@@ -23,7 +23,7 @@ const cents = n => Math.round(n * 100) / 100 === n;
 async function seededDir() {
   const instance = await tempInstance({ mode: 'demo' });
   const { dataDir } = instance;
-  instance.close();
+  await instance.close();
   const r = await seed(dataDir);
   assert.equal(r.code, 0, `seed:demo failed:\n${r.stdout}\n${r.stderr}`);
   return dataDir;
@@ -106,7 +106,7 @@ test('seed:demo rebuilds a demo store, discarding actions taken since', T, async
   });
   // A demo store with no platform gets a synthetic one at startup.
   assert.ok(existsSync(join(dataDir, PLATFORM_FILE)), 'the demo server created its synthetic platform');
-  const served = await withPlatform(join(dataDir, PLATFORM_FILE), (platform, store) => store.servedHousehold());
+  const served = await withPlatform(join(dataDir, PLATFORM_FILE), async (platform, store) => await store.servedHousehold());
   assert.equal(served.mode, 'demo');
   await withStore(dataDir, async db => {
     assert.equal((await db.prepare("SELECT status FROM recs WHERE id = 'deferral'").get()).status, 'done');
@@ -125,7 +125,7 @@ test('seed:demo rebuilds a demo store, discarding actions taken since', T, async
     const r = await postJson(s.baseUrl, '/api/recs/deferral/action', { action: 'complete' });
     assert.equal(r.status, 200);
   });
-  assert.equal((await withPlatform(join(dataDir, PLATFORM_FILE), (platform, store) => store.servedHousehold())).id, served.id);
+  assert.equal((await withPlatform(join(dataDir, PLATFORM_FILE), async (platform, store) => await store.servedHousehold())).id, served.id);
 });
 
 test('the synthetic ledger is deterministic and stamped with demo-seed provenance', T, async () => {
@@ -193,7 +193,7 @@ test('seed:demo refuses a real store and leaves it untouched', T, async () => {
   const t = await tempInstance({ mode: 'real' });
   await t.db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
                 VALUES ('household.dependents', '2', 'you', '2026-11-01', 1, NULL, NULL, NULL, '2026-11-01T09:00:00Z')`).run();
-  t.close();
+  await t.close();
   const before = await dumpStore(t.file);
   const platformBefore = await dumpStore(t.platformFile);
   const r = await seed(t.dataDir);
@@ -210,7 +210,7 @@ test('seed:demo refuses an unmigrated real store with a fixed code and leaves it
   await setSetting(t.db, 'mode', 'real');
   await t.db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
                 VALUES ('household.dependents', '2', 'you', '2026-11-01', 1, NULL, NULL, NULL, '2026-11-01T09:00:00Z')`).run();
-  t.close();
+  await t.close();
   const before = await dumpStore(t.file);
   const r = await seed(t.dataDir);
   assert.notEqual(r.code, 0);
@@ -223,7 +223,7 @@ test('seed:demo treats a store with no mode setting as real and refuses it', T, 
   const t = await tempDb();
   await t.db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
                 VALUES ('household.state', '"VA"', 'you', '2026-11-01', 1, NULL, NULL, NULL, '2026-11-01T09:00:00Z')`).run();
-  t.close();
+  await t.close();
   const before = await dumpStore(t.file);
   const r = await seed(t.dataDir);
   assert.notEqual(r.code, 0);
@@ -238,7 +238,7 @@ test('seedDemo itself refuses a populated store with no mode and leaves it untou
   assert.throws(async () => await seedDemo(t.db), /refusing/);
   assert.equal(await getSetting(t.db, 'mode', null), null);
   assert.equal((await t.db.prepare('SELECT COUNT(*) AS n FROM facts').get()).n, 1);
-  t.close();
+  await t.close();
 });
 
 test('seedDemo itself refuses a real store', T, async () => {
@@ -247,7 +247,7 @@ test('seedDemo itself refuses a real store', T, async () => {
   await setSetting(t.db, 'mode', 'real');
   assert.throws(async () => await seedDemo(t.db), /refusing/);
   assert.equal(await getSetting(t.db, 'mode', null), 'real');
-  t.close();
+  await t.close();
 });
 
 // The households singleton left fathom.sqlite in MT-01; the store now carries store_identity, which
@@ -269,7 +269,7 @@ test('demo seeding and reset keep store_identity without duplicating or erasing 
     assert.deepEqual(await t.db.prepare('SELECT id, mask, kind FROM accounts ORDER BY id').all(), accounts);
     assert.equal((await t.db.prepare('SELECT count(*) AS n FROM transactions').get()).n, transactions);
     assert.equal((await t.platform.prepare('SELECT count(*) AS n FROM households').get()).n, 1, 'the platform keeps one demo household');
-  } finally { t.close(); rmSync(t.dataDir, { recursive: true, force: true }); }
+  } finally { await t.close(); rmSync(t.dataDir, { recursive: true, force: true }); }
 });
 
 test('seedDemo seeds a fresh migrated store that has an empty store_identity table', T, async () => {
@@ -280,5 +280,5 @@ test('seedDemo seeds a fresh migrated store that has an empty store_identity tab
     await seedDemo(t.db);
     assert.equal(await getSetting(t.db, 'mode', null), 'demo');
     assert.ok((await t.db.prepare('SELECT count(*) AS n FROM accounts').get()).n > 0);
-  } finally { t.close(); }
+  } finally { await t.close(); }
 });

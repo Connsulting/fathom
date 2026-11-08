@@ -28,7 +28,7 @@ test('confirmed Ask proposals keep household services and owner statements', asy
   } });
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'off' });
   const app = await serveAppFixture({ db: s.db, platform: s.platform, config, secrets: s.secrets, engine, authenticated: true });
-  t.after(async () => { await app.close(); s.close(); rmSync(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await app.close(); await s.close(); rmSync(s.dataDir, { recursive: true, force: true }); });
   await s.db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)').run('confirmation-setting', '2', '2026-11-07');
   receiptId = (await saveReceipt({ db: s.db, actorId: app.session.user.id }, { scope: 'write:decisions', kind: 'c2_services_confirmation',
     id: 'confirmation-setting', label: 'Synthetic choice', before: '1', after: '2' })).id;
@@ -78,7 +78,7 @@ test('public demo builds its decorated answerer with its sandbox services', asyn
 
 test('Ask and MCP share the resolved household services and root, with actor-bound statements', async t => {
   const s = await tempInstance();
-  t.after(() => { s.close(); rmSync(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); rmSync(s.dataDir, { recursive: true, force: true }); });
   const seen = [];
   const probe = getTool('transactions').operations.find(o => o.name === 'search');
   const original = probe.handler;
@@ -122,7 +122,7 @@ test('Ask and MCP share the resolved household services and root, with actor-bou
   assert.equal(askCtx.services.vault, app.household.vault);
   assert.deepEqual(askCtx.ownerStatements(), ['Keep that assumption.', 'Use 4 percent.']);
   assert.ok(CAPABILITIES.includes('ownerStatements'));
-  const second = await tempInstance(); t.after(() => { second.close(); rmSync(second.dataDir, { recursive: true, force: true }); });
+  const second = await tempInstance(); t.after(async () => { await second.close(); rmSync(second.dataDir, { recursive: true, force: true }); });
   const otherHousehold = await second.household(null, { engine, scheduler });
   assert.notEqual(otherHousehold.services, app.household.services);
   assert.equal(otherHousehold.services.config.dataDir, second.root);

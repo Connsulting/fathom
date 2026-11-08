@@ -70,9 +70,9 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     }
     const auth = createAuthStore(platform);
     // A key's creator must be an active member of the key's household.
-    const creatorActive = (userId, hh) => auth.membership(userId, hh)?.status === 'active';
+    const creatorActive = async (userId, hh) => (await auth.membership(userId, hh))?.status === 'active';
     const user = await auth.findUser(email);
-    if (!user || !creatorActive(user.id, householdId)) {
+    if (!user || !await creatorActive(user.id, householdId)) {
       console.error('mcp-key: unknown owner');
       return 1;
     }
@@ -85,7 +85,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     const keys = createKeyService({ platform, secret: () => secrets.mcpSecret(), creatorActive });
     let key;
     try {
-      ({ key } = keys.create({ householdId, name, scopes: ['read'], userId: user.id }));
+      ({ key } = await keys.create({ householdId, name, scopes: ['read'], userId: user.id }));
     } catch (e) {
       if (e instanceof KeyError && e.code === 'unavailable') {
         console.error('mcp-key: mcp_secret_unavailable');

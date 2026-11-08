@@ -263,7 +263,7 @@ export async function resolvePending(db, engine, { now = new Date().toISOString(
       messages: [{ role: 'user', content: JSON.stringify({ items: batch.map(payloadItem), rows: payloadRows, ...(asking ? { openKeys: openList } : {}) }) }] };
     const spent = Math.max(await cost(), returnedCost);
     const cap = (await getSetting(db, 'cap', { usd: 200 }))?.usd;
-    const monthlyRemaining = Number.isFinite(cap) && cap >= 0 ? cap - ledger.monthSpendUsd(now.slice(0, 7)) : 0;
+    const monthlyRemaining = Number.isFinite(cap) && cap >= 0 ? cap - await ledger.monthSpendUsd(now.slice(0, 7)) : 0;
     const budgetUsd = Math.min(await runCap() - spent, monthlyRemaining);
     const reserve = estimateCompletion(request, engine.modelConfig).costUsd;
     if (budgetUsd < reserve) { stopped = 'budget'; break; }

@@ -180,7 +180,7 @@ test('HTTP proposal confirmation executes a pasted-note refresh and persisted re
   };
   const config = loadConfig({ FATHOM_DATA: instance.dataDir, FATHOM_ENGINE: 'off' });
   const app = await serveAppFixture({ db: instance.db, platform: instance.platform, config, secrets: instance.secrets, engine, authenticated: true });
-  t.after(async () => { await app.household.scheduler.stop(); await app.close(); instance.close(); rmSync(instance.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await app.household.scheduler.stop(); await app.close(); await instance.close(); rmSync(instance.dataDir, { recursive: true, force: true }); });
   const proposed = await app.postJson('/api/threads', { text: 'Import the following note: ' + note.text });
   assert.equal(proposed.status, 200, proposed.text);
   assert.equal(proposed.json.message.provenance.pendingAction.operation, 'import_file');

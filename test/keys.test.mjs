@@ -177,25 +177,25 @@ test('createKeys liveness: g then p on a non-typing target navigates', () => {
   assert.deepEqual(names(), ['plan']);
 });
 
-test('createKeys: g then p within the 1.5 s window runs the sequence and clears the prefix', () => {
+test('createKeys: g then p within the 1.5 s window runs the sequence and clears the prefix', async () => {
   const { clock, keys, b, names } = setup();
   keys.register('global', [b('g p', 'plan')]);
   assert.equal(keys.handle(ev('g'), DIV), true);
-  assert.equal(keys.pending(), 'g');
+  assert.equal(await keys.pending(), 'g');
   clock.t += 1400;
   assert.equal(keys.handle(ev('p'), DIV), true);
   assert.deepEqual(names(), ['plan']);
-  assert.equal(keys.pending(), '');
+  assert.equal(await keys.pending(), '');
 });
 
-test('createKeys: after 1.6 s the prefix expires and p is handled fresh', () => {
+test('createKeys: after 1.6 s the prefix expires and p is handled fresh', async () => {
   const { clock, keys, b, names } = setup();
   keys.register('global', [b('g p', 'plan')]);
   keys.handle(ev('g'), DIV);
   clock.t += 1600;
   assert.equal(keys.handle(ev('p'), DIV), false);
   assert.deepEqual(names(), []);
-  assert.equal(keys.pending(), '');
+  assert.equal(await keys.pending(), '');
 
   const s = setup();
   s.keys.register('global', [s.b('g p', 'plan'), s.b('p', 'single')]);
@@ -205,31 +205,31 @@ test('createKeys: after 1.6 s the prefix expires and p is handled fresh', () => 
   assert.deepEqual(s.names(), ['single']);
 });
 
-test('createKeys: g then an unbound key clears the prefix', () => {
+test('createKeys: g then an unbound key clears the prefix', async () => {
   const { keys, b, names } = setup();
   keys.register('global', [b('g p', 'plan')]);
   keys.handle(ev('g'), DIV);
   assert.equal(keys.handle(ev('z'), DIV), false);
-  assert.equal(keys.pending(), '');
+  assert.equal(await keys.pending(), '');
   assert.equal(keys.handle(ev('p'), DIV), false);
   assert.deepEqual(names(), []);
 });
 
-test('createKeys: g then a key with its own binding runs that key fresh', () => {
+test('createKeys: g then a key with its own binding runs that key fresh', async () => {
   const { keys, b, names } = setup();
   keys.register('global', [b('g p', 'plan'), b('j', 'next')]);
   keys.handle(ev('g'), DIV);
   assert.equal(keys.handle(ev('j'), DIV), true);
   assert.deepEqual(names(), ['next']);
-  assert.equal(keys.pending(), '');
+  assert.equal(await keys.pending(), '');
 });
 
-test('createKeys: a first token with its own single binding runs it instead of waiting', () => {
+test('createKeys: a first token with its own single binding runs it instead of waiting', async () => {
   const { keys, b, names } = setup();
   keys.register('global', [b('g', 'single'), b('g p', 'plan')]);
   assert.equal(keys.handle(ev('g'), DIV), true);
   assert.deepEqual(names(), ['single']);
-  assert.equal(keys.pending(), '');
+  assert.equal(await keys.pending(), '');
 });
 
 test('createKeys: the action receives the event, repeat is allowed, composing and null keys are ignored', () => {
@@ -287,22 +287,22 @@ test('createKeys: when false skips the binding and lets global handle the key', 
   assert.deepEqual(s.names(), ['global-j']);
 });
 
-test('createKeys: the guard blocks g in an input but lets mod+k and escape through', () => {
+test('createKeys: the guard blocks g in an input but lets mod+k and escape through', async () => {
   const { keys, b, names } = setup();
   keys.register('global', [b('g p', 'plan'), b('mod+k', 'switcher'), b('escape', 'close')]);
   assert.equal(keys.handle(ev('g'), INPUT), false);
-  assert.equal(keys.pending(), '');
+  assert.equal(await keys.pending(), '');
   assert.equal(keys.handle(ev('k', { ctrlKey: true }), INPUT), true);
   assert.equal(keys.handle(ev('Escape'), { isContentEditable: true }), true);
   assert.deepEqual(names(), ['switcher', 'close']);
 });
 
-test('createKeys: a typing target clears a pending prefix', () => {
+test('createKeys: a typing target clears a pending prefix', async () => {
   const { keys, b, names } = setup();
   keys.register('global', [b('g p', 'plan')]);
   keys.handle(ev('g'), DIV);
   assert.equal(keys.handle(ev('p'), INPUT), false);
-  assert.equal(keys.pending(), '');
+  assert.equal(await keys.pending(), '');
   assert.equal(keys.handle(ev('p'), DIV), false);
   assert.deepEqual(names(), []);
 });

@@ -4,7 +4,7 @@ import { realStore, NOW } from '../helpers/ingest.mjs';
 import { compatibleKind } from '../../src/ingest/account-match.mjs';
 import * as M from '../../src/ingest/account-merge.mjs';
 
-const withStore = async fn => { const s = await realStore(); try { await fn(s); } finally { s.close(); } };
+const withStore = async fn => { const s = await realStore(); try { await fn(s); } finally { await s.close(); } };
 
 async function connect(db, { id, sfKey, name, kind }) {
   await db.prepare('INSERT INTO accounts (id, identity, name, kind, mirror) VALUES (?,?,?,?,?)')

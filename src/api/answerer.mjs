@@ -674,7 +674,7 @@ async function activeManifestPacks(db, packs) {
   for (const row of await db.prepare('SELECT id, def, active, exploring FROM packs_state ORDER BY sort, id').all()) {
     const def = parseJson(row.def, null);
     if (!def) continue;
-    const pack = packs.backing(row.id, def);
+    const pack = await packs.backing(row.id, def);
     const status = packStatus(def.status, { active: row.active == null ? null : !!row.active, exploring: !!row.exploring });
     if (status === 'active' && pack && !out.some(x => x.pack.id === pack.id)) out.push({ rowId: row.id, pack });
   }
@@ -684,8 +684,8 @@ async function activeManifestPacks(db, packs) {
 async function packConversationContext(db, packs, rowId) {
   const row = await db.prepare('SELECT def FROM packs_state WHERE id = ?').get(rowId);
   const raw = row ? parseJson(row.def, {}) : {};
-  const def = packs ? packs.view(rowId, raw) : raw;
-  const pack = packs ? packs.backing(rowId, raw) : null;
+  const def = packs ? await packs.view(rowId, raw) : raw;
+  const pack = packs ? await packs.backing(rowId, raw) : null;
   const context = { pack: {
     id: rowId, name: def.name, status: def.status, why: def.why, covers: def.covers,
     curator: def.curator, version: def.version, taxYear: def.taxYear, reviewed: def.reviewed,

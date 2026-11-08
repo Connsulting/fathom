@@ -147,7 +147,7 @@ async function withOldStore(fn) {
     assert.equal(DB.schemaVersion(s.db), 14, 'precondition: the store is at 014');
     const ids = await populate(s.db);
     return await fn(s, ids);
-  } finally { s.close(); }
+  } finally { await s.close(); }
 }
 
 const snapshot = async (db) => Object.fromEntries(await mapSeries(['accounts', 'confirm_items', 'confirm_undo', 'files'], async (t) =>

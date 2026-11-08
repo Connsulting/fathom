@@ -45,7 +45,7 @@ test('operator dry run is read only, apply-sure merges only sure and normal Undo
     await reopenItem(s.db,q.id,{now:NOW});
     assert.ok(await s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get(sure.own));
     assert.equal((await s.db.prepare('SELECT count(*) n FROM accounts').get()).n,4);
-  } finally {s.close();}
+  } finally {await s.close();}
 });
 test('AC3: apply-sure fills the institution and last 4 of an already merged survivor, and a dry run does not', async () => {
   const s = await realStore();
@@ -69,7 +69,7 @@ test('AC3: apply-sure fills the institution and last 4 of an already merged surv
     assert.equal(JSON.parse(apply.stdout).merged, 0, 'nothing left to merge');
     survivor = await s.db.prepare('SELECT inst, mask FROM accounts WHERE id=?').get(sure.keep);
     assert.deepEqual({ ...survivor }, { inst: 'Example Bank', mask: '6294' });
-  } finally { s.close(); }
+  } finally { await s.close(); }
 });
 test('an unmigrated real store refuses platform_migration_required for dry run and apply, unchanged', async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'fathom-legacy-'));
@@ -103,7 +103,7 @@ test('apply-sure merges both month-end history pairs', async () => {
     assert.deepEqual(JSON.parse(apply.stdout), { pairs: 2, sure: 2, likely: 0, merged: 2 });
     assert.equal((await s.db.prepare('SELECT count(*) n FROM accounts').get()).n, 2);
     assert.deepEqual((await s.db.prepare('SELECT account_id FROM simplefin_accounts ORDER BY sf_key').all()).map(r => r.account_id), ['file-biz', 'file-check']);
-  } finally { s.close(); }
+  } finally { await s.close(); }
 });
 test('apply-sure merges a survivor with a balance-only file and Undo restores it', async () => {
   const s = await realStore();
@@ -129,5 +129,5 @@ test('apply-sure merges a survivor with a balance-only file and Undo restores it
     await reopenItem(s.db, q.id, { now: NOW });
     assert.ok(await s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get('survivor'));
     assert.equal((await s.db.prepare('SELECT count(*) n FROM accounts').get()).n, 2);
-  } finally { s.close(); }
+  } finally { await s.close(); }
 });

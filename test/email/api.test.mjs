@@ -157,7 +157,7 @@ describe('GET /api/email preview (in-process router, fake engine)', () => {
       assert.equal(r.json.preview.summarySrc, 'template');
     } finally {
       await server.close();
-      t.close();
+      await t.close();
       rmSync(t.dataDir, { recursive: true, force: true });
     }
   });
@@ -223,7 +223,7 @@ describe('ingest triggers the plan job (in-process router, fake scheduler)', () 
       assert.equal(scheduler.calls.length, 3, 'an unapproved mapping does not import or trigger jobs');
     } finally {
       await server.close();
-      st.close();
+      await st.close();
     }
   });
 });

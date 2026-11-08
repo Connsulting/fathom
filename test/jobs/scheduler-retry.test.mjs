@@ -63,7 +63,7 @@ test('schedule() lists handled jobs with their next run and retryMs and writes n
     assert.equal((await t.db.prepare('SELECT count(*) AS n FROM job_runs').get()).n, 0, 'schedule() claims nothing');
     const d = schedulerFor(t, { handlers: { plan: async () => ({}) }, clock, retryMs: null });
     assert.equal(d.schedule()[0].retryMs, 15 * MIN, 'retryMs defaults to 15 minutes');
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('a transient failure retries once after retryMs and reads retrying, then healthy', async () => {
@@ -111,7 +111,7 @@ test('a transient failure retries once after retryMs and reads retrying, then he
     clock.advance(RETRY_MS * 4);
     await s.tick();
     assert.equal((await runsOf(t.db, 'simplefin-sync')).length, 2, 'a successful retry is not run again');
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('a retry that also fails is not retried again in the same period', async () => {
@@ -135,7 +135,7 @@ test('a retry that also fails is not retried again in the same period', async ()
     assert.equal(rows.length, 2, 'the failed retry is never retried');
     assert.equal(calls, 2);
     assert.ok(rows.every((r) => !/\+retry\+retry/.test(r.period_key)));
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('a non-transient failure (a code bug) is never retried and needs a person', async () => {
@@ -156,7 +156,7 @@ test('a non-transient failure (a code bug) is never retried and needs a person',
     const svc = (await statusOf(t, s, clock)).jobs['simplefin-sync'];
     assert.equal(svc.state, 'needs_you');
     assert.equal(svc.control?.id, 'run_job');
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('SQLite busy (5) and locked (6) errors are recorded as store_locked and retried', async () => {
@@ -179,7 +179,7 @@ test('SQLite busy (5) and locked (6) errors are recorded as store_locked and ret
       const rows = await runsOf(t.db, 'simplefin-sync');
       assert.equal(rows.length, 2, `errcode ${errcode} retried`);
       assert.equal(rows[1].status, 'ok');
-    } finally { t.done(); }
+    } finally { await t.done(); }
   }
 });
 
@@ -215,7 +215,7 @@ test('a paused household claims nothing, reads paused for every job and never re
     await s.tick();
     assert.equal((await runsOf(t.db, 'simplefin-sync')).length, 1, 'no retry while paused');
     assert.equal((await statusOf(t, s, clock, { ...ALL_ON, jobs: false })).jobs['simplefin-sync'].state, 'paused');
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('a skipped run while SimpleFIN is paused reads paused and is never retried', async () => {
@@ -236,5 +236,5 @@ test('a skipped run while SimpleFIN is paused reads paused and is never retried'
     const svc = (await statusOf(t, s, clock, { ...ALL_ON, simplefin: false })).jobs['simplefin-sync'];
     assert.equal(svc.state, 'paused');
     assert.deepEqual({ id: svc.control?.id, arg: svc.control?.arg }, { id: 'resume', arg: 'simplefin' });
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });

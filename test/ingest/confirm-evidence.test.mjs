@@ -35,7 +35,7 @@ const ACCOUNT_KINDS = ['account_owner', 'account_kind'];
 
 async function withStore(fn) {
   const s = await realStore();
-  try { return await fn(s); } finally { s.close(); }
+  try { return await fn(s); } finally { await s.close(); }
 }
 // The household files in one ingestFiles call, engine off; names: set household.names first.
 const withHousehold = async (fn, { names = false, extra = [] } = {}) => withStore(async (s) => {

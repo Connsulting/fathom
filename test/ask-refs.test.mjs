@@ -30,12 +30,12 @@ const byKey = list => [...list].sort((a, b) => `${a.kind}:${a.id}`.localeCompare
 
 async function demoStore(t, env = {}) {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   await seedDemo(s.db);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', ...env });
   const runtime = await createRuntimeEngine({ db: s.db, config });
   const packs = createLivePacks(s.db, { dataDir: s.dataDir });
-  packs.refresh();
+  await packs.refresh();
   return { ...s, root: s.dataDir, config, runtime, packs };
 }
 

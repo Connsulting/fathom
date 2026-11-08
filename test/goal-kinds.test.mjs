@@ -392,7 +392,7 @@ const pick = (o, keys) => Object.fromEntries(keys.filter(k => Object.hasOwn(o, k
 test('a reset demo store has one goal of each kind (balance, range, floor, contribution)', async t => {
   // A demo instance, so demo reset gets the household context it clears the vault through.
   const s = await tempInstance({ mode: 'demo', init: seed.seedDemo });
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   const config = { clock: demo.meta.clock, dataDir: s.dataDir };
   const household = await s.household(config);
   const ctx = body => ({ db: s.db, config, body, params: {}, household, platform: s.platform });

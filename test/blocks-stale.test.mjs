@@ -15,7 +15,7 @@ import { mapSeries } from '../src/shared/series.mjs';
 
 const clock = '2026-11-05';
 async function fixture(t) {
-  const s = await tempDb(); await seedDemo(s.db); t.after(() => s.close());
+  const s = await tempDb(); await seedDemo(s.db); t.after(async () => await s.close());
   const server = await serveAppFixture({ db: s.db, config: { clock } }); t.after(() => server.close());
   const thread = await createThread(s.db, `${clock}T00:00:00Z`);
   async function store(op, spec) {

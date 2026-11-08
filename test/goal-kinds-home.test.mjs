@@ -272,7 +272,7 @@ test('over the seeded demo store each kind goal card has a kind line whose figur
     assert.equal(ira.chip.tone, 'ok', 'the entered contribution is ahead');
     for (const c of m.cards.filter(x => x.kind === 'balance')) assert.equal(c.line, null, `${c.id} balance card has no kind line`);
   } finally {
-    t.close();
+    await t.close();
     rmSync(t.dataDir, { recursive: true, force: true });
   }
 });

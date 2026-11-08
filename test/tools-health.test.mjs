@@ -11,7 +11,7 @@ import { assertRefsResolve } from './helpers/figures.mjs';
 
 test('health recomputes ages and exposes category, Confirm, year-end and job state without writes', async t => {
   const s = await tempDb();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   const { db } = s;
   await seedDemo(db);
   await db.prepare("INSERT INTO sources (id,label,kind,as_of) VALUES ('ing:health','Synthetic feed','bank_csv','2026-10-31')").run();

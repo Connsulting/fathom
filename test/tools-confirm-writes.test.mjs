@@ -12,7 +12,7 @@ import { yearendChecklist } from '../src/yearend/expected.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import { proposalTools, proposalBasis } from '../src/actions/proposals.mjs';
 
-async function setup(t){const s=await realStore();t.after(()=>s.close());await setSetting(s.db,'clock','2032-03-10');
+async function setup(t){const s=await realStore();t.after(async ()=>await s.close());await setSetting(s.db,'clock','2032-03-10');
  await s.db.prepare("INSERT INTO accounts (id,name,kind,owner,inst) VALUES ('manual','Synthetic checking','cash',NULL,'Example Bank')").run();
  const ctx={db:s.db,household:s.household,config:s.config,now:NOW,actorId:'test-owner',channel:'mcp',ownerText:'family',replan:async()=>({status:'ok'}),scheduler:{soon(){},trigger(){},runNow:async()=>({status:'ok'})}};
  const q=async kind=>(await ask(s.db,{kind,subject:'manual',question:'Choose',options:kind==='account_owner'?OWNER_OPTIONS:KIND_OPTIONS,context:{},now:NOW})).id;
@@ -20,7 +20,7 @@ async function setup(t){const s=await realStore();t.after(()=>s.close());await s
 const undo=(ctx,r)=>callTool('undo',{operation:'undo',id:r.receipt.id},ctx);
 
 test('Confirm reads match pending, detail and merge-candidate routes with filtering',async t=>{
- const s=await setup(t),id=s.q('account_owner');
+ const s=await setup(t),id=await s.q('account_owner');
  assert.deepEqual(await callTool('household',{operation:'confirm_items'},s.ctx),await listPendingConfirm(s.ctx));
  const detail=await callTool('household',{operation:'confirm_items',status:'all',ids:[id]},s.ctx);
  assert.deepEqual(detail.items,[(await getConfirm({...s.ctx,params:{id:String(id)}})).item]);
@@ -31,7 +31,7 @@ test('Confirm reads match pending, detail and merge-candidate routes with filter
 });
 
 test('Confirm batch answer and reopen share routes, preserve atomicity and undo each direction',async t=>{
- const s=await setup(t),owner=s.q('account_owner'),kind=s.q('account_kind');
+ const s=await setup(t),owner=await s.q('account_owner'),kind=await s.q('account_kind');
  await assert.rejects(callTool('answer',{operation:'confirm',items:[{id:owner,answer:'owner'},{id:kind,answer:'invalid'}]},s.ctx));
  assert.equal((await getItem(s.db,owner)).status,'pending');
  const r=await callTool('answer',{operation:'confirm',items:[{id:owner,answer:'owner'},{id:kind,answer:'taxable'}]},s.ctx);
@@ -47,7 +47,7 @@ test('Confirm batch answer and reopen share routes, preserve atomicity and undo 
 });
 
 test('reopen refuses changed rows with changed_since and leaves the answer intact',async t=>{
- const s=await setup(t),id=s.q('account_owner');
+ const s=await setup(t),id=await s.q('account_owner');
  await answerConfirm({...s.ctx,params:{id:String(id)},body:{answer:'owner'}});
  await s.db.prepare("UPDATE accounts SET owner='Joint' WHERE id='manual'").run();
  await assert.rejects(callTool('answer',{operation:'reopen',ids:[id]},s.ctx),e=>e.code==='changed_since'||e.reason==='changed_since');
@@ -80,7 +80,7 @@ test('yearend mark and clear match route validation and undo prior reasons',asyn
 });
 
 test('Confirm and fact operations enforce scopes and proposal bases without writes',async t=>{
- const s=await setup(t),id=s.q('account_owner'),server=createToolServer({scopes:['read'],authorize:()=>true,ctx:s.ctx,runTool:fn=>fn()});
+ const s=await setup(t),id=await s.q('account_owner'),server=createToolServer({scopes:['read'],authorize:()=>true,ctx:s.ctx,runTool:fn=>fn()});
  for(const operation of ['rec_questions','confirm','reopen','yearend_mark']){
   const r=await server._requestHandlers.get('tools/call')({method:'tools/call',params:{name:'answer',arguments:{operation}}},{});assert.match(r.content[0].text,/Permission denied/);
  }
@@ -93,7 +93,7 @@ test('Confirm and fact operations enforce scopes and proposal bases without writ
 });
 
 test('undoing a batch reopen refuses a later edit to any account field it would restore',async t=>{
- const s=await setup(t),owner=s.q('account_owner'),kind=s.q('account_kind');
+ const s=await setup(t),owner=await s.q('account_owner'),kind=await s.q('account_kind');
  await callTool('answer',{operation:'confirm',items:[{id:owner,answer:'owner'},{id:kind,answer:'taxable'}]},s.ctx);
  const reopened=await callTool('answer',{operation:'reopen',ids:[owner,kind]},s.ctx);
  await s.db.prepare("UPDATE accounts SET owner='Later owner' WHERE id='manual'").run();
@@ -135,7 +135,7 @@ test('C8 eval scripts select the requested household subjects without unrelated 
 });
 
 test('Confirm proposals retain the target item row',async t=>{
- const s=await setup(t),id=s.q('account_owner');let pending;
+ const s=await setup(t),id=await s.q('account_owner');let pending;
  await proposalTools(tools).find(t=>t.name==='answer').handler({operation:'confirm',items:[{id,answer:'owner'}],propose:true},{...s.ctx,onProposal:v=>{pending=v;}});
  await s.db.prepare("UPDATE confirm_items SET question='Updated question' WHERE id=?").run(id);
  assert.notEqual(await proposalBasis(s.db,pending.tool,pending.scopes,pending.args),pending.basis);
@@ -205,7 +205,7 @@ for (const kind of ['entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 
 
 
 test('reopen and revise proposals retain dependent answers and their Undo rows', async t => {
- const s=await setup(t), root=s.q('account_owner');
+ const s=await setup(t), root=await s.q('account_owner');
  await answerItem(s.db,root,'owner',{now:NOW});
  const transaction=Number((await s.db.prepare("INSERT INTO transactions(account_id,date,amount,description) VALUES ('manual','2032-03-01',-20,'Synthetic market')").run()).lastInsertRowid);
  const dependent=(await ask(s.db,{kind:'transaction_category',subject:String(transaction),question:'Synthetic category',options:[{id:'Groceries',label:'Groceries'}],context:{transactionId:transaction},now:NOW})).id;

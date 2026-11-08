@@ -253,13 +253,13 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
     for (const cancel of cancels ?? []) cancel();
   });
   // Route access beyond a session (see the header).
-  const checkAccess = (r, identity) => {
+  const checkAccess = async (r, identity) => {
     if (r.backupControl) {
       const member = identity?.memberships?.find(m => m.householdId === identity.householdId);
       if (member?.role !== 'admin') throw adminRequired();
     }
-    if (r.admin && !auth.servedAdmin(identity)) throw adminRequired();
-    if (financial(r) && !auth.servedMember(identity)) throw membershipRequired();
+    if (r.admin && !await auth.servedAdmin(identity)) throw adminRequired();
+    if (financial(r) && !await auth.servedMember(identity)) throw membershipRequired();
   };
   function resolveHousehold(identity) {
     if (gated) return runtimes.forIdentity(identity);
@@ -304,7 +304,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
         const { r, params } = findRoute(req.method, segments);
         route = r;
         if (config.publicDemo && demoRouteBehavior(r.method, r.path) === 'off') throw new HttpError(403, DEMO_OFF_MESSAGE);
-        if (gated && !r.public) checkAccess(r, identity);
+        if (gated && !r.public) await checkAccess(r, identity);
         const query = queryOf(url, q);
         // The household context assertion is checked before anything is read or written.
         let assertion = null;
@@ -331,7 +331,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
           body = await readJsonBody(req);
         }
         if (gated && !r.public) {
-          identity = revalidateRequest({ authenticate: async () => await identityOf(req, auth), checkAccess: fresh => checkAccess(r, fresh), assertion, household, runtimes });
+          identity = revalidateRequest({ authenticate: async () => await identityOf(req, auth), checkAccess: async fresh => await checkAccess(r, fresh), assertion, household, runtimes });
         }
         // A write to a seeded demo household drops its synthetic marker.
         const seeded = household && !gated && !config.publicDemo && r.method === 'POST' && path !== '/api/demo/reset' ? household.db : null;
@@ -347,7 +347,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
         const principal = gated && household ? { async check() {
           const now = await identityOf(req, auth);
           return Boolean(now) && now.id === caller.id && now.householdId === caller.householdId
-            && now.contextVersion === caller.contextVersion && auth.servedMember(now);
+            && now.contextVersion === caller.contextVersion && await auth.servedMember(now);
         } } : null;
         const run = fn => (principal ? runWithPrincipal(principal, fn) : fn());
         // Nothing household-scoped leaves (a stream event or the final body) once the session no
@@ -404,7 +404,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         throw new HttpError(405, 'method not allowed', { Allow: 'GET, HEAD' });
       }
-      if (gated && path === '/admin/users' && !auth.servedAdmin(identity)) throw adminRequired();
+      if (gated && path === '/admin/users' && !await auth.servedAdmin(identity)) throw adminRequired();
       if (['/signin', '/enroll'].includes(path) || (gated && ['/account', '/admin/users'].includes(path))) {
         let page;
         try { page = await readFile(join(webDir, 'auth', 'index.html')); }

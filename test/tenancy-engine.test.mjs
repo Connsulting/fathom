@@ -159,7 +159,7 @@ test('over HTTP, a session deleted or a membership removed mid-Ask stops the nex
   // The admin's session is deleted while the first round is at the model.
   let from = emulator.requests.length;
   let rowsBefore = (await roundsOf(two.platform, A)).length;
-  emulator.script([body => { store.revokeSession(two.A.admin.token); return toolRound(body); }]);
+  emulator.script([async body => { await store.revokeSession(two.A.admin.token); return toolRound(body); }]);
   let r = await two.A.client.postJson('/api/threads', { text: 'Synthetic alpha question, session revoked' });
   assert.ok(r.status !== 200 || r.json?.message?.notice === true, `no answer after revocation: ${r.status}`);
   assert.equal(emulator.requests.length, from + 1, 'no round after the session was deleted');

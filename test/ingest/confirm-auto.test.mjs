@@ -34,7 +34,7 @@ const householdFiles = () => [AGG_FILE, CHASE_FILE, POS_FILE].map((name) => ({ .
 
 async function withStore(fn) {
   const s = await realStore();
-  try { return await fn(s); } finally { s.close(); }
+  try { return await fn(s); } finally { await s.close(); }
 }
 const setNames = (db, value) => F.upsertFact(db, { key: 'household.names', value, src: 'you', asOf: NOW.slice(0, 10), confirmed: true, now: NOW });
 

@@ -26,7 +26,7 @@ const emptyArgs = { type: 'object', properties: {}, additionalProperties: false 
 
 async function store(t) {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   return s;
 }
 
@@ -37,19 +37,19 @@ const spendRows = async db => (await db.prepare('SELECT * FROM spend_ledger ORDE
 test('spend ledger maps a YYYYMM or YYYY-MM key to the stored YYYY-MM month and rejects other keys', async t => {
   const s = await store(t);
   const ledger = createSpendLedger(s.db);
-  ledger.record({ ts: '2026-12-31T23:59:00.000Z', purpose: 'job', costUsd: 1, model: 'fake', tokens: {} });
-  ledger.record({ ts: '2027-01-05T10:00:00.000Z', purpose: 'chat', costUsd: 0.25, model: 'fake', tokens: { input_tokens: 10 } });
-  assert.equal(ledger.monthSpendUsd('202701'), 0.25);
-  assert.equal(ledger.monthSpendUsd('2027-01'), 0.25);
-  assert.equal(ledger.monthSpendUsd('202612'), 1);
-  assert.equal(ledger.monthSpendUsd('202702'), 0);
+  await ledger.record({ ts: '2026-12-31T23:59:00.000Z', purpose: 'job', costUsd: 1, model: 'fake', tokens: {} });
+  await ledger.record({ ts: '2027-01-05T10:00:00.000Z', purpose: 'chat', costUsd: 0.25, model: 'fake', tokens: { input_tokens: 10 } });
+  assert.equal(await ledger.monthSpendUsd('202701'), 0.25);
+  assert.equal(await ledger.monthSpendUsd('2027-01'), 0.25);
+  assert.equal(await ledger.monthSpendUsd('202612'), 1);
+  assert.equal(await ledger.monthSpendUsd('202702'), 0);
   const rows = await spendRows(s.db);
   assert.deepEqual(rows.map(r => r.yyyymm), ['2026-12', '2027-01']);
   assert.deepEqual(JSON.parse(rows[1].tokens), { input_tokens: 10 });
   assert.equal(rows[1].purpose, 'chat');
   assert.equal(rows[1].cost_usd, 0.25);
   for (const bad of ['2027', '20270', '2027011', '202713', 'abcdef', '']) {
-    assert.throws(() => ledger.monthSpendUsd(bad), TypeError, `month key ${JSON.stringify(bad)} is rejected`);
+    assert.throws(async () => await ledger.monthSpendUsd(bad), TypeError, `month key ${JSON.stringify(bad)} is rejected`);
   }
 });
 

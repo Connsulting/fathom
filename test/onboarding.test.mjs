@@ -36,7 +36,7 @@ const ctxOf = (s, engine, body, household = s.household) => ({ actorId: 'actor-s
 
 async function withStore(fn) {
   const s = await realStore();
-  try { return await fn(s); } finally { s.close(); }
+  try { return await fn(s); } finally { await s.close(); }
 }
 
 describe('Tell us note save path', () => {
@@ -113,7 +113,7 @@ describe('Tell us note save path', () => {
       await assert.rejects(O.saveNotes(ctx), (err) => err.status === 409 && /FATHOM_PLATFORM_KEY_FILE/.test(err.message));
       assert.equal(await count(s.db, 'files'), 0);
       assert.deepEqual(readdirSync(s.root).filter((n) => n === 'files'), []);
-    } finally { s.close(); }
+    } finally { await s.close(); }
   });
 });
 
@@ -124,7 +124,7 @@ describe('what we heard (deriveHeard)', () => {
 
   async function withDb(fn) {
     const t = await tempDb();
-    try { return await fn(t.db); } finally { t.close(); }
+    try { return await fn(t.db); } finally { await t.close(); }
   }
 
   test('an empty store hears nothing: no sections, no invented values', async () => withDb((db) => {

@@ -43,7 +43,7 @@ async function authCall(server, fn) {
   const platform = await openPlatformStore(server.platformFile);
   try {
     const store = createAuthStore(platform);
-    return await fn(platform, store, store.servedHousehold().id);
+    return await fn(platform, store, (await store.servedHousehold()).id);
   } finally { await platform.close(); }
 }
 async function clientFor(server, options) {
@@ -305,10 +305,10 @@ test('registration requires credProps rk exactly true and consumes refused chall
       assert.deepEqual(refused.json, { error: 'a discoverable passkey is required' });
       await authCall(server, async (platform, store, hh) => {
         assert.deepEqual(await store.listPasskeys(issued.user.id), []);
-        assert.equal(store.getUser(issued.user.id).enrolledAt, null);
+        assert.equal((await store.getUser(issued.user.id)).enrolledAt, null);
         assert.equal((await platform.prepare('SELECT count(*) AS n FROM auth_challenges WHERE user_id = ?').get(issued.user.id)).n, 0);
         assert.ok(await store.invitation(issued.token), 'the invitation remains usable for a fresh ceremony');
-        assert.equal(store.membership(issued.user.id, hh), null, 'a refused registration creates no membership');
+        assert.equal(await store.membership(issued.user.id, hh), null, 'a refused registration creates no membership');
       });
       const replay = await postJson(server.baseUrl, '/api/auth/register/verify', body, headers);
       assert.equal(replay.status, 400);
@@ -388,7 +388,7 @@ test('demo stays anonymous without a public URL and every auth/admin API except 
     assert.equal((await postJson(server.baseUrl, '/api/demo/reset')).status, 200);
     // The demo platform is synthetic and created at startup; the financial store keeps no households.
     assert.equal(await authCall(server, async platform => (await platform.prepare('SELECT count(*) AS n FROM households').get()).n), 1);
-    assert.equal(await authCall(server, (platform, store) => store.servedHousehold().mode), 'demo');
+    assert.equal(await authCall(server, async (platform, store) => (await store.servedHousehold()).mode), 'demo');
     assert.equal(await dbCall(server, async db => (await db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'households'").get()).n), 0);
     assert.equal((await request(server.baseUrl, { path: '/api/scenario' })).json.live.mode, 'demo');
   } finally { await server.stop(); }
@@ -530,7 +530,7 @@ test('bootstrap CLI requires explicit admin, reissues only before enrollment, an
   try {
     const initial = await financialDump(temp.db);
     const store = createAuthStore(temp.platform);
-    const hh = store.servedHousehold().id;
+    const hh = (await store.servedHousehold()).id;
     for (const args of [['bootstrap@example.test'], ['bootstrap@example.test', '--member'], ['bootstrap@example.test', '--admin', '--unknown']]) {
       const failed = await inviteCli(args, cliEnv(temp.dataDir));
       assert.notEqual(failed.code, 0);
@@ -566,7 +566,7 @@ test('bootstrap CLI requires explicit admin, reissues only before enrollment, an
     assert.notEqual(refused.code, 0);
     assert.equal(refused.stdout.trim(), '');
     assert.equal(await store.findUser('another@example.test'), null);
-    assert.equal(store.membership(user.id, hh).role, 'admin');
+    assert.equal((await store.membership(user.id, hh)).role, 'admin');
     assert.deepEqual(await financialDump(temp.db), initial);
   } finally { temp.close(); rmSync(temp.dataDir, { recursive: true, force: true }); }
 });
@@ -601,7 +601,7 @@ test('bootstrap CLI refuses demo, absent database, an unmigrated real store and 
     assert.notEqual(invalid.code, 0);
     assert.equal(invalid.stdout.trim(), '');
     const store = createAuthStore(real.platform);
-    assert.equal((await store.listPeople(store.servedHousehold().id)).length, 0);
+    assert.equal((await store.listPeople((await store.servedHousehold()).id)).length, 0);
     assert.equal(await store.findUser('admin@example.test'), null);
     assert.deepEqual(await financialDump(real.db), realInitial);
   } finally {
@@ -746,7 +746,7 @@ test('bootstrap CLI refuses after any member has enrolled and preserves that acc
     assert.equal(refused.stdout.trim(), '');
     const store = createAuthStore(temp.platform);
     assert.deepEqual((await store.listPeople(member.householdId)).map(person => person.id), [member.user.id]);
-    assert.equal(store.membership(member.user.id, member.householdId).role, 'member');
+    assert.equal((await store.membership(member.user.id, member.householdId)).role, 'member');
     assert.equal(await store.findUser('new-admin@example.test'), null);
     assert.equal(store.session(member.token).id, member.user.id);
     assert.deepEqual(await financialDump(temp.db), initial);

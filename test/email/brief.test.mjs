@@ -32,7 +32,7 @@ async function seeded() {
 
 async function withSeeded(fn) {
   const t = await seeded();
-  try { return await fn(t.db); } finally { t.done(); }
+  try { return await fn(t.db); } finally { await t.done(); }
 }
 
 // An engine object with the runtime engine's call() shape that answers `text` or throws `error`.

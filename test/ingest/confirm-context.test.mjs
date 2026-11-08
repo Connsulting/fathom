@@ -26,7 +26,7 @@ const ACCOUNT_FIELDS = ['institution', 'mask', 'holder', 'owner', 'kind', 'balan
 
 async function withStore(fn) {
   const s = await realStore();
-  try { return await fn(s); } finally { s.close(); }
+  try { return await fn(s); } finally { await s.close(); }
 }
 // The three household files in one ingestFiles call, engine off.
 const withHousehold = async (fn) => withStore(async (s) => {

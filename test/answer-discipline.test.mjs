@@ -26,7 +26,7 @@ async function ask(t, scripts, question = 'Describe the household plan.', { setu
     await store.db.prepare('UPDATE figures SET v=? WHERE key=?').run(value, key);
   const packs = createLivePacks(store.db, { dataDir: store.root });
   setup?.(store);
-  packs.refresh();
+  await packs.refresh();
   const inner = createEngine({ mode: 'fake' });
   const calls = [];
   const reads = [];

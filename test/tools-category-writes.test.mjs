@@ -8,7 +8,7 @@ import { loadCategoryInputs } from '../src/categories/store.mjs';
 import { resolveCategories, normalizeMerchant } from '../src/categories/resolve.mjs';
 import { proposalTools, proposalBasis } from '../src/actions/proposals.mjs';
 
-async function setup(t){const s=await realStore();t.after(()=>s.close());await s.db.prepare("INSERT INTO accounts (id,name,kind,owner) VALUES ('card','Synthetic card','card','You')").run();
+async function setup(t){const s=await realStore();t.after(async ()=>await s.close());await s.db.prepare("INSERT INTO accounts (id,name,kind,owner) VALUES ('card','Synthetic card','card','You')").run();
  for(const description of ['Warehouse Club #1','Warehouse Club #1','Other shop'])await s.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('card','2032-02-01',-150,?)").run(description);
  return {...s,ctx:{db:s.db,household:s.household,config:s.config,now:NOW,actorId:'test-owner',channel:'mcp'}};}
 const correction=async (db,id)=>await db.prepare('SELECT category,bucket FROM transaction_category_corrections WHERE transaction_id=?').get(id);

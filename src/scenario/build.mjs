@@ -33,7 +33,7 @@ import { gapsFor, TRIGGER_INPUTS } from '../shared/rec-inputs.mjs';
 import { advisorWait } from '../shared/advisor-waits.mjs';
 import { ADVISOR_KEYS } from '../facts/derive.mjs';
 import { observedPayments } from '../ingest/transaction-payments.mjs';
-import { filterSeries } from '../shared/series.mjs';
+import { filterSeries, mapSeries } from '../shared/series.mjs';
 
 const DAY = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -410,9 +410,9 @@ export function defaultPicks(wargame) {
 
 // livePacks (optional, src/packs/live.mjs) adds each manifest-backed row's manifest fields.
 export async function loadPacks(db, livePacks = null) {
-  return (await db.prepare('SELECT * FROM packs_state ORDER BY sort, id').all()).map(r => ({
+  return await mapSeries((await db.prepare('SELECT * FROM packs_state ORDER BY sort, id').all()), async r => ({
     id: r.id,
-    def: livePacks ? livePacks.view(r.id, parse(r.def, {})) : parse(r.def, {}),
+    def: livePacks ? await livePacks.view(r.id, parse(r.def, {})) : parse(r.def, {}),
     live: {
       active: r.active == null ? null : !!r.active,
       exploring: !!r.exploring,
@@ -732,7 +732,7 @@ export async function buildScenario(db, { clock, engineMode = null, packs: liveP
 
   deriveFigures(fig, { wargame, series, engine }, { names, law, pct, fig });
 
-  livePacks?.loaded();
+  await livePacks?.loaded();
   const packs = await loadPacks(db, livePacks);
   const onboarding = await getSetting(db, 'onboarding', { done: false, step: 0 }) || { done: false, step: 0 };
   const mode = await getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real';

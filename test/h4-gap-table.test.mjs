@@ -118,12 +118,12 @@ const NO_FIX = new Set(['incomplete_month', 'unequal_periods', 'outside_househol
 
 async function demoAsker(t) {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   await seedDemo(s.db);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' });
   const engine = await createRuntimeEngine({ db: s.db, config });
   const packs = createLivePacks(s.db, { dataDir: s.dataDir });
-  packs.refresh();
+  await packs.refresh();
   const root = s.dataDir;
   // Asks once: household.figures returns the synthetic figure with `gap`; the engine's results are
   // kept so the test can see the tool result the model saw.
@@ -132,7 +132,7 @@ async function demoAsker(t) {
     let n = 0;
     const synthetic = () => [{ key: FIGURE_KEY, ...envelope(VALUE, { unit: 'usd', label: 'Synthetic figure', kind: 'a', asOf: '2026-10-31',
       ref: { tool: 'household', args: FIGURES_CALL.args, path: '0' }, provenance: { calc: 'h4:synthetic' }, gaps: [gap] }) }];
-    const wrapped = { ...engine, mode: engine.mode, isOn: () => engine.isOn(), call: async req => {
+    const wrapped = { ...engine, mode: engine.mode, isOn: async () => await engine.isOn(), call: async req => {
       const tools = req.tools.map(tool => tool.name !== 'household' ? tool : { ...tool,
         async handler(args, ctx) { return args.operation === 'figures' ? synthetic() : tool.handler(args, ctx); } });
       const fake = n++ === 0 ? [{ toolCalls: [FIGURES_CALL] }, { text: ANSWER }] : [{ text: ANSWER }];

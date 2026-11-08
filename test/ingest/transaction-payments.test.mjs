@@ -43,7 +43,7 @@ async function fixture(fn, rows = postings()) {
         ? Promise.resolve(new Response(JSON.stringify(body), { status: 200 })) : base(url, init) };
     await connectSimplefin(s.db, fakeToken(), opts);
     await fn(s, opts, body);
-  } finally { s.close(); }
+  } finally { await s.close(); }
 }
 
 async function uploadLog(s, date = '2026-06-12', amount = 1200, payer = 'owner') {

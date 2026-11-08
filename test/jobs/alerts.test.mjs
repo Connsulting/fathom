@@ -60,7 +60,7 @@ test('threshold is the smallest of 14, 7, 1 that covers the days left; outside 0
       if (want == null) assert.equal(hit.length, 0, `${d} days: not due`);
       else assert.deepEqual(hit.map((a) => a.threshold), [want], `${d} days: threshold ${want}`);
     }
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('a pair is sent at most once; the next threshold sends once more; a missed day sends only the tightest', async () => {
@@ -81,7 +81,7 @@ test('a pair is sent at most once; the next threshold sends once more; a missed 
     assert.equal((await run(t.db, day(0), tr)).alerts, 0, '1 already sent');
     assert.equal(tr.sent.length, 3);
     assert.deepEqual((await recorded(t.db)).map((r) => r.threshold).sort((a, b) => a - b), [1, 7, 14]);
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('a first run inside the 7 day band sends threshold 7 only, not 14 as well', async () => {
@@ -90,7 +90,7 @@ test('a first run inside the 7 day band sends threshold 7 only, not 14 as well',
     await addDeadline(t.db, { date: addDays(CLOCK, 3), title: 'Synthetic late start' });
     const due = await dueAlerts(t.db, { clock: CLOCK });
     assert.deepEqual(due.map((a) => a.threshold), [7]);
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('nothing due sends nothing; several alerts on one day produce exactly one email', async () => {
@@ -114,7 +114,7 @@ test('nothing due sends nothing; several alerts on one day produce exactly one e
     assert.equal(out.send.kind, 'alert');
     for (const s of ['Synthetic alpha', 'Synthetic beta', 'Synthetic gamma']) assert.ok(tr.sent[0].text.includes(s), `${s} in the email`);
     assert.equal((await recorded(t.db)).length, 3);
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('deadlines whose rec is done, dismissed or hidden are skipped, and so are recs in those statuses', async () => {
@@ -136,7 +136,7 @@ test('deadlines whose rec is done, dismissed or hidden are skipped, and so are r
       `rec:syn-proposed:${addDays(CLOCK, 4)}`, `rec:syn-proposed:${addDays(CLOCK, 6)}`,
       `rec:syn-snoozed:${addDays(CLOCK, 4)}`, `rec:syn-waiting:${addDays(CLOCK, 4)}`,
     ].sort());
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('a deadline and its rec window on the same date are one alert', async () => {
@@ -149,7 +149,7 @@ test('a deadline and its rec window on the same date are one alert', async () =>
     assert.equal(due.length, 1);
     assert.equal(due[0].key, `rec:syn-merge:${date}`);
     assert.equal(due[0].threshold, 7);
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('identity: unlinked deadlines with the same date and normalized title alert once; a rename is a new deadline', async () => {
@@ -166,7 +166,7 @@ test('identity: unlinked deadlines with the same date and normalized title alert
     await addDeadline(t.db, { date, title: 'Synthetic Quarterly Filing, renamed' });
     const after = await dueAlerts(t.db, { clock: CLOCK });
     assert.deepEqual(after.map((a) => a.key), [titleKey(date, 'Synthetic Quarterly Filing, renamed')]);
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('identity: deleting and reinserting a rec-linked deadline row (planner refresh) does not realert', async () => {
@@ -182,7 +182,7 @@ test('identity: deleting and reinserting a rec-linked deadline row (planner refr
     assert.equal((await run(t.db, addDays(CLOCK, 1), tr)).alerts, 0);
     assert.equal(tr.sent.length, 1);
     assert.deepEqual(await recorded(t.db), [{ key: `rec:syn-linked:${date}`, threshold: 14 }]);
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('dedupe rows are written only when the send succeeds; a later run sends', async () => {
@@ -201,7 +201,7 @@ test('dedupe rows are written only when the send succeeds; a later run sends', a
     assert.equal(ok.send.status, 'sent');
     assert.equal(good.sent.length, 1);
     assert.equal((await recorded(t.db)).length, 1);
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('hostile stored titles are escaped in the HTML and never token-resolved', async () => {
@@ -226,7 +226,7 @@ test('hostile stored titles are escaped in the HTML and never token-resolved', a
     }
     assert.ok(!/[\r\n]/.test(mail.subject));
     assert.ok((mail.html.match(/<style[\s>]/gi) || []).length === 1 && !/<script[\s>]/i.test(mail.html), 'one head style for the color scheme, inline styles elsewhere, no script');
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('renderAlerts links to the app only when publicUrl is set', async () => {
@@ -239,5 +239,5 @@ test('renderAlerts links to the app only when publicUrl is set', async () => {
     const linked = renderAlerts(due, { clock: CLOCK, publicUrl: 'https://fathom.example.invalid' });
     assert.ok(linked.text.includes('https://fathom.example.invalid/#/'));
     assert.ok(linked.html.includes('href="https://fathom.example.invalid/#/'));
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });

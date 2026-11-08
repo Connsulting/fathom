@@ -75,6 +75,7 @@ export function analyze(files, { roots = () => false, root = null } = {}) {
   const calls = [];          // { mod, node, ancestors }
   const refs = [];           // identifier references to functions as values
   const awaits = [];         // await expressions, whose functions must be async
+  const valueProps = [];     // `{ name }` and `{ key: name }` properties naming functions
 
   for (const mod of modules.values()) {
     mod.imports = new Map();
@@ -125,6 +126,8 @@ export function analyze(files, { roots = () => false, root = null } = {}) {
         if (method) { if (!methods.has(method)) methods.set(method, []); methods.get(method).push(info); }
       } else if (node.type === 'CallExpression') {
         calls.push({ mod, node, ancestors: ancestors.slice(0, -1) });
+      } else if (node.type === 'Property' && node.value.type === 'Identifier' && !node.computed) {
+        valueProps.push({ mod, node, ancestors: ancestors.slice(0, -1) });
       } else if (node.type === 'AwaitExpression' || (node.type === 'ForOfStatement' && node.await)) {
         awaits.push({ mod, node, ancestors: ancestors.slice(0, -1) });
       } else if (node.type === 'Identifier') {
@@ -227,8 +230,51 @@ export function analyze(files, { roots = () => false, root = null } = {}) {
   const unwrap = n => (n?.type === 'AwaitExpression' ? n.argument : n?.type === 'ChainExpression' ? n.expression : n);
   const isPrepare = n => { n = unwrap(n); return n?.type === 'CallExpression' && n.callee.type === 'MemberExpression' && propName(n.callee.property) === 'prepare'; };
 
+  // Object-literal properties that name a function are methods of that name too.
+  for (const v of valueProps) {
+    const b = bindingOf(v.mod, v.node.value.name, v.ancestors);
+    if (b?.kind !== 'fn' || !b.info) continue;
+    const name = propName(v.node.key);
+    if (!methods.has(name)) methods.set(name, []);
+    if (!methods.get(name).includes(b.info)) methods.get(name).push(b.info);
+  }
+
+  // The methods of the object a factory function returns (`return { a, b() {} }`, `=> ({ ... })`,
+  // optionally wrapped in Object.freeze).
+  const returned = new Map();
+  function returnedMethods(info) {
+    if (returned.has(info)) return returned.get(info);
+    const out = new Map();
+    returned.set(info, out);
+    const objects = [];
+    const take = n => {
+      n = unwrap(n);
+      if (n?.type === 'CallExpression' && n.callee.type === 'MemberExpression' && propName(n.callee.property) === 'freeze') n = n.arguments[0];
+      if (n?.type === 'ObjectExpression') objects.push(n);
+    };
+    if (info.node.body.type !== 'BlockStatement') take(info.node.body);
+    else fullAncestor(info.node.body, (n, _s, anc) => {
+      if (n.type !== 'ReturnStatement') return;
+      if (anc.some(a => isFunction(a))) return;
+      take(n.argument);
+    });
+    for (const o of objects) {
+      for (const p of o.properties) {
+        if (p.type !== 'Property') continue;
+        const name = propName(p.key);
+        if (!name) continue;
+        if (isFunction(p.value)) out.set(name, fnOf.get(p.value));
+        else if (p.value.type === 'Identifier') {
+          const b = lookup(info.mod, p.value.name, [info.mod.ast, info.node, info.node.body]);
+          if (b?.kind === 'fn' && b.info) out.set(name, b.info);
+        }
+      }
+    }
+    return out;
+  }
+
   // Which functions a call may invoke, and whether it is itself a port seed.
-  function classify(call) {
+  function classify(call, depth = 0) {
     const { mod, node, ancestors } = call;
     const callee = node.callee.type === 'ChainExpression' ? node.callee.expression : node.callee;
     if (callee.type === 'Identifier') {
@@ -258,7 +304,7 @@ export function analyze(files, { roots = () => false, root = null } = {}) {
         const b = lookup(mod, obj.name, ancestors);
         const init = unwrap(b?.init);
         if (init?.type === 'CallExpression') {
-          const t = classify({ mod, node: init, ancestors });
+          const t = classify({ mod, node: init, ancestors }, depth + 1);
           if (t.targets.some(f => f.handle)) return { seed: 'close', targets: [] };
         }
       }
@@ -268,6 +314,13 @@ export function analyze(files, { roots = () => false, root = null } = {}) {
       if (b?.kind === 'ns') {
         const e = exported(b.from, name);
         return { targets: e?.kind === 'fn' && e.info ? [e.info] : [] };
+      }
+      // A receiver made by a factory call: the factory's returned method of that name.
+      const init = b?.kind === 'value' ? unwrap(b.init) : null;
+      if (init?.type === 'CallExpression' && depth < 3) {
+        const made = classify({ mod, node: init, ancestors }, depth + 1).targets;
+        const found = made.map(f => returnedMethods(f).get(name)).filter(Boolean);
+        if (found.length) return { targets: found };
       }
     }
     if (name && !GENERIC.has(name) && methods.has(name)) return { targets: methods.get(name), byName: true };

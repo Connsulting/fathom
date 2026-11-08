@@ -137,7 +137,7 @@ test('AC3 fallbackTitle works with a scenario built from a store', async () => {
     const sc = await buildScenario(t.db, { clock: CLOCK });
     assert.equal(fallbackTitle(sc, 'Synthetic store question'), 'Synthetic store question');
   } finally {
-    t.close();
+    await t.close();
   }
 });
 
@@ -149,7 +149,7 @@ const OTHER = ['Synthetic unrelated thread text', 'Synthetic unrelated thread re
 
 async function namingStore(t) {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   const db = s.db;
   const msg = db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES (?, ?, ?, '[]', ?, ?)");
   let n = 0;

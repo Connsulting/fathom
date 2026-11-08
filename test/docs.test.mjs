@@ -59,7 +59,7 @@ test('architecture.md mentions every table the migrations create', async () => {
     assert.ok(tables.length > 0);
     for (const name of tables) assert.match(doc, new RegExp(`\\b${name}\\b`), `missing table ${name}`);
   } finally {
-    t.close();
+    await t.close();
   }
 });
 

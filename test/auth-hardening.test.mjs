@@ -27,7 +27,7 @@ async function fixture(t, { trustedProxies } = {}) {
   let server;
   t.after(async () => {
     if (server?.listening) await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
-    temp.close();
+    await temp.close();
     rmSync(temp.dataDir, { recursive: true, force: true });
   });
   const port = await freePort();
@@ -40,14 +40,14 @@ async function fixture(t, { trustedProxies } = {}) {
   const now = () => clock;
   const sent = [];
   const transport = { name: 'dev', async send(message) { sent.push(message); return { id: 'synthetic-send', recipients: 1 }; } };
-  const auth = createAuthService({ platform: temp.platform, config, transport, now });
+  const auth = await createAuthService({ platform: temp.platform, config, transport, now });
   // The router serves the instance's household through a runtime registry over temp.db.
   const household = await temp.household(config, { transport });
   const runtimes = createRuntimeRegistry({ platform: temp.platform, config, secrets: temp.secrets, build: () => household });
   const keys = createKeyService({ platform: temp.platform, secret: () => temp.secrets.mcpSecret(), creatorActive: auth.creatorActive });
   server = http.createServer(createHandler({ platform: temp.platform, config, runtimes, auth, keys }));
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
-  const hh = auth.store.servedHousehold().id;
+  const hh = (await auth.store.servedHousehold()).id;
   return {
     db: temp.db, platform: temp.platform, auth, store: auth.store, hh, sent, baseUrl, now,
     advance: ms => { clock += ms; },
@@ -139,7 +139,7 @@ test('HTTP active-member reinvites direct callers to a role action without mutat
     await app.store.createToken(user.id, 'add-passkey');
     await app.store.createToken(user.id, 'recovery');
     const before = { ...await app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) };
-    const membership = app.store.membership(user.id, app.hh);
+    const membership = await app.store.membership(user.id, app.hh);
     const invitations = await app.platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all();
     const tokens = await app.platform.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY hash').all(user.id);
     for (const role of ['admin', 'member']) {
@@ -149,7 +149,7 @@ test('HTTP active-member reinvites direct callers to a role action without mutat
       assert.match(response.json.error, /chang|\/role/i);
       assert.match(response.headers['cache-control'], /no-store/);
       assert.deepEqual({ ...await app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) }, before);
-      assert.deepEqual(app.store.membership(user.id, app.hh), membership);
+      assert.deepEqual(await app.store.membership(user.id, app.hh), membership);
       assert.deepEqual(await app.platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all(), invitations);
       assert.deepEqual(await app.platform.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY hash').all(user.id), tokens);
       assert.equal((await client.request({ path: '/api/auth/session' })).json.identity.role, initial);
@@ -167,8 +167,8 @@ test('session fixtures reuse enrolled users without reinviting them or changing 
   assert.deepEqual(second.session.user, first.session.user);
   assert.equal(app.store.session(first.session.token).id, first.session.user.id);
   assert.equal(app.store.session(second.session.token).id, first.session.user.id);
-  assert.deepEqual(app.store.getUser(first.session.user.id), first.session.user);
-  assert.equal(app.store.membership(first.session.user.id, app.hh).role, 'admin');
+  assert.deepEqual(await app.store.getUser(first.session.user.id), first.session.user);
+  assert.equal((await app.store.membership(first.session.user.id, app.hh)).role, 'admin');
   assert.equal((await app.platform.prepare('SELECT count(*) AS n FROM household_memberships WHERE user_id = ?').get(first.session.user.id)).n, 1);
   assert.equal((await app.platform.prepare('SELECT count(*) AS n FROM household_invitations WHERE email = ?').get('existing@example.test')).n, 1, 'no reinvitation');
 });
@@ -243,7 +243,7 @@ test('invite and recovery registration are independent of an absent or stale bro
       assert.ok(await live());
     }
   }
-  assert.equal(app.store.getUser(pending.id).enrolledAt, null);
+  assert.equal((await app.store.getUser(pending.id)).enrolledAt, null);
   assert.equal((await client.request({ path: '/api/auth/passkeys' })).status, 200);
 });
 

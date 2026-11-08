@@ -394,7 +394,7 @@ test('each household context is frozen and holds its own DB, root, vault and run
     assert.equal(vault.handle.householdId, id, 'vault handle');
     assert.equal(vault.root.householdId, id, 'vault root');
     assert.ok(ctx.inFlight instanceof Set);
-    assert.equal(ctx.packs.entry('your-plans', PLAN_ENTRY).title, `${canary} plan`, 'packs read its own root');
+    assert.equal((await ctx.packs.entry('your-plans', PLAN_ENTRY)).title, `${canary} plan`, 'packs read its own root');
     assert.equal(h.app.runtimes.get(id), ctx, 'the same generation resolves to the same context');
   }
   assert.notEqual(a.inFlight, b.inFlight);

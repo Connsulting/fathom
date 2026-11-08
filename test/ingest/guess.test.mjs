@@ -34,7 +34,7 @@ before(async () => {
 
 async function withStore(fn) {
   const s = await realStore();
-  try { return await fn(s); } finally { s.close(); }
+  try { return await fn(s); } finally { await s.close(); }
 }
 
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));

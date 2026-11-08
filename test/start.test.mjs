@@ -42,7 +42,7 @@ test('npm start on an empty data dir with FATHOM_DEMO unset serves the demo UI a
     assert.equal(h.json.platformSchema, latestMigrationId(join(ROOT, 'src/platform/migrations')));
 
     assert.ok(existsSync(join(dataDir, PLATFORM_FILE)), 'a synthetic platform.sqlite is created in FATHOM_DATA');
-    const served = await withPlatform(join(dataDir, PLATFORM_FILE), (platform, store) => store.servedHousehold());
+    const served = await withPlatform(join(dataDir, PLATFORM_FILE), async (platform, store) => await store.servedHousehold());
     assert.equal(served.mode, 'demo');
     assert.equal(served.status, 'active');
     assert.ok(existsSync(join(dataDir, 'households', served.id, DB_FILE)), 'fathom.sqlite is created in the household root');
@@ -63,7 +63,7 @@ test('FATHOM_DEMO=0 on an empty data dir serves a valid empty scenario', T, asyn
       planned = (await db.prepare('SELECT rec_id FROM planner_recs').all()).map(r => r.rec_id);
       identity = await db.prepare('SELECT household_id FROM store_identity').get();
     } finally { await db.close(); }
-    const served = await withPlatform(s.platformFile, (platform, store) => store.servedHousehold());
+    const served = await withPlatform(s.platformFile, async (platform, store) => await store.servedHousehold());
     assert.equal(served.mode, 'real');
     assert.equal(identity.household_id, served.id, 'the new store names the served household');
     assert.equal(s.session.householdId, served.id);

@@ -17,7 +17,7 @@ const rate = value => owner(value, `${value * 100} percent`);
 async function setup(t) {
   const s = await spendingStore(t);
   s.ctx.channel = 'mcp';
-  s.account('investments', 'taxable');
+  await s.account('investments', 'taxable');
   await s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run('investments','2026-10-31',10000);
   return { ...s, retirement: (operation, args = {}, ctx = s.ctx) => callTool('retirement', { operation, ...args }, ctx) };
 }

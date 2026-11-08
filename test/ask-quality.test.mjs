@@ -53,7 +53,7 @@ async function cardStore(t) {
   for (const r of [ROOF, GROCER]) await tx.run(CARD, r.date, r.amount, r.description, r.category);
   const root = householdOf(db).root;
   const packs = createLivePacks(db, { dataDir: root });
-  packs.refresh();
+  await packs.refresh();
   // The account label every surface shows, read the way accounts.list reads it.
   const label = (await callTool('accounts', { operation: 'list' }, { db, now: CLOCK })).find(a => a.id === CARD).name;
   return { db, dataDir, root, packs, label };

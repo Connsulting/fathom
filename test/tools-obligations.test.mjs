@@ -5,7 +5,7 @@ import { assertRefsResolve } from './helpers/figures.mjs';
 const mortgage = {balance:10000,rate:0,monthlyPayment:500,escrowMonthly:100};
 async function spendingStore(t) {
  const s=await baseStore(t);
- s.account('mortgage','loan');
+ await s.account('mortgage','loan');
  await s.db.prepare("INSERT INTO balances(account_id,date,amount) VALUES ('mortgage','2026-10-31',10000)").run();
  return s;
 }
@@ -64,7 +64,7 @@ test('projection preserves excluded mortgage and applies only the in-base amount
 
 test('unstated school care amount is unavailable and never applied; owner assumption is checked',async t=>{
  const s=await spendingStore(t); s.ctx.channel='mcp';
- for(let m=1;m<=10;m++)s.tx('checking',`2026-${String(m).padStart(2,'0')}-15`,-600,'Childcare');
+ for(let m=1;m<=10;m++)await s.tx('checking',`2026-${String(m).padStart(2,'0')}-15`,-600,'Childcare');
  await s.fact('household.dependentBirthDates',['2022-04-01']);
  const out=await s.call('projection',{years:3,obligations:['childcare']});
  const change=out.years[1].changes.find(c=>c.stage==='school_age');
@@ -107,7 +107,7 @@ test('definition selectors and referenced totals produce identical projections w
 
 test('a stored childcare increase applies while a definition excluding care gets no change',async t=>{
  const s=await spendingStore(t);
- for(let m=1;m<=10;m++)s.tx('checking',`2026-${String(m).padStart(2,'0')}-15`,-600,'Childcare');
+ for(let m=1;m<=10;m++)await s.tx('checking',`2026-${String(m).padStart(2,'0')}-15`,-600,'Childcare');
  await s.fact('household.dependentBirthDates',['2022-04-01']);
  await s.fact('obligations.childcare',{schoolAgeMonthly:800});
  const base=await s.call('total',{annualize:true});
@@ -120,7 +120,7 @@ test('a stored childcare increase applies while a definition excluding care gets
 
 test('one child leaving care cannot erase care for a younger dependent without an allocation',async t=>{
  const s=await spendingStore(t);
- for(let m=1;m<=10;m++)s.tx('checking',`2026-${String(m).padStart(2,'0')}-15`,-600,'Childcare');
+ for(let m=1;m<=10;m++)await s.tx('checking',`2026-${String(m).padStart(2,'0')}-15`,-600,'Childcare');
  await s.fact('household.dependentBirthDates',['2014-04-01','2017-04-01']);
  const base=await s.call('total',{annualize:true});
  const out=await s.call('projection',{years:6,obligations:['childcare']});
@@ -132,7 +132,7 @@ test('one child leaving care cannot erase care for a younger dependent without a
 
 test('one child entering school cannot replace the whole childcare total while another needs full-time care',async t=>{
  const s=await spendingStore(t);
- for(let m=1;m<=10;m++)s.tx('checking',`2026-${String(m).padStart(2,'0')}-15`,-1200,'Childcare');
+ for(let m=1;m<=10;m++)await s.tx('checking',`2026-${String(m).padStart(2,'0')}-15`,-1200,'Childcare');
  await s.fact('household.dependentBirthDates',['2022-03-01','2024-03-01']);
  await s.fact('obligations.childcare',{schoolAgeMonthly:200});
  const base=await s.call('total',{annualize:true});

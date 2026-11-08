@@ -55,7 +55,7 @@ async function retryEngine(db, { valid = true } = {}) {
   let calls = 0;
   const engine = { ...transport, async call(request) {
     if (request.purpose === 'extract') calls++;
-    return transport.call({ ...request, fake: [{ text: request.purpose === 'extract' && valid ? JSON.stringify(output) : '{}', costUsd: 0 }] });
+    return await transport.call({ ...request, fake: [{ text: request.purpose === 'extract' && valid ? JSON.stringify(output) : '{}', costUsd: 0 }] });
   } };
   return { engine, household: { ...householdOf(db), engine }, calls: () => calls };
 }

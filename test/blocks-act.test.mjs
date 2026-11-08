@@ -14,7 +14,7 @@ async function fixture(t, name = 'deferral', real = false) {
   await s.db.prepare("UPDATE decisions SET status = 'open', decided_line = NULL WHERE wargame = ?").run(name);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', FATHOM_CLOCK: '2026-11-05' });
   const app = await serveAppFixture({ db: s.db, config, authenticated: real });
-  t.after(async () => { await app.close(); s.close(); });
+  t.after(async () => { await app.close(); await s.close(); });
   const args = { operation: 'wargame', name };
   const result = await callTool('recommendations', args, { db: s.db, clock: config.clock });
   const source = { tool: 'recommendations', args, path: name === 'salary' ? 'salary.points' : 'deferral.options' };

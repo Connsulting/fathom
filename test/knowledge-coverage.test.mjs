@@ -21,7 +21,7 @@ const CLOCK = '2026-11-08';
 
 async function fixture(t) {
   const inst = await tempInstance({ mode: 'demo', init: seedDemo });
-  t.after(() => { inst.close(); rmSync(inst.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await inst.close(); rmSync(inst.dataDir, { recursive: true, force: true }); });
   const household = await inst.household();
   const stored = await storeFile({ vault: await household.vault(), id: ID, bytes: Buffer.from(TEXT), purpose: 'upload' });
   await inst.db.prepare(`INSERT INTO files (id,name,mime,size,source_kind,uploaded_at,stored_path,status,note)
@@ -55,7 +55,7 @@ for (const stage of ['source-read', 'extraction', 'grounding', 'pack-load']) {
     let result = await buildYourPlans({ db, household, engine, clock: CLOCK });
     if (stage === 'pack-load') writeFileSync(join(yourPlansDir(household.root), 'manifest.json'), '{invalid');
     let packs = createLivePacks(db, { dataDir: household.root });
-    packs.refresh();
+    await packs.refresh();
     const first = await buildScenario(db, { packs });
     const issues = first.live.yourPlans.coverage;
     assert.ok(issues.length > 0);
@@ -78,7 +78,7 @@ for (const stage of ['source-read', 'extraction', 'grounding', 'pack-load']) {
     await storeFile({ vault: await household.vault(), id: ID, bytes: Buffer.from(TEXT), purpose: 'upload' });
     result = await buildYourPlans({ db, household, engine: runtime, clock: CLOCK });
     assert.equal(result.written, true);
-    packs.refresh();
+    await packs.refresh();
     assert.deepEqual((await buildScenario(db, { packs })).live.yourPlans.coverage, []);
     const repaired = createLiveAnswerer({ engine: scripted(runtime), packs, root: household.root, services: { engine: runtime, household, config: s.config } });
     const answer = await repaired.answer({ db, key: 'ask:0123456789ab', text: 'What do our plan documents say?' });
@@ -91,10 +91,10 @@ test('a failed rebuild excludes older document knowledge, and an explicitly disa
   const { db, household, runtime } = s;
   await buildYourPlans({ db, household, engine: runtime, clock: CLOCK });
   const packs = createLivePacks(db, { dataDir: household.root });
-  packs.refresh();
-  assert.equal(packs.entry('your-plans', '01-dental-coverage').title, 'Dental coverage');
+  await packs.refresh();
+  assert.equal((await packs.entry('your-plans', '01-dental-coverage')).title, 'Dental coverage');
   await buildYourPlans({ db, household, engine: scripted(runtime, 'extraction'), clock: CLOCK });
-  assert.equal(packs.entry('your-plans', '01-dental-coverage'), null, 'an older successful build cannot silently supply a failed document');
+  assert.equal(await packs.entry('your-plans', '01-dental-coverage'), null, 'an older successful build cannot silently supply a failed document');
   const toolContext = { db, dataDir: household.root };
   await assert.rejects(callTool('knowledge', { operation: 'entry', packId: 'your-plans', file: '01-dental-coverage.md' }, toolContext), error => error.code === 'not_found');
   assert.equal((await callTool('knowledge', { operation: 'search', query: 'routine dental' }, toolContext)).total, 0);
@@ -111,7 +111,7 @@ test('a pack removed from disk is disclosed, and a corrected rebuild clears the 
   const { db, household, runtime } = s;
   await buildYourPlans({ db, household, engine: runtime, clock: CLOCK });
   const packs = createLivePacks(db, { dataDir: household.root });
-  packs.refresh();
+  await packs.refresh();
   rmSync(yourPlansDir(household.root), { recursive: true });
   assert.ok((await buildScenario(db, { packs })).live.yourPlans.coverage.some(issue => issue.stage === 'pack-load'));
   await buildYourPlans({ db, household, engine: runtime, clock: CLOCK });
@@ -152,11 +152,11 @@ test('removing the last document does not restore its older pack entries on an e
   const { db, household, runtime } = s;
   await buildYourPlans({ db, household, engine: runtime, clock: CLOCK });
   const packs = createLivePacks(db, { dataDir: household.root });
-  packs.refresh();
+  await packs.refresh();
   await db.prepare('UPDATE files SET removed_at = ? WHERE id = ?').run(CLOCK, ID);
   const rebuilt = await buildYourPlans({ db, household, engine: runtime, clock: CLOCK });
   assert.deepEqual(rebuilt.coverage, []);
-  assert.equal(packs.entry('your-plans', '01-dental-coverage'), null);
+  assert.equal(await packs.entry('your-plans', '01-dental-coverage'), null);
   const result = await callTool('knowledge', { operation: 'search', query: 'routine dental' }, { db, dataDir: household.root });
   assert.equal(result.total, 0);
 });

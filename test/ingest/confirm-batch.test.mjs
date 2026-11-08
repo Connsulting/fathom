@@ -31,7 +31,7 @@ async function withHousehold(fn) {
   try {
     await P.ingestFiles(s.db, householdFiles(), s.opts(await offEngine()));
     return await fn(s);
-  } finally { s.close(); }
+  } finally { await s.close(); }
 }
 
 const ROLES = {

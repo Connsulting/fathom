@@ -30,7 +30,7 @@ async function fixture(t) {
   let server;
   t.after(async () => {
     if (server?.listening) await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
-    temp.close();
+    await temp.close();
     rmSync(temp.dataDir, { recursive: true, force: true });
   });
   const port = await freePort();
@@ -51,7 +51,7 @@ async function fixture(t) {
       return { id: 'synthetic-send', recipients: 1 };
     },
   };
-  const auth = createAuthService({ platform: temp.platform, config, transport, now });
+  const auth = await createAuthService({ platform: temp.platform, config, transport, now });
   // The router serves the instance's household through a runtime registry over temp.db.
   const household = await temp.household(config, { transport });
   const runtimes = createRuntimeRegistry({ platform: temp.platform, config, secrets: temp.secrets, build: () => household });
@@ -59,7 +59,7 @@ async function fixture(t) {
   server = http.createServer(createHandler({ platform: temp.platform, config, runtimes, auth, keys }));
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
   return {
-    db: temp.db, platform: temp.platform, auth, store: auth.store, hh: auth.store.servedHousehold().id, sent, state, baseUrl, now,
+    db: temp.db, platform: temp.platform, auth, store: auth.store, hh: (await auth.store.servedHousehold()).id, sent, state, baseUrl, now,
     advance: ms => { clock += ms; },
     // A trusted session fixture for an existing or new user (signed in now).
     async sessionFor(email, role = 'member') {
@@ -117,7 +117,7 @@ async function enrolled(app, email, role = 'member') {
   assert.equal(options.status, 200, `invite options for ${email}`);
   assert.equal(verify.status, 200, `invite enrollment for ${email}`);
   assert.ok(client.session(), 'enrollment signs the browser in');
-  const user = app.store.getUser(invited.id);
+  const user = await app.store.getUser(invited.id);
   assert.notEqual(user.enrolledAt, null);
   return { user, client, device, credentialId: device.credentials()[0].id };
 }
@@ -310,7 +310,7 @@ test('a fresh browser consumes the link, adds a second passkey without revoking 
   const fresh = browser(app);
   const { options, verify } = await register(app, fresh, tablet, { token }, 'Synthetic tablet');
   assert.equal(options.status, 200);
-  assert.equal(options.json.options.user.id, app.store.userRow(owner.user.id).user_handle);
+  assert.equal(options.json.options.user.id, (await app.store.userRow(owner.user.id)).user_handle);
   assert.equal(verify.status, 200, verify.text);
   assert.equal(verify.json.identity.id, owner.user.id);
   assert.ok(fresh.session(), 'the fresh browser gets a session cookie');
@@ -398,13 +398,13 @@ test('the link is bound to its user and never reaches another account or a pendi
 
   const inPlace = await member.client.post('/api/auth/register/options', { name: 'Member in place' });
   assert.equal(inPlace.status, 200);
-  assert.equal(inPlace.json.options.user.id, app.store.userRow(member.user.id).user_handle, "a session add is for the session's user");
+  assert.equal(inPlace.json.options.user.id, (await app.store.userRow(member.user.id)).user_handle, "a session add is for the session's user");
   assert.ok(app.store.token(ownerToken));
 
   const device = createAuthenticator();
   const { options, verify } = await register(app, member.client, device, { token: ownerToken }, 'Owner device in member browser');
   assert.equal(options.status, 200);
-  assert.equal(options.json.options.user.id, app.store.userRow(owner.user.id).user_handle, 'the token decides the account');
+  assert.equal(options.json.options.user.id, (await app.store.userRow(owner.user.id)).user_handle, 'the token decides the account');
   assert.equal(verify.status, 200);
   assert.equal(verify.json.identity.id, owner.user.id);
   assert.equal((await passkeyIds(app, owner.user.id)).length, 2);
@@ -418,9 +418,9 @@ test('the link is bound to its user and never reaches another account or a pendi
   const refused = await register(app, browser(app), createAuthenticator(), { token: pendingAdd.token }, 'Pending device');
   assert.equal(refused.options.status, 410);
   assert.deepEqual(refused.options.json, EXPIRED);
-  assert.equal(app.store.getUser(pending.id).enrolledAt, null);
+  assert.equal((await app.store.getUser(pending.id)).enrolledAt, null);
   assert.deepEqual(await passkeyIds(app, pending.id), []);
-  assert.equal(app.store.membership(pending.id, app.hh), null);
+  assert.equal(await app.store.membership(pending.id, app.hh), null);
   assert.equal((await app.store.invitation(invite))?.userId, pending.id, 'the invitation stays live');
 });
 

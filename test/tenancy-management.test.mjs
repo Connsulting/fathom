@@ -453,12 +453,12 @@ describe('role-aware management', () => {
     const promoted = await ok(post(f.bravo, `/api/admin/users/${member.id}/role`, { role: 'admin' }), 'promote');
     assert.equal(promoted.user.role, 'admin');
     assert.equal((await session(f.dual)).role, 'admin', 'the role applies to the current household');
-    assert.equal(f.store.membership(member.id, f.A).role, 'member', 'the role in A is unchanged');
+    assert.equal((await f.store.membership(member.id, f.A)).role, 'member', 'the role in A is unchanged');
     await ok(post(f.bravo, `/api/admin/users/${member.id}/role`, { role: 'member' }), 'demote');
     // B's admin cannot reach A's people.
     const foreign = await post(f.bravo, `/api/admin/users/${f.alpha.identity.id}/role`, { role: 'member' });
     assert.equal(foreign.status, 404);
-    assert.equal(f.store.membership(f.alpha.identity.id, f.A).role, 'admin');
+    assert.equal((await f.store.membership(f.alpha.identity.id, f.A)).role, 'admin');
   });
 
   test('removal from one household leaves the other membership usable', T, async () => {

@@ -16,7 +16,7 @@ const sum = (xs) => Math.round(xs.reduce((s, x) => s + x, 0) * 100) / 100;
 test('total shares the exact demo and real card spending window selection', async (t) => {
   const real = await spendingStore(t),
     demo = await tempDb();
-  t.after(() => demo.close());
+  t.after(async () => await demo.close());
   await seedDemo(demo.db);
   for (const ctx of [real.ctx, { db: demo.db, dataDir: demo.dataDir, clock: '2026-11-05' }]) {
     const sp = spendingInputs({ ...await loadCategoryInputs(ctx.db), clock: ctx.clock });
@@ -53,7 +53,7 @@ test('Q01 excludes matched mortgage and tax amounts and essential sums five clas
   assert.equal(essential.total.value, 1350);
   assert.equal(sum(essential.groups.map((x) => x.figure.value)), essential.total.value);
   for (const key of ['housing', 'childcare']) {
-    s.tx('checking', '2026-04-12', -10, key === 'housing' ? 'Home & Garden' : 'Childcare', key);
+    await s.tx('checking', '2026-04-12', -10, key === 'housing' ? 'Home & Garden' : 'Childcare', key);
   }
   const five = await s.call('total', { ...custom, definition: 'essential', groupBy: 'class' });
   assert.equal(five.groups.length, 5);
@@ -62,8 +62,8 @@ test('Q01 excludes matched mortgage and tax amounts and essential sums five clas
 
 test('uncertain rows, silent cards, unclassified categories and healthcare outside ledger are measured gaps', async (t) => {
   const s = await spendingStore(t);
-  const id = s.tx('card', '2026-04-12', -17, null, 'Unknown example');
-  const guess = s.tx('card', '2026-04-13', -23, null, 'Guessed example');
+  const id = await s.tx('card', '2026-04-12', -17, null, 'Unknown example');
+  const guess = await s.tx('card', '2026-04-13', -23, null, 'Guessed example');
   await s.db
     .prepare(
       "INSERT INTO transaction_category_corrections(transaction_id,category,bucket,updated_at) VALUES (?,'Shopping','household','2026-04-13')",
@@ -93,8 +93,8 @@ test('uncertain rows, silent cards, unclassified categories and healthcare outsi
 
 test('periods, all measures and scopes, selectors, definitions, annualizing and other are consistent', async (t) => {
   const s = await spendingStore(t);
-  s.tx('business', '2026-04-10', -25, 'Business', 'Business cost');
-  s.tx('business', '2026-04-11', 100, 'Income', 'Business revenue');
+  await s.tx('business', '2026-04-10', -25, 'Business', 'Business cost');
+  await s.tx('business', '2026-04-11', 100, 'Income', 'Business revenue');
   for (const args of [
     {},
     { window: 'trailing_12' },
@@ -209,7 +209,7 @@ test('available eval scripts call valid operations through the Ask tool boundary
 test('large grouped comparisons stay bounded while groups still sum to the total', async (t) => {
   const s = await spendingStore(t);
   for (let i = 0; i < 240; i++)
-    s.tx('card', '2026-04-15', -1, 'Shopping', `Long merchant ${String.fromCodePoint(0x400 + i)} ${'x'.repeat(1000)}`);
+    await s.tx('card', '2026-04-15', -1, 'Shopping', `Long merchant ${String.fromCodePoint(0x400 + i)} ${'x'.repeat(1000)}`);
   const args = {
     a: { from: '2026-03', to: '2026-03' },
     b: { from: '2026-04', to: '2026-04' },
@@ -223,7 +223,7 @@ test('large grouped comparisons stay bounded while groups still sum to the total
 });
 
 test('period gaps expose pre-history and missing months without counting investment accounts as silent', async t => {
-  const s=await spendingStore(t);s.account('brokerage','taxable');
+  const s=await spendingStore(t);await s.account('brokerage','taxable');
   const before=await s.call('total',{window:'calendar_year',year:2025});
   assert.ok(before.gaps.some(g=>g.code==='incomplete_month' && g.count===12));
   const compare=await s.call('compare',{a:{from:'2025-01',to:'2025-02'},b:custom});

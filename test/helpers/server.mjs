@@ -312,18 +312,18 @@ export async function createSessionFixture(platform, { email = 'admin@example.te
   }
   const { createAuthStore } = await src('src/auth/store.mjs');
   const store = createAuthStore(platform, { now });
-  const household = store.servedHousehold();
+  const household = await store.servedHousehold();
   if (!household || typeof household.id !== 'string' || !household.id) throw new Error('the platform has no served household');
   let user = await store.findUser(email);
-  let membership = user ? store.membership(user.id, household.id) : null;
+  let membership = user ? await store.membership(user.id, household.id) : null;
   if (membership?.status !== 'active') {
     const invited = store.invite(household.id, email, { role });
     await store.consumeInvitation(invited.token, invited.user.id);
     user = invited.user;
-    membership = store.membership(user.id, household.id);
+    membership = await store.membership(user.id, household.id);
   }
-  if (store.getUser(user.id).enrolledAt == null) await store.markEnrolled(user.id);
-  user = store.getUser(user.id);
+  if ((await store.getUser(user.id)).enrolledAt == null) await store.markEnrolled(user.id);
+  user = await store.getUser(user.id);
   const { token, expiresAt } = await store.createSession(user.id);
   return { user, householdId: household.id, role: membership.role, token, expiresAt, cookie: `__Host-fathom-session=${token}` };
 }
@@ -362,7 +362,7 @@ export async function spawnAuthenticatedServer(options = {}) {
         const platform = await openPlatformStore(server.platformFile);
         try {
           const { createAuthStore } = await src('src/auth/store.mjs');
-          createAuthStore(platform).revokeSession(session.token);
+          await createAuthStore(platform).revokeSession(session.token);
         } finally { await platform.close(); }
       },
     };
@@ -423,7 +423,7 @@ export async function serveAppFixture({
       build: async args => (args.householdId === served.id ? servedContext : await buildHouseholdContext(args)),
     });
     const authTransport = transport ?? createTransport(fixtureConfig, { outboxDir: join(dataDir, 'outbox') });
-    const auth = createAuthService({ platform: handle, config: fixtureConfig, transport: authTransport, secrets: instance });
+    const auth = await createAuthService({ platform: handle, config: fixtureConfig, transport: authTransport, secrets: instance });
     const keys = createKeyService({ platform: handle, secret: () => instance.mcpSecret(), creatorActive: auth.creatorActive });
     const session = authenticated && await getSetting(db, 'mode', null) !== 'demo' ? await createSessionFixture(handle) : null;
     server = http.createServer(createHandler({

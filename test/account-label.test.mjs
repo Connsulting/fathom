@@ -119,7 +119,7 @@ test('label parts give a screen the bare name to edit and the pieces of the whol
 
 test('the demo store names accounts with resolved owner names, before and after a rename', async (t) => {
   const s = await tempDb();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   await seedDemo(s.db);
   const label = async (id) => accountLabel((await accountNaming(s.db)).byId.get(id));
   assert.equal(await label('a_biz'), 'Northbeam Labs Business checking (1918)');

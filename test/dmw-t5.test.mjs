@@ -45,14 +45,14 @@ async function store(fn) {
 async function model(db, script) {
   const runtime = await createRuntimeEngine({ db, config: { engine: 'fake' }, now: () => new Date(NOW) });
   const calls = [], payloads = [];
-  return { mode: 'fake', isOn: () => runtime.isOn(), status: () => runtime.status(), calls, payloads,
+  return { mode: 'fake', isOn: async () => await runtime.isOn(), status: async () => await runtime.status(), calls, payloads,
     async call(req) {
       calls.push(req);
       const payload = JSON.parse(req.messages[0].content);
       payloads.push(payload);
       const out = typeof script === 'function' ? script(payload) : script;
       const body = Array.isArray(out) ? { answers: out } : { answers: [], ...out };
-      return runtime.call({ ...req, fake: [{ text: JSON.stringify(body), costUsd: 0.001 }] });
+      return await runtime.call({ ...req, fake: [{ text: JSON.stringify(body), costUsd: 0.001 }] });
     } };
 }
 const options = { now: NOW, packDirs: [], allowed: () => true, funded: () => true };

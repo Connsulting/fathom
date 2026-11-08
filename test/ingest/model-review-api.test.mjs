@@ -16,7 +16,7 @@ test('authenticated HTTP review guards, exact owner statement, versions, foreign
   const x = await fixture();
   const config = { ...x.config, publicUrl: 'https://app.example.test', allowedHosts: ['127.0.0.1', 'app.example.test'] };
   const session = await createSessionFixture(x.platform);
-  const auth = createAuthService({ platform: x.platform, config, transport: { send: async () => {} } });
+  const auth = await createAuthService({ platform: x.platform, config, transport: { send: async () => {} } });
   const keys = createKeyService({ platform: x.platform, secret: () => x.secrets.mcpSecret(), creatorActive: auth.creatorActive });
   const runtimes = createRuntimeRegistry({ platform: x.platform, config, secrets: x.secrets });
   const server = http.createServer(createHandler({ platform: x.platform, config, auth, keys, runtimes }));

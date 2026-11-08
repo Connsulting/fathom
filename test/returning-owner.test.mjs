@@ -15,7 +15,7 @@ async function withRealStore(fn) {
     await setSetting(t.db, 'mode', 'real');
     return await fn(t.db);
   } finally {
-    t.close();
+    await t.close();
   }
 }
 
@@ -38,7 +38,7 @@ test('a store with no mode row is real and, empty, is fresh', async () => {
     assert.equal(sc.live.mode, 'real');
     assert.equal(sc.live.demo, 'fresh');
   } finally {
-    t.close();
+    await t.close();
   }
 });
 
@@ -71,7 +71,7 @@ test('the demo seed stays november', async () => {
     assert.equal(sc.live.mode, 'demo');
     assert.equal(sc.live.demo, 'november');
   } finally {
-    t.close();
+    await t.close();
   }
 });
 
@@ -83,6 +83,6 @@ test('a demo store with data but onboarding not done is still fresh (demo rule u
     await setSetting(t.db, 'onboarding', { done: false, step: 0 });
     assert.equal((await buildScenario(t.db)).live.demo, 'fresh');
   } finally {
-    t.close();
+    await t.close();
   }
 });

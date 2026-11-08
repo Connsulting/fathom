@@ -19,7 +19,7 @@ const NOW = '2026-11-05T12:00:00.000Z';
 const CLOCK = NOW.slice(0, 10);
 async function store(t) {
   const s = await realStore();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   await setSetting(s.db, 'clock', CLOCK);
   for (const [key, value] of Object.entries({ 'household.filingStatus': 'single', 'household.state': 'VA',
     'household.birthYears': { owner: 1985 }, 'income.sCorp': false, 'income.selfEmployed': false, 'income.partnership': false })) {

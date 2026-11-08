@@ -117,7 +117,7 @@ test('the scheduler reads settings.timezone, defaults to America/New_York and fa
       assert.equal(rows.length, 1, `${c.tz} at ${c.now}`);
       assert.equal(rows[0].period_key, c.want, `${c.tz} at ${c.now}`);
       assert.equal(h.calls[0].periodKey, c.want);
-    } finally { t.done(); }
+    } finally { await t.done(); }
   }
 });
 
@@ -136,7 +136,7 @@ test('brief-email is due at 07:00 local on the 1st and not before; local time de
     await s.tick();
     assert.deepEqual((await runsOf(t.db, 'brief-email')).map((r) => r.period_key), ['2026-11', '2026-12']);
     assert.equal(h.calls.length, 2);
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('idempotence: two ticks in one period run once; a failed run is not retried that period; the next period runs', async () => {
@@ -166,8 +166,8 @@ test('idempotence: two ticks in one period run once; a failed run is not retried
       await s2.tick();
       assert.equal(calls, 2, 'the next period runs');
       assert.deepEqual((await runsOf(t2.db, 'deadline-alerts')).map((r) => r.period_key), ['2026-11-05', '2026-11-06']);
-    } finally { t2.done(); }
-  } finally { t.done(); }
+    } finally { await t2.done(); }
+  } finally { await t.done(); }
 });
 
 test('catch-up: after several missed periods one tick runs exactly once, for the latest period', async () => {
@@ -185,7 +185,7 @@ test('catch-up: after several missed periods one tick runs exactly once, for the
     assert.deepEqual((await runsOf(t.db, 'brief-email')).map((r) => r.period_key), ['2026-11', '2027-02']);
     assert.equal(daily.calls.length, 2);
     assert.equal(monthly.calls.length, 2);
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('lock: only the lease holder runs; runNow on the other is locked; an expired lease is taken over', async () => {
@@ -213,7 +213,7 @@ test('lock: only the lease holder runs; runNow on the other is locked; an expire
     await assert.rejects(() => sa.runNow('freshness'), (e) => e instanceof SchedulerError && e.code === 'locked');
   } finally {
     await dbB.close();
-    t.done();
+    await t.done();
   }
 });
 
@@ -237,7 +237,7 @@ test('concurrent runNow of the same job is refused with code running and yields 
     // Liveness: once finished, another manual run is accepted.
     await s.runNow('freshness');
     assert.equal((await runsOf(t.db, 'freshness')).length, 2);
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('job_runs rows carry status, period_key, trigger, duration_ms and an identifier-only error_class', async () => {
@@ -272,7 +272,7 @@ test('job_runs rows carry status, period_key, trigger, duration_ms and an identi
         assert.ok(!String(v ?? '').includes('owner@example.invalid'), `job_runs.${col} carries no address`);
       }
     }
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('unknown job id is unknown_job; jobs() lists only jobs with a handler; trigger without a handler is a no-op', async () => {
@@ -285,7 +285,7 @@ test('unknown job id is unknown_job; jobs() lists only jobs with a handler; trig
     await s.trigger('plan', 'ingest');
     assert.equal((await runsOf(t.db, 'plan')).length, 0, 'no plan handler: nothing runs');
     assert.ok(await t.db.prepare("SELECT 1 AS x FROM jobs WHERE id = 'freshness'").get(), 'ensureJobs wrote the jobs row');
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('plan handler: scheduled, manual and ingest triggers each run through the scheduler with the lock held', async () => {
@@ -314,7 +314,7 @@ test('plan handler: scheduled, manual and ingest triggers each run through the s
     assert.deepEqual(seen.map((x) => x.holder), ['plan-holder', 'plan-holder', 'plan-holder'], 'lock held for every trigger');
     assert.deepEqual(seen.map((x) => x.jobRunId), rows.map((r) => r.id), 'ctx.jobRunId is the scheduler row');
     assert.ok(rows.every((r) => r.status === 'ok'));
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 // A plan handler whose runs wait on a promise the test resolves.
@@ -337,7 +337,7 @@ test('trigger when idle runs immediately', async () => {
     const run = await s.trigger('plan', 'ingest');
     assert.equal(run.trigger, 'ingest');
     assert.equal(plan.calls.length, 1);
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('trigger during a plan run queues exactly one ingest rerun after it finishes', async () => {
@@ -364,7 +364,7 @@ test('trigger during a plan run queues exactly one ingest rerun after it finishe
     const rows = await runsOf(t.db, 'plan');
     assert.deepEqual(rows.map((r) => r.trigger), ['manual', 'ingest']);
     assert.ok(rows.every((r) => r.status === 'ok'));
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('several triggers during one plan run coalesce into a single rerun; trigger never rejects', async () => {
@@ -387,7 +387,7 @@ test('several triggers during one plan run coalesce into a single rerun; trigger
     await settle(80);
     assert.equal(g.started.length, 2, 'the coalesced triggers did not add runs');
     assert.equal((await runsOf(t.db, 'plan')).length, 2);
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('fixed clock: config.clock makes every period of that date due, whatever now says', async () => {
@@ -399,7 +399,7 @@ test('fixed clock: config.clock makes every period of that date due, whatever no
     const keys = Object.fromEntries((await t.db.prepare('SELECT job_id, period_key FROM job_runs').all()).map((r) => [r.job_id, r.period_key]));
     assert.deepEqual(keys, { 'brief-email': '2026-11', 'deadline-alerts': '2026-11-05', freshness: '2026-11-02', plan: '2026-11-05', 'trash-purge': '2026-11-05' });
     assert.equal(handlers['brief-email'].calls[0].clock, '2026-11-05', 'ctx.clock is the fixed date');
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('jobs() returns lastRun and next for each handled job; runs() lists recent runs', async () => {
@@ -421,7 +421,7 @@ test('jobs() returns lastRun and next for each handled job; runs() lists recent 
     assert.equal(new Date(brief.nextAt).toISOString(), '2026-12-01T12:00:00.000Z', 'next brief: Dec 1 07:00 New York');
     assert.equal(s.runs({ limit: 1 }).length, 1);
     assert.equal(s.runs({ limit: 10 }).length, 2);
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('start() and stop() leave no timer running', async () => {
@@ -430,7 +430,7 @@ test('start() and stop() leave no timer running', async () => {
     const s = schedulerFor(t, { handlers: { freshness: counter() }, clock: clockAt('2026-11-05T15:00:00Z') });
     s.start();
     s.stop();
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('engine off: the default brief-email handler still sends the brief through the transport', async () => {
@@ -457,7 +457,7 @@ test('engine off: the default brief-email handler still sends the brief through 
     assert.equal(send.length, 1);
     assert.equal(send[0].status, 'sent');
     assert.equal((await t.db.prepare('SELECT count(*) AS n FROM spend_ledger').get()).n, spendBefore, 'no model spend with the engine off');
-  } finally { t.close(); rmSync(t.dataDir, { recursive: true, force: true }); }
+  } finally { await t.close(); rmSync(t.dataDir, { recursive: true, force: true }); }
 });
 
 const realClock = { now: () => new Date() };
@@ -479,7 +479,7 @@ test('ensureJobs inserts a jobs row for every JOBS entry via tick, start and job
       assert.deepEqual(ids, JOBS.map((j) => j.id).sort(), `${how}: every JOBS entry has a row, plan included`);
       assert.deepEqual(s.jobs().map((j) => j.id), ['freshness'], `${how}: jobs() lists only handled jobs`);
       await s.stop();
-    } finally { t.done(); }
+    } finally { await t.done(); }
   }
 });
 
@@ -508,7 +508,7 @@ test('lease renewal: a long run keeps the lock past leaseMs so a second schedule
     assert.equal(plan.calls.length, 1);
   } finally {
     await dbB.close();
-    t.done();
+    await t.done();
   }
 });
 
@@ -542,7 +542,7 @@ test('stop() waits for the running handler and its final job_runs row before rel
     await settle(100);
     assert.equal(g.started.length, 1, 'the queued rerun was dropped');
     assert.equal((await runsOf(t.db, 'plan')).length, 1);
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('stop() is bounded by drainMs: a handler that never finishes does not hold it, and the lease is released', async () => {
@@ -555,7 +555,7 @@ test('stop() is bounded by drainMs: a handler that never finishes does not hold 
     assert.equal((await lockRow(t.db)).holder, 'hung-holder');
     await withTimeout(s.stop(), 2000, 'stop');
     assert.equal(await lockRow(t.db), undefined, 'lease released after the drain timeout');
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('stop() with nothing running resolves promptly and releases the lease', async () => {
@@ -566,7 +566,7 @@ test('stop() with nothing running resolves promptly and releases the lease', asy
     assert.equal((await lockRow(t.db)).holder, 'idle-holder');
     await withTimeout(s.stop(), 500, 'stop');
     assert.equal(await lockRow(t.db), undefined);
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('a paused household: ticks and the job listing write nothing; resumed, the next tick runs the due job', async () => {
@@ -581,7 +581,7 @@ test('a paused household: ticks and the job listing write nothing; resumed, the 
     });
     const before = await logicalDigest(t.db);
     await s.tick();
-    s.jobs();
+    await s.jobs();
     assert.equal(await logicalDigest(t.db), before, 'no job rows, labels, lease or runs written while paused');
     assert.equal(h.calls.length, 0);
     enabled = true;
@@ -589,5 +589,5 @@ test('a paused household: ticks and the job listing write nothing; resumed, the 
     assert.equal(h.calls.length, 1, 'the resumed tick runs the due job');
     assert.notEqual(await logicalDigest(t.db), before);
     await s.stop();
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });

@@ -196,8 +196,8 @@ function makeReader(db, clock) {
   return { tracked, observations, figure, contributions };
 }
 
-export function captureGoalPath(db, goal, clock) {
-  const a = makeReader(db, clock).tracked(goal);
+export async function captureGoalPath(db, goal, clock) {
+  const a = await makeReader(db, clock).tracked(goal);
   if (!a || !finite(a.v) || !a.dataThrough) return null;
   return { startDate: a.dataThrough, startValue: a.v, sources: a.locator.sources };
 }
@@ -229,7 +229,7 @@ async function metersOf(db, clock, reader) {
   const retirement = await factOf(db, `pace.retirement.${year}`);
   const tax = await factOf(db, `pace.tax.${year}`);
   const income = await factOf(db, `pace.income.${year}`);
-  const incomeActual = reader.figure('inc.ytd.total');
+  const incomeActual = await reader.figure('inc.ytd.total');
   const result = (used, limit) => ({ ...paceMeter({ used, limit, clock }), deadline: `${year}-12-31` });
   return {
     retirement: result(factFigure(retirement, 'used'), factFigure(retirement, 'limit', 't')),
@@ -255,23 +255,23 @@ export async function buildPace(db, { clock: override } = {}) {
   // Done goals (done_at set, or a seed def whose status is done) are not paced.
   const defs = (await db.prepare('SELECT id, def FROM goals WHERE archived_at IS NULL AND done_at IS NULL ORDER BY sort, created_at, id').all())
     .map(r => ({ ...parse(r.def, {}), id: r.id })).filter(g => g.status !== 'done');
-  const paceOf = goal => {
+  const paceOf = async goal => {
     const kind = kindOf(goal);
-    const result = kind === 'range' ? rangePace({ goal, actual: reader.tracked(goal), clock })
-      : kind === 'floor' ? floorPace({ goal, actual: reader.tracked(goal), clock })
-        : kind === 'contribution' ? contributionPace({ goal, ...reader.contributions(goal), clock })
-          : goalPace({ goal, actual: reader.tracked(goal), clock });
+    const result = kind === 'range' ? rangePace({ goal, actual: await reader.tracked(goal), clock })
+      : kind === 'floor' ? floorPace({ goal, actual: await reader.tracked(goal), clock })
+        : kind === 'contribution' ? contributionPace({ goal, ...await reader.contributions(goal), clock })
+          : goalPace({ goal, actual: await reader.tracked(goal), clock });
     // owner here is whose goal, not origin 'owner' (typed by the owner).
     return { ...result, kind, owner: isGoalOwner(goal.owner) ? goal.owner : null, priority: PRIORITIES.includes(goal.priority) ? goal.priority : null };
   };
-  const seriesOf = goal => {
+  const seriesOf = async goal => {
     const kind = kindOf(goal);
     if (kind === 'floor' || kind === 'contribution') return { series: null, reason: 'kind_not_charted', dataEnd: null };
-    return monthlyPace({ goal: kind === 'range' ? rangeGoal(goal) : goal, observations: reader.observations(goal), clock });
+    return monthlyPace({ goal: kind === 'range' ? rangeGoal(goal) : goal, observations: await reader.observations(goal), clock });
   };
   const goals = defs.map(paceOf);
   return { clock, rollup: paceRollup(goals, clock), goals,
-    series: { goals: Object.fromEntries(defs.map(goal => [goal.id, seriesOf(goal)])),
+    series: { goals: Object.fromEntries(await mapSeries(defs, async goal => [goal.id, await seriesOf(goal)])),
       householdSavings: await savingsSeries(db, clock) }, meters: await metersOf(db, clock, reader) };
 }
 

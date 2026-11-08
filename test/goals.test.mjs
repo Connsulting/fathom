@@ -249,7 +249,7 @@ async function fakeAnswerer(s) {
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' });
   const engine = await createRuntimeEngine({ db: s.db, config });
   const packs = createLivePacks(s.db, { dataDir: s.root });
-  packs.refresh();
+  await packs.refresh();
   return { engine, answerer: createLiveAnswerer({ engine, packs, root: s.root, services: { engine, config: { dataDir: s.root } } }) };
 }
 

@@ -185,7 +185,7 @@ export async function createHouseholdContext({
   const current = async () => await platform.prepare('SELECT status, generation FROM households WHERE id = ?').get(householdId);
   const jobsAllowed = async () => {
     const row = await current();
-    return row?.status === 'active' && Number(row.generation) === generation && outbound.enabled('jobs');
+    return row?.status === 'active' && Number(row.generation) === generation && await outbound.enabled('jobs');
   };
   const vault = createVaultAccessor({ platform, secrets, db, config, householdId, relativeRoot });
   const emailRecipients = createRecipientPolicy({ platform, householdId, generation, mode, config, readFile: transportOptions.readFile });
@@ -201,7 +201,7 @@ export async function createHouseholdContext({
     const { testTransport = null, fundingNow = Date.now } = engineOptions ?? {};
     householdEngine = await createRuntimeEngine({
       db, config, now: now ?? (async () => new Date(await clockNow(db, config.clock))),
-      allowed: () => outbound.enabled('engine'), funded: async () => await instanceFunded(platform),
+      allowed: async () => await outbound.enabled('engine'), funded: async () => await instanceFunded(platform),
       platform, householdId, generation, fundingNow, testTransport,
     });
     householdEngine.init().then(() => {

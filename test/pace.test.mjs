@@ -16,7 +16,7 @@ const clock = '2032-06-29';
 // A real instance (store plus its synthetic platform.sqlite), so the server can start on it.
 async function store(t) {
   const s = await tempInstance({ mode: 'real', init: async db => { await setSetting(db, 'clock', clock); await setSetting(db, 'mode', 'real'); } });
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   return s;
 }
 async function account(db, id, date = clock, amount = 18000) {
@@ -181,7 +181,7 @@ test('GET pace, scenario and MCP share the deterministic read-only result, inclu
 
 test('demo pace envelopes preserve every figure, its unit, data date and replayable reference', async t => {
   const s = await tempDb();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   await seedDemo(s.db);
   const demoClock = demo.meta.clock;
   const year = demoClock.slice(0, 4);

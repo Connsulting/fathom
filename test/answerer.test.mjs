@@ -47,14 +47,14 @@ const LEAVE = demo.ask.suggested.find(q => q.id === 'leave').q;
 // a synthetic pack in the household's pack directory.
 async function demoStore(t, env = {}, { prepare } = {}) {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   await seedDemo(s.db);
   const root = s.dataDir;
   if (prepare) prepare(root);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', ...env });
   const runtime = await createRuntimeEngine({ db: s.db, config });
   const packs = createLivePacks(s.db, { dataDir: root });
-  packs.refresh();
+  await packs.refresh();
   return { ...s, root, config, runtime, packs };
 }
 
@@ -1137,7 +1137,7 @@ test('R3 A contract: scalar read operations return no sentinel argument outside 
   assert.deepEqual(sorted(names), sorted(REGISTRY.filter(x => x.kind === 'read' && !x.askOnly && !structured.includes(x.name)).map(x => x.name)),
     'a context without trusted identity offers read tools only');
   const recId = (await s.db.prepare("SELECT id FROM recs WHERE status != 'hidden' ORDER BY id LIMIT 1").get()).id;
-  const realPack = s.packs.loaded().find(p => p.id === 's-corp-owner');
+  const realPack = (await s.packs.loaded()).find(p => p.id === 's-corp-owner');
   // The tool context the answerer hands every call: its household's db and root.
   const ctx = { db: s.db, now: await clockNow(s.db), dataDir: s.root };
 
@@ -1330,7 +1330,7 @@ test('R3 B (F1): inline citations (IRS Publication 560) in the active demo packs
   const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } });
 
   // Self-check: with every pack whose entries mention 560 off, nothing else in the demo store grounds $560.
-  const citing = new Set(s.packs.loaded().filter(p => p.entries.some(e => e.body.includes('560'))).map(p => p.id));
+  const citing = new Set((await s.packs.loaded()).filter(p => p.entries.some(e => e.body.includes('560'))).map(p => p.id));
   assert.ok(citing.has('advanced-retirement'));
   const rows = (await s.db.prepare('SELECT id, def FROM packs_state').all()).filter(r => citing.has(JSON.parse(r.def).manifest)).map(r => r.id);
   const setActive = async value => { for (const id of rows) await s.db.prepare('UPDATE packs_state SET active = ? WHERE id = ?').run(value, id); };

@@ -28,7 +28,7 @@ async function storeText(db) {
 
 async function withStore(fn) {
   const s = await realStore();
-  try { return await fn(s); } finally { s.close(); }
+  try { return await fn(s); } finally { await s.close(); }
 }
 
 // Capture console output during fn.
@@ -266,7 +266,7 @@ test('the simplefin-sync job runs under the scheduler, records counts and trigge
     assert.deepEqual([failed.status, failed.errorClass], ['error', 'simplefin_revoked']);
     await s.stop();
   } finally {
-    t.close();
+    await t.close();
     rmSync(t.dataDir, { recursive: true, force: true });
   }
 });

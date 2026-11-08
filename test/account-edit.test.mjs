@@ -29,7 +29,7 @@ async function status(fn) {
 
 const withStore = async (fn) => {
   const s = await realStore();
-  try { await fn(s, await mods()); } finally { s.close(); }
+  try { await fn(s, await mods()); } finally { await s.close(); }
 };
 
 const row = async (db, id) => await db.prepare('SELECT * FROM accounts WHERE id = ?').get(id);

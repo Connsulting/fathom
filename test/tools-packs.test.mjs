@@ -284,7 +284,7 @@ describe('demo store with the repo packs', () => {
       const want = activePacks(loadPacks([join(ROOT, 'packs')]), {});
       assert.deepEqual(list.map(p => [p.id, p.status]), want.map(e => [e.pack.id, e.status]));
     } finally {
-      empty.close();
+      await empty.close();
     }
   });
 });

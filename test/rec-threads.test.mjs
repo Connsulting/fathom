@@ -295,13 +295,13 @@ test('recForKey resolves a rec id and a rec thread to the rec, and anything else
 
 async function demoCtx(t) {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   await seedDemo(s.db);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' });
   const engine = await createRuntimeEngine({ db: s.db, config });
   // The temp store's directory stands in as the household root.
   const packs = createLivePacks(s.db, { dataDir: s.dataDir });
-  packs.refresh();
+  await packs.refresh();
   const answerer = createLiveAnswerer({ engine, packs, root: s.dataDir, services: { engine, config: { dataDir: s.dataDir } } });
   const ctx = (body = {}, extra = {}) => ({ db: s.db, config, engine, packs, answerer, params: {}, body, ...extra });
   return { ...s, config, engine, packs, answerer, ctx };

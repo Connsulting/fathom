@@ -85,9 +85,9 @@ async function packRow(db, id) {
 }
 
 // A pack row's definition with its manifest fields when a loaded manifest backs it.
-function packDef(ctx, row) {
+async function packDef(ctx, row) {
   const def = parse(row.def, {});
-  return ctx.packs ? ctx.packs.view(row.id, def) : def;
+  return ctx.packs ? await ctx.packs.view(row.id, def) : def;
 }
 
 async function recEvent(db, recId, action, arg, from, to, actor = 'ui') {
@@ -212,7 +212,7 @@ export async function packToggle(ctx) {
 export async function packWhatIf(ctx) {
   const { db } = ctx;
   const first = await packRow(db, ctx.params.id);
-  const def = packDef(ctx, first);
+  const def = await packDef(ctx, first);
   if (!def.whatIf) throw new HttpError(400, `pack ${first.id} has no what-if`);
   const key = 'pack:' + first.id;
   const reply = first.what_if_done ? null
@@ -238,8 +238,8 @@ export async function packWhatIf(ctx) {
 }
 
 // GET /api/packs/:id/entries/:entryId: one entry of a manifest-backed pack, from the loaded packs.
-export function packEntry(ctx) {
-  const entry = need(ctx, 'packs').entry(ctx.params.id, ctx.params.entryId);
+export async function packEntry(ctx) {
+  const entry = await need(ctx, 'packs').entry(ctx.params.id, ctx.params.entryId);
   if (!entry) throw new HttpError(404, `no entry ${ctx.params.entryId} in pack ${ctx.params.id}`);
   return { entry };
 }

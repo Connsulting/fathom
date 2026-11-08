@@ -19,7 +19,7 @@ const clock = '2026-11-05';
 const entity = { name: 'Example Studio', type: 's_corp', owner: 'owner', classified: true };
 const base = () => ({ clock, year: 2026, taxYear: 2026, accounts: [], pnl: [], pnlHistory: [], documents: [], transactions: [], confirm: [], withholding: [], conflictArchive: [], aliases: [] });
 const answer = async (db, key, value) => answerFacts(db, [{ key, value }], { now: `${clock}T12:00:00Z`, replan: async () => {} });
-const prepare = async (db, data) => { const p = await prepareRecFacts(db, data); p.write(); return p; };
+const prepare = async (db, data) => { const p = await prepareRecFacts(db, data); await p.write(); return p; };
 
 test('account plan inference is stored with evidence, refreshes, and Undo preserves owner answers', async t => {
   const db = await openDb(':memory:'); await migrate(db); t.after(async () => await db.close());

@@ -23,7 +23,7 @@ const KEY = 'ask:0123456789ab';
 
 async function store(t, { demo: withDemo = false } = {}) {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   if (withDemo) await seedDemo(s.db);
   else await setSetting(s.db, 'clock', CLOCK);
   const config = { clock: CLOCK, dataDir: s.dataDir };

@@ -134,12 +134,12 @@ test('platform migration binds existing hashes and preserves account and passkey
     assert.equal(row.membership_version, 7);
     assert.equal(row.key_hash, hashKey(token, secret));
     const keys = createKeyService({ platform: db, secret: () => secret, creatorActive: () => true });
-    assert.equal(keys.verify(token).id, 'owned');
+    assert.equal((await keys.verify(token)).id, 'owned');
     assert.ok((await db.prepare("SELECT revoked_at FROM api_keys WHERE id = 'unbound'").get()).revoked_at);
     assert.equal((await db.prepare("SELECT revoked_at FROM api_keys WHERE id = 'demo'").get()).revoked_at, null);
-    assert.throws(() => keys.create({ householdId: 'alpha', name: 'Unbound real key' }), { code: 'forbidden' });
-    const fresh = keys.create({ householdId: 'alpha', userId: 'creator', name: 'Bound real key' });
-    assert.equal(keys.verify(fresh.key).id, fresh.record.id);
+    assert.throws(async () => await keys.create({ householdId: 'alpha', name: 'Unbound real key' }), { code: 'forbidden' });
+    const fresh = await keys.create({ householdId: 'alpha', userId: 'creator', name: 'Bound real key' });
+    assert.equal((await keys.verify(fresh.key)).id, fresh.record.id);
     assert.deepEqual(await db.prepare("SELECT name, sql FROM sqlite_master WHERE name IN ('users', 'passkeys') ORDER BY name").all(), before);
   } finally { await db.close(); }
 });

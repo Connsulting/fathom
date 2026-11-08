@@ -518,7 +518,7 @@ describe('sendEmail and listSends', () => {
           assert.ok(!String(v ?? '').includes(TO), `email_sends.${col} holds no address`);
         }
       }
-    } finally { t.close(); rmSync(t.dataDir, { recursive: true, force: true }); }
+    } finally { await t.close(); rmSync(t.dataDir, { recursive: true, force: true }); }
   });
 
   test('a non-EmailError is recorded as other and rethrown', async () => {
@@ -529,7 +529,7 @@ describe('sendEmail and listSends', () => {
       const row = await t.db.prepare('SELECT * FROM email_sends').get();
       assert.equal(row.status, 'failed');
       assert.ok(Object.values(row).includes('other'), 'error code other recorded');
-    } finally { t.close(); rmSync(t.dataDir, { recursive: true, force: true }); }
+    } finally { await t.close(); rmSync(t.dataDir, { recursive: true, force: true }); }
   });
 
   test('listSends returns newest first and honours the limit', async () => {
@@ -541,7 +541,7 @@ describe('sendEmail and listSends', () => {
       assert.deepEqual((await listSends(t.db)).map((s) => s.subject), ['Synthetic 3', 'Synthetic 2', 'Synthetic 1']);
       assert.deepEqual((await listSends(t.db, { limit: 2 })).map((s) => s.subject), ['Synthetic 3', 'Synthetic 2']);
       for (const s of await listSends(t.db)) for (const k of ['text', 'html', 'body']) assert.ok(!(k in s), `no ${k} in history`);
-    } finally { t.close(); rmSync(t.dataDir, { recursive: true, force: true }); }
+    } finally { await t.close(); rmSync(t.dataDir, { recursive: true, force: true }); }
   });
 });
 

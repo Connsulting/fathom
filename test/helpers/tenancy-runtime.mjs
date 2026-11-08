@@ -136,15 +136,15 @@ export async function enrollSession(platform, householdId, email, role = 'member
   const { createAuthStore } = await src('src/auth/store.mjs');
   const store = createAuthStore(platform);
   let user = await store.findUser(email);
-  if (!user || store.membership(user.id, householdId)?.status !== 'active') {
+  if (!user || (await store.membership(user.id, householdId))?.status !== 'active') {
     const invited = store.invite(householdId, email, { role });
     await store.consumeInvitation(invited.token, invited.user.id);
     user = invited.user;
   }
-  if (store.getUser(user.id).enrolledAt == null) await store.markEnrolled(user.id);
-  user = store.getUser(user.id);
+  if ((await store.getUser(user.id)).enrolledAt == null) await store.markEnrolled(user.id);
+  user = await store.getUser(user.id);
   const { token } = await store.createSession(user.id);
-  return { user, householdId, role: store.membership(user.id, householdId).role, token, cookie: `__Host-fathom-session=${token}` };
+  return { user, householdId, role: (await store.membership(user.id, householdId)).role, token, cookie: `__Host-fathom-session=${token}` };
 }
 
 export const sessionHash = token => sha256(token);
@@ -661,7 +661,7 @@ export async function legacyScenario(fx) {
     // (which only the tenancy migration applies), so bring this throwaway copy up with those.
     for (const m of listMigrations().filter(x => x.id > 27)) await db.applySchema(readFileSync(m.file, 'utf8'));
     const packs = createLivePacks(db, { dataDir: fx.dataDir });
-    packs.refresh();
+    await packs.refresh();
     const config = { clock: CLOCK, engine: 'fake', dataDir: fx.dataDir };
     return structuredClone(await scenarioOf({ db, config, packs, household: { db, root: fx.dataDir, packs, config } }));
   } finally {

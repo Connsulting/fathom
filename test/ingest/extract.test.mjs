@@ -35,7 +35,7 @@ before(async () => {
 
 async function withStore(fn) {
   const s = await realStore();
-  try { return await fn(s); } finally { s.close(); }
+  try { return await fn(s); } finally { await s.close(); }
 }
 
 const paystubFile = (opts = {}, name) => textFile(name || `paystub-${opts.payDate || '2032-03-15'}-${(opts.employer || 'a').length}.txt`, paystubText(opts), 'text/plain');

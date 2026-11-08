@@ -159,9 +159,9 @@ describe('MCP secret', () => {
   test('a key service whose secret is unavailable refuses every call with unavailable', async () => {
     const none = createKeyService({ platform: t.platform, secret: () => { throw new Error('mcp_secret_missing'); }, creatorActive, now: () => clock });
     const before = (await rows()).length;
-    assert.throws(() => none.create({ householdId: hh, name: 'No secret' }), isCode('unavailable'));
-    assert.throws(() => none.list({ householdId: hh }), isCode('unavailable'));
-    assert.throws(() => none.verify('fathom_' + 'Q'.repeat(43)), isCode('unavailable'));
+    assert.throws(async () => await none.create({ householdId: hh, name: 'No secret' }), isCode('unavailable'));
+    assert.throws(async () => await none.list({ householdId: hh }), isCode('unavailable'));
+    assert.throws(async () => await none.verify('fathom_' + 'Q'.repeat(43)), isCode('unavailable'));
     assert.equal((await rows()).length, before, 'nothing stored without the secret');
   });
 });

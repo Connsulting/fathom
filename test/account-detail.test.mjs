@@ -52,7 +52,7 @@ test('account detail names the account, its feeds and its freshness, scoped to t
     const other = await accountDetail(ctx(s, d.account.id === chase ? chase : chase));
     assert.equal(other.feeds.every((f) => f.label !== 'Other'), true);
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -82,7 +82,7 @@ test('the balance date is the balance row, not the newest transaction', async ()
     await s.db.prepare('INSERT INTO positions (account_id, as_of, symbol, value) VALUES (?, ?, ?, ?)').run(chase, '2032-04-30', 'XYZ', 60);
     assert.equal((await accountDetail(ctx(s, chase))).balance.asOf, '2032-04-30');
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -104,7 +104,7 @@ test('paging does not skip or repeat rows that share a date', async () => {
     assert.equal(seen.length, 12);
     assert.equal(new Set(seen).size, 12);
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -117,7 +117,7 @@ test('account detail rejects a missing or unknown account', async () => {
     assert.equal(await status(async () => await accountDetail({ db: s.db, config: s.config, params: {}, query: {} })), 400);
     assert.equal(await status(async () => await accountDetail(ctx(s, 'nope'))), 404);
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -136,7 +136,7 @@ test('a connected account lists SimpleFIN with its sync and balance dates and ca
     assert.equal(sf.balanceDate, '2032-02-08');
     assert.equal(d.syncable, true);
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -164,7 +164,7 @@ test('transactions page newest first, once each, and only for the asked account'
     assert.equal(h.items.length, 1);
     assert.equal(h.next, null);
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -182,7 +182,7 @@ test('transactions filter by text and date range, and a percent sign is just a c
     assert.deepEqual(range.items.map((t) => t.date), ['2032-02-05', '2032-02-04', '2032-02-03']);
     assert.equal(range.total, 3);
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -200,7 +200,7 @@ test('every amount carries provenance: a figure and the source it came from', as
     assert.ok(page.sources[f.src], 'the figure names a source');
     assert.match(page.sources[f.src].label, /first\.csv/);
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -220,6 +220,6 @@ test('transactions refuse bad input', async () => {
     assert.equal(await bad({ q: 'x'.repeat(101) }), 400);
     assert.equal(await status(async () => await accountTransactions(ctx(s, 'nope'))), 404);
   } finally {
-    s.close();
+    await s.close();
   }
 });

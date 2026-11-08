@@ -8,7 +8,7 @@ import { answerShape, questionFor } from '../src/jobs/triggers/common.mjs';
 const now = '2026-11-05T12:00:00Z';
 test('C7 facts accept their declared shapes and reject malformed neighbors atomically', async t => {
   const s = await spendingStore(t);
-  s.account('ret','retirement','Owner'); s.account('roth','roth','Spouse'); s.account('ira','ira','Owner');
+  await s.account('ret','retirement','Owner'); await s.account('roth','roth','Spouse'); await s.account('ira','ira','Owner');
   const cases = [
     ['household.dependentAges',[3,8],[-1]],
     ['household.dependentBirthDates',['2021-09-02','2018-02-28'],['2021-02-29']],
@@ -42,7 +42,7 @@ test('C7 facts accept their declared shapes and reject malformed neighbors atomi
 });
 
 test('account eligibility follows the plan type in the same atomic answer batch in either order',async t=>{
- const s=await spendingStore(t);s.account('plan','retirement','owner');
+ const s=await spendingStore(t);await s.account('plan','retirement','owner');
  const separation={key:'accounts.separationDate',value:{plan:'2035-01-01'}};
  const plan={key:'accounts.planType',value:{plan:'401k'}};
  await recordFactAnswers(s.db,[separation,plan],{now});
@@ -54,7 +54,7 @@ test('account eligibility follows the plan type in the same atomic answer batch 
 
 test('answer.fact collects Roth basis for accounts identified by plan type and bridge counts it',async t=>{
  const s=await spendingStore(t);
- for(const [id,kind] of [['ira-plan','ira'],['workplace-ira','retirement']])s.account(id,kind,'owner');
+ for(const [id,kind] of [['ira-plan','ira'],['workplace-ira','retirement']])await s.account(id,kind,'owner');
  await s.fact('accounts.planType',{'ira-plan':'roth_ira','workplace-ira':'roth_ira'});
  for(const id of ['ira-plan','workplace-ira']) {
   await s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run(id,'2026-10-31',10000);

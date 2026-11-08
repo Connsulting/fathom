@@ -171,7 +171,7 @@ async function packetStore() {
   await db.prepare("INSERT INTO figures (key, v, src, kind, label, file_id, parser, locator, updated_at) VALUES ('cash_now', 4321, 'bank', 'a', 'Cash on hand', 'wb', 'tax-workbook', 'Sheet 2026!B2', '2026-10-01')").run();
   return {
     db, dataDir, tmpRoot, vault, w2, other,
-    async cleanup() { await household.close(); inst.close(); await rm(dataDir, { recursive: true, force: true }); },
+    async cleanup() { await household.close(); await inst.close(); await rm(dataDir, { recursive: true, force: true }); },
   };
 }
 
@@ -309,7 +309,7 @@ test('demo: the seeded store builds the year-end section through the same tables
     assert.equal(res.status, 200);
     const names = readZip(Buffer.from(await res.arrayBuffer())).map((e) => e.name);
     assert.deepEqual(names, ['index.html', 'documents/01-1098-Harbor-Bank-2026.txt', 'documents/02-Document-County-treasurer-2026.txt']);
-  } finally { await srv.close(); inst.close(); await rm(dataDir, { recursive: true, force: true }); }
+  } finally { await srv.close(); await inst.close(); await rm(dataDir, { recursive: true, force: true }); }
 });
 
 test('review fix: a client gone before streaming starts still removes the temp directory', async () => {

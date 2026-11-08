@@ -42,13 +42,13 @@ test.describe('answerable questions on the synthetic planning household', () => 
     origin = `http://localhost:${port}`;
     app = await startServer(loadConfig({ FATHOM_DATA: dataDir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_HOST: 'localhost', FATHOM_PORT: String(port), FATHOM_PUBLIC_URL: origin, FATHOM_CLOCK: clock, ...secretEnv(secretsFor(dataDir)) }));
     const auth = createAuthStore(app.platform);
-    const { user, token } = auth.invite(auth.servedHousehold().id, 'owner@example.test', { role: 'admin' });
+    const { user, token } = auth.invite((await auth.servedHousehold()).id, 'owner@example.test', { role: 'admin' });
     await auth.consumeInvitation(token, user.id);
     await auth.markEnrolled(user.id);
     session = await auth.createSession(user.id);
-    householdId = auth.servedHousehold().id;
+    householdId = (await auth.servedHousehold()).id;
     // The served household's own store, through the server's runtime registry.
-    store = app.runtimes.get(auth.servedHousehold().id).db;
+    store = app.runtimes.get((await auth.servedHousehold()).id).db;
   });
   test.afterAll(async () => {
     if (app) await app.close();

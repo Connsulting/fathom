@@ -175,14 +175,14 @@ test('durable quotas reserve atomically and roll over at UTC midnight', async t 
   assert.equal(await ctl.reserveRound('a', 11, 0.1), false);
   assert.equal(await ctl.reserveRound('b', 10, 0.1), true);
   assert.equal(await ctl.reserveRound('c', 10, 0.1), false);
-  ctl.close();
+  await ctl.close();
   ctl = await createDemoControl(c, { now: () => time });
   assert.equal(await ctl.reserveTurn('a', 'ip'), false);
   assert.equal(await ctl.reserveRound('c', 1, 0.01), false);
   time += 120000;
   assert.equal(await ctl.reserveTurn('a', 'ip'), true);
   assert.equal(await ctl.reserveRound('a', 10, 0.1), true);
-  ctl.close();
+  await ctl.close();
 });
 test('the API enforces token and global call caps before any fake model round', async t => {
   for (const settings of [{ FATHOM_PUBLIC_DEMO_TOKENS_PER_DAY: '1' }, { FATHOM_PUBLIC_DEMO_CALLS_PER_DAY: '1' }]) {
@@ -313,7 +313,7 @@ test('per-IP turn quota applies across visitors and persisted control handles', 
     assert.equal(await first.reserveTurn('one', 'same-ip'), true);
     assert.equal(await second.reserveTurn('two', 'same-ip'), false);
     assert.equal(await second.reserveTurn('two', 'other-ip'), true);
-  } finally { first.close(); second.close(); }
+  } finally { await first.close(); await second.close(); }
 });
 test('an existing cookie reopens only its own sandbox after a server restart', async t => {
   const s = await app(t);
@@ -342,5 +342,5 @@ test('global USD reservations, sandbox TTL/cap and per-IP creation cap are enfor
   await ctl.cleanup();
   assert.throws(async () => await ctl.sandbox(null, 'ip'), /creation limit/i);
   assert.notEqual((await ctl.sandbox(null, 'ip2')).id, first.id);
-  ctl.close();
+  await ctl.close();
 });

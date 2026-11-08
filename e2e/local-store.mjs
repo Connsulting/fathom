@@ -94,7 +94,7 @@ export async function startEnrolledServer({ dataDir, clock } = {}) {
     let householdId;
     try {
       const store = createAuthStore(platform);
-      const household = store.servedHousehold();
+      const household = await store.servedHousehold();
       householdId = household.id;
       const { user, token } = store.invite(household.id, 'owner@example.test', { role: 'admin' });
       await store.consumeInvitation(token, user.id);

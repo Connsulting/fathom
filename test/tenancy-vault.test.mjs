@@ -606,7 +606,7 @@ test('the running server has no FTHM1 path: only the offline migration reaches t
 
   // An upload through the real ingest pipeline is stored FTHM2 under the household root.
   const s = await realStore();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   const { ingestFile } = await src('src/ingest/pipeline.mjs');
   const r = await ingestFile(s.db, aggregatorFile('synthetic-fthm2.csv', [{ date: '2032-02-01', amount: '12.00', description: 'Synthetic row' }]), s.opts(await offEngine()));
   const row = await s.db.prepare('SELECT stored_path, sha256 FROM files WHERE id = ?').get(r.fileId);

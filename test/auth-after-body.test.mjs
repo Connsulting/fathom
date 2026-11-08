@@ -19,7 +19,7 @@ async function fixture(t) {
   const instance = await tempInstance();
   const config = loadConfig({ FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_PUBLIC_URL: 'http://localhost:8080' });
   const app = await serveAppFixture({ ...instance, config: { ...config, dataDir: instance.dataDir }, secrets: instance.secrets });
-  t.after(async () => { await app.close(); await app.runtimes.close(); instance.close(); });
+  t.after(async () => { await app.close(); await app.runtimes.close(); await instance.close(); });
   const session = await createSessionFixture(instance.platform, { email: 'member@example.test', role: 'member' });
   const key = app.keys.create({ householdId: instance.householdId, userId: session.user.id, name: 'Synthetic agent', scopes: ['write:recs'] });
   await instance.db.prepare("INSERT INTO recs (id, def, status, tasks_done, sort, updated_at) VALUES (?, ?, 'proposed', '[]', 0, ?)").run('synthetic-rec', JSON.stringify({ id: 'synthetic-rec', title: 'Synthetic recommendation', domain: 'data' }), new Date().toISOString());
@@ -67,7 +67,7 @@ function refuse(r, status) {
 }
 async function mutate(f, reason) {
   if (reason === 'revocation') f.app.keys.revoke(f.key.record.id, { householdId: f.householdId });
-  else if (reason === 'session revocation') f.store.revokeSession(f.session.token);
+  else if (reason === 'session revocation') await f.store.revokeSession(f.session.token);
   else if (reason === 'membership removal') {
     await f.platform.prepare("UPDATE household_memberships SET status = 'removed' WHERE user_id = ? AND household_id = ?").run(f.session.user.id, f.householdId);
   } else if (reason === 'suspension') await f.platform.prepare("UPDATE households SET status = 'suspended' WHERE id = ?").run(f.householdId);

@@ -186,7 +186,7 @@ test('export enrichment retires its Jev review card and preserves another unreso
   // Ingest runs in a household context (MT-03), so this store comes from the ingest helper.
   const {ingestFile,accountIdOf}=await import('../src/ingest/pipeline.mjs');
   const {aggregatorFile,realStore}=await import('./helpers/ingest.mjs');
-  const s=await realStore();t.after(()=>s.close());
+  const s=await realStore();t.after(async ()=>await s.close());
   const db=s.db;await setSetting(db,'clock','2032-11-05');
   await db.applySchema("INSERT INTO accounts (id,kind,name,mask) VALUES ('a','checking','Everyday','3456')");await vocabulary(db);
   const {answerItem}=await import('../src/ingest/confirm.mjs');

@@ -89,7 +89,7 @@ async function withApp(fn, seed = seeded) {
     await fn({ s, app, api, ...ids });
   } finally {
     await app?.close();
-    s.close();
+    await s.close();
   }
 }
 
@@ -238,7 +238,7 @@ const undoArgs = (receipt) => ({ available: true, tool: 'undo', args: { operatio
 
 async function withStore(fn, seed = seeded) {
   const s = await realStore();
-  try { await fn({ s, ...(await seed(s)) }); } finally { s.close(); }
+  try { await fn({ s, ...(await seed(s)) }); } finally { await s.close(); }
 }
 const scenarioIds = (s) => idsOf(B.buildScenario(s.db, { clock: CLOCK }));
 const askIds = async (s) => (await T.callTool('accounts', { operation: 'list' }, toolCtx(s))).map((a) => a.id);

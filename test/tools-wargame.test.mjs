@@ -21,7 +21,7 @@ const call = (ctx, name) => callTool('recommendations', { operation: 'wargame', 
 
 async function store(t, { planned = true } = {}) {
   const s = await tempDb();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   await seedDemo(s.db);
   const ctx = { db: s.db, dataDir: s.dataDir, clock: CLOCK };
   if (!planned) return ctx;
@@ -125,7 +125,7 @@ test('unplanned demo returns unavailable envelopes without manufacturing stored 
 
 test('no S corp returns not_built with the planner reason and no points', async t => {
   const s = await tempDb();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   const ctx = { db: s.db, dataDir: s.dataDir, clock: CLOCK };
   const result = await call(ctx, 'salary');
   assert.equal(result.status, 'not_built');

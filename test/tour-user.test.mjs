@@ -44,9 +44,9 @@ describe('the tour flag on a new column of users', () => {
       assert.ok(col, 'users.tour_pending exists');
       assert.equal(col.nn, 1);
       assert.equal(String(col.d), '0');
-      assert.equal(f.pending('u-owner'), 0);
+      assert.equal(await f.pending('u-owner'), 0);
       assert.ok(cols.some((c) => c.name === 'email') && cols.some((c) => c.name === 'enrolled_at'), 'existing columns are untouched');
-    } finally { f.close(); }
+    } finally { await f.close(); }
   });
 });
 
@@ -56,12 +56,12 @@ describe('the onboarding-complete transition', () => {
     try {
       assert.equal(H.scenarioOf(f.ctxFor('u-owner')).live.tourPending, false);
       H.onboarding(f.ctxFor('u-owner', { step: 3 }));
-      assert.equal(f.pending('u-owner'), 0, 'a step before the end does not start it');
+      assert.equal(await f.pending('u-owner'), 0, 'a step before the end does not start it');
       const out = H.onboarding(f.ctxFor('u-owner', { step: 6 }));
       assert.equal(out.scenario.live.tourPending, true);
-      assert.equal(f.pending('u-owner'), 1);
-      assert.equal(f.pending('u-spouse'), 0, 'only the user who finished onboarding');
-    } finally { f.close(); }
+      assert.equal(await f.pending('u-owner'), 1);
+      assert.equal(await f.pending('u-spouse'), 0, 'only the user who finished onboarding');
+    } finally { await f.close(); }
   });
 
   test('a user who finished onboarding before the change is never flagged, even on the done step again', async () => {
@@ -70,10 +70,10 @@ describe('the onboarding-complete transition', () => {
       D.setSetting(f.store.db, 'onboarding', { done: true, step: 6 });
       const out = H.onboarding(f.ctxFor('u-owner', { step: 6 }));
       assert.equal(out.scenario.live.tourPending, false);
-      assert.equal(f.pending('u-owner'), 0);
+      assert.equal(await f.pending('u-owner'), 0);
       H.onboarding(f.ctxFor('u-owner', { step: 2 }));
-      assert.equal(f.pending('u-owner'), 0, 'revisiting Setup does not flag either');
-    } finally { f.close(); }
+      assert.equal(await f.pending('u-owner'), 0, 'revisiting Setup does not flag either');
+    } finally { await f.close(); }
   });
 
   test('a demo or signed-out caller has no identity to flag', async () => {
@@ -82,7 +82,7 @@ describe('the onboarding-complete transition', () => {
       const out = H.onboarding(f.ctxFor(null, { step: 6 }));
       assert.equal(out.scenario.live.tourPending, false);
       assert.equal((await f.platform.prepare('SELECT COUNT(*) AS n FROM users WHERE tour_pending = 1').get()).n, 0);
-    } finally { f.close(); }
+    } finally { await f.close(); }
   });
 });
 
@@ -96,8 +96,8 @@ describe('POST /api/tour/seen', () => {
       assert.equal(out.scenario.live.tourPending, false);
       assert.equal(H.scenarioOf(f.ctxFor('u-owner')).live.tourPending, false, 'a second session after');
       H.onboarding(f.ctxFor('u-owner', { step: 6 }));
-      assert.equal(f.pending('u-owner'), 0, 'finishing onboarding again does not bring it back');
-    } finally { f.close(); }
+      assert.equal(await f.pending('u-owner'), 0, 'finishing onboarding again does not bring it back');
+    } finally { await f.close(); }
   });
 
   test('touches only the caller and refuses a request without a session', async () => {
@@ -105,11 +105,11 @@ describe('POST /api/tour/seen', () => {
     try {
       await f.platform.prepare('UPDATE users SET tour_pending = 1').run();
       assert.throws(() => T.tourSeen(f.ctxFor(null)), (e) => e.status === 401);
-      assert.equal(f.pending('u-owner'), 1);
+      assert.equal(await f.pending('u-owner'), 1);
       T.tourSeen({ ...f.ctxFor('u-owner'), body: { userId: 'u-spouse' }, params: { id: 'u-spouse' } });
-      assert.equal(f.pending('u-owner'), 0);
-      assert.equal(f.pending('u-spouse'), 1, 'a body or path id never selects another user');
-    } finally { f.close(); }
+      assert.equal(await f.pending('u-owner'), 0);
+      assert.equal(await f.pending('u-spouse'), 1, 'a body or path id never selects another user');
+    } finally { await f.close(); }
   });
 });
 

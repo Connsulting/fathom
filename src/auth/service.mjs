@@ -35,12 +35,12 @@ function passkeyName(value) {
 // household, servedAdmin(identity) adds the admin role, and the admin user routes act on
 // identity.householdId. `demo` is the instance mode. `secrets` (src/platform/secrets.mjs) lets the
 // operator route create a provisioned household's storage (createHouseholdStorage).
-export function createAuthService({ platform, config, transport, secrets = null, now = () => Date.now() }) {
+export async function createAuthService({ platform, config, transport, secrets = null, now = () => Date.now() }) {
   if (!platform) throw new TypeError('createAuthService needs the platform database');
   const db = platform;
   const store = createAuthStore(platform, { now });
   const clientAddress = createClientAddressResolver(config.trustedProxies ?? []);
-  const demo = store.servedHousehold()?.mode === 'demo';
+  const demo = (await store.servedHousehold())?.mode === 'demo';
   const publicUrl = validatePublicUrl(config.publicUrl, { required: !demo });
   const origin = publicUrl ? new URL(publicUrl).origin : null;
   const rpID = origin ? new URL(origin).hostname : null;
@@ -49,16 +49,16 @@ export function createAuthService({ platform, config, transport, secrets = null,
   async function identityFor(user) {
     if (!user) return null;
     const memberships = await store.activeMemberships(user.id);
-    const bound = user.sessionHouseholdId ?? store.defaultHousehold(user.id);
+    const bound = user.sessionHouseholdId ?? await store.defaultHousehold(user.id);
     const current = memberships.find(m => m.householdId === bound) || null;
     const active = current ? (await db.prepare('SELECT status FROM households WHERE id = ?').get(current.householdId))?.status === 'active' : false;
     return {
       id: user.id, email: user.email, login: user.email, name: user.email,
       householdId: current ? current.householdId : null, role: active ? current.role : null,
-      operator: store.isOperator(user.id), memberships, contextVersion: user.contextVersion ?? null,
+      operator: await store.isOperator(user.id), memberships, contextVersion: user.contextVersion ?? null,
     };
   }
-  const identityOfUser = async id => await identityFor(store.getUser(id));
+  const identityOfUser = async id => await identityFor(await store.getUser(id));
   // The identity of a session token's user, with that session's household and context version.
   const identityOfSession = async token => await identityFor(store.session(token));
   // Listeners told the session key (sha256 of the session token) whose household context ended:
@@ -86,8 +86,8 @@ export function createAuthService({ platform, config, transport, secrets = null,
   // The admin's own household (requireUser with admin has already checked the membership).
   const adminHousehold = admin => admin.householdId;
   // A creator-owned MCP key verifies only while its creator is an active member of the key's household.
-  function creatorActive(userId, householdId) {
-    return typeof userId === 'string' && typeof householdId === 'string' && store.membership(userId, householdId)?.status === 'active';
+  async function creatorActive(userId, householdId) {
+    return typeof userId === 'string' && typeof householdId === 'string' && (await store.membership(userId, householdId))?.status === 'active';
   }
   async function rate(req, kind) {
     const address = clientAddress(req);
@@ -113,19 +113,19 @@ export function createAuthService({ platform, config, transport, secrets = null,
     if (body.token !== undefined) {
       const invitation = await store.invitation(body.token);
       if (invitation) {
-        const user = store.userRow(invitation.userId);
+        const user = await store.userRow(invitation.userId);
         if (!user || user.enrolled_at !== null) throw expiredLink();
         return { user, token: body.token, purpose: 'invite', session: null };
       }
       const token = store.token(body.token);
       if (!token) throw expiredLink();
-      const user = store.userRow(token.userId);
+      const user = await store.userRow(token.userId);
       if (!user || user.enrolled_at === null) throw expiredLink();
       return { user, token: body.token, purpose: token.purpose, session: null };
     }
     const user = await requireUser(req);
     const session = await requireRecentSignin(req);
-    return { user: store.userRow(user.id), token: null, purpose: null, session };
+    return { user: await store.userRow(user.id), token: null, purpose: null, session };
   }
   async function recheckRegistration(req, body, context) {
     const fresh = await registrationContext(req, body);
@@ -251,7 +251,7 @@ export function createAuthService({ platform, config, transport, secrets = null,
           if (!consumed || consumed.userId !== fresh.user.id || consumed.purpose !== fresh.purpose) throw expiredLink();
           if (fresh.purpose === 'recovery') {
             await db.prepare('DELETE FROM passkeys WHERE user_id = ?').run(fresh.user.id);
-            store.revokeUserSessions(fresh.user.id);
+            await store.revokeUserSessions(fresh.user.id);
             await db.prepare("DELETE FROM auth_tokens WHERE user_id = ? AND purpose = 'add-passkey'").run(fresh.user.id);
           }
         }
@@ -266,7 +266,7 @@ export function createAuthService({ platform, config, transport, secrets = null,
         if (fresh.purpose === 'add-passkey') {
           if (store.session(currentSession(req))?.id !== fresh.user.id) session = await store.createSession(fresh.user.id);
         } else if (fresh.token) {
-          store.revokeSession(currentSession(req));
+          await store.revokeSession(currentSession(req));
           session = await store.createSession(fresh.user.id);
         }
         const sessionUser = store.session(session ? session.token : currentSession(req));
@@ -292,7 +292,7 @@ export function createAuthService({ platform, config, transport, secrets = null,
       if (typeof response?.id !== 'string' || !response.id || response.id.length > 2048) throw badVerification();
       const credential = await db.prepare('SELECT * FROM passkeys WHERE id = ?').get(response.id);
       if (!credential) throw badVerification();
-      const user = store.userRow(credential.user_id);
+      const user = await store.userRow(credential.user_id);
       const userHandle = response.response?.userHandle;
       if (!user || user.enrolled_at === null || !validHandle(userHandle) || userHandle !== user.user_handle) throw badVerification();
       let verified;
@@ -305,12 +305,12 @@ export function createAuthService({ platform, config, transport, secrets = null,
       const result = await store.transaction(async (store) => {
         freshChallenge(challenge);
         const current = await db.prepare('SELECT * FROM passkeys WHERE id = ?').get(credential.id);
-        const fresh = store.userRow(user.id);
+        const fresh = await store.userRow(user.id);
         if (!current || !fresh || fresh.enrolled_at === null || fresh.user_handle !== userHandle
           || current.user_id !== user.id || current.counter !== credential.counter
           || current.created_at !== credential.created_at || !Buffer.from(current.public_key).equals(Buffer.from(credential.public_key))) throw badVerification();
         await db.prepare('UPDATE passkeys SET counter = ? WHERE id = ?').run(verified.authenticationInfo.newCounter, credential.id);
-        store.revokeSession(currentSession(req));
+        await store.revokeSession(currentSession(req));
         const session = await store.createSession(user.id);
         return { session, identity: await identityOfSession(session.token) };
       });
@@ -334,8 +334,8 @@ export function createAuthService({ platform, config, transport, secrets = null,
       const session = currentSession(req);
       const ceremony = readCookie(req, CEREMONY_COOKIE);
       await store.transaction(async (store) => {
-        store.revokeSession(session);
-        store.clearAddPasskey(user.id);
+        await store.revokeSession(session);
+        await store.clearAddPasskey(user.id);
         await store.revokeChallenge(ceremony);
       });
       contextEnded(session);
@@ -421,7 +421,7 @@ export function createAuthService({ platform, config, transport, secrets = null,
     // storage failure revokes the invitation and leaves a provisioning row with no root.
     async provisionHousehold({ req, body }) {
       const user = await requireUser(req);
-      if (!store.isOperator(user.id)) throw new HttpError(403, 'operator required');
+      if (!await store.isOperator(user.id)) throw new HttpError(403, 'operator required');
       await rate(req, 'invite');
       const made = await store.provisionHousehold({ displayName: body.displayName, adminEmail: body.adminEmail }, { actorId: user.id });
       try {

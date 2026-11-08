@@ -15,7 +15,7 @@ const source = { tool: read.name, args: read.args, path: 'rows' };
 const table = { operation: 'table', source, columns: ['date', 'amount'] };
 async function answer(t, scripts) {
   const s = await tempDb(); await seedDemo(s.db);
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   const runtime = await createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' }) });
   const results = [];
   const engine = { mode: 'fake', isOn: () => true, async call(request) {

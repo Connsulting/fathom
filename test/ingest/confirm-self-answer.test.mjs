@@ -23,7 +23,7 @@ const names = { me: 'Avery Example', spouse: 'Blair Example' };
 const fact = async (db, key, value) => await upsertFact(db, { key, value, src: 'you', confirmed: true, now: NOW });
 async function store(t) {
   const s = await realStore();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   await setSetting(s.db, 'clock', NOW.slice(0, 10));
   return s;
 }

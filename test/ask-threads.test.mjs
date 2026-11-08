@@ -104,7 +104,7 @@ test('AC9 a freshly migrated store has the thread columns on conversations', asy
     const cols = (await t.db.prepare('PRAGMA table_info(conversations)').all()).map(c => c.name);
     for (const c of ['title', 'title_source', 'archived_at', 'trashed_at', 'last_at']) assert.ok(cols.includes(c), `conversations.${c}`);
   } finally {
-    t.close();
+    await t.close();
   }
 });
 
@@ -394,12 +394,12 @@ test('AC5 a thread reopens with every turn in order and continues on the same ke
 
 test('AC5 the answer request carries this thread history and nothing from another thread', async t => {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   await seedDemo(s.db);
   const runtime = await createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' }) });
   // The temp store's directory stands in as the household root.
   const packs = createLivePacks(s.db, { dataDir: s.dataDir });
-  packs.refresh();
+  await packs.refresh();
   const requests = [];
   const engine = new Proxy(runtime, {
     get(target, key) {
@@ -628,7 +628,7 @@ test('AC4 the default trash-purge handler purges at the clock date and the run t
     assert.equal((await db.prepare('SELECT count(*) AS n FROM messages').get()).n, 2);
     assert.deepEqual(await handler(ctx), { costUsd: 0, note: { purged: 0 } }, 'a second run finds nothing');
   } finally {
-    t.close();
+    await t.close();
   }
 });
 
@@ -653,7 +653,7 @@ test('AC4 the trash purge never runs ahead of the trash clock in a far east time
     assert.ok(keys.includes(kept.key), 'trashed 29 days 6 hours ago is kept');
     assert.ok(!keys.includes(gone.key), 'trashed 30 days ago is purged');
   } finally {
-    t.close();
+    await t.close();
   }
 });
 
@@ -686,7 +686,7 @@ test('AC4 purgeTrash deletes threads trashed 30 or more days ago and their messa
     assert.equal((await db.prepare('SELECT count(*) AS n FROM messages').get()).n, 3);
     assert.equal(await purgeTrash(db, now), 0, 'a second purge finds nothing');
   } finally {
-    t.close();
+    await t.close();
   }
 });
 

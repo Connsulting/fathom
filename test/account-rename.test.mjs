@@ -47,7 +47,7 @@ test('a display name survives a re-import and a SimpleFIN refresh, and clearing 
     assert.equal(cleared.account.name.includes('2738 2738'), false);
     assert.equal((await s.db.prepare('SELECT display_name FROM accounts WHERE id = ?').get(acct.id)).display_name, null);
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -90,7 +90,7 @@ test('a rename updates the trend, the source and the question, and accounts.list
     assert.equal(question.question.includes('Household reserve'), true);
     assert.equal(question.question.includes('Avery'), false);
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -111,6 +111,6 @@ test('renaming a mortgage does not drop its 1098, and year end hides a holder na
     assert.equal(brokerage.t.includes('Harbor'), true);
     assert.ok(list.items.some((i) => i.key === '1098:mtg'), 'the renamed mortgage still needs a 1098');
   } finally {
-    s.close();
+    await s.close();
   }
 });

@@ -90,7 +90,7 @@ test('upgrading a store at the latest main migration keeps planner-shaped job_ru
     await keyed.run('2026-11-07');
     await keyed.run('2026-11-08'); // liveness: another period is fine
     assert.throws(async () => await keyed.run('2026-11-07'), /UNIQUE/i, 'one attempt per (job_id, period_key)');
-  } finally { s.done(); }
+  } finally { await s.done(); }
 });
 
 test('migrating twice is a no-op', async () => {
@@ -98,7 +98,7 @@ test('migrating twice is a no-op', async () => {
   try {
     await migrate(s.db);
     assert.deepEqual((await migrate(s.db)).applied, []);
-  } finally { s.done(); }
+  } finally { await s.done(); }
 });
 
 const RETIRED = ['sync', 'sweep', 'triggers', 'brief', 'packet'];
@@ -125,7 +125,7 @@ test('upgrading a demo store removes the five retired mock jobs and their job_ru
     }
     assert.equal((await db.prepare("SELECT count(*) AS n FROM jobs WHERE id = 'plan'").get()).n, 1, 'other jobs survive');
     assert.equal((await db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan'").get()).n, 1, 'other runs survive');
-  } finally { s.done(); }
+  } finally { await s.done(); }
 });
 
 test('upgrading a real store keeps a job that shares a retired id', async () => {
@@ -137,5 +137,5 @@ test('upgrading a real store keeps a job that shares a retired id', async () => 
     await migrate(db);
     assert.equal((await db.prepare("SELECT count(*) AS n FROM jobs WHERE id = 'sync'").get()).n, 1);
     assert.equal((await db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'sync'").get()).n, 2);
-  } finally { s.done(); }
+  } finally { await s.done(); }
 });

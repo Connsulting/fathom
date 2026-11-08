@@ -307,7 +307,7 @@ test('pl-ac2 bad include or exclude is bad_option; the allowed options and a bad
 
 test('pl-ac2 demo seed: estimated tax payments resolve to the tax bucket and including taxes raises the total by their sum', async (t) => {
   const s = await tempDb();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   await seedDemo(s.db);
   const rows = await s.db.prepare("SELECT * FROM transactions WHERE description = 'Estimated tax payment' ORDER BY date").all();
   assert.ok(rows.length > 0, 'the demo has estimated tax payment rows');
@@ -460,7 +460,7 @@ test('pnl2-ac2 pnl2-ac3 household rows: for every category and every month cell 
 
 test('pnl2-ac2 household rows on the demo store: every month cell and every total matches its rows sum', async (t) => {
   const s = await tempDb();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   await seedDemo(s.db);
   const cells = await checkRowsMatchCells(s.db, await householdSpending({ db: s.db }));
   assert.ok(cells > 0, 'the demo has month cells');

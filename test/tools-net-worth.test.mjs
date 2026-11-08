@@ -8,7 +8,7 @@ import { assertRefsResolve } from './helpers/figures.mjs';
 
 async function fixture(t) {
   const s = await tempDb();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   const { db } = s;
   await db.prepare("INSERT INTO sources (id,label,kind,as_of) VALUES ('ing:balances','Synthetic balances','balances','2026-10-31')").run();
   for (const [id, kind] of [['cash','checking'],['invest','taxable'],['retire','retirement'],['roth','roth'],['debt','card'],['biz','business'],['silent','checking']]) {

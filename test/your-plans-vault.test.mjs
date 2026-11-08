@@ -84,7 +84,7 @@ const spend = async db => (await db.prepare('SELECT id, purpose, cost_usd FROM s
 // (engine off, so it waits for extraction).
 async function uploadedStore(t, files) {
   const s = await realStore();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   await setSetting(s.db, 'clock', CLOCK);
   const { results } = await ingestFiles(s.db, files, s.opts(await offEngine()));
   return { ...s, results };
@@ -181,7 +181,7 @@ test('AC14.2: a tampered stored file fails authentication, is skipped with a war
 // document.
 async function pdfStore(t, { id, name, bytes }) {
   const inst = await tempInstance({ mode: 'real', init: async d => await setSetting(d, 'clock', CLOCK) });
-  t.after(() => { inst.close(); rmSync(inst.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await inst.close(); rmSync(inst.dataDir, { recursive: true, force: true }); });
   const { db } = inst;
   const household = await inst.household();
   const storedPath = await storeFile({ vault: await household.vault(), id, bytes: Buffer.from(bytes), purpose: 'upload' });
@@ -245,7 +245,7 @@ const PREMIUM_BODY = 'The premium is $1.';
 // every chat call answered by `text`; returns the amounts it could not ground.
 async function unverifiedAfterBuild(db, household, text) {
   const packs = createLivePacks(db, { dataDir: household.root });
-  packs.refresh();
+  await packs.refresh();
   const runtime = await engineFor(db, household);
   const engine = new Proxy(runtime, {
     get(target, key) {

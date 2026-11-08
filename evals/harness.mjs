@@ -70,7 +70,7 @@ export async function createEvalLedger({ db, maxUsd, onRound }) {
       reserved = rounded(reserved + reserve);
     },
     async record(entry) {
-      base.record(entry);
+      await base.record(entry);
       onRound?.({ round: reserves.length, purpose: entry.purpose, estimateUsd: outstanding,
         actualUsd: entry.costUsd, remainingUsd: rounded(maxUsd - await cost()), admitted: true });
       outstanding = 0;
@@ -109,8 +109,8 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
   try {
     const ledger = await createEvalLedger({ db, maxUsd, onRound });
     const mode = live ? 'live' : 'fake';
-    const inner = createEngine({ mode, ledger, capUsd: maxUsd, credential, admitRound: request => ledger.admitRound(request) });
-    const packs = createLivePacks(db, { dataDir: store.root }); packs.refresh();
+    const inner = createEngine({ mode, ledger, capUsd: maxUsd, credential, admitRound: async request => await ledger.admitRound(request) });
+    const packs = createLivePacks(db, { dataDir: store.root }); await packs.refresh();
     const clock = JSON.parse((await db.prepare("SELECT value FROM settings WHERE key='clock'").get()).value);
     const figures = Object.fromEntries((await db.prepare('SELECT key,v FROM figures').all()).map(r => [r.key, r.v]));
     const rows = [];

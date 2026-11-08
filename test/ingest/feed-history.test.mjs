@@ -29,7 +29,7 @@ const OLD_CLOCK = '2032-09-01'; // months past the monthly cadence of every fixt
 
 async function withStore(fn) {
   const s = await realStore();
-  try { return await fn(s); } finally { s.close(); }
+  try { return await fn(s); } finally { await s.close(); }
 }
 
 async function ingest(s, name) {

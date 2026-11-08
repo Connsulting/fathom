@@ -26,7 +26,7 @@ const ISO = /^\d{4}-\d{2}-\d{2}$/;
 
 async function withStore(fn) {
   const s = await realStore();
-  try { return await fn(s); } finally { s.close(); }
+  try { return await fn(s); } finally { await s.close(); }
 }
 
 const sourcesOf = (s) => FR.ingestState(s.db, { clock: CLOCK }).sources;

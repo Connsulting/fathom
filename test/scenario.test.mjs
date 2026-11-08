@@ -248,7 +248,7 @@ test('an empty store builds a valid empty scenario', async () => {
     assert.equal(sc.live.demo, 'fresh', 'onboarding is not done on an empty store');
     assert.match(sc.live.clock, /^\d{4}-\d{2}-\d{2}$/);
   } finally {
-    t.close();
+    await t.close();
   }
 });
 

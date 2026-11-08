@@ -507,8 +507,8 @@ describe('engine compatibility', () => {
 
 test('resolved transaction filters and keyset pages preserve every tied real-store row', async t => {
   const { spendingStore } = await import('./helpers/spending.mjs');
-  const s = await spendingStore(t); s.account('paged', 'card');
-  for (let i=0;i<450;i++) s.tx('paged',i<300?'2026-10-01':'2026-10-02',-12,'Groceries','Example Market');
+  const s = await spendingStore(t); await s.account('paged', 'card');
+  for (let i=0;i<450;i++) await s.tx('paged',i<300?'2026-10-01':'2026-10-02',-12,'Groceries','Example Market');
   const args={operation:'search',accountId:'paged',bucket:'household',class:'essential_other',merchant:'example market',limit:200};
   const seen=[]; let next;
   do {
@@ -523,7 +523,7 @@ test('resolved transaction filters and keyset pages preserve every tied real-sto
 
 test('transaction text search skips null descriptions and keeps matching neighbors', async t => {
   const {spendingStore}=await import('./helpers/spending.mjs');const s=await spendingStore(t);
-  s.tx('checking','2026-04-01',-1,'Groceries',null);
+  await s.tx('checking','2026-04-01',-1,'Groceries',null);
   const r=await callTool('transactions',{operation:'search',text:'market'},s.ctx);
   assert.equal(r.total,10);assert.ok(r.rows.every(row=>row.description==='Market'));
 });
@@ -532,7 +532,7 @@ test('C4 read metadata and copied refs never ground sentinel argument amounts', 
   const { spendingStore }=await import('./helpers/spending.mjs');
   const {groundAnswer}=await import('../src/api/answerer.mjs');
   const {buildScenario}=await import('../src/scenario/build.mjs');
-  const s=await spendingStore(t);await s.fact('business.entities',[{name:'Example Studio'}]);s.tx('business','2026-04-01',137,'Income','Client');
+  const s=await spendingStore(t);await s.fact('business.entities',[{name:'Example Studio'}]);await s.tx('business','2026-04-01',137,'Income','Client');
   const selector={merchants:['Synthetic $987,654.31']};
   const cases=[
     ['spending',{operation:'total',from:'2091-07',to:'2091-07',include:selector,exclude:selector}],

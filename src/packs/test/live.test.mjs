@@ -163,7 +163,7 @@ test('a demo store keeps its seeded rows; the view adds the backing manifest fie
   const { db, dataDir } = await store(t);
   const before = await rows(db);
   const packs = createLivePacks(db, { dataDir });
-  packs.refresh();
+  await packs.refresh();
   const after = await rows(db);
   const added = after.filter(r => !before.some(b => b.id === r.id));
   assert.deepEqual(added.map(r => r.id).sort(), ALWAYS_ACTIVE, 'only the unseeded always-active packs are added');
@@ -171,7 +171,7 @@ test('a demo store keeps its seeded rows; the view adds the backing manifest fie
   for (const prior of before) assert.deepEqual(after.find(r => r.id === prior.id), prior, 'seeded rows stay untouched');
   for (const [id, manifestId] of Object.entries(ALIASES)) {
     const prior = before.find(r => r.id === id).def;
-    const def = packs.view(id, prior);
+    const def = await packs.view(id, prior);
     const manifest = manifestOf(manifestId);
     assert.equal(def.id, id);
     assert.equal(def.manifest, manifestId);
@@ -192,13 +192,13 @@ test('a demo store keeps its seeded rows; the view adds the backing manifest fie
     assert.ok(!/\{[a-z]+:/.test(def.why), `${id} why carries no scenario token, since it renders literally`);
     assert.deepEqual(def.whatIf.a, prior.whatIf.a);
     assert.deepEqual(def.whatIf.unlocks, prior.whatIf.unlocks);
-    assert.equal(packs.backing(id, prior).id, manifestId);
+    assert.equal((await packs.backing(id, prior)).id, manifestId);
   }
-  assert.equal(packs.view('giving', (await row(db, 'giving')).def).status, 'suggested');
+  assert.equal((await packs.view('giving', (await row(db, 'giving')).def)).status, 'suggested');
   for (const id of ILLUSTRATIVE) {
     const def = (await row(db, id)).def;
-    assert.deepEqual(packs.view(id, def), def, `${id} has no manifest view`);
-    assert.equal(packs.backing(id, def), null);
+    assert.deepEqual(await packs.view(id, def), def, `${id} has no manifest view`);
+    assert.equal(await packs.backing(id, def), null);
   }
 });
 
@@ -211,7 +211,7 @@ test('a your-plans pack from the data dir becomes an active row in a real store 
     const yp = await row(db, 'your-plans');
     assert.ok(yp, `your-plans row exists (${seed ? 'demo' : 'real'})`);
     assert.equal(yp.def.status, 'active');
-    const view = createLivePacks(db, { dataDir }).view('your-plans', yp.def);
+    const view = await createLivePacks(db, { dataDir }).view('your-plans', yp.def);
     assert.equal(view.manifest, 'your-plans');
     assert.equal(view.entryList[0].id, '01-synthetic-plan-entry');
     await refreshLivePacks(db, { dataDir });
@@ -255,10 +255,10 @@ test('an existing demo store upgrades through the migration: ids, names and over
     assert.equal(def.label, demo.packs.find(p => p.id === id).name);
   }
   const packs = createLivePacks(db, { dataDir });
-  packs.refresh();
+  await packs.refresh();
   assert.deepEqual((await rows(db)).map(r => r.id).sort(), [...DEMO_IDS, ...ALWAYS_ACTIVE].sort(), 'no duplicate manifest rows');
   assert.equal((await row(db, 'giving')).active, 1);
-  assert.equal(packs.view('giving', (await row(db, 'giving')).def).version, manifestOf('charitable-giving').version);
+  assert.equal((await packs.view('giving', (await row(db, 'giving')).def)).version, manifestOf('charitable-giving').version);
   assert.equal((await row(db, 'scorp')).exploring, 1);
   assert.equal((await row(db, 'scorp')).what_if_done, 1);
   assert.equal((await row(db, 'scorp')).def.name, 'S corp owner');
@@ -305,24 +305,24 @@ test('the upgrade inserts no fact into a real store', async t => {
 test('loaded() follows packs.generation and the your-plans dir, and entry() serves backed rows only', async t => {
   const { db, dataDir } = await store(t);
   const packs = createLivePacks(db, { dataDir });
-  assert.deepEqual(packs.loaded().map(p => p.id).sort(), PUBLIC_IDS);
-  assert.equal(packs.loaded(), packs.loaded(), 'nothing changed, nothing reloads');
+  assert.deepEqual((await packs.loaded()).map(p => p.id).sort(), PUBLIC_IDS);
+  assert.equal(await packs.loaded(), await packs.loaded(), 'nothing changed, nothing reloads');
 
-  const entry = packs.entry('giving', 'bunching');
+  const entry = await packs.entry('giving', 'bunching');
   const manifest = manifestOf('charitable-giving');
   assert.equal(entry.id, 'bunching');
   assert.equal(entry.title, manifest.entries.find(e => e.file === 'bunching.md').title);
   assert.equal(entry.body, readFileSync(join(REPO_PACKS, 'charitable-giving', 'bunching.md'), 'utf8'));
   assert.ok(entry.cites.length > 0);
-  assert.equal(packs.entry('giving', 'no-such-entry'), null);
-  assert.equal(packs.entry('contractor', 'bunching'), null, 'illustrative rows serve no entries');
-  assert.equal(packs.entry('no-such-pack', 'bunching'), null);
+  assert.equal(await packs.entry('giving', 'no-such-entry'), null);
+  assert.equal(await packs.entry('contractor', 'bunching'), null, 'illustrative rows serve no entries');
+  assert.equal(await packs.entry('no-such-pack', 'bunching'), null);
 
   writePack(yourPlansDir(dataDir));
   await setSetting(db, 'packs.generation', 1);
-  assert.ok(packs.loaded().some(p => p.id === 'your-plans'), 'a new your-plans pack appears without a restart');
+  assert.ok((await packs.loaded()).some(p => p.id === 'your-plans'), 'a new your-plans pack appears without a restart');
   await refreshLivePacks(db, { dataDir });
-  const yp = packs.entry('your-plans', '01-synthetic-plan-entry');
+  const yp = await packs.entry('your-plans', '01-synthetic-plan-entry');
   assert.equal(yp.title, 'Synthetic plan entry');
   assert.match(yp.body, /synthetic plan/);
 });

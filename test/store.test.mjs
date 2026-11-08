@@ -42,7 +42,7 @@ test('migrate on an empty db creates every foundation table', async () => {
     assert.deepEqual([...tables].sort(), tables, 'listTables is sorted');
     assert.ok(!tables.some(n => n.startsWith('sqlite_')), 'listTables excludes sqlite internals');
   } finally {
-    t.close();
+    await t.close();
   }
 });
 
@@ -57,13 +57,13 @@ test('migrate reports what it applied and a rerun is a no-op', async () => {
     const after = (await t.db.prepare('SELECT id, name FROM schema_migrations ORDER BY id').all()).map(r => ({ ...r }));
     assert.deepEqual(after, before);
   } finally {
-    t.close();
+    await t.close();
   }
 });
 
 test('a first migrate returns the applied migration ids in order', async () => {
   const t = await tempDb();
-  t.close();
+  await t.close();
   const raw = await openDb(t.file + '.fresh');
   try {
     const res = await migrate(raw);
@@ -81,7 +81,7 @@ test('openDb enables foreign keys and WAL', async () => {
     assert.equal((await t.db.prepare('PRAGMA foreign_keys').get()).foreign_keys, 1);
     assert.equal(String((await t.db.prepare('PRAGMA journal_mode').get()).journal_mode).toLowerCase(), 'wal');
   } finally {
-    t.close();
+    await t.close();
   }
 });
 
@@ -93,7 +93,7 @@ test('every data-derived table carries provenance columns', async () => {
       for (const c of ['file_id', 'parser', 'locator']) assert.ok(cols.includes(c), `${table}.${c}`);
     }
   } finally {
-    t.close();
+    await t.close();
   }
 });
 
@@ -110,7 +110,7 @@ test('accounts keep only a four digit mask', async () => {
     const masks = (await t.db.prepare('SELECT id, mask FROM accounts ORDER BY id').all()).map(r => [r.id, r.mask]);
     assert.deepEqual(masks, [['a4', '1234'], ['a5', null]]);
   } finally {
-    t.close();
+    await t.close();
   }
 });
 
@@ -135,7 +135,7 @@ test('enumerated columns reject unknown values and accept known ones', async () 
     assert.throws(async () => await dec.run('d_bad', 'maybe'));
     for (const st of ['open', 'decided', 'upcoming']) await dec.run('d_' + st, st);
   } finally {
-    t.close();
+    await t.close();
   }
 });
 
@@ -150,7 +150,7 @@ test('settings hold JSON values with a fallback', async () => {
     await setSetting(t.db, 'engine', { on: false });
     assert.deepEqual(await getSetting(t.db, 'engine', null), { on: false });
   } finally {
-    t.close();
+    await t.close();
   }
 });
 

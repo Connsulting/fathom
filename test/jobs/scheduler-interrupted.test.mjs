@@ -99,7 +99,7 @@ test('an abandoned running row is marked interrupted, reads retrying, then runs 
     const after = (await statusOf(t, s, clock)).jobs[JOB];
     assert.equal(after.state, 'healthy');
     assert.equal(after.cause, null);
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('a run still in flight in this process is not marked interrupted by a tick', async () => {
@@ -127,7 +127,7 @@ test('a run still in flight in this process is not marked interrupted by a tick'
     const done = await manual;
     assert.equal(done.status, 'ok');
     assert.equal((await t.db.prepare('SELECT status FROM job_runs WHERE id = ?').get(mine[0].id)).status, 'ok');
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('a running row under a live lease held by another holder is left alone', async () => {
@@ -139,5 +139,5 @@ test('a running row under a live lease held by another holder is left alone', as
     await s.tick();
     assert.equal((await t.db.prepare('SELECT status FROM job_runs WHERE id = ?').get(id)).status, 'running', 'no lease, no recovery');
     assert.equal((await runsOf(t.db, JOB)).length, 1);
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });

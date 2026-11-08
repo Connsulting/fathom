@@ -6,7 +6,7 @@ import { assertRefsResolve } from './helpers/figures.mjs';
 async function setup(t){
  const s=await spendingStore(t);s.ctx.channel='mcp';
  for(const [id,kind,amount] of [['plan','retirement',50000],['ira','ira',20000],['roth','roth',30000],['broker','taxable',40000],['cash','cash',10000],['hsa','hsa',5000]]){
-  s.account(id,kind,'owner');await s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run(id,'2026-10-31',amount);
+  await s.account(id,kind,'owner');await s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run(id,'2026-10-31',amount);
  }
  await s.fact('household.ownerBirthDate','1980-06-15');await s.fact('household.spouseBirthDate','1982-08-31');
  await s.fact('accounts.planType',{plan:'401k',ira:'traditional_ira',roth:'roth_ira'});

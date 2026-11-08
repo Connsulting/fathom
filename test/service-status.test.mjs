@@ -226,7 +226,7 @@ test('job and outbound rows reach GET /api/jobs (listJobs) and the scenario (sce
   const household = await instance.household(config, { handlers, now: () => new Date(NOW) });
   t.after(async () => {
     try { await household.close(); } catch { /* closed */ }
-    instance.close();
+    await instance.close();
     rmSync(instance.dataDir, { recursive: true, force: true });
   });
   const ctx = {

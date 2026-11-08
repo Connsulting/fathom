@@ -251,10 +251,10 @@ async function scriptedRuntime(db, scripts) {
   let n = 0;
   return {
     mode: 'live',
-    isOn: () => rt.isOn(),
+    isOn: async () => await rt.isOn(),
     init: () => rt.init(),
-    call: (req) => rt.call({ ...req, fake: [scripts[n++] ?? { text: JSON.stringify({ answers: [] }), costUsd: 0 }] }),
-    extract: (req) => rt.extract(req),
+    call: async (req) => await rt.call({ ...req, fake: [scripts[n++] ?? { text: JSON.stringify({ answers: [] }), costUsd: 0 }] }),
+    extract: async (req) => await rt.extract(req),
   };
 }
 const confirmSpend = async (db) => Number((await db.prepare("SELECT coalesce(sum(cost_usd), 0) AS s FROM spend_ledger WHERE purpose = 'job'").get()).s);
@@ -383,7 +383,7 @@ describe('confirm-guess over the jobs API', () => {
       assert.deepEqual((await all(st.db, 'SELECT item_id FROM confirm_auto ORDER BY item_id')).map((x) => x.item_id), ids);
     } finally {
       await app.close();
-      st.close();
+      await st.close();
     }
   });
 
@@ -399,7 +399,7 @@ describe('confirm-guess over the jobs API', () => {
       assert.equal(await count(st.db, 'confirm_guesses'), 0);
     } finally {
       await app.close();
-      st.close();
+      await st.close();
     }
   });
 });

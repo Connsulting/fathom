@@ -84,7 +84,7 @@ test('mcp-key refuses an unknown owner and a duplicate active name', async () =>
     assert.equal(unknown.stdout, '');
     assert.match(unknown.stderr, /unknown owner/);
 
-    await withPlatform(s.platformFile, async (_, auth) => auth.invite(auth.servedHousehold().id, 'pending@example.test', { role: 'admin' }));
+    await withPlatform(s.platformFile, async (_, auth) => auth.invite((await auth.servedHousehold()).id, 'pending@example.test', { role: 'admin' }));
     const pending = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'pending-owner', '--owner', 'pending@example.test', '--household', s.householdId], {
       env: { FATHOM_DATA: s.dataDir },
     });

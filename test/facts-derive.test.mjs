@@ -101,7 +101,7 @@ test('defaults carry assumptions and Undo survives rederivation', async () => {
     assert.equal(result.values['household.filingStatus'], 'mfj');
     assert.equal(result.values['business.cashBasis'], true);
     assert.ok(result.assumptions.every(a => /assum/i.test(a.evidence)));
-    result.write();
+    await result.write();
     assert.equal((await getFacts(db))['household.filingStatus'], 'mfj');
     await answerFacts(db, [{ key: 'household.filingStatusDefault', value: true }], { now: `${date}T12:00:00Z`, replan: async () => {} });
     result = await prepareRecFacts(db, base());
@@ -127,14 +127,14 @@ test('Virginia carryforward defaults preserve confirmed plan answers and Undo is
     const data = base();
     data.accounts.push({ id: 'college', kind: '529', inst: 'Invest529' });
     let prepared = await prepareRecFacts(db, data);
-    prepared.write();
+    await prepared.write();
     assert.equal(prepared.values['accounts.va529'].college.carryforward, 0);
     assert.equal((await getFacts(db))['accounts.va529'].college.carryforward, undefined);
     fact({ carry: { value: (await getFacts(db))['accounts.va529Carryforward'], ...await db.prepare("SELECT src FROM facts WHERE key = 'accounts.va529Carryforward'").get(), provenance: { locator: JSON.parse((await db.prepare("SELECT locator FROM facts WHERE key = 'accounts.va529Carryforward'").get()).locator) } } }, 'carry', { college: 0 });
     assert.equal(questionFor(['accounts.va529'], { accounts: data.accounts, facts: await getFacts(db) }).answered, true);
     await answerFacts(db, [{ key: 'accounts.va529CarryforwardDefault', value: { college: { undone: true } } }], { now: `${date}T12:00:00Z`, replan: async () => {} });
     prepared = await prepareRecFacts(db, data);
-    prepared.write();
+    await prepared.write();
     assert.equal(prepared.values['accounts.va529'].college.carryforward, undefined);
     assert.equal(questionFor(['accounts.va529'], { accounts: data.accounts, facts: await getFacts(db) }).answered, false);
   } finally { await db.close(); }

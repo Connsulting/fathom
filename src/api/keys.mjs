@@ -21,25 +21,25 @@ function keyCall(fn) {
 const isDemo = ctx => ctx.household.mode === 'demo';
 
 // Admins (and the demo) manage every key of the household; members only their own.
-function keyOwner(ctx) {
+async function keyOwner(ctx) {
   const scope = { householdId: ctx.household.householdId };
   if (isDemo(ctx)) return scope;
-  const identity = ctx.auth.requireUser(ctx.req);
+  const identity = await ctx.auth.requireUser(ctx.req);
   return identity.role === 'admin' ? scope : { ...scope, userId: identity.id };
 }
 
 export function listKeys(ctx) {
-  return { keys: keyCall(() => ctx.keys.list(keyOwner(ctx))) };
+  return { keys: keyCall(async () => ctx.keys.list(await keyOwner(ctx))) };
 }
 
-export function createKey(ctx) {
-  const userId = isDemo(ctx) ? null : ctx.auth.requireUser(ctx.req).id;
+export async function createKey(ctx) {
+  const userId = isDemo(ctx) ? null : (await ctx.auth.requireUser(ctx.req)).id;
   const { key, record } = keyCall(() => ctx.keys.create({ householdId: ctx.household.householdId, name: ctx.body.name, scopes: ctx.body.scopes, userId }));
   return { key, record, ...listKeys(ctx) };
 }
 
 export function revokeKey(ctx) {
-  const record = keyCall(() => ctx.keys.revoke(ctx.params.id, keyOwner(ctx)));
+  const record = keyCall(async () => ctx.keys.revoke(ctx.params.id, await keyOwner(ctx)));
   return { record, ...listKeys(ctx) };
 }
 

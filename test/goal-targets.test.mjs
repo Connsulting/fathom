@@ -35,7 +35,7 @@ const digitFree = s => !/\d/.test(String(s).replace(/401\s*\(\s*k\s*\)|401k|529/
 
 async function store(t, clock = CLOCK) {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   await setSetting(s.db, 'clock', clock);
   await setSetting(s.db, 'mode', 'real');
   return s.db;

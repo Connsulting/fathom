@@ -55,7 +55,7 @@ function scratch(t, prefix = 'fathom-yp-') {
 // Returns { db, household, dataDir }; builds write under household.root.
 async function store(t, { mode = 'real', init = () => {} } = {}) {
   const inst = await tempInstance({ mode, init: async db => { init(db); await setSetting(db, 'clock', CLOCK); } });
-  t.after(() => { inst.close(); rmSync(inst.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await inst.close(); rmSync(inst.dataDir, { recursive: true, force: true }); });
   return { db: inst.db, household: await inst.household(), dataDir: inst.dataDir };
 }
 
@@ -409,7 +409,7 @@ function sayingEngine(runtime, text) {
 
 async function answerAfterBuild(db, household, text) {
   const packs = createLivePacks(db, { dataDir: household.root });
-  packs.refresh();
+  await packs.refresh();
   const engine = sayingEngine(await engineFor(db, household), text);
   return createLiveAnswerer({ engine, packs, root: household.root, services: { ...household.services, engine: engine, config: { dataDir: household.root } } }).answer({ db, key: 'ask:0123456789ab', text: 'What do our plan documents say' });
 }

@@ -47,47 +47,47 @@ function pollCase(name, fn) {
   });
 }
 
-pollCase('an idle plan re-reads after 30000 ms, not before', () => {
+pollCase('an idle plan re-reads after 30000 ms, not before', async () => {
   const st = bindEngine();
   engineScreen.schedulePoll();
-  mock.timers.tick(29999);
+  await mock.timers.tick(29999);
   assert.equal(st.refreshes, 0, 'no refresh before 30000 ms');
-  mock.timers.tick(1);
+  await mock.timers.tick(1);
   assert.equal(st.refreshes, 1, 'one refresh at 30000 ms');
 });
 
-pollCase('a running plan re-reads after 5000 ms', () => {
+pollCase('a running plan re-reads after 5000 ms', async () => {
   const st = bindEngine({ running: true });
   engineScreen.schedulePoll();
-  mock.timers.tick(4999);
+  await mock.timers.tick(4999);
   assert.equal(st.refreshes, 0, 'no refresh before 5000 ms');
-  mock.timers.tick(1);
+  await mock.timers.tick(1);
   assert.equal(st.refreshes, 1, 'one refresh at 5000 ms');
 });
 
-pollCase('no refresh when the route is no longer the Engine screen at fire time', () => {
+pollCase('no refresh when the route is no longer the Engine screen at fire time', async () => {
   const st = bindEngine({ running: true });
   engineScreen.schedulePoll();
   st.route = 'home';
-  mock.timers.tick(60000);
+  await mock.timers.tick(60000);
   assert.equal(st.refreshes, 0);
 });
 
-pollCase('calling schedulePoll twice keeps exactly one pending timer', () => {
+pollCase('calling schedulePoll twice keeps exactly one pending timer', async () => {
   const st = bindEngine();
   engineScreen.schedulePoll();
   engineScreen.schedulePoll();
-  mock.timers.tick(30000);
+  await mock.timers.tick(30000);
   assert.equal(st.refreshes, 1, 'one refresh, not two');
-  mock.timers.tick(30000);
+  await mock.timers.tick(30000);
   assert.equal(st.refreshes, 1, 'the fired timer does not re-arm itself');
 });
 
-pollCase('reset clears the pending timer', () => {
+pollCase('reset clears the pending timer', async () => {
   const st = bindEngine({ running: true });
   engineScreen.schedulePoll();
   engineScreen.reset();
-  mock.timers.tick(60000);
+  await mock.timers.tick(60000);
   assert.equal(st.refreshes, 0);
 });
 

@@ -505,7 +505,7 @@ describe('household membership on a real instance (AC1)', () => {
   let member;
   let operator;
   const as = person => sessionBrowser(base, person.token);
-  const membership = id => store.membership(id, hh);
+  const membership = async id => await store.membership(id, hh);
   const storeFile = async () => (await servedStore(dataDir)).file;
 
   before(async () => {
@@ -552,7 +552,7 @@ describe('household membership on a real instance (AC1)', () => {
     const dup = await as(admin).post('/api/admin/users/invite', { email: member.email, role: 'member' });
     assert.equal(dup.status, 409, dup.text);
     await assert.rejects(async () => store.invite(hh, member.email), err => err.status === 409);
-    assert.deepEqual(pick(membership(member.id), ['role', 'status']), { role: 'member', status: 'active' });
+    assert.deepEqual(pick(await membership(member.id), ['role', 'status']), { role: 'member', status: 'active' });
     assert.equal(await count(platform, 'SELECT count(*) AS n FROM household_invitations WHERE email = ?', member.email), 1, 'only the original, consumed invitation');
     const fresh = await as(admin).post('/api/admin/users/invite', { email: 'fresh-invite@example.test', role: 'member' });
     assert.equal(fresh.status, 200, fresh.text);
@@ -574,7 +574,7 @@ describe('household membership on a real instance (AC1)', () => {
     const { options, verify } = await register(base, client, createAuthenticator(), { token: second.token });
     assert.equal(options.status, 200, options.text);
     assert.equal(verify.status, 200, verify.text);
-    assert.deepEqual(pick(membership(second.user.id), ['role', 'status']), { role: 'member', status: 'active' });
+    assert.deepEqual(pick(await membership(second.user.id), ['role', 'status']), { role: 'member', status: 'active' });
     assert.equal((await client.get('/api/scenario')).status, 200);
   });
 
@@ -582,21 +582,21 @@ describe('household membership on a real instance (AC1)', () => {
     const joiner = await enrollMember(store, hh, 'joiner@example.test', 'member');
     await store.grantOperator(joiner.id);
     assert.equal((await as(admin).post(`/api/admin/users/${joiner.id}/remove`, {})).status, 200);
-    assert.equal(membership(joiner.id).status, 'removed');
+    assert.equal((await membership(joiner.id)).status, 'removed');
     const joinerSession = (await store.createSession(joiner.id)).token;
     const invitation = await store.invite(hh, joiner.email, { role: 'member' });
     assert.equal(invitation.user.id, joiner.id, 'the invitation targets the existing account');
 
     const wrong = await as(member).post('/api/auth/invitations/accept', { token: invitation.token });
     assert.equal(wrong.status, 403, wrong.text);
-    assert.equal(membership(joiner.id).status, 'removed', 'no membership is created for a mismatched email');
-    assert.deepEqual(pick(membership(member.id), ['role', 'status']), { role: 'member', status: 'active' });
+    assert.equal((await membership(joiner.id)).status, 'removed', 'no membership is created for a mismatched email');
+    assert.deepEqual(pick(await membership(member.id), ['role', 'status']), { role: 'member', status: 'active' });
     assert.notEqual(await store.invitation(invitation.token), null, 'a refused accept leaves the invitation live');
 
     const accepted = await sessionBrowser(base, joinerSession).post('/api/auth/invitations/accept', { token: invitation.token, role: 'admin' });
     assert.equal(accepted.status, 200, accepted.text);
     assert.deepEqual(accepted.json.identity.memberships, [{ householdId: hh, role: 'member', name: null }]);
-    assert.deepEqual(pick(membership(joiner.id), ['role', 'status']), { role: 'member', status: 'active' }, 'a body role is ignored');
+    assert.deepEqual(pick(await membership(joiner.id), ['role', 'status']), { role: 'member', status: 'active' }, 'a body role is ignored');
     assert.equal((await sessionBrowser(base, joinerSession).get('/api/scenario')).status, 200);
 
     const replay = await sessionBrowser(base, joinerSession).post('/api/auth/invitations/accept', { token: invitation.token });
@@ -614,15 +614,15 @@ describe('household membership on a real instance (AC1)', () => {
     assert.equal(await count(platform, 'SELECT count(*) AS n FROM household_invitations WHERE email = ?', 'by-member@example.test'), 0);
     assert.equal((await m.post(`/api/admin/users/${member.id}/role`, { role: 'admin' })).status, 403, 'no self escalation');
     assert.equal((await m.post(`/api/admin/users/${admin.id}/role`, { role: 'member' })).status, 403);
-    assert.equal(membership(member.id).role, 'member');
-    assert.equal(membership(admin.id).role, 'admin');
+    assert.equal((await membership(member.id)).role, 'member');
+    assert.equal((await membership(admin.id)).role, 'admin');
 
     const target = await enrollMember(store, hh, 'role-liveness@example.test', 'member');
-    const before = membership(target.id).version;
+    const before = (await membership(target.id)).version;
     const promoted = await as(admin).post(`/api/admin/users/${target.id}/role`, { role: 'admin' });
     assert.equal(promoted.status, 200, promoted.text);
-    assert.equal(membership(target.id).role, 'admin');
-    assert.ok(membership(target.id).version > before, 'a role change bumps the membership version');
+    assert.equal((await membership(target.id)).role, 'admin');
+    assert.ok((await membership(target.id)).version > before, 'a role change bumps the membership version');
     assert.equal((await as(admin).post(`/api/admin/users/${target.id}/role`, { role: 'member' })).status, 200, 'a non-last admin can be demoted');
     assert.equal((await as(admin).post(`/api/admin/users/${target.id}/remove`, {})).status, 200);
   });
@@ -635,7 +635,7 @@ describe('household membership on a real instance (AC1)', () => {
     assert.equal(remove.status, 409, remove.text);
     await assert.rejects(async () => await store.setRole(hh, admin.id, 'member'), err => err.status === 409);
     await assert.rejects(async () => await store.removeMember(hh, admin.id), err => err.status === 409);
-    assert.deepEqual(pick(membership(admin.id), ['role', 'status']), { role: 'admin', status: 'active' });
+    assert.deepEqual(pick(await membership(admin.id), ['role', 'status']), { role: 'admin', status: 'active' });
     assert.equal((await as(admin).get('/api/scenario')).status, 200);
   });
 
@@ -685,7 +685,7 @@ describe('household membership on a real instance (AC1)', () => {
       passkeys: await count(platform, 'SELECT count(*) AS n FROM passkeys WHERE user_id = ?', operator.id),
       sessions: await count(platform, 'SELECT count(*) AS n FROM auth_sessions WHERE user_id = ?', operator.id),
     }, before, 'the outsider keeps passkeys and sessions');
-    assert.equal(store.isOperator(operator.id), true);
+    assert.equal(await store.isOperator(operator.id), true);
     assert.equal((await as(operator).get('/api/identity')).status, 200);
 
     const target = await enrollMember(store, hh, 'passkey-target@example.test', 'member');
@@ -715,7 +715,7 @@ describe('household membership on a real instance (AC1)', () => {
     assert.equal(await count(platform, 'SELECT count(*) AS n FROM auth_sessions WHERE user_id = ?', leaver.id), 0);
     assert.equal((await mcpList(base, created.json.key)).status, 401, 'the MCP key no longer authenticates');
     assert.equal(await count(platform, 'SELECT count(*) AS n FROM api_keys WHERE user_id = ?', leaver.id), 0, 'the key row is deleted');
-    assert.equal(store.getUser(leaver.id), null, 'no membership and no operator grant: the account is deleted');
+    assert.equal(await store.getUser(leaver.id), null, 'no membership and no operator grant: the account is deleted');
     assert.equal((await mcpList(base, adminKey)).status, 200, 'other keys keep working');
   });
 
@@ -812,7 +812,7 @@ describe('admin credential scoping and audit attribution (AC1)', () => {
     const held = async () => ({ passkeys: await passkeysOf(outsider.id), sessions: await sessionsOf(outsider.id) });
     const kept = await held();
     assert.deepEqual(kept, { passkeys: 1, sessions: 1 });
-    assert.equal(store.membership(outsider.id, hh), null, 'no membership row in the household');
+    assert.equal(await store.membership(outsider.id, hh), null, 'no membership row in the household');
 
     for (const state of ['live', 'expired']) {
       const invited = await as(admin).post('/api/admin/users/invite', { email, role: 'member' });
@@ -839,10 +839,10 @@ describe('admin credential scoping and audit attribution (AC1)', () => {
       const removed = await as(admin).post(`/api/admin/users/${outsider.id}/remove`, {});
       assert.equal(removed.status, 200, `${state}: ${removed.text}`);
       assert.equal(await openInvitations(outsider.id), 0, `${state}: the invitation is revoked`);
-      assert.notEqual(store.getUser(outsider.id), null, `${state}: the account is kept`);
-      assert.equal(store.isOperator(outsider.id), true, `${state}: the operator grant is kept`);
+      assert.notEqual(await store.getUser(outsider.id), null, `${state}: the account is kept`);
+      assert.equal(await store.isOperator(outsider.id), true, `${state}: the operator grant is kept`);
       assert.deepEqual(await held(), kept, `${state}: removing the invitee leaves passkeys and global sessions untouched`);
-      assert.equal(store.membership(outsider.id, hh), null, `${state}: no membership is created`);
+      assert.equal(await store.membership(outsider.id, hh), null, `${state}: no membership is created`);
       const who = await as(outsider).get('/api/identity');
       assert.equal(who.status, 200, `${state}: the outsider is still signed in`);
       assert.equal(who.json.identity.operator, true);
@@ -862,7 +862,7 @@ describe('admin credential scoping and audit attribution (AC1)', () => {
     assert.deepEqual(pick(listed, ['role', 'enrolledAt', 'passkeys']), { role: 'member', enrolledAt: null, passkeys: [] });
     const removed = await as(admin).post(`/api/admin/users/${user.id}/remove`, {});
     assert.equal(removed.status, 200, removed.text);
-    assert.equal(store.getUser(user.id), null, 'the never-enrolled account is deleted');
+    assert.equal(await store.getUser(user.id), null, 'the never-enrolled account is deleted');
     assert.equal(await count(platform, 'SELECT count(*) AS n FROM household_invitations WHERE user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL', user.id), 0);
   });
 
@@ -924,7 +924,7 @@ describe('admin credential scoping and audit attribution (AC1)', () => {
     assertIdsOnly(rowsNow, [admin.id, leaver.id], start);
     assert.deepEqual(pick(only(rowsNow, 'membership.remove'), ['actor_user_id', 'target_user_id', 'household_id', 'outcome']),
       { actor_user_id: admin.id, target_user_id: leaver.id, household_id: hh, outcome: 'ok' });
-    assert.equal(store.getUser(leaver.id), null, 'liveness: the removal itself still happens');
+    assert.equal(await store.getUser(leaver.id), null, 'liveness: the removal itself still happens');
   });
 });
 
@@ -949,20 +949,20 @@ describe('instance operators (AC1)', () => {
     const audits = await count(platform, 'SELECT count(*) AS n FROM audit_events');
     const granted = await operatorCli(['grant', first.email], dataDir);
     assert.equal(granted.code, 0, granted.stderr);
-    assert.equal(store.isOperator(first.id), true);
+    assert.equal(await store.isOperator(first.id), true);
     assert.ok(await count(platform, 'SELECT count(*) AS n FROM audit_events') > audits, 'the grant is audited');
 
     const last = await operatorCli(['revoke', first.email], dataDir);
     assert.equal(last.code, 1, last.stderr);
     assert.ok(!last.stderr.includes(first.email));
-    assert.equal(store.isOperator(first.id), true);
+    assert.equal(await store.isOperator(first.id), true);
     await assert.rejects(async () => await store.revokeOperator(first.id), err => err.status === 409);
 
     assert.equal((await operatorCli(['grant', second.email], dataDir)).code, 0);
     const revoked = await operatorCli(['revoke', first.email], dataDir);
     assert.equal(revoked.code, 0, revoked.stderr);
-    assert.equal(store.isOperator(first.id), false);
-    assert.equal(store.isOperator(second.id), true);
+    assert.equal(await store.isOperator(first.id), false);
+    assert.equal(await store.isOperator(second.id), true);
   });
 });
 

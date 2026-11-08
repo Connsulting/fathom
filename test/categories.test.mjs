@@ -236,7 +236,7 @@ test('AC2 a corrected connected row survives the actual account merge and Undo',
   const {realStore}=await import('./helpers/ingest.mjs');
   const {seedDuplicate}=await import('./helpers/account-merge.mjs');
   const {queueAccountPairs}=await import('../src/ingest/account-merge.mjs');
-  const s=await realStore(); t.after(()=>s.close());
+  const s=await realStore(); t.after(async ()=>await s.close());
   const {own,keep}=await seedDuplicate(s,{sure:true});
   const r=await s.db.prepare('SELECT id FROM transactions WHERE account_id=?').get(own);
   await s.db.prepare("INSERT INTO transaction_category_corrections VALUES (?,'Business','business',?)").run(r.id,'2032-03-10');

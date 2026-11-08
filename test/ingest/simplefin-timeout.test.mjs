@@ -22,7 +22,7 @@ async function withConnected(fn) {
     const fake = S.createFakeSimplefin({ today: () => TODAY });
     await S.connectSimplefin(s.db, S.fakeToken(), { household: s.household, now: NOW, fetch: fake });
     return await fn(s, fake);
-  } finally { s.close(); }
+  } finally { await s.close(); }
 }
 
 const isAccounts = (url) => String(url).includes('/accounts');

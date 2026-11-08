@@ -30,15 +30,15 @@ export async function modelApp(t) {
   await createAuthStore(x.platform).setPlatformSetting('instance_model_cap_usd', 50);
   const inner = await createRuntimeEngine({ db: x.db, config: { engine: 'fake', fakeStreamMs: 0 } }), responses = [];
   let extracts = 0, chat = [], onExtract = () => {}, onChat = () => {};
-  const engine = { ...inner, call(request) {
+  const engine = { ...inner, async call(request) {
     if (request.purpose === 'extract') {
       extracts++; onExtract(request);
       if (!responses.length) throw new Error('No scripted interpretation');
-      return inner.call({ ...request, fake: [{ text: JSON.stringify(responses.shift()), costUsd: 0.001,
+      return await inner.call({ ...request, fake: [{ text: JSON.stringify(responses.shift()), costUsd: 0.001,
         tokens: { input_tokens: 20, output_tokens: 40 } }] });
     }
-    if (request.purpose === 'chat') { onChat(request); return inner.call({ ...request, fake: chat }); }
-    return inner.call({ ...request, fake: [{ text: request.purpose === 'title' ? '{"title":"Synthetic import"}' : '{}', costUsd: 0 }] });
+    if (request.purpose === 'chat') { onChat(request); return await inner.call({ ...request, fake: chat }); }
+    return await inner.call({ ...request, fake: [{ text: request.purpose === 'title' ? '{"title":"Synthetic import"}' : '{}', costUsd: 0 }] });
   } };
   const app = await serveAppFixture({ ...x, engine, authenticated: true });
   t.after(async () => { await app.household.scheduler.stop(); await app.close(); x.close(); });

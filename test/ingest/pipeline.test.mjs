@@ -31,7 +31,7 @@ const inserted = (result, kind) => (result.counts && result.counts.rows && resul
 
 async function withStore(fn) {
   const s = await realStore();
-  try { return await fn(s); } finally { s.close(); }
+  try { return await fn(s); } finally { await s.close(); }
 }
 
 // Every text value in every user table, for privacy scans.

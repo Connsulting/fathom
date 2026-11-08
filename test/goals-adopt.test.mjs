@@ -44,7 +44,7 @@ async function serve(t, { data = true } = {}) {
   await setSetting(s.db, 'onboarding', { done: true, step: 6 });
   if (data) await household(s.db);
   const srv = await serveAppFixture({ authenticated: true, db: s.db, config: { clock: CLOCK, dataDir: s.dataDir }, answerer: null });
-  t.after(async () => { await srv.close(); s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await srv.close(); await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   return { ...srv, db: s.db };
 }
 

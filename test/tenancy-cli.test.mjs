@@ -68,7 +68,7 @@ test('seed CLI resets only its explicit demo household and refuses missing or fo
     const r = await run('demo/seed.mjs', ['--household', fx.householdId], { FATHOM_DATA: fx.dataDir });
     assert.equal(r.code, 0, r.stderr);
     assert.ok((await fx.db.prepare('SELECT count(*) AS n FROM accounts').get()).n > 0);
-  } finally { fx.close(); rmSync(fx.dataDir, { recursive: true, force: true }); }
+  } finally { await fx.close(); rmSync(fx.dataDir, { recursive: true, force: true }); }
 });
 
 test('dump uses a session with context assertions and refuses foreign, expired or absent authorization', { timeout: 30000 }, async () => {
@@ -86,7 +86,7 @@ test('dump uses a session with context assertions and refuses foreign, expired o
     assert.equal(r.code, 0, r.stderr);
     assert.equal((await fx.ctx(fx.A.id).db.prepare('SELECT count(*) AS n FROM files').get()).n, 1);
     assert.equal((await fx.ctx(fx.B.id).db.prepare('SELECT count(*) AS n FROM files').get()).n, 0);
-    fx.store.revokeSession(fx.A.admin.token);
+    await fx.store.revokeSession(fx.A.admin.token);
     const expired = await run('scripts/dump.mjs', ['--household', fx.A.id, fx.baseUrl, input], env);
     assert.notEqual(expired.code, 0);
     for (const secret of [fx.A.admin.token, 'Synthetic purchase', '14.25']) assert.ok(!(r.stdout + r.stderr + expired.stdout + expired.stderr).includes(secret));

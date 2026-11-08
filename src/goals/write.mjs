@@ -39,7 +39,7 @@ export async function createGoal(db, fields, { now, clock, onWrite } = {}) {
     const id = 'g' + randomBytes(6).toString('hex');
     const { status, ...rest } = value;
     const def = defFor({ id, ...rest, note: rest.note || '' }, kindOf(rest));
-    def.pace = PATH_KINDS.includes(def.kind) ? captureGoalPath(db, def, now.slice(0, 10)) : null;
+    def.pace = PATH_KINDS.includes(def.kind) ? await captureGoalPath(db, def, now.slice(0, 10)) : null;
     const sort = (await db.prepare('SELECT coalesce(max(sort), -1) + 1 s FROM goals').get()).s;
     await db.prepare("INSERT INTO goals (id, def, sort, origin, created_at, updated_at, archived_at, done_at) VALUES (?, ?, ?, 'owner', ?, ?, ?, ?)")
       .run(id, JSON.stringify(def), sort, now, now, status === 'archived' || status === 'done' ? now : null, status === 'done' ? now : null);
@@ -74,7 +74,7 @@ export async function updateGoal(db, id, fields, { now, clock, onWrite } = {}) {
     }
     if (Number.isFinite(previous.target) && Object.hasOwn(fields, 'target') && fields.target == null) await declineSuggestion(db, id);
     if (!PATH_KINDS.includes(def.kind)) def.pace = null;
-    else if (!previous.pace || goalPathChanged(previous, def)) def.pace = captureGoalPath(db, def, now.slice(0, 10));
+    else if (!previous.pace || goalPathChanged(previous, def)) def.pace = await captureGoalPath(db, def, now.slice(0, 10));
     // status open clears done and archived; done keeps the first done time; archived keeps done_at.
     let archivedAt = row.archived_at ?? null, doneAt = row.done_at ?? null;
     if (status === 'open') { archivedAt = null; doneAt = null; }
@@ -146,7 +146,7 @@ async function declineSuggestion(db, id) {
 }
 
 async function writeDef(db, row, previous, def, now) {
-  if (PATH_KINDS.includes(def.kind) && (!previous.pace || goalPathChanged(previous, def))) def.pace = captureGoalPath(db, def, now.slice(0, 10));
+  if (PATH_KINDS.includes(def.kind) && (!previous.pace || goalPathChanged(previous, def))) def.pace = await captureGoalPath(db, def, now.slice(0, 10));
   await db.prepare('UPDATE goals SET def = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(def), now, row.id);
 }
 

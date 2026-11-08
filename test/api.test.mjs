@@ -481,7 +481,7 @@ describe('store modes', () => {
     const t = await tempInstance({ mode: 'real' });
     await t.db.prepare("DELETE FROM settings WHERE key = 'mode'").run();
     assert.equal((await t.db.prepare("SELECT count(*) AS n FROM settings WHERE key = 'mode'").get()).n, 0);
-    t.close();
+    await t.close();
     await withAuthenticatedServer({ dataDir: t.dataDir }, async s => {
       const sc = await s.getScenario();
       assert.equal(sc.live.mode, 'real');

@@ -277,7 +277,7 @@ export async function seedDemo(db) {
     const goal = db.prepare('INSERT INTO goals (id, def, sort) VALUES (?, ?, ?)');
     await forEachSeries(S.goals, async (g, i) => await goal.run(g.id, JSON.stringify(g), i));
     // Balances are in, so a range captures its path from the tracked balance at the demo clock.
-    await forEachSeries(KIND_GOALS, async (g, i) => await goal.run(g.id, JSON.stringify({ ...g, pace: g.kind === 'range' ? captureGoalPath(db, g, clock) : null }), S.goals.length + i));
+    await forEachSeries(KIND_GOALS, async (g, i) => await goal.run(g.id, JSON.stringify({ ...g, pace: g.kind === 'range' ? await captureGoalPath(db, g, clock) : null }), S.goals.length + i));
     const deadline = db.prepare('INSERT INTO deadlines (date, label, title, rec_id, hard) VALUES (?, ?, ?, ?, ?)');
     for (const d of S.deadlines) await deadline.run(d.date, d.label, d.title, d.recId || null, d.hard ? 1 : 0);
     const event = db.prepare('INSERT INTO events (date, kind, title, body, sort) VALUES (?, ?, ?, ?, ?)');

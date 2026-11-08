@@ -44,7 +44,7 @@ async function plantWargames(db) {
 
 async function store(t) {
   const s = await tempDb(); await seedDemo(s.db); await plantWargames(s.db);
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   return s;
 }
 

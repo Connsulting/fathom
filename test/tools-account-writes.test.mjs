@@ -18,7 +18,7 @@ for (const [operation,params,field,value] of [
   ['owner',{ owner:'owner' },'owner','You'],
   ['kind',{ kind:'taxable' },'kind','taxable'],
 ]) test(`account ${operation} matches the route and undoes`,async t => {
-  const s=await realStore();t.after(()=>s.close());await account(s);await account(s,'route');
+  const s=await realStore();t.after(async ()=>await s.close());await account(s);await account(s,'route');
   const ctx=context(s), before=await row(s);
   const result=await callTool('update_account',{operation,id:'manual',...params},ctx);
   const handler={rename:api.accountRename,mask:api.accountMask,owner:api.accountOwner,kind:api.accountKind}[operation];
@@ -29,7 +29,7 @@ for (const [operation,params,field,value] of [
 });
 
 test('account receipts refuse later edits and another actor',async t=>{
-  const s=await realStore();t.after(()=>s.close());await account(s);const ctx=context(s);
+  const s=await realStore();t.after(async ()=>await s.close());await account(s);const ctx=context(s);
   const r=await callTool('update_account',{operation:'rename',id:'manual',displayName:'Reserve'},ctx);
   await assert.rejects(undo({...ctx,actorId:'someone-else'},r),{code:'forbidden'});
   await s.db.prepare("UPDATE accounts SET display_name='Later' WHERE id='manual'").run();
@@ -40,7 +40,7 @@ test('account receipts refuse later edits and another actor',async t=>{
 });
 
 test('merge requires confirmation and later owner evidence, then restores moved rows',async t=>{
-  const s=await realStore();t.after(()=>s.close());const ids=await seedDuplicate(s,{sure:true});const ctx=context(s);
+  const s=await realStore();t.after(async ()=>await s.close());const ids=await seedDuplicate(s,{sure:true});const ctx=context(s);
   const moved=Number((await s.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES (?,'2032-03-02',-57,'Unique moved row')").run(ids.own)).lastInsertRowid);
   const args={operation:'merge',id:ids.keep,withId:ids.own,evidence:'yes, merge these accounts'};
   await assert.rejects(callTool('update_account',args,ctx),{code:'bad_input'});
@@ -65,7 +65,7 @@ test('all account operations deny a read key before validating arguments',async(
 });
 
 test('account rename proposals ignore unrelated postings and stale on the target account',async t=>{
-  const s=await realStore();t.after(()=>s.close());await account(s);const ctx=context(s);let pending;
+  const s=await realStore();t.after(async ()=>await s.close());await account(s);const ctx=context(s);let pending;
   const p=proposalTools(tools).find(t=>t.name==='update_account');
   await p.handler({operation:'rename',id:'manual',displayName:'Reserve',propose:true},{...ctx,onProposal:v=>{pending=v;}});
   assert.equal((await row(s)).display_name,null);assert.equal(pending.scopes[0],'write:accounts');
@@ -78,7 +78,7 @@ test('account rename proposals ignore unrelated postings and stale on the target
 
 for (const confirmation of ['yes','Confirmed']) test(`a stored Ask merge proposal executes on ${confirmation} and its own scope can undo`,async t=>{
   const { claimProposal, executeProposal }=await import('../src/actions/proposals.mjs');
-  const s=await realStore();t.after(()=>s.close());const ids=await seedDuplicate(s,{sure:true});
+  const s=await realStore();t.after(async ()=>await s.close());const ids=await seedDuplicate(s,{sure:true});
   const key='ask:fedcba654321',ctx={...context(s),channel:'ask',conversationKey:key,ownerText:'Merge these accounts',scopes:['write:accounts']};
   await s.db.prepare('INSERT INTO conversations (key,created_at,last_at) VALUES (?,?,?)').run(key,NOW,NOW);
   let pending;const tool=proposalTools(tools).find(t=>t.name==='update_account');
@@ -96,7 +96,7 @@ for (const confirmation of ['yes','Confirmed']) test(`a stored Ask merge proposa
 
 test('source-operation proposals retain the merged catalog scope and durable Undo',async t=>{
  const {claimProposal,executeProposal}=await import('../src/actions/proposals.mjs');
- const s=await realStore();t.after(()=>s.close());await account(s);
+ const s=await realStore();t.after(async ()=>await s.close());await account(s);
  const key='ask:abc123def456',ctx={...context(s),channel:'ask',conversationKey:key,scopes:['write:sources']};
  await s.db.prepare('INSERT INTO conversations (key,created_at,last_at) VALUES (?,?,?)').run(key,NOW,NOW);
  let pending;await proposalTools(tools).find(t=>t.name==='sources').handler({operation:'archive_account',id:'manual',propose:true},{...ctx,onProposal:p=>{pending=p;}});
@@ -110,7 +110,7 @@ test('source-operation proposals retain the merged catalog scope and durable Und
 for (const [operation,params] of [
  ['mask',{mask:'1234'}],['owner',{owner:'owner'}],['kind',{kind:'taxable'}],
 ]) test(`account ${operation} proposals ignore unrelated rows and guard the target`,async t=>{
- const s=await realStore();t.after(()=>s.close());await account(s);await account(s,'unrelated');let pending;
+ const s=await realStore();t.after(async ()=>await s.close());await account(s);await account(s,'unrelated');let pending;
  await proposalTools(tools).find(t=>t.name==='update_account').handler({operation,id:'manual',...params,propose:true},{...context(s),onProposal:p=>{pending=p;}});
  const basis=async ()=>await proposalBasis(s.db,pending.tool,pending.scopes,pending.args);
  await s.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('unrelated','2032-03-01',-10,'New posting')").run();
@@ -122,7 +122,7 @@ for (const [operation,params] of [
 
 
 test('merge proposals ignore unrelated transactions and retain both accounts and moved rows',async t=>{
- const s=await realStore();t.after(()=>s.close());const ids=await seedDuplicate(s,{sure:true});await account(s,'unrelated');
+ const s=await realStore();t.after(async ()=>await s.close());const ids=await seedDuplicate(s,{sure:true});await account(s,'unrelated');
  const args={id:ids.keep,withId:ids.own,confirm:true,evidence:'yes, merge these accounts'};
  const basis=async ()=>await proposalBasis(s.db,'update_account',['write:accounts'],args), before=await basis();
  await s.db.prepare("INSERT INTO transactions(account_id,date,amount,description) VALUES ('unrelated','2032-03-01',-10,'Unrelated posting')").run();
@@ -140,7 +140,7 @@ test('merge proposals ignore unrelated transactions and retain both accounts and
 
 
 test('a completed merge makes its outstanding proposal stale without throwing',async t=>{
- const s=await realStore();t.after(()=>s.close());const ids=await seedDuplicate(s,{sure:true});
+ const s=await realStore();t.after(async ()=>await s.close());const ids=await seedDuplicate(s,{sure:true});
  const args={id:ids.keep,withId:ids.own,confirm:true,evidence:'yes, merge these accounts'};
  const before=await proposalBasis(s.db,'update_account',['write:accounts'],args);
  await callTool('update_account',{operation:'merge',...args},context(s));

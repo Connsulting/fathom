@@ -26,7 +26,7 @@ before(async () => {
 
 async function withStore(fn) {
   const s = await realStore();
-  try { return await fn(s); } finally { s.close(); }
+  try { return await fn(s); } finally { await s.close(); }
 }
 
 // aggregator.csv (last data 2032-03-01) and positions.csv (as of 2032-03-05) in a real store.

@@ -51,7 +51,7 @@ async function rowsByManifest(db) {
 // keeps the status derived from the facts.
 async function loadPackView(ctx) {
   const { db } = ctx;
-  const packs = ctx.packDirs ? await coveredPacks(db, loadPacks(ctx.packDirs)) : createLivePacks(db, { dataDir: ctx.dataDir }).loaded();
+  const packs = ctx.packDirs ? await coveredPacks(db, loadPacks(ctx.packDirs)) : await createLivePacks(db, { dataDir: ctx.dataDir }).loaded();
   const rows = await rowsByManifest(db);
   const views = activePacks(packs, await getFacts(db));
   if (!rows.size) return views;

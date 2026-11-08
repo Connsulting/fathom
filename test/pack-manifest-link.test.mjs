@@ -105,7 +105,7 @@ describe('migration 005 tags the rows of an existing demo store', () => {
       assert.deepEqual(await dumpPacks(t.db), settled, 'second migrate changes nothing');
       assert.deepEqual(settled.length, tagged.length);
     } finally {
-      t.close();
+      await t.close();
     }
   });
 
@@ -121,7 +121,7 @@ describe('migration 005 tags the rows of an existing demo store', () => {
       assert.deepEqual((await migrate(t.db)).applied, [5]);
       assert.deepEqual(await dumpPacks(t.db), once);
     } finally {
-      t.close();
+      await t.close();
     }
   });
 
@@ -139,7 +139,7 @@ describe('migration 005 tags the rows of an existing demo store', () => {
       assert.equal(parseJson((await t.db.prepare("SELECT def FROM packs_state WHERE id = 'custom'").get()).def, {}).why, 'A synthetic row.');
       assert.deepEqual((await defs(t.db)).scorp, before, 'the scorp def is the seeded def again, tag included');
     } finally {
-      t.close();
+      await t.close();
     }
   });
 
@@ -154,7 +154,7 @@ describe('migration 005 tags the rows of an existing demo store', () => {
       assert.ok(await manifestOf(t.db, 'scorp') == null, 'real-mode scorp row is not tagged');
       assert.deepEqual((await defs(t.db)).scorp, { id: 'scorp', status: 'available' });
     } finally {
-      t.close();
+      await t.close();
     }
   });
 
@@ -167,7 +167,7 @@ describe('migration 005 tags the rows of an existing demo store', () => {
       await migrate(t.db);
       assert.ok(await manifestOf(t.db, 'kids') == null);
     } finally {
-      t.close();
+      await t.close();
     }
   });
 
@@ -177,7 +177,7 @@ describe('migration 005 tags the rows of an existing demo store', () => {
       assert.equal((await t.db.prepare('SELECT COUNT(*) AS n FROM packs_state').get()).n, 0);
       assert.deepEqual((await migrate(t.db)).applied, []);
     } finally {
-      t.close();
+      await t.close();
     }
   });
 });

@@ -57,7 +57,7 @@ const withoutQuestions = async (db) => await dataDump(db, [...BOOKKEEPING, 'conf
 
 async function withStore(fn) {
   const s = await realStore();
-  try { return await fn(s); } finally { s.close(); }
+  try { return await fn(s); } finally { await s.close(); }
 }
 // Building a store's household context refreshes its pack state stamped with the wall clock (as a
 // server start does); two stores built moments apart are normalized to one setup time before the

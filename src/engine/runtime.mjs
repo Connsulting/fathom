@@ -99,15 +99,15 @@ export async function createRuntimeEngine({ db, config = {}, now, allowed = () =
     if (legacySpendUsd > 0) await ensureCarry(platform, { householdId, month: fundingMonth(at), legacySpendUsd, now: at });
   }
   // Mirror this household's final platform rounds of the funding month into spend_ledger.
-  function syncMirror() {
+  async function syncMirror() {
     for (const row of platformLedger.rounds(month())) {
-      ledger.record({ ts: row.reserved_at, purpose: row.purpose, costUsd: committedOf(row), model: row.model,
+      await ledger.record({ ts: row.reserved_at, purpose: row.purpose, costUsd: committedOf(row), model: row.model,
         tokens: { input_tokens: row.input_tokens, output_tokens: row.output_tokens }, roundId: row.id });
     }
   }
   const reservations = platformLedger && {
     async reserve({ purpose, model, boundUsd }) {
-      syncMirror();
+      await syncMirror();
       return platformLedger.reserve({ purpose, model, boundUsd, adminCapUsd: await capOf(db), legacySpendUsd: await ledger.legacySpendUsd(month()),
         principal: currentPrincipal() });
     },
@@ -186,12 +186,12 @@ export async function createRuntimeEngine({ db, config = {}, now, allowed = () =
     async status() {
       const base = { mode, on: mode !== 'off' && await settingOn(db), credentialState: state.credentialState, funded: mode !== 'live' || funded() === true };
       if (platformLedger) {
-        syncMirror();
+        await syncMirror();
         const s = platformLedger.status(month());
         return { ...base, capUsd: Math.min(await capOf(db), s.allocationUsd), spentUsd: s.committedUsd };
       }
       const at = new Date(now ? now() : Date.now());
-      return { ...base, capUsd: await capOf(db), spentUsd: ledger.monthSpendUsd(at.toISOString().slice(0, 7)) };
+      return { ...base, capUsd: await capOf(db), spentUsd: await ledger.monthSpendUsd(at.toISOString().slice(0, 7)) };
     },
     complete: async (req) => guarded((e) => e.call(req), req.purpose),
     call: async (req) => guarded((e) => e.call(req), req.purpose),

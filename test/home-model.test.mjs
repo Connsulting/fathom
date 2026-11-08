@@ -635,7 +635,7 @@ test('homeModel over the seeded demo store matches the server housekeeping count
     assert.equal(v.needs, m.due.length);
     assert.equal(v.title, m.due.length ? `${m.due.length} thing${m.due.length === 1 ? ' needs' : 's need'} you before Dec 31` : 'You are covered through Dec 31');
   } finally {
-    t.close();
+    await t.close();
     rmSync(t.dataDir, { recursive: true, force: true });
   }
 });

@@ -426,7 +426,7 @@ test('pl-ac1 errors: unknown entity, from after to, more than 120 months, malfor
 
 test('pl-ac1 demo store: workbook entities own their mapped business checking account', async (t) => {
   const s = await tempDb();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   await seedDemo(s.db);
   const list = await pnlEntities({ db: s.db });
   const ents = list.filter((e) => e.kind === 'entity');
@@ -614,7 +614,7 @@ test('pnl2-ac2 pnl2-ac3 business rows: for every category and every month cell t
 
 test('pnl2-ac2 business rows on the demo store: every month cell and every total matches its rows sum', async (t) => {
   const s = await tempDb();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   await seedDemo(s.db);
   let cells = 0;
   for (const e of await pnlEntities({ db: s.db })) cells += await checkRowsMatchCells(s.db, e.key, await businessPnl({ db: s.db, entity: e.key }));

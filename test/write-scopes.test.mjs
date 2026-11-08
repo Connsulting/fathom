@@ -37,7 +37,7 @@ test('new write scopes have exact access text and are offered only for chat', as
 });
 
 test('registered table kinds restore inserts, edits and deletes by primary key', async t => {
-  const s = await tempDb(); t.after(() => s.close());
+  const s = await tempDb(); t.after(async () => await s.close());
   await s.db.applySchema('CREATE TABLE c2_rows (id TEXT PRIMARY KEY, value TEXT)');
   receipts.registerReceiptKind('c2_table', { table: 'c2_rows', pk: 'id' });
   const ctx = { db: s.db, actorId: 'person-a', now };
@@ -53,7 +53,7 @@ test('registered table kinds restore inserts, edits and deletes by primary key',
 });
 
 test('restore hooks run in the receipt transaction and refusals preserve the action', async t => {
-  const s = await tempDb(); t.after(() => s.close());
+  const s = await tempDb(); t.after(async () => await s.close());
   let refuse = true, calls = 0;
   receipts.registerReceiptKind('c2_inverse', { async restore(ctx, { id, before, after }) {
     calls++;
@@ -72,7 +72,7 @@ test('restore hooks run in the receipt transaction and refusals preserve the act
 });
 
 test('unknown kinds fail closed and registrations reject duplicate or unsafe definitions', async t => {
-  const s = await tempDb(); t.after(() => s.close());
+  const s = await tempDb(); t.after(async () => await s.close());
   const ctx = { db: s.db, actorId: 'person-a', now };
   await s.db.prepare(`INSERT INTO action_receipts
     (id, scope, kind, entity_id, actor_id, label, before_state, after_state, before_value, after_value, created_at)
@@ -86,7 +86,7 @@ test('unknown kinds fail closed and registrations reject duplicate or unsafe def
 });
 
 test('setting undo rejects later edits, another actor and a missing scope before restoring', async t => {
-  const s = await tempDb(); t.after(() => s.close());
+  const s = await tempDb(); t.after(async () => await s.close());
   const ctx = { db: s.db, actorId: 'person-a', now };
   await s.db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)').run('pick', '2', now);
   const r = await receipts.saveReceipt(ctx, { scope: 'write:decisions', kind: 'setting', id: 'pick', label: 'Pick', before: { key: 'pick', value: '1' }, after: { key: 'pick', value: '2' } });
@@ -100,7 +100,7 @@ test('setting undo rejects later edits, another actor and a missing scope before
 });
 
 test('every write scope lists undo and restores a receipt through MCP and Ask', async t => {
-  const s = await tempInstance(); t.after(() => s.close());
+  const s = await tempInstance(); t.after(async () => await s.close());
   const app = await serveAppFixture({ db: s.db, platform: s.platform, config: { dataDir: s.dataDir }, secrets: s.secrets });
   t.after(() => app.close());
   const creator = await createSessionFixture(s.platform, { email: 'scopes@example.test', role: 'member' });

@@ -21,12 +21,12 @@ async function account(db, name = 'Synthetic reserve') {
 async function model(db, answer) {
   const runtime = await createRuntimeEngine({ db, config: { engine: 'fake' }, now: () => new Date(NOW) });
   const calls = [];
-  return { mode: 'fake', isOn: () => runtime.isOn(), status: () => runtime.status(), calls,
+  return { mode: 'fake', isOn: async () => await runtime.isOn(), status: async () => await runtime.status(), calls,
     async call(req) {
       calls.push(req);
       const payload = JSON.parse(req.messages[0].content);
       const answers = typeof answer === 'function' ? answer(payload) : answer;
-      return runtime.call({ ...req, fake: [{ text: JSON.stringify({ answers }), costUsd: 0.001 }] });
+      return await runtime.call({ ...req, fake: [{ text: JSON.stringify({ answers }), costUsd: 0.001 }] });
     } };
 }
 const options = { now: NOW, packDirs: [], allowed: () => true, funded: () => true };
@@ -307,7 +307,7 @@ test('the scheduled resolver answers HSA eligibility and runs the actual planner
     assert.equal(engine.calls.length, 1, 'follow-up planning makes no additional model call');
   } finally {
     await scheduler?.stop();
-    instance.close();
+    await instance.close();
     rmSync(instance.dataDir, { recursive: true, force: true });
   }
 });

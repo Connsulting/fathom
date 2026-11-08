@@ -153,7 +153,7 @@ async function plan(db, engine, { clock, runId, packDirs }) {
 
   const now = new Date().toISOString();
   const out = await tx(db, async (db) => {
-    let factsWritten = recFacts.write();
+    let factsWritten = await recFacts.write();
     for (const w of merged.writes) {
       const res = await upsertFact(db, { key: w.key, value: w.value, src: PLANNER_SRC, asOf: clock, confirmed: false, provenance: factProvenance(w) });
       if (res.written && res.changed) factsWritten += 1;

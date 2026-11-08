@@ -48,7 +48,7 @@ async function serve(instance) {
 
 async function withInstance(fn) {
   const instance = await tempInstance();
-  try { return await fn(instance); } finally { instance.close(); rmSync(instance.dataDir, { recursive: true, force: true }); }
+  try { return await fn(instance); } finally { await instance.close(); rmSync(instance.dataDir, { recursive: true, force: true }); }
 }
 
 async function uploadOver(app, name, text) {

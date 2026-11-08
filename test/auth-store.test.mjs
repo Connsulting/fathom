@@ -18,21 +18,21 @@ const status = expected => err => err.status === expected && typeof err.message 
 
 async function fixture(t) {
   const instance = await tempInstance({ mode: 'real' });
-  t.after(() => { instance.close(); rmSync(instance.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await instance.close(); rmSync(instance.dataDir, { recursive: true, force: true }); });
   const { db, platform } = instance;
   let clock = START;
   const now = () => clock;
   const store = createAuthStore(platform, { now });
-  const household = store.servedHousehold();
+  const household = await store.servedHousehold();
   const hh = household.id;
   const invite = async (email, role = 'member') => store.invite(hh, email, { role });
   const enroll = async (email, role = 'member') => {
     const { user, token } = await invite(email, role);
     await store.consumeInvitation(token, user.id);
     await store.markEnrolled(user.id);
-    return store.getUser(user.id);
+    return await store.getUser(user.id);
   };
-  const roleOf = userId => store.membership(userId, hh)?.role ?? null;
+  const roleOf = async userId => (await store.membership(userId, hh))?.role ?? null;
   return { db, platform, store, household, hh, now, invite, enroll, roleOf, advance: ms => { clock += ms; } };
 }
 
@@ -80,8 +80,8 @@ test('invitations canonicalize the entire ASCII address, preserve plus tags and 
   assert.equal((await store.invitation(admin.token)).role, 'admin');
   assert.notEqual(invite('owner@example.test', 'member').user.id, first.user.id);
   assert.equal((await store.listPeople(hh)).length, 2);
-  assert.equal(store.membership(first.user.id, hh), null, 'a pending invitee has no membership yet');
-  assert.equal(store.getUser('missing'), null);
+  assert.equal(await store.membership(first.user.id, hh), null, 'a pending invitee has no membership yet');
+  assert.equal(await store.getUser('missing'), null);
   assert.equal(await store.findUser('absent@example.test'), null);
 });
 
@@ -107,7 +107,7 @@ test('reinviting an active member directs callers to role changes without changi
     const add = await store.createToken(user.id, 'add-passkey');
     const session = await store.createSession(user.id);
     const before = { ...await platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) };
-    const membership = store.membership(user.id, hh);
+    const membership = await store.membership(user.id, hh);
     const tokens = await platform.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY hash').all(user.id);
     const invitations = await platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all();
     for (const role of ['admin', 'member']) {
@@ -118,7 +118,7 @@ test('reinviting an active member directs callers to role changes without changi
         return true;
       });
       assert.deepEqual({ ...await platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) }, before);
-      assert.deepEqual(store.membership(user.id, hh), membership);
+      assert.deepEqual(await store.membership(user.id, hh), membership);
       assert.deepEqual(await platform.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY hash').all(user.id), tokens);
       assert.deepEqual(await platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all(), invitations);
       assert.ok(store.token(recovery.token));
@@ -156,7 +156,7 @@ test('users have stable distinct random handles and public metadata contains no 
   assert.deepEqual(await handle(a.id), before);
   const people = await store.listPeople(hh);
   assert.equal(people.length, 3);
-  for (const user of [...people, again.user, store.getUser(a.id)]) {
+  for (const user of [...people, again.user, await store.getUser(a.id)]) {
     for (const key of ['user_handle', 'userHandle', 'public_key', 'token']) assert.equal(key in user, false, key);
   }
 });
@@ -198,7 +198,7 @@ test('invitations contain 32 random bytes, persist only a digest, expire at 20 m
   assert.deepEqual(await store.invitation(issued.token),
     { householdId: hh, email: 'pending@example.test', role: 'member', userId: issued.user.id, expiresAt: issued.expiresAt });
   await store.consumeInvitation(issued.token, issued.user.id);
-  assert.deepEqual({ role: store.membership(issued.user.id, hh).role, status: store.membership(issued.user.id, hh).status }, { role: 'member', status: 'active' });
+  assert.deepEqual({ role: (await store.membership(issued.user.id, hh)).role, status: (await store.membership(issued.user.id, hh)).status }, { role: 'member', status: 'active' });
   assert.equal(await store.invitation(issued.token), null);
   assert.throws(async () => await store.consumeInvitation(issued.token, issued.user.id), status(410), 'a consumed invitation is single use');
   const other = invite('later@example.test');
@@ -207,7 +207,7 @@ test('invitations contain 32 random bytes, persist only a digest, expire at 20 m
   advance(1);
   assert.equal(await store.invitation(other.token), null);
   assert.throws(async () => await store.consumeInvitation(other.token, other.user.id), status(410));
-  assert.equal(store.membership(other.user.id, hh), null, 'an expired invitation creates no membership');
+  assert.equal(await store.membership(other.user.id, hh), null, 'an expired invitation creates no membership');
 });
 
 test('reissue invalidates every prior same-purpose token and leaves the other purpose live', async t => {
@@ -288,7 +288,7 @@ test('sessions record their actual creation wall time without exposing it as use
     for (const key of ['signedInAt', 'signed_in_at']) assert.equal(key in resolved, false, key);
     assert.ok(!Object.values(resolved).includes(at), 'the sign-in time is not part of the projection');
   }
-  assert.deepEqual(store.getUser(user.id), user);
+  assert.deepEqual(await store.getUser(user.id), user);
 });
 
 test('revoking one session preserves another and revoking user sessions preserves other users', async t => {
@@ -298,10 +298,10 @@ test('revoking one session preserves another and revoking user sessions preserve
   const first = await store.createSession(a.id);
   const second = await store.createSession(a.id);
   const other = await store.createSession(b.id);
-  store.revokeSession(first.token);
+  await store.revokeSession(first.token);
   assert.equal(store.session(first.token), null);
   assert.ok(store.session(second.token));
-  store.revokeUserSessions(a.id);
+  await store.revokeUserSessions(a.id);
   assert.equal(store.session(second.token), null);
   assert.equal(store.session(other.token).id, b.id);
 });
@@ -318,8 +318,8 @@ test('pending admins do not defeat the last enrolled admin removal and demotion 
   await store.setRole(hh, admin.id, 'member');
   assert.equal(roleOf(admin.id), 'member');
   await store.removeMember(hh, admin.id);
-  assert.equal(store.getUser(admin.id), null, 'no other membership or operator grant holds the account');
-  assert.equal(store.membership(admin.id, hh), null);
+  assert.equal(await store.getUser(admin.id), null, 'no other membership or operator grant holds the account');
+  assert.equal(await store.membership(admin.id, hh), null);
   assert.equal(roleOf(replacement.id), 'admin');
 });
 
@@ -337,8 +337,8 @@ test('an enrolled admin of another household does not satisfy this household las
   assert.equal(pending.role, 'admin');
   await store.consumeInvitation(provisioned.token, pending.userId);
   await store.markEnrolled(pending.userId);
-  assert.equal(store.membership(pending.userId, provisioned.household.id).role, 'admin');
-  assert.equal(store.membership(pending.userId, hh), null);
+  assert.equal((await store.membership(pending.userId, provisioned.household.id)).role, 'admin');
+  assert.equal(await store.membership(pending.userId, hh), null);
   assert.throws(async () => await store.setRole(hh, admin.id, 'member'), status(409));
   assert.throws(async () => await store.removeMember(hh, admin.id), status(409));
   assert.throws(async () => await store.setRole(provisioned.household.id, pending.userId, 'member'), status(409));
@@ -352,10 +352,10 @@ test('role changes bump the membership version and a second enrolled admin permi
   const live = await store.createSession(a.id);
   assert.throws(async () => await store.setRole(hh, a.id, 'root'), status(400));
   assert.equal(roleOf(a.id), 'admin');
-  const v0 = store.membership(a.id, hh).version;
+  const v0 = (await store.membership(a.id, hh)).version;
   await store.setRole(hh, a.id, 'member');
   assert.equal(roleOf(a.id), 'member');
-  assert.ok(store.membership(a.id, hh).version > v0, 'a role change bumps the membership version');
+  assert.ok((await store.membership(a.id, hh)).version > v0, 'a role change bumps the membership version');
   assert.equal(store.session(live.token).id, a.id, 'a role change keeps the session; the role is read per request');
   await store.setRole(hh, a.id, 'admin');
   assert.equal(roleOf(a.id), 'admin');
@@ -401,7 +401,7 @@ test('removal cascades tokens, credentials and sessions while unrelated users re
   assert.equal(await store.consumeToken(token.token), null);
   assert.equal(store.session(session.token), null);
   assert.deepEqual(await store.listPasskeys(a.id), []);
-  assert.equal(store.getUser(a.id), null);
+  assert.equal(await store.getUser(a.id), null);
   assert.equal(store.session(kept.token).id, b.id);
   assert.ok(!(await store.listPeople(hh)).some(person => person.id === a.id));
 });
@@ -416,14 +416,14 @@ test('removing a member who is also an operator removes only the membership and 
   await passkey(platform, operator.id, 'operator-key');
   const session = await store.createSession(operator.id);
   const issued = store.invite(hh, 'invited-by-operator@example.test', { role: 'member', inviterId: operator.id });
-  const before = store.membership(operator.id, hh);
+  const before = await store.membership(operator.id, hh);
   advance(1);
   await store.removeMember(hh, operator.id);
-  const after = store.membership(operator.id, hh);
+  const after = await store.membership(operator.id, hh);
   assert.equal(after.status, 'removed');
   assert.ok(after.version > before.version, 'removal bumps the membership version');
-  assert.ok(store.getUser(operator.id), 'the operator account remains');
-  assert.ok(store.isOperator(operator.id));
+  assert.ok(await store.getUser(operator.id), 'the operator account remains');
+  assert.ok(await store.isOperator(operator.id));
   assert.deepEqual((await store.listPasskeys(operator.id)).map(item => item.id), ['operator-key']);
   assert.equal(store.session(session.token), null, 'the removed member is signed out');
   assert.equal(await store.invitation(issued.token), null, 'invitations the removed member issued in this household are revoked');
@@ -469,16 +469,16 @@ test('accepting an invitation into a household that already has a member sets th
   const pending = async userId => (await f.platform.prepare('SELECT tour_pending AS p FROM users WHERE id = ?').get(userId)).p;
   assert.equal((await f.platform.prepare("SELECT count(*) AS n FROM household_memberships WHERE household_id = ? AND status = 'active'").get(f.hh)).n, 0, 'precondition: nobody has joined yet');
 
-  const admin = f.invite('first-admin@example.test', 'admin');
+  const admin = await f.invite('first-admin@example.test', 'admin');
   await f.store.consumeInvitation(admin.token, admin.user.id);
   assert.equal(await pending(admin.user.id), 0, 'the founder is flagged by finishing onboarding, not by joining');
 
-  const member = f.invite('invited-member@example.test', 'member');
+  const member = await f.invite('invited-member@example.test', 'member');
   assert.equal(await pending(member.user.id), 0, 'an invitation alone flags nobody');
   await f.store.consumeInvitation(member.token, member.user.id);
   assert.equal(await pending(member.user.id), 1, 'the member joined a household that already had one, so the tour starts');
 
-  const second = f.invite('second-admin@example.test', 'admin');
+  const second = await f.invite('second-admin@example.test', 'admin');
   await f.store.consumeInvitation(second.token, second.user.id);
   assert.equal(await pending(second.user.id), 1, 'any role that joins after another member gets the tour');
   assert.equal(await pending(admin.user.id), 0, 'nobody else is touched');

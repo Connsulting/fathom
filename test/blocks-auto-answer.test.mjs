@@ -35,7 +35,7 @@ async function plantWargames(db) {
 
 async function answer(t, scripts, { prepare } = {}) {
   const s = await tempDb(); await seedDemo(s.db);
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   prepare?.(s.db);
   const runtime = await createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' }) });
   const results = [];

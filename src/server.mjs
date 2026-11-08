@@ -180,7 +180,7 @@ export async function startServer(config = loadConfig(), { engineOptions = {} } 
   try {
     await recoverHouseholdOperations({ platform, config });
     const transport = createEnrollmentTransport(config, { outboxDir: join(config.dataDir, 'outbox') });
-    const auth = createAuthService({ platform, config, transport, secrets });
+    const auth = await createAuthService({ platform, config, transport, secrets });
     // Live mode: every household's pre-MT-05 spend is carried before any household is admitted.
     if (config.engine === 'live') await carryAllHouseholds(platform, { dataDir: config.dataDir, now: (engineOptions.fundingNow ?? Date.now)() });
     runtimes = createRuntimeRegistry({ platform, config, secrets, engineOptions });

@@ -129,14 +129,14 @@ test('after an interim round the assembler starts over: no separator, and a repl
 
 async function demoStore(t) {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   await seedDemo(s.db);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' });
   const runtime = await createRuntimeEngine({ db: s.db, config });
   // The temp store's directory stands in as the household root.
   const root = s.dataDir;
   const packs = createLivePacks(s.db, { dataDir: root });
-  packs.refresh();
+  await packs.refresh();
   return { ...s, root, config, runtime, packs };
 }
 
@@ -331,7 +331,7 @@ test('a notice reply has no work', async t => {
 
 test('fakeAnswerScript scripts three rounds for "show your work", reading goals or the rec, and leaves other questions alone', async t => {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   await seedDemo(s.db);
   const now = '2026-11-05T09:00:00.000Z';
   await s.db.prepare('INSERT INTO conversations (key, created_at, last_at, rec_id) VALUES (?, ?, ?, ?)').run('ask:aaaaaaaaaaaa', now, now, 'deferral');

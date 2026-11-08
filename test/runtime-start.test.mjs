@@ -17,12 +17,12 @@ test('building and reading a household context writes no pack state; starting th
   const runtimes = createRuntimeRegistry({ platform: temp.platform, config, secrets: temp.secrets });
   t.after(async () => {
     await runtimes.close();
-    temp.close();
+    await temp.close();
     rmSync(temp.dataDir, { recursive: true, force: true });
   });
   const packRows = async () => (await temp.db.prepare('SELECT count(*) AS n FROM packs_state').get()).n;
 
-  const context = runtimes.get(temp.householdId);
+  const context = await runtimes.get(temp.householdId);
   assert.ok(context, 'the household is served');
   assert.equal(context.isCurrent(), true);
   await temp.platform.prepare('UPDATE households SET generation = generation + 1 WHERE id = ?').run(temp.householdId);
@@ -32,7 +32,7 @@ test('building and reading a household context writes no pack state; starting th
   assert.equal(context.isCurrent(), false);
   await temp.platform.prepare("UPDATE households SET status = 'active' WHERE id = ?").run(temp.householdId);
   assert.equal(context.isCurrent(), true);
-  assert.ok(context.packs.loaded().length > 0, 'packs load on read');
+  assert.ok((await context.packs.loaded()).length > 0, 'packs load on read');
   assert.equal(await packRows(), 0, 'building and reading the context wrote no pack state');
 
   await runtimes.startAll();

@@ -33,7 +33,7 @@ async function withHousehold(fn, { names = false } = {}) {
     }
     await P.ingestFiles(s.db, household(), s.opts(await offEngine()));
     return await fn(s);
-  } finally { s.close(); }
+  } finally { await s.close(); }
 }
 
 const acct = async (db, mask, inst) => (await one(db, "SELECT id FROM accounts WHERE mask = ? AND coalesce(inst, '') = ?", mask, inst)).id;

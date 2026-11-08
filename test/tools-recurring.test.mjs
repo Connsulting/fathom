@@ -11,14 +11,14 @@ test('recurring detects monthly quarterly annual stopped and changed series with
     ['2026-09-01', 15],
     ['2026-10-01', 15],
   ])
-    s.tx('card', date, -v, 'Shopping', 'Example subscription');
+    await s.tx('card', date, -v, 'Shopping', 'Example subscription');
   for (const date of ['2026-01-05', '2026-04-05', '2026-07-05', '2026-10-05'])
-    s.tx('card', date, -30, 'Shopping', 'Quarterly service');
-  for (const date of ['2025-10-15', '2026-10-15']) s.tx('card', date, -120, 'Shopping', 'Annual service');
-  for (const date of ['2026-01-20', '2026-02-20', '2026-03-20']) s.tx('card', date, -20, 'Shopping', 'Stopped service');
+    await s.tx('card', date, -30, 'Shopping', 'Quarterly service');
+  for (const date of ['2025-10-15', '2026-10-15']) await s.tx('card', date, -120, 'Shopping', 'Annual service');
+  for (const date of ['2026-01-20', '2026-02-20', '2026-03-20']) await s.tx('card', date, -20, 'Shopping', 'Stopped service');
   for (const date of ['2026-01-25', '2026-02-25', '2026-03-25']) {
-    s.tx('checking', date, -99, 'Internal Transfers', 'Transfer service');
-    s.tx('card', date, 99, 'Credit Card Payment', 'Transfer service');
+    await s.tx('checking', date, -99, 'Internal Transfers', 'Transfer service');
+    await s.tx('card', date, 99, 'Credit Card Payment', 'Transfer service');
   }
   const r = await s.call('recurring', { status: 'all' }),
     by = Object.fromEntries(r.charges.map((c) => [c.merchant, c]));
@@ -29,7 +29,7 @@ test('recurring detects monthly quarterly annual stopped and changed series with
   assert.equal(by['annual service'].annualCost.value, 120);
   assert.equal(by['stopped service'].status, 'stopped');
   assert.equal(by['transfer service'], undefined);
-  const changedId = s.tx('card', '2026-11-01', -25, 'Shopping', 'Example subscription');
+  const changedId = await s.tx('card', '2026-11-01', -25, 'Shopping', 'Example subscription');
   const changed = await s.call('recurring', { status: 'all' });
   const c = changed.charges.find((x) => x.merchant === 'example subscription');
   assert.equal(c.changed.from.value, 15);
@@ -44,8 +44,8 @@ test('recurring detects monthly quarterly annual stopped and changed series with
 test('recurring total provenance includes only the series accepted by its filters', async t => {
   const s=await spendingStore(t);
   const included=[];
-  for(const date of ['2025-10-15','2026-10-15'])included.push(s.tx('card',date,-71,'Shopping','Annual sample'));
-  s.tx('card','2026-10-16',-51,'Shopping','One time sample');
+  for(const date of ['2025-10-15','2026-10-15'])included.push(await s.tx('card',date,-71,'Shopping','Annual sample'));
+  await s.tx('card','2026-10-16',-51,'Shopping','One time sample');
   const r=await s.call('recurring',{cadence:'annual'});
   assert.deepEqual(r.totalAnnual.provenance.sources[0].ids,included);
   assert.equal(r.totalAnnual.provenance.sources[0].count,2);

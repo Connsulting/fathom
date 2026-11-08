@@ -10,7 +10,7 @@ import { autoResolve } from '../../src/ingest/auto.mjs';
 import { buildTrend } from '../../src/accounts/trend.mjs';
 import { planRun } from '../helpers/plan.mjs';
 
-const withStore = async fn => { const s = await realStore(); try { await fn(s); } finally { s.close(); } };
+const withStore = async fn => { const s = await realStore(); try { await fn(s); } finally { await s.close(); } };
 const acct = { inst: 'Example Brokerage', name: 'Individual Brokerage x6294', mask: '6294', maskSure: true, balance: 1200, balanceDate: '2032-02-29' };
 const pending = async db => (await C.pendingItems(db)).filter(i => i.context.repair);
 

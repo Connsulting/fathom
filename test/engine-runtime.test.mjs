@@ -80,8 +80,8 @@ test('live mode reads a missing credential once at start; a file created later i
   reads.write('synthetic-placeholder');
   const unavailable = (e) => e instanceof ModelCallError && e.message === 'engine credential unavailable';
   for (let i = 0; i < 2; i++) {
-    await assert.rejects(rt.call(CALL), unavailable);
-    await assert.rejects(rt.extract(EXTRACT), unavailable);
+    await assert.rejects(await rt.call(CALL), unavailable);
+    await assert.rejects(await rt.extract(EXTRACT), unavailable);
   }
   assert.equal(reads.n, 1, 'never read again, even after the file appears');
 }));
@@ -92,8 +92,8 @@ test('fake and off modes never touch the credential file', async () => withFixtu
   for (const mode of ['fake', 'off']) {
     const rt = await createRuntimeEngine({ db, config: { engine: mode, claudeCredentialFile: credFile } });
     await started(rt);
-    await assert.rejects(rt.extract(EXTRACT));
-    await assert.rejects(rt.call(CALL));
+    await assert.rejects(await rt.extract(EXTRACT));
+    await assert.rejects(await rt.call(CALL));
   }
   assert.equal(reads.n, 0);
 }));

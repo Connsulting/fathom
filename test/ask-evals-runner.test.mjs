@@ -82,7 +82,7 @@ test('budget ledger excludes demo spend and refuses a later round inside one eng
     const wrapped = ledger.begin({ ...request, fake: [
       { toolCalls: [{ name: 'read', args: {} }], costUsd: 0.99 }, { text: '10', costUsd: 0.02 },
     ] });
-    const engine = createEngine({ admitRound: req => ledger.admitRound(req), mode: 'fake', ledger, capUsd: 1, responses: [
+    const engine = createEngine({ admitRound: async req => await ledger.admitRound(req), mode: 'fake', ledger, capUsd: 1, responses: [
       { toolCalls: [{ name: 'read', args: {} }], costUsd: 0.99 }, { text: '10', costUsd: 0.02 },
     ] });
     await assert.rejects(engine.call(wrapped), BudgetExceededError);
@@ -98,11 +98,11 @@ test('budget admits valid neighboring rounds and records existing engine account
   try {
     const ledger = await createEvalLedger({ db: store.db, maxUsd: 1 });
     const req = ledger.begin({ purpose: 'chat', system: 'Read.', messages: [{ role: 'user', content: 'Hi.' }], maxTokens: 1024, tools: [] });
-    const engine = createEngine({ admitRound: req => ledger.admitRound(req), mode: 'fake', ledger, capUsd: 1, responses: [{ text: 'Hi.', costUsd: 0.01 }] });
+    const engine = createEngine({ admitRound: async req => await ledger.admitRound(req), mode: 'fake', ledger, capUsd: 1, responses: [{ text: 'Hi.', costUsd: 0.01 }] });
     await engine.call(req);
     assert.equal(ledger.state.stopped, null);
     assert.equal(ledger.costUsd, 0.01);
-    assert.equal(ledger.monthSpendUsd('203201'), 0.01);
+    assert.equal(await ledger.monthSpendUsd('203201'), 0.01);
   } finally { await store.close(); }
 });
 
@@ -250,19 +250,19 @@ test('live reservation uses the actual transcript, output limit and purpose mode
     const request = { purpose: 'chat', system: 'Use tools.', systemDynamic: 'Current context.', tools: [],
       maxTokens: 128, messages: [{ role: 'user', content: 'Discuss education savings.' }] };
     ledger.begin(request);
-    ledger.admitRound(request);
+    await ledger.admitRound(request);
     const first = estimateEvalCost({ model: DEFAULT_MODEL, maxTokens: 128,
       system: 'Use tools.\nCurrent context.', messages: request.messages, tools: [] }).costUsd;
     assert.equal(ledger.reserves[0], first);
-    ledger.record({ ts: new Date().toISOString(), purpose: 'chat', model: DEFAULT_MODEL, costUsd: 0.001, tokens: {} });
+    await ledger.record({ ts: new Date().toISOString(), purpose: 'chat', model: DEFAULT_MODEL, costUsd: 0.001, tokens: {} });
     assert.equal(ledger.outstandingReservedUsd, 0);
     const next = { ...request, messages: [...request.messages, { role: 'assistant', content: 'A short reply.' }] };
-    ledger.admitRound(next);
+    await ledger.admitRound(next);
     assert.equal(ledger.reserves[1], estimateEvalCost({ model: DEFAULT_MODEL, maxTokens: 128,
       system: 'Use tools.\nCurrent context.', messages: next.messages, tools: [] }).costUsd);
     ledger.end();
     ledger.begin({ ...request, purpose: 'title' });
-    ledger.admitRound({ ...request, purpose: 'title' });
+    await ledger.admitRound({ ...request, purpose: 'title' });
     assert.equal(ledger.reserves[2], estimateEvalCost({ model: TITLE_MODEL, maxTokens: 128,
       system: 'Use tools.\nCurrent context.', messages: request.messages, tools: [] }).costUsd);
     assert.ok(ledger.reserves[2] < first);

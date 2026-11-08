@@ -140,8 +140,8 @@ const merge = (args, L) => `Merge ${L.account(args.id)} and ${L.account(args.wit
 export const DESCRIBERS = Object.freeze({
   'act_on_recommendation.status': statusText,
   'act_on_recommendation.owner': (a, L) => `Change who acts on ${L.rec(a.id)} to ${OWNER_LABEL[a.owner] || 'someone else'}.`,
-  'act_on_recommendation.step': (a, L) => {
-    const step = L.recDef(a.id).tasks?.[a.index];
+  'act_on_recommendation.step': async (a, L) => {
+    const step = (await L.recDef(a.id)).tasks?.[a.index];
     const name = step && typeof step.t === 'string' ? `the step ${q(step.t)}` : 'a step';
     return `Mark ${name} in ${L.rec(a.id)} as ${a.checked ? 'done' : 'not done'}.`;
   },
@@ -236,7 +236,7 @@ export const DESCRIBERS = Object.freeze({
   },
   'update_goal.delete': async (a, L) => `Delete ${await L.goal(a.id)}. Undo can bring it back.`,
   'update_goal.edit': async (a, L) => {
-    const before = L.goalDef(a.id);
+    const before = await L.goalDef(a.id);
     const fields = Object.keys(a).filter(k => k !== 'id' && a[k] !== undefined);
     if (fields.length === 1 && a.status) {
       return a.status === 'done' ? `Mark ${await L.goal(a.id)} as done.`

@@ -99,7 +99,7 @@ test('B4: POST /api/packs/:id/whatif stores a manifest prompt as escaped literal
   // (households/<id>/packs/your-plans) before the server starts.
   const inst = await tempInstance({ mode: 'demo', init: seedDemo });
   const dataDir = inst.dataDir;
-  inst.close();
+  await inst.close();
   t.after(() => rmSync(dataDir, { recursive: true, force: true }));
   writeSyntheticPack(inst.root, HOSTILE_PACK);
   await withServer({ dataDir, env: FAKE }, async s => {
@@ -130,13 +130,13 @@ test('B4: POST /api/packs/:id/whatif stores a manifest prompt as escaped literal
 
 test('B4: the What if question for a manifest pack is the raw prompt, and its stored form is dropped from history', async t => {
   const s = await tempDb();
-  t.after(() => { s.close(); rmSync(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); rmSync(s.dataDir, { recursive: true, force: true }); });
   await seedDemo(s.db);
   // The temp store's directory stands in as the household root.
   writeSyntheticPack(s.dataDir, HOSTILE_PACK);
   const runtime = await createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' }) });
   const packs = createLivePacks(s.db, { dataDir: s.dataDir });
-  packs.refresh();
+  await packs.refresh();
   const requests = [];
   const engine = new Proxy(runtime, {
     get(target, key) {

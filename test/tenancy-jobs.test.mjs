@@ -27,7 +27,7 @@ async function fixture(t, handler, count = 3) {
     }, now: () => new Date('2026-11-05T12:00:00Z'), log: quiet }),
   });
   let registry = makeRegistry();
-  t.after(async () => { await registry.close(); instance.close(); rmSync(instance.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await registry.close(); await instance.close(); rmSync(instance.dataDir, { recursive: true, force: true }); });
   return { ...instance, ids, get registry() { return registry; }, contexts: () => ids.map(id => registry.get(id)),
     async restart() { await registry.close(); registry = makeRegistry(); } };
 }
@@ -72,7 +72,7 @@ test('scheduled periods, failures and restart remain independent', { timeout: 15
     return { note: { completed: true } };
   }, 2);
   const [a, b] = fx.contexts(); failId = a.householdId;
-  await Promise.all([a.scheduler.tick(), b.scheduler.tick()]);
+  await Promise.all([await a.scheduler.tick(), await b.scheduler.tick()]);
   const ar = a.scheduler.runs({ limit: 20 }); const br = b.scheduler.runs({ limit: 20 });
   assert.equal(ar.length, 3); assert.equal(br.length, 3);
   assert.ok(ar.every(r => r.status === 'error' && r.errorClass === 'synthetic_failure'));
@@ -81,7 +81,7 @@ test('scheduled periods, failures and restart remain independent', { timeout: 15
   assert.equal(ar.find(r => r.jobId === 'plan').periodKey, br.find(r => r.jobId === 'plan').periodKey);
   await fx.restart();
   const [aa, bb] = fx.contexts();
-  await Promise.all([aa.scheduler.tick(), bb.scheduler.tick()]);
+  await Promise.all([await aa.scheduler.tick(), await bb.scheduler.tick()]);
   assert.equal(seen.length, 6, 'restart does not replay claimed periods');
   for (const reason of ['ingest', 'confirm', 'decide']) await bb.scheduler.trigger('plan', reason);
   bb.scheduler.soon('plan', 'confirm', { immediate: true });
@@ -156,7 +156,7 @@ test('SimpleFIN sync queues local planning and freshness without holding its han
   const config = { dataDir: instance.dataDir, engine: 'off', clock: '2026-11-05', emailTransport: 'dev' };
   const registry = createRuntimeRegistry({ platform: instance.platform, config, secrets: instance.secrets });
   try {
-    const a = registry.get(instance.householdId); const b = registry.get(other);
+    const a = await registry.get(instance.householdId); const b = await registry.get(other);
     await connectSimplefin(a.db, fakeToken(), { household: a, now: '2026-11-05T12:00:00Z', fetch: createFakeSimplefin({ today: () => '2026-11-05' }) });
     const run = await a.scheduler.runNow('simplefin-sync');
     assert.equal(run.status, 'ok');
@@ -168,7 +168,7 @@ test('SimpleFIN sync queues local planning and freshness without holding its han
     assert.equal(b.scheduler.runs().length, 0);
     assert.equal((await b.db.prepare('SELECT count(*) AS n FROM transactions').get()).n, 0);
   } finally {
-    await registry.close(); instance.close(); rmSync(instance.dataDir, { recursive: true, force: true });
+    await registry.close(); await instance.close(); rmSync(instance.dataDir, { recursive: true, force: true });
   }
 });
 
@@ -182,7 +182,7 @@ test('resolver answers queue a separate local plan claim after releasing the hou
     dataDir: instance.dataDir, engine: 'off', clock: '2026-11-05', emailTransport: 'dev',
   }, secrets: instance.secrets });
   try {
-    const a = registry.get(instance.householdId); const b = registry.get(other);
+    const a = await registry.get(instance.householdId); const b = await registry.get(other);
     const seedQuestion = async ctx => {
       await ctx.db.prepare('INSERT INTO accounts (id,name,inst,mask) VALUES (?,?,?,?)').run('synthetic-checking', 'Synthetic checking', 'Example Bank', '1234');
       return (await ask(ctx.db, { kind: 'account_kind', subject: 'synthetic-checking', question: 'What kind of account is this?', options: KIND_OPTIONS, now: '2026-11-05T12:00:00Z' })).id;
@@ -200,6 +200,6 @@ test('resolver answers queue a separate local plan claim after releasing the hou
     assert.equal((await b.db.prepare('SELECT status FROM confirm_items WHERE id = ?').get(foreign)).status, 'pending');
     assert.equal(b.scheduler.runs().length, 0);
   } finally {
-    await registry.close(); instance.close(); rmSync(instance.dataDir, { recursive: true, force: true });
+    await registry.close(); await instance.close(); rmSync(instance.dataDir, { recursive: true, force: true });
   }
 });

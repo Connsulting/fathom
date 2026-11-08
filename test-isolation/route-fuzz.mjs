@@ -216,7 +216,7 @@ async function deterministicPolicies(f, inventory, specs) {
     ]) {
       const r = await own.admin.client.post(path, body);
       assert.equal(r.status, expected, 'foreign_control');
-      assert.equal(f.store.membership(other.member.identity.id, other.id).role, 'member');
+      assert.equal((await f.store.membership(other.member.identity.id, other.id)).role, 'member');
       assert.equal((await f.store.listPasskeys(other.member.identity.id)).length, 1);
     }
     const before = await snapshot(other);
@@ -292,7 +292,7 @@ async function lifecyclePolicies(f, inventory, specs) {
     }
     const revoked = await f.invite(own, own.canary.toLowerCase() + '-revoked@example.test');
     const expired = await f.invite(own, own.canary.toLowerCase() + '-expired@example.test');
-    f.store.revokeSession(revoked.client.session());
+    await f.store.revokeSession(revoked.client.session());
     await f.platform.prepare('UPDATE auth_sessions SET expires_at=0 WHERE hash=?').run(hash(expired.client.session()));
     const removed = own.member;
     const memberKey = ok(await removed.client.post('/api/keys', { name: 'Synthetic removed member', scopes: ['read'] }));
