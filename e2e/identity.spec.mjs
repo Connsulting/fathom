@@ -345,6 +345,13 @@ test.describe('passkey accounts through the browser', () => {
       expect(registration.identity.memberships).toEqual([{ householdId: ownerIdentity.householdId, role: 'member' }]);
       await member.page.goto(`${base}/`);
       await expect(member.page).toHaveURL(/#\/home$/);
+      // Accepting an invitation into an active household starts the member's guided tour; Escape
+      // dismisses it (even while it waits for a stop's anchor) and clears the user's flag.
+      const tourPending = async () => (await (await member.page.request.get(`${base}/api/scenario`)).json()).live.tourPending;
+      expect(await tourPending(), 'the invited member has the tour pending').toBe(true);
+      await member.page.keyboard.press('Escape');
+      await expect(member.page.locator('.h-tour')).toHaveCount(0);
+      await expect.poll(tourPending, { timeout: 15_000 }).toBe(false);
       await member.page.locator('header.h-top a.h-gear').click();
       await expect(member.page).toHaveURL(/#\/settings$/);
       await expect(member.page.locator('section.h-settings').getByRole('link', { name: 'Account', exact: true })).toBeVisible();
