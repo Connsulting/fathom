@@ -11,7 +11,7 @@
    change saves at once, through the confirm queue on the server), Add last 4 stores a missing
    4-digit mask, and Merge with... picks another account, states which record stays and what moves,
    and merges on confirm. After a change a status line says what changed, with Undo where the
-   server can undo it (last 4 has no undo). */
+   server can undo it. */
 
 let H = null;
 
@@ -282,7 +282,7 @@ function undoHtml() {
   const { esc, btn } = H;
   const u = S.undo;
   if (!u) return '';
-  const can = u.kind === 'owner' || u.kind === 'kind' || u.kind === 'merge';
+  const can = u.kind === 'owner' || u.kind === 'kind' || u.kind === 'mask' || u.kind === 'merge';
   const b = can ? btn(u.busy ? 'Undoing' : 'Undo', `data-ad="undo"${u.busy ? ' disabled' : ''}`, 'ghost') : '';
   return `<div class="h-ad-undo" role="status"><span>${esc(u.text)}</span>${b}${u.err ? `<span class="h-ad-err">${esc(u.err)}</span>` : ''}</div>`;
 }
@@ -474,6 +474,19 @@ function undoChange() {
     });
     return;
   }
+  if (u.kind === 'mask') {
+    Promise.resolve(H.api.accountMask(id, { undo: u.before })).then((r) => {
+      if (S.id !== id || S.undo !== u) return;
+      u.busy = false;
+      if (!r || r.error) u.err = r?.error || 'Could not undo that.';
+      else {
+        patchDetail({ mask: null, maskEditable: true });
+        S.undo = { kind: 'done', text: 'Last 4 removed.' };
+      }
+      H.draw();
+    });
+    return;
+  }
   const f = FIELD[u.kind];
   const call = u.kind === 'owner' ? H.api.accountOwner : H.api.accountKind;
   Promise.resolve(call(id, { undo: u.before })).then((r) => {
@@ -526,7 +539,7 @@ function saveMask() {
     }
     S.mask = null;
     patchDetail({ mask: v, maskEditable: false });
-    S.undo = { kind: 'mask', text: `Last 4 saved as ${v}.` };
+    S.undo = { kind: 'mask', before: r.data.before, text: `Last 4 saved as ${v}.` };
     H.draw();
     focusIn('[data-ad="merge-open"]');
   });

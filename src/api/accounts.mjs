@@ -2,7 +2,7 @@
 // Stores the owner's display name. Empty clears it, and the screens fall back to the default label.
 // The imported name, source_id and mirror are left alone.
 
-import { tx, getSetting } from '../store/db.mjs';
+import { tx, getSetting, parseJson } from '../store/db.mjs';
 import { validateDisplayName, accountLabel } from '../shared/account-label.mjs';
 import { HttpError } from './http.mjs';
 import { scenarioOf } from './handlers.mjs';
@@ -31,7 +31,7 @@ export function accountRename(ctx) {
   return { scenario, account, label: accountNaming(ctx.db).label({ ...row, display_name: res.value }) };
 }
 
-// POST /api/accounts/:id/mask  {mask: "NNNN"} -> {scenario, account}
+// POST /api/accounts/:id/mask  {mask: "NNNN"} or {undo: before} -> {scenario, account, before}
 // Stores a last 4 the owner typed, only on an account with none and no SimpleFIN identity (the
 // bridge owns those). Duplicate detection reads accounts.mask, so the pairs are asked again here.
 //
@@ -60,7 +60,9 @@ const withAccount = (scenario, id) => ({ scenario, account: scenario.accounts.fi
 
 export function accountMask(ctx) {
   const row = accountOf(ctx);
-  const mask = bodyOf(ctx).mask;
+  const body = bodyOf(ctx);
+  if (Object.hasOwn(body, 'undo')) return undoAccountMask(ctx, row, body.undo);
+  const mask = body.mask;
   if (typeof mask !== 'string' || !/^\d{4}$/.test(mask)) throw new HttpError(400, 'last 4 must be exactly four digits');
   if ((row.mask != null && row.mask !== '') || String(row.identity ?? '').startsWith('simplefin:')) {
     throw new HttpError(409, 'this account already has its last 4');
@@ -69,7 +71,28 @@ export function accountMask(ctx) {
     ctx.db.prepare('UPDATE accounts SET mask = ? WHERE id = ?').run(mask, row.id);
     queueAccountPairs(ctx.db);
   });
-  return withAccount(scenarioOf(ctx), row.id);
+  // The receipt for Undo: the last 4 that was stored (an account only takes one while it has none).
+  return { ...withAccount(scenarioOf(ctx), row.id), before: { set: mask } };
+}
+
+// {undo: {set}} takes back the last 4 an earlier save stored. It is refused when that last 4 is no
+// longer the account's, when the bridge owns it, or when an answered Same account? question for the
+// account built on it. Pairs only the last 4 proposed are withdrawn with it.
+function undoAccountMask(ctx, row, undo) {
+  if (!undo || typeof undo !== 'object' || Array.isArray(undo) || typeof undo.set !== 'string' || !/^\d{4}$/.test(undo.set)) {
+    throw new HttpError(400, 'undo must be the before value an edit returned');
+  }
+  if (row.mask !== undo.set || String(row.identity ?? '').startsWith('simplefin:')) {
+    throw new HttpError(409, 'the last 4 changed since, so it cannot be undone');
+  }
+  const answered = ctx.db.prepare("SELECT context FROM confirm_items WHERE kind = 'account_match' AND status = 'answered' AND answer IS NOT 'superseded'").all()
+    .some((i) => { const c = parseJson(i.context, {}) || {}; return c.candidateId === row.id || c.ownId === row.id; });
+  if (answered) throw new HttpError(409, 'a later answer builds on this last 4, so it is final');
+  tx(ctx.db, () => {
+    ctx.db.prepare('UPDATE accounts SET mask = NULL WHERE id = ?').run(row.id);
+    queueAccountPairs(ctx.db);
+  });
+  return { ...withAccount(scenarioOf(ctx), row.id), before: null };
 }
 
 const nowIso = () => new Date().toISOString();
