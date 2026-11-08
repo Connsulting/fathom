@@ -32,12 +32,13 @@ export function rowNumber(ref, field) {
   return field === 'amount' && (ref.tool === 'transactions' && ref.args.operation === 'search' && ref.path === 'rows' ||
     ref.tool === 'business' && ref.args.operation === 'rows' && ref.path === '');
 }
-const TEXT = new Set(['month', 'year', 'key', 'label', 'date', 'description', 'category', 'merchant', 'cadence', 'status', 'account.label', 'window.from', 'window.to']);
-const NUMERIC_TEXT = new Set(['month', 'date', 'year', 'key', 'window.from', 'window.to']);
+const TEXT = new Set(['month', 'year', 'key', 'label', 'date', 'nextExpected', 'description', 'category', 'merchant', 'cadence', 'status', 'account.label', 'window.from', 'window.to']);
+const NUMERIC_TEXT = new Set(['month', 'date', 'nextExpected', 'year', 'key', 'window.from', 'window.to']);
 export function fieldType(ref, item, field) {
   const value = at(item, field);
   if (isFigure(value)) return { type: 'fig', unit: value.unit };
   if (rowNumber(ref, field) && typeof value === 'number' && Number.isFinite(value)) return { type: 'row', unit: 'usd' };
+  if (field === 'year' && Number.isInteger(value)) return { type: 'text' };
   if (typeof value === 'string' && TEXT.has(field) && (NUMERIC_TEXT.has(field) || !/\p{N}/u.test(value))) return { type: 'text' };
   return null;
 }
