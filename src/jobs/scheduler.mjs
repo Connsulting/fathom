@@ -39,8 +39,11 @@ import { guessCategories } from '../categories/guess.mjs';
 //    and jobs() lists without refreshing job rows while paused.
 // 11. Handlers get ctx.household, the household context (household() at run time), beside db,
 //    config, engine and transport, all of that one household.
+// 12. Registry schedulers share round-robin admission: one handler per household and two for the
+//    instance. Queued runs recheck admission and the lease before claiming a local job_runs row.
 
 import { getSetting } from '../store/db.mjs';
+import { createJobDispatcher } from './dispatch.mjs';
 import { isIsoDate } from '../scenario/build.mjs';
 import { refreshFreshness } from '../ingest/freshness.mjs';
 import { composeBrief } from '../email/brief.mjs';
@@ -57,7 +60,7 @@ export const DEFAULT_TIMEZONE = 'America/New_York';
 const DAY = 86400000;
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const TRIGGERS = new Set(['manual', 'ingest', 'confirm', 'decide']);
+const TRIGGERS = new Set(['manual', 'ingest', 'confirm', 'decide', 'resolve']);
 
 export const JOBS = Object.freeze([
   { id: 'plan', name: 'Nightly plan refresh', cadence: 'Daily, 2:00 AM', does: 'Re-plan recommendations and deadlines from the latest data.', schedule: Object.freeze({ every: 'day', hour: 2 }) },
@@ -232,7 +235,7 @@ const isUniqueViolation = (e) => e && (e.errcode === 2067 || e.errcode === 1555 
 // ---------------------------------------------------------------- scheduler
 
 export function createScheduler({
-  db, config = {}, engine = null, handlers = {}, transport = null, now = () => new Date(), allowed = () => true, household = () => null,
+  db, config = {}, engine = null, handlers = {}, transport = null, dispatcher = createJobDispatcher(), now = () => new Date(), allowed = () => true, household = () => null,
   tickMs = 60000, leaseMs = 300000, drainMs = 30000, debounceMs = 30000, holder = `fathom-${process.pid}`, log = console,
 } = {}) {
   if (!db) throw new TypeError('A store is required');
@@ -249,6 +252,7 @@ export function createScheduler({
   let timer = null;
   let first = null;
   let renewer = null;
+  let executing = 0;
   let stopping = false;
   // Debounced triggers: jobId -> timer.
   const soonTimers = new Map();
@@ -308,14 +312,29 @@ export function createScheduler({
   }
 
   function execute(job, opts) {
-    const p = executeOnce(job, opts);
+    const captured = household();
+    running.add(job.id);
+    const p = dispatcher.run(captured?.householdId ?? holder, () => {
+      if (stopping) throw new SchedulerError('locked');
+      if (allowed() !== true) throw new SchedulerError('paused');
+      if (!lease(at())) throw new SchedulerError('locked');
+      executing++;
+      return executeOnce(job, { ...opts, household: captured }).finally(() => {
+        if (--executing === 0) stopRenewing();
+      });
+    }).finally(() => {
+      running.delete(job.id);
+      const again = pending.get(job.id);
+      pending.delete(job.id);
+      if (again && !stopping) trigger(job.id, again).catch(() => {});
+    });
     active.add(p);
     p.then(() => active.delete(p), () => active.delete(p));
     return p;
   }
 
   // Claims (jobId, key) and runs the handler. Returns the finished run, or null when already claimed.
-  async function executeOnce(job, { key, trigger, t, zone }) {
+  async function executeOnce(job, { key, trigger, t, zone, household: captured }) {
     if (allowed() !== true) throw new SchedulerError('paused');
     let id;
     try {
@@ -324,7 +343,6 @@ export function createScheduler({
       if (isUniqueViolation(e)) return null;
       throw e;
     }
-    running.add(job.id);
     if (!renewer && !stopping) {
       renewer = setInterval(renew, Math.max(1, Math.floor(leaseMs / 3)));
       renewer.unref?.();
@@ -335,7 +353,7 @@ export function createScheduler({
     let cost = null;
     let note = null;
     try {
-      const ctx = { db, config, engine, transport, household: household(), now: t.toISOString(), clock: clockFor(t, zone), periodKey: key, trigger, jobRunId: id, triggerJob: (jobId) => triggerJob(jobId, 'ingest') };
+      const ctx = { db, config, engine, transport, household: captured, now: t.toISOString(), clock: clockFor(t, zone), periodKey: key, trigger, jobRunId: id, triggerJob: (jobId, reason = 'ingest') => triggerJob(jobId, reason) };
       // A job is system-initiated even when a request triggered it: no request principal.
       const out = (await withoutPrincipal(() => handlers[job.id](ctx))) || {};
       if (out.status === 'skipped') status = 'skipped';
@@ -345,20 +363,11 @@ export function createScheduler({
       status = 'error';
       errorClass = errorClassOf(e);
       if (Number.isFinite(e && e.costUsd) && e.costUsd >= 0) cost = e.costUsd;
-    } finally {
-      running.delete(job.id);
-      if (!running.size) stopRenewing();
     }
     q.finish.run(status, at().toISOString(), Math.max(0, Math.round(performance.now() - started)), errorClass, cost, note, id);
     log.log(`fathom: job ${job.id} ${status}${errorClass ? ` ${errorClass}` : ''}`);
     try { ensureJobs(); } catch { /* labels refresh on the next tick */ }
     const result = runOut(q.run.get(id));
-    const again = pending.get(job.id);
-    if (again && !stopping) {
-      pending.delete(job.id);
-      // Not awaited: the finished run's caller must not wait on the rerun.
-      runOff(job.id, again).catch((e) => { if (!(e instanceof SchedulerError)) log.log(`fathom: job ${job.id} error store`); });
-    }
     return result;
   }
 
@@ -511,12 +520,12 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
       if (out.status === 'skipped') return { status: 'skipped', note: { connected: false } };
       if (out.status !== 'ok') throw new JobFailure(`simplefin_${out.code || 'error'}`);
       if (out.changed) ctx.triggerJob?.('plan');
-      await ctx.triggerJob?.('freshness');
+      ctx.triggerJob?.('freshness');
       return { costUsd: 0, note: { ...out.counts, changed: out.changed } };
     },
     async plan(ctx) {
       if (getSetting(ctx.db, 'mode', null) === 'demo') return { status: 'skipped' };
-      const planning = await runPlanning(ctx.db, ctx.engine || null, {
+      const planning = await runPlanning(ctx.db, ctx.trigger === 'resolve' ? null : (ctx.engine || null), {
         now: ctx.clock, packDirs: defaultPackDirs(ctx.household.root), runId: ctx.jobRunId,
       });
       ctx.db.prepare('UPDATE action_receipts SET planning_pending = 0 WHERE planning_pending = 1').run();
@@ -566,7 +575,7 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
           const closed = categories.stopped ? { guessed: 0 } : await guessClosedOptions(ctx.db, categorizer, { now: ctx.now });
           return { applied: categories.applied, stopped: categories.stopped ?? closed.stopped };
         },
-        replan: () => runPlanning(ctx.db, null, { now: ctx.clock, packDirs, runId: ctx.jobRunId }),
+        replan: () => { ctx.triggerJob('plan', 'resolve'); },
       });
       if (!out.answered && !out.batches && !out.costUsd) return { status: 'skipped', note: { pending: out.pending } };
       return { costUsd: out.costUsd,
