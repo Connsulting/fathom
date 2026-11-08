@@ -24,6 +24,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - name: offline import evaluation
+        run: node evals/imports/run.mjs --offline
       - run: bash scripts/push-tested-image-test.sh
 
   e2e:

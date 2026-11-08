@@ -61,3 +61,33 @@ test('actual and estimated usage retain model version and over-budget provider r
   await assert.rejects(over.call(request), /accounting_exceeded/);
   await assert.rejects(over.call(request), /evaluation_cap/);
 });
+
+test('simulated live evaluation records a failed call and marks the other 23 base cases unrun', async () => {
+  const { runEvaluation } = await import('../evals/imports/run.mjs');
+  let calls = 0;
+  const liveEngine = {
+    isOn: () => true, credentialStateFor: () => 'loaded', status: () => ({ capUsd: 5, spentUsd: 0 }),
+    async call(request) { request.beforeDispatch(); calls++; throw new Error('synthetic transport failure'); },
+  };
+  const report = await runEvaluation({ liveEngine, liveOptions: { ...options, maxCalls: 1 } });
+  assert.equal(calls, 1);
+  assert.equal(report.spend.failedCalls, 1);
+  assert.ok(report.spend.estimatedCostUsd > 0);
+  assert.equal(report.unrun, 23);
+  assert.equal(report.cases.filter(c => c.status === 'unrun').length, 23);
+  assert.equal(report.ok, false);
+  assert.equal(report.spend.stopReason, 'call_cap');
+});
+
+test('per-file cumulative output, input and unknown-success accounting stop before the next transport', async () => {
+  const output = cappedEngine({ call: async () => ({ accounting: { ...actual, costUsd: 0, tokens: { input_tokens: 10, output_tokens: 4096 } } }) }, options, () => ({ ...estimate, costUsd: 0 }));
+  await output.call(request); await output.call(request);
+  await assert.rejects(output.call(request), /file_cap/);
+  const input = cappedEngine({ call: async () => ({ accounting: { ...actual, costUsd: 0, tokens: { input_tokens: 20000, output_tokens: 1 } } }) }, options, () => ({ ...estimate, costUsd: 0, inputTokens: 20000 }));
+  await input.call(request);
+  await assert.rejects(input.call(request), /file_cap/);
+  const unknown = cappedEngine({ call: async () => ({ text: '{}' }) }, options, () => estimate);
+  await unknown.call(request); await unknown.call(request);
+  await assert.rejects(unknown.call(request), /file_cap/);
+  assert.equal(unknown.report().estimatedCostUsd, 0.5);
+});
