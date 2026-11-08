@@ -24,7 +24,17 @@ function domainError(err) {
 function domain(fn) { try { return fn(); } catch (err) { throw domainError(err); } }
 function changedRows(db,ids) {
   const changes=ids.flatMap(id=>parseJson(db.prepare('SELECT changes FROM confirm_undo WHERE item_id=?').get(id)?.changes,[])||[]);
-  return [...new Map(changes.map(c=>[`${c.table}:${c.rowid}`,{table:c.table,rowid:c.rowid,fields:c.op==='update'&&c.table==='accounts'?Object.keys(JSON.parse(c.after)).filter(k=>JSON.parse(c.before)[k]!==JSON.parse(c.after)[k]):null}])).values()];
+  const rows=new Map();
+  for (const change of changes) {
+    const key=`${change.table}:${change.rowid}`;
+    const previous=rows.get(key);
+    const fields=change.op==='update' && change.table==='accounts'
+      ? Object.keys(JSON.parse(change.after)).filter(k=>JSON.parse(change.before)[k]!==JSON.parse(change.after)[k]) : null;
+    rows.set(key,{table:change.table,rowid:change.rowid,fields:previous
+      ? previous.fields && fields ? [...new Set([...previous.fields,...fields])] : null
+      : fields});
+  }
+  return [...rows.values()];
 }
 function rowStates(db,rows){return rows.map(({table,rowid,fields})=>{
   const row=db.prepare(`SELECT * FROM ${ident(table)} WHERE rowid=?`).get(rowid)||null;

@@ -88,3 +88,13 @@ test('Confirm and fact operations enforce scopes and proposal bases without writ
  s.db.prepare("UPDATE accounts SET owner='Joint' WHERE id='manual'").run();
  assert.notEqual(proposalBasis(s.db,'answer',pending.scopes,pending.args),basis);
 });
+
+test('undoing a batch reopen refuses a later edit to any account field it would restore',async t=>{
+ const s=await setup(t),owner=s.q('account_owner'),kind=s.q('account_kind');
+ await callTool('answer',{operation:'confirm',items:[{id:owner,answer:'owner'},{id:kind,answer:'taxable'}]},s.ctx);
+ const reopened=await callTool('answer',{operation:'reopen',ids:[owner,kind]},s.ctx);
+ s.db.prepare("UPDATE accounts SET owner='Later owner' WHERE id='manual'").run();
+ await assert.rejects(undo(s.ctx,reopened),{code:'changed_since'});
+ assert.equal(s.db.prepare("SELECT owner FROM accounts WHERE id='manual'").get().owner,'Later owner');
+ assert.equal(getItem(s.db,owner).status,'pending');assert.equal(getItem(s.db,kind).status,'pending');
+});
