@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mcpHouseholds, mcp, toolText, result, digest, refreshImportFixture } from './helpers/tenancy-mcp.mjs';
+import { mcpHouseholds, mcp, toolText, result, digest, refreshImportFixture, accountCategoryFixtures } from './helpers/tenancy-mcp.mjs';
 import { tools } from '../src/tools/index.mjs';
 import { request } from './helpers/server.mjs';
 
@@ -37,15 +37,13 @@ test('each registered MCP tool executes with only its bearer household context',
   try {
     for (const [own, other] of [[f.A, f.B], [f.B, f.A]]) {
       const before = digest(other.db);
-      const transactionId = Number(own.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('colliding-account','2026-11-01',-25,'Synthetic store')").run().lastInsertRowid);
       const samples = {
         accounts: { operation: 'list' }, act_on_recommendation: { operation: 'owner', id: 'colliding-rec', owner: 'both' },
         answer: { operation: 'fact', key: 'household.expectedDate', value: '2027-03-19', evidence: 'Set the expected date to 2027-03-19' },
         business: { operation: 'pnl' }, calculate: { operation: 'sum', operands: [{ ref: { tool: 'accounts', args: { operation: 'net_worth' }, path: 'total' } }], label: 'Synthetic balance' },
         goals: { operation: 'list' }, household: { operation: 'summary' }, knowledge: { operation: 'packs' },
         recommendations: { operation: 'list' }, refresh: refreshImportFixture(own), sources: { operation: 'archive_account', id: 'colliding-account' }, spending: { operation: 'total' }, tax: { operation: 'estimate' }, transactions: { operation: 'search' },
-        categorize: { operation: 'transaction', transactionId, category: 'Groceries' },
-        update_account: { operation: 'rename', id: 'colliding-account', displayName: own.canary + ' reserve' },
+        ...accountCategoryFixtures(own),
         update_goal: { operation: 'create', title: 'Synthetic reserve' },
         update_preferences: { operation: 'remember', text: 'Prefer a steady reserve', evidence: 'Prefer a steady reserve' },
       };

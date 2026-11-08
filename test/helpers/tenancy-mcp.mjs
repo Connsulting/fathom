@@ -15,6 +15,14 @@ export const mcp = (baseUrl, key, method, params = {}, headers = {}) => mcpPost(
 
 export const refreshImportFixture = household => ({ operation: 'import_file', name: `Synthetic ${household.canary} notes.md`, mime: 'text/markdown', text: `# ${household.canary}\n\nKeep answers short.` });
 
+export function accountCategoryFixtures(household) {
+  const transactionId = Number(household.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('colliding-account','2026-11-01',-25,'Synthetic store')").run().lastInsertRowid);
+  return {
+    categorize: { operation: 'transaction', transactionId, category: 'Groceries' },
+    update_account: { operation: 'rename', id: 'colliding-account', displayName: household.canary + ' reserve' },
+  };
+}
+
 export async function mcpHouseholds() {
   const root = await tempDir('fathom-mt06-');
   let server;
