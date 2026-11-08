@@ -21,8 +21,8 @@ With `FATHOM_ENGINE=fake` (the demo default), Ask, recommendation chats and What
 deterministic scripted source through the same grounding and provenance path as the live engine.
 `live` needs `FATHOM_CLAUDE_CREDENTIAL_FILE`.
 
-Your plans: `npm run build:your-plans` (or the button on Packs) builds the private Your plans pack
-from uploaded plan and benefits documents into `$FATHOM_DATA/packs/your-plans/`. It refuses to
+Your plans: `npm run build:your-plans -- --household <id>` (or the button on Packs) builds the private Your plans pack
+from uploaded plan and benefits documents into `$FATHOM_DATA/households/<id>/packs/your-plans/`. It refuses to
 write inside the repository, so set `FATHOM_DATA` to a directory outside the checkout to use it
 (the default `./data` is inside the checkout).
 
@@ -61,7 +61,7 @@ npm run seed:demo -- --household <id>
 | `FATHOM_EMAIL_SMTP_USER` | unset | SMTP user name when the transport is `smtp`. |
 | `FATHOM_EMAIL_SMTP_HOST` | `smtp.gmail.com` | SMTP host. |
 | `FATHOM_EMAIL_SMTP_PORT` | `465` | `465` (TLS) or `587` (STARTTLS). |
-| `FATHOM_LIVE_EMAIL` | unset | `1` lets `npm run email:test` send one real message. Read only by that script. |
+| `FATHOM_LIVE_EMAIL` | unset | `1` lets `npm run email:test -- --household <id>` send one household test message. Read only by that script. |
 | `FATHOM_LIVE` | unset | `1` lets `npm run smoke:live` call the live model. Read only by that test. |
 | `FATHOM_SMOKE_BASE_URL` | unset | Playwright smoke target. `BASE_URL` is the same switch. |
 | `FATHOM_SMOKE_TARGET` | `demo` | `real` for a real store: signed-out `@auth-smoke` checks, or with a storage state the shells, empty states and provenance. GET and HEAD only. |
