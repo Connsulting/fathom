@@ -48,7 +48,10 @@ test('category scopes and proposal basis cover rules and transaction changes',as
  for(const operation of ['transaction','merchant_rule']){const r=await server._requestHandlers.get('tools/call')({method:'tools/call',params:{name:'categorize',arguments:{operation}}},{});assert.match(r.content[0].text,/Permission denied.*write:categories/);}
  let pending;await proposalTools(tools).find(t=>t.name==='categorize').handler({operation:'merchant_rule',merchant:'warehouse club',category:'Groceries',propose:true},{...s.ctx,onProposal:v=>{pending=v;}});
  assert.equal(s.db.prepare('SELECT count(*) AS n FROM category_merchant_rules').get().n,0);
- const basis=pending.basis;s.db.prepare("UPDATE transactions SET description='Different'").run();
+ const basis=pending.basis;
+ s.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('card','2032-02-02',-20,'Unrelated shop')").run();
+ assert.equal(proposalBasis(s.db,'categorize',pending.scopes,pending.args),basis);
+ s.db.prepare("UPDATE transactions SET description='Different'").run();
  assert.notEqual(proposalBasis(s.db,'categorize',pending.scopes,pending.args),basis);
 });
 
@@ -67,4 +70,14 @@ test('Confirm always answers retain long merchants while the tool enforces its i
  answerItem(s.db,q.id,'always:Groceries',{now:NOW});
  assert.equal(s.db.prepare('SELECT category FROM category_merchant_rules WHERE merchant=?').get(merchant).category,'Groceries');
  await assert.rejects(callTool('categorize',{operation:'merchant_rule',merchant,category:'Groceries'},s.ctx),{code:'bad_input'});
+});
+
+ test('transaction category proposals ignore other transactions but retain the correction row',async t=>{
+ const s=await setup(t),id=s.db.prepare('SELECT id FROM transactions ORDER BY id LIMIT 1').get().id;
+ let pending;await proposalTools(tools).find(t=>t.name==='categorize').handler({operation:'transaction',transactionId:id,category:'Groceries',propose:true},{...s.ctx,onProposal:v=>{pending=v;}});
+ const basis=()=>proposalBasis(s.db,pending.tool,pending.scopes,pending.args);
+ s.db.prepare('UPDATE transactions SET amount=amount-1 WHERE id!=?').run(id);
+ assert.equal(basis(),pending.basis);
+ await callTool('categorize',{operation:'transaction',transactionId:id,category:'Shopping'},s.ctx);
+ assert.notEqual(basis(),pending.basis);
 });

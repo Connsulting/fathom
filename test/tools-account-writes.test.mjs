@@ -64,14 +64,16 @@ test('all account operations deny a read key before validating arguments',async(
   }
 });
 
-test('account proposals do not mutate and stale when a merge source changes',async t=>{
+test('account rename proposals ignore unrelated postings and stale on the target account',async t=>{
   const s=await realStore();t.after(()=>s.close());account(s);const ctx=context(s);let pending;
   const p=proposalTools(tools).find(t=>t.name==='update_account');
   await p.handler({operation:'rename',id:'manual',displayName:'Reserve',propose:true},{...ctx,onProposal:v=>{pending=v;}});
   assert.equal(row(s).display_name,null);assert.equal(pending.scopes[0],'write:accounts');
-  const basis=proposalBasis(s.db,'update_account',['write:accounts'],{id:'manual',withId:'other'});
+  const basis=pending.basis;
   s.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('manual','2032-03-01',-1,'New posting')").run();
-  assert.notEqual(proposalBasis(s.db,'update_account',['write:accounts'],{id:'manual',withId:'other'}),basis);
+  assert.equal(proposalBasis(s.db,pending.tool,pending.scopes,pending.args),basis);
+  s.db.prepare("UPDATE accounts SET display_name='Later' WHERE id='manual'").run();
+  assert.notEqual(proposalBasis(s.db,pending.tool,pending.scopes,pending.args),basis);
 });
 
 for (const confirmation of ['yes','Confirmed']) test(`a stored Ask merge proposal executes on ${confirmation} and its own scope can undo`,async t=>{
