@@ -54,9 +54,10 @@ import { signInTarget } from '../auth/return-path.js';
 //    null too, and a deleted open thread falls back to #/ask).
 //  - api.askStream({ text } | { questionId }, key, onEvent) and api.newThreadStream({ text, recId? } |
 //    { questionId, recId? }, onEvent) are api.askFree / api.ask and api.newThread over the server's
-//    event stream: onEvent(name, data) sees 'start' {key},
-//    'progress' {label}, 'text' {text} (raw model text: escape it and never style its numbers as
-//    verified), 'reset' and 'recovering'. They resolve exactly like askFree and newThread. When the
+//    event stream: onEvent(name, data) sees 'start' {key}, 'progress' {label}, 'interim' {text}
+//    (a tool round's raw model text, a work note: escape it and never style its numbers as
+//    verified) and 'recovering'. No answer text streams; the answer arrives once, in the final
+//    event. They resolve exactly like askFree and newThread. When the
 //    stream breaks before its final event, the answer is fetched instead: the scenario is reloaded
 //    until the conversation has the new turn (the server stores it once, after grounding). A new
 //    thread counts only once it has a turn (a rec thread's row exists before its answer is stored).

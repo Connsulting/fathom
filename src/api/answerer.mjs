@@ -46,15 +46,13 @@ import { listPreferences } from '../actions/preferences.mjs';
 // text grounds when the model read it through that tool: the tool result is the evidence.
 //
 // Streaming: answer({ ..., onEvent }) and whatIf({ ..., onEvent }) report progress while the model
-// runs: { type: 'progress', label } (a fixed plain label per tool, never arguments or values),
-// { type: 'text', text } (raw model text deltas, untrusted: the client escapes them and shows every
-// number as still being checked), { type: 'interim', text } (the text streamed so far in a tool
-// round, sent before that round's tools: it is working text, not the answer, and moves into the
-// work block) and { type: 'reset' } (drop the streamed text: the engine restreams after the SDK
-// superseded refused frames, or the answer is being regenerated, in which case the progress label
-// "Revised to remove N unchecked figures" comes first so the cleared text has a stated reason; a
-// tool call does not reset it). The returned reply is the only grounded result; nothing streamed
-// is stored. A throwing onEvent never fails the answer.
+// runs, and only progress: { type: 'progress', label } (a fixed plain label per tool, never
+// arguments or values; a regeneration adds "Revised to remove N unchecked figures") and
+// { type: 'interim', text } (a tool round's text, sent before that round's tools: working text,
+// not the answer, shown as a note in the work block). Answer text is never streamed, so a draft
+// the corrective round replaces never reaches the page; the engine's text and reset events stop
+// here. The returned reply is the only answer and the only grounded result, delivered once;
+// nothing streamed is stored. A throwing onEvent never fails the answer.
 //
 // Only the engine's final text (the round after the last tool round) is grounded, rendered and fed
 // back in the corrective turn. provenance.work = { ms, items } records how the answer was reached,
@@ -581,30 +579,25 @@ export function checkAnswerForDelivery(text, { scenario, toolResults = [], data 
 export const PROGRESS_START = getTool('household').progress;
 export const PROGRESS_GROUNDING = 'Checking every number against your data';
 const PROGRESS_OTHER = 'Looking at your data';
-// The one step a regeneration shows, before the replaced text clears.
+// The one step a regeneration shows.
 const revisedLabel = n => n ? `Revised to remove ${n} unchecked figure${n === 1 ? '' : 's'}` : 'Revised to follow the answer rules';
 
 export const progressLabel = name => (getTool(name)?.progress || PROGRESS_OTHER);
 
-// A safe emitter: progress labels deduplicated in a row, a reset only after text, a throwing
-// listener ignored. Engine events ({ type: 'tool', name } / { type: 'text', text } /
-// { type: 'interim', text } / { type: 'reset' }) go through engineEvent. A tool call does not reset
-// streamed text; an interim event moves it into the work block. A reset is always plain: the
-// engine's restream after superseded frames, or a regeneration right after its revision step.
+// A safe emitter of progress and interim events only: progress labels deduplicated in a row, a
+// throwing listener ignored. Engine events go through engineEvent: { type: 'tool', name } becomes
+// a progress label, { type: 'interim', text } is forwarded as a work note, and the engine's
+// { type: 'text' } deltas and { type: 'reset' } are dropped (the reply carries the answer).
 function streamer(onEvent) {
-  if (typeof onEvent !== 'function') return { progress() {}, reset() {}, engineEvent: undefined };
+  if (typeof onEvent !== 'function') return { progress() {}, engineEvent: undefined };
   let lastLabel = null;
-  let texted = false;
   const send = e => { try { onEvent(e); } catch { /* the stream never fails an answer */ } };
   const out = {
     progress(label) { if (label !== lastLabel) { lastLabel = label; send({ type: 'progress', label }); } },
-    reset() { if (texted) { texted = false; send({ type: 'reset' }); } },
     engineEvent(e) {
       if (!e || typeof e !== 'object') return;
       if (e.type === 'tool') out.progress(progressLabel(String(e.name || '')));
-      else if (e.type === 'text' && typeof e.text === 'string' && e.text) { texted = true; send({ type: 'text', text: e.text }); }
-      else if (e.type === 'interim' && typeof e.text === 'string' && e.text) { texted = false; send({ type: 'interim', text: e.text }); }
-      else if (e.type === 'reset') out.reset();
+      else if (e.type === 'interim' && typeof e.text === 'string' && e.text) send({ type: 'interim', text: e.text });
     },
   };
   return out;
@@ -787,11 +780,9 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
     let retried = false;
     let costUsd = first.costUsd || 0;
     if (discipline.violations.length) {
-      // The step streams before the reset, so the cleared text has a stated reason.
       revised = grounding.violations.filter(v => !v.date).length;
       retried = true;
       stream.progress(revisedLabel(revised));
-      stream.reset();
       work.step(revisedLabel(revised));
       const earlier = resultsOf(first).map(r => ({ name: r.name, args: r.args ?? {}, result: r.result ?? null,
         ...(r.isError ? { isError: true } : {}) }));

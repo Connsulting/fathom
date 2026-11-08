@@ -151,8 +151,7 @@
    grows below it. */
 .d-horizon .h-askx .h-askx-pend { min-height: calc(100vh - var(--askx-top) - var(--askx-off) - 52px - 24px - var(--askx-tabs, 0px)); }
 .d-horizon .h-askx-live { display: flex; flex-direction: column; gap: 12px; }
-.d-horizon .h-askx-stream .h-msg-b { color: var(--tx); font-size: 15px; line-height: 1.65; }
-/* A number in streamed text is not checked yet: plain, muted, no source underline, no popover. */
+/* A number in a work note is not checked yet: plain, muted, no source underline, no popover. */
 .d-horizon .fx-checking { color: var(--mu); }
 /* A stored figure grounding could not check, left in place: the same neutral tone, with a faint
    dotted underline so its "Not checked against your data" title is discoverable. Older answers
@@ -201,8 +200,6 @@
 .d-horizon .h-work-note :is(ul, ol) { padding-left: 1.4em; }
 .d-horizon .h-work-note ul { list-style: disc; }
 .d-horizon .h-work-note ol { list-style: decimal; }
-.d-horizon .h-work-items li.note.draft { color: var(--fa); }
-.d-horizon .h-work-tag { display: block; margin-bottom: 2px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fa); }
 @keyframes h-askx-pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
 
 /* The markdown subset in answers: lists and bold. */
@@ -406,8 +403,7 @@
 .d-horizon .h-askp .h-askx .h-askx-pend { margin-top: 20px; min-height: calc(100vh - 210px); }
 .d-horizon .h-askp .h-askx .h-msg.me { max-width: 88%; padding: 9px 14px; }
 .d-horizon .h-askp .h-askx .h-msg.me .h-msg-b,
-.d-horizon .h-askp .h-askx .h-msg.fathom .h-msg-b,
-.d-horizon .h-askp .h-askx-stream .h-msg-b { font-size: 14.5px; }
+.d-horizon .h-askp .h-askx .h-msg.fathom .h-msg-b { font-size: 14.5px; }
 .d-horizon .h-askp .h-askx .h-msg { scroll-margin-top: 12px; }
 .d-horizon .h-askp .h-askx-compose.docked { max-width: none; bottom: 0; padding: 8px 0 14px; }
 .d-horizon .h-askp .h-askx-msgs:has(> .h-askx-empty) { display: flex; flex-direction: column; }

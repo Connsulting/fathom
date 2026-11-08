@@ -21,19 +21,19 @@
    and the latest message of its thread (api.proposalDecide); else its state (Confirmed, Not now,
    Out of date). Nothing is written until the owner confirms.
    Streaming: with the engine on, a question goes out through api.askStream / api.newThreadStream.
-   The pending block is a work block (a row button: spinner, "Working…", step count, chevron; its
-   body lists steps and notes) above the text streaming in the current round. Progress labels are
-   steps; an interim event (text a tool round streamed) moves the streamed text into the block as a
-   note. A reset clears the streamed text: after superseded engine frames, or on a regeneration,
-   whose "Revised to remove N unchecked figures" step arrives first, so nothing leaves the screen
-   without a step saying why. Draft notes (stored before regenerations stopped keeping the first
-   attempt) still render with their tag. The block is open while nothing streams and collapsed
-   while text streams, until the owner toggles it for that answer. Streamed text and notes are raw
-   model output rendered by streamHtml (escaped, minimal markdown, every number and token in a
-   neutral .fx-checking span, never .fx-src or .fx-fig). The final grounded message replaces the pending block and carries
-   the stored block (workHtml, provenance.work { ms, items }), collapsed by default, its open
-   state in ui.det. Only the pending blocks are repainted per event (a focused live row keeps
-   focus); the page redraws once at the start and once at the end.
+   The pending block is a work block only (a row button: spinner, "Working…", step count,
+   chevron; its body lists steps and notes). No answer text streams: progress labels are steps
+   (a regeneration shows "Revised to remove N unchecked figures"), and an interim event (a tool
+   round's text) is a note. A draft the answer check replaces never reaches the page. Draft notes
+   stored before regenerations stopped keeping the first attempt are not rendered. The live
+   block is open until the owner toggles it for that answer. Notes are raw model output rendered
+   by streamHtml (escaped, minimal markdown, every number and token in a neutral .fx-checking
+   span, never .fx-src or .fx-fig). The final grounded message replaces the pending block, once,
+   and carries the stored block (workHtml, provenance.work { ms, items }), collapsed by default,
+   its open state in ui.det. The new answer's body fades in (class h-reveal, off under
+   prefers-reduced-motion); a redraw during the fade continues it rather than replaying it. Only
+   the pending blocks are repainted per event (a focused live row keeps focus); the page redraws
+   once at the start and once at the end.
    Recs: a question asked in a rec dialog is an Ask thread carrying recId (api.recThread is the
    thread the dialog shows). This module is the one pending and streaming implementation for both:
    design.js asks through askFromRec and renders recPendingHtml in the dialog, so the same question
@@ -63,7 +63,39 @@ export function bind(kit) {
 // its block notes as muted lines under it (ask-blocks.js). Every host that shows Fathom messages
 // (the Ask page and panel, the rec dialog, Packs) draws bodies through this.
 export function bodyHtml(m) {
-  return `<div class="h-msg-b">${messageBodyHtml(m)}</div>`;
+  const age = revealAge(m);
+  const cls = age == null ? '' : ' h-reveal';
+  const style = age > 0 ? ` style="animation-delay:-${age}ms"` : '';
+  return `<div class="h-msg-b${cls}"${style}>${messageBodyHtml(m)}</div>`;
+}
+
+// The reveal of a new answer. sendAsk arms A.reveal with the highest stored message id it knows;
+// the first Fathom message rendered with a higher id is the new answer, and it carries h-reveal for
+// REVEAL_MS. A redraw inside that window renders a negative animation-delay, so the fade continues
+// where it was instead of starting over. Older messages never carry it.
+const REVEAL_MS = 400;
+const msgNum = (id) => { const x = /^m(\d+)$/.exec(String(id ?? '')); return x ? Number(x[1]) : -1; };
+
+// Milliseconds since m started its reveal, or null when m is not being revealed.
+function revealAge(m) {
+  const r = A.reveal;
+  if (!r || !m || m.role !== 'fathom') return null;
+  if (r.id == null) {
+    if (m.notice || msgNum(m.id) <= r.base) return null;
+    r.id = m.id;
+    r.t0 = Date.now();
+  }
+  if (m.id !== r.id) return null;
+  const age = Date.now() - r.t0;
+  if (age >= REVEAL_MS) { A.reveal = null; return null; }
+  return age;
+}
+
+// The highest stored message id in any thread this page knows.
+function maxMessageId() {
+  let max = -1;
+  for (const t of threads()) for (const m of H.arr(H.api.conversation(keyOf(t)))) max = Math.max(max, msgNum(m && m.id));
+  return max;
 }
 
 const GROUNDED = 'Every number is from your data or a tool result.';
@@ -260,7 +292,8 @@ const fresh = () => ({
                       // recId: asked from that rec's dialog)
   pendingTitle: null, // { id, title } a rename in flight
   lastId: null,       // thread shown by the last render ('' for the empty state)
-  lastN: 0            // its message count then
+  lastN: 0,           // its message count then
+  reveal: null        // { base, id, t0 } the answer to fade in (revealAttrs)
 });
 let A = fresh();
 
@@ -392,7 +425,6 @@ function emptyHtml(host) {
 
 const WORKING = 'Working…';
 const RECOVERING = 'Reconnecting to fetch your answer';
-const DRAFT_TAG = 'Earlier draft, replaced after the number check';
 const LIVE_ROW = 'button.h-work-row[data-work="live"]';
 
 // A streamed token shows its plain value (still in the checking style), or nothing when unknown.
@@ -406,14 +438,14 @@ function plainToken(tok) {
 const stepCount = (items) => items.filter((x) => x.k === 'step').length;
 const stepsLabel = (n) => (n === 0 ? '' : n === 1 ? '1 step' : `${n} steps`);
 
-// The block's item list. pulse marks the last step as the one running (live, nothing streaming).
+// The block's item list. pulse marks the last step as the one running (live).
 // Notes are model text: escaped and rendered by the neutral streamHtml, never as figures.
 function itemsHtml(items, pulse) {
   const { esc } = H;
   let last = -1;
   if (pulse) items.forEach((x, i) => { if (x.k === 'step') last = i; });
   return `<ol class="h-work-items">${items.map((x, i) => (x.k === 'note'
-    ? `<li class="note${x.draft ? ' draft' : ''}">${x.draft ? `<span class="h-work-tag">${DRAFT_TAG}</span>` : ''}<div class="h-work-note">${streamHtml(x.text, plainToken)}</div></li>`
+    ? `<li class="note"><div class="h-work-note">${streamHtml(x.text, plainToken)}</div></li>`
     : `<li class="step${i === last ? ' on' : ''}"><i></i><span>${esc(x.label)}</span></li>`)).join('')}</ol>`;
 }
 
@@ -431,10 +463,11 @@ function blockHtml({ key, live, open, label, items, pulse }) {
     + '</div>';
 }
 
-// Stored items, shape checked: { k:'step', label } or { k:'note', text, draft? }.
+// Stored items, shape checked: { k:'step', label } or { k:'note', text }. A draft note (an older
+// message's replaced first attempt, { draft: true }) is not shown.
 function workItems(list) {
   return H.arr(list).filter((x) => isObj(x) && ((x.k === 'step' && typeof x.label === 'string' && x.label)
-    || (x.k === 'note' && typeof x.text === 'string' && x.text.trim())));
+    || (x.k === 'note' && !x.draft && typeof x.text === 'string' && x.text.trim())));
 }
 
 // The finished block above a Fathom answer (provenance.work { ms, items }), collapsed by default,
@@ -475,13 +508,12 @@ export function workHtml(m) {
   return blockHtml({ key: String(m.id), live: false, open, label: `Worked for ${secs}s`, items: workItems(w.items), pulse: false }) + actions;
 }
 
-// Open while nothing streams, collapsed while text streams, unless the owner chose for this answer.
-const liveOpen = (p) => (p.open == null ? !p.stream : p.open);
+// Open unless the owner chose for this answer.
+const liveOpen = (p) => (p.open == null ? true : p.open);
 
-// The live part of a pending question: the work block, then the text streaming in this round.
+// The live part of a pending question: the work block, its last step running.
 function liveHtml(p) {
-  return blockHtml({ key: 'live', live: true, open: liveOpen(p), label: WORKING, items: p.items, pulse: !p.stream })
-    + (p.stream ? `<div class="h-askx-stream" data-streaming="1"><div class="h-msg-b">${streamHtml(p.stream, plainToken)}</div></div>` : '');
+  return blockHtml({ key: 'live', live: true, open: liveOpen(p), label: WORKING, items: p.items, pulse: true });
 }
 
 function pendingHtml(p) {
@@ -558,23 +590,17 @@ function pushNote(p, text) {
   if (typeof text === 'string' && text.trim()) p.items.push({ k: 'note', text });
 }
 
-// An interim round's text moves into the block as a note. A reset clears the stream; on a
-// regeneration the revision step has already arrived, so the cleared text has a stated reason.
+// A progress label is a step and an interim round's text a note. streamed marks that the answer
+// was followed in place (the scroll rules keep the owner where they are).
 function streamEvent(p, name, data) {
   if (A.pending !== p) return;
   if (name === 'progress' && data && typeof data.label === 'string') {
     pushStep(p, data.label);
-  } else if (name === 'text' && data && typeof data.text === 'string') {
-    p.stream += data.text;
     p.streamed = true;
   } else if (name === 'interim') {
-    const t = data && typeof data.text === 'string' && data.text.trim() ? data.text : p.stream;
-    pushNote(p, t);
-    p.stream = '';
-  } else if (name === 'reset') {
-    p.stream = '';
+    pushNote(p, data && data.text);
+    p.streamed = true;
   } else if (name === 'recovering') {
-    p.stream = '';
     pushStep(p, RECOVERING);
   } else return;
   paintLive(p);
@@ -707,11 +733,12 @@ function sendAsk({ key, recId, text, questionId, draftKey, refocus, host = 'page
   const k = host === 'panel' && H.askBegin && H.askBegin() ? null : (key || null);
   const rid = recId || null;
   const hasQ = questionId != null && questionId !== '';
-  // items: the work block's steps and notes; stream: this round's tentative text; open: null
-  // follows the auto rule, true or false is the owner's choice for this answer. host: where it
-  // was asked ('page', 'panel' or 'dialog').
-  const pend = { key: k, recId: rid, text, n: k ? meCount(k) : 0, items: [], stream: '', streamed: false, open: null, t0: Date.now(), host };
+  // items: the work block's steps and notes; streamed: an event arrived; open: null is open,
+  // true or false is the owner's choice for this answer. host: where it was asked ('page',
+  // 'panel' or 'dialog').
+  const pend = { key: k, recId: rid, text, n: k ? meCount(k) : 0, items: [], streamed: false, open: null, t0: Date.now(), host };
   A.pending = pend;
+  A.reveal = { base: maxMessageId(), id: null, t0: 0 };
   if (draftKey) H.ui.draft[draftKey] = '';
   H.draw();
   // The question goes to the top of the view (inside the dialog for a rec); the answer grows below.
@@ -728,6 +755,8 @@ function sendAsk({ key, recId, text, questionId, draftKey, refocus, host = 'page
     : (k ? (hasQ ? api.ask(questionId, k, { context: q.context }) : api.askFree(text, k, { context: q.context })) : api.newThread({ ...q, recId: rid }));
   Promise.resolve(req).then((res) => {
     if (A.pending === pend) A.pending = null;
+    // No new answer was drawn (an error): nothing to reveal.
+    if (A.reveal && A.reveal.id == null) A.reveal = null;
     if (!H.api) return;
     const ok = k ? meCount(k) > pend.n : !!res;
     if (!ok && draftKey && !hasQ && !H.ui.draft[draftKey]) H.ui.draft[draftKey] = text;
