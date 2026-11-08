@@ -396,10 +396,12 @@ function receiptValue(value, scope) {
   return Object.entries(value).filter(([, v]) => v != null && v !== '').map(([k, v]) => `${k === 'targetDate' ? 'date' : k}: ${typeof v === 'object' ? JSON.stringify(v) : v}`).join(', ');
 }
 
-// A remembered preference reads as a memory with a link to the Memories page; any other receipt
-// shows its label and the value before and after.
+// A remembered preference reads as a memory with a link to the Memories page; a source change
+// shows its label; any other receipt shows its label and the value before and after.
 function receiptLine(a) {
   const { esc } = H;
+  // A source change (archive, restore, remove a file, merge) says it all in its label.
+  if (a.scope === 'write:sources') return `<p><b>${esc(a.label)}</b></p>`;
   if (a.scope !== 'write:preferences') return `<p><b>${esc(a.label)}</b>: ${esc(receiptValue(a.before, a.scope))} → ${esc(receiptValue(a.after, a.scope))}</p>`;
   const had = a.before != null && a.before !== '';
   const head = a.after == null ? 'Memory deleted' : had ? 'Memory updated' : 'Memory saved';
