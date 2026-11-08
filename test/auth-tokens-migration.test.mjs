@@ -20,7 +20,6 @@ const hex = c => c.repeat(64);
 async function storeBefore() {
   assert.ok(TARGET, 'migration 020-auth-token-add-passkey.sql is registered');
   const db = await openScope({ path: ':memory:', journal: null, busyTimeout: 0 });
-  db.exec('PRAGMA foreign_keys = ON');
   await db.applySchema('CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
   for (const m of listMigrations().filter(x => x.id < TARGET.id)) {
     db.exec('BEGIN');
@@ -70,14 +69,14 @@ test('migration 020 keeps every auth row byte for byte', async () => {
   assert.deepEqual((await migrate(db, THROUGH)).applied, [TARGET.id]);
   assert.deepEqual(await snapshot(db), before);
   assert.deepEqual((await db.foreignKeyCheck()), []);
-  assert.equal((await db.prepare('PRAGMA foreign_keys').get()).foreign_keys, 1, 'foreign keys are back on');
+  assert.equal((await (await db.inspect('foreign_keys'))[0]).foreign_keys, 1, 'foreign keys are back on');
   assert.deepEqual((await migrate(db, THROUGH)).applied, [], 'repeatable');
 });
 
 test('migration 020 keeps the auth_tokens shape, keys, index and the challenge reference', async () => {
   const db = await storeBefore();
   await migrate(db, THROUGH);
-  const columns = await db.prepare('PRAGMA table_info(auth_tokens)').all();
+  const columns = await db.columns('auth_tokens');
   assert.deepEqual(columns.map(c => ({ name: c.name, type: c.type, pk: c.pk })), [
     { name: 'hash', type: 'TEXT', pk: 1 },
     { name: 'user_id', type: 'TEXT', pk: 0 },
@@ -89,16 +88,16 @@ test('migration 020 keeps the auth_tokens shape, keys, index and the challenge r
   assert.match(sql, /UNIQUE\s*\(\s*user_id\s*,\s*purpose\s*\)/i);
   assert.match(sql, /CHECK\s*\(\s*purpose\s+IN\s*\(\s*'invite'\s*,\s*'recovery'\s*,\s*'add-passkey'\s*\)\s*\)/i);
   assert.doesNotMatch(sql, /auth_tokens_new/, 'the rebuilt table carries its final name');
-  const unique = (await db.prepare('PRAGMA index_list(auth_tokens)').all()).filter(index => index.unique === 1 && index.origin === 'u');
+  const unique = (await db.inspect('index_list', 'auth_tokens')).filter(index => index.unique === 1 && index.origin === 'u');
   assert.equal(unique.length, 1);
-  assert.deepEqual((await db.prepare(`PRAGMA index_info("${unique[0].name}")`).all()).map(c => c.name), ['user_id', 'purpose']);
+  assert.deepEqual((await db.inspect('index_info', unique[0].name)).map(c => c.name), ['user_id', 'purpose']);
   const expiry = await db.prepare("SELECT tbl_name, sql FROM sqlite_master WHERE type = 'index' AND name = 'auth_tokens_expiry'").get();
   assert.ok(expiry, 'auth_tokens_expiry exists');
   assert.equal(expiry.tbl_name, 'auth_tokens');
-  assert.deepEqual((await db.prepare('PRAGMA index_info(auth_tokens_expiry)').all()).map(c => c.name), ['expires_at']);
-  const tokenFks = (await db.prepare('PRAGMA foreign_key_list(auth_tokens)').all()).map(fk => ({ table: fk.table, from: fk.from, to: fk.to, on_delete: fk.on_delete }));
+  assert.deepEqual((await db.inspect('index_info', 'auth_tokens_expiry')).map(c => c.name), ['expires_at']);
+  const tokenFks = (await db.inspect('foreign_key_list', 'auth_tokens')).map(fk => ({ table: fk.table, from: fk.from, to: fk.to, on_delete: fk.on_delete }));
   assert.deepEqual(tokenFks, [{ table: 'users', from: 'user_id', to: 'id', on_delete: 'CASCADE' }]);
-  const challengeFk = (await db.prepare('PRAGMA foreign_key_list(auth_challenges)').all()).find(fk => fk.from === 'token_hash');
+  const challengeFk = (await db.inspect('foreign_key_list', 'auth_challenges')).find(fk => fk.from === 'token_hash');
   assert.deepEqual({ table: challengeFk.table, to: challengeFk.to, on_delete: challengeFk.on_delete }, { table: 'auth_tokens', to: 'hash', on_delete: 'CASCADE' });
   assert.doesNotMatch(await tableSql(db, 'auth_challenges'), /auth_tokens_new/);
   assert.equal((await db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name LIKE 'auth_tokens_new%'").get()).n, 0);
@@ -163,5 +162,5 @@ test('after 020, a populated store without store_identity refuses migration 022 
   await assert.rejects(async () => await migrate(db), new RegExp(`migration ${identity.id}-platform-identity failed`));
   assert.equal((await db.prepare('SELECT max(id) AS id FROM schema_migrations').get()).id, identity.id - 1, 'only the migrations between 020 and the platform migration are recorded');
   assert.deepEqual(await snapshot(db), before, 'the refused migration rolls back');
-  assert.equal((await db.prepare('PRAGMA foreign_keys').get()).foreign_keys, 1);
+  assert.equal((await (await db.inspect('foreign_keys'))[0]).foreign_keys, 1);
 });

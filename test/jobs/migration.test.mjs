@@ -32,7 +32,7 @@ async function applyThrough(db, last) {
   }
 }
 
-const columns = async (db, table) => (await db.prepare(`PRAGMA table_info("${table}")`).all()).map((c) => c.name);
+const columns = async (db, table) => (await db.columns(table)).map((c) => c.name);
 
 async function oldStore() {
   const dir = await tempDir('fathom-migr-');

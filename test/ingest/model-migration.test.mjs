@@ -31,7 +31,7 @@ test('populated additive upgrade preserves financial rows and provenance; old ma
     assert.equal(mapping.schema_version, 1); assert.equal(mapping.approved_by, null); assert.equal(mapping.approved_at, null);
     assert.equal(mapping.structural_context, null);
     assert.deepEqual((await migrate(db, { through: 29 })).applied, []);
-    assert.deepEqual(await db.prepare('PRAGMA foreign_key_check').all(), []);
+    assert.deepEqual(await db.foreignKeyCheck(), []);
     await assert.rejects(async () => await db.prepare("UPDATE column_mappings SET approval_status = 'guessed'").run());
     await assert.rejects(async () => await db.prepare('UPDATE column_mappings SET mapping_version = 0').run());
   } finally { await db.close(); }
@@ -76,7 +76,7 @@ test('migration 034 preserves populated proposal, mapping and financial rows', a
     assert.equal(proposal.review_state, null); assert.equal(mapping.header_signature, null);
     assert.deepEqual(await snapshot(db), before);
     assert.deepEqual((await migrate(db, { through: 34 })).applied, []);
-    assert.deepEqual(await db.prepare('PRAGMA foreign_key_check').all(), []);
+    assert.deepEqual(await db.foreignKeyCheck(), []);
   } finally { await db.close(); }
 });
 

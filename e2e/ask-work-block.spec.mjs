@@ -589,9 +589,8 @@ test('@mobile @wb-ac4 a message stored without work renders no block', async ({ 
   const stored = await lastAnswer(request, thread.id);
   expect(stored.provenance && stored.provenance.work, 'a new answer stores its work').toBeTruthy();
   // Strip the work from the stored row, as a message from before this change has none.
-  const db = await openScope({ path: await STORE(), journal: null, busyTimeout: 0 });
+  const db = await openScope({ path: await STORE(), journal: null, busyTimeout: 5000 });
   try {
-    db.exec('PRAGMA busy_timeout = 5000');
     await db.prepare("UPDATE messages SET provenance = json_remove(provenance, '$.work') WHERE id = ?").run(Number(String(stored.id).replace(/^m/, '')));
   } finally {
     await db.close();

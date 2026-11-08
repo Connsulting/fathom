@@ -36,7 +36,7 @@ const NEW_TABLES = {
   simplefin_snapshots: ['sf_key', 'snapshot', 'at'],
 };
 
-const columnsOf = async (db, table) => (await db.prepare(`PRAGMA table_info("${table}")`).all()).map((c) => c.name);
+const columnsOf = async (db, table) => (await db.columns(table)).map((c) => c.name);
 // A row image exactly as main's undo.mjs triggers write it.
 const image = async (db, table, rowid) => (await db.prepare(`SELECT json_object(${(await columnsOf(db, table)).map((c) => `'${c}', t."${c}"`).join(', ')}) AS img
   FROM "${table}" AS t WHERE t.rowid = ?`).get(rowid)).img;

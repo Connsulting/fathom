@@ -18,7 +18,7 @@ import { dirname, resolve } from 'node:path';
 const QUERY = new Set(['get', 'all', 'run']);
 const PORT_METHODS = new Set(['transaction', 'savepoint', 'capture']);
 // Storage metadata and lifecycle operations (always Promise valued).
-export const STORAGE_OPS = new Set(['columns', 'tables', 'migrate', 'checkpoint', 'hasTable', 'sizeBytes', 'backupTo', 'applySchema', 'integrityCheck', 'foreignKeyCheck']);
+export const STORAGE_OPS = new Set(['columns', 'tables', 'migrate', 'checkpoint', 'hasTable', 'sizeBytes', 'backupTo', 'applySchema', 'integrityCheck', 'foreignKeyCheck', 'inspect']);
 // Method names too generic to resolve by name alone.
 const GENERIC = new Set([
   'get', 'all', 'run', 'set', 'has', 'add', 'delete', 'clear', 'map', 'filter', 'find', 'forEach',

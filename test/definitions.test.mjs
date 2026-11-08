@@ -113,7 +113,7 @@ test('migration preserves existing preferences and demo reset clears linked rows
   await migrate(db);
   assert.deepEqual({ ...await db.prepare("SELECT * FROM preferences WHERE id='old'").get() }, { id: 'old', text: 'Synthetic legacy preference', actor_id: 'person-a', created_at: '2026-01-01', updated_at: '2026-01-01', origin: null, conversation_key: null, definition_id: null });
   await callTool('update_preferences', args, context(db));
-  assert.deepEqual(await db.prepare('PRAGMA foreign_key_check').all(), []);
+  assert.deepEqual(await db.foreignKeyCheck(), []);
   await setSetting(db, 'mode', 'demo');
   await seedDemo(db);
   assert.equal((await db.prepare('SELECT count(*) n FROM spending_definitions').get()).n, 0);

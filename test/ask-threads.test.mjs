@@ -70,7 +70,7 @@ async function storeAt007(file, init) {
       await record.run(m.id, m.name);
       db.exec('COMMIT');
     }
-    assert.ok(!(await db.prepare('PRAGMA table_info(conversations)').all()).some(c => c.name === 'title'), 'the fixture is pre-threads');
+    assert.ok(!(await db.columns('conversations')).some(c => c.name === 'title'), 'the fixture is pre-threads');
     init(db);
   } finally {
     await db.checkpoint();
@@ -101,7 +101,7 @@ const messagesOf = async (db, key) => (await db.prepare('SELECT role, text, ts F
 test('AC9 a freshly migrated store has the thread columns on conversations', async () => {
   const t = await tempDb();
   try {
-    const cols = (await t.db.prepare('PRAGMA table_info(conversations)').all()).map(c => c.name);
+    const cols = (await t.db.columns('conversations')).map(c => c.name);
     for (const c of ['title', 'title_source', 'archived_at', 'trashed_at', 'last_at']) assert.ok(cols.includes(c), `conversations.${c}`);
   } finally {
     await t.close();

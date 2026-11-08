@@ -21,7 +21,6 @@ const TS = '2026-11-01T00:00:00Z';
 
 async function storeBefore() {
   const db = await openScope({ path: ':memory:', journal: null, busyTimeout: 0 });
-  db.exec('PRAGMA foreign_keys = ON');
   await db.applySchema('CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
   for (const m of listMigrations().filter(x => x.id < TARGET_ID)) {
     db.exec('BEGIN');
@@ -94,7 +93,7 @@ test('migration 019 exists', () => {
 test('migration 019 adds owner, owner_override and goal_kinds to recs', async () => {
   const db = await plannerStore();
   await migrate(db);
-  const cols = Object.fromEntries((await db.prepare('PRAGMA table_info(recs)').all()).map(c => [c.name, c]));
+  const cols = Object.fromEntries((await db.columns('recs')).map(c => [c.name, c]));
   for (const c of ['owner', 'owner_override', 'goal_kinds']) assert.ok(cols[c], `recs.${c}`);
   assert.equal(cols.owner.notnull, 1);
   assert.equal(cols.owner_override.notnull, 1);

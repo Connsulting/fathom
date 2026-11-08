@@ -24,7 +24,7 @@ const PROVENANCE_TABLES = [
   'accounts', 'transactions', 'balances', 'positions', 'pnl_lines', 'tax_payments', 'documents', 'facts', 'figures',
 ];
 
-const columns = async (db, table) => (await db.prepare(`PRAGMA table_info("${table}")`).all()).map(c => c.name);
+const columns = async (db, table) => (await db.columns(table)).map(c => c.name);
 
 async function insertAccount(db, id, mask) {
   await db.prepare(`INSERT INTO accounts (id, inst, mask, name, owner, kind, mirror, note, fig_key, file_id, parser, locator)
@@ -78,8 +78,8 @@ test('a first migrate returns the applied migration ids in order', async () => {
 test('openDb enables foreign keys and WAL', async () => {
   const t = await tempDb();
   try {
-    assert.equal((await t.db.prepare('PRAGMA foreign_keys').get()).foreign_keys, 1);
-    assert.equal(String((await t.db.prepare('PRAGMA journal_mode').get()).journal_mode).toLowerCase(), 'wal');
+    assert.equal((await (await t.db.inspect('foreign_keys'))[0]).foreign_keys, 1);
+    assert.equal(String((await (await t.db.inspect('journal_mode'))[0]).journal_mode).toLowerCase(), 'wal');
   } finally {
     await t.close();
   }
@@ -224,7 +224,7 @@ test('migration 022 on a marked store drops the account tables and keeps creator
   try {
     await addUser(db);
     await db.prepare(`INSERT INTO api_keys (id, name, key_hash, scopes, created_at, user_id) VALUES ('key-owner', 'Synthetic key', ?, '["read"]', '2032-03-10T12:00:00.000Z', 'user-owner')`).run('d'.repeat(64));
-    const columnsBefore = (await db.prepare('PRAGMA table_info(api_keys)').all()).map(c => c.name);
+    const columnsBefore = (await db.columns('api_keys')).map(c => c.name);
     const keyBefore = { ...await db.prepare("SELECT * FROM api_keys WHERE id = 'key-owner'").get() };
     // The marker the offline migration writes after publishing platform.sqlite.
     await db.applySchema('CREATE TABLE IF NOT EXISTS store_identity (id INTEGER PRIMARY KEY CHECK (id = 1), household_id TEXT NOT NULL, platform_operation TEXT)');
@@ -232,10 +232,10 @@ test('migration 022 on a marked store drops the account tables and keeps creator
     assert.ok((await migrate(db, BEFORE_KEYS_MOVED)).applied.includes(IDENTITY.id));
     const tables = await listTables(db);
     for (const name of ACCOUNT_TABLES) assert.ok(!tables.includes(name), `${name} is dropped`);
-    assert.deepEqual((await db.prepare('PRAGMA table_info(api_keys)').all()).map(c => c.name), columnsBefore);
+    assert.deepEqual((await db.columns('api_keys')).map(c => c.name), columnsBefore);
     assert.deepEqual({ ...await db.prepare("SELECT * FROM api_keys WHERE id = 'key-owner'").get() }, keyBefore);
-    assert.deepEqual(await db.prepare('PRAGMA foreign_key_list(api_keys)').all(), [], 'no foreign key to the dropped users table');
-    assert.deepEqual((await db.prepare('PRAGMA index_info(api_keys_user)').all()).map(c => c.name), ['user_id']);
+    assert.deepEqual(await db.inspect('foreign_key_list', 'api_keys'), [], 'no foreign key to the dropped users table');
+    assert.deepEqual((await db.inspect('index_info', 'api_keys_user')).map(c => c.name), ['user_id']);
     assert.equal((await db.prepare('SELECT household_id FROM store_identity').get()).household_id, 'hh-synthetic');
     assert.deepEqual((await db.foreignKeyCheck()), []);
   } finally { await db.close(); }
@@ -266,7 +266,7 @@ test('a store migrated to exactly 005 upgrades to 006-chat through the platform 
     const msg = old.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES ('ask', ?, ?, '[]', 0, ?)");
     await msg.run('me', '<p>Synthetic question before the upgrade</p>', '2026-10-02T09:00:00Z');
     await msg.run('fathom', '<p>Synthetic answer before the upgrade</p>', '2026-10-02T09:00:05Z');
-    assert.ok(!(await old.prepare('PRAGMA table_info(messages)').all()).some(c => c.name === 'provenance'), 'the fixture is pre-chat');
+    assert.ok(!(await old.columns('messages')).some(c => c.name === 'provenance'), 'the fixture is pre-chat');
   } finally {
     await old.checkpoint();
     await old.close();
@@ -299,7 +299,7 @@ test('a store migrated to exactly 005 upgrades to 006-chat through the platform 
   assert.equal(existsSync(file), false, 'the original store moved out of the data root');
   const db = await openDb((await servedStore(dataDir)).file);
   try {
-    assert.ok((await db.prepare('PRAGMA table_info(messages)').all()).some(c => c.name === 'provenance'), 'messages.provenance exists');
+    assert.ok((await db.columns('messages')).some(c => c.name === 'provenance'), 'messages.provenance exists');
     const applied = (await db.prepare('SELECT id, name FROM schema_migrations ORDER BY id').all()).map(r => `${r.id}-${r.name}`);
     assert.deepEqual(applied, listMigrations().map(m => `${m.id}-${m.name}`));
     assert.deepEqual(applied.slice(0, 7), ['1-foundation', '2-ingest', '3-ingest-recipients', '4-ingest-survivor', '5-pack-manifest', '6-chat', '7-planner']);
@@ -343,7 +343,7 @@ test('openDb waits out a short exclusive lock held by another process', async ()
   });
   const db = await openDb(file);
   try {
-    assert.equal((await db.prepare('PRAGMA journal_mode').get()).journal_mode, 'wal');
+    assert.equal((await (await db.inspect('journal_mode'))[0]).journal_mode, 'wal');
   } finally {
     await db.close();
     await new Promise(resolve => (holder.exitCode !== null ? resolve() : holder.on('exit', resolve)));

@@ -76,7 +76,7 @@ test('additive expected-payment migration preserves populated financial state an
     assert.deepEqual((await migrate(db)).applied, [35]);
     assert.deepEqual(await snapshot(), before);
     assert.deepEqual((await migrate(db)).applied, []);
-    assert.deepEqual(await db.prepare('PRAGMA foreign_key_check').all(), []);
+    assert.deepEqual(await db.foreignKeyCheck(), []);
   } finally { await db.close(); }
 });
 

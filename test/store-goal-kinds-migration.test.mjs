@@ -30,7 +30,6 @@ const DEFS = Object.freeze({
 
 async function storeAt025() {
   const db = await openScope({ path: ':memory:', journal: null, busyTimeout: 0 });
-  db.exec('PRAGMA foreign_keys = ON');
   await migrate(db, { through: BEFORE });
   await db.prepare("INSERT INTO sources (id, label, as_of) VALUES ('bank', 'Synthetic bank export', '2026-09-30')").run();
   await db.prepare("INSERT INTO accounts (id, inst, name, kind, fig_key, parser) VALUES ('acc', 'Example Bank', 'Savings', 'checking', 'bal.acc', 'test')").run();
@@ -65,7 +64,7 @@ test('the migration under test is 026 and the store before it is at 025', async 
   assert.match(listMigrations().find(m => m.id === TARGET).name, /goal/);
   const db = await storeAt025();
   assert.equal((await db.prepare('SELECT max(id) AS id FROM schema_migrations').get()).id, BEFORE);
-  assert.equal((await db.prepare('PRAGMA table_info(goals)').all()).some(c => c.name === 'done_at'), false);
+  assert.equal((await db.columns('goals')).some(c => c.name === 'done_at'), false);
 });
 
 test('migration 026 adds done_at and rewrites no goal row', async () => {
@@ -76,7 +75,7 @@ test('migration 026 adds done_at and rewrites no goal row', async () => {
   const after = await rows(db);
   assert.deepEqual(after, before, 'every column of every goals row is unchanged');
   for (const r of after) assert.equal(r.def, JSON.stringify(DEFS[r.id]), `${r.id} def text is byte for byte the same`);
-  const doneAt = (await db.prepare('PRAGMA table_info(goals)').all()).find(c => c.name === 'done_at');
+  const doneAt = (await db.columns('goals')).find(c => c.name === 'done_at');
   assert.ok(doneAt, 'goals has a done_at column');
   assert.equal(doneAt.type, 'TEXT');
   assert.equal(doneAt.notnull, 0, 'done_at is nullable');

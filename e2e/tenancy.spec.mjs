@@ -328,9 +328,8 @@ async function signInto(context, person) {
 
 // Guided tours are out of scope here: none starts over these pages.
 async function clearTours() {
-  const db = await openScope({ path: join(dataDir, 'platform.sqlite'), journal: null, busyTimeout: 0 });
+  const db = await openScope({ path: join(dataDir, 'platform.sqlite'), journal: null, busyTimeout: 5000 });
   try {
-    db.exec('PRAGMA busy_timeout = 5000');
     await db.prepare('UPDATE users SET tour_pending = 0').run();
   } finally { await db.close(); }
 }
@@ -347,16 +346,15 @@ async function choose(page, householdId) {
 }
 
 async function seedPlatformSetting(key, value) {
-  const db = await openScope({ path: join(dataDir, 'platform.sqlite'), journal: null, busyTimeout: 0 });
+  const db = await openScope({ path: join(dataDir, 'platform.sqlite'), journal: null, busyTimeout: 5000 });
   try {
-    db.exec('PRAGMA busy_timeout = 5000');
     await db.prepare(`INSERT INTO platform_settings (key, value, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).run(key, JSON.stringify(value), Date.now());
   } finally { await db.close(); }
 }
 
 async function householdDb(id, fn) {
-  const db = await openScope({ path: join(dataDir, 'households', id, 'fathom.sqlite'), readOnly: true, journal: null, busyTimeout: 0 });
+  const db = await openScope({ path: join(dataDir, 'households', id, 'fathom.sqlite'), readOnly: true, journal: null, busyTimeout: 5000 });
   try { return fn(db); } finally { await db.close(); }
 }
 const goalTitles = async (id) => await householdDb(id, async (db) => (await db.prepare('SELECT def FROM goals').all()).map((r) => JSON.parse(r.def).title));

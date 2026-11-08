@@ -139,9 +139,8 @@ test('@mobile @st2 a stored draft note is not rendered and no draft tag shows', 
   const stored = await read();
   const steps = stored.provenance.work.items.filter((x) => x.k === 'step').map((x) => x.label);
   // A message stored before regenerations stopped keeping the first attempt carries a draft note.
-  const db = await openScope({ path: await STORE(), journal: null, busyTimeout: 0 });
+  const db = await openScope({ path: await STORE(), journal: null, busyTimeout: 5000 });
   try {
-    db.exec('PRAGMA busy_timeout = 5000');
     const id = Number(String(stored.id).replace(/^m/, ''));
     const row = await db.prepare('SELECT provenance FROM messages WHERE id = ?').get(id);
     const prov = JSON.parse(row.provenance);

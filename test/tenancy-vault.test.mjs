@@ -549,13 +549,13 @@ test('platform migration 002 gives every fresh platform an empty household_data_
   const dir = await tempDir(t);
   const p = await openPlatform(join(dir, 'platform.sqlite'));
   t.after(async () => await p.close());
-  const cols = (await p.prepare('PRAGMA table_info(household_data_keys)').all()).map(c => ({ ...c }));
+  const cols = (await p.columns('household_data_keys')).map(c => ({ ...c }));
   assert.deepEqual(cols.map(c => c.name), ['household_id', 'key_version', 'wrapped_key', 'status', 'created_at']);
   assert.deepEqual(cols.filter(c => c.pk > 0).sort((x, y) => x.pk - y.pk).map(c => c.name), ['household_id', 'key_version'], 'primary key (household_id, key_version)');
   assert.ok(cols.every(c => c.notnull === 1 || c.pk > 0), 'every column is NOT NULL');
-  const fks = (await p.prepare('PRAGMA foreign_key_list(household_data_keys)').all()).map(f => [f.table, f.from, f.to]);
+  const fks = (await p.inspect('foreign_key_list', 'household_data_keys')).map(f => [f.table, f.from, f.to]);
   assert.deepEqual(fks, [['households', 'household_id', 'id']]);
-  const indexes = (await p.prepare('PRAGMA index_list(household_data_keys)').all()).map(i => ({ ...i }));
+  const indexes = (await p.inspect('index_list', 'household_data_keys')).map(i => ({ ...i }));
   assert.ok(indexes.some(i => i.unique === 1 && i.partial === 1), 'a unique partial index (one active key per household)');
   assert.ok(await p.prepare('SELECT 1 AS x FROM schema_migrations WHERE id = 2').get(), 'migration 002 recorded');
   assert.equal((await p.prepare('SELECT count(*) AS n FROM household_data_keys').get()).n, 0, 'empty after migration');

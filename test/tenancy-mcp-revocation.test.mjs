@@ -116,7 +116,6 @@ test('one creators keys in two households stay independent when one membership i
 test('platform migration binds existing hashes and preserves account and passkey schemas', async () => {
   const db = await openScope({ path: ':memory:', journal: null, busyTimeout: 0 });
   try {
-    db.exec('PRAGMA foreign_keys = ON');
     for (const name of readdirSync(PLATFORM_MIGRATIONS_DIR).filter(n => /^00[1-5]-.*\.sql$/.test(n)).sort()) await db.applySchema(readFileSync(join(PLATFORM_MIGRATIONS_DIR, name), 'utf8'));
     await db.applySchema(`INSERT INTO households (id, status, mode, created_at, updated_at, generation) VALUES ('alpha', 'active', 'real', 1, 1, 8), ('bravo', 'active', 'demo', 1, 1, 2);
       INSERT INTO users (id, email, user_handle, created_at) VALUES ('creator', 'creator@example.test', 'synthetic-handle', 1);

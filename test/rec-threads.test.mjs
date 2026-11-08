@@ -143,7 +143,7 @@ async function movedTo(db, recId) {
 
 test('AC4 migration 016 adds rec_id and rec_detached_at and leaves no rec-keyed conversation', async t => {
   const { db } = await migratedStore(t);
-  const cols = (await db.prepare('PRAGMA table_info(conversations)').all()).map(c => c.name);
+  const cols = (await db.columns('conversations')).map(c => c.name);
   assert.ok(cols.includes('rec_id'), 'conversations.rec_id');
   assert.ok(cols.includes('rec_detached_at'), 'conversations.rec_detached_at');
   const keys = (await db.prepare('SELECT key FROM conversations ORDER BY key').all()).map(r => r.key);

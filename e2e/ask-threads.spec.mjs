@@ -61,11 +61,11 @@ const ids = (list) => (list || []).map((t) => t.id);
 test('AC10 opening a fallback thread requests its one title repair and reload does not repeat it', async ({ page, request }) => {
   test.skip(REMOTE, 'This check reads the local demo spend ledger.');
   const thread = await newThread(request, '529 contributions.');
-  const store = await openScope({ path: await STORE(), journal: null, busyTimeout: 0 });
+  const store = await openScope({ path: await STORE(), journal: null, busyTimeout: 5000 });
   try { await store.prepare("UPDATE conversations SET title = '529 contributions.', title_source = 'auto' WHERE key = ?").run(thread.key); }
   finally { await store.close(); }
   const titleCalls = async () => {
-    const db = await openScope({ path: await STORE(), readOnly: true, journal: null, busyTimeout: 0 });
+    const db = await openScope({ path: await STORE(), readOnly: true, journal: null, busyTimeout: 5000 });
     try { return (await db.prepare("SELECT count(*) AS n FROM spend_ledger WHERE purpose = 'title'").get()).n; }
     finally { await db.close(); }
   };
@@ -89,7 +89,7 @@ test('AC10 creating a thread preserves its repair attempt for a later opening', 
   const reads = [];
   page.on('request', r => { if (r.method() === 'GET' && /\/api\/threads\/[a-f0-9]{12}$/.test(new URL(r.url()).pathname)) reads.push(r.url()); });
   const id = await askOnAsk(page, '529 contributions');
-  const db = await openScope({ path: await STORE(), readOnly: true, journal: null, busyTimeout: 0 });
+  const db = await openScope({ path: await STORE(), readOnly: true, journal: null, busyTimeout: 5000 });
   try {
     expect(await db.prepare('SELECT value FROM settings WHERE key = ?').get(`ask.titleRetried.ask:${id}`)).toBeUndefined();
     expect(reads).toEqual([]);
@@ -368,9 +368,8 @@ test('AC1: rows group into Today, Yesterday, Previous 7 days and Older by last a
   const made = {};
   for (const n of ages) made[n] = await newThread(request, `Synthetic question for the ${n} day bucket`);
 
-  const db = await openScope({ path: await STORE(), journal: null, busyTimeout: 0 });
+  const db = await openScope({ path: await STORE(), journal: null, busyTimeout: 5000 });
   try {
-    db.exec('PRAGMA busy_timeout = 5000');
     const set = db.prepare('UPDATE conversations SET last_at = ? WHERE key = ?');
     for (const n of ages) expect(Number((await set.run(day(n), `ask:${made[n].id}`)).changes), `last_at for the ${n} day thread`).toBe(1);
   } finally {

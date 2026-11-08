@@ -266,7 +266,7 @@ test('sessions require enrollment, store only a digest and use seven-day absolut
 // the session resolves to the user and exposes no sign-in time.
 test('sessions record their actual creation wall time without exposing it as user metadata', async t => {
   const { platform, store, enroll, now, advance } = await fixture(t);
-  const column = (await platform.prepare('PRAGMA table_info(auth_sessions)').all()).find(row => row.name === 'signed_in_at');
+  const column = (await platform.columns('auth_sessions')).find(row => row.name === 'signed_in_at');
   assert.ok(column, 'auth_sessions has a signed_in_at column');
   assert.equal(column.type.toUpperCase(), 'INTEGER');
   assert.equal(column.notnull, 1);

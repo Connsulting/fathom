@@ -273,5 +273,5 @@ test('merge moves expected payments and merge Undo restores their original accou
   assert.equal((await s.db.prepare('SELECT account_id FROM expected_transactions WHERE id=?').get(out.expectedTransaction.id)).account_id, p.keep);
   await C.reopenItem(s.db, q.id, { now: NOW });
   assert.equal((await s.db.prepare('SELECT account_id FROM expected_transactions WHERE id=?').get(out.expectedTransaction.id)).account_id, p.own);
-  assert.deepEqual(await s.db.prepare('PRAGMA foreign_key_check').all(), []);
+  assert.deepEqual(await s.db.foreignKeyCheck(), []);
 }));

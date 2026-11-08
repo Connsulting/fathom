@@ -8,6 +8,7 @@ import { captureBegin, captureEnd, captureDrop } from './capture.mjs';
 
 const ident = name => `"${String(name).replaceAll('"', '""')}"`;
 const JOURNALS = new Set(['wal', 'delete']);
+const INSPECT = new Set(['table_info', 'index_list', 'index_info', 'index_xinfo', 'foreign_key_list', 'foreign_keys', 'journal_mode']);
 
 // One physical SQLite connection. Options: readOnly; journal ('wal' default, 'delete', or null to
 // leave the file's mode); busyTimeout (ms, default 5000); foreignKeys (default true); queryOnly;
@@ -75,6 +76,11 @@ export async function openConnection({ path, readOnly = false, journal = 'wal', 
     async columns(table) {
       return pragmaRows(`PRAGMA main.table_info(${ident(table)})`)
         .map(c => ({ name: c.name, type: c.type, notnull: c.notnull, dflt_value: c.dflt_value, pk: c.pk }));
+    },
+    // Read-only schema metadata, as the matching PRAGMA reports it (SQLite-specific tests only).
+    async inspect(kind, name) {
+      if (!INSPECT.has(kind) || (name !== undefined && typeof name !== 'string')) throw storageError();
+      return pragmaRows(name === undefined ? `PRAGMA ${kind}` : `PRAGMA ${kind}(${ident(name)})`);
     },
     async integrityCheck() { return pragmaRows('PRAGMA integrity_check').map(r => r.integrity_check); },
     async foreignKeyCheck(table) { return pragmaRows(table === undefined ? 'PRAGMA foreign_key_check' : `PRAGMA foreign_key_check(${ident(table)})`); },

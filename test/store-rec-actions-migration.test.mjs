@@ -14,7 +14,6 @@ const TARGET = listMigrations().find(m => m.name === 'rec-doing-status');
 // A store at migration 014 holding recs in every status, with events and referencing rows.
 async function storeBefore() {
   const db = await openScope({ path: ':memory:', journal: null, busyTimeout: 0 });
-  db.exec('PRAGMA foreign_keys = ON');
   await db.applySchema(`CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)`);
   for (const m of listMigrations().filter(x => x.id < TARGET.id)) {
     db.exec('BEGIN');
@@ -59,7 +58,7 @@ test('migration 015 turns every accepted rec into doing and keeps all other data
   assert.equal((await db.prepare('SELECT count(*) AS n FROM planner_recs').get()).n, 3);
   assert.equal((await db.prepare('SELECT count(*) AS n FROM advisor_reviews').get()).n, 1);
   assert.deepEqual((await db.foreignKeyCheck()), []);
-  assert.equal((await db.prepare('PRAGMA foreign_keys').get()).foreign_keys, 1);
+  assert.equal((await (await db.inspect('foreign_keys'))[0]).foreign_keys, 1);
 });
 
 test('migration 015 rewrites rec history so it reads in the new vocabulary', async () => {
@@ -81,7 +80,7 @@ test('migration 015 leaves the recs table refusing accepted, with its index and 
   await assert.rejects(async () => await db.prepare("UPDATE recs SET status = 'accepted' WHERE id = 'r0'").run(), /CHECK/);
   await assert.rejects(async () => await db.prepare(`INSERT INTO rec_events (rec_id, ts, action, actor) VALUES ('nope', 'x', 'start', 'ui')`).run(), /FOREIGN KEY/);
   await assert.doesNotReject(async () => await db.prepare("UPDATE recs SET status = 'doing' WHERE id = 'r0'").run());
-  const cols = (await db.prepare('PRAGMA table_info(recs)').all()).map(c => c.name);
+  const cols = (await db.columns('recs')).map(c => c.name);
   // Later migrations add columns (019: owner, owner_override, goal_kinds) after the rebuilt ones.
   assert.deepEqual(cols, ['id', 'def', 'status', 'waiting_on', 'wake', 'tasks_done', 'window_close', 'window_label', 'pack_id', 'sort', 'updated_at', 'file_id', 'parser', 'locator', 'owner', 'owner_override', 'goal_kinds']);
   assert.equal((await db.prepare("SELECT sql FROM sqlite_master WHERE name = 'recs'").get()).sql.includes('accepted'), false);

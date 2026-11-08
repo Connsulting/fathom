@@ -386,9 +386,8 @@ test('AC2 no chip for a thread without a rec or whose rec no longer exists', asy
   const plainThread = (await postJson(request, '/api/threads', { text: 'Synthetic plain question' })).thread;
   const retired = (await postJson(request, '/api/threads', { recId: REC_ID, text: 'Synthetic question about a retired rec' })).thread;
   // The rec named by the thread is gone (a retired planner rec id that no longer exists).
-  const db = await openScope({ path: await STORE(), journal: null, busyTimeout: 0 });
+  const db = await openScope({ path: await STORE(), journal: null, busyTimeout: 5000 });
   try {
-    db.exec('PRAGMA busy_timeout = 5000');
     await db.prepare('UPDATE conversations SET rec_id = ? WHERE key = ?').run('synthetic-retired-rec', retired.key);
   } finally {
     await db.close();

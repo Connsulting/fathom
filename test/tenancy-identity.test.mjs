@@ -404,7 +404,6 @@ describe('preflight refusals change nothing (migration safety)', () => {
       await db.prepare('INSERT INTO users (id, household_id, email, role, user_handle, created_at, enrolled_at) VALUES (?, 2, ?, ?, ?, ?, ?)')
         .run('usr-second-household', 'second-household@example.test', 'admin', randomBytes(32).toString('base64url'), Date.now(), Date.now());
       db.exec('COMMIT');
-      db.exec('PRAGMA foreign_keys = ON');
       assert.deepEqual((await db.foreignKeyCheck()), []);
     });
     const before = stable(fx.dataDir);

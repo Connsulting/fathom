@@ -6,7 +6,7 @@ const contexts = new AsyncLocalStorage();
 
 // Metadata operations available on scopes and transaction handles alike, and lifecycle operations
 // only a scope (outside any transaction) can run.
-const METADATA = ['tables', 'hasTable', 'columns', 'foreignKeyCheck'];
+const METADATA = ['tables', 'hasTable', 'columns', 'foreignKeyCheck', 'inspect'];
 const LIFECYCLE = ['integrityCheck', 'checkpoint', 'sizeBytes', 'applySchema', 'migrate', 'backupTo'];
 const operations = (names, submit, connection) => Object.fromEntries(names.map(name => [name, async (...args) => submit(() => connection[name](...args))]));
 
