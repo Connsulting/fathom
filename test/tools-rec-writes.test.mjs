@@ -7,6 +7,7 @@ import { callTool, getTool } from '../src/tools/index.mjs';
 import { proposalTools, proposalBasis } from '../src/actions/proposals.mjs';
 import { buildScenario, loadContent } from '../src/scenario/build.mjs';
 import { getSetting, setSetting } from '../src/store/db.mjs';
+import { createEngine } from '../src/engine/index.mjs';
 
 const S = scratch('fathom-rec-writes-');
 after(() => S.cleanup());
@@ -122,4 +123,91 @@ test('decision proposals do not write and their basis covers decision, game, pic
   const prior = threads();
   ctx.db.prepare('INSERT INTO conversations (key, created_at, rec_id) VALUES (?, ?, ?)').run('ask:0123456789ab', NOW, id);
   assert.notEqual(threads(), prior);
+});
+
+test('HTTP Ask confirms a decision without another model call and rejects a changed basis', async t => {
+  const ctx = await store();
+  const transport = createEngine({ mode: 'fake' });
+  let chatCalls = 0;
+  let operation = 'decide';
+  const engine = { mode: 'fake', isOn: () => true, call(request) {
+    if (request.purpose !== 'chat') return Promise.resolve({ text: '{"title":"Salary choice"}', toolResults: [] });
+    chatCalls++;
+    return transport.call({ ...request, fake: [
+      { toolCalls: [{ name: 'act_on_recommendation', args: { operation, decisionId: 'salary-2026', ...(operation === 'decide' ? { point: 1 } : {}), propose: true } }] },
+      { text: 'I can record this change to the salary decision. Confirm below.' },
+    ] });
+  } };
+  const srv = await serveAppFixture({ db: ctx.db, config: ctx.household.config, authenticated: true, engine });
+  t.after(() => srv.close());
+  const first = await srv.postJson('/api/threads', { text: 'Lock in the middle salary option.' });
+  assert.equal(first.status, 200, first.text);
+  assert.ok(first.json.message.provenance.pendingAction);
+  assert.equal(decision(ctx.db).status, 'open');
+  const count = chatCalls;
+  const path = `/api/threads/${first.json.thread.id}/proposals/${first.json.message.id}`;
+  const confirmed = await srv.postJson(path, { decision: 'confirm' });
+  assert.equal(confirmed.status, 200, confirmed.text);
+  assert.equal(chatCalls, count);
+  assert.equal(decision(ctx.db).status, 'decided');
+  assert.ok(factRow(ctx.db, 'business.salaryDecided'));
+  assert.equal((await srv.postJson(path, { decision: 'confirm' })).status, 409);
+  operation = 'revisit';
+  const second = await srv.postJson('/api/threads', { text: 'Revisit the salary decision.' });
+  assert.ok(second.json.message.provenance.pendingAction);
+  setSetting(ctx.db, 'wargame.picks', { salary: 0 });
+  const stale = await srv.postJson(`/api/threads/${second.json.thread.id}/proposals/${second.json.message.id}`, { decision: 'confirm' });
+  assert.equal(stale.status, 200, stale.text);
+  assert.equal(decision(ctx.db).status, 'decided');
+  const pending = JSON.parse(ctx.db.prepare('SELECT provenance FROM messages WHERE id = ?').get(Number(second.json.message.id.slice(1))).provenance).pendingAction;
+  assert.equal(pending.resolved.status, 'stale');
+});
+
+test('deferral decisions undo, replan through the hook, and revisit still works when inputs become unavailable', async () => {
+  const ctx = await store();
+  let replans = 0;
+  ctx.replan = async () => { replans++; return { status: 'ok' }; };
+  const id = ctx.db.prepare("SELECT id FROM decisions WHERE wargame = 'deferral' AND status = 'open'").get().id;
+  const result = await call(ctx, 'decide', { decisionId: id, point: 1 });
+  assert.equal(replans, 1);
+  assert.ok(factRow(ctx.db, 'business.deferralDecided'));
+  await undo(ctx, result);
+  assert.equal(replans, 2);
+  assert.equal(factRow(ctx.db, 'business.deferralDecided'), null);
+  await call(ctx, 'decide', { decisionId: id, point: 1 });
+  const game = loadContent(ctx.db).wargame;
+  game.deferral.unavailable = 'Inputs changed';
+  ctx.db.prepare("UPDATE content SET value = ? WHERE key = 'wargame'").run(JSON.stringify(game));
+  const reopened = await call(ctx, 'revisit', { decisionId: id });
+  assert.equal(reopened.decision.status, 'open');
+  await assert.rejects(undo(ctx, reopened), { code: 'conflict' });
+});
+
+test('writes require an actor and Undo keeps its receipt scope and actor', async () => {
+  const ctx = await store();
+  await assert.rejects(call({ ...ctx, actorId: null }, 'decide', { decisionId: 'salary-2026' }), { code: 'forbidden' });
+  assert.equal(decision(ctx.db).status, 'open');
+  const result = await call(ctx, 'decide', { decisionId: 'salary-2026', point: 1 });
+  await assert.rejects(undo({ ...ctx, scopes: ['write:recs'] }, result), { code: 'forbidden' });
+  await assert.rejects(undo({ ...ctx, actorId: 'someone-else' }, result), { code: 'forbidden' });
+  await undo({ ...ctx, scopes: ['write:decisions'] }, result);
+  assert.equal(decision(ctx.db).status, 'open');
+});
+
+test('the three C9 eval scripts register as required passes and validate all their proposed calls', async t => {
+  const { loadCases } = await import('../evals/cases.mjs');
+  const { createEvalStore } = await import('../evals/harness.mjs');
+  const s = await createEvalStore();
+  t.after(() => s.close());
+  const cases = await loadCases();
+  for (const id of ['q62-decide-salary-option', 'q63-archive-goal', 'q64-send-to-advisor']) {
+    assert.equal(cases.find(c => c.id === id).expectedFail, undefined);
+    const { script } = await import(`../evals/scripts/${id}.mjs`);
+    const rounds = await script({ db: s.db, clock: CLOCK });
+    for (const round of rounds) for (const call of round.toolCalls ?? []) {
+      const { propose, ...args } = call.args;
+      assert.doesNotThrow(() => getTool(call.name).validateArgs(args));
+      if (getTool(call.name).kind === 'write') assert.equal(propose, true);
+    }
+  }
 });

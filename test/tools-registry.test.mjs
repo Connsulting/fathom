@@ -10,10 +10,10 @@ const expected = {
   household: ['summary', 'facts', 'fact_shapes', 'figures', 'deadlines', 'health'],
   accounts: ['list', 'holdings', 'detail', 'net_worth'], tax: ['estimate', 'room'], transactions: ['search'], business: ['pnl', 'rows'],
   spending: ['total', 'compare', 'definitions', 'cash_flow', 'recurring'],
-  goals: ['list', 'pace'], recommendations: ['list', 'detail', 'advisor', 'wargame'],
+  goals: ['list', 'pace', 'suggestions'], recommendations: ['list', 'detail', 'advisor', 'wargame'],
   knowledge: ['packs', 'search', 'entry'], answer: ['fact'],
-  act_on_recommendation: ['status', 'owner', 'step'], update_goal: ['create', 'edit'],
-  update_preferences: ['remember'], undo: ['undo'],
+  act_on_recommendation: ['status', 'owner', 'step', 'start_over', 'decide', 'revisit', 'pick_point'], update_goal: ['create', 'edit', 'archive', 'delete', 'suggestion'],
+  advisor_review: ['send', 'verdict', 'checkin', 'packet'], update_preferences: ['remember', 'curve'], undo: ['undo'],
   calculate: ['add', 'subtract', 'multiply', 'divide', 'sum', 'min', 'max', 'negate', 'annualize', 'monthly', 'percent_of', 'round_up', 'compound'],
 };
 const oldNames = [
@@ -82,7 +82,7 @@ test('scope filtering narrows operation enums and hides all writes from read-onl
   assert.ok(read.every(t => t.kind === 'read'));
   const mixed = toolsForScopes(['read', 'write:recs']);
   const rec = mixed.find(t => t.name === 'act_on_recommendation');
-  assert.deepEqual(rec.inputSchema.properties.operation.enum, ['owner', 'status']);
+  assert.deepEqual(rec.inputSchema.properties.operation.enum, ['owner', 'start_over', 'status']);
   assert.ok(mixed.some(t => t.name === 'undo'));
   assert.ok(createRegistryServer(tools, { purpose: 'chat' }).names.includes('undo'));
   assert.ok(!createRegistryServer(tools, { purpose: 'plan' }).names.includes('undo'));

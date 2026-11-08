@@ -71,3 +71,30 @@ export function updateGoal(db, id, fields, { now, onWrite } = {}) {
     return after;
   });
 }
+
+function goalRow(db, id) {
+  const row = typeof id === 'string' ? db.prepare('SELECT * FROM goals WHERE id = ?').get(id) : null;
+  if (!row) throw new ToolError('not_found', 'no such goal');
+  return row;
+}
+
+export function archiveGoal(db, id, { archived = true, now, onWrite } = {}) {
+  if (typeof archived !== 'boolean') throw new ToolError('bad_input', 'archived must be true or false');
+  return tx(db, () => {
+    const before = goalRow(db, id);
+    db.prepare('UPDATE goals SET archived_at = ?, updated_at = ? WHERE id = ?').run(archived ? before.archived_at || now : null, now, id);
+    const after = goalRow(db, id);
+    onWrite?.(before, after);
+    return after;
+  });
+}
+
+export function deleteGoal(db, id, { ownerOnly = false, onWrite } = {}) {
+  return tx(db, () => {
+    const before = goalRow(db, id);
+    if (ownerOnly && before.origin !== 'owner') throw new ToolError('conflict', 'only your own goals can be deleted with this tool');
+    db.prepare('DELETE FROM goals WHERE id = ?').run(id);
+    onWrite?.(before, null);
+    return before;
+  });
+}

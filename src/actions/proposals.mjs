@@ -36,7 +36,7 @@ export function isPlainConfirmation(text) {
 export const allowedScopes = scopes => (Array.isArray(scopes) ? WRITE_SCOPES.filter(s => scopes.includes(s)) : [...WRITE_SCOPES]);
 
 const TABLES = { 'write:goals': ['goals', 'id'], 'write:facts': ['facts', 'key'], 'write:recs': ['recs', 'id'],
-  'write:steps': ['recs', 'id'], 'write:preferences': ['preferences', 'id'] };
+  'write:steps': ['recs', 'id'], 'write:preferences': ['preferences', 'id'], 'write:decisions': ['decisions', 'id'] };
 
 export function proposalBasis(db, tool, scopes, args = {}) {
   const parts = [];
@@ -44,13 +44,34 @@ export function proposalBasis(db, tool, scopes, args = {}) {
   else for (const scope of scopes) {
     const [table, pk] = TABLES[scope];
     if (table === 'goals') continue;
-    const target = args[pk] ?? args.id ?? args.key;
+    const target = args.decisionId ?? args.recId ?? args[pk] ?? args.id ?? args.key;
     parts.push([table, target !== undefined
       ? db.prepare(`SELECT * FROM ${table} WHERE ${pk} = ?`).all(target)
       : db.prepare(`SELECT * FROM ${table} ORDER BY ${pk}`).all()]);
   }
+  const rows = (table, order) => parts.push([table, db.prepare(`SELECT * FROM ${table} ORDER BY ${order}`).all()]);
+  if (tool === 'act_on_recommendation') {
+    parts.push(['rec_threads', db.prepare('SELECT key, rec_id, rec_detached_at FROM conversations WHERE rec_id = ? ORDER BY key').all(args.id ?? null)]);
+    parts.push(['wargame', db.prepare("SELECT * FROM content WHERE key = 'wargame'").all()]);
+    parts.push(['wargame_picks', db.prepare("SELECT * FROM settings WHERE key = 'wargame.picks'").all()]);
+    if (args.decisionId) parts.push(['decision_rec', db.prepare('SELECT * FROM recs WHERE id = (SELECT rec_id FROM decisions WHERE id = ?)').all(args.decisionId)]);
+  }
+  if (tool === 'advisor_review') {
+    for (const [table, order] of [['advisor_reviews', 'id'], ['advisor_checkin', 'id'], ['advisor_packets', 'id'],
+      ['planner_recs', 'rec_id'], ['decisions', 'id'], ['content', 'key'], ['sources', 'id'], ['accounts', 'id'],
+      ['balances', 'account_id, date'], ['positions', 'id'], ['preferences', 'id'], ['settings', 'key']]) rows(table, order);
+  }
+  if (tool === 'update_goal') {
+    rows('settings', 'key');
+    for (const [table, order] of [['accounts', 'id'], ['balances', 'account_id, date'], ['positions', 'id'], ['transactions', 'id'],
+      ['transaction_category_corrections', 'transaction_id'], ['category_merchant_rules', 'merchant']]) rows(table, order);
+  }
+  if (tool === 'update_preferences' && args.positions) {
+    rows('settings', 'key');
+    rows('content', 'key');
+  }
   // Sources a proposed value may come from: goal notes and targets, facts and stored figures.
-  parts.push(['goals', db.prepare('SELECT id, def, origin, archived_at, done_at FROM goals ORDER BY id').all()]);
+  parts.push(['goals', db.prepare('SELECT * FROM goals ORDER BY id').all()]);
   parts.push(['facts', db.prepare('SELECT * FROM facts ORDER BY key').all()]);
   parts.push(['figures', db.prepare('SELECT key, v, unavailable_reason FROM figures ORDER BY key').all()]);
   return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
