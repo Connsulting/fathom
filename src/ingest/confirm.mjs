@@ -14,6 +14,20 @@ import { cents } from './format.mjs';
 import { captureChanges, revertChanges, touches } from './undo.mjs';
 import { accountNaming } from '../accounts/naming.mjs';
 
+function confirmTransaction(db, fn) {
+  if (!db.isTransaction) return tx(db, fn);
+  db.exec('SAVEPOINT confirm_write');
+  try {
+    const result = fn();
+    db.exec('RELEASE confirm_write');
+    return result;
+  } catch (err) {
+    db.exec('ROLLBACK TO confirm_write');
+    db.exec('RELEASE confirm_write');
+    throw err;
+  }
+}
+
 export const KINDS = Object.freeze([
   'account_owner', 'account_kind', 'entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 'employer_relation', 'employer_recipient', 'document_recipient',
   'withholding_conflict', 'account_match', 'transaction_category', 'category_mapping', 'resolver_fact',
@@ -128,7 +142,7 @@ export function answer(db, id, optionId, { now } = {}) {
 // answer() plus whether facts changed, for callers that refresh pack state.
 export function answerItem(db, id, optionId, { now } = {}) {
   const item = answerable(db, id, optionId);
-  return tx(db, () => {
+  return confirmTransaction(db, () => {
     const { factsChanged } = recordAnswer(db, item, optionId, { now });
     return { item: getItem(db, item.id), factsChanged: Boolean(factsChanged) };
   });
@@ -154,7 +168,7 @@ function answerable(db, id, optionId) {
 export function answerItems(db, answers, { now } = {}) {
   const list = Array.isArray(answers) ? answers : [];
   for (const a of list) answerable(db, a?.id, a?.option);
-  return tx(db, () => {
+  return confirmTransaction(db, () => {
     let factsChanged = false;
     const items = list.map((a) => {
       const item = answerable(db, a.id, a.option);
@@ -174,7 +188,7 @@ export function recordAutoAnswer(db, itemId, optionId, { rule, evidence, now } =
   if (!evidence || typeof evidence.text !== 'string' || !evidence.text) throw new TypeError('An auto answer needs its evidence text');
   const stored = { text: evidence.text, basis: ids(evidence.basis), ancestors: ids(evidence.ancestors), ...(evidence.refs ? { refs: evidence.refs } : {}) };
   const item = answerable(db, itemId, optionId);
-  return tx(db, () => {
+  return confirmTransaction(db, () => {
     recordAnswer(db, item, optionId, { now, auto: { rule, evidence: stored } });
     return getItem(db, item.id);
   });
@@ -296,7 +310,7 @@ export function reviseItem(db, id, optionId, { now } = {}) {
   if (optionId === item.answer) return { item, factsChanged: false };
   const reason = finalReason(db, item);
   if (reason) throw new ConfirmError('final', reason);
-  return tx(db, () => revise(db, item, optionId, { now }));
+  return confirmTransaction(db, () => revise(db, item, optionId, { now }));
 }
 
 // reviseItem inside the caller's transaction.
@@ -332,7 +346,7 @@ function accountQuestion(kind) {
 export function setAccountAnswer(db, kind, accountId, optionId, { now } = {}) {
   const spec = accountQuestion(kind);
   if (!spec.options.some((o) => o.id === optionId)) throw new ConfirmError('bad_option');
-  return tx(db, () => {
+  return confirmTransaction(db, () => {
     let item = findItem(db, kind, accountId);
     const before = { answer: item?.status === 'answered' ? item.answer : null, present: Boolean(item), created: !item };
     if (!item) {
@@ -364,7 +378,7 @@ export function undoAccountAnswer(db, kind, accountId, before, { now } = {}) {
   if (!item || item.status !== 'answered' || (!before?.present && !before?.created)) return { item, factsChanged: false };
   const reason = finalReason(db, item);
   if (reason) throw new ConfirmError('final', reason);
-  return tx(db, () => {
+  return confirmTransaction(db, () => {
     if (before.created) {
       revertDependents(db, item.id);
       revertAnswer(db, item);
@@ -381,7 +395,7 @@ export function reopenItem(db, id, { now } = {}) {
   const item = answeredItem(db, id);
   const reason = finalReason(db, item);
   if (reason) throw new ConfirmError('final', reason);
-  return tx(db, () => {
+  return confirmTransaction(db, () => {
     const reverted = reopenOne(db, item, { now });
     return { item: getItem(db, item.id), factsChanged: touches(reverted, 'facts') };
   });
@@ -406,7 +420,7 @@ export function reopenItems(db, ids, { now } = {}) {
     const reason = finalReason(db, item);
     if (reason) throw new ConfirmError('final', reason);
   }
-  return tx(db, () => {
+  return confirmTransaction(db, () => {
     let factsChanged = false;
     for (const item of items) {
       const fresh = getItem(db, item.id);

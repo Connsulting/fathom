@@ -3,7 +3,7 @@
 // response itself.
 
 import { HttpError } from './http.mjs';
-import { scenarioOf } from './handlers.mjs';
+import { scenarioOf } from './scenario.mjs';
 import { resolveClock } from '../scenario/build.mjs';
 import { openVault, VaultError } from '../ingest/vault.mjs';
 import { taxYearFor, yearendChecklist, setMark } from '../yearend/expected.mjs';

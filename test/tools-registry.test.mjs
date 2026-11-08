@@ -7,13 +7,14 @@ import { toolsForScopes, SCOPES } from '../src/mcp/keys.mjs';
 import { createRegistryServer } from '../src/engine/tools.mjs';
 
 const expected = {
-  household: ['summary', 'facts', 'fact_shapes', 'figures', 'deadlines', 'health'],
-  accounts: ['list', 'holdings', 'detail', 'net_worth'], tax: ['estimate', 'room'], transactions: ['search'], business: ['pnl', 'rows'],
+  household: ['summary', 'facts', 'fact_shapes', 'figures', 'deadlines', 'health', 'confirm_items'],
+  accounts: ['list', 'holdings', 'detail', 'net_worth', 'merge_candidates'], tax: ['estimate', 'room'], transactions: ['search'], business: ['pnl', 'rows'],
   spending: ['total', 'compare', 'definitions', 'cash_flow', 'recurring'],
   goals: ['list', 'pace'], recommendations: ['list', 'detail', 'advisor', 'wargame'],
-  knowledge: ['packs', 'search', 'entry'], answer: ['fact'],
+  knowledge: ['packs', 'search', 'entry'], answer: ['fact', 'rec_questions', 'confirm', 'reopen', 'yearend_mark'],
   act_on_recommendation: ['status', 'owner', 'step'], update_goal: ['create', 'edit'],
   update_preferences: ['remember'], undo: ['undo'],
+  update_account: ['rename', 'mask', 'owner', 'kind', 'merge'], categorize: ['transaction', 'merchant_rule'],
   calculate: ['add', 'subtract', 'multiply', 'divide', 'sum', 'min', 'max', 'negate', 'annualize', 'monthly', 'percent_of', 'round_up', 'compound'],
 };
 const oldNames = [

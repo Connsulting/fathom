@@ -41,6 +41,7 @@ test('account receipts refuse later edits and another actor',async t=>{
 
 test('merge requires confirmation and later owner evidence, then restores moved rows',async t=>{
   const s=await realStore();t.after(()=>s.close());const ids=await seedDuplicate(s,{sure:true});const ctx=context(s);
+  const moved=Number(s.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES (?,'2032-03-02',-57,'Unique moved row')").run(ids.own).lastInsertRowid);
   const args={operation:'merge',id:ids.keep,withId:ids.own,evidence:'yes, merge these accounts'};
   await assert.rejects(callTool('update_account',args,ctx),{code:'bad_input'});
   await assert.rejects(callTool('update_account',{...args,confirm:true,evidence:'please merge'},ctx),{code:'bad_input'});
@@ -52,8 +53,8 @@ test('merge requires confirmation and later owner evidence, then restores moved 
   assert.equal(r.survivorId,ids.keep);assert.equal(s.db.prepare('SELECT count(*) AS n FROM transactions WHERE account_id=?').get(ids.own).n,0);
   await undo(ask,r);assert.ok(s.db.prepare('SELECT count(*) AS n FROM transactions WHERE account_id=?').get(ids.own).n>0);
   const again=await callTool('update_account',{...args,confirm:true},ctx);
-  s.db.prepare('UPDATE transactions SET amount=amount-1 WHERE account_id=?').run(ids.keep);
-  await assert.rejects(undo(ctx,again),e=>e.reason==='changed_since'||/changed_since|changed since/.test(e.message));
+  s.db.prepare('UPDATE transactions SET amount=amount-1 WHERE id=?').run(moved);
+  await assert.rejects(undo(ctx,again),e=>e.code==='changed_since'||e.reason==='changed_since'||/changed_since|changed since/.test(e.message));
 });
 
 test('all account operations deny a read key before validating arguments',async()=>{
@@ -71,4 +72,20 @@ test('account proposals do not mutate and stale when a merge source changes',asy
   const basis=proposalBasis(s.db,'update_account',['write:accounts'],{id:'manual',withId:'other'});
   s.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('manual','2032-03-01',-1,'New posting')").run();
   assert.notEqual(proposalBasis(s.db,'update_account',['write:accounts'],{id:'manual',withId:'other'}),basis);
+});
+
+test('a stored Ask merge proposal executes only on the later confirmation and its own scope can undo',async t=>{
+  const { claimProposal, executeProposal }=await import('../src/actions/proposals.mjs');
+  const s=await realStore();t.after(()=>s.close());const ids=await seedDuplicate(s,{sure:true});
+  const key='ask:fedcba654321',ctx={...context(s),channel:'ask',conversationKey:key,ownerText:'Merge these accounts',scopes:['write:accounts']};
+  s.db.prepare('INSERT INTO conversations (key,created_at,last_at) VALUES (?,?,?)').run(key,NOW,NOW);
+  let pending;const tool=proposalTools(tools).find(t=>t.name==='update_account');
+  await tool.handler({operation:'merge',id:ids.keep,withId:ids.own,confirm:true,evidence:'Merge these accounts',propose:true},{...ctx,onProposal:p=>{pending=p;}});
+  assert.ok(s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get(ids.own));
+  const id=Number(s.db.prepare("INSERT INTO messages (conversation_key,role,text,ts,provenance) VALUES (?,'fathom','Merge these shown candidates?',?,?)").run(key,NOW,JSON.stringify({pendingAction:pending,tools:[{name:'accounts',args:{operation:'merge_candidates',id:ids.keep}}]})).lastInsertRowid);
+  const claim=claimProposal(s.db,{key,id,decision:'confirm',scopes:ctx.scopes,at:NOW});assert.equal(claim.status,'confirmed');
+  const out=await executeProposal(claim.pending,{...ctx,ownerText:'yes',evidenceMessageId:id});
+  assert.equal(out.receipt.scope,'write:accounts');assert.equal(s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get(ids.own),undefined);
+  await assert.rejects(undo({...ctx,scopes:['write:confirm']},out),{code:'forbidden'});
+  await undo(ctx,out);assert.ok(s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get(ids.own));
 });
