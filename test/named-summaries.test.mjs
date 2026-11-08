@@ -114,6 +114,16 @@ test('SUM1b AC4: an owner business classification survives named-summary inferen
   assert.equal(summaries(db).filter(l => l.person === 'spouse').length, 51);
 });
 
+test('SUM1b: exactly one third household categories qualify before inactive inference', async t => {
+  const db = await fixture(t);
+  const insert = db.prepare('INSERT INTO pnl_lines(entity,period,category,amount) VALUES (?,\'2025-01\',?,-10)');
+  for (let i = 0; i < 14; i++) insert.run(tabs[0][0], `Other expense ${i}`);
+  db.prepare("UPDATE pnl_lines SET period='2025-01' WHERE entity=?").run(tabs[0][0]);
+  await planRun(db);
+  assert.equal(getFacts(db)['business.entities'].find(e => e.name === tabs[0][0])?.type, 'personal');
+  assert.equal(summaries(db).filter(l => l.person === 'owner').length, 93);
+});
+
 test('SUM1b: named-summary inference requires household attribution, personal income and enough household categories', async t => {
   for (const [label, change] of [
     ['unknown person', db => addFact(db, 'household.names', { owner: 'Cedar', spouse: 'Birch' })],

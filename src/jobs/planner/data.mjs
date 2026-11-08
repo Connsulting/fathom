@@ -14,7 +14,7 @@ import { parseJson, cents } from '../../store/db.mjs';
 import { accountNaming } from '../../accounts/naming.mjs';
 import { addDays, daysBetween } from '../../scenario/build.mjs';
 import { monthEnd } from '../../ingest/format.mjs';
-import { ledgerDisplayName, ledgerKind, looksLikeSpending, spendingStatement, businessEntry, ownerEntityIdentity, summaryPerson, accountEntityLink } from '../../pnl/ledgers.mjs';
+import { ledgerDisplayName, ledgerKind, looksLikeSpending, spendingStatement, businessEntry, ownerEntityIdentity, summaryPerson, accountEntityLink, PERSONAL_CATEGORIES, personalIncomeCategory, payrollIncomeCategory } from '../../pnl/ledgers.mjs';
 import { loadCategoryInputs } from '../../categories/store.mjs';
 import { resolveCategories } from '../../categories/resolve.mjs';
 import { staleAccountIds } from '../../../web/core/account-freshness.js';
@@ -308,8 +308,26 @@ export function inferEntities(data, facts) {
     const i = value.findIndex(e => sameName(e?.name, entity.name));
     if (i < 0) value.push(entry); else value[i] = { ...value[i], ...entry };
   };
-  const spending = entities.filter(e => !e.accountIds.length && looksLikeSpending(e, baseFacts) && !undone(e.name));
-  for (const entity of spending) add(entity, 'personal', spendingStatement(entity));
+  const spending = [];
+  for (const entity of entities) {
+    if (entity.classified || entity.accountIds.length || undone(entity.name) || ledgerKind(baseFacts, entity.name, entity.lines)) continue;
+    const attribution = summaryPerson(entity, baseFacts);
+    const totals = new Map();
+    for (const line of entity.lines) {
+      const category = String(line.category).trim().toLowerCase();
+      totals.set(category, (totals.get(category) || 0) + line.amount);
+    }
+    const categories = [...totals.keys()];
+    const summary = attribution?.source === 'household_names' && categories.length > 0
+      && !categories.some(c => /revenue|sales|client fees|consulting fees|officer|payroll/i.test(c))
+      && [...totals].every(([category, amount]) => amount <= 0 || personalIncomeCategory(category) || payrollIncomeCategory(category))
+      && categories.filter(c => PERSONAL_CATEGORIES.has(c)).length >= categories.length / 3;
+    if (!summary && !looksLikeSpending(entity, baseFacts)) continue;
+    spending.push(entity);
+    add(entity, 'personal', summary
+      ? `Per-person summary for ${attribution.person === 'owner' ? 'you' : 'your spouse'}: personal income and household spending by month.`
+      : spendingStatement(entity));
+  }
   const cutoff = new Date(`${data.clock}T00:00:00Z`); cutoff.setUTCMonth(cutoff.getUTCMonth() - 6);
   const inactive = entities.filter(e => !e.classified && !e.accountIds.length && !spending.includes(e) && !undone(e.name) && !ledgerKind(baseFacts, e.name, e.lines)
     && e.lines.length && new Set(e.lines.map(l => l.period)).size <= 3 && e.lines.every(l => l.period < cutoff.toISOString().slice(0, 7)));

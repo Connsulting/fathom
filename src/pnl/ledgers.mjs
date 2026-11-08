@@ -49,7 +49,7 @@ export function summaryPerson(entity, facts) {
 }
 
 // A majority of personal categories and no revenue identify a spending statement.
-const PERSONAL_CATEGORIES = new Set([
+export const PERSONAL_CATEGORIES = new Set([
   'medical', 'healthcare', 'shopping', 'groceries', 'hsa', 'dining', 'restaurants',
   'food', 'entertainment', 'clothing', 'personal care', 'childcare', 'pets', 'household',
   'dining & drinks', 'entertainment & rec.', 'bills & utilities', 'auto & transport',
