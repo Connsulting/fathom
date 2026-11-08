@@ -48,7 +48,7 @@ function inferredSkips(db, { year, facts, accounts }) {
     const interest = history.filter((r) => r.amount > 0 && /\binterest\b/i.test(`${r.category || ''} ${r.description || ''}`));
     const total = interest.reduce((n, r) => n + Math.round(r.amount * 100), 0);
     if (total < INFERENCE_THRESHOLDS.interestCents) {
-      infer(`1099-int:${a.id}`, `Stored ${year} history shows $${(total / 100).toFixed(2)} interest, below the $${INFERENCE_THRESHOLDS.interestCents / 100} reporting threshold.`, interest.length ? interest : history);
+      infer(`1099-int:${a.id}`, `Interest in stored ${year} history is below the bank reporting threshold.`, interest.length ? interest : history);
     }
   }
   const hsas = new Set(accounts.filter((a) => a.kind === 'hsa').map((a) => a.id));

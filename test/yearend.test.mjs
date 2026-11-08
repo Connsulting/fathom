@@ -370,7 +370,8 @@ test('inferred 1099-INT: below threshold with evidence, threshold and other year
   let i = item('1099-int:bank');
   assert.equal(i.status, 'skipped');
   assert.equal(i.skip.inferred, true);
-  assert.match(i.skip.reason, /9.99.*10/);
+  assert.match(i.skip.reason, /Interest.*below the bank reporting threshold/);
+  assert.ok(!i.skip.reason.includes('$'), 'inferred prose has no bare dollar amounts');
   assert.ok(i.skip.evidence.some(e => e.table === 'transactions' && e.locator === 'synthetic ledger row'));
   tx('bank', 0.01, 'Interest paid', 'interest');
   assert.equal(item('1099-int:bank').status, 'missing');
