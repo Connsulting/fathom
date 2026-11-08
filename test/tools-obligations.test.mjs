@@ -97,3 +97,28 @@ test('definition selectors and referenced totals produce identical projections w
  await assert.rejects(s.call('projection',{base:base.total.ref,definition:'core_living'}),e=>e.code==='bad_input');
  await assert.rejects(s.call('obligations',{changes:[{kind:'mortgage',newMonthly:{value:0,source:'default'}}]}),e=>e.code==='bad_input');
 });
+
+test('a stored childcare increase applies while a definition excluding care gets no change',async t=>{
+ const s=await spendingStore(t);
+ for(let m=1;m<=10;m++)s.tx('checking',`2026-${String(m).padStart(2,'0')}-15`,-600,'Childcare');
+ s.fact('household.dependentBirthDates',['2022-04-01']);
+ s.fact('obligations.childcare',{schoolAgeMonthly:800});
+ const base=await s.call('total',{annualize:true});
+ const out=await s.call('projection',{years:3,obligations:['childcare']});
+ assert.equal(out.years[2].spending.value,base.total.value+2400);
+ const selected=await s.call('total',{annualize:true,include:{categories:['Groceries']}});
+ const excluded=await s.call('projection',{years:3,base:selected.total.ref,obligations:['childcare']});
+ assert.equal(excluded.years[2].spending.value,selected.total.value);
+});
+
+test('one child leaving care cannot erase care for a younger dependent without an allocation',async t=>{
+ const s=await spendingStore(t);
+ for(let m=1;m<=10;m++)s.tx('checking',`2026-${String(m).padStart(2,'0')}-15`,-600,'Childcare');
+ s.fact('household.dependentBirthDates',['2014-04-01','2017-04-01']);
+ const base=await s.call('total',{annualize:true});
+ const out=await s.call('projection',{years:6,obligations:['childcare']});
+ assert.equal(out.years[1].spending.value,base.total.value);
+ assert.equal(out.years[1].changes[0].applied,false);
+ assert.ok(out.gaps.some(g=>/per-dependent allocation/.test(g.message)));
+ assert.equal(out.years[5].spending.value,base.total.value-7200);
+});

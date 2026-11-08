@@ -40,3 +40,14 @@ test('C7 facts accept their declared shapes and reject malformed neighbors atomi
   const q=questionFor(['accounts.separationDate'],{accounts:s.db.prepare('SELECT * FROM accounts').all(),facts:{'accounts.planType':{ret:'401k',ira:'roth_ira'}}});
   assert.deepEqual(q.fields.map(f=>f.path[0]),['ret']);
 });
+
+test('account eligibility follows the plan type in the same atomic answer batch in either order',async t=>{
+ const s=await spendingStore(t);s.account('plan','retirement','owner');
+ const separation={key:'accounts.separationDate',value:{plan:'2035-01-01'}};
+ const plan={key:'accounts.planType',value:{plan:'401k'}};
+ recordFactAnswers(s.db,[separation,plan],{now});
+ s.db.prepare("DELETE FROM facts WHERE key IN ('accounts.planType','accounts.separationDate')").run();
+ recordFactAnswers(s.db,[plan,separation],{now});
+ assert.throws(()=>recordFactAnswers(s.db,[{...plan,value:{plan:'traditional_ira'}},separation],{now}),FactAnswerError);
+ assert.equal(JSON.parse(s.db.prepare("SELECT value FROM facts WHERE key='accounts.planType'").get().value).plan,'401k');
+});
