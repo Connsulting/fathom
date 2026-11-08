@@ -152,7 +152,15 @@ test.describe('household selection and isolation', () => {
     await expect(page.getByText(BRAVO_GOAL).first()).toBeVisible();
     await expect(page.getByText(ALPHA_GOAL)).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('bravo.png'), fullPage: false });
+    // While the switch is in flight the page shows neither household's figures under the new name.
+    let release;
+    const held = new Promise((resolve) => { release = resolve; });
+    await page.route('**/api/auth/household', async (route) => { await held; await route.continue(); }, { times: 1 });
     await picker.selectOption(fx.A);
+    await expect(page.getByRole('alert').filter({ hasText: 'Switching household' })).toBeVisible();
+    await expect(page.getByText(BRAVO_GOAL)).toHaveCount(0);
+    await expect(page.locator('select[data-hh-switch]')).toHaveCount(0);
+    release();
     await expect(picker).toHaveValue(fx.A, { timeout: 15_000 });
     await page.goto(`${base}/#/goals`);
     await expect(page.getByText(ALPHA_GOAL).first()).toBeVisible();
@@ -245,6 +253,9 @@ test.describe('household selection and isolation', () => {
     await page.goto(`${base}/account`);
     await page.getByRole('button', { name: 'Sign out', exact: true }).click();
     await expect(page).toHaveURL((url) => url.pathname === '/signin');
+    // Signed out, a deep link keeps its household target through sign-in.
+    await page.goto(`${base}/?household=${encodeURIComponent(fx.B)}#/goals`);
+    await expect(page).toHaveURL((url) => url.pathname === '/signin' && url.searchParams.get('household') === fx.B && url.hash === '#/goals');
     expect((await context.request.get(`${base}/api/auth/session`)).status()).toBe(200);
     expect((await (await context.request.get(`${base}/api/auth/session`)).json()).identity).toBeNull();
     await signInto(context, fx.owner);

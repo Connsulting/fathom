@@ -134,6 +134,13 @@ let CTX = null;         // { householdId, contextVersion, memberships } of the s
 let switching = false;  // set once a household switch started: every response is dropped
 let staleNow = false;   // set once the server refused this tab's context as stale
 const inflight = new Set(); // AbortControllers of requests in flight
+const readers = new Set();  // stream readers still being consumed
+const leftContext = () => switching || staleNow || leaving;
+// Abort every request and stream body of this tab.
+function abortAll() {
+  for (const c of inflight) c.abort();
+  for (const r of readers) { try { r.cancel().catch(() => {}); } catch (e) { /* already closed */ } }
+}
 let leaving = false;    // set once a 401 sent the page to /signin
 let version = 0;        // bumped on every change; caches key off it
 let routeStep = null;   // onboarding step of the current route (route state, not stored)
@@ -409,7 +416,9 @@ function signedOut(notice) {
   version += 1;
   if (root) { root.className = ''; root.innerHTML = ''; }
   if (notice) { try { window.sessionStorage.setItem(NOTICE_KEY, notice); } catch (e) { /* the page still works */ } }
-  try { window.location.replace(signInTarget(window.location.pathname, window.location.hash)); } catch (e) { /* ignore */ }
+  let household = null;
+  try { household = new URLSearchParams(window.location.search).get('household'); } catch (e) { household = null; }
+  try { window.location.replace(signInTarget(window.location.pathname, window.location.hash, household)); } catch (e) { /* ignore */ }
 }
 
 // ---------------------------------------------------------------- household context
@@ -423,7 +432,7 @@ const droppedError = () => { const err = new Error('This tab left that household
 function staleTab() {
   if (staleNow || leaving || switching) return;
   staleNow = true;
-  for (const c of inflight) c.abort();
+  abortAll();
   hideError();
   const el = document.createElement('div');
   el.className = 'fx-err fx-stale';
@@ -493,8 +502,18 @@ const currentHousehold = () => households().find(h => h.current) || null;
 // home route).
 async function switchHousehold(id, target) {
   if (!CTX || switching || leaving || typeof id !== 'string' || !id) return false;
+  const to = households().find(h => h.id === id);
   switching = true;
-  for (const c of inflight) c.abort();
+  abortAll();
+  // From here until the reload the page shows no household's figures: the old household's content
+  // is taken down before the request, so a slow switch never shows one household's name over
+  // another's data.
+  const shown = Boolean(current);
+  if (shown) {
+    closePopover();
+    unmountCurrent();
+    bootMessage('Switching household', 'Opening ' + (to ? to.name : 'the household') + '.');
+  }
   let res = null;
   try {
     res = await fetch('/api/auth/household', {
@@ -506,6 +525,8 @@ async function switchHousehold(id, target) {
   if (res && res.status === 401) { switching = false; signedOut('expired'); return false; }
   if (!res || !res.ok) {
     switching = false;
+    // Nothing changed on the server: put the current household back.
+    if (shown) { const def = pickDesign(); if (def) mountDesign(def); }
     showError('Could not switch household. ' + (res ? 'The server answered ' + res.status + '.' : 'The server could not be reached.'));
     return false;
   }
@@ -539,6 +560,7 @@ async function postJson(path, body) {
   }
   let data = null;
   try { data = await res.json(); } catch (e) { data = null; }
+  if (leftContext()) throw droppedError();
   if (res.status === 401) signedOut('expired');
   if (!res.ok) {
     const err = new Error((data && typeof data.error === 'string' && data.error) || 'The server answered ' + res.status + '.');
@@ -587,6 +609,7 @@ async function postStream(path, body, onEvent) {
   if (!/text\/event-stream/i.test(res.headers.get('content-type') || '')) {
     let data = null;
     try { data = await res.json(); } catch (e) { data = null; }
+    if (leftContext()) throw droppedError();
     if (!res.ok) {
       const err = new Error((data && typeof data.error === 'string' && data.error) || 'The server answered ' + res.status + '.');
       err.status = res.status;
@@ -598,10 +621,12 @@ async function postStream(path, body, onEvent) {
   let key = null;
   let buf = '';
   const dec = new TextDecoder();
+  const reader = res.body.getReader();
+  readers.add(reader);
   try {
-    const reader = res.body.getReader();
     for (;;) {
       const { value, done: end } = await reader.read();
+      if (leftContext()) throw droppedError();
       if (end) break;
       buf += dec.decode(value, { stream: true }).replace(/\r\n?/g, '\n');
       let at;
@@ -626,8 +651,10 @@ async function postStream(path, body, onEvent) {
     }
   } catch (e) {
     if (e && (e.status || e.broken || e.dropped)) throw e;
+  } finally {
+    readers.delete(reader);
   }
-  if (switching || staleNow) throw droppedError();
+  if (leftContext()) throw droppedError();
   throw broken(key);
 }
 
@@ -643,7 +670,7 @@ const threadIds = (scenario) => new Set(arr(scenario && scenario.live && scenari
 // Resolves { scenario, key } or null after RECOVER_FOR_MS.
 async function recoverTurn({ key, before, ids }) {
   const until = Date.now() + RECOVER_FOR_MS;
-  while (!leaving && Date.now() < until) {
+  while (!leftContext() && Date.now() < until) {
     await new Promise(r => setTimeout(r, RECOVER_EVERY_MS));
     let next;
     try { next = await loadScenario(); } catch (e) { continue; }
@@ -1117,6 +1144,7 @@ async function getRead(path) {
     const res = await apiFetch(path, { headers: { accept: 'application/json' } });
     if (!res.ok) return null;
     const data = await res.json();
+    if (leftContext()) return null;
     return data && typeof data === 'object' ? data : null;
   } catch (e) {
     return null;
@@ -1253,6 +1281,7 @@ async function packEntry(packId, entryId) {
     });
     if (!res.ok) return null;
     const data = await res.json();
+    if (leftContext()) return null;
     const e = data && data.entry;
     if (!e || typeof e !== 'object' || typeof e.body !== 'string') return null;
     return { id: String(e.id == null ? entryId : e.id), title: String(e.title || ''), body: e.body, cites: arr(e.cites) };
@@ -1308,6 +1337,7 @@ async function confirmItemNow(id) {
     const res = await apiFetch('/api/confirm/' + encodeURIComponent(id), { headers: { accept: 'application/json' } });
     if (!res.ok) return null;
     const d = await res.json();
+    if (leftContext()) return null;
     return d && d.item && typeof d.item === 'object' ? d.item : null;
   } catch (e) {
     return null;
@@ -1738,6 +1768,7 @@ async function loadScenario() {
   const res = await apiFetch('/api/scenario', { headers: { accept: 'application/json' } });
   if (!res.ok) throw new Error('The server answered ' + res.status + '.');
   const data = await res.json();
+  if (leftContext()) throw droppedError();
   if (!data || typeof data !== 'object' || !data.meta) throw new Error('The server sent an unexpected reply.');
   return data;
 }

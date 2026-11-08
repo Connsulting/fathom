@@ -148,7 +148,7 @@ test.describe('passkey accounts through the browser', () => {
         expect(db.prepare('SELECT count(*) AS n FROM household_invitations WHERE user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL').get(user.id).n).toBe(1);
         expect(db.prepare('SELECT count(*) AS n FROM household_memberships WHERE user_id = ?').get(user.id).n).toBe(0);
       } finally { db.close(); }
-      expect((await admin.context.request.get('/api/scenario')).status()).toBe(401);
+      expect((await householdGet(admin, '/api/scenario')).status()).toBe(401);
       await admin.auth.replace();
       const notice = securitySnapshot();
       const registration = await register(admin, 'Primary device');
@@ -162,7 +162,7 @@ test.describe('passkey accounts through the browser', () => {
       // householdId is the opaque platform household id (MT-01 contradiction 8), no longer the integer 1.
       expect(ownerIdentity).toMatchObject({ email: OWNER, login: OWNER, name: OWNER, householdId: expect.any(String), role: 'admin', operator: false });
       expect(ownerIdentity.householdId.length).toBeGreaterThan(0);
-      expect(ownerIdentity.memberships).toEqual([{ householdId: ownerIdentity.householdId, role: 'admin' }]);
+      expect(ownerIdentity.memberships).toEqual([{ householdId: ownerIdentity.householdId, role: 'admin', name: null }]);
       expect((await sessionIdentity(admin)).id).toBe(ownerIdentity.id);
       const cookies = await admin.context.cookies(base);
       const cookie = cookies.find((item) => item.name === '__Host-fathom-session');
@@ -178,7 +178,7 @@ test.describe('passkey accounts through the browser', () => {
       primaryId = registration.credentialId;
       await assertPasskeyNames(admin, ['Primary device']);
       await usedLinkIsDenied(browser, enrollmentLink);
-      expect((await admin.context.request.get('/api/scenario')).status()).toBe(200);
+      expect((await householdGet(admin, '/api/scenario')).status()).toBe(200);
     });
 
     await test.step('authenticated boot precedes scenario fetch and the Settings page links to real auth pages', async () => {
@@ -221,7 +221,7 @@ test.describe('passkey accounts through the browser', () => {
       await assertPasskeyNames(admin, ['Primary device', 'Secondary device']);
       secondaryCredentials = await admin.auth.credentials();
       expect(secondaryCredentials.length).toBe(1);
-      expect((await admin.context.request.get('/api/scenario')).status()).toBe(200);
+      expect((await householdGet(admin, '/api/scenario')).status()).toBe(200);
       otherOwner = await browserClient(browser, { authenticator: true, credentials: primaryCredentials });
       await signin(otherOwner);
       primaryCredentials = await otherOwner.auth.credentials();
@@ -233,16 +233,16 @@ test.describe('passkey accounts through the browser', () => {
       await passkeyRow(admin.page, 'Secondary device').getByRole('button', { name: 'Revoke passkey', exact: true }).click();
       expect((await revoked).status()).toBe(200);
       await expect(admin.page).toHaveURL(`${base}/signin`);
-      expect((await admin.context.request.get('/api/scenario')).status()).toBe(401);
-      expect((await otherOwner.context.request.get('/api/scenario')).status()).toBe(401);
+      expect((await householdGet(admin, '/api/scenario')).status()).toBe(401);
+      expect((await householdGet(otherOwner, '/api/scenario')).status()).toBe(401);
       const removedDevice = await browserClient(browser, { authenticator: true, credentials: secondaryCredentials });
       await signin(removedDevice, 400);
-      expect((await removedDevice.context.request.get('/api/scenario')).status()).toBe(401);
+      expect((await householdGet(removedDevice, '/api/scenario')).status()).toBe(401);
       await admin.auth.replace(primaryCredentials);
       await signin(admin);
       primaryCredentials = await admin.auth.credentials();
       await assertPasskeyNames(admin, ['Primary device']);
-      expect((await admin.context.request.get('/api/scenario')).status()).toBe(200);
+      expect((await householdGet(admin, '/api/scenario')).status()).toBe(200);
     });
 
     await test.step('the only enrolled admin cannot demote or remove itself', async () => {
@@ -266,8 +266,8 @@ test.describe('passkey accounts through the browser', () => {
         await remove.click();
         expect((await removal).status()).toBe(409);
       }
-      expect((await admin.context.request.get('/api/admin/users')).status()).toBe(200);
-      expect((await admin.context.request.get('/api/scenario')).status()).toBe(200);
+      expect((await householdGet(admin, '/api/admin/users')).status()).toBe(200);
+      expect((await householdGet(admin, '/api/scenario')).status()).toBe(200);
     });
 
     await test.step('a second admin enrolls through an actual invitation after last-admin protection was proved', async () => {
@@ -286,10 +286,10 @@ test.describe('passkey accounts through the browser', () => {
       const notice = securitySnapshot();
       const registration = await register(secondAdmin, 'Second admin device');
       expect(registration.identity).toMatchObject({ email: SECOND_ADMIN, role: 'admin', householdId: ownerIdentity.householdId, operator: false });
-      expect(registration.identity.memberships).toEqual([{ householdId: ownerIdentity.householdId, role: 'admin' }]);
+      expect(registration.identity.memberships).toEqual([{ householdId: ownerIdentity.householdId, role: 'admin', name: null }]);
       expect(registration.identity.id).not.toBe(ownerIdentity.id);
       await securityNotices(notice, 'Fathom passkey added', [SECOND_ADMIN]);
-      expect((await secondAdmin.context.request.get('/api/admin/users')).status()).toBe(200);
+      expect((await householdGet(secondAdmin, '/api/admin/users')).status()).toBe(200);
       await usedLinkIsDenied(browser, link);
     });
 
@@ -321,7 +321,7 @@ test.describe('passkey accounts through the browser', () => {
       expect(emailSendCount()).toBe(sendsBefore);
       expect(await sessionCookie(secondAdmin)).toBe(beforeSession);
       await assertPasskeyNames(secondAdmin, ['Second admin device', 'Second admin backup']);
-      expect((await secondAdmin.context.request.get('/api/admin/users')).status()).toBe(200);
+      expect((await householdGet(secondAdmin, '/api/admin/users')).status()).toBe(200);
     });
 
     await test.step('a member enrolls from its emailed invite and cannot enter any admin surface', async () => {
@@ -342,12 +342,12 @@ test.describe('passkey accounts through the browser', () => {
       const registration = await register(member, 'Member device');
       await securityNotices(notice, 'Fathom passkey added', [MEMBER]);
       expect(registration.identity).toMatchObject({ email: MEMBER, role: 'member', householdId: ownerIdentity.householdId, operator: false });
-      expect(registration.identity.memberships).toEqual([{ householdId: ownerIdentity.householdId, role: 'member' }]);
+      expect(registration.identity.memberships).toEqual([{ householdId: ownerIdentity.householdId, role: 'member', name: null }]);
       await member.page.goto(`${base}/`);
       await expect(member.page).toHaveURL(/#\/home$/);
       // Accepting an invitation into an active household starts the member's guided tour; Escape
       // dismisses it (even while it waits for a stop's anchor) and clears the user's flag.
-      const tourPending = async () => (await (await member.page.request.get(`${base}/api/scenario`)).json()).live.tourPending;
+      const tourPending = async () => (await (await householdGet(member, `${base}/api/scenario`)).json()).live.tourPending;
       expect(await tourPending(), 'the invited member has the tour pending').toBe(true);
       await member.page.keyboard.press('Escape');
       await expect(member.page.locator('.h-tour')).toHaveCount(0);
@@ -358,7 +358,7 @@ test.describe('passkey accounts through the browser', () => {
       await expect(member.page.locator('section.h-settings').getByRole('link', { name: 'Household', exact: true })).toHaveCount(0);
       const denied = await member.page.goto(`${base}/admin/users`);
       expect(denied.status()).toBe(403);
-      expect((await member.context.request.get('/api/admin/users')).status()).toBe(403);
+      expect((await householdGet(member, '/api/admin/users')).status()).toBe(403);
       for (const [path, data] of [
         ['/api/admin/users/invite', { email: 'uninvited@example.test', role: 'admin' }],
         [`/api/admin/users/${ownerIdentity.id}/role`, { role: 'member' }],
@@ -367,8 +367,8 @@ test.describe('passkey accounts through the browser', () => {
       ]) {
         expect((await post(member, path, data)).status(), 'member admin mutation denial').toBe(403);
       }
-      expect((await member.context.request.get('/api/scenario')).status()).toBe(200);
-      expect((await admin.context.request.get('/api/admin/users')).status()).toBe(200);
+      expect((await householdGet(member, '/api/scenario')).status()).toBe(200);
+      expect((await householdGet(admin, '/api/admin/users')).status()).toBe(200);
       await usedLinkIsDenied(browser, link);
     });
 
@@ -387,23 +387,23 @@ test.describe('passkey accounts through the browser', () => {
       const adminKeyBody = await adminCreated.json();
       adminKey = adminKeyBody.key;
       privateMaterial.add(adminKey);
-      const memberKeys = await member.context.request.get('/api/keys');
+      const memberKeys = await householdGet(member, '/api/keys');
       expect(memberKeys.status()).toBe(200);
       expect((await memberKeys.json()).keys.some((key) => key.id === adminKeyBody.record.id)).toBe(false);
       expect((await mcp(memberKey)).status).toBe(200);
       expect((await mcp(adminKey)).status).toBe(200);
       expect((await post(member, `/api/keys/${adminKeyBody.record.id}/revoke`, {})).status()).toBe(403);
-      expect((await member.context.request.get('/api/scenario')).status()).toBe(200);
+      expect((await householdGet(member, '/api/scenario')).status()).toBe(200);
       const memberIdentity = await sessionIdentity(member);
       await admin.page.goto(`${base}/admin/users`);
       const removed = admin.page.waitForResponse((response) => new URL(response.url()).pathname === `/api/admin/users/${memberIdentity.id}/remove`);
       await userRow(admin.page, MEMBER).getByRole('button', { name: 'Remove user', exact: true }).click();
       expect((await removed).status()).toBe(200);
       await expect(userRow(admin.page, MEMBER)).toHaveCount(0);
-      expect((await member.context.request.get('/api/scenario')).status()).toBe(401);
+      expect((await householdGet(member, '/api/scenario')).status()).toBe(401);
       expect((await mcp(memberKey)).status).toBe(401);
       expect((await mcp(adminKey)).status).toBe(200);
-      expect((await admin.context.request.get('/api/scenario')).status()).toBe(200);
+      expect((await householdGet(admin, '/api/scenario')).status()).toBe(200);
     });
 
     await test.step('sign-out revokes its session and emailed recovery replaces lost keys only after verification', async () => {
@@ -415,8 +415,8 @@ test.describe('passkey accounts through the browser', () => {
       await admin.page.getByRole('button', { name: 'Sign out', exact: true }).click();
       expect((await signout).status()).toBe(200);
       await expect(admin.page).toHaveURL(`${base}/signin`);
-      expect((await admin.context.request.get('/api/scenario')).status()).toBe(401);
-      expect((await otherOwner.context.request.get('/api/scenario')).status()).toBe(200);
+      expect((await householdGet(admin, '/api/scenario')).status()).toBe(401);
+      expect((await householdGet(otherOwner, '/api/scenario')).status()).toBe(200);
       const before = outboxNames();
       await admin.auth.replace();
       await admin.page.getByRole('textbox', { name: 'Email', exact: true }).fill(OWNER);
@@ -426,24 +426,24 @@ test.describe('passkey accounts through the browser', () => {
       expect(recoveryResponse.status()).toBe(200);
       expect((await recoveryResponse.text()).includes('/enroll#')).toBe(false);
       const recoveryLink = await mailedLink(before, OWNER);
-      expect((await otherOwner.context.request.get('/api/scenario')).status()).toBe(200);
+      expect((await householdGet(otherOwner, '/api/scenario')).status()).toBe(200);
       await visitEnrollment(admin, recoveryLink);
       const notice = securitySnapshot();
       const registration = await register(admin, 'Recovered device');
       await securityNotices(notice, 'Fathom account recovered', [OWNER, SECOND_ADMIN]);
       expect(registration.identity.id).toBe(ownerIdentity.id);
-      expect((await otherOwner.context.request.get('/api/scenario')).status()).toBe(401);
-      expect((await secondAdmin.context.request.get('/api/admin/users')).status()).toBe(200);
+      expect((await householdGet(otherOwner, '/api/scenario')).status()).toBe(401);
+      expect((await householdGet(secondAdmin, '/api/admin/users')).status()).toBe(200);
       await assertPasskeyNames(admin, ['Recovered device']);
       const oldDevice = await browserClient(browser, { authenticator: true, credentials: primaryCredentials });
       await signin(oldDevice, 400);
-      expect((await oldDevice.context.request.get('/api/scenario')).status()).toBe(401);
+      expect((await householdGet(oldDevice, '/api/scenario')).status()).toBe(401);
       const recoveredCredentials = await admin.auth.credentials();
       const returning = await browserClient(browser, { authenticator: true, credentials: recoveredCredentials });
       await signin(returning);
       expect((await sessionIdentity(returning)).id).toBe(ownerIdentity.id);
       await usedLinkIsDenied(browser, recoveryLink);
-      expect((await returning.context.request.get('/api/scenario')).status()).toBe(200);
+      expect((await householdGet(returning, '/api/scenario')).status()).toBe(200);
       await assertAuthenticatedBoot(admin);
       await assertAuthenticatedBoot(returning);
       otherOwner = returning;
@@ -462,7 +462,7 @@ test.describe('passkey accounts through the browser', () => {
       finally { db.close(); }
       await returning.page.evaluate(() => window.Fathom.api.goalCreate({ name: 'Synthetic' })).catch(() => {});
       await expect(returning.page).toHaveURL(/\/signin#\/plan$/);
-      expect((await returning.context.request.get('/api/scenario')).status()).toBe(401);
+      expect((await householdGet(returning, '/api/scenario')).status()).toBe(401);
     });
 
     await test.step('revoking the final passkey signs out every session and explains email recovery', async () => {
@@ -472,8 +472,8 @@ test.describe('passkey accounts through the browser', () => {
       expect((await revoked).status()).toBe(200);
       await expect(admin.page).toHaveURL(`${base}/signin`);
       await expect(admin.page.locator('body')).toContainText(/recover|email/i);
-      expect((await admin.context.request.get('/api/scenario')).status()).toBe(401);
-      expect((await otherOwner.context.request.get('/api/scenario')).status()).toBe(401);
+      expect((await householdGet(admin, '/api/scenario')).status()).toBe(401);
+      expect((await householdGet(otherOwner, '/api/scenario')).status()).toBe(401);
       await expect(admin.page.getByRole('button', { name: 'Email recovery link', exact: true })).toBeVisible();
       expect((await mcp(adminKey)).status).toBe(200);
       expect((await admin.context.request.get('/healthz')).status()).toBe(200);
@@ -632,7 +632,7 @@ async function signin(client, expectedStatus = 200, hash = '#/home') {
       expect((await sessionIdentity(client)).email).toBe(OWNER);
       await assertAuthenticatedBoot(client);
     } else {
-      expect((await client.context.request.get('/api/scenario')).status()).toBe(401);
+      expect((await householdGet(client, '/api/scenario')).status()).toBe(401);
       await expect(client.page.locator('body')).toContainText(/passkey|sign in/i);
     }
   } finally {
@@ -680,8 +680,14 @@ function passkeyRow(page, name) {
   return page.getByRole('row').or(page.getByRole('listitem')).filter({ hasText: name });
 }
 
-function post(client, path, data) {
-  return client.context.request.post(path, { headers: { Origin: base }, data });
+// Household routes carry the session's household context like the web client; auth routes do not.
+async function post(client, path, data) {
+  let context = {};
+  if (!path.startsWith('/api/auth/')) {
+    const i = (await (await client.context.request.get(`${base}/api/auth/session`)).json()).identity;
+    if (i && i.householdId) context = { 'X-Fathom-Household': i.householdId, 'X-Fathom-Context-Version': String(i.contextVersion) };
+  }
+  return client.context.request.post(path, { headers: { Origin: base, ...context }, data });
 }
 
 async function mcp(key) {
@@ -809,7 +815,7 @@ async function usedLinkIsDenied(browser, link) {
   await replay.page.getByRole('button', { name: 'Create passkey', exact: true }).click();
   expect((await denied).status()).toBe(410);
   await expect(replay.page.locator('body')).toContainText(/expired|used|no longer valid/i);
-  expect((await replay.context.request.get('/api/scenario')).status()).toBe(401);
+  expect((await householdGet(replay, '/api/scenario')).status()).toBe(401);
   expect((await replay.context.request.get('/healthz')).status()).toBe(200);
 }
 
@@ -824,4 +830,13 @@ function seedReturningHousehold() {
     expect(result.queued).toBe(true);
     confirmationId = result.id;
   } finally { db.close(); }
+}
+
+// A household request as the web client sends it: the session's household context asserted
+// (src/api/household-context.mjs). A signed-out client asserts nothing and gets 401.
+async function householdGet(client, path) {
+  const session = await (await client.context.request.get(`${base}/api/auth/session`)).json();
+  const i = session.identity;
+  const headers = i && i.householdId ? { 'X-Fathom-Household': i.householdId, 'X-Fathom-Context-Version': String(i.contextVersion) } : {};
+  return client.context.request.get(path, { headers });
 }

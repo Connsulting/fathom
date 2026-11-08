@@ -471,7 +471,7 @@ test.describe('real store past first run', () => {
     const panel = page.locator('[data-understood]');
     await expect(panel).toContainText('The engine is off');
     await expect(panel).not.toContainText('Virginia');
-    const files = await (await context.request.get(`${BASE}/api/files`)).json();
+    const files = await (await context.request.get(`${BASE}/api/files`, { headers: app.contextHeaders })).json();
     const note = files.files.find((f) => /^Setup notes /.test(f.name));
     expect(note && note.status).toBe('needs_extraction');
 

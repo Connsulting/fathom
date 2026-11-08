@@ -1,5 +1,5 @@
 import { HttpError, sendJson } from './http.mjs';
-import { safePath } from '../../web/auth/return-path.js';
+import { safePath, safeHousehold } from '../../web/auth/return-path.js';
 import { checkAssertion } from './household-context.mjs';
 
 export const identityOf = (req, auth) => auth.identity(req);
@@ -27,8 +27,16 @@ export function signInLocation(url) {
   const raw = String(url || '/');
   const q = raw.indexOf('?');
   const path = safePath(q >= 0 ? raw.slice(0, q) : raw);
-  if (!path || path === '/' || path === '/signin') return '/signin';
-  return '/signin?next=' + encodeURIComponent(path);
+  // A deep link's household target (?household=<id>) is kept so the app still asks before opening it.
+  let household = null;
+  if (q >= 0) {
+    try { household = safeHousehold(new URLSearchParams(raw.slice(q + 1)).get('household')); } catch { household = null; }
+  }
+  const params = new URLSearchParams();
+  if (path && path !== '/' && path !== '/signin') params.set('next', path);
+  if (household) params.set('household', household);
+  const query = params.toString();
+  return '/signin' + (query ? '?' + query : '');
 }
 
 export function sendUnauthorized(req, res, isApi) {
