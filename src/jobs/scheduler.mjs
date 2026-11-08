@@ -588,3 +588,11 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
     },
   };
 }
+
+export const SCHEDULER_STATUS = { unknown_job: 404, running: 409, locked: 409, paused: 409, demo_store: 409, unavailable: 503 };
+export const SCHEDULER_MESSAGE = { unknown_job: 'no such job', running: 'that job is already running', locked: 'another scheduler holds the job lock', paused: 'outbound jobs are paused', demo_store: 'planning runs on real stores only', unavailable: 'scheduler unavailable' };
+export async function runManualJob(db, scheduler, id) {
+  if (id === 'plan' && getSetting(db, 'mode', null) === 'demo') throw new SchedulerError('demo_store');
+  if (!scheduler) throw new SchedulerError('unavailable');
+  return await scheduler.runNow(id) ?? null;
+}
