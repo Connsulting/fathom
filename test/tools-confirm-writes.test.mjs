@@ -220,3 +220,23 @@ test('reopen and revise proposals retain dependent answers and their Undo rows',
   s.db.exec('ROLLBACK TO dependent_change');s.db.exec('RELEASE dependent_change');
  }
 });
+
+
+for (const [kind,answer] of [['employer_recipient','both'],['withholding_conflict','both'],['document_recipient','owner']]) {
+ test(`${kind} ${answer} basis follows whether the answer closes stale conflicts`,async t=>{
+  const s=await setup(t),db=s.db;
+  const payment=key=>Number(db.prepare("INSERT INTO tax_payments(jurisdiction,tax_year,date,amount,payer,source_slot,dedupe_key,recipient) VALUES ('federal',2031,'2032-01-10',20,?,'wh:example:2031:federal:unknown',?,'unknown')").run(key,key).lastInsertRowid);
+  const first=payment('first'),second=payment('second'),foreign=payment('foreign'),foreignSecond=payment('foreign-second');
+  const ref=id=>({id,key:db.prepare('SELECT dedupe_key FROM tax_payments WHERE id=?').get(id).dedupe_key,fileId:null,cents:2000});
+  const unrelated=ask(db,{kind:'withholding_conflict',subject:'unrelated',question:'Synthetic conflict',options:[{id:'both',label:'Both'}],context:{first:{...ref(foreign),cents:1900},second:ref(foreignSecond)},now:NOW}).id;
+  const subject=kind==='document_recipient'?'first':kind==='employer_recipient'?'no-payments':'selected-conflict';
+  const context=kind==='withholding_conflict'?{first:ref(first),second:ref(second)}:{};
+  const id=ask(db,{kind,subject,context,question:'Synthetic recipient',options:[{id:answer,label:answer}],now:NOW}).id;
+  const args={items:[{id,answer}]},basis=()=>proposalBasis(db,'answer',['write:confirm'],args),before=basis();
+  db.prepare("UPDATE confirm_items SET question='Edited unrelated conflict' WHERE id=?").run(unrelated);
+  if(answer==='both') assert.equal(basis(),before);
+  else assert.notEqual(basis(),before);
+  await callTool('answer',{operation:'confirm',...args},s.ctx);
+  assert.equal(getItem(db,unrelated).status,answer==='both'?'pending':'answered');
+ });
+}
