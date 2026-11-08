@@ -85,6 +85,10 @@ test('every table value is a .fx-fig span registered under a blk: key with its u
   const want = new Set(figs.filter((f) => f.unit).map((f) => JSON.stringify([f.value, f.unit, f.label, f.source, f.asOf])));
   const got = new Set([...registered.values()].filter((r) => r.unit).map((r) => JSON.stringify([r.value, r.unit, r.label, r.source, r.asOf])));
   for (const w of want) assert.ok(got.has(w), `registered ${w}`);
+  // ...and its provenance, unchanged.
+  for (const f of figs.filter((x) => x.unit)) {
+    assert.ok([...registered.values()].some((r) => r.label === f.label && JSON.stringify(r.provenance) === JSON.stringify(f.provenance)), `provenance of ${f.label}`);
+  }
   // No digit is printed outside a figure span in the table body (labels and text cells hold none).
   const outside = html.split('<tbody')[1].replace(/<span class="fx-fig[\s\S]*?<\/span>/g, '').replace(/<[^>]+>/g, '');
   assert.doesNotMatch(outside, /\d/);
@@ -104,6 +108,7 @@ test('row numbers register with their row as provenance', () => {
     assert.equal(hit.source, r.row.account);
     assert.equal(hit.asOf, r.row.date);
     assert.equal(hit.label, r.row.description);
+    assert.deepEqual(hit.provenance, { row: r.row });
   }
 });
 
