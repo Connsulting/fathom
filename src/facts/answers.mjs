@@ -26,6 +26,8 @@ function validate(value, shape, year) {
   } else if (shape.type === 'years') {
     if (!Array.isArray(value) || !value.length || value.length > shape.maxItems
       || value.some(y => !Number.isInteger(y) || y < shape.min || y > shape.max)) fail();
+  } else if (shape.type === 'string') {
+    if (typeof value !== 'string' || !value.trim() || value.length > 200) fail();
   } else if (shape.type === 'boolean') {
     if (typeof value !== 'boolean') fail();
   } else if (shape.type === 'number') {
@@ -78,6 +80,7 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
         value = { ...Object.fromEntries(keep), ...value };
       }
     }
+    if (a.key === 'income.payrollYtd' && Object.values(value).some(v => v.asOf > date)) fail();
     if (a.key === 'obligations.mortgage' && value.escrowMonthly >= value.monthlyPayment) fail();
     if (/^household\.(owner|spouse)BirthDate$/.test(a.key) && value > date) fail();
     if (a.key === 'business.salaryRange' && value.min > value.max) fail();

@@ -41,9 +41,9 @@ test('AC1: one unreadable paystub leaves partial federal, state and downstream f
     assert.equal(f.locator.partial, true, key);
     assert.match(f.label, /partial/i);
     assert.ok(f.locator.notes.some(n => /Cedar Labs.*not included.*year-to-date/i.test(n)), key);
-    assert.ok(f.locator.inputs || f.locator.rows, 'figure retains its calculation provenance');
+    assert.ok(f.locator.inputs || f.locator.rows || f.locator.parts, 'figure retains its calculation provenance');
   }
-  assert.equal(fed.locator.inputs.w2.reduce((sum, r) => sum + r.agi, 0), 120000);
+  assert.equal(fed.locator.parts.wages.reduce((sum, r) => sum + r.agi, 0), 120000);
   const rec = buildScenario(db).recs.find(r => r.id === 'missing-data');
   assert.match(JSON.stringify(rec), /Cedar Labs/);
   assert.doesNotMatch(JSON.stringify(rec), /tax projections are on hold/);
@@ -101,7 +101,7 @@ test('AC4: per-period gross uses recorded pay-period dates and carries its infer
   assert.equal(r.ytdWages, 31500);
   assert.equal(r.payrollProvenance.assumption, true);
   assert.ok(projection(db).locator.notes.some(n => /Cedar Labs.*gross.*pay periods/i.test(n)));
-  assert.ok(!projection(db).locator.partial);
+  assert.ok(projection(db).locator.gaps.some(g => g.code === 'paystub_gross_assumed'));
 });
 
 test('AC5: scripted Ask records YTD with a receipt, removes the partial mark, and Undo restores it', async () => {
@@ -126,11 +126,12 @@ test('AC5: scripted Ask records YTD with a receipt, removes the partial mark, an
   assert.equal(projection(db).locator.partial, true);
 });
 
-test('AC6: no usable income stays held, zero wages remain usable, and net never supplies gross', async () => {
+test('AC6 amended: no usable income gives a rough estimate, zero wages remain usable, and net never supplies gross', async () => {
   const db = await s.store({ variant: { files: false, entities: [], priorReturn: false, facts: { 'household.dependents': 0 } } });
   await addPayroll(db, paystubDoc({ ...poor, person: 'owner', relation: 'outside' }));
   await planRun(db);
-  assert.equal(figureRow(db, 'tax.fed.proj'), null);
+  assert.equal(figureRow(db, 'tax.fed.proj').v, 0);
+  assert.equal(figureRow(db, 'tax.fed.proj').locator.rough, true);
   assert.equal(payroll(db).records.length, 0);
   await addPayroll(db, paystubDoc({ employerName: 'Zero Works', person: 'owner', relation: 'outside', payDate: '2026-10-31', ytdGross: 0 }));
   await planRun(db);

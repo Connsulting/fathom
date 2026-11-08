@@ -1,7 +1,7 @@
 import { cents, parseJson } from '../store/db.mjs';
 import { upsertFact } from '../store/facts.mjs';
 import { resolveEntities } from '../jobs/planner/data.mjs';
-import { docRecipient, payrollRecords, sameEmployer } from '../jobs/planner/payroll.mjs';
+import { docRecipient, payrollRecords, sameEmployer, inferHouseholdEmployer } from '../jobs/planner/payroll.mjs';
 import { TAX_2026 } from '../calc/index.mjs';
 import { activeInference } from '../shared/va529-plan.mjs';
 import { isCollegeAccount } from '../shared/account-kinds.mjs';
@@ -10,6 +10,7 @@ export const ADVISOR_KEYS = new Set(['retirement.planTermsConfirmed', 'retiremen
 export const DEFAULT_UNDO = Object.freeze({
   'household.filingStatusDefault': 'household.filingStatus',
   'business.cashBasisDefault': 'business.cashBasis',
+  'business.entitiesDefault': 'business.entities',
   'accounts.va529CarryforwardDefault': 'accounts.va529',
 });
 const amount = v => typeof v === 'number' && Number.isFinite(v) && v >= 0;
@@ -40,7 +41,7 @@ export function deriveRecFacts(data, facts = {}, { entities = [] } = {}) {
   }
   if (wageRows.length) out['retirement.priorYearFicaWages'] = sourceFact(data, wages, 'Prior-year sponsor W-2 box three, by recipient', wageRows);
 
-  const payroll = payrollRecords(data, entities, {});
+  const payroll = payrollRecords(data, entities, facts);
   const other = {};
   const otherRows = [];
   for (const person of ['owner', 'spouse']) {
@@ -99,9 +100,15 @@ export function prepareRecFacts(db, data) {
   for (const [key, row] of Object.entries(stored)) if (automatic(row)) {
     delete values[key];
   }
-  const entities = resolveEntities(data, values);
+  let entities = resolveEntities(data, values);
+  const employer = inferHouseholdEmployer(data, values, entities);
+  if (employer) { values['business.entities'] = employer.value; entities = resolveEntities(data, values); }
   const candidates = deriveRecFacts(data, values, { entities });
   const defaults = [];
+  if (employer) {
+    candidates['business.entities'] = sourceFact(data, employer.value, employer.evidence, employer.rows, true);
+    defaults.push({ key: 'business.entities', path: [], value: employer.value, undoKey: 'business.entitiesDefault', evidence: employer.evidence });
+  }
   const addDefault = (key, value, undoKey, evidence, path = []) => {
     const flag = values[undoKey];
     if (path.length ? flag?.[path[0]]?.undone : flag === true) return;
@@ -126,7 +133,7 @@ export function prepareRecFacts(db, data) {
   const writes = [];
   for (const [key, candidate] of Object.entries(candidates)) {
     const row = stored[key];
-    if (row && !automatic(row)) continue;
+    if (row && !automatic(row) && !(key === 'business.entities' && Array.isArray(row.value) && row.value.length === 0)) continue;
     values[key] = candidate.value;
     writes.push({ key, ...candidate });
   }
@@ -137,7 +144,10 @@ export function prepareRecFacts(db, data) {
     for (const key of deletes) changed += db.prepare("DELETE FROM facts WHERE key = ? AND src LIKE 'derived:%' AND confirmed = 0").run(key).changes;
     if (writes.length) db.prepare('INSERT OR IGNORE INTO sources (id, label, as_of, kind, note) VALUES (?, ?, ?, ?, ?)')
       .run(`derived:${data.clock}`, 'Derived from stored data and stated assumptions', data.clock, 'derived', '');
-    for (const w of writes) if (upsertFact(db, { ...w, confirmed: false }).changed) changed++;
+    for (const w of writes) {
+      if (w.key === 'business.entities' && employer) db.prepare("DELETE FROM facts WHERE key = 'business.entities' AND value = '[]'").run();
+      if (upsertFact(db, { ...w, confirmed: false }).changed) changed++;
+    }
     return changed;
   } };
 }

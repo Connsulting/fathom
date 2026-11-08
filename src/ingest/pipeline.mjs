@@ -18,7 +18,7 @@ import { header as headerText, cents, institution, isoDate, LimitError } from '.
 import { readTable, mapTabular, isZip, sourceKindOf as mappedSourceKind, id as MAPPED_ID, label as MAPPED_LABEL } from './mapping.mjs';
 import { extractDocument, isPdf, plainText, labelOf } from './extract.mjs';
 import {
-  ask, recordFact, archive, normalizeName, OWNER_OPTIONS, KIND_OPTIONS, NEAR_DUPLICATE_OPTIONS, EMPLOYER_OPTIONS, taxYearOptions,
+  ask, recordFact, archive, normalizeName, CONFIDENCE_FLOOR, OWNER_OPTIONS, KIND_OPTIONS, NEAR_DUPLICATE_OPTIONS, EMPLOYER_OPTIONS, taxYearOptions,
   withholdingRecipient, withRecipient, recipientPayer, summarizeSlot, conflictPayer, conflictAsked, askConflict, askSlotConflict,
 } from './confirm.mjs';
 import { storeFile, readStoredFile, openVault } from './vault.mjs';
@@ -142,6 +142,30 @@ export async function retryFile(db, fileId, opts = {}) {
   }
 }
 
+export async function retryIncompletePaystubs(db, { household, engine, now, taxYear }) {
+  if (!household?.vault || household.db !== db) return;
+  const docs = db.prepare("SELECT d.*, f.name, f.mime, f.stored_path FROM documents d JOIN files f ON f.id = d.file_id WHERE d.doc_type = 'paystub' AND f.removed_at IS NULL").all();
+  for (const doc of docs) {
+    const fields = parseJson(doc.fields, {}), locator = parseJson(doc.locator, {});
+    if (Number(fields.payDate?.slice(0, 4)) !== taxYear || fields.payDate > now.slice(0, 10)
+      || !(fields.confidence < CONFIDENCE_FLOOR) || (Number.isFinite(fields.gross) && Number.isFinite(fields.ytdGross)) || locator.paystubRetry) continue;
+    if (household.inFlight.has(doc.file_id)) continue;
+    household.inFlight.add(doc.file_id);
+    try {
+      const vault = await openVault(household);
+      const bytes = await readStoredFile({ vault, id: doc.file_id, storedPath: doc.stored_path, purpose: 'upload' });
+      const plan = await planFile(db, doc.file_id, { name: doc.name, mime: doc.mime, bytes: toBytes(bytes) }, { household, engine, now, docType: 'paystub' });
+      const fresh = plan.parsed?.rows.find(r => r.kind === 'document' && r.docType === 'paystub')?.fields;
+      const same = fresh && fresh.payDate === fields.payDate && normalizeName(fresh.employerName) === normalizeName(fields.employerName);
+      const updated = same ? { ...fields, ...fresh } : fields;
+      db.prepare('UPDATE documents SET fields = ?, locator = ? WHERE id = ?').run(JSON.stringify(updated), JSON.stringify({ ...locator,
+        paystubRetry: { attemptedAt: now, status: same ? 'extracted' : plan.status, parser: plan.parser ?? null } }), doc.id);
+    } catch {
+      db.prepare('UPDATE documents SET locator = ? WHERE id = ?').run(JSON.stringify({ ...locator, paystubRetry: { attemptedAt: now, status: 'failed' } }), doc.id);
+    } finally { household.inFlight.delete(doc.file_id); }
+  }
+}
+
 async function route(db, fileId, file, opts) {
   let out;
   try {
@@ -212,7 +236,7 @@ async function planFile(db, fileId, file, opts) {
   }
   if (isZip(file.bytes) || /\.xlsx$/i.test(file.name ?? '')) return { status: 'unsupported', warnings: [{ code: 'unsupported_workbook', locator: {} }] };
   if (isPdf(file) || plainText(file) !== null) {
-    const ex = await extractDocument(engine, file, { households: { entities: householdEntities(db) }, fileId });
+    const ex = await extractDocument(engine, file, { docType: opts.docType, households: { entities: householdEntities(db) }, fileId });
     if (ex.status !== 'imported') return { status: 'needs_extraction', extractPath: ex.extractPath, note: ex.reason === 'pdf_unreadable' ? 'pdf_unreadable' : null };
     return {
       status: 'imported', parser: `extract-${ex.docType}`, label: labelOf(ex.docType), sourceKind: ex.sourceKind,

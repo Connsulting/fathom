@@ -7,6 +7,8 @@
 //
 // runPlanning(db, engine, {now, packDirs, runId}) -> {runId, status, counts, warnings, costUsd}
 
+import { retryIncompletePaystubs } from '../ingest/pipeline.mjs';
+import { planningYear } from './planner/data.mjs';
 import { looksLikeSpending, spendingStatement } from '../pnl/ledgers.mjs';
 import { getSetting, tx, parseJson } from '../store/db.mjs';
 import { withLabelHints } from '../accounts/naming.mjs';
@@ -59,11 +61,12 @@ function storedFacts(db) {
   return out;
 }
 
-async function run(db, engine, { now, packDirs, runId }) {
+async function run(db, engine, { now, packDirs, runId, household }) {
   if (getSetting(db, 'mode', null) === 'demo') throw new PlannerError('demo_store', 'planning runs on real stores only');
   const claim = db.prepare('SELECT job_id, status FROM job_runs WHERE id = ?').get(runId);
   if (claim?.job_id !== PLAN_JOB_ID || claim.status !== 'running') throw new PlannerError('invalid_run', 'runId must identify a running local plan claim');
   const clock = resolveClock(db, isoDateOf(now));
+  await retryIncompletePaystubs(db, { household, engine, now: clock, taxYear: planningYear(clock) });
   return plan(db, engine, { clock, runId, packDirs: packDirs ?? defaultPackDirs() });
 }
 
@@ -80,6 +83,10 @@ async function plan(db, engine, { clock, runId, packDirs }) {
   const owner = ownerFactsOf(stored);
   const storedValues = Object.fromEntries(Object.entries(stored).map(([k, r]) => [k, r.value]));
   const entities = resolveEntities(data, storedValues);
+  for (const e of entities) {
+    const type = Object.entries(storedValues['business.entityTypes'] || {}).find(([name]) => name.trim().toLowerCase() === e.name.toLowerCase())?.[1];
+    if (type && !e.classified) { e.type = type; e.classified = true; }
+  }
 
   const candidates = entities.filter(e => looksLikeSpending(e, storedValues));
   const ledgerChecks = candidates.length ? [{

@@ -1,3 +1,4 @@
+import { taxGap, rankGaps, TAX_GAP_RULES } from '../../shared/tax-gaps.mjs';
 // Figures: every amount the planner shows, computed by deterministic code from the data and the
 // merged facts, each with a kind (a actual, p projected, e estimate, m model output), a source and
 // a locator (data rows, or the calculator inputs and steps). Labels carry no digits.
@@ -73,7 +74,7 @@ export function decidedSalary(owner, slug) {
 export function createOut(clock) {
   const out = {
     clock, figures: {}, sources: {}, warnings: new Set(), model: {},
-    info: { confirm: {}, blocked: [], calcFailed: [], withheld: {}, wargameInvalid: {} },
+    info: { gaps: [], payroll: [], confirm: {}, blocked: [], calcFailed: [], withheld: {}, wargameInvalid: {} },
   };
   out.warn = code => out.warnings.add(code);
   out.source = (id, label, asOf, kind) => { out.sources[id] = { label, asOf, kind }; };
@@ -266,9 +267,11 @@ export function computeFigures(data, facts, ctx) {
   out.info.heldReasons = [];
   const holdPayment = (part, keys) => {
     if (!part.blocked) return false;
-    out.withhold(keys, part.blocked);
-    if (!out.info.heldReasons.includes(part.blocked)) out.info.heldReasons.push(part.blocked);
-    return true;
+    const code = part.blocked;
+    out.info.gaps.push({ code, message: 'Unresolved tax payments or withholding are excluded until their source is clarified.',
+      action: { screen: 'upload', kind: code === 'tax_year_unconfirmed' || code === 'tax_payment_kind_unknown' ? 'estimates' : 'taxforms', label: 'Upload the clarified tax record' }, rough: false, impact: null });
+    part.blocked = null;
+    return false;
   };
   if (pay.lastPaidDate) out.source('tax-payments', SOURCES['tax-payments'].label, `through ${monthLabel(pay.lastPaidDate.slice(0, 7))}`, SOURCES['tax-payments'].kind);
   const putPaid = (key, label, part, shKeys) => {
@@ -288,14 +291,14 @@ export function computeFigures(data, facts, ctx) {
   const payroll = payrollRecords(data, entities, owner);
   const records = payroll.records;
   out.info.payrollBlocks = payroll.blocks.map(b => ({ code: b.code, employer: b.employer }));
+  out.info.payroll = records.map(r => ({ employer: r.employer, person: r.person, docIds: r.docIds, wages: r.wages, ytdWages: r.ytdWages, ...r.payrollProvenance }));
   out.info.ask = payroll.ask;
-  for (const b of payroll.blocks) if (!b.person || inUnit(b.person)) blocked.push(b.code);
+  for (const b of payroll.blocks) if (!b.person || inUnit(b.person)) out.info.gaps.push(taxGap(b.code, b));
   // inc.ytd.w2 (F8): outside-employer pay received in the tax year: W-2 box 1, or the latest
   // paystub's year-to-date gross. Held while any payroll document is unresolved.
   const outsideYtd = records.filter(r => !r.household);
   const section125 = records.some(r => inUnit(r.person) && r.section125Unknown) ? ['section125_unknown'] : [];
-  if (payroll.blocks.length) out.withhold(['inc.ytd.w2', 'room.hsa'], payroll.blocks[0].code);
-  else if (outsideYtd.length) {
+  if (outsideYtd.length) {
     out.source('docs', SOURCES.docs.label, dateLabel(clock), SOURCES.docs.kind);
     const label = outsideYtd.some(r => r.projected) ? 'Outside employer gross pay received this year' : 'Outside employer wages received this year';
     out.put('inc.ytd.w2', sum(outsideYtd.map(r => r.ytdWages)), 'a', label, 'docs',
@@ -361,7 +364,7 @@ export function computeFigures(data, facts, ctx) {
       w2.push({ person: r.person, src, gross: r.medicare, comp: r.comp, agi: r.wages });
       continue;
     }
-    if (r.household) continue;
+    if (r.household && r.corp) continue;
     w2.push({ person: r.person, src: 'outside', gross: r.medicare, comp: r.comp, agi: r.wages });
   }
   for (const e of pnlEntities) {
@@ -482,9 +485,11 @@ export function computeFigures(data, facts, ctx) {
 
   const itemized = typeof owner['tax.itemizedEstimate'] === 'number' ? owner['tax.itemizedEstimate'] : 0;
   const vaItemized = typeof owner['tax.vaItemizedEstimate'] === 'number' ? owner['tax.vaItemizedEstimate'] : null;
-  const vaBlocked = !isVa ? null
+  const vaGap = !isVa ? null
     : itemized > stdDeduction(f) && vaItemized == null ? 'va_itemized_missing'
       : out.info.va529.missing.length ? 'va529_answers_missing' : null;
+  const vaBlocked = null;
+  if (vaGap) out.info.gaps.push(taxGap(vaGap));
   // Dependent ages: from the birth years the owner told us, else the dependent ages a note or the
   // seed recorded (the pack gates read that fact too).
   const ages = Array.isArray(birthYears?.dependents) ? birthYears.dependents.map((_, i) => ageAtYearEnd(birthYears, { dependent: i }, data.year)).filter(a => a !== null)
@@ -505,6 +510,15 @@ export function computeFigures(data, facts, ctx) {
     ...(typeof qbiCarry === 'number' && Number.isFinite(qbiCarry) && qbiCarry >= 0 ? { qbiLossCarryforward: qbiCarry } : {}),
   };
   const hasIncome = biz.length > 0 || w2.length > 0;
+  if (!hasIncome) out.info.gaps.push(taxGap('no_income_inputs'));
+  if (out.warnings.has('filing_status_assumed')) out.info.gaps.push(taxGap('filing_status_assumed'));
+  for (const code of blocked.filter(code => code !== 'mfs_unsupported')) {
+    const entity = entities.find(e => e.slug === code.split(':')[1]);
+    out.info.gaps.push(taxGap(code, { employer: entity?.displayName || entity?.name || out.info.partnershipsMissing?.join(', ') || undefined,
+      impact: entity?.sums ? Math.abs(entity.proj(entity.sums.net)) : null }));
+  }
+  blocked.splice(0, blocked.length, ...blocked.filter(code => code === 'mfs_unsupported'));
+
 
   // Self-employment tax, computed on its own so retirement sizing never depends on the household
   // tax result (R3-6).
@@ -537,15 +551,25 @@ export function computeFigures(data, facts, ctx) {
   // plan deduction, MG5, R2-3, R3-2, comes from that validation).
   let run = null;
   let hh = null;
-  if (hasIncome && !blocked.length) {
+  if (!blocked.length) {
     run = out.safe('householdTax', () => householdTax(parts));
     if (!run) out.info.blocked = ['calc_failed'];
     else {
       for (const w of run.warnings) out.warn(w);
       if (run.blocked) {
-        out.info.blocked = [run.blocked];
-        out.warn(run.blocked);
-        if (run.blocked === 'retirement_other_deferrals_missing') out.confirm('retirement', 'retirement.otherPlanDeferrals');
+        const code = run.blocked;
+        out.info.gaps.push(taxGap(code));
+        out.warn(code);
+        if (code === 'ctc_refundable_unsupported') hh = run;
+        else {
+          const assumed = { ...parts, retirement: Object.fromEntries(persons.map(p => [p, { ...parts.retirement[p], byPlan: {} }])) };
+          run = out.safe('householdTax', () => householdTax(assumed));
+          if (run && (!run.blocked || run.blocked === 'ctc_refundable_unsupported')) {
+            if (run.blocked) out.info.gaps.push(taxGap(run.blocked));
+            parts.retirement = assumed.retirement;
+            hh = run;
+          } else out.info.blocked = [run?.blocked || 'calc_failed'];
+        }
       } else hh = run;
     }
   }
@@ -621,7 +645,7 @@ export function computeFigures(data, facts, ctx) {
     }
     if (run) iraRoom(out, { seInfo, persons, w2, biz, retireByBiz: run.retireByBiz, contrib, ageOf, f });
   }
-  if (!payroll.blocks.length) hsaRoom(out, { facts, owner, records, hsaPersonal, hsaAccts, ageOf, ageKey, inUnit });
+  hsaRoom(out, { facts, owner, records, hsaPersonal, hsaAccts, ageOf, ageKey, inUnit });
   if (hh && isVa && hh.va != null && college.some(c => c.capped || c.age70)) va529Figures(out, { hh, parts, college });
   incomeTotal(out);
 
@@ -736,6 +760,19 @@ function incomeTotal(out) {
 }
 
 function finish(out) {
+  const gaps = rankGaps(out.info.gaps.filter((gap, i, all) => all.findIndex(g => g.code === gap.code && g.employer === gap.employer && g.person === gap.person) === i));
+  out.info.gaps = gaps;
+  out.info.partial = gaps.length > 0;
+  out.info.rough = gaps.some(g => g.rough);
+  for (const f of Object.values(out.figures)) {
+    if (!/^(agi\.|tax\.|sh\.|room\.|wg\.|va529\.(deduction|taxSaved)|inc\.ytd\.(w2|total))/.test(f.key)) continue;
+    const dependent = !/^(tax\.[^.]+\.(paid|withheld)|sh\.fed\.priorTarget)$/.test(f.key);
+    const applicable = dependent ? gaps : [];
+    f.locator = { ...f.locator, completeness: applicable.length ? `estimate with ${applicable.length} gaps` : 'complete',
+      partial: applicable.length > 0, rough: dependent && out.info.rough, gaps: applicable,
+      payroll: dependent ? out.info.payroll : [], notes: [...applicable.map(g => g.message), ...(f.locator.notes || [])] };
+    if (applicable.length) f.label += out.info.rough ? ' (rough partial estimate)' : ' (partial estimate)';
+  }
   return { tax: out.tax || null, figures: out.figures, sources: out.sources, model: out.model, warnings: [...out.warnings].sort(), info: out.info };
 }
 

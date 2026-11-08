@@ -1,3 +1,4 @@
+import { TAX_GAP_RULES, taxGap, rankGaps } from '../../shared/tax-gaps.mjs';
 // Missing data: stale or missing sources, unclassified businesses, blocked figures and missing
 // tax inputs (R1, R14, R19, T9.5). Evaluated last so it sees every other trigger's block.
 
@@ -95,7 +96,7 @@ export function classify(task, code, answerKey) {
   if (/^(Tell us|Enter|Confirm)\b/.test(task)) return { kind: 'question', link: 'ask' };
   return { kind: 'check', link: 'ask' };
 }
-const withKind = item => ({ ...item, ...classify(item.task, item.code, item.answerKey) });
+const withKind = item => ({ ...item, ...classify(item.task, item.code, item.answerKey), fix: item.fix || fixForCode(item.code) });
 
 // `name` formats a data-derived name: dataText for stored rec HTML, plain for a plain-text reason.
 function reasonItem(ctx, reason, name = dataText) {
@@ -103,6 +104,12 @@ function reasonItem(ctx, reason, name = dataText) {
 }
 
 function rawReasonItem(ctx, reason, name) {
+  const gap = ctx.info?.gaps?.find(g => g.code === reason);
+  if (gap) return gapItem(gap, name);
+  if (TAX_GAP_RULES[reason]) {
+    const who = ctx.info?.payrollBlocks?.filter(b => b.code === reason).map(b => b.employer).filter(Boolean).join(', ') || undefined;
+    return gapItem(taxGap(reason, { employer: who }), name);
+  }
   if (reason.startsWith('entity_unclassified:')) {
     const slug = reason.slice('entity_unclassified:'.length);
     const e = (ctx.entities || []).find(x => x.slug === slug);
@@ -137,7 +144,7 @@ export function reasonText(ctx, code) {
 }
 
 export function items(ctx) {
-  const out = [];
+  const out = rankGaps(ctx.info?.gaps || []).map(g => gapItem(g));
   const business = BUSINESS_FACTS.some(k => ctx.facts[k] === true);
   const stale = staleAccountIds(ctx.data?.accounts ?? []);
   for (const s of ctx.freshness || []) {
@@ -159,7 +166,7 @@ export function items(ctx) {
   const reasons = [...(ctx.info.blocked || []), ...(ctx.info.heldReasons || []), ...(ctx.blockedReasons || []).map(b => b.reason)];
   for (const r of reasons) if (!ADVISOR_KEYS.has(r)) out.push(reasonItem(ctx, r));
   const seen = new Set();
-  return out.filter(i => (seen.has(i.code) ? false : (seen.add(i.code), true)));
+  return out.filter(i => (seen.has(i.code) ? false : (seen.add(i.code), true))).map(i => ({ ...i, fix: i.fix || fixForCode(i.code) }));
 }
 
 // The earliest hard window among the estimates the data blocks, else two weeks out.
@@ -181,7 +188,7 @@ export function evaluate(ctx) {
     const candidates = (ctx.data?.confirm ?? []).filter(item => !employers.length || employers.includes(normalizeName(item.context?.employer)) || files.includes(item.fileId));
     const confirmId = /\bin Confirm$/.test(i.task) ? confirmItemFor(i.code, candidates)?.id : null;
     return { ...i, answerKey, ...(confirmId ? { confirmId } : {}), ...(answerKey ? { kind: 'question', link: 'ask' } : {}) };
-  }).filter(i => (!i.answerKey || !ctx.questionKeys?.has(i.answerKey)) && (!i.answerKey || !questionFor([i.answerKey], { accounts: ctx.data?.accounts || [], facts: ctx.facts }).answered));
+  }).filter(i => (i.fix || !i.answerKey || !ctx.questionKeys?.has(i.answerKey)) && (!i.answerKey || !questionFor([i.answerKey], { accounts: ctx.data?.accounts || [], facts: ctx.facts }).answered));
   if (!list.length) return null;
   const questions = [...new Set(list.map(i => i.answerKey).filter(Boolean))];
   const answers = questions.length ? list.every(i => i.answerKey) ? { confirm: questions } : { questions } : {};
@@ -215,6 +222,7 @@ export function listTitle(list) {
 // every other step the item code, which clears when the planner no longer finds the item. Each
 // carries where it is done: an upload, the exact Confirm question, or Ask with this rec attached.
 export function stepOf(i) {
+  if (i.fix) return { t: i.task, kind: i.fix.screen === 'upload' ? 'upload' : 'answer', code: i.code, link: i.fix.screen, fix: i.fix, optional: true };
   if (i.answerKey) return { t: i.task, kind: 'answer', fact: i.answerKey };
   if (i.kind === 'upload') return { t: i.task, kind: 'upload', code: i.code, noun: i.noun, link: 'upload', ...(i.accountIds ? { accountIds: i.accountIds } : {}) };
   if (/\bin Confirm$/.test(i.task)) return { t: i.task, kind: 'confirm', code: i.code, link: i.confirmId ? 'confirm' : 'ask', ...(i.confirmId ? { confirmId: i.confirmId } : {}) };
@@ -224,7 +232,7 @@ export function stepOf(i) {
 
 export function build(ctx, hit) {
   return {
-    title: listTitle(hit.items),
+    title: hit.items.some(i => i.optional) ? 'Improve the precision of your estimates' : listTitle(hit.items),
     effort: 'A few minutes',
     value: [{ cls: 'risk', text: 'Keeps every figure on your plan current' }],
     mine: [],
@@ -235,9 +243,9 @@ export function build(ctx, hit) {
 
 export function template(ctx, hit) {
   return {
-    summary: 'Update the missing data so the parts of your plan that are on hold can update.',
+    summary: 'Your estimates use the information on file. These optional improvements would make them more precise, with the largest income gaps first.',
     why: hit.items.slice(0, 4).map(i => i.text),
-    qa: [{ q: 'What happens to recommendations in the meantime?', a: ['They keep their last figures and wait for the data. Nothing is retired because a file is late.'] }],
+    qa: [{ q: 'What happens to recommendations in the meantime?', a: ['Tax estimates continue using stated assumptions and the income on file. Each gap names the change that would improve precision.'] }],
   };
 }
 
@@ -245,5 +253,26 @@ export function template(ctx, hit) {
 // it and the link to where it is done. Built from the same reason text the missing-data rec lists.
 export function blockerOf(ctx, code) {
   const item = reasonItem(ctx, code, v => String(v));
-  return { code, text: item.text, task: item.task, link: item.link };
+  return { code, text: item.text, task: item.task, link: item.link, ...(item.fix ? { fix: item.fix } : {}) };
+}
+
+function gapItem(gap, name = dataText) {
+  return { code: gap.code, tax: true, text: name(gap.message), task: `${gap.action.label}${gap.employer && gap.employer !== 'this business' ? ` for ${name(gap.employer)}` : ''}`,
+    kind: gap.action.screen === 'upload' ? 'upload' : 'question', link: gap.action.screen, fix: gap.action, optional: true, impact: gap.impact };
+}
+
+const SOURCE_FIXES = Object.freeze({ balances: 'bank', transactions: 'aggregator', pnl: 'pnl', tax_payments: 'estimates', prior_year_missing: 'taxforms',
+  tax_payment_kind_unknown: 'estimates', tax_year_unconfirmed: 'estimates', estimated_payer_unknown: 'estimates', withholding_state_unknown: 'taxforms',
+  withholding_recipient_unknown: 'taxforms', withholding_conflict_pending: 'taxforms', calc_failed: 'taxforms',
+  wargame_contribution_over_limit: 'taxforms', wargame_salary_contribution_over_limit: 'taxforms', inputs_changed: 'taxforms' });
+export const MISSING_TASK_CODES = Object.freeze([...new Set([...Object.keys(REASONS), ...Object.keys(PAYROLL_NAMED), ...Object.keys(TAX_GAP_RULES),
+  ...Object.keys(SOURCE_FIXES), 'entity_unclassified', 'filing_status_assumed'])]);
+export function fixForCode(code) {
+  const base = code.split(':')[0];
+  if (TAX_GAP_RULES[base]) return { ...TAX_GAP_RULES[base].fix };
+  const key = base === 'mfs_unsupported' ? 'household.filingStatus' : base === 'ira_room_missing' ? 'household.birthYears' : code;
+  if (Object.hasOwn(ANSWER_SHAPES, key)) return { screen: 'ask', key, label: 'Enter the missing answer', prompt: `Help me record ${key}. Ask me for the missing information.` };
+  const kind = SOURCE_FIXES[base];
+  if (kind) return { screen: 'upload', kind, label: 'Upload the updated record' };
+  throw new TypeError(`No missing-data fix for ${code}`);
 }

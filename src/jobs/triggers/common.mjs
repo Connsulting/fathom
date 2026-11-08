@@ -96,6 +96,12 @@ export const ANSWER_SHAPES = Object.freeze({
   'accounts.separationDate': { scope: 'account', accountEligibility: 'employer', type: 'date', label: 'Separation date for {account}' },
 
   'household.filingStatusDefault': { scope: 'household', ...yesNo('Undo the joint filing assumption?') },
+  'business.entitiesDefault': { scope: 'household', ...yesNo('Undo the inferred household business?') },
+  'business.employerEntity': { scope: 'household', type: 'map', label: 'Household business by employer name', values: { type: 'string', label: 'Business name' } },
+  'business.entityTypes': { scope: 'household', type: 'map', label: 'Business tax types', values: { type: 'choice', ownerInterpreted: true, label: 'Tax type', choices: ['s_corp', 'sole_prop', 'llc_single', 'partnership', 'c_corp'].map(value => ({ value, label: value })) } },
+  'income.payrollRecipient': { scope: 'household', type: 'map', label: 'Payroll recipient by employer', values: { type: 'choice', label: 'Recipient', choices: [{ value: 'owner', label: 'You' }, { value: 'spouse', label: 'Spouse' }] } },
+  'income.employerRelation': { scope: 'household', type: 'map', label: 'Employer relationship', values: { type: 'choice', label: 'Relationship', choices: [{ value: 'household', label: 'Household business' }, { value: 'outside', label: 'Outside employer' }] } },
+  'income.payrollYtd': { scope: 'household', type: 'map', label: 'Year-to-date gross by employer', values: { type: 'object', fields: { person: { type: 'choice', label: 'Whose pay?', choices: [{ value: 'owner', label: 'You' }, { value: 'spouse', label: 'Spouse' }] }, asOf: { type: 'date', label: 'Pay date' }, ytdGross: dollars('Year-to-date gross pay') } } },
   'business.cashBasisDefault': { scope: 'household', ...yesNo('Undo the cash-basis assumption?') },
   'accounts.va529CarryforwardDefault': { scope: 'account', accountKind: '529', type: 'object', fields: { undone: yesNo('Undo the carryforward assumption?') } },
   'pnl.ledgers': { scope: 'household', type: 'map', label: 'Which imported ledgers are spending or businesses?', values: {
