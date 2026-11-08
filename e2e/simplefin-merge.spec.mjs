@@ -55,7 +55,7 @@ test('Confirm shares the repair question and Keep both clears the Money warning 
   const card=page.locator(`[data-item="${q.id}"]`);
   await expect(card).toContainText('Same account?');
   await card.getByRole('button',{name:/Keep both/}).click();
-  await gotoRoute(page,'accounts');
+  await gotoRoute(page, 'money');
   await expect(page.locator('[data-account-duplicates]')).toHaveCount(0);
   expect(await total(request), 'Keep both leaves both accounts in the total').toBe(before);
 });
