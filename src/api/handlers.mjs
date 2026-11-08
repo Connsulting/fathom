@@ -1,3 +1,4 @@
+import { setPackActive, packIsActive } from '../packs/state.mjs';
 import { writePreference } from '../actions/preferences.mjs';
 import { randomUUID } from 'node:crypto';
 import { requireActor, undoAction, ensureActionConversation, receiptsFor, receiptMessages } from '../actions/receipts.mjs';
@@ -32,7 +33,7 @@ import { queueAccountPairs } from '../ingest/account-merge.mjs';
 
 import { getSetting, setSetting, schemaVersion, listMigrations, tx, cents, parseJson as parse } from '../store/db.mjs';
 import { buildScenario, clockNow, loadContent, defaultPicks, wargameLists } from '../scenario/build.mjs';
-import { ACTION_STATUS, packStatus } from '../shared/rules.mjs';
+import { ACTION_STATUS } from '../shared/rules.mjs';
 import { OWNERS, isOwner } from '../shared/rec-links.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
 import { wrapBlocks } from '../shared/answer-text.mjs';
@@ -313,43 +314,10 @@ export function decisionRevisit(ctx) {
   return { scenario: scenarioOf(ctx) };
 }
 
-const packActive = row => (row.active == null ? parse(row.def, {}).status === 'active' : !!row.active);
-
 export function packToggle(ctx) {
-  const { db } = ctx;
-  const row = packRow(db, ctx.params.id);
-  const def = parse(row.def, {});
-  const turnOn = !packActive(row);
-  const statusOf = db.prepare('SELECT status FROM recs WHERE id = ?');
-  const setStatus = db.prepare('UPDATE recs SET status = ?, updated_at = ? WHERE id = ?');
-  tx(db, () => {
-    const unhid = [];
-    if (turnOn) {
-      for (const rid of def.recIds || []) {
-        const r = statusOf.get(rid);
-        if (r && r.status === 'hidden') {
-          setStatus.run('proposed', nowIso(), rid);
-          recEvent(db, rid, 'pack_on', row.id, 'hidden', 'proposed');
-          unhid.push(rid);
-        }
-      }
-    } else {
-      const powered = new Set(db.prepare('SELECT * FROM packs_state WHERE id <> ?').all(row.id).filter(packActive)
-        .flatMap(o => parse(o.def, {}).recIds || []));
-      for (const rid of parse(row.unhid, [])) {
-        const r = statusOf.get(rid);
-        if (r && r.status === 'proposed' && !powered.has(rid)) {
-          setStatus.run('hidden', nowIso(), rid);
-          recEvent(db, rid, 'pack_off', row.id, 'proposed', 'hidden');
-        }
-      }
-    }
-    db.prepare('UPDATE packs_state SET active = ?, unhid = ?, updated_at = ? WHERE id = ?')
-      .run(turnOn ? 1 : 0, JSON.stringify(unhid), nowIso(), row.id);
-  });
-  const after = packRow(db, row.id);
-  const status = packStatus(def.status, { active: !!after.active, exploring: !!after.exploring });
-  return { scenario: scenarioOf(ctx), status, note: TOGGLE_NOTE };
+  const row = packRow(ctx.db, ctx.params.id);
+  const { pack } = setPackActive(ctx.db, row.id, !packIsActive(row));
+  return { scenario: scenarioOf(ctx), status: pack.status, note: TOGGLE_NOTE };
 }
 
 export async function packWhatIf(ctx) {
@@ -560,13 +528,15 @@ async function decideProposal(ctx, key, id, decision, ownerText) {
     const run = streaming(turn);
     const { pending } = claim;
     try {
-      const toolContext = { db, now: stamp(ctx), dataDir: ctx.household?.root, actorId: run.actorId,
+      const afterTools = [];
+      const toolContext = { queueAfterTools: task => afterTools.push(task), db, now: stamp(ctx), dataDir: ctx.household?.root, actorId: run.actorId,
         ownerText, turnId: run.turnId, replan: run.replan, queuePlan: run.queuePlan, conversationKey: key,
         recId: db.prepare('SELECT rec_id FROM conversations WHERE key = ?').get(key)?.rec_id ?? null, scopes: run.scopes, evidenceMessageId: id,
         channel: 'ask', household: ctx.household, services: ctx.household?.services };
       toolContext.ownerStatements = () => ownerStatements(toolContext);
       const result = await executeProposal(pending, toolContext);
-      reply = { paragraphs: [CONFIRMED_TEXT], refs: [], provenance: { actionTurn: run.turnId, confirmedProposal: 'm' + id,
+      for (const task of afterTools) await task();
+      reply = { paragraphs: [result?.undo?.available === false ? 'The refresh is queued. Its receipt records the outcome.' : CONFIRMED_TEXT], refs: [], provenance: { actionTurn: run.turnId, confirmedProposal: 'm' + id,
         tools: [{ name: pending.tool, args: { operation: pending.operation, ...pending.args }, result: JSON.parse(JSON.stringify(result ?? null)) }] } };
     } catch (e) {
       markProposal(db, id, 'stale', stamp(ctx));

@@ -98,6 +98,10 @@ export function recordSource(db, { id, label, kind, asOf, now } = {}) {
   return { id, asOf: latest };
 }
 
+export function listImportedFiles(db) {
+  return { files: db.prepare('SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files ORDER BY uploaded_at DESC, rowid DESC').all().map(fileOf) };
+}
+
 // A files row as the API returns it.
 export function fileOf(row) {
   return {

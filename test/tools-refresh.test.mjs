@@ -9,6 +9,7 @@ import { SCOPES } from '../src/mcp/keys.mjs';
 import { uploadFiles, listFiles, retryFile } from '../src/api/ingest-handlers.mjs';
 import { runJob } from '../src/api/email-handlers.mjs';
 import { setSetting } from '../src/store/db.mjs';
+import { fakeExtractRows } from '../src/packs/your-plans.mjs';
 import { createEngine } from '../src/engine/index.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { proposalBasis, proposalTools } from '../src/actions/proposals.mjs';
@@ -102,7 +103,8 @@ for (const operation of ['import_file','retry_import','build_your_plans','plan',
   const extraction = req => {
     assert.equal(inside, false, 'engine is called only after the tool round');
     extracts++;
-    return inner.extract({ ...req, fake: [{ text: JSON.stringify({ rows: [{ facts: [], goals: [] }] }), costUsd: 0 }] });
+    const rows = req.schema?.properties?.title ? fakeExtractRows(req.document.text) : [{ facts: [], goals: [] }];
+    return inner.extract({ ...req, fake: [{ text: JSON.stringify({ rows }), costUsd: 0 }] });
   };
   const engine = { mode: 'fake', isOn: () => true, extract: extraction, async call(request) {
     const result = await inner.call({ ...request, fake: [ { toolCalls: [{ name: 'refresh', args }], costUsd: 0 }, { text: 'The requested refresh was queued.', costUsd: 0 } ] });
@@ -112,7 +114,7 @@ for (const operation of ['import_file','retry_import','build_your_plans','plan',
   ctx.services.engine = engine;
   ctx.services.scheduler.runNow = async job => {
     assert.equal(inside, false);
-    await inner.extract({ purpose: 'extract', system: 'Synthetic', messages: [{ role: 'user', content: 'Synthetic' }], maxTokens: 100,
+    await inner.extract({ document: { type: 'text', text: 'Synthetic job input' }, schema: { type: 'object' }, system: 'Synthetic', maxTokens: 100,
       fake: [{ text: '{"rows":[]}', costUsd: 0 }] });
     return { id: `run-${job}`, status: 'ok', startedAt: now, finishedAt: now };
   };
@@ -134,7 +136,8 @@ for (const operation of ['import_file','retry_import','build_your_plans','plan',
     const outcome = JSON.parse(receipt.after_value);
     assert.notEqual(outcome.status, 'queued');
     assert.notEqual(outcome.status, 'failed', JSON.stringify(outcome));
-    if (operation === 'import_file' || operation === 'retry_import') { assert.ok(outcome.file.id); assert.ok(extracts > 0); }
+    if (operation === 'import_file' || operation === 'retry_import') { assert.ok(outcome.file.id); assert.equal(outcome.file.status, 'imported'); assert.ok(extracts > 0); }
+    if (operation === 'build_your_plans') assert.equal(outcome.written, true);
   } finally { tool.handler = original; }
 });
 
@@ -153,4 +156,71 @@ test('refresh proposals snapshot files, settings and jobs, and queue failures pe
   const outcome = JSON.parse(ctx.db.prepare('SELECT after_value FROM action_receipts WHERE id=?').get(result.receipt.id).after_value);
   assert.equal(outcome.status, 'failed');
   assert.ok(!JSON.stringify(outcome).includes('private details'));
+});
+
+test('HTTP proposal confirmation executes a pasted-note refresh and persisted receipts offer no Undo', async t => {
+  const { tempInstance, serveAppFixture } = await import('./helpers/server.mjs');
+  const { rmSync } = await import('node:fs');
+  const { loadConfig } = await import('../src/config.mjs');
+  const { rpcResult, callToolRpc } = await import('../src/mcp/test/helpers.mjs');
+  const instance = await tempInstance();
+  let calls = 0;
+  const inner = createEngine({ mode: 'fake' });
+  const engine = { mode: 'fake', isOn: () => true,
+    extract: req => inner.extract({ ...req, fake: [{ text: '{"rows":[{"facts":[],"goals":[]}]}', costUsd: 0 }] }),
+    call(req) {
+      if (req.purpose === 'chat') calls++;
+      if (req.purpose === 'job') return inner.call({ ...req, fake: [{ text: '{}', costUsd: 0 }] });
+      if (req.purpose === 'title') return Promise.resolve({ text: '{"title":"Synthetic import"}' });
+      return inner.call({ ...req, fake: [{ toolCalls: [{ name: 'refresh', args: { operation: 'import_file', ...note, propose: true } }], costUsd: 0 },
+        { text: 'Import your pasted note? Confirm below.', costUsd: 0 }] });
+    },
+  };
+  const config = loadConfig({ FATHOM_DATA: instance.dataDir, FATHOM_ENGINE: 'off' });
+  const app = await serveAppFixture({ db: instance.db, platform: instance.platform, config, secrets: instance.secrets, engine, authenticated: true });
+  t.after(async () => { await app.household.scheduler.stop(); await app.close(); instance.close(); rmSync(instance.dataDir, { recursive: true, force: true }); });
+  const proposed = await app.postJson('/api/threads', { text: 'Import the following note: ' + note.text });
+  assert.equal(proposed.status, 200, proposed.text);
+  assert.equal(proposed.json.message.provenance.pendingAction.operation, 'import_file');
+  assert.equal(instance.db.prepare('SELECT count(*) n FROM files').get().n, 0);
+  const beforeCalls = calls;
+  const confirmed = await app.postJson('/api/ask', { key: proposed.json.thread.key, text: 'yes' });
+  assert.equal(confirmed.status, 200, confirmed.text);
+  assert.equal(calls, beforeCalls, 'confirmation makes no chat call');
+  const receipt = confirmed.json.message.provenance.actions[0];
+  assert.equal(receipt.after.file.status, 'imported');
+  assert.equal(receipt.undo.available, false);
+  assert.ok(!confirmed.json.message.text.includes('undo it below'));
+  const { key } = app.keys.create({ householdId: instance.householdId, name: 'Synthetic importer', scopes: ['read','write:imports'] });
+  const imports = rpcResult(await callToolRpc(app.baseUrl, key, 'household', { operation: 'imports' }));
+  assert.deepEqual(JSON.parse(imports.content[0].text), (await app.request({ path: '/api/files' })).json);
+  const result = rpcResult(await callToolRpc(app.baseUrl, key, 'refresh', { operation: 'import_file', name: 'Other notes.md', mime: note.mime,
+    contentBase64: Buffer.from('A different synthetic note.').toString('base64') }));
+  assert.equal(result.isError, undefined, result.content[0].text);
+  const imported = JSON.parse(result.content[0].text);
+  assert.equal(imported.file.status, 'imported');
+  const form = new FormData();
+  form.append('files', new Blob(['A different synthetic note.'], { type: note.mime }), 'Other notes.md');
+  const upload = await fetch(app.baseUrl + '/api/files', { method: 'POST', headers: app.headers, body: form });
+  assert.equal(upload.status, 200);
+  const uploaded = await upload.json();
+  assert.equal(uploaded.files[0].fileId, imported.file.id);
+  assert.equal(uploaded.files[0].status, 'duplicate');
+  const undone = await app.postJson(`/api/actions/${receipt.id}/undo`, {});
+  assert.equal(undone.status, 409);
+});
+
+test('refresh receipt rendering omits Undo while ordinary reversible receipts keep it', async () => {
+  const { registerHooks } = await import('node:module');
+  const hook = registerHooks({ resolve(specifier, context, next) {
+    return next(specifier.startsWith('/shared/') ? new URL('../src/shared/' + specifier.slice(8), import.meta.url).href : specifier, context);
+  } });
+  try {
+    const chat = await import('../web/horizon/screens/chat.js');
+    chat.bind({ esc: String, arr: v => v });
+    const html = receipt => chat.workHtml({ role: 'fathom', provenance: { actions: [receipt] } });
+    const receipt = { id: 'synthetic', scope: 'write:imports', label: 'Data refresh', before: null, after: { status: 'imported' } };
+    assert.match(html(receipt), /data-undo-action/);
+    assert.doesNotMatch(html({ ...receipt, undo: { available: false, reason: 'This refresh cannot be undone here.' } }), /data-undo-action/);
+  } finally { hook.deregister(); }
 });
