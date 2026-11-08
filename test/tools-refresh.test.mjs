@@ -71,6 +71,8 @@ test('refresh validates size, encoding, job allowlist, queue capability and demo
     { name: note.name, mime: note.mime, contentBase64: '???' }, { name: note.name, mime: note.mime } ])
     await assert.rejects(callTool('refresh', { operation: 'import_file', ...input }, ctx));
   assert.equal(ctx.db.prepare('SELECT count(*) n FROM files').get().n, 0);
+  await assert.rejects(callTool('refresh', { operation: 'import_file', ...note }, { ...ctx, household: { ...ctx.household, db: {} } }), /own this store/);
+  assert.equal(ctx.db.prepare('SELECT count(*) n FROM action_receipts').get().n, 0);
   for (const job of ['brief-email','deadline-alerts','trash-purge']) await assert.rejects(callTool('refresh', { operation: 'run_job', job }, ctx));
   for (const args of [ { operation: 'import_file', ...note }, { operation: 'retry_import', fileId: 'unknown' }, { operation: 'build_your_plans' }, { operation: 'run_job', job: 'plan' }, { operation: 'run_job', job: 'confirm-guess' } ])
     await assert.rejects(callTool('refresh', args, { ...ctx, channel: 'ask' }));
