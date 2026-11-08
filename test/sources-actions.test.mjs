@@ -390,7 +390,7 @@ test('identical re-upload restores removed data through HTTP and consumes the or
   assert.equal(restored.json.files[0].status, 'imported');
   assert.equal(await api.txTotal(cash), txBefore);
   assert.equal(totalOf(await api.scenario()), totalOf(before));
-  assert.equal((await api.undo(removed.json.receipt.id)).status, 400, 'the removal was already undone by the upload');
+  assert.equal((await api.undo(removed.json.receipt.id)).status, 409, 'the removal was already undone by the upload');
   const duplicate = await reupload(app, fixture('Chase7766_Activity_20320305.csv', 'text/csv'));
   assert.equal(duplicate.json.files[0].status, 'duplicate', 'active identical uploads retain duplicate detection');
 }));
