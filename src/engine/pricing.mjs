@@ -42,10 +42,20 @@ export function usageCostUsd(model, usage) {
     oneHour * price.cacheWrite1h) / 1e6).toFixed(12));
 }
 
-export function estimateUnknownCost({ model, maxTokens, system, messages, tools, schema }) {
+// The input-token ceiling reserved per page of a PDF document block. PDF support converts each
+// page to an image and also extracts its text, so a page is billed as both; Anthropic documents
+// typically 1,500 to 3,000 tokens per page, and page images are downscaled so one stays near 1,600
+// tokens (https://docs.claude.com/en/docs/build-with-claude/pdf-support). 5000 is a conservative
+// ceiling over both, so a compact multipage PDF is not bounded by its serialized bytes alone.
+export const PDF_PAGE_INPUT_TOKENS = 5000;
+
+// extraInputTokens (nonnegative integer, default 0): input tokens the serialized bytes do not
+// account for (an image-only PDF's per-page bound), added to the reserved input tokens.
+export function estimateUnknownCost({ model, maxTokens, system, messages, tools, schema, extraInputTokens = 0 }) {
+  if (!Number.isInteger(extraInputTokens) || extraInputTokens < 0) throw new TypeError('Invalid extra input tokens');
   const definitions = tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
   // Reserve UTF-8 bytes as input tokens plus an SDK envelope, at the highest standard input rate.
-  const inputTokens = Buffer.byteLength(JSON.stringify({ system, messages, tools: definitions, ...(schema ? { schema } : {}) }), 'utf8') + 4096;
+  const inputTokens = Buffer.byteLength(JSON.stringify({ system, messages, tools: definitions, ...(schema ? { schema } : {}) }), 'utf8') + 4096 + extraInputTokens;
   const tokens = { input_tokens: 0, output_tokens: maxTokens, cache_creation_input_tokens: inputTokens,
     cache_creation: { ephemeral_1h_input_tokens: inputTokens } };
   return { costUsd: usageCostUsd(model, tokens), inputTokens, outputTokens: maxTokens };
