@@ -36,7 +36,7 @@ function validate(value, shape) {
 }
 
 export function recordFactAnswers(db, answers, { now = new Date().toISOString(), recId = null, channel = null, actorId = null, onWrite } = {}) {
-  if (!Array.isArray(answers) || !answers.length || answers.length > 30) fail();
+  if (!Array.isArray(answers) || !answers.length || answers.length > 50) fail();
   const date = now.slice(0, 10);
   if (isoDate(date) !== date) fail();
   const keys = new Set();
