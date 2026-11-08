@@ -27,6 +27,10 @@ test('both drill mappings fetch sums equal to every displayed demo category figu
     const snapshot = buildSnapshot('table', { source: ref, columns: ['key', ...fields] }, [{ name: ref.tool, args: ref.args, result }]);
     const chart = buildSnapshot('chart', { kind: 'bar', source: ref, x: 'key', series: fields.map(path => ({ path })) }, [{ name: ref.tool, args: ref.args, result }]);
     assert.deepEqual(tableOf(chart).rows.map(row => row.cells.slice(1).map(cell => cell.drill)), snapshot.rows.map(row => row.cells.slice(1).map(cell => cell.drill)));
+    if (ref.tool === 'business') {
+      const scatter = buildSnapshot('chart', { kind: 'scatter', source: ref, x: 'revenue', series: [{ path: 'expenses' }] }, [{ name: ref.tool, args: ref.args, result }]);
+      assert.deepEqual(tableOf(scatter).rows.map(row => row.cells.slice(1).map(cell => cell.drill)), snapshot.rows.map(row => row.cells.slice(1).map(cell => cell.drill)));
+    }
     for (const row of snapshot.rows) for (const cell of row.cells.slice(1)) {
       assert.ok(cell.drill, `${ref.tool} category figure has a drill`);
       const res = await request(server.baseUrl, { path: `/api/${cell.drill.route === 'pnl' ? 'pnl' : 'spending'}/rows?${queryString(cell.drill.query)}` });
