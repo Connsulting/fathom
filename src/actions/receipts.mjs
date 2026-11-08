@@ -9,8 +9,13 @@ export function requireActor(ctx) {
   return actor;
 }
 
+export function requireScope(ctx, scope) {
+  if (ctx.scopes && !ctx.scopes.includes(scope)) throw new ToolError('forbidden', `Permission denied: this action needs ${scope}.`);
+}
+
 export function receiptOut(r) {
   return { id: r.id, scope: r.scope, label: r.label, before: parse(r.before_value, null), after: parse(r.after_value, null),
+    ...(r.kind === 'receipt_group' ? { scopes: receiptScopes(r) } : {}),
     actorId: r.actor_id, ts: r.created_at, undone: !!r.undone_at, planningPending: !!r.planning_pending,
     ...(r.kind === 'refresh' ? { undo: { available: false, reason: 'This refresh cannot be undone here.' } } : {}) };
 }
@@ -39,7 +44,9 @@ export function saveReceipt(ctx, { scope, kind, id, label, before, after, from =
 }
 
 export function receiptMessages(db, key, messages) {
-  const rows = receiptsFor(db, key);
+  const all = receiptsFor(db, key);
+  const grouped = new Set(all.filter(r => r.kind === 'receipt_group').flatMap(r => parse(r.after_state, {}).childIds ?? []));
+  const rows = all.filter(r => !grouped.has(r.id));
   const used = new Set();
   for (const message of messages) {
     const turnId = message.provenance?.actionTurn;
@@ -74,52 +81,94 @@ for (const [kind, table, pk] of [
   ['step', 'recs', 'id'], ['status', 'recs', 'id'], ['owner', 'recs', 'id'], ['setting', 'settings', 'key'],
 ]) registerReceiptKind(kind, { table, pk });
 
-export async function undoAction(ctx, id, scope) {
+export function restoreReceipt(ctx, id, scope, checkOnly = false) {
   const actor = requireActor(ctx);
-  if (ctx.scopes && !ctx.scopes.includes(scope)) throw new ToolError('forbidden', `Permission denied: Undo needs ${scope}.`);
-  let receipt;
-  tx(ctx.db, () => {
-    const row = ctx.db.prepare('SELECT * FROM action_receipts WHERE id = ?').get(id);
-    if (!row || row.actor_id !== actor || row.scope !== scope) throw new ToolError('forbidden', 'This change is not available to you.');
-    if (row.undone_at) throw new ToolError('bad_input', 'This change was already undone.');
-    const before = parse(row.before_state, null), after = parse(row.after_state, null);
-    const definition = KINDS.get(row.kind);
-    if (!definition) throw new ToolError('bad_input', 'This receipt kind does not support Undo.');
-    let current;
-    if (definition.restore) {
-      const restored = definition.restore(ctx, { id: row.entity_id, before, after, receipt: receiptOut(row) });
-      if (restored && typeof restored.then === 'function') throw new TypeError('Receipt kind restore must be synchronous');
+  requireScope(ctx, scope);
+  const row = ctx.db.prepare('SELECT * FROM action_receipts WHERE id = ?').get(id);
+  if (!row || row.actor_id !== actor || row.scope !== scope) throw new ToolError('forbidden', 'This change is not available to you.');
+  if (row.undone_at) throw new ToolError('bad_input', 'This change was already undone.');
+  const before = parse(row.before_state, null), after = parse(row.after_state, null);
+  const definition = KINDS.get(row.kind);
+  if (!definition) throw new ToolError('bad_input', 'This receipt kind does not support Undo.');
+  let current;
+  if (definition.restore) {
+    const restored = definition.restore(ctx, { id: row.entity_id, before, after, receipt: receiptOut(row), checkOnly });
+    if (restored && typeof restored.then === 'function') throw new TypeError('Receipt kind restore must be synchronous');
+  } else {
+    const { table, pk } = definition;
+    current = ctx.db.prepare(`SELECT * FROM ${table} WHERE ${pk} = ?`).get(row.entity_id);
+    // A goal's lifecycle columns are always compared, so a goal archived or marked done after the
+    // receipt refuses Undo. A receipt written before migration 026 has no done_at: read as null.
+    const lifecycle = row.kind === 'goal' ? ['archived_at', 'done_at'] : [];
+    const fields = [...new Set([...Object.keys(after || before || {}), ...lifecycle])];
+    if (![...fields, ...Object.keys(before || {})].every(k => IDENTIFIER.test(k))) throw new ToolError('bad_input', 'Invalid receipt state.');
+    const value = current ? Object.fromEntries(fields.map(k => [k, current[k] ?? null])) : null;
+    const expected = after ? Object.fromEntries(fields.map(k => [k, after[k] ?? null])) : null;
+    if (!isDeepStrictEqual(value, expected)) throw new ToolError('conflict', 'This item changed since that action. Ask for a new change instead.');
+    if (checkOnly) return;
+    if (before === null) ctx.db.prepare(`DELETE FROM ${table} WHERE ${pk} = ?`).run(row.entity_id);
+    else if (!current) {
+      const keys = Object.keys(before);
+      ctx.db.prepare(`INSERT INTO ${table} (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`).run(...keys.map(k => before[k]));
     } else {
-      const { table, pk } = definition;
-      current = ctx.db.prepare(`SELECT * FROM ${table} WHERE ${pk} = ?`).get(row.entity_id);
-      // A goal's lifecycle columns are always compared, so a goal archived or marked done after the
-      // receipt refuses Undo. A receipt written before migration 026 has no done_at: read as null.
-      const lifecycle = row.kind === 'goal' ? ['archived_at', 'done_at'] : [];
-      const fields = [...new Set([...Object.keys(after || before || {}), ...lifecycle])];
-      if (![...fields, ...Object.keys(before || {})].every(k => IDENTIFIER.test(k))) throw new ToolError('bad_input', 'Invalid receipt state.');
-      const value = current ? Object.fromEntries(fields.map(k => [k, current[k] ?? null])) : null;
-      const expected = after ? Object.fromEntries(fields.map(k => [k, after[k] ?? null])) : null;
-      if (!isDeepStrictEqual(value, expected)) throw new ToolError('conflict', 'This item changed since that action. Ask for a new change instead.');
-      if (before === null) ctx.db.prepare(`DELETE FROM ${table} WHERE ${pk} = ?`).run(row.entity_id);
-      else if (!current) {
-        const keys = Object.keys(before);
-        ctx.db.prepare(`INSERT INTO ${table} (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`).run(...keys.map(k => before[k]));
-      } else {
-        const keys = Object.keys(before);
-        ctx.db.prepare(`UPDATE ${table} SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE ${pk} = ?`).run(...keys.map(k => before[k]), row.entity_id);
-      }
+      const keys = Object.keys(before);
+      ctx.db.prepare(`UPDATE ${table} SET ${keys.map(k => `${k} = ?`).join(', ')} WHERE ${pk} = ?`).run(...keys.map(k => before[k]), row.entity_id);
     }
-    const stamp = new Date(ctx.now ?? Date.now()).toISOString();
-    ctx.db.prepare('UPDATE action_receipts SET undone_at = ?, planning_pending = 0 WHERE id = ?').run(stamp, id);
-    if (['status', 'owner', 'step'].includes(row.kind)) ctx.db.prepare(`INSERT INTO rec_events
-      (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, 'undo', ?, ?, ?, ?)`).run(row.entity_id, stamp, id,
-      current.status, before.status ?? current.status, actor);
-    receipt = receiptOut(ctx.db.prepare('SELECT * FROM action_receipts WHERE id = ?').get(id));
+  }
+  if (checkOnly) return;
+  const stamp = new Date(ctx.now ?? Date.now()).toISOString();
+  ctx.db.prepare('UPDATE action_receipts SET undone_at = ?, planning_pending = 0 WHERE id = ?').run(stamp, id);
+  if (['status', 'owner', 'step'].includes(row.kind)) ctx.db.prepare(`INSERT INTO rec_events
+    (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, 'undo', ?, ?, ?, ?)`)
+    .run(row.entity_id, stamp, id, current.status, before.status ?? current.status, actor);
+  return receiptOut(ctx.db.prepare('SELECT * FROM action_receipts WHERE id = ?').get(id));
+}
+
+export function receiptScopes(row) {
+  return row.kind === 'receipt_group' ? parse(row.after_state, {}).scopes ?? [] : [row.scope];
+}
+
+export function groupReceipts(ctx, children, { id, label = 'Reviewed update' }) {
+  const rows = children.filter(Boolean).map(child => ctx.db.prepare('SELECT * FROM action_receipts WHERE id=?').get(child.id));
+  if (!rows.length) return null;
+  const actor = requireActor(ctx), scopes = [...new Set(['write:imports', ...rows.flatMap(receiptScopes)])].sort();
+  for (const row of rows) if (row.actor_id !== actor || row.undone_at) throw new ToolError('forbidden', 'This change is not available to you.');
+  scopes.forEach(scope => requireScope(ctx, scope));
+  return saveReceipt(ctx, { scope: 'write:imports', kind: 'receipt_group', id, label, before: null,
+    after: { childIds: rows.map(r => r.id), scopes }, from: null, to: { changes: rows.length } });
+}
+
+export function restoreReceiptGroup(ctx, { after, receipt, checkOnly = false }) {
+  const actor = requireActor(ctx);
+  if (!Array.isArray(after?.childIds) || !after.childIds.length || !Array.isArray(after.scopes)) throw new ToolError('bad_input', 'Invalid receipt group.');
+  const rows = after.childIds.map(id => ctx.db.prepare('SELECT * FROM action_receipts WHERE id=?').get(id));
+  for (const row of rows) if (!row || row.actor_id !== actor || row.undone_at || row.kind === 'receipt_group') throw new ToolError('conflict', 'A child change is unavailable or already undone.');
+  for (const scope of new Set([...after.scopes, ...rows.flatMap(receiptScopes)])) requireScope(ctx, scope);
+  ctx.db.exec('SAVEPOINT check_receipt_group');
+  try { for (const row of rows.toReversed()) restoreReceipt(ctx, row.id, row.scope); }
+  finally { ctx.db.exec('ROLLBACK TO check_receipt_group'); ctx.db.exec('RELEASE check_receipt_group'); }
+  if (!checkOnly) {
+    for (const row of rows.toReversed()) restoreReceipt(ctx, row.id, row.scope);
+    if (receipt) {
+      ctx.db.prepare("UPDATE import_batches SET status='undone',undone_at=? WHERE receipt_id=?")
+        .run(new Date(ctx.now ?? Date.now()).toISOString(), receipt.id);
+      ctx.db.prepare("UPDATE import_proposals SET status='rejected' WHERE (id,version) IN (SELECT proposal_id,proposal_version FROM import_batches WHERE receipt_id=?)").run(receipt.id);
+    }
+  }
+}
+
+registerReceiptKind('receipt_group', { restore: restoreReceiptGroup });
+
+export async function undoAction(ctx, id, scope) {
+  let receipt, scopes;
+  tx(ctx.db, () => {
+    const row = ctx.db.prepare('SELECT * FROM action_receipts WHERE id=?').get(id);
+    scopes = row ? receiptScopes(row) : [scope];
+    receipt = restoreReceipt(ctx, id, scope);
+
   });
-  if (scope === 'write:facts') await replanAction(ctx, receipt);
+  if (scopes.includes('write:facts')) await replanAction(ctx, receipt);
   else if (scope === 'write:sources') ctx.queuePlan?.();
-  // A remembered withdrawal rate moves the targets Fathom set, so undoing one moves them back.
-  // Imported here, not at the top: goals/write reaches this module through the scenario builder.
   if (scope === 'write:preferences') {
     const { adoptSuggestions } = await import('../goals/write.mjs');
     adoptSuggestions(ctx.db, { now: new Date(ctx.now ?? Date.now()).toISOString(), clock: ctx.config?.clock });

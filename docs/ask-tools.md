@@ -498,7 +498,7 @@ that adds the operation (section 7).
 | `calculate` | read | add, subtract, multiply, divide, sum, min, max, negate, annualize, monthly, percent_of, round_up, compound (C3) |
 | `update_account` | write | rename, mask, owner, kind, merge (C8) |
 | `categorize` | write | transaction, merchant_rule (C8) |
-| `answer` | write | fact (C1); rec_questions, confirm, reopen, yearend_mark (C8) |
+| `answer` | write | expected_transaction (IMP-5), fact (C1); rec_questions, confirm, reopen, yearend_mark (C8) |
 | `act_on_recommendation` | write | status, owner, step (C1); start_over, decide, revisit, pick_point (C9) |
 | `advisor_review` | write | send, verdict, checkin, packet (C9) |
 | `update_goal` | write | create, edit (C1); archive, delete, suggestion (C9) |
@@ -1496,7 +1496,7 @@ The scopes on main are `read`, `write:recs`, `write:facts`, `write:steps`, `writ
 | `write:accounts` | `update_account` (all five) | Rename accounts, set their last four, owner and kind, and merge duplicates with confirmation. |
 | `write:categories` | `categorize` (both) | Correct transaction categories and set merchant rules. |
 | `write:confirm` | `answer.confirm`, `answer.reopen`, `answer.yearend_mark` | Answer and reopen Confirm questions and mark expected tax documents. |
-| `write:imports` | `refresh.import_file`, `refresh.retry_import`, `refresh.build_your_plans` | Import files and retry or build from imported documents. |
+| `write:imports` | `answer.expected_transaction`, `refresh.import_file`, `refresh.retry_import`, `refresh.build_your_plans` | Import files, record expected payments and retry or build from imported documents. |
 | `write:jobs` | `refresh.run_job` | Run planning, sync, freshness and guess jobs now. |
 | `write:decisions` | `act_on_recommendation.decide`, `revisit`, `pick_point` | Pick and decide war-game options and reopen decisions. |
 
@@ -1622,6 +1622,23 @@ Done when:
    `npm run eval:ask`.
 
 Test command: `node --test test/eval-grader.test.mjs test/ask-evals.test.mjs test/ask-evals-runner.test.mjs && npm run eval:ask`
+
+### Expected transactions and free-form updates
+
+`answer.expected_transaction` records a pending payment using `subject`, `direction`
+(`inflow` or `outflow`), `dueDate`, `datePrecision`, nullable `amount`, optional `accountId`,
+and exact owner `evidence`. Optional `relativeDate` supplies a cited "next weekday" phrase;
+code resolves it from the captured local date using the household timezone. MCP can cite an
+actor-bound `conversationKey`. The result includes `expectedTransaction`, a receipt and Undo.
+The operation requires `write:imports`; it never writes observed balances, spending or paid tax.
+
+The internal `stageUpdate` adapter stores cited note actions in the shared import proposal
+versions. The shared proposal review route approves or corrects that version. Unsupported
+facts and unmatched recommendation steps remain source-linked notes. Historical relative dates
+without a captured anchor wait for clarification. Approval requires every underlying action
+scope, writes atomically through shared actions and returns one grouped Undo receipt.
+Group Undo checks every child actor, scope and current state; the encrypted source survives.
+Routing uploads and Ask notes into this adapter belongs to the import cutover and integration.
 
 ### C1 Operation registry, context budget and the live-tool migration
 
