@@ -25,7 +25,7 @@ export const TOUR_STOPS = Object.freeze([
     body: 'Net worth, month by month, summed from every account. Pick a part to see what moved.' },
   { id: 'pnl', route: 'pnl', anchor: '.pl-tiles', title: 'Profit and loss',
     body: 'Income, expenses and net for each business, plus what the household spends.' },
-  { id: 'accounts', route: 'accounts', anchor: '.h-accs .h-acc', title: 'A read-only mirror',
+  { id: 'accounts', route: 'money', anchor: '.h-accs .h-acc', title: 'A read-only mirror',
     body: 'Every account in one place. Fathom can see balances and transactions but can never move money.' },
   { id: 'confirm', route: 'confirm', anchor: '.h-deck-card.cur .h-cf-q', title: 'Quick questions',
     body: 'When an import is unsure, Fathom asks instead of guessing. One answer fixes every matching item.' },

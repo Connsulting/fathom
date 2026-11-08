@@ -40,7 +40,7 @@ function control(r, t, i) {
 function goLink(r, link) {
   const { esc } = H;
   if (link === 'ask') return `<button type="button" class="h-btn sm" data-ask-next="${esc(r.id)}">Ask about it</button>`;
-  const page = { upload: ['add', 'Open Files'], confirm: ['confirm', 'Open Confirm'], accounts: ['accounts', 'Open Accounts'] }[link];
+  const page = { upload: ['add', 'Open Files'], confirm: ['confirm', 'Open Confirm'], accounts: ['money', 'Open Accounts'] }[link];
   return page ? `<a class="h-btn sm" href="#/${page[0]}" data-go="${page[0]}">${page[1]}</a>` : '';
 }
 
