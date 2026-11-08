@@ -111,11 +111,11 @@ export function normalizeSdkRound({ result, content = [], tools = [], usage }, {
     details: { tools, maxTokens, maxBudgetUsd }, toolResults: registry.results };
 }
 
-export async function sdkRound({ credential, system, systemDynamic, messages, maxTokens, maxBudgetUsd, model, registry, onEvent }) {
+export async function sdkRound({ credential, system, systemDynamic, messages, maxTokens, maxBudgetUsd, model, registry, onEvent, timeoutMs = 120000 }) {
   const configDir = await mkdtemp(join(tmpdir(), 'fathom-engine-'));
   const options = sdkOptions({ credential, configDir, system, systemDynamic, maxTokens, maxBudgetUsd, model, registry });
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 120000);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let observed;
   try {
     observed = await consumeSdkMessages(query({ prompt: encodeTranscript(messages),
@@ -206,9 +206,9 @@ export function wireMessages(messages) {
 // path; production chat and job rounds run on the SDK). Tool calls run through the registry, so a
 // round that ran tools returns status 'error_max_turns' like an SDK round ending at its turn limit.
 export async function messagesToolRound({ credential, system, systemDynamic, messages, tools = [], maxTokens, model, registry, onEvent,
-  baseURL = ANTHROPIC_BASE_URL }) {
+  baseURL = ANTHROPIC_BASE_URL, timeoutMs = 120000 }) {
   const offered = tools.filter(tool => registry.names.includes(tool.name));
-  const { response, round } = await createMessage(messagesClient(credential, baseURL), { model, max_tokens: maxTokens,
+  const { response, round } = await createMessage(messagesClient(credential, baseURL, timeoutMs), { model, max_tokens: maxTokens,
     system: [{ type: 'text', text: system || 'Answer from the supplied context.', cache_control: { type: 'ephemeral' } },
       ...(systemDynamic ? [{ type: 'text', text: systemDynamic }] : [])],
     messages: wireMessages(messages),

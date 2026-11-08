@@ -45,12 +45,14 @@ test('completing every needs-you item, steps included, turns the verdict clear a
     const dlg = recDialog(page);
 
     const tasks = rec(id).tasks || [];
+    // Demo steps are all unobservable, so each is one "I did this" that turns into Undo.
     for (let i = 0; i < tasks.length; i++) {
-      const task = dlg.locator(`button.h-task[data-arg="${i}"]`);
-      if ((await task.getAttribute('aria-pressed')) !== 'true') {
-        await task.click();
-        await expect(dlg.locator(`button.h-task[data-arg="${i}"]`)).toHaveAttribute('aria-pressed', 'true');
+      const step = dlg.locator(`.h-steps li.h-step[data-step="${i}"]`);
+      if (!/\bdone\b/.test((await step.getAttribute('class')) || '')) {
+        await step.getByRole('button', { name: 'I did this', exact: true }).click();
+        await expect(dlg.locator(`.h-steps li.h-step[data-step="${i}"]`)).toHaveClass(/\bdone\b/);
       }
+      await expect(dlg.locator(`.h-steps li.h-step[data-step="${i}"]`).getByRole('button', { name: 'Undo', exact: true })).toBeVisible();
     }
     if (tasks.length) await expect(dlg.locator('.h-prog span')).toHaveText(`${tasks.length} of ${tasks.length}`);
 
