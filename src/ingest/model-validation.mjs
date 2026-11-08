@@ -18,8 +18,8 @@ const normalize = value => String(value ?? '').trim().toLowerCase();
 
 function accountFor(db, value) {
   const id = db.prepare('SELECT * FROM accounts WHERE id = ?').get(String(value));
-  if (id) return id;
-  const matches = db.prepare('SELECT * FROM accounts').all().filter(a => normalize(a.name) === normalize(value));
+  if (id) return id.archived_at === null ? id : null;
+  const matches = db.prepare('SELECT * FROM accounts WHERE archived_at IS NULL').all().filter(a => normalize(a.name) === normalize(value));
   return matches.length === 1 ? matches[0] : null;
 }
 
@@ -35,6 +35,7 @@ export function validateImport(ctx, proposal, source) {
   const fail = reason => ({ valid: false, errors: [...new Set([...errors, reason])], rows, bindings, identities, counts: null, summary: null });
   if (!checked.valid) return fail('invalid_proposal');
   if (source.status !== 'indexed') return fail('needs_source_text');
+  if (ctx.db.prepare('SELECT removed_at FROM files WHERE id=?').get(source.fileId)?.removed_at) return fail('source_removed');
   const parsed = parseInterpretation({ rows: proposal.rows, coverage: proposal.coverage, completeness: proposal.completeness, controls: proposal.controls ?? [] }, source);
   if (!parsed.valid) return fail('invalid_source_values');
   if (proposal.completeness !== 'complete') errors.push('incomplete_coverage');

@@ -86,9 +86,9 @@ The header-based owner gate (#11) and its limits are gone; these replace them.
 6. Changing the `FATHOM_PUBLIC_URL` host name invalidates every passkey; everyone re-enrolls through recovery links.
 7. Sessions last a fixed seven days with no sliding renewal, and there is no "sign out everywhere" control other than revoking a passkey.
 8. Rate limits include a global bucket, so a flood can delay real sign-ins and recovery for the window; with `FATHOM_TRUSTED_PROXIES` unset, everyone behind the proxy also shares one per-client bucket.
-9. MCP keys created before accounts have no recorded creator; they stay valid as household keys that only admins can see or revoke.
+9. Legacy MCP keys without a creator bind to the single active admin during offline migration; ambiguous ownership revokes them. Only demo keys may stay ownerless.
 10. Auth email and security notices go through the transport directly, so they are not in the Email screen's send history.
-11. Revoking a passkey, even the last one, leaves that person's MCP keys live; only removing the person (which deletes the keys they created) or revoking each key ends them.
+11. Revoking a passkey, even the last one, leaves that person's MCP keys live. Membership version changes, removal, key revocation and household restore invalidate affected keys; household suspension refuses access while suspended.
 12. Requesting recovery again replaces the earlier pending recovery link; only the newest link works.
 13. Response timing can still hint whether an address has an account: the recovery send is not awaited, but the remaining local work differs.
 

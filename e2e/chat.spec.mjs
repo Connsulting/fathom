@@ -8,7 +8,7 @@ import { test, expect, S, resetDemo, visibleRecs, plain, gotoRoute, expectH1, re
 
 const ENGINE_OFF_NOTICE = 'Engine is off, so answers are paused. Switch it back on to get an answer.';
 const GROUNDED = 'Every number is from your data or a tool result.';
-const UNVERIFIED = 'Some numbers could not be verified and are marked.';
+const OWNER_SOURCE = 'From what you told Fathom';
 
 // An invented amount that appears nowhere in the demo data or any tool result.
 const INVENTED_AMOUNT = '$987,654';
@@ -100,7 +100,7 @@ test('a free text question with no canned match gets a grounded answer', async (
   await expect(src.locator('p.h-src-warn')).toHaveCount(0);
 });
 
-test('a free text question naming an invented amount marks it unchecked in place', async ({ page }) => {
+test('a free text question quoting an owner-stated amount names the owner as its source', async ({ page }) => {
   const text = `Can I put ${INVENTED_AMOUNT} in my HSA?`;
 
   await gotoRoute(page, 'ask');
@@ -108,16 +108,16 @@ test('a free text question naming an invented amount marks it unchecked in place
   const msg = answers(page).last();
   await expect(answers(page)).toHaveCount(1);
   await expect(msg).not.toHaveClass(/\bnotice\b/);
-  const marked = msg.locator('.h-msg-b .fx-unchecked');
+  const marked = msg.locator('.h-msg-b .fx-src').filter({ hasText: '987,654' });
   await expect(marked.first()).toBeVisible();
   await expect(marked.filter({ hasText: '987,654' })).toHaveCount(1);
-  await expect(marked.first()).toHaveAttribute('title', 'Not checked against your data');
-  await expect(marked.first()).toHaveClass(/\bfx-checking\b/);
+  await expect(marked.first()).toHaveAttribute('title', OWNER_SOURCE);
+  await expect(msg.locator('.fx-unchecked')).toHaveCount(0);
   await expect(msg.locator('.fx-unverified')).toHaveCount(0);
 
   const src = await openSources(msg);
-  await expect(src.locator('p.h-src-warn')).toHaveText(UNVERIFIED);
-  await expect(src.locator('p.h-src-ok')).toHaveCount(0);
+  await expect(src.locator('p.h-src-warn')).toHaveCount(0);
+  await expect(src.locator('p.h-src-ok')).toHaveCount(1);
 });
 
 test('a rec conversation answer shows Sources naming the recommendation it read', async ({ page }) => {

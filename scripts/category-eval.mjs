@@ -1,11 +1,13 @@
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
-import { openReadOnlyHousehold } from '../src/platform/ready.mjs';
+import { openReadOnlyHousehold, openOperatorPlatform } from '../src/platform/ready.mjs';
 import { householdArg } from '../src/platform/cli.mjs';
 import { parseJson } from '../src/store/db.mjs';
 import { readOutbound } from '../src/platform/outbound.mjs';
-import { instanceFunded } from '../src/platform/runtime.mjs';
+import { instanceFunded, openHouseholdDb } from '../src/platform/runtime.mjs';
+import { createRuntimeEngine } from '../src/engine/runtime.mjs';
+import { loadConfig } from '../src/config.mjs';
 import { createJev, categoryQuestions } from '../src/categories/jev.mjs';
 import { sourceBucket, resolveCategories, createHistoryIndex, historyExamples, CATEGORY_TABLES } from '../src/categories/resolve.mjs';
 import { loadCategoryInputs } from '../src/categories/store.mjs';
@@ -79,7 +81,7 @@ export function evalAdmission(platform,householdId) {
   return instanceFunded(platform)?null:'funding_unavailable';
 }
 export async function main(argv=process.argv.slice(2)) {
-  let store;
+  let store, accountingDb, accountingPlatform;
   try {
     const {householdId,rest}=householdArg(argv);
     const path=rest[0]??process.env.FATHOM_DATA;
@@ -89,11 +91,17 @@ export async function main(argv=process.argv.slice(2)) {
     const admit=()=>evalAdmission(store.platform,householdId);
     const refused=admit();
     if(refused) {console.error(`category_eval_failed: ${refused}`);return 1;}
-    const jev=await createJev({maxCostUsd,admit});
+    const config=loadConfig({...process.env,FATHOM_ENGINE:'live',FATHOM_DATA:resolve(path),FATHOM_DEMO:'0'});
+    accountingPlatform=openOperatorPlatform({FATHOM_DATA:resolve(path)});
+    const household=accountingPlatform.prepare('SELECT generation,storage_root FROM households WHERE id=?').get(householdId);
+    accountingDb=openHouseholdDb({dataDir:resolve(path),householdId,storageRoot:household.storage_root});
+    const engine=createRuntimeEngine({db:accountingDb,platform:accountingPlatform,householdId,generation:household.generation,config,
+      allowed:()=>evalAdmission(accountingPlatform,householdId)==null,funded:()=>instanceFunded(accountingPlatform)});
+    const jev=await createJev({maxCostUsd,admit,complete:engine.complete});
     if(!jev.isOn()) throw new Error();
     const result=await evaluateCategories(store.db,jev,{sampleSize});
     console.log(JSON.stringify(result)); return result.stopped?1:0;
   } catch {console.error('category_eval_failed');return 1;}
-  finally {store?.db.close();store?.platform.close();}
+  finally {accountingDb?.close();accountingPlatform?.close();store?.db.close();store?.platform.close();}
 }
 if(import.meta.url===pathToFileURL(process.argv[1]??'').href) process.exitCode=await main();

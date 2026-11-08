@@ -32,11 +32,15 @@ const creatorActive = userId => active.has(userId);
 const users = {};
 
 before(async () => {
-  t = await tempInstance();
+  t = await tempInstance({ mode: 'demo' });
   hh = t.householdId;
   // Real platform users, so the api_keys.user_id foreign key holds.
   const store = createAuthStore(t.platform);
-  for (const name of ['creator', 'member']) users[name] = store.invite(hh, `${name}@example.test`).user.id;
+  for (const name of ['creator', 'member']) {
+    const invited = store.invite(hh, `${name}@example.test`);
+    store.consumeInvitation(invited.token, invited.user.id);
+    users[name] = invited.user.id;
+  }
   clock = new Date('2026-11-05T15:00:00.000Z');
   raw = createKeyService({ platform: t.platform, secret: () => SECRET, creatorActive, now: () => clock });
   // The tests below act inside the instance's household unless they say otherwise.
@@ -57,7 +61,7 @@ describe('constants and scopes', () => {
   test('prefix and scope list', () => {
     assert.equal(KEY_PREFIX, 'fathom_');
     assert.deepEqual([...SCOPES], ['read', 'write:recs', 'write:preferences', 'write:facts', 'write:steps', 'write:goals',
-      'write:accounts', 'write:categories', 'write:confirm', 'write:imports', 'write:jobs', 'write:decisions']);
+      'write:accounts', 'write:categories', 'write:confirm', 'write:imports', 'write:jobs', 'write:decisions', 'write:sources']);
   });
 
   test('keys accept and retain every new write scope without widening older keys', () => {

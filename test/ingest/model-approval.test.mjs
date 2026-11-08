@@ -151,3 +151,18 @@ test('changed duplicate preview refuses with a meaningful diff and restages a fr
     assert.equal(x.db.prepare('SELECT count(*) n FROM transactions').get().n, 1);
   } finally { x.close(); }
 });
+
+test('a source removed or account archived after staging cannot be restored by an old approval', async () => {
+  for (const table of ['files', 'accounts']) {
+    const x = await fixture();
+    try {
+      const source = await x.source(), p = stageImport(x.ctx, { source, proposal: applyLayout(source, recipe()) });
+      if (table === 'files') x.db.prepare('UPDATE files SET removed_at=? WHERE id=?').run(x.ctx.now, source.fileId);
+      else x.db.prepare('UPDATE accounts SET archived_at=?').run(x.ctx.now);
+      await assert.rejects(reviewImport(x.ctx, { proposalId: p.proposalId, version: 1, decision: 'approve', evidence: 'yes' }), e => e.code === 'proposal_stale');
+      assert.equal(x.db.prepare('SELECT count(*) n FROM transactions').get().n, 0);
+      assert.equal(x.db.prepare('SELECT count(*) n FROM action_receipts').get().n, 0);
+      if (table === 'files') await assert.rejects(prepareImport(x.ctx, { file: { fileId: source.fileId, format: source.format, bytes: source.bytes } }), e => e.code === 'bad_input');
+    } finally { x.close(); }
+  }
+});

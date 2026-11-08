@@ -635,6 +635,9 @@ export const digestRules = throughId => ({
   preferences: { omit: ['origin', 'conversation_key'] },
   // Store migration 031 adds spend_ledger.round_id (the platform model round of a live mirror).
   spend_ledger: { omit: ['round_id'] },
+  // Store migration 032 adds accounts.archived_at and files.removed_at (sources management).
+  accounts: { omit: ['archived_at'] },
+  files: { omit: ['removed_at'] },
   column_mappings: { omit: ['schema_version', 'mapping_version', 'approval_status', 'approved_by', 'approved_at', 'structural_context', 'header_signature'] },
   schema_migrations: { where: `id <= ${Number(throughId)}` },
 });

@@ -440,7 +440,8 @@ The data directory holds `platform.sqlite` (accounts, memberships, sessions, MCP
 data keys, outbound flags) and one directory per household: `households/<id>/{fathom.sqlite,files,
 packs/your-plans,outbox,work}`. A request resolves its runtime (store, engine, packs, scheduler,
 transport) through the session's household membership; a session with no household or no runtime
-is 403. MCP keys are bound to a household (platform `api_keys.household_id`); a CLI that opens a
+is 403. MCP keys bind immutably to a household, its generation and their creator's membership
+version in platform `api_keys`; a CLI that opens a
 store takes `--household <id>`. Files, advisor packets and SimpleFIN access URLs are stored in the
 FTHM2 vault (see Encryption at rest) under the household's data key, wrapped by
 `FATHOM_PLATFORM_KEY_FILE`.
@@ -518,6 +519,8 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `advisor_checkin` | `id` PK (always 1), `date`, `time` (`HH:MM` or NULL), `length_min`, `updated_at`. The owner-set next check-in (migration 011). |
 | `advisor_packets` | `id` PK (`advpkt-` and 16 hex), `created_at`, `clock` (the scenario date it was built for), `rec_ids` JSON, `stored_path` (encrypted under the data key, `files/<id>.bin`), `bytes`, `sha256` (migration 011) |
 | `planner_recs` | `rec_id` PK (references `recs.id`), `trigger_id`, `grounding_hash`, `prose_src` in model, template, `first_run`, `last_run` (reference `job_runs.id`), `retired_at`, `retired_reason`, `retired_from`, `held_from`. Bookkeeping for planner-owned recs (migration 007). |
+
+Migration 032 (`032-sources.sql`) adds `accounts.archived_at`, `files.removed_at` and `source_changes` (`receipt_id` PK, `changes`: the JSON change log of a file removal, keyed by its action receipt). Archived accounts and removed files are described with `POST /api/accounts/:id/archive` and `POST /api/files/:id/remove`.
 
 Migration 030 adds durable per-file engine accounting. The internal interpreter indexes every sheet or text span and sends scrubbed reference tokens through the household engine with no tools. File limits are USD 0.50, four dispatched calls, 32,768 input tokens and 8,192 output tokens, with 4,096 output tokens per call, a 120-second attempt deadline and one explicit retry. Each dispatch also requires current household generation, outbound permission, funding, engine admission and remaining monthly cap. Unknown or interrupted calls retain conservative reservations after restart; upload routing is unchanged until the later cutover.
 
@@ -936,7 +939,9 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/accounts/:id/owner` | `{owner}` (a confirm option id) or `{undo: before}` | `{scenario, account, before}`. Records the value as the account's `account_owner` confirm answer (asked, answered, revised, or restated when final), so a later import keeps it; schedules a replan like a Confirm answer. `{undo: before}` sets the prior answer back, reopens a question that was pending, or removes one the edit created. 400 for a bad value, 404 unknown, 409 when the answer can no longer be undone. |
 | `POST /api/accounts/:id/kind` | `{kind}` (a confirm option id) or `{undo: before}` | `{scenario, account, before}`. Same as the owner route, for the `account_kind` answer.
 | `GET /api/accounts/:id/merge-candidates` | none | `{items: [{id, label, inst, kind, mask, lastDataDate, mirror, plan: {keepId, keepLabel, ownId, ownLabel, moves: {transactions, balances, positions, sources}}, refused?}]}`. Every other account with what a merge would keep and move: a connected account is merged into the other one; between two file accounts the open one survives; two connected accounts carry `refused`. 404 unknown. Read-only. |
-| `POST /api/accounts/:id/merge` | `{withId}` | `{scenario, survivorId, itemId}`. Merges through a manual `account_match` item answered `same`, the same path and undo log as a detected pair; the survivor takes a missing institution and a reliable last 4 from the SimpleFIN snapshot. Undo is `POST /api/confirm/:itemId/reopen`. 400 for a missing or same id, 404 unknown, 409 for two connected accounts. |
+| `POST /api/accounts/:id/merge` | `{withId}` | `{scenario, survivorId, itemId, receipt}`. Merges through a manual `account_match` item answered `same`, the same path and undo log as a detected pair; the survivor takes a missing institution and a reliable last 4 from the SimpleFIN snapshot. The receipt (scope `write:sources`, kind `merge`) is undone by `POST /api/actions/:id/undo`, which reopens the item; `POST /api/confirm/:itemId/reopen` still works. Same code as the `sources.merge_accounts` tool. 400 for a missing or same id, 404 unknown, 409 for two connected accounts. |
+| `POST /api/accounts/:id/archive` | `{archived?}` (boolean, default true) | `{scenario, receipt}`. Sets or clears `accounts.archived_at`. An archived account leaves `scenario.accounts`, the current point of the household trend, the per-account series, planner accounts and Ask; its rows stay and it is never stale. `receipt` is null when nothing changed; Undo is `POST /api/actions/:id/undo`. Same code as `sources.archive_account`. 400 for a non-boolean, 404 unknown. |
+| `GET /api/sources` | none | `{sources}`: each ingest source by its real origin (`name`: institution, file name, or newest file plus a count), `label` (parser label, not shown), `kind`, `state` (`history`, `fresh`, `stale`, `unknown`; `src/ingest/coverage.mjs` `sourceStates`), `range` `{from, to}`, `asOf`, `ageDays`, `cadence`, `accounts` `[{id, label, state, archived}]` and live uploaded `files` `[{id, name, removable}]`. Same view as `accounts.sources` and `live.ingest.sources`. |
 | `POST /api/goals` | `{title, note?, horizon?, kind?, owner?, priority?, status?, ...kind fields}` | `{scenario, goal}`. Creates an owner goal (`origin` owner). `title` 1 to 120 characters, no line breaks; `note` at most 500; `horizon` now, 1-3y or 3-10y (default now); `kind` balance (default), range, floor or contribution; `owner` (whose goal) owner, spouse, joint, a dependent key such as kid, or null; `priority` high, medium, low or null; `status` open (default), done or archived. Kind fields (only the kind's own; another kind's field is 400 "`<field>` does not apply to a `<kind>` goal"): balance `target` (non-negative number or null), `targetDate` (YYYY-MM-DD or null), `track` (null, `{accounts: [account ids]}` at most 20 known ids, or `{figure: key}` a known figure the store holds); range `targetLow` and `targetHigh` (both required, low not above high), `targetDate`, `track`; floor `floor` and `track` (both required); contribution `target` (the amount, above zero), `taxYear` (2000 to 2100), `targetDate` (the deadline, after Jan 1 of the tax year), optional `accounts` (destination account ids), `split` (`[{person, amount}]`, owner and spouse once each, adding up to the amount to the cent) and `entered` (`{asOf, total}` or `{asOf, people: [{person, amount}]}`, people within the split when one is set). Anything else 400 with the validation message. |
 | `GET /api/pace` | none | Deterministic `clock`, `rollup`, `goals`, `series` and `meters`, identical to `scenario.pace`. Uses the same owner gate as the scenario. No writes or model calls. |
 | `POST /api/tour/seen` | none | `{scenario}`. The signed-in user finished or dismissed the guided tour: clears `users.tour_pending` on the caller's own platform row (a body or path id never selects another user) and answers with the fresh scenario. 401 without an identity. `scenario.live.tourPending` is that flag, set when the user completes onboarding (the not-done to done change of `POST /api/onboarding`), so the tour auto-starts once per user on a real instance. The public demo has no accounts and keeps its once-per-browser rule. |
@@ -956,9 +961,10 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/keys/:id/revoke` | `{}` | `{record, keys}`. Sets `revokedAt` once (a second revoke keeps it); 404 unknown id. A member may revoke only keys they created (403 otherwise); an admin may revoke any. |
 | `GET /api/mcp` | | `{url, publicUrlSet, tools: [{name, description, scope}], scopes: [{id, label, access}]}`. `url` is the `FATHOM_PUBLIC_URL` origin with `/mcp` appended. |
 | `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`, `unsupported`, `too_large` (past a parse limit, see Ingest) or `failed`. 400 no files or malformed body, 409 a real household without `FATHOM_PLATFORM_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
-| `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first. |
+| `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first; a removed file is left out. |
 | `POST /api/files/:id/retry` | `{}` | `{scenario, file: result}`. Routes a `needs_mapping` or `needs_extraction` file again under the same id; 404 unknown file, 409 a file that is not waiting. |
 | `POST /api/import-proposals/:proposalId/review` | `{version, decision, evidence}` | Internal staged import review. `approve` validates current owner evidence, source and stored state before committing; `correct` queues a new version. Requires `write:imports` and underlying action scopes. Stale proposals return 409 `proposal_stale` with a deterministic diff. Upload routing is unchanged pending the model-import cutover. |
+| `POST /api/files/:id/remove` | `{}` | `{scenario, receipt}`. Deletes an uploaded file's transactions (with their category rows), balances, positions, P&L lines, tax payments, facts, held facts and documents and its pending questions, drops figures read from it and recomputes each fed account's balance figure, archives an account left with no rows that no live bank connection feeds, and sets `files.removed_at`. The captured change log is stored in `source_changes` under the receipt id; `POST /api/actions/:id/undo` replays it and refuses (409) when a touched row changed since. 404 unknown, 409 already removed, 400 for a file with no stored bytes. Same code as `sources.remove_file`; off on the public demo. |
 | `GET /api/confirm` | | `{items: [pending confirm items]}`. |
 | `POST /api/confirm/list` | `{status?: pending (default), answered or all}` | `{items}`; 400 for another status. |
 | `GET /api/confirm/:id` | | `{item}` with `item.final`, pending or answered; 404 unknown item. The Confirm deck reads it after a lost answer reply to retry only an item that is still pending. |
@@ -1317,14 +1323,15 @@ UI.
 MCP keys.
 
 1. Bearer keys stay independent of sessions: a session never authorizes `/mcp` and a key never
-   opens a page. Bearer verification is unchanged.
+   opens a page. Each stateless request resolves the key's household, ignoring browser cookies
+   and refusing household tool arguments.
 2. A new key records its creator in `api_keys.user_id`, from the session. Members list and revoke
-   their own keys (403 for anyone else's); admins list and revoke every key. Keys created before
-   accounts have no creator, stay valid as household keys, and only admins manage them. Removing a
-   user deletes the keys they created; demotion keeps them, because members keep the same data and
-   recommendation access. Revoking a passkey, even the last one, leaves the user's MCP keys live;
-   only removing the user or revoking the key ends them. No MCP tool manages users. Demo key
-   behavior is unchanged.
+   their own keys (403 for anyone else's); admins list and revoke every key in their household.
+   Membership version changes, removal and restore generation changes invalidate old keys.
+   Suspension refuses keys while the household is unavailable. A member can create a fresh key
+   within their current permissions. Legacy ownerless keys bind to the single active admin during
+   offline migration, or are revoked when ownership is ambiguous. Only demo keys may stay
+   ownerless. Revoking a passkey leaves the user's MCP keys live. No MCP tool manages users.
 
 Deployment. The container sits behind a reverse proxy that terminates HTTPS for the
 `FATHOM_PUBLIC_URL` host, serves the app at the root path, and passes `Cookie` and `Origin`
@@ -1732,11 +1739,19 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    date, description"); other tool literals carry a plain label, never the tool name. A date that
    matches a date in a same-turn tool row or in the context data is sourced to it (a stated year
    must match). Every remaining violation, dates included, is stored in place as
-   `<span class="fx-checking fx-unchecked" title="Not checked against your data">`. Only when two
-   or more figures and more than half of the answer's figures (dates excluded) are unchecked is
-   the answer regenerated once, with a corrective user turn; the stream and the work block then
-   show one step "Revised to remove N unchecked figures" before the reset, never the earlier
-   draft, and `provenance.grounding.revised` is N. If that call fails, the answer is the matching
+   `<span class="fx-checking fx-unchecked" title="Not checked against your data">`. Ask and the eval
+   grader share figure and word-count checks in `src/shared/answer-discipline.mjs`. Ask uses the
+   same sanitized prompt evidence as grounding, including pack bodies and the owner's stated
+   quantities. Its figure gate checks quantity-marked figures and anything grounding flags;
+   ordinary metadata and structural counts do not cause a correction. Word counts use the same
+   plain rendered text as the eval. Any remaining violation
+   triggers one corrective user turn: shorten an over-limit answer unless the owner requested
+   detail, write figures as digits, get derived figures from calculate, and use exact tool values.
+   The stream and work block show "Revised to remove N unchecked figures" before the reset when
+   figures are unchecked, or "Revised to follow the answer rules" otherwise, never the earlier
+   draft. `provenance.grounding.revised` is N when nonzero. The corrected answer is delivered even
+   if violations remain, with kinds only in `provenance.discipline.violations`. The correction keeps
+   any proposal sentence; a proposal absent from the delivered answer is cleared. If that call fails, the answer is the matching
    notice (engine off, over the cap, model error), never the first ungrounded text; the spend the
    engine recorded for each completed round stays in the ledger. Answers stored before this rule
    keep their `.fx-unverified` spans and draft notes.
@@ -2954,7 +2969,7 @@ assistant messages, imported prose and account masks cannot supply evidence. Fac
 "you told Fathom in Ask on <date>" with the signed-in actor id. MCP provenance says "through MCP".
 MCP new fact values require existing typed Fathom conversation evidence or stored data; an invented
 caller quote is insufficient. Read-only keys receive `Permission denied:` before argument validation.
-New scopes appear in key creation with plain descriptions. Ownerless keys use a stable key actor.
+New scopes appear in key creation with plain descriptions. Ownerless demo keys use a stable key actor.
 
 Migration 025 adds durable `action_receipts` and `preferences`. Each receipt commits in the same
 transaction as its write and records actor, conversation, changed fields and prior values. Receipts
@@ -3013,3 +3028,72 @@ The chronological 1,000-row replay classified 207 rows from history at 97.58% ex
 `householdSpending({db, from, to, include, exclude, clock})` returns `{from, to, months, include, exclude, total, monthlyAverage, monthTotals, buckets, leftOut, gaps, notes, figures, sources}`: household-bucket outflows on spending accounts (never business accounts), housing toggled by `exclude: ['housing']` and tax payments by `include: ['tax']`. `householdSpendingRows({db, from, to, include, exclude, bucket, category, month, clock})` lists the rows behind one cell.
 
 Every number is a figure key into `figures`: `{v, src, kind: 'a', label, notes, detail, sums?, provenance: {source, accounts, months, rows, files}}`, with `src` one of `pnl:workbook`, `pnl:transactions`, `pnl:mixed` or `spend:transactions` in `sources` (`{label, asOf}`, the newest counted row). The routes are `GET /api/pnl`, `GET /api/pnl/rows`, `GET /api/spending` and `GET /api/spending/rows` (`src/api/pnl-handlers.mjs`).
+
+## Model completion port
+
+`src/models/port.mjs` is the model boundary. A completion takes messages, optional tools,
+`schema` or typed `choices`, `maxTokens`, and the engine's request budget:
+`{ maxCostUsd, maxInputTokens?, timeoutMs?, correlationId? }`. The engine runs
+`beforeDispatch` after platform admission. Results include content, tool results or choices,
+input and output token counts, actual USD cost, and accounting metadata. Errors use the fixed
+codes exported as `MODEL_ERROR_CODES`; provider response bodies never become product errors.
+Admission preserves existing refusal objects, and `modelErrorCode` provides a normalized code
+without changing those objects. The engine applies the shared `redactProviderText` scrub immediately before every
+`port.complete`, including JSON-schema prompts, typed choices, tool arguments and tool-result
+replay. Existing transport scrubs remain in place. Zero input-token reports hold accounting;
+a zero reported charge cannot override positive configured token rates.
+
+The engine admits every household response before calling an adapter. It checks the outbound
+engine pause, instance funding and the request budget, then reserves in the platform ledger
+using the household allocation and monthly cap. SDK rounds reserve twice the per-response
+bound because one SDK round can generate a response after running tools. Other adapters
+reserve one response bound. Every tool continuation gets a new reservation. Known usage
+settles the reservation and mirrors into the household spend ledger; missing usage or an
+uncertain transport outcome holds the reservation until reconciliation. A refused
+`beforeDispatch` settles at zero. Adapters do not retry internally.
+
+The current Claude SDK and Messages API paths remain the defaults for Ask, jobs, titles,
+Confirm and imports. The categorizer defaults to the existing typed-choice service. The
+OpenAI-compatible adapter uses Chat Completions and can target an aggregator such as
+OpenRouter. The Ollama adapter uses its native `/api/chat` endpoint. Both support tool calls,
+JSON schemas and typed choices. They accept text documents; binary document blocks are
+refused before dispatch. Grounding and tool authorization remain engine responsibilities.
+
+Configuration is per purpose, loaded by `src/models/config.mjs`. `ask` includes chat and jobs;
+`import` includes extraction and structured Confirm calls. Defaults require no new settings.
+For each of `ASK`, `TITLE`, `CATEGORIZE` and `IMPORT`, the environment accepts:
+
+| Variable suffix after `FATHOM_MODEL_<PURPOSE>_` | Meaning |
+| --- | --- |
+| `ADAPTER` | `claude`, `jev` (categorize only), `openai` or `ollama` |
+| `MODEL` | Provider model identifier; required for `openai` and `ollama` |
+| `BASE_URL` | Caller-supplied API base URL; required for `openai` and `ollama` |
+| `KEY_FILE` | Private token file, read once at initialization; optional for unauthenticated endpoints |
+| `INPUT_USD_PER_MILLION` | Input rate used for reservations and usage accounting |
+| `OUTPUT_USD_PER_MILLION` | Output rate used for reservations and usage accounting |
+
+For example, `FATHOM_MODEL_ASK_ADAPTER=ollama` selects a local Ask service when its model and
+base URL are also supplied. OpenAI-compatible endpoints require explicit input and output
+rates. Ollama defaults to zero provider cost but still passes funding, pause, reservation and
+usage accounting checks. Claude and the default categorizer retain their existing pricing
+and credential-file settings. No endpoint, credential or model selection is taken from a
+household prompt. Model identifiers remain in accounting and provenance records; product
+screens use neutral service labels. Alternative categorization models retain their identity
+and produce review suggestions, without inheriting the default model's calibrated auto-apply
+threshold.
+
+Scheduled categorization uses the household runtime's completion function. The offline
+category evaluation reads its source rows through a read-only connection and opens separate
+accounting connections so paid evaluation also reserves and records every response.
+Low-level engine and categorizer constructors support injected transports for isolated tests;
+production callers use `createRuntimeEngine`, which requires a platform reservation ledger
+in live mode.
+
+`scripts/model-port-smoke.mjs` creates a disposable synthetic household and sends one fixed
+request for each purpose through the live runtime, including real platform reservations and
+household ledger writes. Set `FATHOM_SMOKE_ADAPTER`, `FATHOM_SMOKE_MODEL` and
+`FATHOM_SMOKE_BASE_URL`, plus optional `FATHOM_SMOKE_KEY_FILE` and explicit
+`FATHOM_SMOKE_INPUT_USD_PER_MILLION` / `FATHOM_SMOKE_OUTPUT_USD_PER_MILLION` rates.
+Per-purpose variables also work when testing mixed selections. Output is limited to pass or
+fail per purpose and token counts; any failure exits nonzero. The disposable store is removed
+on exit. Use a local endpoint for development smoke runs.

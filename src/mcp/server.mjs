@@ -17,20 +17,23 @@ export const serverInfo = (env = process.env) => ({ name: 'fathom', version: ser
 const errorResult = text => ({ isError: true, content: [{ type: 'text', text }] });
 
 // A Server answering tools/list and tools/call for `scopes`, running tools with `ctx`.
-export function createToolServer({ scopes, ctx }) {
+export function createToolServer({ scopes, ctx, authorize }) {
+  if (typeof authorize !== 'function') throw new TypeError('createToolServer needs authorization');
   const offered = toolsForScopes(scopes);
   const server = new Server(serverInfo(), { capabilities: { tools: {} }, instructions });
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: offered.map(t => ({
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    if (!authorize()) throw new ToolError('forbidden', 'Key authorization is no longer available');
+    return { tools: offered.map(t => ({
       name: t.name,
       description: t.description,
       inputSchema: t.inputSchema,
       annotations: { readOnlyHint: t.kind === 'read', destructiveHint: false, openWorldHint: false },
-    })),
-  }));
+    })) };
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async request => {
+    if (!authorize()) return errorResult('Key authorization is no longer available');
     const { name } = request.params;
     const tool = getTool(name);
     if (!tool) return errorResult(`no tool ${name}`);

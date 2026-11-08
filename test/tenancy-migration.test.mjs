@@ -151,9 +151,9 @@ describe('a complete migration preserves the household', T, () => {
     const published = join(fx.dataDir, 'households', fx.householdId, 'fathom.sqlite');
     assert.ok(existsSync(published), 'households/<id>/fathom.sqlite');
     const after = tableDigests(published, digestRules(expected.maxMigration));
-    const added = ['import_batches', 'import_proposals', 'import_model_spend'];
+    const added = ['import_batches', 'import_proposals', 'import_model_spend', 'source_changes'];
     assert.deepEqual(Object.keys(after).sort(), [...expected.tables.filter(t => t !== 'api_keys'), ...added].sort(),
-      'only api_keys is removed and the model-import tables are added');
+      'only api_keys is removed and the model-import and source change tables are added');
     for (const table of added) assert.equal(after[table].count, 0, `${table} starts empty`);
     for (const t of expected.tables) {
       if (t === 'api_keys') continue;
@@ -268,6 +268,26 @@ test('with two admins the ownerless key is revoked with migration_no_creator and
     assert.equal(ownerless.revoked_code, 'migration_no_creator');
     assert.equal(ownerless.household_id, fx.householdId);
     assert.equal(ownerless.key_hash, expected.apiKeys.find(k => k.id === fx.ownerlessKey.id).key_hash);
+  });
+});
+
+test('migration refuses an inactive creator key while binding a new active admin', T, async () => {
+  const fx = fresh();
+  withSqlite(join(fx.dataDir, 'platform.sqlite'), p => {
+    p.prepare("UPDATE household_memberships SET role = 'admin' WHERE user_id = ?").run(fx.member.id);
+    p.prepare("UPDATE household_memberships SET status = 'removed', version = version + 1 WHERE user_id = ?").run(fx.admin.id);
+  });
+  assert.equal((await runMigration(fx)).status, 'complete');
+  withSqlite(join(fx.dataDir, 'platform.sqlite'), p => {
+    const owned = p.prepare('SELECT * FROM api_keys WHERE id = ?').get(fx.ownedKey.id);
+    const ownerless = p.prepare('SELECT * FROM api_keys WHERE id = ?').get(fx.ownerlessKey.id);
+    assert.equal(owned.user_id, fx.admin.id);
+    assert.equal(owned.revoked_code, 'migration_inactive_creator');
+    assert.ok(owned.revoked_at);
+    assert.equal(ownerless.user_id, fx.member.id);
+    assert.equal(ownerless.revoked_at, null);
+    assert.equal(ownerless.household_generation, 1);
+    assert.equal(ownerless.membership_version, 1);
   });
 });
 

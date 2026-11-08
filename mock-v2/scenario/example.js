@@ -2459,7 +2459,7 @@ window.FATHOM_SCENARIO = {
           "dcfsa"
         ],
         "a": [
-          "Nothing yet, and three things could slip. The off-cycle payroll with your {l:deferral} deferral is not scheduled and the deadline is hard. The fixed-fee invoices need a decision because they collide with December payroll cash. And open enrollment is the only cheap window for a Dependent Care FSA, worth about {f:dcfsa_save}.",
+          "Nothing yet, but these decisions could slip. The off-cycle payroll with your {l:deferral} deferral is not scheduled and the deadline is hard. The fixed-fee invoices need a decision because they collide with December payroll cash. And open enrollment is the only cheap window for a Dependent Care FSA, worth about {f:dcfsa_save}.",
           "Taxes are covered: {f:fed_paid} federal is credited and the January and April money is earmarked."
         ]
       },
@@ -2490,7 +2490,7 @@ window.FATHOM_SCENARIO = {
           "compmemo"
         ],
         "a": [
-          "If the {f:baseline} baseline holds, somewhere between your current {f:salary} and 120K. Both are on the curve. Going higher buys 401(k) room at about 40 cents per dollar of tax. Open the salary war game to pick your spot."
+          "If the {f:baseline} baseline holds, use your current {f:salary} as the starting point. Going higher changes your 401(k) room and tax costs. Open the salary war game to compare the stored options and pick your spot."
         ]
       },
       {
