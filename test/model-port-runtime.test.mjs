@@ -125,3 +125,19 @@ test('product engine screen uses neutral labels while the ledger retains provide
   assert.ok(!html.includes('synthetic-provider-model')); assert.ok(!html.includes('claude-'));
   assert.equal(db.prepare('SELECT model FROM spend_ledger').get().model,'synthetic-provider-model');
 });
+
+import { ask, getItem, KIND_OPTIONS } from '../src/ingest/confirm.mjs';
+import { resolvePending } from '../src/resolve/index.mjs';
+import { bestGuess } from '../src/ingest/bestguess.mjs';
+test('alternative fixed-choice confidences stay reviewable and cannot auto-apply account changes', async t => {
+  const { db } = fixture(t);
+  for (const [id, model] of [['alternative','synthetic-local'],['calibrated','jev-1.14.0']]) {
+    db.prepare("INSERT INTO accounts (id,name) VALUES (?,'Synthetic account')").run(id);
+    const item=ask(db,{kind:'account_kind',subject:id,question:'Account kind?',options:KIND_OPTIONS});
+    db.prepare('INSERT INTO confirm_guesses VALUES (?,?,?,?,?)').run(item.id,'cash',JSON.stringify({confidence:1,probabilities:{cash:1},modelPort:true}),model,'2032-01-01');
+    assert.equal(bestGuess(db,getItem(db,item.id),{})?.evidence,"Fathom's categorization");
+    await resolvePending(db,{isOn:()=>false},{now:'2032-01-01T00:00:00Z',packDirs:[],allowed:()=>true,funded:()=>true});
+    assert.equal(getItem(db,item.id).status,id==='alternative'?'pending':'answered');
+    assert.equal(db.prepare('SELECT kind FROM accounts WHERE id=?').get(id).kind,id==='alternative'?null:'cash');
+  }
+});
