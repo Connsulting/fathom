@@ -207,7 +207,9 @@ test('HTTP proposal confirmation executes a pasted-note refresh and persisted re
   assert.equal(upload.status, 200);
   const uploaded = await upload.json();
   assert.equal(uploaded.files[0].fileId, imported.file.id);
-  assert.equal(uploaded.files[0].status, 'duplicate');
+  // H1: identical bytes of a file still waiting answer its stored status, not 'duplicate'.
+  assert.equal(uploaded.files[0].status, imported.file.status);
+  assert.equal(uploaded.files[0].duplicateOf, imported.file.id);
   const undone = await app.postJson(`/api/actions/${receipt.id}/undo`, {});
   assert.equal(undone.status, 409);
 });

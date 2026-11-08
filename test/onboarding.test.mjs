@@ -69,9 +69,12 @@ describe('Tell us note save path', () => {
     const engine = await fakeEngine([[NOTES_OUT]]);
     const first = await O.saveNotes(ctxOf(s, engine, { text: NOTE }));
     const again = await O.saveNotes(ctxOf(s, engine, { text: `  ${NOTE}\r\n` }));
-    assert.equal(again.file.status, 'duplicate');
+    // H1: a repeat of a note still waiting answers the stored status with duplicateOf, not 'duplicate'.
+    assert.equal(first.file.status, 'waiting_for_engine');
+    assert.equal(again.file.status, first.file.status);
+    assert.equal(again.file.duplicateOf, first.file.fileId);
     assert.equal(again.file.fileId, first.file.fileId);
-    assert.equal(again.understood.status, 'duplicate');
+    assert.equal(again.understood.status, first.file.status);
     assert.equal(count(s.db, 'files'), 1);
   }));
 
