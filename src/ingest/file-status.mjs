@@ -6,3 +6,5 @@ export const UNRESOLVED = Object.freeze([
   'waiting_for_engine', 'budget_exhausted', 'needs_confirmation', 'needs_clarification', 'needs_source_text',
 ]);
 export const RESOLVED = Object.freeze(['imported', 'duplicate']);
+// The actor the scheduler's background passes run as. A proposal it staged is restaged under the owner who reviews it.
+export const BACKGROUND_ACTOR = 'fathom';

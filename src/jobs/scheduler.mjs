@@ -71,6 +71,7 @@ import { defaultPackDirs } from '../packs/state.mjs';
 import { syncSimplefin, createFakeSimplefin } from '../ingest/simplefin.mjs';
 import { withoutPrincipal } from '../platform/model-budget.mjs';
 import { isTransient } from './transient.mjs';
+import { BACKGROUND_ACTOR } from '../ingest/file-status.mjs';
 
 export { isTransient };
 
@@ -445,7 +446,7 @@ export function createScheduler({
     if (resuming || stopping || !h || h.db !== db || !(h.inFlight instanceof Set)) return;
     const p = withoutPrincipal(async () => {
       const { resumeImports: resume } = await import('../ingest/pipeline.mjs');
-      await resume(h.db, { household: h, db: h.db, config, engine: h.engine, scheduler: h.scheduler, actorId: 'fathom', now: t.toISOString() });
+      await resume(h.db, { household: h, db: h.db, config, engine: h.engine, scheduler: h.scheduler, actorId: BACKGROUND_ACTOR, now: t.toISOString() });
     }).catch((e) => { log.log(`fathom: import resume error ${errorClassOf(e)}`); }).finally(() => { resuming = null; active.delete(p); });
     resuming = p;
     active.add(p);

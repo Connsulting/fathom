@@ -92,6 +92,7 @@ export function proposalControl(status, { engineOn = false, reasonCode = null } 
 export function proposalCause(file) {
   const s = proposalStatus(file), reason = proposalReason(file);
   if (s === 'waiting_for_engine' && reason === 'owner_correction') return 'Your correction is saved. Waiting for the engine to read the file again.';
+  if (s === 'waiting_for_engine' && reason === 'model_transient') return 'File saved. The engine did not answer in time; Fathom tries once more automatically.';
   if (s === 'budget_exhausted' && FILE_LIMIT.has(reason)) return 'File saved. This file needs more interpretation than one file is allowed; add a smaller file or split it.';
   if (s === 'failed' && String(reason ?? '').startsWith('retry:')) return RETRYING_CAUSE;
   if (s === 'unsupported' && (reason === 'empty_file' || num(file?.counts?.warningCodes?.empty_file) > 0)) return EMPTY_CAUSE;
@@ -1265,7 +1266,8 @@ export function ingestScreens(h) {
     if (input) { input.accept = ['pnl', 'estimates'].includes(kind) ? '.xlsx,.csv' : kind === 'paystub' || kind === 'taxforms' ? '.pdf,.txt' : '.csv,.pdf,.xlsx'; input.click(); }
   }
 
-  // A replacement upload (data-replace-for) removes the file it replaces once every new file was read.
+  // A replacement upload (data-replace-for) removes the file it replaces once every new file was read
+  // and none is that file itself (identical bytes answer the same file id).
   function upload(input) {
     const files = Array.from(input.files || []);
     const replaces = String(input.dataset?.replaceFor ?? '');
@@ -1277,7 +1279,7 @@ export function ingestScreens(h) {
       st.busy = 0;
       const out = res && Array.isArray(res.files) ? res.files : null;
       if (out) st.results = out;
-      if (!replaces || !out?.length || out.some((f) => UNREAD.has(String(f?.status ?? '')))) return draw();
+      if (!replaces || !out?.length || out.some((f) => String(f?.fileId ?? '') === replaces || UNREAD.has(String(f?.status ?? '')))) return draw();
       return Promise.resolve(api.removeFile(replaces)).then(() => draw());
     });
   }

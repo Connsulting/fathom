@@ -13,7 +13,8 @@
 // engine: the household engine or null (status() in try/catch). scheduler: anything with a
 //   read-only schedule() -> [{ id, nextAt, retryMs }]; jobs are omitted when it is null.
 // imports: the unresolved uploaded files (src/ingest/file-status.mjs), with files: their count.
-//   Retrying while Fathom resumes them all ('pending', or failed with a `retry:` note), else needs_you.
+//   Retrying while Fathom resumes them all ('pending', failed with a `retry:` note, or
+//   waiting_for_engine with note model_transient), else needs_you.
 // attention: the first service (engine, simplefin, email, imports, then jobs in JOBS order) that
 //   needs the owner now, or has been retrying for more than a day; else null.
 
@@ -251,7 +252,8 @@ function importsService(db) {
   const rows = db.prepare(`SELECT status, note, uploaded_at FROM files WHERE removed_at IS NULL AND stored_path IS NOT NULL
                            AND status IN (${UNRESOLVED.map(() => '?').join(', ')})`).all(...UNRESOLVED);
   if (!rows.length) return healthy(base);
-  const fathom = (r) => r.status === 'pending' || (r.status === 'failed' && String(r.note ?? '').startsWith('retry:'));
+  const fathom = (r) => r.status === 'pending' || (r.status === 'failed' && String(r.note ?? '').startsWith('retry:'))
+    || (r.status === 'waiting_for_engine' && r.note === 'model_transient');
   const owner = rows.filter((r) => !fathom(r)).length;
   const n = rows.length;
   const since = minIso(...rows.map((r) => r.uploaded_at));

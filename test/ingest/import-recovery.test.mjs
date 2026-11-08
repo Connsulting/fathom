@@ -673,8 +673,10 @@ function failEngine(x, errors) {
   };
   return { calls, restore() { engine.call = real; } };
 }
-const timeoutError = () => Object.assign(new Error('synthetic engine timeout naming Synthetic Private Payee'), { name: 'TimeoutError' });
-const connectionTimeout = () => Object.assign(new Error('synthetic connection timeout naming Synthetic Private Payee'), { code: 'ETIMEDOUT' });
+// A transient failure whose call reported its usage: the file's allowance is charged what was used.
+const USED = Object.freeze({ costUsd: 0.001, tokens: { input_tokens: 20, output_tokens: 40 } });
+const timeoutError = (accounting = USED) => Object.assign(new Error('synthetic engine timeout naming Synthetic Private Payee'), { name: 'TimeoutError', ...(accounting ? { accounting } : {}) });
+const connectionTimeout = () => Object.assign(new Error('synthetic connection timeout naming Synthetic Private Payee'), { code: 'ETIMEDOUT', accounting: USED });
 
 test('a transient model failure waits for the engine, shows that Fathom tries again, and is retried once automatically', async () => {
   const x = await setup();
@@ -736,6 +738,25 @@ test('a transient model failure that fails again on its automatic retry asks the
     assert.deepEqual(second.resumed, []);
     assert.equal(eng.calls.length, 2);
     assert.deepEqual([fileRowOf(x.db, r.fileId).status, fileRowOf(x.db, r.fileId).note], ['needs_clarification', 'model_failed']);
+  } finally { eng.restore(); x.close(); }
+});
+
+// The pinned budget rule (test/ingest/model-budget.test.mjs, unknown failed call): a failure with no
+// usage keeps its conservative reservation, retry or not. The one automatic retry stays inside that
+// budget: when the reservation leaves no room it ends at the budget state without dispatching, and is
+// not retried again.
+test('a transient model failure with unknown usage gets its automatic retry only inside the file budget', async () => {
+  const x = await setup();
+  const eng = failEngine(x, [timeoutError(null)]);
+  try {
+    const csv = MODEL_CSV('model transient unknown usage');
+    const r = await P.ingestFile(x.db, modelFile(csv), x.opts);
+    assert.deepEqual([fileRowOf(x.db, r.fileId).status, fileRowOf(x.db, r.fileId).note], ['waiting_for_engine', 'model_transient']);
+    const first = await P.resumeImports(x.db, { ...bg(x), fake: await fakeFor(csv) });
+    assert.deepEqual(first.resumed, [{ fileId: r.fileId, status: 'budget_exhausted' }]);
+    assert.equal(eng.calls.length, 1, 'a retry that does not fit never dispatches');
+    assert.deepEqual((await P.resumeImports(x.db, bg(x))).resumed, []);
+    assert.equal(serviceStatus({ db: x.db, now: new Date(NOW) }).imports.state, 'needs_you');
   } finally { eng.restore(); x.close(); }
 });
 

@@ -150,18 +150,20 @@ export async function retryFile(db, fileId, opts = {}) {
 }
 
 // The scheduler's resume pass: every live file left 'pending' by an interrupted run, and every
-// failed file marked for one automatic retry, is routed again from its stored bytes, oldest first.
-// Files this household is routing now are skipped. A refusal or error logs a safe class and the
-// pass goes on. Returns { resumed: [{ fileId, status }] }, one entry per attempted file.
+// failed file or transient model failure marked for one automatic retry, is routed again from its
+// stored bytes, oldest first. Files this household is routing now are skipped. A refusal or error
+// logs a safe class and the pass goes on. Returns { resumed: [{ fileId, status }] }, one entry per
+// attempted file.
 export async function resumeImports(db, opts = {}) {
   const { inFlight } = householdOf(db, opts);
   const rows = db.prepare(`SELECT id, status FROM files WHERE removed_at IS NULL AND stored_path IS NOT NULL
-                           AND (status = 'pending' OR (status = 'failed' AND note LIKE 'retry:%')) ORDER BY uploaded_at, rowid`).all();
+                           AND (status = 'pending' OR (status = 'failed' AND note LIKE 'retry:%')
+                             OR (status = 'waiting_for_engine' AND note = 'model_transient')) ORDER BY uploaded_at, rowid`).all();
   const resumed = [];
   for (const row of rows) {
     if (inFlight.has(row.id)) continue;
     try {
-      const out = await retryFile(db, row.id, { ...opts, mode: 'retry', autoRetried: row.status === 'failed' });
+      const out = await retryFile(db, row.id, { ...opts, mode: 'retry', autoRetried: row.status !== 'pending' });
       resumed.push({ fileId: row.id, status: out.status });
     } catch (error) {
       console.error('fathom: import resume failed', failureClass(error));
