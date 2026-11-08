@@ -16,7 +16,7 @@ const additions = {
   'write:accounts': 'Rename accounts, set their last four, owner and kind, and merge duplicates with confirmation.',
   'write:categories': 'Correct transaction categories and set merchant rules.',
   'write:confirm': 'Answer and reopen Confirm questions and mark expected tax documents.',
-  'write:imports': 'Import files and retry or build from imported documents.',
+  'write:imports': 'Import files, record expected payments and retry or build from imported documents.',
   'write:jobs': 'Run planning, sync, freshness and guess jobs now.',
   'write:decisions': 'Pick and decide war-game options and reopen decisions.',
 };

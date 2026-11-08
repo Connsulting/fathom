@@ -321,6 +321,8 @@ export function loadThreads(db) {
 
 // The fixed Ask starter questions, in their pinned order. No figures, no tokens.
 export const ASK_STARTERS = Object.freeze([
+  Object.freeze({ id: 'wargame-salary', q: 'Compare the salary options for my S corp side by side.' }),
+  Object.freeze({ id: 'wargame-deferral', q: 'Should I move some December invoices into January? Compare the options.' }),
   Object.freeze({ id: 'attention', q: 'What needs my attention right now?' }),
   Object.freeze({ id: 'taxes', q: 'How are our tax payments tracking this year?' }),
   Object.freeze({ id: 'scorp', q: 'How is the S corp doing this year?' }),
@@ -329,10 +331,12 @@ export const ASK_STARTERS = Object.freeze([
 
 // The starters whose condition holds: attention (a visible rec proposed or doing), taxes
 // (any tax payment), scorp (fact income.sCorp is true or any P&L line), yearend (always).
-export function loadAskStarters(db, recs) {
+export function loadAskStarters(db, recs, wargame = {}) {
   const exists = table => !!db.prepare(`SELECT EXISTS (SELECT 1 FROM ${table}) AS x`).get().x;
   const sCorp = parse(db.prepare("SELECT value FROM facts WHERE key = 'income.sCorp'").get()?.value, null) === true;
   const holds = {
+    'wargame-salary': ['open', 'upcoming'].includes(wargame.salary?.status),
+    'wargame-deferral': ['open', 'upcoming'].includes(wargame.deferral?.status),
     attention: recs.some(r => ['proposed', 'doing'].includes(r.status)),
     taxes: exists('tax_payments'),
     scorp: sCorp || exists('pnl_lines'),
@@ -774,7 +778,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
       picks,
       conversations: loadConversations(db),
       threads: loadThreads(db),
-      askStarters: loadAskStarters(db, recs),
+      askStarters: loadAskStarters(db, recs, wargame),
       packs: Object.fromEntries(packs.map(p => [p.def.id, { active: p.live.active, exploring: p.live.exploring, whatIfDone: p.live.whatIfDone }])),
       yourPlans: loadYourPlans(db),
       clock: clk,

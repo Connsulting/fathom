@@ -34,7 +34,7 @@ export async function main(argv = process.argv.slice(2), { scripts } = {}) {
   for (const c of scorecard.cases) counts[c.status] = (counts[c.status] ?? 0) + 1;
   console.log(JSON.stringify({ cases: scorecard.completed, selected: scorecard.selected, attempted: scorecard.attempted, results: counts,
     reservedUsd: scorecard.reservedUsd, costUsd: scorecard.costUsd, stopped: scorecard.stopped,
-    failedDrafts: scorecard.failedDrafts,
+    failedDrafts: scorecard.failedDrafts, correctionTriggers: scorecard.correctionTriggers,
     scorecard: scorecard.cases.map(c => ({ id: c.id, status: c.status, failingChecks: c.failingChecks ?? [],
       missingOperations: c.missingOperations ?? [], failedDrafts: c.failedDrafts ?? 0 })),
     unrun: scorecard.cases.filter(c => c.status === 'unrun').map(({ id, reason }) => ({ id, reason })) }));

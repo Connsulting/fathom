@@ -86,6 +86,8 @@ test('Confirm and fact operations enforce scopes and proposal bases without writ
  }
  let pending;await proposalTools(tools).find(t=>t.name==='answer').handler({operation:'confirm',items:[{id,answer:'owner'}],propose:true},{...s.ctx,onProposal:v=>{pending=v;}});
  assert.equal(getItem(s.db,id).status,'pending');const basis=pending.basis;
+ s.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('manual','2032-03-01',-10,'New posting')").run();
+ assert.equal(proposalBasis(s.db,'answer',pending.scopes,pending.args),basis);
  s.db.prepare("UPDATE accounts SET owner='Joint' WHERE id='manual'").run();
  assert.notEqual(proposalBasis(s.db,'answer',pending.scopes,pending.args),basis);
 });
@@ -130,4 +132,11 @@ test('C8 eval scripts select the requested household subjects without unrelated 
  const yearendCalls=(await yearend.script({db:s.db,clock:'2026-11-05'}))[0].toolCalls;
  const health=await callTool('household',yearendCalls[0].args,{db:s.db,clock:'2026-11-05'});
  assert.match(health.yearend.items.find(item=>item.key===yearendCalls[1].args.itemKey).issuer,/credit union/i);
+});
+
+test('Confirm proposals retain the target item row',async t=>{
+ const s=await setup(t),id=s.q('account_owner');let pending;
+ await proposalTools(tools).find(t=>t.name==='answer').handler({operation:'confirm',items:[{id,answer:'owner'}],propose:true},{...s.ctx,onProposal:v=>{pending=v;}});
+ s.db.prepare("UPDATE confirm_items SET question='Updated question' WHERE id=?").run(id);
+ assert.notEqual(proposalBasis(s.db,pending.tool,pending.scopes,pending.args),pending.basis);
 });

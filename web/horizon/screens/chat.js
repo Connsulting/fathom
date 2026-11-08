@@ -56,7 +56,7 @@ let H = null;
 
 export function bind(kit) {
   H = kit;
-  useKit({ esc, money, registerFigures: (map) => { if (kit.api && kit.api.registerFigures) kit.api.registerFigures(map); } });
+  useKit({ esc, money, getApi: () => kit.api, askAgain: (text, key) => sendAsk({ text, key }), registerFigures: (map) => { if (kit.api && kit.api.registerFigures) kit.api.registerFigures(map); } });
 }
 
 // A message's body: its stored html, with an answer's blocks placed after paragraph `after` and
@@ -466,7 +466,7 @@ export function workHtml(m) {
   const { esc } = H;
   const actions = H.arr(m.provenance.actions).map(a => `<div class="h-action-receipt" data-receipt="${esc(a.id)}" role="status">${receiptLine(a)}`
     + (a.planningPending ? '<p class="h-mute">Saved. Planning is pending.</p>' : '')
-    + (a.undo?.available === false ? `<span class="h-mute">${esc(a.undo.reason)}</span>` : a.undone ? '<span class="h-mute">Undone</span>' : `<button type="button" class="h-btn" data-undo-action="${esc(a.id)}">Undo</button>`) + '</div>').join('');
+    + (a.undo?.available === false ? `<span class="h-mute">${esc(a.undo.reason)}</span>` : a.undone ? '<span class="h-mute">Undone</span>' : `<button type="button" class="h-btn" data-undo-action="${esc(a.id)}"${m.provenance.blockControl ? ` data-blk-ctl="${esc(m.provenance.blockControl)}"` : ''}>Undo</button>`) + '</div>').join('');
   if (m.notice || !isObj(m.provenance.work)) return actions;
   const w = m.provenance.work;
   const ms = Number(w.ms);
@@ -744,6 +744,10 @@ const hostOf = (el) => (el && el.closest && el.closest('.h-askp') ? 'panel' : 'p
 // A question from a rec dialog, asked into the rec's attached thread (none: a new thread asked
 // from the rec); text is the typed or chip text, questionId the rec.qa index for a chip. Returns
 // false when another question is still in flight.
+export function askWargame(text) {
+  return sendAsk({ key: null, text, host: 'panel' });
+}
+
 export function askFromRec({ recId, text, questionId, draftKey, refocus }) {
   if (!H || !H.api || !recId) return false;
   return sendAsk({ key: recKey(recId), recId, text: String(text || '').trim(), questionId, draftKey, refocus, host: 'dialog' });
@@ -797,7 +801,11 @@ export function onClick(e) {
   if (undo && H?.root?.contains(undo)) {
     e.preventDefault();
     undo.disabled = true;
-    Promise.resolve(H.api.actionUndo(undo.dataset.undoAction)).finally(() => { if (undo.isConnected) undo.disabled = false; });
+    const ctl = undo.dataset.blkCtl;
+    Promise.resolve(H.api.actionUndo(undo.dataset.undoAction)).finally(() => {
+      if (undo.isConnected) undo.disabled = false;
+      if (ctl) H.root.querySelector(`[data-blk-ctl="${CSS.escape(ctl)}"]`)?.focus({ preventScroll: true });
+    });
     return true;
   }
   if (proposalClick(e)) return true;

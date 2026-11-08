@@ -126,7 +126,6 @@ export function buildRegistry(modules, toolHeaders = headers) {
     'When no tool covers the question, say "Fathom does not have that" and what it does have. No securities selection, live market quotes, money movement or tax filing.',
     'Use write operations only in chat when the owner asked for that change in this conversation. Confirm each change with its receipt and Undo. Never chain unrequested writes. Confirm only when their request is ambiguous.',
     'Use only typed owner words or stored data for fact values and goal targets; never invent a figure or infer a date.',
-    'Write stored figures as {f:key} tokens returned by household.figures, never typed amounts.',
     ...rules,
   ].join('\n');
   const instructions = [mcpInstructions, ...modules.flatMap(m => m.askRules || []),

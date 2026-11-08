@@ -117,7 +117,7 @@ function ctxFor(messageId, block) {
   const figs = figureList(snap);
   const index = new Map(figs.map(([holder], i) => [holder, i]));
   const reg = {};
-  figs.forEach(([, entry], i) => { reg[`blk:${key}:${i}`] = entry; });
+  figs.forEach(([, entry], i) => { reg[`blk:${key}:${i}`] = { ...entry, stale: blockState(messageId, block.id).status === 'stale' }; });
   K.registerFigures(reg);
   const fig = (holder) => {
     const i = index.get(holder);
@@ -132,6 +132,7 @@ function ctxFor(messageId, block) {
     builtAt: typeof block.builtAt === 'string' ? block.builtAt : '',
     state: blockState(messageId, block.id),
     ctl: (name) => `${key}:${name}`,
+    rowFigure: key => `<span class="fx-fig" data-fig="${K.esc(key)}" tabindex="0">${K.esc(formatByUnit(K.getApi?.()?.fig(key)?.v, 'usd'))}</span>`,
   };
 }
 
@@ -141,9 +142,13 @@ function blockHtml(messageId, block) {
   const ctx = ctxFor(messageId, block);
   LIVE.set(ctx.key, { messageId, block });
   const title = typeof block.snapshot.title === 'string' ? block.snapshot.title : '';
+  const status = ctx.state.status;
+  const stamp = block.asOf || block.builtAt?.slice(0, 10) || '';
+  const note = status === 'stale' ? `<p class="h-blk-note"><strong>Stale</strong> Your data changed after this answer. Values are as of ${K.esc(stamp)}. <button type="button" class="h-btn ghost" data-blk-ctl="${K.esc(ctx.ctl('again'))}">Ask again</button></p>`
+    : status === 'unavailable' ? '<p class="h-blk-note">This data is no longer available</p>' : '';
   return `<figure class="h-blk h-blk-${K.esc(block.op)}" data-blk="${K.esc(ctx.key)}">`
     + `<figcaption class="h-blk-t">${K.esc(title)}</figcaption>`
-    + r.render(block.snapshot, ctx)
+    + note + (status === 'unavailable' ? '<div class="h-blk-unavailable">' : '<div>') + r.render(block.snapshot, ctx) + '</div>'
     + '</figure>';
 }
 
@@ -193,12 +198,14 @@ function redraw(root) {
   if (!live) return;
   const a = document.activeElement;
   const ctl = a && root.contains(a) ? a.getAttribute('data-blk-ctl') : null;
+  const heading = a && root.contains(a) && a.hasAttribute('data-blk-drill-heading');
   const sel = a && typeof a.selectionStart === 'number' ? [a.selectionStart, a.selectionEnd] : null;
   const tmp = document.createElement('div');
   tmp.innerHTML = blockHtml(live.messageId, live.block);
   const next = tmp.firstElementChild;
   root.replaceWith(next);
   bindRoot(next);
+  if (heading) next.querySelector('[data-blk-drill-heading]')?.focus({ preventScroll: true });
   if (!ctl) return;
   const t = next.querySelector(`[data-blk-ctl="${CSS.escape(ctl)}"]`);
   if (!t) return;
@@ -211,8 +218,59 @@ function bindRoot(root) {
   const live = LIVE.get(root.getAttribute('data-blk'));
   const r = live && RENDERERS[live.block.op];
   if (!r || typeof r.bind !== 'function') return;
+  const host = root.parentElement;
   root.setAttribute('data-blk-bound', '');
-  r.bind(root, live.block.snapshot, { state: blockState(live.messageId, live.block.id), redraw: () => redraw(root) });
+  root.addEventListener('click', async e => {
+    const button = e.target.closest?.('[data-blk-ctl$=":again"]');
+    if (!button || !root.contains(button)) return;
+    const context = conversationFor(live.messageId);
+    if (!context?.question) return;
+    button.disabled = true;
+    await K.askAgain(context.question, context.key);
+    if (button.isConnected) button.disabled = false;
+  });
+  r.bind(root, live.block.snapshot, { ...ctxFor(live.messageId, live.block),
+    redraw: () => redraw(host?.querySelector(`[data-blk="${CSS.escape(root.getAttribute('data-blk'))}"]`)),
+    rows: drill => drill.route === 'spending' ? K.getApi().spendingRows(drill.query) : K.getApi().pnlRows(drill.query) });
+}
+
+function conversationFor(messageId) {
+  for (const [key, list] of Object.entries(K.getApi?.()?.s?.live?.conversations || {})) {
+    if (!key.startsWith('ask:')) continue;
+    const index = list.findIndex(m => m.id === messageId);
+    if (index < 0) continue;
+    const question = list.slice(0, index).reverse().find(m => m.role === 'me')?.text;
+    if (typeof document === 'undefined') return { key, question };
+    const text = document.createElement('div'); text.innerHTML = question || '';
+    return { key, question: text.textContent };
+  }
+  return null;
+}
+
+let opened = new Set();
+let statusQueued = false;
+function checkOpened() {
+  if (statusQueued || !K.getApi?.()?.blockStatus) return;
+  statusQueued = true;
+  queueMicrotask(() => {
+    statusQueued = false;
+    const visible = new Set();
+    for (const root of document.querySelectorAll('figure.h-blk[data-blk]')) {
+      const live = LIVE.get(root.getAttribute('data-blk'));
+      const context = live && conversationFor(live.messageId);
+      if (context) visible.add(context.key);
+    }
+    for (const key of visible) if (!opened.has(key)) {
+      K.getApi().blockStatus(key.slice(4)).then(data => {
+        for (const b of arr(data?.blocks)) blockState(b.messageId, b.id).status = b.state;
+        for (const root of document.querySelectorAll('figure.h-blk[data-blk]')) {
+          const live = LIVE.get(root.getAttribute('data-blk'));
+          if (live && conversationFor(live.messageId)?.key === key) redraw(root);
+        }
+      });
+    }
+    opened = visible;
+  });
 }
 
 function bindAll(scope) {
@@ -225,6 +283,7 @@ if (typeof document !== 'undefined' && typeof MutationObserver !== 'undefined') 
   const watch = () => {
     new MutationObserver((list) => {
       for (const rec of list) for (const n of rec.addedNodes) if (n.nodeType === 1) bindAll(n);
+      checkOpened();
     }).observe(document.body, { childList: true, subtree: true });
     bindAll(document.body);
   };

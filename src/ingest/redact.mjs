@@ -27,7 +27,11 @@ export function redactProviderText(value, field = '') {
   if (typeof value === 'string') return /^\d{9}$/.test(value) && TAX_FIELD.test(field) ? 'XXXXXXXXX' : redactTaxIdentifiers(value);
   if (Array.isArray(value)) return value.map(item => redactProviderText(item));
   if (!value || typeof value !== 'object') return value;
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [redactTaxIdentifiers(key), redactProviderText(item, key)]));
+  const binary = ['document', 'image'].includes(value.type) && value.source?.type === 'base64';
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [redactTaxIdentifiers(key),
+    binary && key === 'source'
+      ? Object.fromEntries(Object.entries(item).map(([name, data]) => [redactTaxIdentifiers(name), name === 'data' && typeof data === 'string' ? data : redactProviderText(data, name)]))
+      : redactProviderText(item, key)]));
 }
 
 export function redact(text) {

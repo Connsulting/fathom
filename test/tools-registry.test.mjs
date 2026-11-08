@@ -16,7 +16,7 @@ const expected = {
   retirement: ['target', 'growth', 'after_tax', 'access', 'bridge'],
   spending: ['total', 'compare', 'definitions', 'cash_flow', 'recurring', 'obligations', 'projection'],
   goals: ['list', 'pace', 'suggestions'], recommendations: ['list', 'detail', 'advisor', 'wargame'],
-  knowledge: ['packs', 'search', 'entry'], answer: ['fact', 'rec_questions', 'confirm', 'reopen', 'yearend_mark'],
+  knowledge: ['packs', 'search', 'entry'], answer: ['fact', 'expected_transaction', 'rec_questions', 'confirm', 'reopen', 'yearend_mark'],
   act_on_recommendation: ['status', 'owner', 'step', 'start_over', 'decide', 'revisit', 'pick_point'], update_goal: ['create', 'edit', 'archive', 'delete', 'suggestion'],
   advisor_review: ['send', 'verdict', 'checkin', 'packet'], update_preferences: ['remember', 'curve', 'forget', 'save_definition', 'delete_definition', 'pack'],
   refresh: ['import_file', 'retry_import', 'build_your_plans', 'run_job'], undo: ['undo'],
@@ -126,8 +126,8 @@ test('the assembled rule text holds section 4 rules 2 to 6', async () => {
   assert.equal(rules.length, 5);
   for (const line of rules) assert.ok(instructions.includes(line), line);
   const [arithmetic, quoting, refs, assumptions, gaps] = rules;
-  assert.match(arithmetic, /digits.*derived figures only from calculate.*no figure without a tool source/);
-  assert.match(quoting, /quote.*\{f:key\}.*calculate with refs and named assumptions/);
+  assert.match(arithmetic, /digits.*Call calculate for every sum, difference, ratio or change.*without a tool source/);
+  assert.match(quoting, /quote exactly.*calculate with refs and named assumptions/);
   assert.match(quoting, /unsigned.*spent.*paid/);
   assert.match(refs, /Copy a figure's ref field.*do not compose refs by hand.*same arguments/);
   assert.match(assumptions, /name, value and source.*owner.*evidence.*preference.*fact.*default.*Never mark a value as the owner's/);

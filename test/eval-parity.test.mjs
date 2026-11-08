@@ -4,6 +4,7 @@ import { loadCases, validateCases } from '../evals/cases.mjs';
 import { runCases, createEvalLedger, createEvalStore } from '../evals/harness.mjs';
 import { ANSWER_STYLE } from '../src/api/answerer.mjs';
 import { estimateEvalCost } from '../evals/reservation.mjs';
+import { SDK_RESPONSE_BOUND } from '../src/engine/index.mjs';
 import { usageCostUsd, DEFAULT_MODEL, TITLE_MODEL, estimateUnknownCost } from '../src/engine/pricing.mjs';
 import { main } from '../evals/run.mjs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -93,7 +94,7 @@ test('AC5: an unaffordable round leaves later affordable cases runnable at concu
   assert.equal(r.outstandingReservedUsd, 0);
 });
 
-test('AC5: realistic synthetic usage rows stay below reservations and below three times actual', async () => {
+test('AC5: synthetic usage rows fit the production SDK reservation bound', async () => {
   // Synthetic English/JSON prompt sizes and SDK usage shapes, not a live usage recording.
   const fixtures = [
     { model: DEFAULT_MODEL, characters: 12000, maxTokens: 1024,
@@ -118,8 +119,8 @@ test('AC5: realistic synthetic usage rows stay below reservations and below thre
       const estimate = estimateEvalCost(request).costUsd;
       assert.equal(actual, row.cost_usd);
       assert.ok(estimate >= actual, `fixture ${i}: reserve covers actual`);
-      assert.ok(estimate / actual < 3, `fixture ${i}: calibrated ratio below three`);
-      assert.ok(estimateUnknownCost(request).costUsd > estimate, 'production unknown-usage accounting remains conservative');
+      assert.equal(estimate, Number((estimateUnknownCost(request).costUsd * SDK_RESPONSE_BOUND).toFixed(12)),
+        `fixture ${i}: eval admission covers the SDK response bound`);
     }
   } finally { await store.close(); }
 });

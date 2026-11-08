@@ -151,6 +151,7 @@ test('CLI entrypoint exits nonzero and writes evidence for a self-computed answe
     const summary = logged.at(-1);
     assert.equal(summary.scorecard[0].id, 'retirement-hsa-room');
     assert.ok(summary.scorecard[0].failingChecks.includes('figures.self-computed'));
+    assert.equal(summary.correctionTriggers['figures.self-computed'], 1);
     assert.ok(logged.some(line => line.type === 'round' && line.estimateUsd === 0 && line.actualUsd === 0 && line.remainingUsd === 100));
     assert.ok(summary.scorecard.every(row => !Object.hasOwn(row, 'delivered') && !Object.hasOwn(row, 'figures')));
   } finally { await rm(dir, { recursive: true, force: true }); }
@@ -281,6 +282,69 @@ test('title calls share the cap and later unaffordable cases are reported', asyn
   assert.equal(r.cases[1].status, 'budget-stopped');
   assert.equal(r.outstandingReservedUsd, 0);
 });
+
+
+
+test('scorecards count correction triggers per answer even when the delivered answer is clean', async () => {
+  const c = (await loadCases()).find(c => c.id === 'unavailable-market-forecast');
+  const dir = await mkdtemp(join(tmpdir(), 'fathom-trigger-scorecard-'));
+  try {
+    const r = await runCases({ cases: [c], outDir: dir, scripts: ({ attempt }) => [
+      { toolCalls: [{ name: 'accounts', args: { operation: 'holdings' } }], costUsd: 0 },
+      { text: attempt ? "Fathom doesn't have that." : 'Expect forty percent or fifty percent.', costUsd: 0 },
+    ] });
+    assert.equal(r.cases[0].status, 'pass');
+    assert.deepEqual(r.correctionTriggers, { 'figures.spelled_out': 1 });
+    assert.deepEqual(r.cases[0].turns[0].discipline.triggeredBy, ['figures.spelled_out']);
+    assert.match(await readFile(join(dir, 'summary.md'), 'utf8'), /figures\.spelled_out: 1/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('recorded synthetic live eval overruns fit the reservation, including corrective requests', () => {
+  // Admission receipts from the synthetic eval at 6d9e494, rounds 1, 3, 81, 82, 85, 86.
+  // Receipts contain costs, not token usage or transcripts; reconstruct byte lengths from
+  // the old estimator (ceil(bytes / 3) + 1024, priced as a five-minute cache write).
+  const receipts = [
+    [0.318715, 0.334673], [0.340835, 0.364248], [0.865815, 0.9678536],
+    [0.93785, 1.0877186], [0.865775, 0.9698036], [0.870365, 0.9819436],
+  ];
+  for (const [estimateUsd, actualUsd] of receipts) {
+    const recordedTokens = Math.round((estimateUsd - 1024 * 20 / 1e6) / (5 / 1e6));
+    const request = { model: DEFAULT_MODEL, maxTokens: 1024, system: 'Synthetic system.', tools: [],
+      messages: [{ role: 'user', content: '' }] };
+    const emptyBytes = Buffer.byteLength(JSON.stringify({ system: request.system, messages: request.messages, tools: [] }));
+    request.messages[0].content = 'x'.repeat(3 * (recordedTokens - 1024) - emptyBytes);
+    assert.equal(Number(((recordedTokens * 5 + 1024 * 20) / 1e6).toFixed(12)), estimateUsd);
+    assert.ok(estimateEvalCost(request).costUsd >= actualUsd, `${estimateUsd} must cover ${actualUsd}`);
+    const corrective = { ...request, messages: [...request.messages, { role: 'assistant', content: 'Forty dollars.' },
+      { role: 'user', content: 'Correct figures.spelled_out. Write every figure as digits.' }] };
+    assert.ok(estimateEvalCost(corrective).costUsd >= actualUsd);
+  }
+});
+
+
+test('scripted catalog drafts follow all four steers without a corrective round', async () => {
+  const ids = ['business-stored-revenue', 'net-worth-change', 'spending-annual-exclusions', 'spending-latest-groceries'];
+  const cases = (await loadCases()).filter(c => ids.includes(c.id));
+  assert.equal(cases.length, ids.length);
+  const r = await runCases({ cases });
+  assert.deepEqual(r.correctionTriggers, {});
+  for (const c of r.cases) {
+    assert.equal(c.status, 'pass', c.id);
+    for (const t of c.turns) {
+      assert.equal(t.attempts.length, 1, c.id);
+      assert.equal(t.grounding.retried, false, c.id);
+      assert.equal(t.attempts[0].figures.ok, true, c.id);
+      assert.deepEqual(t.attempts[0].figures.spelledOut, [], c.id);
+    }
+  }
+  const calls = id => r.cases.find(c => c.id === id).turns[0].tools;
+  assert.ok(calls(ids[0]).some(t => t.name === 'household' && t.args.operation === 'figures'));
+  assert.ok(calls(ids[1]).some(t => t.name === 'calculate' && t.args.operation === 'subtract'));
+  assert.ok(calls(ids[2]).some(t => t.name === 'spending' && t.args.operation === 'total'));
+  assert.ok(calls(ids[3]).some(t => t.name === 'transactions' && t.args.operation === 'search'));
+});
+
 
 test('a required block cannot pass vacuously when a script omits it', async () => {
   const c = structuredClone((await loadCases()).find(c => c.id === 'retirement-hsa-room'));
