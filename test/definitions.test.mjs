@@ -119,3 +119,26 @@ test('migration preserves existing preferences and demo reset clears linked rows
   assert.equal(db.prepare('SELECT count(*) n FROM spending_definitions').get().n, 0);
   assert.equal(db.prepare('SELECT count(*) n FROM preferences').get().n, 0);
 });
+
+test('Ask saves a definition only after explicit confirmation and the receipt offers atomic Undo', async () => {
+  const { createEngine } = await import('../src/engine/index.mjs');
+  const { threadCreate, ask } = await import('../src/api/handlers.mjs');
+  const db = await store(), household = householdOf(db);
+  const inner = createEngine({ mode: 'fake' });
+  const engine = { mode: 'fake', isOn: () => true, call: req => req.purpose === 'title'
+    ? Promise.resolve({ text: '{"title":"Synthetic selection"}' })
+    : inner.call({ ...req, fake: [{ toolCalls: [{ name: 'update_preferences', args: { ...args, propose: true } }], costUsd: 0 },
+      { text: 'Save your elective spending selection? Confirm below.', costUsd: 0 }] }) };
+  const ctx = { db, household, identity: { id: 'person-a' }, config: {},
+    answerer: createLiveAnswerer({ engine, root: household.root, services: { ...household.services, engine } }) };
+  const proposed = await threadCreate({ ...ctx, body: { text: words } });
+  assert.equal(proposed.message.provenance.pendingAction.operation, 'save_definition');
+  assert.deepEqual(snapshot(db), { definitions: [], preferences: [] });
+  const confirmed = await ask({ ...ctx, body: { key: proposed.thread.key, text: 'yes' } });
+  const receipt = confirmed.message.provenance.actions[0];
+  assert.equal(snapshot(db).definitions.length, 1);
+  assert.equal(listPreferences(db)[0].definitionId, args.definitionId);
+  assert.equal(receipt.after, listPreferences(db)[0].text);
+  await callTool('undo', { operation: 'undo', id: receipt.id }, context(db));
+  assert.deepEqual(snapshot(db), { definitions: [], preferences: [] });
+});
