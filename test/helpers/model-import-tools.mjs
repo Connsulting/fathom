@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { fixture, recipe } from './model-import.mjs';
 import { serveAppFixture } from './server.mjs';
 import { createAuthStore } from '../../src/auth/store.mjs';
-import { createEngine } from '../../src/engine/index.mjs';
+import { createRuntimeEngine } from '../../src/engine/runtime.mjs';
 import { indexSource } from '../../src/ingest/model-source.mjs';
 import { applyLayout } from '../../src/ingest/model-layout.mjs';
 import { SCOPES } from '../../src/mcp/keys.mjs';
@@ -28,7 +28,7 @@ export async function interpretation(text, { negate = false, pasted = false } = 
 export async function modelApp(t) {
   const x = await fixture({ engine: 'fake' });
   createAuthStore(x.platform).setPlatformSetting('instance_model_cap_usd', 50);
-  const inner = createEngine({ mode: 'fake' }), responses = [];
+  const inner = createRuntimeEngine({ db: x.db, config: { engine: 'fake', fakeStreamMs: 0 } }), responses = [];
   let extracts = 0, chat = [], onExtract = () => {}, onChat = () => {};
   const engine = { ...inner, call(request) {
     if (request.purpose === 'extract') {
@@ -41,8 +41,8 @@ export async function modelApp(t) {
     return inner.call({ ...request, fake: [{ text: request.purpose === 'title' ? '{"title":"Synthetic import"}' : '{}', costUsd: 0 }] });
   } };
   const app = await serveAppFixture({ ...x, engine, authenticated: true });
-  const { key } = app.keys.create({ householdId: app.household.id, userId: app.session.user.id, name: 'Synthetic import key', scopes: SCOPES });
   t.after(async () => { await app.household.scheduler.stop(); await app.close(); x.close(); });
+  const { key } = app.keys.create({ householdId: app.household.householdId, userId: app.session.user.id, name: 'Synthetic import key', scopes: SCOPES });
   return { ...x, app, engine, responses, get extracts() { return extracts; },
     set chat(value) { chat = value; }, set onExtract(value) { onExtract = value; }, set onChat(value) { onChat = value; },
     async mcp(operation, args = {}) {
