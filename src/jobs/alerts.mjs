@@ -18,7 +18,7 @@ import { parseJson, tx } from '../store/db.mjs';
 import { esc } from '../shared/tokens.mjs';
 import { sendEmail } from '../email/send.mjs';
 import { C, FONT, darkDocument } from '../email/palette.mjs';
-import { STYLE, figureRegistry, narrativeParts, partsRenderer, footnoteText, footnoteHtml } from '../email/brief.mjs';
+import { appLink, STYLE, figureRegistry, narrativeParts, partsRenderer, footnoteText, footnoteHtml } from '../email/brief.mjs';
 
 export const THRESHOLDS = Object.freeze([14, 7, 1]);
 const ASCENDING = [...THRESHOLDS].sort((a, b) => a - b);
@@ -83,7 +83,7 @@ function whenWords(daysLeft) {
 }
 
 // One combined email for a list of due alerts; figures renumbered across the whole email.
-export function renderAlerts(alerts, { clock, publicUrl = null } = {}) {
+export function renderAlerts(alerts, { clock, publicUrl = null, householdId = null } = {}) {
   const figures = [];
   const seen = new Set();
   for (const a of alerts) {
@@ -95,7 +95,7 @@ export function renderAlerts(alerts, { clock, publicUrl = null } = {}) {
   }
   const r = partsRenderer(figures);
   const base = typeof publicUrl === 'string' && publicUrl ? publicUrl.replace(/\/+$/, '') : null;
-  const linkOf = (a) => (base ? (a.recId ? `${base}/#/rec/${encodeURIComponent(a.recId)}` : `${base}/#/plan`) : null);
+  const linkOf = a => appLink(base, a.recId ? 'rec' : 'plan', a.recId || undefined, householdId);
   const n = alerts.length;
   const subject = `Fathom: ${n} ${n === 1 ? 'deadline' : 'deadlines'} in the next ${HORIZON} days`;
   const intro = `Coming up in the next ${HORIZON} days, as of ${clockLabel(clock)}.`;
@@ -132,11 +132,11 @@ export function renderAlerts(alerts, { clock, publicUrl = null } = {}) {
 }
 
 // Sends one alert email when anything is due. Returns {alerts: count, send: email_sends row|null}.
-export async function runDeadlineAlerts(db, { clock, transport, publicUrl = null, now, jobRunId = null } = {}) {
+export async function runDeadlineAlerts(db, { clock, transport, publicUrl = null, now, jobRunId = null, householdId = null } = {}) {
   const clk = resolveClock(db, clock);
   const alerts = dueAlerts(db, { clock: clk });
   if (!alerts.length) return { alerts: 0, send: null };
-  const mail = renderAlerts(alerts, { clock: clk, publicUrl });
+  const mail = renderAlerts(alerts, { clock: clk, publicUrl, householdId });
   const at = now == null ? new Date().toISOString() : new Date(now).toISOString();
   const send = await sendEmail(db, { transport, kind: 'alert', ...mail, now: at, jobRunId });
   if (send.status === 'sent') {
