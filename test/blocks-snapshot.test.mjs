@@ -102,3 +102,71 @@ test('shape check rejects malformed renderer contracts', () => {
   assert.throws(() => assertSnapshotShape('table', { title: 'Broken', columns: [], rows: [] }));
   assert.throws(() => assertSnapshotShape('unknown', {}));
 });
+
+test('alignment reorders secondary series to the primary x data', () => {
+  const other = structuredClone(calls[1]); other.args = { operation: 'pace', selected: 'comparison' };
+  const rows = other.result.series.goals.reserve.series;
+  rows.reverse();
+  const spec = { kind: 'line', source: ref(1, 'series.goals.reserve.series'), x: 'month', series: [
+    { path: 'plan.envelope' }, { path: 'plan.envelope', source: { tool: other.name, args: other.args, path: 'series.goals.reserve.series' } },
+  ] };
+  const results = [...calls, other];
+  assert.equal(validateBlock('chart', spec, results).ok, true);
+  const s = buildSnapshot('chart', spec, results); assertSnapshotShape('chart', s);
+  assert.deepEqual(s.series[1].points, s.series[0].points);
+});
+
+test('scatter keeps mixed axis units, duplicate x values, flags and unavailable values', () => {
+  const results = structuredClone(calls), rows = results[1].result.series.goals.reserve.series;
+  rows.forEach((row, i) => {
+    row.x = { ...structuredClone(row.plan.envelope), value: rows[0].plan.envelope.value, label: 'Available cash' };
+    row.y = { ...structuredClone(row.plan.envelope), unit: 'ratio', value: i / rows.length, label: 'Share' };
+    row.id = row.month; row.current = i === 0; row.frontier = i % 2 === 0;
+  });
+  rows[0].y.value = null; rows[0].y.quote = null; rows[0].y.gaps = [{ code: 'missing_fact', message: 'Share unknown' }];
+  const spec = { kind: 'scatter', source: ref(1, 'series.goals.reserve.series'), x: 'x', series: [{ path: 'y' }] };
+  assert.equal(validateBlock('chart', spec, results).ok, true);
+  const s = buildSnapshot('chart', spec, results); assertSnapshotShape('chart', s);
+  assert.equal(s.xUnit, 'usd'); assert.equal(s.yUnit, 'ratio');
+  s.points.forEach((p, i) => {
+    assert.equal(p.id, rows[i].id); assert.equal(p.current, rows[i].current); assert.equal(p.frontier, rows[i].frontier);
+    sameFigure(p.x, rows[i].x, 'your goals'); sameFigure(p.y, rows[i].y, 'your goals');
+  });
+});
+
+test('row-number charts build figure envelopes with row provenance', () => {
+  const spec = { kind: 'scatter', source: ref(2, 'rows'), x: 'amount', series: [{ path: 'amount' }] };
+  assert.equal(validateBlock('chart', spec, calls).ok, true);
+  const s = buildSnapshot('chart', spec, calls); assertSnapshotShape('chart', s);
+  s.points.forEach((p, i) => {
+    assert.equal(p.y.value, calls[2].result.rows[i].amount);
+    assert.equal(p.y.provenance.sources[0].description, calls[2].result.rows[i].description);
+  });
+});
+
+test('timeline date envelopes and optional value preserve their figure data', () => {
+  const results = structuredClone(calls), rows = results[3].result;
+  rows.forEach(row => { row.when = { ...calls[0].result[0], unit: 'date', value: row.date }; row.amount = calls[0].result[0]; });
+  const spec = { source: ref(3), date: 'when', value: 'amount' };
+  assert.equal(validateBlock('timeline', spec, results).ok, true);
+  const s = buildSnapshot('timeline', spec, results); assertSnapshotShape('timeline', s);
+  s.events.forEach((event, i) => { assert.equal(event.date, rows[i].date); sameFigure(event.value, rows[i].amount, 'household summary'); });
+});
+
+test('separate comparison calls label the single differing assumption from provenance', async () => {
+  const results = [...calls], refs = [];
+  for (const evidence of ['Use a 3 percent real return.', 'Use a 4 percent real return.']) {
+    const value = evidence.includes('3') ? 0.03 : 0.04;
+    const args = { operation: 'multiply', operands: [{ ref: ref(0, '0') },
+      { assumption: { name: 'realReturn', value, unit: 'ratio', source: 'owner', evidence } }], label: 'Projected return' };
+    const result = await callTool('calculate', args, { db: store.db, ownerStatements: () => [evidence] });
+    results.push({ name: 'calculate', args, result }); refs.push({ source: { tool: 'calculate', args, path: '' } });
+  }
+  const spec = { options: refs, fields: ['figure'] };
+  assert.equal(validateBlock('compare', spec, results).ok, true);
+  const s = buildSnapshot('compare', spec, results); assertSnapshotShape('compare', s);
+  assert.deepEqual(s.options.map(o => o.label), ['Real Return 3%', 'Real Return 4%']);
+  refs[1].source.args = { ...refs[1].source.args, label: 'Another label' };
+  results.at(-1).args = refs[1].source.args;
+  assert.deepEqual(buildSnapshot('compare', spec, results).options.map(o => o.label), ['calculated figures', 'calculated figures']);
+});

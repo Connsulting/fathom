@@ -101,7 +101,7 @@ test('too_large enforces item, field, series and serialized UTF-8 snapshot limit
     else altered[1].result.series.goals.reserve.series = Array.from({ length: count }, (_, n) => ({ ...altered[1].result.series.goals.reserve.series[0], month: `row_${n}` }));
     reason(op, args, 'too_large', altered);
   }
-  reason('table', { ...table(), columns: Array(9).fill('value') }, 'too_large');
+  reason('table', { ...table(), columns: Array(9).fill('plan.envelope') }, 'too_large');
   reason('chart', { ...pace, series: Array(5).fill({ path: 'plan.envelope' }) }, 'too_large');
   const huge = structuredClone(calls);
   huge[1].result.series.goals.reserve.series[0].plan.envelope.provenance.formula = 'é'.repeat(40_000);
@@ -134,5 +134,39 @@ test('an argument-echo figure label is replaced with the field or source fallbac
   const call = { name: 'calculate', args, result };
   const spec = { options: [{ source: ref(call) }, { source: ref(call) }], fields: ['figure'] };
   assert.equal(validateBlock('compare', spec, [...calls, call]).ok, true);
-  assert.doesNotMatch(JSON.stringify(buildSnapshot('compare', spec, [...calls, call])), /Save ten thousand/);
+  const snapshot = buildSnapshot('compare', spec, [...calls, call]);
+  assert.equal(snapshot.fields[0].label, 'Amount');
+  snapshot.options.forEach(o => assert.equal(o.cells[0].fig.label, 'Amount'));
+});
+
+test('size boundaries stay live with bounded source provenance', () => {
+  const results = structuredClone(calls);
+  const row = results[1].result.series.goals.reserve.series[0];
+  results[1].result.series.goals.reserve.series = Array.from({ length: 120 }, (_, i) => ({ ...row,
+    month: `point_${i}`, plan: { envelope: { ...row.plan.envelope, provenance: { calc: 'synthetic_fixture' } } } }));
+  assert.equal(validateBlock('chart', pace, results).ok, true);
+  const four = { ...pace, series: Array(4).fill({ path: 'plan.envelope' }) };
+  const short = structuredClone(calls);
+  short[1].result.series.goals.reserve.series = short[1].result.series.goals.reserve.series.slice(0, 2);
+  assert.equal(validateBlock('chart', four, short).ok, true);
+  const rowRef = ref(calls[2], 'rows');
+  results[2].result.rows = Array(200).fill(calls[2].result.rows[0]);
+  assert.equal(validateBlock('table', { source: rowRef, columns: ['amount'] }, results).ok, true);
+  assert.equal(validateBlock('table', { source: rowRef, columns: Array(8).fill('amount') }, calls).ok, true);
+  results[1].result.series.goals.reserve.series = results[1].result.series.goals.reserve.series.slice(0, 8);
+  assert.equal(validateBlock('compare', { source: table().source, fields: ['plan.envelope'] }, results).ok, true);
+  results[3].result = Array(60).fill(calls[3].result[0]);
+  assert.equal(validateBlock('timeline', { source: ref(calls[3]), date: 'date' }, results).ok, true);
+});
+
+test('missing alignment fields, non-date timeline text and empty data fail closed', () => {
+  const other = structuredClone(calls[1]); other.args = { operation: 'pace', selected: 'other' };
+  delete other.result.series.goals.reserve.series[0].month;
+  reason('chart', { ...pace, series: [{ path: 'plan.envelope', source: ref(other, 'series.goals.reserve.series') }] }, 'bad_field', [...calls, other]);
+  const results = structuredClone(calls);
+  results[3].result[0].date = '2026-02-30';
+  reason('timeline', { source: ref(calls[3]), date: 'date' }, 'mixed_units', results);
+  results[1].result.series.goals.reserve.series = [];
+  reason('table', table(), 'too_large', results);
+  reason('compare', { options: [], fields: ['figure'] }, 'too_large');
 });
