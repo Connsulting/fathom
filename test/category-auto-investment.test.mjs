@@ -44,7 +44,7 @@ const resolved = db => resolveCategories(loadCategoryInputs(db));
 
 test('AC1 AC4 AC5: one pass moves 46 investment questions out of a 59-item deck with unique reasons and Undo', async t => {
   const db = store(t), investments = [];
-  for (let i = 0; i < 46; i++) investments.push(row(db, ['a','b','c','d'][i % 4], ['Bought synthetic fund','Dividend synthetic fund','Reinvestment synthetic fund'][i % 3], { amount: -127 - i }));
+  for (let i = 0; i < 46; i++) investments.push(row(db, ['a','b','c','d'][i % 4], ['Bought synthetic fund','Dividend synthetic fund','Reinvestment synthetic fund'][i % 3], { amount: (i % 3 === 1 ? 1 : -1) * (127 + i) }));
   for (let i = 0; i < 13; i++) row(db, i % 2 ? 'card' : 'work', 'Synthetic merchant ' + String.fromCharCode(65 + i), { guess: i % 2 ? 'Shopping' : 'Business' });
   assert.equal(pendingItems(db).length, 59);
   const out = await guessCategories(db, off);
@@ -93,6 +93,7 @@ test('income-like investment activity preserves consistent owner history and tra
   const dividend = row(db, 'c', 'Dividend synthetic beta', { amount: 41 });
   const interest = row(db, 'd', 'Interest synthetic balance', { amount: 19 });
   const reinvest = row(db, 'a', 'Dividend reinvestment synthetic alpha');
+  for (let i = 0; i < 3; i++) label(db, 'a', 'Contribution transfer', 'Investment', { amount: -431 - i });
   const outgoing = row(db, 'a', 'Contribution transfer', { amount: -431 });
   const incoming = row(db, 'b', 'Contribution transfer', { amount: 431 });
   await guessCategories(db, off);
@@ -107,15 +108,17 @@ test('AC2: three consistent owner labels in the same account kind decide only a 
   for (let i = 0; i < 3; i++) label(db, 'card', `POS Cobalt Market #${100 + i}`, 'Groceries', { amount: -20 - i });
   const match = row(db, 'other-card', 'POS Cobalt Market #900', { guess: 'Groceries', amount: -2500 });
   const wrongGuess = row(db, 'other-card', 'Cobalt Market', { guess: 'Shopping' });
+  const sameAccountWrongGuess = row(db, 'card', 'Cobalt Market', { guess: 'Shopping' });
   const wrongKind = row(db, 'cash', 'Cobalt Market', { guess: 'Groceries' });
   for (let i = 0; i < 8; i++) label(db, 'card', 'Conflicted Market', i === 0 ? 'Shopping' : 'Groceries');
   const conflict = row(db, 'other-card', 'Conflicted Market', { guess: 'Groceries' });
+  const sameAccountConflict = row(db, 'card', 'Conflicted Market', { guess: 'Groceries' });
   for (let i = 0; i < 2; i++) label(db, 'card', 'Rare Market', 'Groceries');
   const insufficient = row(db, 'other-card', 'Rare Market', { guess: 'Groceries' });
   await guessCategories(db, off);
   assert.equal(autoInfo(db, match.item)?.evidence.text, 'Matches how you categorized Cobalt Market');
   assert.equal(resolved(db).get(match.id).category, 'Groceries');
-  for (const x of [wrongGuess, wrongKind, conflict, insufficient]) assert.equal(getItem(db, x.item)?.status, 'pending');
+  for (const x of [wrongGuess, sameAccountWrongGuess, wrongKind, conflict, sameAccountConflict, insufficient]) assert.equal(getItem(db, x.item)?.status, 'pending');
   assert.equal(db.prepare('SELECT count(*) AS n FROM category_merchant_rules').get().n, 0);
 });
 
@@ -141,7 +144,20 @@ test('AC3: Undo reopens investment and history decisions permanently while owner
 
 test('the next planner run drains eligible pending questions without a migration or provider', async t => {
   const db = store(t), x = row(db, 'a', 'Synthetic holding activity');
+  db.prepare('DELETE FROM transaction_category_guesses WHERE transaction_id=?').run(x.id);
   await planRun(db, { now: clock });
   assert.equal(autoInfo(db, x.item)?.evidence.text, 'Investment account activity');
   assert.equal(getItem(db, x.item).status, 'answered');
+});
+
+test('new model guesses for investment accounts use the account reason in the same pass', async t => {
+  const db = store(t);
+  label(db, 'card', 'Synthetic historical food', 'Groceries');
+  label(db, 'work', 'Synthetic historical work', 'Business');
+  const xs = [row(db, 'a', 'Synthetic holding alpha', { guess: null }), row(db, 'b', 'Synthetic holding beta', { guess: null })];
+  const provider = { isOn: () => true, stats: () => ({ costUsd: 0 }), choose: async qs => qs.map((_, i) => ({ choice: 'Investment', confidence: i ? .99 : .85 })) };
+  const out = await guessCategories(db, provider);
+  assert.equal(out.stopped, undefined);
+  assert.equal(out.applied, 2);
+  for (const x of xs) assert.equal(autoInfo(db, x.item)?.evidence.text, 'Investment account activity');
 });
