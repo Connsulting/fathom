@@ -18,7 +18,7 @@ test('remembered preferences need owner words, enter the prompt, and undo restor
   assert.equal(buildScenario(db).preferences[0].text, 'keep answers short');
   const requests = [];
   const engine = { mode: 'live', isOn: () => true, call: async r => { requests.push(r); return { text: 'Your preferences are saved.', toolResults: [] }; } };
-  await createLiveAnswerer({ engine, root: householdOf(db).root }).answer({ db, key: ctx.conversationKey, text: 'What should I do next?', actorId: 'person-a' });
+  await createLiveAnswerer({ engine, root: householdOf(db).root, services: { ...householdOf(db).services, engine: engine, config: { dataDir: householdOf(db).root } } }).answer({ db, key: ctx.conversationKey, text: 'What should I do next?', actorId: 'person-a' });
   assert.match(requests[0].systemDynamic, /keep answers short/);
   assert.ok(!requests[0].system.includes('keep answers short'));
   const edited = await callTool('update_preferences', { operation: 'remember',  id: saved.preference.id, text: 'keep answers brief', evidence: 'keep answers brief' }, { ...ctx, ownerText: 'keep answers brief' });

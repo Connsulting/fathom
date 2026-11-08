@@ -56,7 +56,18 @@ const rows = () => t.platform.prepare('SELECT * FROM api_keys ORDER BY created_a
 describe('constants and scopes', () => {
   test('prefix and scope list', () => {
     assert.equal(KEY_PREFIX, 'fathom_');
-    assert.deepEqual([...SCOPES], ['read', 'write:recs', 'write:preferences', 'write:facts', 'write:steps', 'write:goals', 'write:sources']);
+    assert.deepEqual([...SCOPES], ['read', 'write:recs', 'write:preferences', 'write:facts', 'write:steps', 'write:goals',
+      'write:accounts', 'write:categories', 'write:confirm', 'write:imports', 'write:jobs', 'write:decisions', 'write:sources']);
+  });
+
+  test('keys accept and retain every new write scope without widening older keys', () => {
+    const old = svc.create({ name: 'Existing', scopes: ['write:recs'] });
+    for (const scope of ['write:accounts', 'write:categories', 'write:confirm', 'write:imports', 'write:jobs', 'write:decisions']) {
+      const created = svc.create({ name: 'Scoped', scopes: [scope] });
+      assert.deepEqual(created.record.scopes, ['read', scope]);
+      assert.deepEqual(svc.verify(created.key).scopes, ['read', scope]);
+    }
+    assert.deepEqual(svc.verify(old.key).scopes, ['read', 'write:recs']);
   });
 
   test('normalizeScopes: empty means read, read always included, ordered and deduplicated', () => {
