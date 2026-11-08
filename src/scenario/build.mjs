@@ -24,6 +24,7 @@ import { buildSuggestions } from '../suggest/build.mjs';
 import { buildTrend, groupOfKind, TREND_SRC } from '../accounts/trend.mjs';
 import { questionFor, dataText, LISTED_RECS } from '../jobs/triggers/common.mjs';
 import { getFacts } from '../store/facts.mjs';
+import { deriveSteps } from '../shared/rec-steps.mjs';
 
 const DAY = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -176,14 +177,26 @@ export function tokenScope(db) {
   return { names: c.names || {}, law: c.law || {}, pct: c.pct || {}, fig: loadFigures(db) };
 }
 
-export function recFromRow(row, clock) {
+// What derives each rec's step state: the facts and accounts an answer step checks, the
+// missing-data codes the last plan run left open, and the latest "I did this" or Undo per step.
+export function stepEnvOf(db) {
+  const marks = new Map();
+  for (const e of db.prepare("SELECT rec_id, action, arg, ts, actor FROM rec_events WHERE action IN ('step_did', 'step_undo') ORDER BY id").all()) {
+    if (!marks.has(e.rec_id)) marks.set(e.rec_id, new Map());
+    marks.get(e.rec_id).set(e.arg, { action: e.action, ts: e.ts, actor: e.actor });
+  }
+  const open = parse(db.prepare("SELECT value FROM content WHERE key = 'rec.openData'").get()?.value, null);
+  return { facts: getFacts(db), accounts: db.prepare('SELECT * FROM accounts').all(), open: Array.isArray(open) ? open : null, marks };
+}
+
+export function recFromRow(row, clock, env = {}) {
   const def = parse(row.def, {});
   const done = parse(row.tasks_done, []);
   const rec = {
     ...def,
     window: { close: row.window_close, label: row.window_label, days: row.window_close ? daysBetween(clock, row.window_close) : null },
     status: row.status,
-    tasks: arr(def.tasks).map((t, i) => ({ ...t, done: !!done[i] })),
+    tasks: deriveSteps(def.tasks, done, { ...env, marks: env.marks?.get(row.id) }),
   };
   if (row.wake != null) rec.wake = row.wake; else delete rec.wake;
   if (row.waiting_on != null) rec.waitingOn = row.waiting_on; else delete rec.waitingOn;
@@ -198,7 +211,8 @@ export function recFromRow(row, clock) {
 export function loadRecs(db, clock) {
   const facts = getFacts(db);
   const accounts = withLabelHints(db, db.prepare('SELECT * FROM accounts').all());
-  const recs = db.prepare('SELECT * FROM recs ORDER BY sort, id').all().map(r => recFromRow(r, clock));
+  const env = stepEnvOf(db);
+  const recs = db.prepare('SELECT * FROM recs ORDER BY sort, id').all().map(r => recFromRow(r, clock, env));
   if (getSetting(db, 'mode', null) === 'demo') {
     const window = expectedChildWindow(facts);
     const rec = recs.find(r => r.id === 'babyprep');
@@ -239,7 +253,7 @@ export function loadLinkedRecs(db, clock) {
 
 // One stored rec row, with its advisor field and goal links.
 export function loadLinkedRec(db, clock, row) {
-  return linkWithStoredGoals(db, withAdvisor(db, [recFromRow(row, clock)]))[0];
+  return linkWithStoredGoals(db, withAdvisor(db, [recFromRow(row, clock, stepEnvOf(db))]))[0];
 }
 
 function linkWithStoredGoals(db, recs) {

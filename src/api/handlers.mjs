@@ -148,7 +148,7 @@ export function recAction(ctx) {
     const i = Number(arg);
     const done = parse(row.tasks_done, []);
     try { writeRec(db, id, 'step', { index: i, checked: !done[i] }, { now: nowIso(), actor: 'ui' }); }
-    catch (e) { if (e instanceof ToolError) throw new HttpError(400, e.message); throw e; }
+    catch (e) { if (e instanceof ToolError) throw new HttpError(e.code === 'conflict' ? 409 : 400, e.message); throw e; }
     return { scenario: scenarioOf(ctx) };
   }
 

@@ -23,7 +23,7 @@ import { writeProse } from './planner/prose.mjs';
 import { applyRecs } from './planner/recs.mjs';
 import { writeBrief, namesOf, upsertContent } from './planner/brief.mjs';
 import { evaluateCatalog } from './triggers/index.mjs';
-import { reasonText } from './triggers/missing-data.mjs';
+import { reasonText, items as missingItems } from './triggers/missing-data.mjs';
 import { wargameFigurePrefixes } from './planner/wargame.mjs';
 import { prepareRecFacts } from '../facts/derive.mjs';
 import { sendToAdvisor } from '../advisor/index.mjs';
@@ -119,6 +119,8 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     assumptions: recFacts.assumptions, info: computed.info, freshness: data.freshness, warnings: [...warnings], entities, goals: prefs.goals, curve: prefs.curve,
   };
   const results = evaluateCatalog(ctx);
+  // The missing-data codes still open after this run: a step naming a code no longer here reads done.
+  const openData = [...new Set(missingItems(ctx).map(i => i.code))];
 
   // Prose, outside the write transaction (it may call the engine).
   const recRows = new Map(db.prepare('SELECT id, def FROM recs').all().map(r => [r.id, r]));
@@ -164,6 +166,7 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     writeFigures(db, computed.figures, now);
     const changes = applyRecs(db, results, {
       clock, now, runId, prose, packOverride: id => overrides[id] ?? null, warn: code => warnings.add(code), prefs,
+      stepEnv: { facts: merged.values, accounts: accountRows, open: openData },
     });
     for (const r of results.filter(r => r.state === 'hit')) {
       const id = r.trigger.id;
@@ -189,6 +192,7 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     }
     // What each blocked rec is waiting on (plain reason, the task that clears it, where it is done),
     // read back by the scenario for recs in the waiting status.
+    upsertContent(db, 'rec.openData', openData, now);
     upsertContent(db, 'rec.blockers', Object.fromEntries(results.filter(r => r.state === 'blocked' && r.blocker).map(r => [r.trigger.id, r.blocker])), now);
     // A vetoed rec stays dismissed (applyRecs keeps the owner's status) unless its inputs changed.
     liftStaleVetoes(db, { now });

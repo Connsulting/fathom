@@ -20,6 +20,7 @@ import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
 import * as recAnswers from './screens/rec-answers.js';
 import * as recBlocker from './screens/rec-blocker.js';
+import * as recSteps from './screens/rec-steps.js';
 import * as accountScreen from './screens/account.js';
 import { composeLabel } from '/shared/account-label.mjs';
 import * as askPanel from './screens/ask-panel.js';
@@ -1005,7 +1006,6 @@ function dlgHtml(id) {
   const pend = chatScreen.recPendingHtml(r.id, tkey);
   const busy = chatScreen.askBusy() || !!ui.recReset[r.id];
   const tasks = arr(r.tasks);
-  const doneN = tasks.filter((t) => t.done).length;
   const ny = api.needsYou();
 
   const why = arr(r.why).map((p) => `<p>${T(p)}</p>`).join('');
@@ -1014,9 +1014,7 @@ function dlgHtml(id) {
   const cross = arr(r.cross).length ? `<ul class="h-cross">${arr(r.cross).map((x) => `<li>${T(x)}</li>`).join('')}</ul>` : '';
   const val = arr(r.value).length ? `<ul class="h-vals">${arr(r.value).map((v) => `<li><span class="h-vk">${VALUE[v.cls] || esc(v.cls)}</span><div>${T(v.text)}</div></li>`).join('')}</ul>` : '';
 
-  const pct = tasks.length ? doneN / tasks.length : 0;
-  const check = tasks.length ? `<div class="h-prog"><svg viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true"><rect class="bg" width="100" height="4" rx="2"/><rect class="fg" width="${pct * 100}" height="4" rx="2"/></svg><span>${doneN} of ${tasks.length}</span></div>
-    <ul class="h-tasks">${tasks.map((t, i) => `<li><button type="button" class="h-task${t.done ? ' done' : ''}" data-act="task" data-rec="${esc(r.id)}" data-arg="${i}" aria-pressed="${t.done}"><i>${t.done ? icon('check') : ''}</i><span>${T(t.t)}</span></button>${t.link ? recBlocker.linkHtml(r.id, t.link, 'h-task-go') : ''}${addBtn('step', `${r.id}:${i}`, api.txt(t.t))}</li>`).join('')}</ul>` : '<p class="h-mute">No steps.</p>';
+  const check = recSteps.html(r);
 
   const adv = advisorScreen.recBox(r);
 
@@ -1047,7 +1045,7 @@ function dlgHtml(id) {
         ${cross ? section('Touches', cross) : ''}
       </div>
       <div class="h-dside">
-        ${r.question?.primary ? '' : section('Steps', check)}
+        ${r.question?.primary && !tasks.length ? '' : section('Steps', check)}
         ${section('Advisor', adv)}
         ${wg}
       </div>
@@ -2271,6 +2269,15 @@ function onClick(e) {
   }
   const ow = e.target.closest('[data-owner]');
   if (ow && root.contains(ow)) { e.preventDefault(); ui.owner = ow.dataset.owner; draw(); return; }
+  // An answer step's control: the answer form on the same rec, focused.
+  const sa = e.target.closest('[data-step-answer]');
+  if (sa && root.contains(sa)) {
+    e.preventDefault();
+    const form = root.querySelector(`[data-rec-answers="${CSS.escape(sa.dataset.stepAnswer)}"]`);
+    form?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    form?.querySelector('input:not([type=hidden]),select,button')?.focus({ preventScroll: true });
+    return;
+  }
   const an = e.target.closest('[data-ask-next]');
   if (an && root.contains(an)) { e.preventDefault(); askNext(an.dataset.askNext, an); return; }
   const sel = '[data-go],[data-act],[data-askrec],[data-recstart],[data-wg],[data-onboard],[data-savenote],[data-modal],[data-whatif],[data-packtoggle],[data-decide],[data-revisit],[data-dlg]';
@@ -2532,7 +2539,7 @@ function trapTab(e) {
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
-const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, recBlocker, accountScreen, trendScreen, pnlScreen, tour, memoriesScreen];
+const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, recBlocker, recSteps, accountScreen, trendScreen, pnlScreen, tour, memoriesScreen];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(), composeLabel,
