@@ -82,7 +82,11 @@ function salaryGame(data, out, ctx) {
   const { corp, parts, f, owner, contrib, ageOf, ageKey, retireMissing, householdTax, priorWages } = ctx;
   const invalid = code => { out.info.wargameInvalid.salary = code; return null; };
   if (parts.vaBlocked) return invalid(parts.vaBlocked);
-  if (!corp || !(corp.P > 0)) return invalid('inputs_changed');
+  if (!corp) {
+    const unclassified = ctx.entities?.find(e => !e.classified);
+    return invalid(unclassified ? `entity_unclassified:${unclassified.slug}` : 'inputs_changed');
+  }
+  if (!(corp.P > 0)) return invalid('inputs_changed');
   const c = contrib[corp.person];
   const range = owner['business.salaryRange'];
   const valid = range && typeof range === 'object' && Number.isFinite(range.min) && Number.isFinite(range.max) && range.min > 0 && range.max > 0;

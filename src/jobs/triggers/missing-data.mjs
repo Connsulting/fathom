@@ -80,7 +80,7 @@ function reasonItem(ctx, reason, name = dataText) {
 
 function rawReasonItem(ctx, reason, name) {
   const gap = ctx.info?.gaps?.find(g => g.code === reason);
-  if (gap) return gapItem(gap, name);
+  if (gap && !reason.startsWith('entity_unclassified:')) return gapItem(gap, name);
   if (TAX_GAP_RULES[reason]) {
     const who = ctx.info?.payrollBlocks?.filter(b => b.code === reason).map(b => b.employer).filter(Boolean).join(', ') || undefined;
     return gapItem(taxGap(reason, { employer: who }), name);
@@ -100,7 +100,12 @@ function rawReasonItem(ctx, reason, name) {
     const task = unclassified.some(x => summaryPerson(x, ctx.facts) || looksLikeSpending(x, ctx.facts))
       ? `Tell Fathom how to classify ${who}: personal spending summary, S corp, sole proprietorship, partnership, or not mine?`
       : `How is ${who} taxed? Tell Fathom: S corp, sole proprietorship, partnership, personal spending, or not mine.`;
-    return { code: reason, tax: true, text: task, task };
+    const exposures = (ctx.info.gaps || []).filter(g => g.code.startsWith('entity_unclassified:')).map(g => g.impact).filter(Number.isFinite);
+    const plainNames = unclassified.map(e => e.displayName || e.name).join(', ') || 'the unclassified businesses';
+    return { code: reason, tax: true, text: task, task, optional: true, rough: true, impact: exposures.length ? exposures.reduce((sum, n) => sum + n, 0) : null, fix: {
+      screen: 'ask', key: 'business.entities', label: 'Classify the businesses',
+      prompt: `Record how these businesses are taxed: ${plainNames}. Ask me for the missing classifications, preserving existing entries and account links.`,
+    } };
   }
   if (reason === 'partnership_incomplete') {
     const names = ((ctx.info && ctx.info.partnershipsMissing) || []).map(name);
@@ -124,7 +129,7 @@ export function reasonText(ctx, code) {
 }
 
 export function items(ctx) {
-  const out = rankGaps(ctx.info?.gaps || []).map(g => gapItem(g));
+  const out = rankGaps(ctx.info?.gaps || []).filter(g => !g.code.startsWith('entity_unclassified:')).map(g => gapItem(g));
   const business = BUSINESS_FACTS.some(k => ctx.facts[k] === true);
   const stale = staleAccountIds(ctx.data?.accounts ?? []);
   for (const s of ctx.freshness || []) {
@@ -143,7 +148,7 @@ export function items(ctx) {
   if (ctx.warnings.includes('filing_status_assumed')) {
     out.push({ code: 'filing_status_assumed', tax: true, text: 'Your filing status is not set, so we assumed single.', task: 'Tell us your filing status', kind: 'question', link: 'ask' });
   }
-  const reasons = [...(ctx.info.blocked || []), ...(ctx.info.heldReasons || []), ...(ctx.blockedReasons || []).map(b => b.reason),
+  const reasons = [...(ctx.info.blocked || []), ...(ctx.info.gaps || []).filter(g => g.code.startsWith('entity_unclassified:')).map(g => g.code), ...(ctx.info.heldReasons || []), ...(ctx.blockedReasons || []).map(b => b.reason),
     ...(ctx.entities || []).filter(e => e.payrollEmployer && !e.classified).map(e => `entity_unclassified:${e.slug}`)];
   let entityQuestion = false;
   for (const r of reasons) if (!ADVISOR_KEYS.has(r)) {
@@ -171,7 +176,7 @@ export function items(ctx) {
     out.push({ code: 'pnl_people_unknown', tax: false, text: question, task: question, kind: 'question', link: 'ask' });
   }
   const seen = new Set();
-  return out.filter(i => (seen.has(i.code) ? false : (seen.add(i.code), true))).map(i => ({ ...i, fix: i.fix || fixForCode(i.code) }));
+  return rankGaps(out.filter(i => (seen.has(i.code) ? false : (seen.add(i.code), true))).map(i => ({ ...i, fix: i.fix || fixForCode(i.code) })));
 }
 
 // The earliest hard window among the estimates the data blocks, else two weeks out.
@@ -227,7 +232,7 @@ export function listTitle(list) {
 // every other step the item code, which clears when the planner no longer finds the item. Each
 // carries where it is done: an upload, the exact Confirm question, or Ask with this rec attached.
 export function stepOf(i) {
-  if (i.fix && i.optional) return { t: i.task, kind: i.fix.screen === 'upload' ? 'upload' : 'answer', code: i.code, link: i.fix.screen, fix: i.fix, optional: true };
+  if (i.fix && i.optional) return { t: i.task, kind: i.code.startsWith('entity_unclassified:') ? 'classify' : i.fix.screen === 'upload' ? 'upload' : 'answer', code: i.code, link: i.fix.screen, fix: i.fix, optional: true };
   if (i.answerKey) return { t: i.task, kind: 'answer', fact: i.answerKey };
   if (i.kind === 'upload') return { t: i.task, kind: 'upload', code: i.code, noun: i.noun, link: 'upload', ...(i.fix ? { fix: i.fix } : {}), ...(i.accountIds ? { accountIds: i.accountIds } : {}) };
   if (/\bin Confirm$/.test(i.task)) return { t: i.task, kind: 'confirm', code: i.code, link: i.confirmId ? 'confirm' : 'ask', ...(i.confirmId ? { confirmId: i.confirmId } : {}) };
@@ -263,7 +268,7 @@ export function blockerOf(ctx, code) {
 
 function gapItem(gap, name = dataText) {
   return { code: gap.code, tax: true, text: name(gap.message), task: `${gap.action.label}${gap.employer && gap.employer !== 'this business' ? ` for ${name(gap.employer)}` : ''}`,
-    kind: gap.action.screen === 'upload' ? 'upload' : 'question', link: gap.action.screen, fix: gap.action, optional: true, impact: gap.impact };
+    kind: gap.action.screen === 'upload' ? 'upload' : 'question', link: gap.action.screen, fix: gap.action, optional: true, rough: gap.rough, impact: gap.impact };
 }
 
 const SOURCE_FIXES = Object.freeze({ final_k1: 'taxforms', bank: 'bank', balances: 'bank', transactions: 'aggregator', pnl: 'pnl', tax_payments: 'estimates', prior_year_missing: 'taxforms',
