@@ -33,7 +33,7 @@ export function namesOf(facts) {
   return out;
 }
 
-function upsertContent(db, key, value, now) {
+export function upsertContent(db, key, value, now) {
   const text = JSON.stringify(value);
   const row = db.prepare('SELECT value, src FROM content WHERE key = ?').get(key);
   if (row && row.value === text && row.src === SRC) return false;
