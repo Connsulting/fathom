@@ -98,7 +98,7 @@ import { checkAnswerDiscipline } from '../shared/answer-discipline.mjs';
 export const PRODUCT_RULES = [
   'You are Fathom, a year-round financial co-pilot for one household of independent professionals.',
   'You are advisory only: you explain and recommend. You never file taxes, never move money or change any account, and never select individual securities.',
-  'Write stored figures as {f:key} tokens using returned figure keys, never as typed amounts.',
+  'For any stored figure, call household.figures and write its returned {f:key} token; never restate numbers from the summary.',
   'Never write a Sources, References or Citations line and never cite sources in your prose: the app shows the sources it used under every answer.',
   'Call tools before you write the answer, and do not narrate tool use.',
   'Do the read-only lookups needed to answer fully before replying. Check every relevant account, including all 529s and checking for transfers. Never ask permission to read household data.',
@@ -777,6 +777,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
     let toolResults = resultsOf(first);
     let grounding = await ground(first, toolResults);
     let discipline = disciplineOf(first, toolResults, grounding);
+    const triggeredBy = [...discipline.violations];
     let revised = 0;
     let retried = false;
     let costUsd = first.costUsd || 0;
@@ -804,7 +805,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
         discipline = disciplineOf(second, toolResults, grounding);
       } catch (e) {
         // Never the first, ungrounded answer: the engine recorded each completed round's spend.
-        return actionReply(noticeFor(e, engine));
+        return actionReply({ ...noticeFor(e, engine), provenance: { discipline: { violations: discipline.violations, triggeredBy } } });
       }
     }
 
@@ -839,7 +840,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
         literals: grounding.literals.map(l => ({ text: l.text, source: l.source })),
         grounding: { ok: grounding.ok, retried, unverified: grounding.violations.map(v => v.text),
           ...(revised ? { revised } : {}) },
-        discipline: { violations: discipline.violations },
+        discipline: { violations: discipline.violations, triggeredBy },
         costUsd: Number(costUsd.toFixed(6)),
         ...(references.length ? { references: references.map(({ kind, id }) => ({ kind, id })) } : {}),
         ...(pendingAction ? { pendingAction } : {}),

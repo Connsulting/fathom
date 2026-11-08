@@ -151,6 +151,7 @@ test('CLI entrypoint exits nonzero and writes evidence for a self-computed answe
     const summary = logged.at(-1);
     assert.equal(summary.scorecard[0].id, 'retirement-hsa-room');
     assert.ok(summary.scorecard[0].failingChecks.includes('figures.self-computed'));
+    assert.equal(summary.correctionTriggers['figures.self-computed'], 1);
     assert.ok(logged.some(line => line.type === 'round' && line.estimateUsd === 0 && line.actualUsd === 0 && line.remainingUsd === 100));
     assert.ok(summary.scorecard.every(row => !Object.hasOwn(row, 'delivered') && !Object.hasOwn(row, 'figures')));
   } finally { await rm(dir, { recursive: true, force: true }); }
@@ -312,9 +313,33 @@ test('recorded synthetic live eval overruns fit the reservation, including corre
       messages: [{ role: 'user', content: '' }] };
     const emptyBytes = Buffer.byteLength(JSON.stringify({ system: request.system, messages: request.messages, tools: [] }));
     request.messages[0].content = 'x'.repeat(3 * (recordedTokens - 1024) - emptyBytes);
+    assert.equal(Number(((recordedTokens * 5 + 1024 * 20) / 1e6).toFixed(12)), estimateUsd);
     assert.ok(estimateEvalCost(request).costUsd >= actualUsd, `${estimateUsd} must cover ${actualUsd}`);
     const corrective = { ...request, messages: [...request.messages, { role: 'assistant', content: 'Forty dollars.' },
       { role: 'user', content: 'Correct figures.spelled_out. Write every figure as digits.' }] };
     assert.ok(estimateEvalCost(corrective).costUsd >= actualUsd);
   }
+});
+
+
+test('scripted catalog drafts follow all four steers without a corrective round', async () => {
+  const ids = ['business-stored-revenue', 'net-worth-change', 'spending-annual-exclusions', 'spending-latest-groceries'];
+  const cases = (await loadCases()).filter(c => ids.includes(c.id));
+  assert.equal(cases.length, ids.length);
+  const r = await runCases({ cases });
+  assert.deepEqual(r.correctionTriggers, {});
+  for (const c of r.cases) {
+    assert.equal(c.status, 'pass', c.id);
+    for (const t of c.turns) {
+      assert.equal(t.attempts.length, 1, c.id);
+      assert.equal(t.grounding.retried, false, c.id);
+      assert.equal(t.attempts[0].figures.ok, true, c.id);
+      assert.deepEqual(t.attempts[0].figures.spelledOut, [], c.id);
+    }
+  }
+  const calls = id => r.cases.find(c => c.id === id).turns[0].tools;
+  assert.ok(calls(ids[0]).some(t => t.name === 'household' && t.args.operation === 'figures'));
+  assert.ok(calls(ids[1]).some(t => t.name === 'calculate' && t.args.operation === 'subtract'));
+  assert.ok(calls(ids[2]).some(t => t.name === 'spending' && t.args.operation === 'total'));
+  assert.ok(calls(ids[3]).some(t => t.name === 'transactions' && t.args.operation === 'search'));
 });
