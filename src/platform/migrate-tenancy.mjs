@@ -127,6 +127,7 @@ const TABLE_RULES = Object.freeze({
   schema_migrations: { where: `id <= ${PRE_TENANCY_SCHEMA}` },
   simplefin_connection: { omit: ['access_blob'] },
   preferences: { omit: ['origin', 'conversation_key'] },
+  column_mappings: { omit: ['schema_version', 'mapping_version', 'approval_status', 'approved_by', 'approved_at', 'structural_context'] },
 });
 
 // { count, sha256 } of a table, every row carrying its rowid (as __rowid) when the table has one.

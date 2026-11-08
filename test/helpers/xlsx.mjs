@@ -36,7 +36,7 @@ function column(index) {
   return out;
 }
 
-function sheetXml(rows) {
+function sheetXml(rows, merges = []) {
   const body = rows.map((cells, r) => {
     const number = r + 1;
     const xml = cells.map((value, c) => {
@@ -59,7 +59,9 @@ function sheetXml(rows) {
   }).join('');
   return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
     + '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-    + `<sheetData>${body}</sheetData></worksheet>`;
+    + `<sheetData>${body}</sheetData>`
+    + (merges.length ? `<mergeCells count="${merges.length}">${merges.map(ref => `<mergeCell ref="${xmlEscape(ref)}"/>`).join('')}</mergeCells>` : '')
+    + '</worksheet>';
 }
 
 function zip(entries, { deflate = false } = {}) {
@@ -134,7 +136,7 @@ export function writeXlsx(sheets, { sharedStrings, deflate = false, workbookExtr
     + '</Relationships>';
   const workbook = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
     + '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
-    + `<sheets>${sheets.map((s, i) => `<sheet name="${xmlEscape(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets>`
+    + `<sheets>${sheets.map((s, i) => `<sheet name="${xmlEscape(s.name)}" sheetId="${i + 1}" r:id="rId${i + 1}"${s.hidden ? ' state="hidden"' : ''}/>`).join('')}</sheets>`
     + workbookExtra
     + '</workbook>';
   const workbookRels = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -148,7 +150,7 @@ export function writeXlsx(sheets, { sharedStrings, deflate = false, workbookExtr
     { name: '_rels/.rels', data: enc.encode(rootRels) },
     { name: 'xl/workbook.xml', data: enc.encode(workbook) },
     { name: 'xl/_rels/workbook.xml.rels', data: enc.encode(workbookRels) },
-    ...sheets.map((s, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, data: enc.encode(sheetXml(s.rows)) })),
+    ...sheets.map((s, i) => ({ name: `xl/worksheets/sheet${i + 1}.xml`, data: enc.encode(sheetXml(s.rows, s.merges)) })),
     ...(sharedStrings !== undefined ? [{
       name: 'xl/sharedStrings.xml',
       data: enc.encode('<?xml version="1.0" encoding="UTF-8" standalone="yes"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' + sharedStrings + '</sst>'),
