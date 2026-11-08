@@ -13,7 +13,7 @@
 // div.h-after).
 
 import {
-  test, expect, resetDemo, gotoRoute, fetchScenario, money, expectPopoverSource, dataHealth, mainNav
+  test, expect, resetDemo, gotoRoute, fetchScenario, money, expectPopoverSource, dataHealth, mainNav, HOME_VERDICT
 } from './helpers.mjs';
 
 /* ---------- fixtures ---------- */
@@ -261,8 +261,8 @@ test.describe('suggested goal targets', () => {
     expect(g.targetDate).toBe(rec.accept.targetDate);
     expect(g.track).toEqual(rec.accept.track);
     expect(recordOf(after, ids.cushion), 'a goal with a target gets no record').toBeUndefined();
-    // A goal with a target now exists, so Home is headed by the pace headline.
-    await expect(h1(page)).toHaveText(after.pace.rollup.headline);
+    // A goal with a target now exists, so Home is headed by the verdict.
+    await expect(h1(page)).toHaveText(HOME_VERDICT);
   });
 
   test('Accept all saves every pending suggestion and leaves the question', { tag: ['@tg-ac2', '@mobile'] }, async ({ page, request }) => {
@@ -425,10 +425,11 @@ test.describe('suggested goal targets', () => {
     const chip = card.locator('span.h-pchip');
     // Revision 1 item 8 keeps stale data unknown even on a reached path. The demo's investment
     // positions may be past their monthly cadence at the demo clock; when they are, the chip must
-    // say Data stale (never On pace), and Reached is asserted whenever the data is current.
+    // carry no chip on Home (the data line says how current the data is), never On pace, and
+    // Reached is asserted whenever the data is current.
     if (p.stale) {
       expect(p.status).toBe('unknown');
-      await expect(chip).toHaveText('Data stale');
+      await expect(chip).toHaveCount(0);
     } else {
       expect(p.status).toBe('ahead');
       expect(p.timeGap).toBe('Reached');
@@ -515,7 +516,7 @@ test.describe('suggested goal targets', () => {
     expect(recordOf(s, ids.tax).state).toBe('question');
 
     await gotoRoute(page, 'home');
-    await expect(h1(page)).toHaveText(s.pace.rollup.headline);
+    await expect(h1(page)).toHaveText(HOME_VERDICT);
     await expect(home(page).locator('article.h-gcard[data-goal-card]')).toHaveCount(3);
     const tc = homeCard(page, ids.cushion);
     await expect(tc.locator('.h-pbar')).toHaveCount(1);
@@ -542,7 +543,7 @@ test.describe('suggested goal targets', () => {
     for (const id of Object.values(ids)) expect(recordOf(s, id), `${id} has a target, so no record`).toBeUndefined();
 
     await gotoRoute(page, 'home');
-    await expect(h1(page)).toHaveText(s.pace.rollup.headline);
+    await expect(h1(page)).toHaveText(HOME_VERDICT);
     await expect(home(page).locator('article.h-gcard[data-goal-card]')).toHaveCount(3);
     for (const id of Object.values(ids)) await expect(homeCard(page, id).locator('.h-pbar')).toHaveCount(1);
     await expect(home(page).locator('.h-sugg')).toHaveCount(0);

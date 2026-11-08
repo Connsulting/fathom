@@ -133,7 +133,7 @@ test('Home\'s data-health line counts the questions, and its Confirm link opens 
   await expect(dataHealth(page)).toHaveCount(1);
   await expect(dataHealth(page)).toContainText(questionsToConfirm(n));
   await expect(page.locator('.h-ing-banner')).toHaveCount(0);
-  await expect(healthConfirm(page)).toHaveText('Confirm');
+  await expect(healthConfirm(page)).toContainText('Fathom needs');
   await healthConfirm(page).click();
   await expect(page).toHaveURL(/#\/confirm$/);
   await expect(page.locator('.h-deck')).toBeVisible();
