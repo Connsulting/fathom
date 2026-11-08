@@ -61,7 +61,9 @@ test.beforeAll(async () => {
       .run(THREAD_KEY, 'Synthetic owner question for this check.', `${CLOCK}T09:00:00.000Z`);
     db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES (?, 'advisor', ?, '[]', 0, ?)")
       .run(THREAD_KEY, '<p>Synthetic advisor note for this check.</p>', `${CLOCK}T10:00:00.000Z`);
-    addFact(db, 'accounts.va529', { [accountIdByMask(db, MASKS.college)]: { virginiaPlan: true } });
+    const collegeId = accountIdByMask(db, MASKS.college);
+    addFact(db, 'accounts.va529', { [collegeId]: { virginiaPlan: true } });
+    addFact(db, 'accounts.va529CarryforwardDefault', { [collegeId]: { undone: true } });
     expect((await planRun(db, { now: CLOCK, dataDir: DIR })).status).toBe('ok');
   } finally {
     db.close();

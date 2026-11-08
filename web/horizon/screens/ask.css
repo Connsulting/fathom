@@ -444,3 +444,52 @@
 @media (prefers-reduced-motion: reduce) {
   .d-horizon .h-add, .d-horizon .h-askp-launch, .d-horizon .h-askp-grip::after { transition: none; }
 }
+
+/* ---------- Ask blocks (ask-blocks.js): tables and comparisons inside an answer ----------
+   The series ramp (--blk-s1 .. --blk-s4, for charts) and the panel background it is checked
+   against (--blk-bg, test/block-palette.test.mjs: every step at least 3:1). Horizon is dark
+   today; the light set is kept ready for a light theme under [data-theme="light"]. */
+.d-horizon { --blk-bg: var(--bg); --blk-s1: #3fcfae; --blk-s2: #7fa6ff; --blk-s3: #e3a857; --blk-s4: #d68ad9; }
+.d-horizon[data-theme="light"] { --blk-bg: #ffffff; --blk-s1: #0b7d67; --blk-s2: #3456c8; --blk-s3: #9a5c0c; --blk-s4: #9c3ea0; }
+
+/* Inline-size containment: a wide table never widens the message column; it scrolls in its box. */
+.d-horizon .h-blk { container-type: inline-size; margin: 14px 0; padding: 12px 14px 14px; border: 1px solid var(--line2); border-radius: 10px; background: var(--s1); color: var(--tx2); }
+.d-horizon .h-msg-b .h-blk:last-child { margin-bottom: 0; }
+.d-horizon .h-blk-t { margin: 0 0 10px; color: var(--mu); font-size: 12px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; }
+.d-horizon .h-blk-na { color: var(--fa); }
+.d-horizon .h-blk .fx-fig[data-unavailable] { color: var(--fa); font-family: var(--sans); font-size: 13px; }
+.d-horizon .h-blk-note { margin-top: 10px; color: var(--fa); font-size: 13px; }
+
+/* Table: filter, scroller, sticky first column, right-aligned tabular numbers. */
+.d-horizon .h-blk-filter { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.d-horizon .h-blk-filter label { flex: none; color: var(--mu); font-size: 12.5px; }
+.d-horizon .h-blk-filter input { flex: 1 1 auto; min-width: 0; height: 32px; padding: 0 10px; border: 1px solid var(--line2); border-radius: 7px; background: var(--bg); color: var(--tx); font: inherit; font-size: 13.5px; }
+.d-horizon .h-blk-filter input:focus { border-color: var(--ac); outline: none; }
+.d-horizon .h-blk-tw { width: 100%; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: var(--line2) transparent; border-radius: 6px; }
+.d-horizon .h-blk-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13.5px; }
+.d-horizon .h-blk-table th { padding: 0 10px 8px; text-align: left; font-weight: 500; white-space: nowrap; border-bottom: 1px solid var(--line2); }
+.d-horizon .h-blk-table td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: baseline; }
+.d-horizon .h-blk-table tbody tr:last-child td { border-bottom: 0; }
+.d-horizon .h-blk-table :is(th, td):first-child { position: sticky; left: 0; z-index: 1; padding-left: 0; background: var(--s1); color: var(--tx); }
+.d-horizon .h-blk-table :is(th, td):last-child { padding-right: 0; }
+.d-horizon .h-blk-table .n { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.d-horizon .h-blk-sort { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0; border: 0; background: none; color: var(--fa); font: inherit; font-size: 12px; letter-spacing: 0.04em; cursor: pointer; }
+.d-horizon .h-blk-sort:hover, .d-horizon th[aria-sort="ascending"] .h-blk-sort, .d-horizon th[aria-sort="descending"] .h-blk-sort { color: var(--tx); }
+.d-horizon .h-blk-sort i { font-style: normal; color: var(--ac); }
+.d-horizon .h-blk-sort i:empty { display: none; }
+/* A number column's arrow sits before its label, so the label lines up with the values. */
+.d-horizon .h-blk-table th.n .h-blk-sort { flex-direction: row-reverse; }
+.d-horizon .h-blk-empty { padding: 10px 0 2px; color: var(--fa); font-size: 13px; }
+.d-horizon .h-blk-more { margin-top: 8px; }
+
+/* Compare: stacked option cards; side by side once the block is 560px wide (4 options at most). */
+.d-horizon .h-blk-cmp { display: grid; gap: 10px; }
+.d-horizon .h-blk-opt { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.d-horizon .h-blk-opt h4 { margin: 0 0 6px; color: var(--tx); font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.d-horizon .h-blk-opt dl { margin: 0; }
+.d-horizon .h-blk-cf { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 6px 0; border-top: 1px solid var(--line); }
+.d-horizon .h-blk-cf dt { min-width: 0; color: var(--mu); font-size: 13px; }
+.d-horizon .h-blk-cf dd { margin: 0; text-align: right; white-space: nowrap; }
+@container (min-width: 560px) {
+  .d-horizon .h-blk-cmp.cols { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+}
