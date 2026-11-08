@@ -1,6 +1,6 @@
 import { fromStored } from '../../calc/figure.mjs';
 import { buildScenario, tokenScope } from '../../scenario/build.mjs';
-import { notBuiltReason } from '../../jobs/planner/wargame.mjs';
+import { notBuiltReason } from '../../jobs/planner/unlocks.mjs';
 import { clockOf, plainDeep } from './figures.mjs';
 
 const SALARY = { salary: 'salary', payroll: 'payroll', distributions: 'dist', tax: 'tax', room: 'x', taxChange: 'y' };

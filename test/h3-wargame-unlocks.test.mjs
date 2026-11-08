@@ -9,7 +9,7 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { notBuiltReason, WARGAME_UNLOCKS } from '../src/jobs/planner/wargame.mjs';
+import { notBuiltReason, WARGAME_UNLOCKS } from '../src/jobs/planner/unlocks.mjs';
 import { MISSING_TASK_CODES } from '../src/jobs/triggers/missing-data.mjs';
 import { HOWTO } from '../src/ingest/howto.mjs';
 import { answerShape } from '../src/jobs/triggers/common.mjs';

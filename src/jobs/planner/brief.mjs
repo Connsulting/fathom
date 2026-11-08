@@ -12,7 +12,7 @@ import { lawContent, pctContent } from './law.mjs';
 import { dateLabel, dayLabel, monthEnd, addDays } from './data.mjs';
 import { buildSeries } from './series.mjs';
 import { factEventTitle } from '../../shared/event-labels.mjs';
-import { notBuiltReason } from './wargame.mjs';
+import { notBuiltReason } from './unlocks.mjs';
 import { ledgerDisplayName } from '../../pnl/ledgers.mjs';
 
 export const SRC = 'planner';
