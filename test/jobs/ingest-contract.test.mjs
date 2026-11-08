@@ -32,6 +32,7 @@ import { loadPlanningData, resolveEntities } from '../../src/jobs/planner/data.m
 import { deriveFacts, mergeFacts, ownerFactsOf } from '../../src/jobs/planner/facts.mjs';
 import { notesFor } from '../../src/jobs/planner/assumptions.mjs';
 import { reasonText } from '../../src/jobs/triggers/missing-data.mjs';
+import { autoInfo, reopenItem } from '../../src/ingest/confirm.mjs';
 import { nameKey } from '../../src/ingest/extract.mjs';
 import {
   scratch, addFact, addFile, addNotes, addPayroll, factRow, contentValue, answerPending, figureRow, plannerFigures, recRow, activeRecIds, parseJson, pnlWorkbook,
@@ -904,14 +905,19 @@ test('MGI2: unknown and other-state withholding stays out of Virginia', async ()
   assert.ok(md.result.warnings.includes('other_state_withholding'), `warnings: ${md.result.warnings}`);
 });
 
-// Workbook sheet 2026: Federal January 6,000 and April 6,000; the tax_year question unanswered.
-// Estimates are held (tax_year_unconfirmed). Answer payment_year: January moves to 2025, so 6,000.
-// A fresh store answered tax_year: 12,000.
+// Workbook sheet 2026: January is inferred to the prior year; an owner reversal restores the gap.
+// An explicitly designated tax year remains the owner's answer.
 const JAN_APR = Object.freeze({ fed: 6000, state: null, months: [1, 4] });
 
-test('MGI2: an unconfirmed sheet year blocks estimates', async () => {
+test('MGI2: payment dates infer sheet years with Undo and preserve explicit years', async () => {
   const { db, info } = await planned({ taxPayments: JAN_APR, taxYear: null });
-  assertGap(db, info, 'tax_year_unconfirmed', ['tax.fed.paid']);
+  assert.ok(!info.gaps.some(g => g.code === 'tax_year_unconfirmed'));
+  near(fig(db, 'tax.fed.paid').v, 6000, 'January is inferred to the prior year');
+  const item = db.prepare("SELECT id FROM confirm_items WHERE kind='tax_year'").get();
+  assert.ok(autoInfo(db, item.id));
+  reopenItem(db, item.id, { now: NOW });
+  const reopened = await replan(db);
+  assertGap(db, reopened.info, 'tax_year_unconfirmed', ['tax.fed.paid']);
   answerPending(db, 'tax_year', 'payment_year');
   await replan(db);
   near(fig(db, 'tax.fed.paid').v, 6000, 'January counts toward 2025');

@@ -141,7 +141,7 @@ export function items(ctx) {
     const names = accounts.map(a => accountLabel(a)).join(', ');
     const name = accounts[0].inst || names;
     out.push({ code: `balances:${institution}`, accountIds: accounts.map(a => a.id), tax: false,
-      text: `${dataText(name)}: the plan uses out of date account data for ${dataText(names)}.`,
+      text: 'The plan uses out of date account data from an institution without a connected feed.',
       task: `Upload the latest statement for ${dataText(name)}, covering ${dataText(names)}`, kind: 'upload', link: 'upload', noun: 'an account statement',
       fix: fixForCode('balances'),
     });
