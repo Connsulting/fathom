@@ -38,7 +38,9 @@ function cell(item, ref, field, accountLabels) {
   if (rowNumber(ref, field)) return { t: 'row', value, unit: 'usd', row: {
     account: item.account?.label ?? accountLabels.get(item.accountId) ?? null, date: item.date ?? null, description: item.description ?? null, ...named(item.description) } };
   const description = field === 'description' || String(field).endsWith('.description');
-  return { t: 'text', text: typeof value === 'number' ? String(value) : value, ...(description ? named(value) : {}) };
+  // A transaction's merchant is its normalized description; the name comes from the raw text.
+  const merchant = field === 'merchant' && typeof item?.description === 'string';
+  return { t: 'text', text: typeof value === 'number' ? String(value) : value, ...(description ? named(value) : merchant ? named(item.description) : {}) };
 }
 function pointFigure(item, ref, field, accountLabels) {
   const value = at(item, field);

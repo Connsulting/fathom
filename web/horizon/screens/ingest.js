@@ -548,7 +548,7 @@ export function ingestScreens(h) {
   // Newest rows as a list, each with its file; fileName overrides a row's own (SimpleFIN rows).
   function recentList(rows, label, fileName) {
     if (!arr(rows).length) return '';
-    return `<p class="h-cf-sub">${esc(label)}</p><ul class="h-cf-recent">${arr(rows).map((r) => `<li><span class="d">${esc(dateText(r.date) || r.date || '')}</span><span class="t">${esc(r.description || '')}</span><span class="a">${esc(cash(r.amount))}</span><span class="f">${esc(fileName || r.fileName || '')}</span></li>`).join('')}</ul>`;
+    return `<p class="h-cf-sub">${esc(label)}</p><ul class="h-cf-recent">${arr(rows).map((r) => `<li><span class="d">${esc(dateText(r.date) || r.date || '')}</span>${r.name && r.description && r.name !== r.description ? `<span class="t" title="${esc(r.description)}">${esc(r.name)}</span>` : `<span class="t">${esc(r.description || '')}</span>`}<span class="a">${esc(cash(r.amount))}</span><span class="f">${esc(fileName || r.fileName || '')}</span></li>`).join('')}</ul>`;
   }
 
   const SAME_COLS = [
@@ -579,8 +579,10 @@ export function ingestScreens(h) {
     mask: 'Ends in', balance: 'Balance', balanceDate: 'Balance date', from: 'First date', to: 'Last date', count: 'Transactions'
   };
 
-  function compareCell(f, v) {
+  function compareCell(f, v, e) {
     if (v == null || v === '') return none;
+    // A bank description reads by its name; the raw text stays on hover.
+    if (f === 'description' && e && typeof e.name === 'string' && e.name && e.name !== v) return `<span title="${esc(valueText(v))}">${esc(e.name)}</span>`;
     if (f === 'amount' || f === 'balance') return esc(cash(v) || String(v));
     if (f === 'date' || f === 'balanceDate' || f === 'from' || f === 'to') return esc(dateText(v) || String(v));
     return esc(valueText(v));
@@ -592,7 +594,7 @@ export function ingestScreens(h) {
     const diff = new Set(arr(d.differs).map(String));
     const heads = entries.map((_, i) => (it.kind === 'account_match' ? (i === 0 ? 'Imported' : 'SimpleFIN') : `Entry ${i + 1}`));
     const head = `<tr><th scope="col"><span class="h-cf-sr">Field</span></th>${heads.map((h) => `<th scope="col">${h}</th>`).join('')}</tr>`;
-    const rows = arr(d.fields).map((f) => `<tr data-field="${esc(f)}"${diff.has(String(f)) ? ' data-differs="1"' : ''}><th scope="row">${esc(COMPARE_LABEL[f] || f)}</th>${entries.map((e) => `<td>${compareCell(f, e && e[f])}</td>`).join('')}</tr>`).join('');
+    const rows = arr(d.fields).map((f) => `<tr data-field="${esc(f)}"${diff.has(String(f)) ? ' data-differs="1"' : ''}><th scope="row">${esc(COMPARE_LABEL[f] || f)}</th>${entries.map((e) => `<td>${compareCell(f, e && e[f], e)}</td>`).join('')}</tr>`).join('');
     return `<div class="h-cf-scroll"><table class="h-cf-compare"><thead>${head}</thead><tbody>${rows}</tbody></table></div>${diff.size ? '<p class="h-cf-sub">Marked rows differ.</p>' : ''}`;
   }
 
