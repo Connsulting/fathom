@@ -46,8 +46,10 @@ export const operations = [
     required: [],
     scope: 'read',
     handler(args, ctx) {
+      // An archived account's holdings are history, not current investments.
       const { clause, params } = where([['account_id = ?', args.id]]);
-      return ctx.db.prepare('SELECT * FROM positions' + clause + ' ORDER BY account_id, id').all(...params).map(p => ({
+      const live = (clause ? ' AND' : ' WHERE') + ' account_id NOT IN (SELECT id FROM accounts WHERE archived_at IS NOT NULL)';
+      return ctx.db.prepare('SELECT * FROM positions' + clause + live + ' ORDER BY account_id, id').all(...params).map(p => ({
         accountId: p.account_id, symbol: p.symbol, name: p.name, quantity: p.quantity, price: p.price, value: p.value,
         costBasis: p.cost_basis, asOf: p.as_of,
       }));

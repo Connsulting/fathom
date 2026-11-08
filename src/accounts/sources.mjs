@@ -54,7 +54,8 @@ export function archiveAccount(ctx, id, archived = true) {
 }
 
 // Rows an uploaded file carries, deleted in this order (category rows before their transactions).
-const ROW_TABLES = ['transactions', 'balances', 'positions', 'pnl_lines', 'tax_payments', 'facts'];
+// Documents (W-2s, paystubs, statements) and held facts go too, so the planner stops reading them.
+const ROW_TABLES = ['transactions', 'balances', 'positions', 'pnl_lines', 'tax_payments', 'facts', 'held_facts', 'documents'];
 const CATEGORY_TABLES = ['transaction_category_corrections', 'transaction_category_guesses', 'transaction_category_imports'];
 const hasRows = (db, id) => !!db.prepare(`SELECT 1 FROM transactions WHERE account_id = ?1
   UNION ALL SELECT 1 FROM balances WHERE account_id = ?1 UNION ALL SELECT 1 FROM positions WHERE account_id = ?1 LIMIT 1`).get(id);
@@ -70,7 +71,8 @@ export function removeFile(ctx, id) {
   const stamp = stampOf(ctx);
   return tx(db, () => {
     const fed = db.prepare(`SELECT account_id FROM transactions WHERE file_id = ?1 UNION SELECT account_id FROM balances WHERE file_id = ?1
-      UNION SELECT account_id FROM positions WHERE file_id = ?1`).all(id).map((r) => r.account_id).filter(Boolean);
+      UNION SELECT account_id FROM positions WHERE file_id = ?1
+      UNION SELECT id FROM accounts WHERE fig_key IN (SELECT key FROM figures WHERE file_id = ?1)`).all(id).map((r) => r.account_id).filter(Boolean);
     const connected = connectedAccountIds(db);
     const archived = [];
     const { changes } = captureChanges(db, () => {

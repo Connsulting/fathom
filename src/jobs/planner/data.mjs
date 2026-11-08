@@ -173,7 +173,7 @@ function freshness(db, clock) {
     pnl: period ? monthEnd(period) : null,
     tax_payments: one('SELECT max(date) AS d FROM tax_payments WHERE date <= ?'),
   };
-  // With ingest accounts, balances and transactions are stale only when an active account is
+  // With ingest accounts, balances and transactions are stale exactly when an active account is
   // stale under the shared rule (coverage.mjs), the accounts the Cash card counts: an archived,
   // connected or covered account never asks for a fresh export.
   const accounts = [...sourceStates(db, clock).accounts.values()];
@@ -182,7 +182,8 @@ function freshness(db, clock) {
     let state = 'current';
     if (!date) state = 'missing';
     else if (id === 'tax_payments') state = date < lastInstallmentDue(clock) ? 'stale' : 'current';
-    else if (daysBetween(date, clock) > STALE_DAYS && !(accounts.length && ['balances', 'transactions'].includes(id) && !anyStale)) state = 'stale';
+    else if (accounts.length && ['balances', 'transactions'].includes(id)) state = anyStale ? 'stale' : 'current';
+    else if (daysBetween(date, clock) > STALE_DAYS) state = 'stale';
     return { id, label: SOURCE_LABELS[id], latest: date, state };
   });
 }
