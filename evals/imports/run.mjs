@@ -161,9 +161,10 @@ export async function runEvaluation({ offline = false, seed = SEED, caseIds, inj
       if (group !== c.baseId) { await x?.close(); await foreign.close(); x = await environment(factory); foreign = await environment(factory); group = c.baseId; current = c; if (offline) await upload(foreign, c); }
       current = c;
       expectedCount += expectedRows(c).length;
-      const errors = [], before = snapshot(x), other = snapshot(foreign), beforeCalls = calls;
+      const errors = [], before = snapshot(x), other = snapshot(foreign), beforeCalls = calls, beforeLiveCalls = gate?.report().calls;
       try {
         let file = await upload(x, c);
+        if (gate?.report().stopReason && gate.report().calls === beforeLiveCalls) { report.unrun++; report.cases.push({ id: c.id, status: 'unrun', errors: ['evaluation_cap'] }); continue; }
         if (offline && c.variant === 'changed' && mappedFamilies.has(c.family)) {
           if (!file.delta?.length) errors.push('missing_layout_delta'); else report.lifecycle.changedApprovals++;
           const corrected = await x.app.postJson(`/api/import-proposals/${file.proposalId}/review`, { version: file.version, decision: 'correct', evidence: 'Use the added annotation column and keep the other bindings.' });

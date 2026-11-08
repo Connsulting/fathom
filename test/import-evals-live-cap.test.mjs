@@ -102,3 +102,16 @@ test('completion uses the same cap and other engine entry points cannot dispatch
   await assert.rejects(gate.call({ ...request, purpose: 'categorize' }), /evaluation_purpose/);
   assert.equal(calls, 1);
 });
+
+test('a cost ceiling that cannot admit the first call marks all 24 cases unrun', async () => {
+  const { runEvaluation } = await import('../evals/imports/run.mjs');
+  let calls = 0;
+  const liveEngine = { isOn: () => true, credentialStateFor: () => 'loaded', status: () => ({ capUsd: 5, spentUsd: 0 }), async call() { calls++; throw new Error('must not dispatch'); } };
+  const report = await runEvaluation({ liveEngine, liveOptions: { ...options, maxCostUsd: 0.000001 } });
+  assert.equal(calls, 0);
+  assert.equal(report.unrun, 24);
+  assert.equal(report.failed, 0);
+  assert.equal(report.passed, 0);
+  assert.equal(report.f1, 0);
+  assert.equal(report.ok, false);
+});
