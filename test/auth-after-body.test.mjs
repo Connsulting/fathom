@@ -5,7 +5,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config.mjs';
 import { createAuthStore } from '../src/auth/store.mjs';
-import { createSessionFixture, serveAppFixture, tempInstance, request } from './helpers/server.mjs';
+import { SERVER_TIMEOUT, createSessionFixture, serveAppFixture, tempInstance, request } from './helpers/server.mjs';
 import { aggregatorCsv } from './helpers/ingest.mjs';
 
 const TEXT = 'Prefer a simple household plan.';
@@ -71,12 +71,17 @@ function mutate(f, reason) {
   else if (reason === 'membership removal') {
     f.platform.prepare("UPDATE household_memberships SET status = 'removed' WHERE user_id = ? AND household_id = ?").run(f.session.user.id, f.householdId);
   } else if (reason === 'suspension') f.platform.prepare("UPDATE households SET status = 'suspended' WHERE id = ?").run(f.householdId);
-
+  else if (reason === 'household change') {
+    const at = Date.now();
+    f.platform.prepare("INSERT INTO households (id, status, mode, created_at, updated_at) VALUES ('synthetic-other-household', 'active', 'real', ?, ?)").run(at, at);
+    f.platform.prepare("INSERT INTO household_memberships (user_id, household_id, role, status, created_at, updated_at) VALUES (?, 'synthetic-other-household', 'member', 'active', ?, ?)").run(f.session.user.id, at, at);
+    f.platform.prepare("UPDATE auth_sessions SET household_id = 'synthetic-other-household' WHERE user_id = ?").run(f.session.user.id);
+  }
 }
 
 for (const reason of ['revocation', 'membership removal', 'suspension']) {
   for (const [operation, payload] of [['read', READ], ['write', WRITE]]) {
-    test(`MCP refuses a delayed ${operation} after ${reason}`, { timeout: 20000 }, async t => {
+    test(`MCP refuses a delayed ${operation} after ${reason}`, { timeout: SERVER_TIMEOUT * 3 }, async t => {
       const f = await fixture(t);
       const pending = await withhold(t, f, 'mcp', payload);
       const before = changes(f);
@@ -95,13 +100,19 @@ for (const reason of ['revocation', 'membership removal', 'suspension']) {
 }
 
 for (const kind of ['json', 'upload']) {
-  for (const reason of ['session revocation', 'membership removal', 'suspension']) {
-    test(`${kind} refuses a delayed body after ${reason} without side effects`, { timeout: 20000 }, async t => {
+  for (const reason of ['session revocation', 'membership removal', 'suspension', 'household change']) {
+    test(`${kind} refuses a delayed body after ${reason} without side effects`, { timeout: SERVER_TIMEOUT * 3 }, async t => {
       const f = await fixture(t);
       const pending = await withhold(t, f, kind, kind === 'upload' ? UPLOAD : JSON.stringify({ text: TEXT }));
       const before = { changes: changes(f), vault: vaultFiles(f), jobs: jobs(f) };
       mutate(f, reason);
       const fresh = await request(f.app.baseUrl, { path: '/api/scenario', headers: { cookie: f.session.cookie } });
+      if (reason === 'household change') {
+        const session = await request(f.app.baseUrl, { path: '/api/auth/session', headers: { cookie: f.session.cookie } });
+        assert.equal(session.status, 200);
+        assert.equal(session.json.identity.householdId, 'synthetic-other-household');
+        assert.equal(session.json.identity.role, 'member');
+      }
       const status = reason === 'session revocation' ? 401 : 403;
       refuse(fresh, status);
       refuse(await pending.finish(), status);
@@ -114,7 +125,7 @@ for (const kind of ['json', 'upload']) {
 }
 
 for (const kind of ['mcp', 'json', 'upload']) {
-  test(`${kind} accepts a valid delayed body`, { timeout: 20000 }, async t => {
+  test(`${kind} accepts a valid delayed body`, { timeout: SERVER_TIMEOUT * 3 }, async t => {
     const f = await fixture(t);
     const pending = await withhold(t, f, kind, kind === 'upload' ? UPLOAD : kind === 'mcp' ? WRITE : JSON.stringify({ text: TEXT }));
     const r = await pending.finish();
