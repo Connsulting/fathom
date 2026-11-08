@@ -45,6 +45,54 @@ const STATUS = {
   failed: 'Could not import'
 };
 
+// A waiting file's status: its label, the plain cause, and the one control that moves it on.
+const INTERPRETING = 'File saved. Waiting for interpretation.';
+export const PROPOSAL_STATES = Object.freeze({
+  waiting_for_engine: { label: STATUS.waiting_for_engine, cause: 'File saved. Waiting for the engine to interpret it.', control: 'engine' },
+  budget_exhausted: { label: STATUS.budget_exhausted, cause: 'File saved. Interpretation stopped at the budget limit.', control: 'engine' },
+  needs_confirmation: { label: STATUS.needs_confirmation, cause: 'Nothing is imported until you approve.', control: 'approve' },
+  needs_clarification: { label: STATUS.needs_clarification, cause: 'Fathom needs one answer before it can import this.', control: 'answer' },
+  needs_source_text: { label: STATUS.needs_source_text, cause: 'File saved. It has no readable text; add a text export or a PDF with selectable text.', control: 'upload' },
+  needs_mapping: { label: STATUS.needs_mapping, cause: INTERPRETING, control: 'retry' },
+  needs_extraction: { label: STATUS.needs_extraction, cause: INTERPRETING, control: 'retry' }
+});
+const stateOf = (status) => (Object.hasOwn(PROPOSAL_STATES, String(status)) ? PROPOSAL_STATES[status] : null);
+
+// The status a waiting file shows: its proposal's when that is a waiting state, else the file's.
+export const proposalStatus = (file) => (stateOf(file?.proposal?.status) ? file.proposal.status : String(file?.status ?? ''));
+
+// With the engine on, Retry is the working control for a file waiting on it. Unknown is Retry.
+export function proposalControl(status, { engineOn = false } = {}) {
+  if (status === 'waiting_for_engine' && engineOn) return 'retry';
+  return stateOf(status)?.control ?? 'retry';
+}
+
+export function proposalCause(file) {
+  const s = proposalStatus(file);
+  if (s === 'waiting_for_engine' && file?.proposal?.reasonCode === 'owner_correction') return 'Your correction is saved. Waiting for the engine to read the file again.';
+  return stateOf(s)?.cause ?? '';
+}
+
+// What changed since the approved layout, in plain phrases; '' when nothing did. A filled-area
+// change is named only when no header change already explains it.
+export function deltaText(delta) {
+  const out = [];
+  let filled = false, header = false;
+  for (const d of Array.isArray(delta) ? delta : []) {
+    const f = String(d?.field ?? '');
+    const column = /^headers\.\d+\.columns\.\d+$/.test(f);
+    const phrase = column && d.before == null && d.after?.label != null ? `a new column appeared: ${d.after.label}`
+      : column && d.after == null && d.before?.label != null ? `the ${d.before.label} column is gone`
+        : /^headers\.\d+\.columns\.\d+\.label$/.test(f) ? `the ${d.before} column is now ${d.after}` : '';
+    if (phrase) { out.push(phrase); header = true; }
+    else if (f === 'layout' && d.reason === 'no_unique_approved_layout') out.push('more than one saved layout fits this file');
+    else if (/^bindings(\.|$)/.test(f)) out.push('an account in the file changed');
+    else if (/^structure(\.|$)/.test(f)) filled = true;
+  }
+  if (filled && !header) out.push('the file has a new filled area');
+  return [...new Set(out)].join('; ');
+}
+
 const ROWS = [
   ['transaction', 'transaction'],
   ['balance', 'balance'],
@@ -195,6 +243,32 @@ export function cash(v) {
   return `${n < 0 && a >= 0.005 ? '-' : ''}$${w.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}${f ? `.${f}` : ''}`;
 }
 
+// One sentence for a waiting proposal from server values only (validated counts and totals, or a
+// note's actions); '' when the server sent none.
+export function proposalSummary(file) {
+  const p = file?.proposal;
+  if (!p || typeof p !== 'object') return '';
+  if (p.kind === 'actions') {
+    const acts = arr(p.actions).map((a) => (a?.subject && a?.dueDate
+      ? `expected payment from ${a.subject} on ${dateText(a.dueDate) || a.dueDate}, ${cash(a.amount) || 'amount unknown'}`
+      : String(a?.label ?? ''))).filter(Boolean);
+    if (!acts.length) return '';
+    const n = num(p.notes);
+    return `From your note: ${acts.join('; ')}.${n > 0 ? ` ${plural(n, 'line')} kept as a note.` : ''}`;
+  }
+  const s = p.summary;
+  if (!s || typeof s !== 'object' || !p.counts) return '';
+  const total = typeof s.amount === 'number' && Number.isFinite(s.amount) ? `, ${cash(s.amount)} in total` : '';
+  return `${countsText(p.counts)}${total}.${s.totalMessage ? ` ${s.totalMessage}.` : ''}`;
+}
+
+// The status line after a review: imported row counts, or applied note changes.
+function reviewedText(counts) {
+  const c = counts && typeof counts === 'object' ? counts : {};
+  if (!c.rows && Number.isFinite(Number(c.actions))) return `Applied ${plural(num(c.actions), 'change')}.`;
+  return `Imported ${countsText(c)}.`;
+}
+
 // A stored value as plain text: lists joined, objects as JSON, booleans as Yes or No.
 function valueText(v) {
   if (v == null) return '';
@@ -215,7 +289,10 @@ export function ingestScreens(h) {
   const st = { busy: 0, results: null, retrying: {}, open: {}, rowOpen: {}, undoing: {}, decidedFinal: {}, deck: freshDeck(), origin: null, decidedAll: false, bankOpen: {},
     // Sources: open Manage panels by source id, the action in flight, and the status line of the
     // last action ({ text, receiptId }) with its Undo.
-    srcOpen: {}, srcBusy: null, srcNote: null };
+    srcOpen: {}, srcBusy: null, srcNote: null,
+    // Import review: correction drafts by proposal id, open Source panels by file id, the review or
+    // Undo in flight, the status line ({ text, receiptId }) and receipts already undone.
+    drafts: {}, proposalOpen: {}, reviewBusy: null, reviewNote: null, undone: {} };
   const ing = () => api.ingest();
 
   function chip(state) {
@@ -256,8 +333,25 @@ export function ingestScreens(h) {
 
   function fileRow(f) {
     const s = String(f.status || '');
-    const summary = s === 'imported' || s === 'duplicate' ? countsText(f.counts) : '';
-    return `<li class="${esc(s)}">${icon('doc')}<div class="h-ing-f"><div class="h-ing-f-h"><span class="h-ing-f-n">${esc(f.name)}</span><em>${esc(STATUS[s] || s)}</em></div>${summary ? `<p>${esc(summary)}</p>` : ''}</div></li>`;
+    const summary = s === 'imported' || s === 'duplicate' ? countsText(f.counts)
+      : s === 'needs_confirmation' || s === 'needs_clarification' ? 'Review it under Waiting files.' : '';
+    const rid = s === 'imported' && f.receipt?.id && !st.undone[f.receipt.id] ? String(f.receipt.id) : '';
+    return `<li class="${esc(s)}">${icon('doc')}<div class="h-ing-f"><div class="h-ing-f-h"><span class="h-ing-f-n">${esc(f.name)}</span><em>${esc(STATUS[s] || s)}</em></div>${summary ? `<p>${esc(summary)}</p>` : ''}</div>${rid ? undoBtn(rid) : ''}</li>`;
+  }
+
+  const undoBtn = (rid) => btn(st.reviewBusy === 'undo' ? 'Undoing' : 'Undo', `data-review-undo="${esc(rid)}"${st.reviewBusy != null ? ' disabled' : ''}`, 'ghost');
+
+  // The status line of the last review or Undo; '' when there is none.
+  function reviewNote() {
+    const n = st.reviewNote;
+    if (!n) return '';
+    return `<div class="h-src-undo" role="status" data-review-note><span>${esc(n.text)}</span>${n.receiptId ? undoBtn(n.receiptId) : ''}</div>`;
+  }
+
+  // Waiting files with the status line above them; '' when there is neither.
+  function waitingSection() {
+    const body = reviewNote() + waitingList();
+    return body ? section('Waiting files', body) : '';
   }
 
   function addFiles(context) {
@@ -274,8 +368,7 @@ export function ingestScreens(h) {
       <input type="file" multiple data-upload="1" hidden tabindex="-1"></div>`;
     if (onboarding) return `<div class="h-ing-add ob">${list}${control}</div>`;
     const lede = '<p class="h-mute sm">Exports from banks, cards, brokerages and payroll, profit and loss workbooks, statements and tax forms. Rows already imported are skipped.</p>';
-    const wl = waitingList();
-    return section('Add files', `<div class="h-ing-add">${lede}${control}${list}</div>`) + (wl ? section('Waiting files', wl) : '');
+    return section('Add files', `<div class="h-ing-add">${lede}${control}${list}</div>`) + waitingSection();
   }
 
   function accountMeta(a) {
@@ -329,11 +422,62 @@ export function ingestScreens(h) {
     return section('Sources', sourceNote() + srcs, g.sources.length ? plural(g.sources.length, 'source') : '') + fmts;
   }
 
-  // Files that need a mapping or the engine; '' when none. Shared by Confirm and Accounts.
+  // Files that need a review, an answer, readable text or the engine; '' when none. Shared by
+  // Files and Confirm.
   function waitingList() {
     const waiting = ing().waiting;
     if (!waiting.length) return '';
-    return `<ul class="h-ing-files">${waiting.map((f) => `<li class="${esc(f.status)}">${icon('doc')}<div class="h-ing-f"><div class="h-ing-f-h"><span class="h-ing-f-n">${esc(f.name)}</span><em>${esc(STATUS[f.status] || f.status)}</em></div></div>${btn(st.retrying[f.id] ? 'Retrying' : 'Retry', `data-retry="${esc(f.id)}"${st.retrying[f.id] ? ' disabled' : ''}`, 'ghost')}</li>`).join('')}</ul>`;
+    return `<ul class="h-ing-files">${waiting.map(proposalRow).join('')}</ul>`;
+  }
+
+  // One waiting file: status, plain cause, then the single control its state needs. Counts and
+  // amounts come only from the server's validated summary.
+  function proposalRow(f) {
+    const p = f.proposal && typeof f.proposal === 'object' ? f.proposal : {};
+    const s = proposalStatus(f);
+    let ctl = proposalControl(s, { engineOn: !!api.engineOn?.() });
+    if ((ctl === 'approve' || ctl === 'answer') && (p.id == null || p.id === '')) ctl = 'retry';
+    const summary = proposalSummary(f);
+    const sum = summary ? `<p data-proposal-summary>${esc(summary)}</p>` : '';
+    const delta = deltaText(p.delta);
+    const changed = delta ? `Only this changed since you approved this layout: ${delta}.` : '';
+    let body = '';
+    let side = '';
+    if (ctl === 'approve') body = `${changed ? `<p data-proposal-delta>${esc(changed)}</p>` : ''}${sum}${proposalSource(f)}${reviewBlock(p, true)}`;
+    else if (ctl === 'answer') {
+      const q = p.question || changed || 'The file did not check out against its interpretation. Say what the columns mean.';
+      body = `<p data-proposal-question>${esc(q)}</p>${sum}${proposalSource(f)}${reviewBlock(p, false)}`;
+    }
+    else if (ctl === 'engine') body = `<a class="h-btn ghost" href="#/engine" data-go="engine" data-proposal-engine>${s === 'budget_exhausted' ? 'Check the engine budget' : 'Turn on the engine'}</a>`;
+    else if (ctl === 'upload') body = `<div class="h-ing-ctl">${btn(`${icon('plus')}Add files`, `data-upload-open="1"${st.busy ? ' disabled' : ''}`, 'ghost')}<input type="file" multiple data-upload="1" hidden tabindex="-1"></div>`;
+    else side = btn(st.retrying[f.id] ? 'Retrying' : 'Retry', `data-retry="${esc(f.id)}"${st.retrying[f.id] ? ' disabled' : ''}`, 'ghost');
+    const label = stateOf(s)?.label ?? STATUS[s] ?? s;
+    return `<li class="${esc(s)}" data-proposal-file="${esc(f.id)}">${icon('doc')}<div class="h-ing-f"><div class="h-ing-f-h"><span class="h-ing-f-n">${esc(f.name)}</span><em data-proposal-status>${esc(label)}</em></div><p data-proposal-cause>${esc(proposalCause(f))}</p>${body}</div>${side}</li>`;
+  }
+
+  // Looks right (approve only) and a correction in the owner's own words. No per-column inputs.
+  function reviewBlock(p, approve) {
+    const id = esc(p.id);
+    const attrs = `data-version="${esc(p.version)}"${st.reviewBusy != null ? ' disabled' : ''}`;
+    return `<div class="h-ing-review">${approve ? btn('Looks right', `data-proposal-approve="${id}" ${attrs}`, 'pri') : ''}
+      <textarea data-proposal-text="${id}" rows="2" placeholder="Not quite: column C is the spouse's income" aria-label="Correction in your own words">${esc(st.drafts[p.id] ?? '')}</textarea>
+      ${btn('Send correction', `data-proposal-correct="${id}" ${attrs}`, 'ghost')}</div>`;
+  }
+
+  const fieldText = (key) => String(key).replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/_/g, ' ').toLowerCase();
+
+  // Where the summary came from: the file, and for imports each header column and what reads it.
+  function proposalSource(f) {
+    const p = f.proposal;
+    const key = String(f.id);
+    let inner = '';
+    if (p.kind === 'actions') {
+      inner = `<p>From the note ${esc(f.name)}.</p>${num(p.notes) > 0 ? `<p>${esc(plural(num(p.notes), 'line'))} kept as a note.</p>` : ''}`;
+    } else {
+      const cols = arr(p.columns).map((c) => `<li>Column ${esc(c.ordinal)}, ${esc(c.label)}: ${esc(c.field ? fieldText(c.field) : 'not used')}</li>`).join('');
+      inner = `<p>From ${esc(f.name)}. Every count and amount above comes from cells in this file.</p>${cols ? `<ul class="h-ing-cols" aria-label="Columns">${cols}</ul>` : ''}`;
+    }
+    return `<details class="h-src-m" data-proposal-source="${esc(key)}"${st.proposalOpen[key] ? ' open' : ''}><summary>${icon('chev')}<span>Source</span></summary>${inner}</details>`;
   }
 
   /* ---------- Confirm deck ----------
@@ -800,7 +944,7 @@ export function ingestScreens(h) {
       const nav = `<div class="h-deck-nav">${btn('← Prev', `data-deck="prev"${at > 0 ? '' : ' disabled'}`, 'ghost')}${hint}${fwd}</div>`;
       deck = `<div class="h-deck">${top}${note}${stack}${nav}</div>`;
     }
-    const wait = waitingList() || '<p class="h-mute">No files are waiting.</p>';
+    const wait = reviewNote() + (waitingList() || '<p class="h-mute">No files are waiting.</p>');
     return shell(`${pageHead('Household', 'Confirm', 'A few short questions so imports land in the right place.')}
       <div class="h-cols"><div class="h-col-main">${deck}${decidedSection()}</div>
       <div class="h-col-side">${section('Waiting files', wait)}</div></div>`);
@@ -1046,6 +1190,35 @@ export function ingestScreens(h) {
     });
   }
 
+  // One review or Undo in flight at a time; the status line reports the result.
+  function review(id, version, decision, evidence) {
+    if (st.reviewBusy != null) return;
+    st.reviewBusy = id;
+    draw();
+    Promise.resolve(api.reviewImport(id, version, decision, evidence)).then((r) => {
+      st.reviewBusy = null;
+      if (r && decision === 'correct') {
+        delete st.drafts[id];
+        st.reviewNote = { text: 'Correction saved. Fathom reads the file again with it when the engine runs.', receiptId: null };
+      } else if (r) st.reviewNote = { text: reviewedText(r.counts), receiptId: r.receipt?.id ?? null };
+      draw();
+    });
+  }
+
+  function undoReview(receiptId) {
+    if (st.reviewBusy != null) return;
+    st.reviewBusy = 'undo';
+    draw();
+    Promise.resolve(api.actionUndo(receiptId)).then((r) => {
+      st.reviewBusy = null;
+      if (r) {
+        st.undone[receiptId] = true;
+        st.reviewNote = { text: 'Undone.', receiptId: null };
+      }
+      draw();
+    });
+  }
+
   function accountLabelOf(id) {
     for (const s of arr(ing().sources)) for (const a of arr(s.accounts)) if (a.id === id) return String(a.label || '');
     return '';
@@ -1068,7 +1241,7 @@ export function ingestScreens(h) {
   }
 
   function handleClick(e) {
-    const t = e.target.closest?.('[data-upload-open],[data-answer],[data-row-answer],[data-row-undo],[data-group-apply],[data-take-guess],[data-decided-undo],[data-decided-more],[data-deck],[data-deck-home],[data-retry],[data-src-archive],[data-src-remove],[data-src-undo],[data-src-merge],details[data-howto] > summary,details[data-row-detail] > summary,details[data-bank-details] > summary,details[data-src-manage] > summary');
+    const t = e.target.closest?.('[data-upload-open],[data-answer],[data-row-answer],[data-row-undo],[data-group-apply],[data-take-guess],[data-decided-undo],[data-decided-more],[data-deck],[data-deck-home],[data-retry],[data-src-archive],[data-src-remove],[data-src-undo],[data-src-merge],[data-proposal-approve],[data-proposal-correct],[data-review-undo],details[data-howto] > summary,details[data-row-detail] > summary,details[data-bank-details] > summary,details[data-src-manage] > summary,details[data-proposal-source] > summary');
     if (!t) return false;
     if (t.tagName === 'SUMMARY') {
       // The native toggle runs; the open state is kept so a redraw does not close it.
@@ -1076,6 +1249,7 @@ export function ingestScreens(h) {
       if (d.dataset.rowDetail) st.rowOpen[d.dataset.rowDetail] = !d.open;
       else if (d.dataset.bankDetails) st.bankOpen[d.dataset.bankDetails] = !d.open;
       else if (d.dataset.srcManage) st.srcOpen[d.dataset.srcManage] = !d.open;
+      else if (d.dataset.proposalSource) st.proposalOpen[d.dataset.proposalSource] = !d.open;
       else st.open[d.dataset.howto] = !d.open;
       return true;
     }
@@ -1151,6 +1325,19 @@ export function ingestScreens(h) {
       else api.go('account', { id: d.srcMerge });
       return true;
     }
+    if (d.proposalApprove) {
+      review(d.proposalApprove, Number(d.version), 'approve', 'Looks right');
+      return true;
+    }
+    if (d.proposalCorrect) {
+      const text = String(st.drafts[d.proposalCorrect] ?? '').trim();
+      if (text) review(d.proposalCorrect, Number(d.version), 'correct', text);
+      return true;
+    }
+    if (d.reviewUndo) {
+      undoReview(d.reviewUndo);
+      return true;
+    }
     if (d.retry) {
       if (st.retrying[d.retry]) return true;
       const id = d.retry;
@@ -1165,6 +1352,11 @@ export function ingestScreens(h) {
   // The file input fires both input and change; only change uploads, input is swallowed.
   function handleChange(e) {
     const t = e.target;
+    // A correction draft is kept without a redraw so the caret stays.
+    if (t?.matches?.('textarea[data-proposal-text]')) {
+      st.drafts[t.dataset.proposalText] = String(t.value ?? '');
+      return true;
+    }
     if (t?.matches?.('input[data-category-always]')) {
       if (e.type === 'change') {
         st.deck.categoryAlways ??= {};

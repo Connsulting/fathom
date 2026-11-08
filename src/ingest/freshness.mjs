@@ -114,10 +114,25 @@ function fileWithProposal(db, row) {
   const file = fileOf(row);
   const proposal = db.prepare('SELECT id,version,status,reason_code,review_state FROM import_proposals WHERE file_id=? ORDER BY version DESC,rowid DESC LIMIT 1').get(row.id);
   if (!proposal) return file;
-  const presentation = parseJson(proposal.review_state, {}).presentation ?? {};
+  const review = parseJson(proposal.review_state, {}) ?? {};
+  const presentation = review.presentation ?? {};
   const batch = db.prepare('SELECT receipt_id FROM import_batches WHERE proposal_id=? AND proposal_version=?').get(proposal.id,proposal.version);
+  const kind = review.kind === 'actions' ? 'actions' : 'import';
+  const list = (value, max) => (Array.isArray(value) ? value.slice(0, max) : []);
+  // Each header column of the approved structure with the layout field reading it (null when unused).
+  const tables = review.layout?.tables ?? [];
+  const columns = kind === 'import' ? list(review.structural?.headers, 50).flatMap((h, i) => list(h?.columns, 50).map(c => ({ ordinal: c.ordinal, label: String(c.label ?? ''),
+    field: Object.entries(tables[i]?.fields ?? {}).find(([, s]) => Array.isArray(s?.columns) && s.columns.includes(c.ordinal))?.[0] ?? null }))).slice(0, 50) : [];
+  const actions = kind === 'actions' ? list(presentation.actions, 20).map(a => {
+    const e = a?.expectedTransaction;
+    return { label: String(a?.label ?? ''), subject: e?.subject ?? null, dueDate: e?.dueDate ?? null, amount: Number.isFinite(e?.amount) ? e.amount : null };
+  }) : [];
   return { ...file, proposal: { id: proposal.id, version: proposal.version, status: proposal.status, reasonCode: proposal.reason_code,
-    summary: presentation.summary ?? null, counts: presentation.counts ?? null, receiptId: batch?.receipt_id ?? null } };
+    summary: presentation.summary ?? null, counts: presentation.counts ?? null, receiptId: batch?.receipt_id ?? null,
+    kind, delta: list(presentation.delta, 20), errors: list(presentation.errors, 10),
+    question: typeof presentation.question === 'string' ? presentation.question : null, actions,
+    notes: Array.isArray(presentation.notes) ? presentation.notes.length : 0,
+    permission: Array.isArray(presentation.permission?.scopes) ? presentation.permission.scopes : null, columns } };
 }
 
 export function fileOf(row) {

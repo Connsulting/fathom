@@ -1337,6 +1337,15 @@ function retryFile(id) {
   return send('/api/files/' + encodeURIComponent(id) + '/retry', {}, d => d.file || null);
 }
 
+// Approve ('approve', evidence 'Looks right') or correct in the owner's own words ('correct') one
+// version of a staged import proposal. Resolves the review result ({status: 'imported', counts,
+// receipt} or {status: 'queued'}) with the scenario applied, or null on failure (error line shown).
+function reviewImport(id, version, decision, evidence) {
+  if (id == null || id === '' || !Number.isSafeInteger(version) || version <= 0 || (decision !== 'approve' && decision !== 'correct')
+    || typeof evidence !== 'string' || !evidence.trim() || evidence.length > 4000) return done();
+  return send('/api/import-proposals/' + encodeURIComponent(id) + '/review', { version, decision, evidence }, d => d, null, 'Could not save that review. ');
+}
+
 // Advisor workflow (item 24). Each resolves with a truthy value on success, null on failure.
 function sendToAdvisor(recId) {
   if (recId == null || recId === '') return done();
@@ -1438,6 +1447,7 @@ const api = {
   answerMany,
   reopenMany,
   retryFile,
+  reviewImport,
   archiveAccount,
   removeFile,
   yearendMark,
