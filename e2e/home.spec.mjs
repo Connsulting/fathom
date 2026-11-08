@@ -387,7 +387,7 @@ test.describe('Home', () => {
 
       const shown = async (id) => {
         await openDetails(hk(page));
-        return home(page).locator(`.h-gnext[data-rec="${id}"], .h-due-r[data-rec="${id}"]`).count();
+        return home(page).locator(`.h-gnext[data-rec="${id}"], .h-due-r[data-rec="${id}"], article.h-next[data-next-rec="${id}"]`).count();
       };
       const spouseGoal = servedIds(spouseRec)[0];
       expect(await shown(spouseRec.id), 'Both shows the spouse action').toBeGreaterThan(0);
