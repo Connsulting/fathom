@@ -116,6 +116,9 @@ test('removing and restoring a payment log keeps observed payments counted with 
   assert.equal(projectedFederalPaid(s.db), 3000);
   assert.equal(payments(s.db).filter(r => r.parser === 'synthetic-payment-log').length, 1);
   assert.equal(payments(s.db).length, 3);
+  reopenItem(s.db, item.id, { now: NOW });
+  assert.equal(projectedFederalPaid(s.db), 3000, 'Undo of the inference leaves the restored uploaded log alone');
+  answer(s.db, item.id, 'estimate', { now: NOW });
   removeFile(ctx, log.fileId);
   reopenItem(s.db, item.id, { now: NOW });
   assert.equal(projectedFederalPaid(s.db), 1800, 'Undo removes the restored inference');

@@ -139,6 +139,7 @@ registerReceiptKind('file', {
     const log = ctx.db.prepare('SELECT changes FROM source_changes WHERE receipt_id = ?').get(receipt.id);
     if (!log) throw new ToolError('conflict', CHANGED_SINCE);
     conflictOnChange(() => revertChanges(ctx.db, JSON.parse(log.changes)));
+    reconcileTransactionPayments(ctx.db, { now: stampOf(ctx) });
   },
 });
 registerReceiptKind('merge', {

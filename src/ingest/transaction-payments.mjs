@@ -92,11 +92,15 @@ export function reconcileTransactionPayments(db, { now = new Date().toISOString(
       if (!t || db.prepare('SELECT 1 FROM tax_payments WHERE parser=? AND dedupe_key=?').get(PARSER, `transaction-payment:${t.dedupe_key}`)) continue;
       const choice = row.answer.split(':')[0];
       const j = ['estimate', 'logged', 'separate'].includes(choice) ? context.jurisdiction : choice;
-      if (logsFor(db, t, j).length) continue;
       const undo = db.prepare('SELECT changes FROM confirm_undo WHERE item_id=?').get(row.id);
+      const retained = JSON.parse(undo.changes).filter(c => c.table !== 'tax_payments');
+      if (logsFor(db, t, j).length) {
+        db.prepare('UPDATE confirm_undo SET changes=? WHERE item_id=?').run(JSON.stringify(retained), row.id);
+        continue;
+      }
       const { changes } = captureChanges(db, () => applyTransactionPayment(db, { ...row, context }, choice === 'logged' ? 'estimate' : row.answer));
       db.prepare('UPDATE confirm_undo SET changes=? WHERE item_id=?')
-        .run(JSON.stringify([...JSON.parse(undo.changes).filter(c => c.table !== 'tax_payments'), ...changes]), row.id);
+        .run(JSON.stringify([...retained, ...changes]), row.id);
     }
     for (const t of rows) {
       const c = classify(t);
