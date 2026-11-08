@@ -100,14 +100,14 @@ export async function buildSuggestions(db, { clock: override, goals } = {}) {
 
   for (const goal of list) {
     const entry = settings && typeof settings === 'object' ? settings[goal.id] : null;
-    const { rec, figures } = suggestionFor({ goal, entry, clock, spending, cash, invested, rooms, withdrawalRate });
+    const { rec, figures } = await suggestionFor({ goal, entry, clock, spending, cash, invested, rooms, withdrawalRate });
     out.suggestions.push(rec);
     Object.assign(out.figures, figures);
   }
   return out;
 }
 
-function suggestionFor({ goal, entry, clock, spending, cash, invested, rooms, withdrawalRate: rateOf }) {
+async function suggestionFor({ goal, entry, clock, spending, cash, invested, rooms, withdrawalRate: rateOf }) {
   const { kind, reason } = goalKind(goal);
   const horizon = horizonOf(goal.horizon);
   const key = name => `suggest.${goal.id}.${name}`;
@@ -122,9 +122,9 @@ function suggestionFor({ goal, entry, clock, spending, cash, invested, rooms, wi
   const put = (name, f) => { figs[key(name)] = f; rec.figures[name] = key(name); };
 
   if (kind === 'cushion' || kind === 'independence') {
-    const sp = spending();
-    const holding = kind === 'cushion' ? cash() : invested();
-    const withdrawalRate = rateOf();
+    const sp = await spending();
+    const holding = await (kind === 'cushion' ? cash() : invested());
+    const withdrawalRate = await rateOf();
     rec.params = kind === 'cushion' ? { cushionMonths: TARGET_PARAMETERS.cushionMonths }
       : { withdrawalRate, realReturn: TARGET_PARAMETERS.realReturn };
     rec.window = sp.window;
@@ -151,7 +151,7 @@ function suggestionFor({ goal, entry, clock, spending, cash, invested, rooms, wi
       inputs.target = plan.target;
     }
   } else if (kind === 'tax') {
-    const usable = rooms();
+    const usable = await rooms();
     if (!usable.length) rec.missing.push('no_tax_room');
     else {
       const plan = taxPlan({ rooms: usable, clock, goalId: goal.id });
