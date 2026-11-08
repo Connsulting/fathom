@@ -31,7 +31,19 @@ export function getFacts(db) {
   for (const row of db.prepare('SELECT key, value FROM facts ORDER BY key').all()) {
     try { out[row.key] = JSON.parse(row.value); } catch { /* skip a malformed value */ }
   }
-  return out;
+  return withInferredRecFacts(out);
+}
+
+export function withInferredRecFacts(facts) {
+  for (const [key, undoKey] of [
+    ['accounts.planType', 'accounts.planTypeInference'],
+    ['retirement.otherPlanDeferrals', 'retirement.otherPlanDeferralsDefault'],
+  ]) {
+    const inferred = Object.fromEntries(Object.entries(facts[`${key}Inferred`] || {})
+      .filter(([id]) => !facts[undoKey]?.[id]?.undone));
+    if (Object.keys(inferred).length) facts[key] = { ...inferred, ...facts[key] };
+  }
+  return facts;
 }
 
 // Deletes the fact only when it is unconfirmed and came from that file.

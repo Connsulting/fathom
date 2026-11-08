@@ -2,6 +2,7 @@
 // confirm-form text and task padding. Template text here follows the prose rule: no digits outside
 // tokens and no number words; dates are written as month and day.
 
+import { PLAN_LABELS } from '../../shared/account-plans.mjs';
 import { ADVISOR_KEYS } from '../../facts/derive.mjs';
 import { isIsoDate } from '../../scenario/build.mjs';
 import { esc } from '../../shared/tokens.mjs';
@@ -105,7 +106,9 @@ export const ANSWER_SHAPES = Object.freeze({
   } },
   'obligations.childcareChangeDate': { scope: 'household', type: 'date', label: 'Childcare change date' },
   'accounts.planType': { scope: 'account', accountKinds: ['retirement','roth','ira','taxable','brokerage'], type: 'choice', label: 'Plan type for {account}',
-    choices: ['traditional_ira','roth_ira','sep_ira','401k','roth_401k','solo_401k','403b','457b','hsa','529','taxable'].map(value => ({value,label:value})) },
+    choices: Object.entries(PLAN_LABELS).map(([value, label]) => ({ value, label })) },
+  'accounts.planTypeInference': { scope: 'account', accountKinds: ['retirement','roth','ira','taxable','brokerage'], type: 'object', fields: { undone: yesNo('Undo this inferred plan type?') } },
+  'retirement.otherPlanDeferralsDefault': { scope: 'person', type: 'object', fields: { undone: yesNo('Undo the assumption of no other workplace deferrals?') } },
   'accounts.rothFirstContributionYear': { scope: 'account', accountEligibility: 'roth', type: 'number', min: 1975, currentYear: true, integer: true, unit: 'year', label: 'First Roth contribution year for {account}' },
   'accounts.rothBasis': { scope: 'account', accountEligibility: 'roth', ...dollars('Roth contribution basis for {account}') },
   'accounts.separationDate': { scope: 'account', accountEligibility: 'employer', type: 'date', label: 'Separation date for {account}' },

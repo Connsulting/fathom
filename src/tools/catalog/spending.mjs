@@ -4,6 +4,7 @@ import { aggregate, compare, cashFlow, bindFigures, boundResult } from '../../ca
 import { recurring } from '../../calc/recurring.mjs';
 import { resolveDefinition, spendingDefinitions } from '../../spending/definitions.mjs';
 import { BUCKETS } from '../../categories/resolve.mjs';
+import { withInferredRecFacts } from '../../store/facts.mjs';
 import { ToolError } from '../errors.mjs';
 
 const choice = (values) => ({ type: 'string', enum: values });
@@ -69,7 +70,7 @@ export function readInput(ctx) {
         return [r.key, v];
       }),
   );
-  return { ...loadCategoryInputs(ctx.db), clock, facts };
+  return { ...loadCategoryInputs(ctx.db), clock, facts: withInferredRecFacts(facts) };
 }
 function op(name, params, summary, route, handler) {
   return {

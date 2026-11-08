@@ -192,7 +192,8 @@ test('number keys 1 to 3 answer with that option and advance', async ({ page, re
     const it = plan[key];
     await deckTo(page, order, it.id);
     await pressToAnswer(page, String(key), it.id);
-    await expectAnswered(request, it.id, it.options[key - 1].id);
+    const optionId = it.options[key - 1].id;
+    await expectAnswered(request, it.id, it.kind === 'transaction_category' ? 'always:' + optionId : optionId);
   }
 });
 
