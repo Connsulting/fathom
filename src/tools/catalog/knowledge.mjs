@@ -112,7 +112,7 @@ export const operations = [
     },
   },
   {
-    tool: 'knowledge', name: 'entry', summary: 'Read one sourced knowledge pack entry.', route: 'One knowledge entry', routes: [],
+    tool: 'knowledge', name: 'entry', summary: 'Read one sourced knowledge pack entry.', route: 'One knowledge entry', routes: ['GET /api/packs/:id/entries/:entryId'],
     params: {
         packId: { type: 'string', minLength: 1 },
         file: { type: 'string', minLength: 1, maxLength: 200 },

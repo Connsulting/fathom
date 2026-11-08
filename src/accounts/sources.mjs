@@ -6,7 +6,7 @@
 //     balances, positions, P&L lines, tax payments, facts) and its pending questions, archives an
 //     account left with no rows that no live bank connection feeds, and marks the file removed.
 //     The change log (ingest/undo.mjs captureChanges) is kept in source_changes under the receipt
-//     id; Undo replays it backwards (undoSourceChange).
+//     id; Undo replays it backwards (the 'file' receipt kind registered below).
 //   mergeAccounts(ctx, id, withId): the account dialog's manual merge (mergePlan, manualMerge),
 //     with a receipt kind 'merge' whose Undo reopens the merge's confirm item (receipt null when
 //     no person is signed in).
@@ -14,10 +14,10 @@
 
 import { tx } from '../store/db.mjs';
 import { ToolError } from '../tools/errors.mjs';
-import { requireActor, saveReceipt } from '../actions/receipts.mjs';
+import { requireActor, saveReceipt, registerReceiptKind } from '../actions/receipts.mjs';
 import { captureChanges, revertChanges } from '../ingest/undo.mjs';
 import { connectedAccountIds } from '../ingest/coverage.mjs';
-import { ConfirmError, reopenItem } from '../ingest/confirm.mjs';
+import { ConfirmError, reopenItemInTx } from '../ingest/confirm.mjs';
 import { mergePlan, manualMerge } from '../ingest/account-merge.mjs';
 import { refreshFigures } from '../ingest/pipeline.mjs';
 import { accountNaming } from './naming.mjs';
@@ -121,29 +121,25 @@ export function mergeAccounts(ctx, id, withId) {
   return { ...merged, itemId: merged.item.id, receipt };
 }
 
-// Undo of a 'file' or 'merge' receipt `row`, inside no transaction (reopenItem opens its own).
-// Marks the receipt undone. Throws ToolError('conflict') when the rows changed since.
-export function undoSourceChange(ctx, row) {
-  const { db } = ctx;
-  const done = () => db.prepare('UPDATE action_receipts SET undone_at = ?, planning_pending = 0 WHERE id = ?').run(stampOf(ctx), row.id);
-  try {
-    if (row.kind === 'file') {
-      tx(db, () => {
-        const log = db.prepare('SELECT changes FROM source_changes WHERE receipt_id = ?').get(row.id);
-        if (!log) throw new ToolError('conflict', CHANGED_SINCE);
-        revertChanges(db, JSON.parse(log.changes));
-        done();
-      });
-      return;
-    }
-    if (row.kind === 'merge') {
-      reopenItem(db, Number(row.entity_id), { now: stampOf(ctx) });
-      done();
-      return;
-    }
-  } catch (e) {
+// Undo for each receipt kind, run by actions/receipts.mjs undoAction inside its transaction:
+// archive is the generic single-row revert; a file removal replays its stored change log; a merge
+// reopens its confirm item. A changed row refuses with a conflict and the transaction rolls back.
+const conflictOnChange = (fn) => {
+  try { return fn(); } catch (e) {
     if (e instanceof ConfirmError) throw new ToolError('conflict', CHANGED_SINCE);
     throw e;
   }
-  throw new ToolError('bad_input', 'This change cannot be undone here.');
-}
+};
+registerReceiptKind('account', { table: 'accounts', pk: 'id' });
+registerReceiptKind('file', {
+  restore(ctx, { receipt }) {
+    const log = ctx.db.prepare('SELECT changes FROM source_changes WHERE receipt_id = ?').get(receipt.id);
+    if (!log) throw new ToolError('conflict', CHANGED_SINCE);
+    conflictOnChange(() => revertChanges(ctx.db, JSON.parse(log.changes)));
+  },
+});
+registerReceiptKind('merge', {
+  restore(ctx, { id }) {
+    conflictOnChange(() => reopenItemInTx(ctx.db, Number(id), { now: stampOf(ctx) }));
+  },
+});

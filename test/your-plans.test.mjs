@@ -411,7 +411,7 @@ async function answerAfterBuild(db, household, text) {
   const packs = createLivePacks(db, { dataDir: household.root });
   packs.refresh();
   const engine = sayingEngine(engineFor(db, household), text);
-  return createLiveAnswerer({ engine, packs, root: household.root }).answer({ db, key: 'ask:0123456789ab', text: 'What do our plan documents say' });
+  return createLiveAnswerer({ engine, packs, root: household.root, services: { ...household.services, engine: engine, config: { dataDir: household.root } } }).answer({ db, key: 'ask:0123456789ab', text: 'What do our plan documents say' });
 }
 
 test('B5: a document with no numbers and a row inventing an amount gives no entry with it, and an answer stating it is ungrounded', async t => {
