@@ -625,3 +625,29 @@ describe('guess CLI (npm run confirm:guess runs the confirm-guess job once throu
     }
   });
 });
+
+
+test('confirm guesses scrub imported filenames on the outbound transport and retain stored metadata', () => withStore(async s => {
+  const off = await offEngine();
+  await P.ingestFile(s.db, fixture('Chase7766_Activity_20320305.csv', 'text/csv'), s.opts(off));
+  const filename = 'synthetic_900-12-3456_900-70-1234_90-1234567.csv';
+  s.db.prepare('UPDATE files SET name = ?').run(filename);
+  const originalFetch = globalThis.fetch;
+  const payloads = [];
+  globalThis.fetch = async (url, init) => {
+    payloads.push(JSON.parse(init.body));
+    return new Response(JSON.stringify({ id: 'synthetic', type: 'message', role: 'assistant', model: 'claude-sonnet-4-6',
+      content: [{ type: 'text', text: '{"guesses":[]}' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } }),
+    { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  try {
+    const live = E.createEngine({ mode: 'live', credential: 'synthetic-key' });
+    const result = await G.guessPending(s.db, { mode: 'live', isOn: () => true, call: live.call }, { now: NOW });
+    assert.equal(result.stopped, undefined);
+    assert.equal(payloads.length, 1);
+    assert.doesNotMatch(JSON.stringify(payloads), /900-12-3456|900-70-1234|90-1234567/);
+    assert.ok(JSON.stringify(payloads).includes('synthetic_XXX-XX-XXXX_XXX-XX-XXXX_XX-XXXXXXX.csv'));
+    assert.equal(one(s.db, 'SELECT name FROM files').name, filename);
+    assert.deepEqual(payloads[0].output_config.format.schema, G.GUESS_SCHEMA);
+  } finally { globalThis.fetch = originalFetch; }
+}));

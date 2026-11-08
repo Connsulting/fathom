@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { consumeSdkMessages, normalizeSdkRound, assistantText, messagesRound, wireSchema, WIRE_UNSUPPORTED_KEYWORDS } from '../live.mjs';
+import { consumeSdkMessages, normalizeSdkRound, assistantText, messagesRound, sdkOptions, encodeTranscript, wireSchema, WIRE_UNSUPPORTED_KEYWORDS } from '../live.mjs';
 import { DEFAULT_MODEL, usageCostUsd } from '../pricing.mjs';
 import { createEngine, createMemoryLedger, ModelAccountingError, ModelCallError } from '../index.mjs';
 import * as engineModule from '../index.mjs';
@@ -339,4 +339,67 @@ test('a rejected live extract records zero cost and does not disable the engine'
     assert.deepEqual(await engine.extract({ document, schema, maxTokens: 64 }), [{ c: 0.5 }], 'the engine still works after the rejection');
     await assert.rejects(engine.extract({ document, schema, maxTokens: 64 }), ModelCallError, 'the full schema still bounds the value locally');
   } finally { stub.restore(); }
+});
+
+
+const TAX_TEXT = 'SSN 900-12-3456; ITIN 900 70 1234; EIN 90-1234567; SSN: 900123456; ITIN: 900701234; EIN: 901234567';
+const assertNoTaxIds = value => {
+  const text = JSON.stringify(value);
+  for (const id of ['900-12-3456', '900 70 1234', '90-1234567', '900123456', '900701234', '901234567']) {
+    assert.ok(!text.includes(id), `outbound tax identifier: ${id}`);
+  }
+};
+
+test('SDK outbound transcript and system text scrub tax identifiers without mutating callers', () => {
+  const messages = [
+    { role: 'user', content: TAX_TEXT },
+    { role: 'assistant', content: [{ type: 'text', text: TAX_TEXT }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'synthetic-evidence', content: JSON.stringify({ filename: `tax_${TAX_TEXT}.pdf`, amount: 123456789, date: '2032-03-05' }) }] },
+  ];
+  const original = structuredClone(messages);
+  const wire = encodeTranscript(messages);
+  assertNoTaxIds(wire);
+  assert.deepEqual(messages, original);
+  assert.ok(wire.includes('123456789'));
+  assert.ok(wire.includes('2032-03-05'));
+  assert.ok(wire.includes('synthetic-evidence'));
+  const options = sdkOptions({ credential: { value: 'synthetic-key' }, configDir: '/synthetic', system: TAX_TEXT, systemDynamic: TAX_TEXT, maxTokens: 64, model: DEFAULT_MODEL });
+  assertNoTaxIds(options.systemPrompt);
+});
+
+test('Messages outbound body scrubs nested metadata, history and schema descriptions', async () => {
+  const stub = stubFetch([{ status: 200, body: OK_MESSAGE('{}') }]);
+  const messages = [{ role: 'user', content: [{ type: 'text', text: TAX_TEXT }, { type: 'document', title: `tax_${TAX_TEXT}.pdf`, source: { type: 'text', media_type: 'text/plain', data: TAX_TEXT } }] }];
+  const original = structuredClone(messages);
+  const schema = { type: 'object', description: TAX_TEXT, properties: { amount: { type: 'number', minimum: 0 }, date: { type: 'string' } }, additionalProperties: false };
+  try {
+    await messagesRound({ credential: { value: 'synthetic-key' }, system: TAX_TEXT, systemDynamic: TAX_TEXT, messages, schema, model: DEFAULT_MODEL, maxTokens: 64 });
+    assertNoTaxIds(stub.bodies[0]);
+    assert.deepEqual(messages, original);
+    assert.equal(schema.description, TAX_TEXT);
+    assert.deepEqual(stub.bodies[0].output_config.format.schema.properties, { amount: { type: 'number' }, date: { type: 'string' } });
+  } finally { stub.restore(); }
+});
+
+test('MCP replies scrub success and error text while local evidence keeps original data', async () => {
+  const { createRegistryServer } = await import('../tools.mjs');
+  const result = { filename: `tax_${TAX_TEXT}.pdf`, amount: 123456789, date: '2032-03-05', evidence: { id: 'synthetic-evidence', excerpt: TAX_TEXT } };
+  const registry = createRegistryServer([{ name: 'synthetic', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: TAX_TEXT,
+    inputSchema: { type: 'object', properties: { operation: { type: 'string' } }, required: ['operation'], additionalProperties: false },
+    handler: async args => {
+      if (args.operation === 'fail') { const error = new Error(TAX_TEXT); error.name = 'ToolError'; throw error; }
+      return result;
+    } }], { purpose: 'chat' });
+  const reply = await registry.invoke('synthetic', { operation: 'read' });
+  assertNoTaxIds(reply);
+  assert.deepEqual(registry.results[0].result, result);
+  const wireResult = JSON.parse(reply.content[0].text);
+  assert.equal(wireResult.amount, result.amount);
+  assert.equal(wireResult.date, result.date);
+  assert.equal(wireResult.evidence.id, result.evidence.id);
+  const failed = await registry.invoke('synthetic', { operation: 'fail' });
+  assert.equal(failed.isError, true);
+  assertNoTaxIds(failed);
+  const invalid = await registry.invoke('synthetic', { operation: TAX_TEXT, [TAX_TEXT]: 'invalid' });
+  assertNoTaxIds(invalid);
 });
