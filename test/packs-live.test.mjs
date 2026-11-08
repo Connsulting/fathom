@@ -29,7 +29,7 @@ async function ok(resPromise) {
   return r.json;
 }
 
-test('the scenario shows the demo pack defs with manifest metadata under the demo ids', T, () => withServer({ env: FAKE }, async s => {
+test('the scenario shows the demo pack defs with manifest metadata under the demo ids', T, async () => withServer({ env: FAKE }, async s => {
   const sc = await getScenario(s.baseUrl);
   const giving = packOf(sc, 'giving');
   const manifest = manifestOf('charitable-giving');
@@ -51,7 +51,7 @@ test('the scenario shows the demo pack defs with manifest metadata under the dem
   assert.equal(contractor.version, undefined, 'illustrative packs are untouched');
 }));
 
-test('GET /api/packs/:id/entries/:entryId serves one manifest entry and 404s otherwise', T, () => withServer({ env: FAKE }, async s => {
+test('GET /api/packs/:id/entries/:entryId serves one manifest entry and 404s otherwise', T, async () => withServer({ env: FAKE }, async s => {
   const r = await ok(request(s.baseUrl, { path: '/api/packs/giving/entries/bunching' }));
   const manifest = manifestOf('charitable-giving');
   const listed = manifest.entries.find(e => e.file === 'bunching.md');
@@ -74,7 +74,7 @@ test('GET /api/packs/:id/entries/:entryId serves one manifest entry and 404s oth
   assert.equal((await postJson(s.baseUrl, '/api/packs/giving/entries/bunching', {})).status, 405);
 }));
 
-test('toggle keeps working with the planning-run note, and the override survives later refreshes', T, () => withServer({ env: FAKE }, async s => {
+test('toggle keeps working with the planning-run note, and the override survives later refreshes', T, async () => withServer({ env: FAKE }, async s => {
   const on = await ok(postJson(s.baseUrl, '/api/packs/giving/toggle', {}));
   assert.equal(on.status, 'active');
   assert.equal(on.note, NOTE);
@@ -122,19 +122,19 @@ test('B4: POST /api/packs/:id/whatif stores a manifest prompt as escaped literal
     assert.equal(conv[1].notice, false);
     const db = await openStore(s.dbFile);
     try {
-      const row = db.prepare("SELECT text FROM messages WHERE conversation_key = ? AND role = 'me'").get(`pack:${HOSTILE_ID}`);
+      const row = await db.prepare("SELECT text FROM messages WHERE conversation_key = ? AND role = 'me'").get(`pack:${HOSTILE_ID}`);
       assert.equal(row.text, escapeUserText(HOSTILE_PROMPT));
-    } finally { db.close(); }
+    } finally { await db.close(); }
   });
 });
 
 test('B4: the What if question for a manifest pack is the raw prompt, and its stored form is dropped from history', async t => {
   const s = await tempDb();
   t.after(() => { s.close(); rmSync(s.dataDir, { recursive: true, force: true }); });
-  seedDemo(s.db);
+  await seedDemo(s.db);
   // The temp store's directory stands in as the household root.
   writeSyntheticPack(s.dataDir, HOSTILE_PACK);
-  const runtime = createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' }) });
+  const runtime = await createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' }) });
   const packs = createLivePacks(s.db, { dataDir: s.dataDir });
   packs.refresh();
   const requests = [];
@@ -146,7 +146,7 @@ test('B4: the What if question for a manifest pack is the raw prompt, and its st
     },
   });
   const answerer = createLiveAnswerer({ engine, packs, root: s.dataDir, services: { engine, config: { dataDir: s.dataDir } } });
-  const figure = money(buildScenario(s.db).fig.true_reserve.v);
+  const figure = money((await buildScenario(s.db)).fig.true_reserve.v);
 
   const first = await answerer.whatIf({ db: s.db, packId: HOSTILE_ID });
   assert.ok(!first.notice);
@@ -157,17 +157,17 @@ test('B4: the What if question for a manifest pack is the raw prompt, and its st
 
   // A prior notice round stored the owner message in its stored (escaped) form.
   const key = `pack:${HOSTILE_ID}`;
-  s.db.prepare('INSERT OR IGNORE INTO conversations (key, created_at) VALUES (?, ?)').run(key, '2026-11-05T09:00:00.000Z');
+  await s.db.prepare('INSERT OR IGNORE INTO conversations (key, created_at) VALUES (?, ?)').run(key, '2026-11-05T09:00:00.000Z');
   const insert = s.db.prepare('INSERT INTO messages (conversation_key, role, text, refs, notice, ts, provenance) VALUES (?, ?, ?, ?, ?, ?, NULL)');
-  insert.run(key, 'me', escapeUserText(HOSTILE_PROMPT), '[]', 0, 'Nov 5, 9:00 AM');
-  insert.run(key, 'fathom', '<p>Engine is off, so answers are paused.</p>', '[]', 1, 'Nov 5, 9:00 AM');
+  await insert.run(key, 'me', escapeUserText(HOSTILE_PROMPT), '[]', 0, 'Nov 5, 9:00 AM');
+  await insert.run(key, 'fathom', '<p>Engine is off, so answers are paused.</p>', '[]', 1, 'Nov 5, 9:00 AM');
   await answerer.whatIf({ db: s.db, packId: HOSTILE_ID });
   const turns = requests[1].messages.filter(m => String(m.content).includes('onerror'));
   assert.equal(turns.length, 1, 'the earlier copy of the prompt is dropped; only the question remains');
   assert.equal(requests[1].messages.at(-1).content, HOSTILE_PROMPT);
 });
 
-test('B4: an illustrative demo pack What if keeps its token form in the stored message', T, () => withServer({ env: FAKE }, async s => {
+test('B4: an illustrative demo pack What if keeps its token form in the stored message', T, async () => withServer({ env: FAKE }, async s => {
   const def = packOf(await getScenario(s.baseUrl), 'contractor');
   assert.equal(def.manifest, undefined, 'contractor is illustrative');
   assert.ok(def.whatIf.prompt.includes('{n:'), 'its prompt carries a token');

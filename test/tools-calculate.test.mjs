@@ -23,8 +23,8 @@ let value;
 let pace;
 before(async () => {
   t = await tempDb();
-  seedDemo(t.db);
-  t.db.prepare(`INSERT INTO figures (key, v, src, kind, label, locator, unavailable_reason, updated_at)
+  await seedDemo(t.db);
+  await t.db.prepare(`INSERT INTO figures (key, v, src, kind, label, locator, unavailable_reason, updated_at)
                 VALUES ('test_stale', 0, NULL, 'a', 'Stale balance', NULL, 'stale_account', '2026-11-01T00:00:00Z')`).run();
   ctx = { db: t.db, dataDir: t.dataDir, now: new Date('2026-11-05T15:00:00Z'), ownerStatements: () => STATEMENTS };
   const figures = await callTool('household', { operation: 'figures' }, ctx);
@@ -230,7 +230,7 @@ describe('refusals', () => {
   });
 
   test('fact, default and owner assumptions are checked', async () => {
-    const agi = JSON.parse(t.db.prepare("SELECT value FROM facts WHERE key = 'income.agiEstimate'").get().value);
+    const agi = JSON.parse((await t.db.prepare("SELECT value FROM facts WHERE key = 'income.agiEstimate'").get()).value);
     const fact = x => ({ assumption: { name: 'income', value: x, unit: 'usd', source: 'fact', factKey: 'income.agiEstimate' } });
     assert.equal((await calc('add', [F('biz_cash'), fact(agi)])).figure.value, round(v('biz_cash') + agi));
     await assert.rejects(calc('add', [F('biz_cash'), fact(agi + 1)]), badInput(/income\.agiEstimate/));

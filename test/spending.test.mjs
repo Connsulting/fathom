@@ -23,6 +23,7 @@ import { serveAppFixture, tempDb } from './helpers/server.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 import { householdSpending, householdSpendingRows, PnlError } from '../src/pnl/index.mjs';
 import { ITEM_LIMIT } from '../src/pnl/shared.mjs';
+import { mapSeries } from '../src/shared/series.mjs';
 
 const CLOCK = '2032-11-05';
 const r2 = (x) => Math.round(x * 100) / 100;
@@ -32,69 +33,69 @@ const TOTAL = 19658.83; // Groceries 2160 + Mortgage 16500 + Dining 95.5 + Bills
 const TAX = 2400;
 const HOUSING = 16500;
 
-function store(t) {
+async function store(t) {
   const dir = mkdtempSync(join(tmpdir(), 'fathom-spending-'));
-  const s = createInstance(dir, { mode: 'real' });
-  setSetting(s.db, 'clock', CLOCK);
-  t.after(() => { s.db.close(); s.platform.close(); rmSync(dir, { recursive: true, force: true }); });
+  const s = await createInstance(dir, { mode: 'real' });
+  await setSetting(s.db, 'clock', CLOCK);
+  t.after(async () => { await s.db.close(); await s.platform.close(); rmSync(dir, { recursive: true, force: true }); });
   return { ...s, dir };
 }
 
-function account(db, id, kind, name, extra = {}) {
-  db.prepare('INSERT INTO accounts (id, kind, inst, name, mask, sort) VALUES (?, ?, ?, ?, ?, ?)')
+async function account(db, id, kind, name, extra = {}) {
+  await db.prepare('INSERT INTO accounts (id, kind, inst, name, mask, sort) VALUES (?, ?, ?, ?, ?, ?)')
     .run(id, kind, extra.inst ?? 'Example Bank', name, extra.mask ?? null, extra.sort ?? 0);
 }
 
 let dedupe = 0;
-function txn(db, account_id, date, amount, description, category = null) {
-  const q = db.prepare('INSERT INTO transactions (account_id, date, amount, description, category, parser, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?)')
+async function txn(db, account_id, date, amount, description, category = null) {
+  const q = await db.prepare('INSERT INTO transactions (account_id, date, amount, description, category, parser, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(account_id, date, amount, description, category, 'aggregator', `spend-test:${++dedupe}`);
   return Number(q.lastInsertRowid);
 }
 
-function household(db) {
+async function household(db) {
   const ids = {};
-  account(db, 'chk', 'checking', 'Everyday checking', { sort: 1 });
-  account(db, 'card', 'card', 'Rewards card', { inst: 'Example Card', mask: '5678', sort: 2 });
-  account(db, 'sav', 'savings', 'Reserve savings', { sort: 3 });
-  account(db, 'old', 'checking', 'Old checking', { sort: 4 });
-  account(db, 'empty', 'checking', 'Spare checking', { sort: 5 });
-  account(db, 'brk', 'taxable', 'Taxable brokerage', { sort: 6 });
-  account(db, 'biz', 'business', 'Business checking', { sort: 7 });
+  await account(db, 'chk', 'checking', 'Everyday checking', { sort: 1 });
+  await account(db, 'card', 'card', 'Rewards card', { inst: 'Example Card', mask: '5678', sort: 2 });
+  await account(db, 'sav', 'savings', 'Reserve savings', { sort: 3 });
+  await account(db, 'old', 'checking', 'Old checking', { sort: 4 });
+  await account(db, 'empty', 'checking', 'Spare checking', { sort: 5 });
+  await account(db, 'brk', 'taxable', 'Taxable brokerage', { sort: 6 });
+  await account(db, 'biz', 'business', 'Business checking', { sort: 7 });
 
   for (const [y, m] of [[2031, 12], ...Array.from({ length: 10 }, (_, i) => [2032, i + 1])]) {
     const p = `${y}-${pad(m)}`;
-    txn(db, 'chk', `${p}-01`, -1500, 'Example Home Loan', 'Mortgage');
-    txn(db, 'chk', `${p}-05`, -200, 'Example Market', 'Groceries');
-    txn(db, 'chk', `${p}-10`, 5000, 'Payroll deposit', 'Income');
+    await txn(db, 'chk', `${p}-01`, -1500, 'Example Home Loan', 'Mortgage');
+    await txn(db, 'chk', `${p}-05`, -200, 'Example Market', 'Groceries');
+    await txn(db, 'chk', `${p}-10`, 5000, 'Payroll deposit', 'Income');
   }
-  ids.taxes = ['01', '04', '06', '09'].map((m) => txn(db, 'chk', `2032-${m}-15`, -600, 'State tax payment', 'Taxes'));
-  ids.refund = txn(db, 'chk', '2032-03-08', 40, 'Example Market refund', 'Groceries');
+  ids.taxes = await mapSeries(['01', '04', '06', '09'], async (m) => await txn(db, 'chk', `2032-${m}-15`, -600, 'State tax payment', 'Taxes'));
+  ids.refund = await txn(db, 'chk', '2032-03-08', 40, 'Example Market refund', 'Groceries');
   // A structural transfer between household accounts and a card payment found by its words.
-  ids.toSavings = txn(db, 'chk', '2032-04-20', -1000, 'Move to savings');
-  ids.fromChecking = txn(db, 'sav', '2032-04-21', 1000, 'Transfer in');
-  ids.cardPayment = txn(db, 'chk', '2032-05-25', -800, 'Example Card PAYMENT 5678');
-  ids.cardCredit = txn(db, 'card', '2032-06-15', 800, 'PAYMENT THANK YOU');
-  ids.cafe = [txn(db, 'card', '2032-06-03', -75.5, 'Example Cafe', 'Dining & Drinks'), txn(db, 'card', '2032-10-04', -20, 'Example Cafe', 'Dining & Drinks')];
-  ids.lunch = txn(db, 'chk', '2032-07-09', -300, 'Client lunch', 'Business');
-  ids.saving = txn(db, 'chk', '2032-08-03', -2000, 'Brokerage contribution', 'Investment');
-  ids.excluded = txn(db, 'chk', '2032-08-12', -55, 'Ignored adjustment', 'Ignore');
-  ids.uncat = txn(db, 'chk', '2032-09-14', -333.33, 'Unknown shop');
-  ids.guess = txn(db, 'chk', '2032-10-11', -120, 'Mystery merchant');
+  ids.toSavings = await txn(db, 'chk', '2032-04-20', -1000, 'Move to savings');
+  ids.fromChecking = await txn(db, 'sav', '2032-04-21', 1000, 'Transfer in');
+  ids.cardPayment = await txn(db, 'chk', '2032-05-25', -800, 'Example Card PAYMENT 5678');
+  ids.cardCredit = await txn(db, 'card', '2032-06-15', 800, 'PAYMENT THANK YOU');
+  ids.cafe = [await txn(db, 'card', '2032-06-03', -75.5, 'Example Cafe', 'Dining & Drinks'), await txn(db, 'card', '2032-10-04', -20, 'Example Cafe', 'Dining & Drinks')];
+  ids.lunch = await txn(db, 'chk', '2032-07-09', -300, 'Client lunch', 'Business');
+  ids.saving = await txn(db, 'chk', '2032-08-03', -2000, 'Brokerage contribution', 'Investment');
+  ids.excluded = await txn(db, 'chk', '2032-08-12', -55, 'Ignored adjustment', 'Ignore');
+  ids.uncat = await txn(db, 'chk', '2032-09-14', -333.33, 'Unknown shop');
+  ids.guess = await txn(db, 'chk', '2032-10-11', -120, 'Mystery merchant');
   const proposal={category:'Shopping',confidence:.99,probabilities:{Shopping:.99,Groceries:.01}};
-  db.prepare('INSERT INTO transaction_category_guesses VALUES (?,?,?,?)').run(ids.guess,JSON.stringify(proposal),JEV_MODEL,'2032-10-12T00:00:00Z');
-  const item=ask(db,{kind:'transaction_category',subject:String(ids.guess),question:'Check this transaction category',
+  await db.prepare('INSERT INTO transaction_category_guesses VALUES (?,?,?,?)').run(ids.guess,JSON.stringify(proposal),JEV_MODEL,'2032-10-12T00:00:00Z');
+  const item=await ask(db,{kind:'transaction_category',subject:String(ids.guess),question:'Check this transaction category',
     options:[{id:'Shopping',label:'Shopping'},{id:'Groceries',label:'Groceries'}],context:{transactionId:ids.guess,guess:'Shopping',jev:proposal}});
-  recordAutoAnswer(db,item.id,'Shopping',{rule:'jev_category',evidence:{text:'Jev guess, 99% confident',refs:{confidence:.99,model:JEV_MODEL}}});
-  txn(db, 'sav', '2032-10-31', 1.23, 'Interest', 'Income');
-  ids.old = [1, 2, 3, 4, 5].map((m) => txn(db, 'old', `2032-${pad(m)}-20`, -90, 'Old account fee', 'Bills & Utilities'));
+  await recordAutoAnswer(db,item.id,'Shopping',{rule:'jev_category',evidence:{text:'Jev guess, 99% confident',refs:{confidence:.99,model:JEV_MODEL}}});
+  await txn(db, 'sav', '2032-10-31', 1.23, 'Interest', 'Income');
+  ids.old = await mapSeries([1, 2, 3, 4, 5], async (m) => await txn(db, 'old', `2032-${pad(m)}-20`, -90, 'Old account fee', 'Bills & Utilities'));
   // Never household spending: a brokerage fee and a business account's purchases.
-  txn(db, 'brk', '2032-06-10', -50, 'Fund fee', 'Fees');
-  ids.bizShopping = txn(db, 'biz', '2032-06-06', -999, 'Office chairs', 'Shopping');
-  txn(db, 'biz', '2032-07-07', -450, 'Supplies', 'Business');
+  await txn(db, 'brk', '2032-06-10', -50, 'Fund fee', 'Fees');
+  ids.bizShopping = await txn(db, 'biz', '2032-06-06', -999, 'Office chairs', 'Shopping');
+  await txn(db, 'biz', '2032-07-07', -450, 'Supplies', 'Business');
   // The clock month and after the clock.
-  txn(db, 'chk', '2032-11-02', -200, 'Example Market', 'Groceries');
-  txn(db, 'chk', '2032-11-20', -5555, 'Example Market', 'Groceries');
+  await txn(db, 'chk', '2032-11-02', -200, 'Example Market', 'Groceries');
+  await txn(db, 'chk', '2032-11-20', -5555, 'Example Market', 'Groceries');
   return ids;
 }
 
@@ -168,10 +169,10 @@ function checkFigure(p, key) {
 
 /* ---------------------------------------------------------------- pl-ac2 */
 
-test('pl-ac2 only household spending counts: transfers, card payments, business, tax, saving and excluded are left out; refunds lower a category; business accounts never count', (t) => {
-  const { db } = store(t);
-  const ids = household(db);
-  const p = householdSpending({ db });
+test('pl-ac2 only household spending counts: transfers, card payments, business, tax, saving and excluded are left out; refunds lower a category; business accounts never count', async (t) => {
+  const { db } = await store(t);
+  const ids = await household(db);
+  const p = await householdSpending({ db });
   assert.equal(val(p, p.total), TOTAL);
   assert.deepEqual(p.buckets.map((b) => b.bucket), ['household']);
   const want = { Groceries: 2160, Mortgage: HOUSING, 'Dining & Drinks': 95.5, 'Bills & Utilities': 450, Uncategorized: 333.33, Shopping: 120 };
@@ -200,10 +201,10 @@ test('pl-ac2 only household spending counts: transfers, card payments, business,
   assert.ok(!fig(p, p.total).provenance.accounts.some((a) => ['biz', 'brk'].includes(a.id)));
 });
 
-test('pl-ac2 toggles: include tax adds a tax bucket; exclude housing removes Mortgage and lists it as left out', (t) => {
-  const { db } = store(t);
-  household(db);
-  const tax = householdSpending({ db, include: ['tax'] });
+test('pl-ac2 toggles: include tax adds a tax bucket; exclude housing removes Mortgage and lists it as left out', async (t) => {
+  const { db } = await store(t);
+  await household(db);
+  const tax = await householdSpending({ db, include: ['tax'] });
   assert.deepEqual(tax.include, ['tax']);
   assert.deepEqual(tax.buckets.map((b) => b.bucket).sort(), ['household', 'tax']);
   assert.equal(val(tax, bucketOf(tax, 'tax').total), TAX);
@@ -211,7 +212,7 @@ test('pl-ac2 toggles: include tax adds a tax bucket; exclude housing removes Mor
   assert.equal(val(tax, tax.total), r2(TOTAL + TAX));
   assert.ok(!leftOf(tax).tax, 'included tax is not left out');
 
-  const noHousing = householdSpending({ db, exclude: ['housing'] });
+  const noHousing = await householdSpending({ db, exclude: ['housing'] });
   assert.deepEqual(noHousing.exclude, ['housing']);
   assert.ok(!bucketOf(noHousing, 'household').categories.some((c) => c.category === 'Mortgage'));
   assert.equal(val(noHousing, noHousing.total), r2(TOTAL - HOUSING));
@@ -220,14 +221,14 @@ test('pl-ac2 toggles: include tax adds a tax bucket; exclude housing removes Mor
   assert.equal(housing.rows, 11);
   assert.equal(Math.abs(val(noHousing, housing.amount)), HOUSING);
 
-  const elective = householdSpending({ db, include: ['tax'], exclude: ['housing'] });
+  const elective = await householdSpending({ db, include: ['tax'], exclude: ['housing'] });
   assert.equal(val(elective, elective.total), r2(TOTAL - HOUSING + TAX));
 });
 
-test('pl-ac2 default range is the trailing twelve months ending at the latest complete month, with a monthly average', (t) => {
-  const { db } = store(t);
-  household(db);
-  const p = householdSpending({ db });
+test('pl-ac2 default range is the trailing twelve months ending at the latest complete month, with a monthly average', async (t) => {
+  const { db } = await store(t);
+  await household(db);
+  const p = await householdSpending({ db });
   assert.equal(p.to, '2032-10', 'the latest row is in the clock month, so the range ends the month before');
   assert.equal(p.from, '2031-11');
   assert.deepEqual(monthList(p), RANGE);
@@ -240,7 +241,7 @@ test('pl-ac2 default range is the trailing twelve months ending at the latest co
   assert.equal(r2(RANGE.reduce((a, m) => a + (val(p, byMonth[m]) ?? 0), 0)), TOTAL, 'the total is the sum of months');
   assert.ok(!JSON.stringify(p).includes('5555'), 'the after-clock row never counts');
 
-  const q = householdSpending({ db, from: '2032-01', to: '2032-03' });
+  const q = await householdSpending({ db, from: '2032-01', to: '2032-03' });
   assert.deepEqual(monthList(q), ['2032-01', '2032-02', '2032-03']);
   assert.equal(val(q, q.total), r2(3 * 1700 + 3 * 90 - 40));
   assert.equal(val(q, q.monthlyAverage), r2((3 * 1790 - 40) / 3));
@@ -253,19 +254,19 @@ test('pl-ac2 default range is the trailing twelve months ending at the latest co
   assert.equal(val(p, groceries.average), r2(val(p, groceries.total) / 11), 'the default range averages over its 11 active months');
 
   // An explicit clock: its own month is never the end of the default range.
-  const early = householdSpending({ db, clock: '2032-10-20' });
+  const early = await householdSpending({ db, clock: '2032-10-20' });
   assert.equal(early.to, '2032-09');
   assert.equal(early.from, '2031-10');
   // The latest month is used as is when it is before the clock's month.
-  const later = householdSpending({ db, clock: '2032-12-15' });
+  const later = await householdSpending({ db, clock: '2032-12-15' });
   assert.equal(later.to, '2032-11');
   assert.equal(later.from, '2031-12');
 });
 
-test('pl-ac2 gaps: a stopped feed with its last month, an account with no rows, empty months, uncategorized and guessed shares', (t) => {
-  const { db } = store(t);
-  household(db);
-  const p = householdSpending({ db });
+test('pl-ac2 gaps: a stopped feed with its last month, an account with no rows, empty months, uncategorized and guessed shares', async (t) => {
+  const { db } = await store(t);
+  await household(db);
+  const p = await householdSpending({ db });
   const gaps = Object.fromEntries(p.gaps.accounts.map((a) => [a.id, a]));
   assert.deepEqual(Object.keys(gaps).sort(), ['empty', 'old']);
   assert.equal(gaps.old.state, 'stopped');
@@ -282,42 +283,42 @@ test('pl-ac2 gaps: a stopped feed with its last month, an account with no rows, 
   assert.ok(near(p.gaps.guessed.share, 120 / TOTAL));
 
   // A range before the feed stopped has no stopped account.
-  const spring = householdSpending({ db, from: '2032-01', to: '2032-05' });
+  const spring = await householdSpending({ db, from: '2032-01', to: '2032-05' });
   assert.ok(!spring.gaps.accounts.some((a) => a.id === 'old'));
   assert.deepEqual(spring.gaps.emptyMonths, []);
   assert.equal(spring.gaps.uncategorized.rows, 0);
   assert.equal(spring.gaps.uncategorized.share, 0);
 });
 
-test('pl-ac2 bad include or exclude is bad_option; the allowed options and a bad range are handled', (t) => {
-  const { db } = store(t);
-  household(db);
-  assert.equal(code(() => householdSpending({ db, include: ['rent'] })), 'bad_option');
-  assert.equal(code(() => householdSpending({ db, include: ['tax'] })), 'ok');
-  assert.equal(code(() => householdSpending({ db, exclude: ['tax'] })), 'bad_option');
-  assert.equal(code(() => householdSpending({ db, exclude: ['housing'] })), 'ok');
-  assert.equal(code(() => householdSpending({ db, include: ['housing'] })), 'bad_option');
-  assert.equal(code(() => householdSpendingRows({ db, include: ['rent'], bucket: 'household', category: 'Groceries' })), 'bad_option');
-  assert.equal(code(() => householdSpending({ db, from: '2032-05', to: '2032-04' })), 'bad_range');
-  assert.equal(code(() => householdSpending({ db, from: '2022-10', to: '2032-10' })), 'bad_range', '121 months');
-  assert.equal(code(() => householdSpending({ db, from: '2022-11', to: '2032-10' })), 'ok', '120 months');
-  assert.equal(code(() => householdSpending({ db, from: '2032-1', to: '2032-10' })), 'bad_range');
+test('pl-ac2 bad include or exclude is bad_option; the allowed options and a bad range are handled', async (t) => {
+  const { db } = await store(t);
+  await household(db);
+  assert.equal(code(async () => await householdSpending({ db, include: ['rent'] })), 'bad_option');
+  assert.equal(code(async () => await householdSpending({ db, include: ['tax'] })), 'ok');
+  assert.equal(code(async () => await householdSpending({ db, exclude: ['tax'] })), 'bad_option');
+  assert.equal(code(async () => await householdSpending({ db, exclude: ['housing'] })), 'ok');
+  assert.equal(code(async () => await householdSpending({ db, include: ['housing'] })), 'bad_option');
+  assert.equal(code(async () => await householdSpendingRows({ db, include: ['rent'], bucket: 'household', category: 'Groceries' })), 'bad_option');
+  assert.equal(code(async () => await householdSpending({ db, from: '2032-05', to: '2032-04' })), 'bad_range');
+  assert.equal(code(async () => await householdSpending({ db, from: '2022-10', to: '2032-10' })), 'bad_range', '121 months');
+  assert.equal(code(async () => await householdSpending({ db, from: '2022-11', to: '2032-10' })), 'ok', '120 months');
+  assert.equal(code(async () => await householdSpending({ db, from: '2032-1', to: '2032-10' })), 'bad_range');
 });
 
 test('pl-ac2 demo seed: estimated tax payments resolve to the tax bucket and including taxes raises the total by their sum', async (t) => {
   const s = await tempDb();
   t.after(() => s.close());
-  seedDemo(s.db);
-  const rows = s.db.prepare("SELECT * FROM transactions WHERE description = 'Estimated tax payment' ORDER BY date").all();
+  await seedDemo(s.db);
+  const rows = await s.db.prepare("SELECT * FROM transactions WHERE description = 'Estimated tax payment' ORDER BY date").all();
   assert.ok(rows.length > 0, 'the demo has estimated tax payment rows');
-  const resolved = resolveCategories(loadCategoryInputs(s.db));
+  const resolved = resolveCategories(await loadCategoryInputs(s.db));
   for (const r of rows) {
     assert.equal(r.category, 'taxes');
     assert.ok(r.amount < 0);
     assert.equal(resolved.get(r.id).bucket, 'tax', `row ${r.id}`);
   }
-  const base = householdSpending({ db: s.db });
-  const withTax = householdSpending({ db: s.db, include: ['tax'] });
+  const base = await householdSpending({ db: s.db });
+  const withTax = await householdSpending({ db: s.db, include: ['tax'] });
   assert.equal(withTax.from, base.from);
   assert.equal(withTax.to, base.to);
   const end = `${base.to}-31`;
@@ -330,11 +331,11 @@ test('pl-ac2 demo seed: estimated tax payments resolve to the tax bucket and inc
 
 /* ---------------------------------------------------------------- pl-ac3 */
 
-test('pl-ac3 every household figure resolves with source, detail and provenance', (t) => {
-  const { db } = store(t);
-  household(db);
+test('pl-ac3 every household figure resolves with source, detail and provenance', async (t) => {
+  const { db } = await store(t);
+  await household(db);
   for (const opts of [{}, { include: ['tax'] }, { exclude: ['housing'] }, { from: '2032-01', to: '2032-03' }]) {
-    const p = householdSpending({ db, ...opts });
+    const p = await householdSpending({ db, ...opts });
     assert.deepEqual(Object.keys(p.sources), ['spend:transactions'], JSON.stringify(opts));
     assert.equal(p.sources['spend:transactions'].label, 'Categorized household transactions');
     assert.match(p.sources['spend:transactions'].asOf, /^\d{4}-\d{2}-\d{2}$/);
@@ -342,7 +343,7 @@ test('pl-ac3 every household figure resolves with source, detail and provenance'
     assert.ok(keys.length > 10, JSON.stringify(opts));
     for (const k of keys) checkFigure(p, k);
   }
-  const p = householdSpending({ db });
+  const p = await householdSpending({ db });
   assert.equal(p.sources['spend:transactions'].asOf, '2032-10-11', 'newest counted row');
   const total = checkFigure(p, p.total);
   assert.deepEqual(total.provenance.accounts.map((a) => a.id).sort(), ['card', 'chk', 'old']);
@@ -354,12 +355,12 @@ test('pl-ac3 every household figure resolves with source, detail and provenance'
   assert.equal(prov(cell, 'transactions').count, 2);
 });
 
-test('pl-ac3 householdSpendingRows lists exactly the rows behind a cell, and their amounts sum to it', (t) => {
-  const { db } = store(t);
-  const ids = household(db);
-  const p = householdSpending({ db, include: ['tax'] });
-  const check = (opts, cell, count) => {
-    const r = householdSpendingRows({ db, include: ['tax'], ...opts });
+test('pl-ac3 householdSpendingRows lists exactly the rows behind a cell, and their amounts sum to it', async (t) => {
+  const { db } = await store(t);
+  const ids = await household(db);
+  const p = await householdSpending({ db, include: ['tax'] });
+  const check = async (opts, cell, count) => {
+    const r = await householdSpendingRows({ db, include: ['tax'], ...opts });
     assert.equal(r.total, count, JSON.stringify(opts));
     assert.equal(r.items.length, count);
     assert.ok(r.items.every((i) => i.kind === 'transaction'));
@@ -376,16 +377,16 @@ test('pl-ac3 householdSpendingRows lists exactly the rows behind a cell, and the
     }
     return r;
   };
-  const g = check({ bucket: 'household', category: 'Groceries' }, catOf(p, 'household', 'Groceries').total, 12);
+  const g = await check({ bucket: 'household', category: 'Groceries' }, catOf(p, 'household', 'Groceries').total, 12);
   assert.ok(g.items.some((i) => i.id === ids.refund));
-  const mar = check({ bucket: 'household', category: 'Groceries', month: '2032-03' }, catOf(p, 'household', 'Groceries').months['2032-03'], 2);
+  const mar = await check({ bucket: 'household', category: 'Groceries', month: '2032-03' }, catOf(p, 'household', 'Groceries').months['2032-03'], 2);
   assert.equal(mar.items[0].id, ids.refund, 'Mar 8 refund is newer than the Mar 5 purchase');
-  const taxes = check({ bucket: 'tax', category: 'Taxes' }, catOf(p, 'tax', 'Taxes').total, 4);
+  const taxes = await check({ bucket: 'tax', category: 'Taxes' }, catOf(p, 'tax', 'Taxes').total, 4);
   assert.deepEqual(taxes.items.map((i) => i.id).sort((a, b) => a - b), ids.taxes);
-  const shop = check({ bucket: 'household', category: 'Shopping' }, catOf(p, 'household', 'Shopping').total, 1);
+  const shop = await check({ bucket: 'household', category: 'Shopping' }, catOf(p, 'household', 'Shopping').total, 1);
   assert.deepEqual(shop.items.map((i) => i.id), [ids.guess], 'the business account purchase is not behind the cell');
-  check({ bucket: 'household', category: 'Uncategorized' }, catOf(p, 'household', 'Uncategorized').total, 1);
-  check({ bucket: 'household', category: 'Dining & Drinks' }, catOf(p, 'household', 'Dining & Drinks').total, 2);
+  await check({ bucket: 'household', category: 'Uncategorized' }, catOf(p, 'household', 'Uncategorized').total, 1);
+  await check({ bucket: 'household', category: 'Dining & Drinks' }, catOf(p, 'household', 'Dining & Drinks').total, 2);
 });
 
 /* ---------------------------------------------------------------- pnl2-ac2, pnl2-ac3 */
@@ -394,7 +395,7 @@ test('pl-ac3 householdSpendingRows lists exactly the rows behind a cell, and the
 // (the response's `sum` figure) to that cell and list only that month; the rows for the range sum to
 // the category total; uncapped items add up to the sum; each item's figure is its counted value, the
 // amount negated. Returns how many cells it checked.
-function checkRowsMatchCells(db, p) {
+async function checkRowsMatchCells(db, p) {
   let cells = 0;
   const base = { db, from: p.from, to: p.to, include: p.include, exclude: p.exclude };
   const items = (r, where) => {
@@ -415,7 +416,7 @@ function checkRowsMatchCells(db, p) {
       for (const m of monthList(p)) {
         if (!c.months[m]) continue;
         const where = `${b.bucket} ${c.category} ${m}`;
-        const r = householdSpendingRows({ ...base, bucket: b.bucket, category: c.category, month: m });
+        const r = await householdSpendingRows({ ...base, bucket: b.bucket, category: c.category, month: m });
         assert.ok(r.sum, `${where}: the response has a sum figure`);
         assert.equal(val(r, r.sum), val(p, c.months[m]), `${where}: sum equals the cell`);
         assert.ok(r.items.length > 0, `${where}: a cell has rows`);
@@ -424,7 +425,7 @@ function checkRowsMatchCells(db, p) {
         cells++;
       }
       const where = `${b.bucket} ${c.category} range`;
-      const r = householdSpendingRows({ ...base, bucket: b.bucket, category: c.category });
+      const r = await householdSpendingRows({ ...base, bucket: b.bucket, category: c.category });
       assert.ok(r.sum, `${where}: the response has a sum figure`);
       assert.equal(val(r, r.sum), val(p, c.total), `${where}: sum equals the category total`);
       for (const i of r.items) assert.ok(String(i.date).slice(0, 7) >= p.from && String(i.date).slice(0, 7) <= p.to, `${where}: item ${i.id} is in the range`);
@@ -434,24 +435,24 @@ function checkRowsMatchCells(db, p) {
   return cells;
 }
 
-test('pnl2-ac2 pnl2-ac3 household rows: for every category and every month cell the rows sum to the cell, only that month, items carry their counted value', (t) => {
-  const { db } = store(t);
-  const ids = household(db);
+test('pnl2-ac2 pnl2-ac3 household rows: for every category and every month cell the rows sum to the cell, only that month, items carry their counted value', async (t) => {
+  const { db } = await store(t);
+  const ids = await household(db);
   let cells = 0;
   for (const opts of [{}, { include: ['tax'] }, { exclude: ['housing'] }, { include: ['tax'], exclude: ['housing'], from: '2032-02', to: '2032-07' }]) {
-    cells += checkRowsMatchCells(db, householdSpending({ db, ...opts }));
+    cells += await checkRowsMatchCells(db, await householdSpending({ db, ...opts }));
   }
   assert.ok(cells > 40, `checked ${cells} cells`);
 
   // A refund is a negative spending value and lowers the month's sum.
-  const mar = householdSpendingRows({ db, bucket: 'household', category: 'Groceries', month: '2032-03' });
+  const mar = await householdSpendingRows({ db, bucket: 'household', category: 'Groceries', month: '2032-03' });
   const refund = mar.items.find((i) => i.id === ids.refund);
   assert.equal(refund.amount, 40);
   assert.equal(refund.value, -40);
   assert.equal(val(mar, mar.sum), 160);
 
   // A month inside the range with no rows for a real category: no items and a zero sum.
-  const none = householdSpendingRows({ db, bucket: 'household', category: 'Dining & Drinks', month: '2032-03' });
+  const none = await householdSpendingRows({ db, bucket: 'household', category: 'Dining & Drinks', month: '2032-03' });
   assert.deepEqual(none.items, []);
   assert.equal(none.total, 0);
   assert.equal(val(none, none.sum), 0);
@@ -460,39 +461,39 @@ test('pnl2-ac2 pnl2-ac3 household rows: for every category and every month cell 
 test('pnl2-ac2 household rows on the demo store: every month cell and every total matches its rows sum', async (t) => {
   const s = await tempDb();
   t.after(() => s.close());
-  seedDemo(s.db);
-  const cells = checkRowsMatchCells(s.db, householdSpending({ db: s.db }));
+  await seedDemo(s.db);
+  const cells = await checkRowsMatchCells(s.db, await householdSpending({ db: s.db }));
   assert.ok(cells > 0, 'the demo has month cells');
 });
 
-test('pnl2-ac2 a capped household rows read still sums every matching row, not just the listed items', (t) => {
-  const { db } = store(t);
-  account(db, 'chk', 'checking', 'Everyday checking', { sort: 1 });
+test('pnl2-ac2 a capped household rows read still sums every matching row, not just the listed items', async (t) => {
+  const { db } = await store(t);
+  await account(db, 'chk', 'checking', 'Everyday checking', { sort: 1 });
   const n = ITEM_LIMIT + 25;
-  for (let i = 0; i < n; i++) txn(db, 'chk', `2032-05-${pad((i % 28) + 1)}`, -(1 + (i % 7)), `Synthetic market ${i}`, 'Groceries');
-  const p = householdSpending({ db });
+  for (let i = 0; i < n; i++) await txn(db, 'chk', `2032-05-${pad((i % 28) + 1)}`, -(1 + (i % 7)), `Synthetic market ${i}`, 'Groceries');
+  const p = await householdSpending({ db });
   const c = catOf(p, 'household', 'Groceries');
-  const r = householdSpendingRows({ db, bucket: 'household', category: 'Groceries', month: '2032-05' });
+  const r = await householdSpendingRows({ db, bucket: 'household', category: 'Groceries', month: '2032-05' });
   assert.equal(r.total, n);
   assert.equal(r.items.length, ITEM_LIMIT, 'items are capped');
   assert.equal(val(r, r.sum), val(p, c.months['2032-05']), 'the sum counts every row');
   assert.notEqual(r2(r.items.reduce((a, i) => a + i.value, 0)), val(r, r.sum), 'the listed items alone fall short');
-  const all = householdSpendingRows({ db, bucket: 'household', category: 'Groceries' });
+  const all = await householdSpendingRows({ db, bucket: 'household', category: 'Groceries' });
   assert.equal(val(all, all.sum), val(p, c.total));
 });
 
 /* ---------------------------------------------------------------- pl-ac4 */
 
 test('pl-ac4 household reads never write, and the HTTP routes return the same values with 400 for bad options', async (t) => {
-  const { db, dir } = store(t);
-  household(db);
-  const changes = () => db.prepare('SELECT total_changes() AS n').get().n;
-  const before = changes();
-  const direct = householdSpending({ db });
-  const elective = householdSpending({ db, include: ['tax'], exclude: ['housing'] });
-  const rows = householdSpendingRows({ db, bucket: 'household', category: 'Groceries' });
-  code(() => householdSpending({ db, include: ['rent'] }));
-  assert.equal(changes(), before, 'household reads never write the store');
+  const { db, dir } = await store(t);
+  await household(db);
+  const changes = async () => (await db.prepare('SELECT total_changes() AS n').get()).n;
+  const before = await changes();
+  const direct = await householdSpending({ db });
+  const elective = await householdSpending({ db, include: ['tax'], exclude: ['housing'] });
+  const rows = await householdSpendingRows({ db, bucket: 'household', category: 'Groceries' });
+  code(async () => await householdSpending({ db, include: ['rent'] }));
+  assert.equal(await changes(), before, 'household reads never write the store');
 
   const srv = await serveAppFixture({ authenticated: true, db, config: { clock: CLOCK, dataDir: dir }, answerer: null });
   t.after(() => srv.close());
@@ -531,13 +532,13 @@ test('pl-ac4 household reads never write, and the HTTP routes return the same va
   const own = await get('/api/pnl');
   assert.deepEqual(own.entities.map((e) => [e.key, e.kind]), [['account:biz', 'account']]);
   assert.equal(own.pnl.entity.key, 'account:biz');
-  assert.equal(changes(), before, 'the HTTP reads never write the store');
+  assert.equal(await changes(), before, 'the HTTP reads never write the store');
 });
 
 test('pl-ac4 a household with no business account or workbook gets no entities and a null P&L, not an error', async (t) => {
-  const { db, dir } = store(t);
-  account(db, 'chk', 'checking', 'Everyday checking', { sort: 1 });
-  txn(db, 'chk', '2032-06-10', -200, 'Grocery store', 'Groceries');
+  const { db, dir } = await store(t);
+  await account(db, 'chk', 'checking', 'Everyday checking', { sort: 1 });
+  await txn(db, 'chk', '2032-06-10', -200, 'Grocery store', 'Groceries');
   const srv = await serveAppFixture({ authenticated: true, db, config: { clock: CLOCK, dataDir: dir }, answerer: null });
   t.after(() => srv.close());
   const r = await srv.request({ path: '/api/pnl' });

@@ -35,9 +35,9 @@ const compare = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
 // packs_state rows by the manifest id they stand for (manifestIdOf). The first row in display
 // order wins.
-function rowsByManifest(db) {
+async function rowsByManifest(db) {
   const rows = new Map();
-  for (const r of db.prepare('SELECT id, def, active, exploring FROM packs_state ORDER BY sort, id').all()) {
+  for (const r of await db.prepare('SELECT id, def, active, exploring FROM packs_state ORDER BY sort, id').all()) {
     const parsed = parseJson(r.def, null);
     const def = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
     const key = manifestIdOf(r.id, def);
@@ -49,13 +49,13 @@ function rowsByManifest(db) {
 // [{ pack, status, why }] sorted by pack id. A manifest pack with a linked packs_state row takes
 // the row's live state (packStatus over the row's base status, active and exploring); one without
 // keeps the status derived from the facts.
-function loadPackView(ctx) {
+async function loadPackView(ctx) {
   const { db } = ctx;
-  const packs = ctx.packDirs ? coveredPacks(db, loadPacks(ctx.packDirs)) : createLivePacks(db, { dataDir: ctx.dataDir }).loaded();
-  const rows = rowsByManifest(db);
-  const views = activePacks(packs, getFacts(db));
+  const packs = ctx.packDirs ? await coveredPacks(db, loadPacks(ctx.packDirs)) : createLivePacks(db, { dataDir: ctx.dataDir }).loaded();
+  const rows = await rowsByManifest(db);
+  const views = activePacks(packs, await getFacts(db));
   if (!rows.size) return views;
-  const scope = tokenScope(db);
+  const scope = await tokenScope(db);
   return views.map(view => {
     const row = rows.get(view.pack.id);
     if (!row) return view;
@@ -91,8 +91,8 @@ export const operations = [
     tool: 'knowledge', name: 'packs', summary: 'List knowledge packs with live status, guidance coverage and entry titles.', route: 'Knowledge packs and status', routes: [],
     params: {}, required: [],
     scope: 'read',
-    handler(args, ctx) {
-      const entries = loadPackView(ctx).map(({ pack, status, why }) => ({
+    async handler(args, ctx) {
+      const entries = (await loadPackView(ctx)).map(({ pack, status, why }) => ({
         id: pack.id,
         name: pack.name,
         status,
@@ -103,8 +103,8 @@ export const operations = [
         covers: [...pack.covers],
         entries: pack.entries.map(e => ({ file: e.file, title: e.title })),
       }));
-      const scope = tokenScope(ctx.db);
-      for (const { id, def, live } of loadScenarioPacks(ctx.db)) {
+      const scope = await tokenScope(ctx.db);
+      for (const { id, def, live } of await loadScenarioPacks(ctx.db)) {
         const status = packStatus(def.status, live);
         const row = { id, name: resolveTokens(scope, def.name || id, false), status, why: resolveTokens(scope, def.why || '', false) };
         const existing = entries.find(p => p.id === id);
@@ -120,8 +120,8 @@ export const operations = [
         file: { type: 'string', minLength: 1, maxLength: 200 },
       }, required: ['packId', 'file'],
     scope: 'read',
-    handler(args, ctx) {
-      const view = loadPackView(ctx).find(v => v.pack.id === args.packId);
+    async handler(args, ctx) {
+      const view = (await loadPackView(ctx)).find(v => v.pack.id === args.packId);
       if (!view) throw new ToolError('not_found', `no pack ${args.packId}`);
       const { pack } = view;
       const entry = pack.entries.find(e => e.file === args.file) || pack.entries.find(e => e.id === args.file);
@@ -148,12 +148,12 @@ export const operations = [
         limit: { type: 'integer', minimum: 1, maximum: 20 },
       }, required: ['query'],
     scope: 'read',
-    handler(args, ctx) {
+    async handler(args, ctx) {
       const terms = [...new Set(args.query.toLowerCase().match(/[a-z0-9]{2,}/g) || [])];
       if (!terms.length) throw new ToolError('bad_input', 'args.query needs a word of at least two letters or digits');
       const limit = args.limit === undefined ? SEARCH_DEFAULT : args.limit;
       const matches = [];
-      for (const { pack, status } of loadPackView(ctx)) {
+      for (const { pack, status } of await loadPackView(ctx)) {
         if (status !== 'active' || (args.packId !== undefined && pack.id !== args.packId)) continue;
         for (const entry of pack.entries) {
           const title = entry.title.toLowerCase();

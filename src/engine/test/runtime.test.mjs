@@ -31,8 +31,8 @@ async function store(t) {
 }
 
 const configFor = (s, env = {}) => loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', ...env });
-const runtimeFor = (s, env = {}) => createRuntimeEngine({ db: s.db, config: configFor(s, env), now: clockNow });
-const spendRows = db => db.prepare('SELECT * FROM spend_ledger ORDER BY id').all().map(r => ({ ...r }));
+const runtimeFor = async (s, env = {}) => await createRuntimeEngine({ db: s.db, config: configFor(s, env), now: clockNow });
+const spendRows = async db => (await db.prepare('SELECT * FROM spend_ledger ORDER BY id').all()).map(r => ({ ...r }));
 
 test('spend ledger maps a YYYYMM or YYYY-MM key to the stored YYYY-MM month and rejects other keys', async t => {
   const s = await store(t);
@@ -43,7 +43,7 @@ test('spend ledger maps a YYYYMM or YYYY-MM key to the stored YYYY-MM month and 
   assert.equal(ledger.monthSpendUsd('2027-01'), 0.25);
   assert.equal(ledger.monthSpendUsd('202612'), 1);
   assert.equal(ledger.monthSpendUsd('202702'), 0);
-  const rows = spendRows(s.db);
+  const rows = await spendRows(s.db);
   assert.deepEqual(rows.map(r => r.yyyymm), ['2026-12', '2027-01']);
   assert.deepEqual(JSON.parse(rows[1].tokens), { input_tokens: 10 });
   assert.equal(rows[1].purpose, 'chat');
@@ -55,15 +55,15 @@ test('spend ledger maps a YYYYMM or YYYY-MM key to the stored YYYY-MM month and 
 
 test('runtime exposes the configured mode and the switch; off by configuration refuses', async t => {
   const s = await store(t);
-  const rt = runtimeFor(s);
+  const rt = await runtimeFor(s);
   assert.equal(rt.mode, 'fake');
   assert.equal(rt.isOn(), true, 'no engine setting reads on');
-  setSetting(s.db, 'engine', { on: false });
+  await setSetting(s.db, 'engine', { on: false });
   assert.equal(rt.isOn(), false, 'switch is re-read');
-  setSetting(s.db, 'engine', { on: true });
+  await setSetting(s.db, 'engine', { on: true });
   assert.equal(rt.isOn(), true);
 
-  const off = runtimeFor(s, { FATHOM_ENGINE: 'off' });
+  const off = await runtimeFor(s, { FATHOM_ENGINE: 'off' });
   assert.equal(off.mode, 'off');
   assert.equal(off.isOn(), false, 'off by configuration even with the switch on');
   await assert.rejects(off.call(ask({ fake: [{ text: 'must not run' }] })), EngineOffError);
@@ -71,13 +71,13 @@ test('runtime exposes the configured mode and the switch; off by configuration r
 
 test('fake calls take request.fake and record spend in the month of the passed clock', async t => {
   const s = await store(t);
-  const rt = runtimeFor(s);
+  const rt = await runtimeFor(s);
   // Spend in a different month does not count against the clock month's cap.
   createSpendLedger(s.db).record({ ts: '2026-11-05T09:00:00.000Z', purpose: 'chat', costUsd: 500, model: 'fake', tokens: {} });
 
   const first = await rt.call(ask({ systemDynamic: 'Synthetic dynamic context.', fake: [{ text: 'Scripted reply', costUsd: 0.02 }] }));
   assert.equal(first.text, 'Scripted reply');
-  const rows = spendRows(s.db);
+  const rows = await spendRows(s.db);
   assert.equal(rows.length, 2);
   assert.equal(rows[1].yyyymm, '2027-01');
   assert.ok(rows[1].ts.startsWith('2027-01-05T'), rows[1].ts);
@@ -91,36 +91,36 @@ test('fake calls take request.fake and record spend in the month of the passed c
   const scriptedRows = await rt.extract({ document: { type: 'text', text: 'Synthetic amount 75' }, schema: rowsSchema,
     fake: [{ text: '{"rows":[{"amount":75}]}' }] });
   assert.deepEqual(scriptedRows, [{ amount: 75 }]);
-  assert.equal(spendRows(s.db).at(-1).purpose, 'extract');
+  assert.equal((await spendRows(s.db)).at(-1).purpose, 'extract');
 });
 
 test('the switch is re-read before every call: off refuses without a ledger row, on works again', async t => {
   const s = await store(t);
-  const rt = runtimeFor(s);
+  const rt = await runtimeFor(s);
   assert.equal((await rt.call(ask({ fake: [{ text: 'first' }] }))).text, 'first');
-  setSetting(s.db, 'engine', { on: false });
+  await setSetting(s.db, 'engine', { on: false });
   await assert.rejects(rt.call(ask({ fake: [{ text: 'second' }] })), EngineOffError);
   await assert.rejects(rt.extract({ document: { type: 'text', text: 'Synthetic' }, schema: rowsSchema }), EngineOffError);
-  assert.equal(spendRows(s.db).length, 1, 'no spend while off');
-  setSetting(s.db, 'engine', { on: true });
+  assert.equal((await spendRows(s.db)).length, 1, 'no spend while off');
+  await setSetting(s.db, 'engine', { on: true });
   assert.equal((await rt.call(ask({ fake: [{ text: 'third' }] }))).text, 'third');
-  assert.equal(spendRows(s.db).length, 2);
+  assert.equal((await spendRows(s.db)).length, 2);
 });
 
 test('the cap is re-read before every call: a cap below month spend refuses, raising it works again', async t => {
   const s = await store(t);
-  const rt = runtimeFor(s);
+  const rt = await runtimeFor(s);
   await rt.call(ask({ fake: [{ text: 'spent', costUsd: 0.05 }] }));
-  setSetting(s.db, 'cap', { usd: 0.01 });
+  await setSetting(s.db, 'cap', { usd: 0.01 });
   await assert.rejects(rt.call(ask({ fake: [{ text: 'must not run' }] })), BudgetExceededError);
-  assert.equal(spendRows(s.db).length, 1);
-  setSetting(s.db, 'cap', { usd: 1 });
+  assert.equal((await spendRows(s.db)).length, 1);
+  await setSetting(s.db, 'cap', { usd: 1 });
   assert.equal((await rt.call(ask({ fake: [{ text: 'allowed' }] }))).text, 'allowed');
 });
 
 test('the default cap is 200: spend just below it is allowed, spend at it is refused', async t => {
   const s = await store(t);
-  const rt = runtimeFor(s);
+  const rt = await runtimeFor(s);
   createSpendLedger(s.db).record({ ts: `${CLOCK}T07:00:00.000Z`, purpose: 'job', costUsd: 199.5, model: 'fake', tokens: {} });
   assert.equal((await rt.call(ask({ fake: [{ text: 'under the cap', costUsd: 0.5 }] }))).text, 'under the cap');
   assert.equal(createSpendLedger(s.db).monthSpendUsd('202701'), 200);
@@ -146,10 +146,10 @@ test('createEngine: request.fake takes precedence over the queue and request.too
 
 test('unknown accounting with is_error poisons the process engine: a later call below the cap is refused', async t => {
   const s = await store(t);
-  const rt = runtimeFor(s);
+  const rt = await runtimeFor(s);
   assert.equal((await rt.call(ask({ fake: [{ text: 'healthy' }] }))).text, 'healthy', 'calls work before the poison');
   await assert.rejects(rt.call(ask({ fake: [{ costUsd: null, accountingUnknown: true, is_error: true }] })), ModelCallError);
-  const rows = spendRows(s.db);
+  const rows = await spendRows(s.db);
   assert.equal(rows.length, 2, 'a conservative estimate is recorded');
   assert.equal(JSON.parse(rows[1].tokens).estimated, true);
   assert.ok(createSpendLedger(s.db).monthSpendUsd('202701') < 200, 'spend is still below the cap');
@@ -157,5 +157,5 @@ test('unknown accounting with is_error poisons the process engine: a later call 
   await assert.rejects(rt.extract({ document: { type: 'text', text: 'Synthetic' }, schema: rowsSchema,
     fake: [{ text: '{"rows":[]}' }] }), ModelAccountingError);
   assert.equal(rt.isOn(), false, 'a poisoned runtime reads off');
-  assert.equal(spendRows(s.db).length, 2, 'nothing further is spent');
+  assert.equal((await spendRows(s.db)).length, 2, 'nothing further is spent');
 });

@@ -32,8 +32,8 @@ export const operations = [
     }).properties,
     required: [],
     scope: 'read',
-    handler(args, ctx) {
-      const input = loadCategoryInputs(ctx.db),
+    async handler(args, ctx) {
+      const input = await loadCategoryInputs(ctx.db),
         resolved = resolveCategories(input);
       let cursor;
       if (args.cursor) {

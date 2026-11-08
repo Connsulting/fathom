@@ -13,17 +13,17 @@ const A_NAME = 'Reserve savings';
 
 async function seed(request) {
   await resetDemo(request);
-  const db = openDb(householdStoreFile(localDataDir()));
+  const db = await openDb(await householdStoreFile(localDataDir()));
   try {
     const acct = db.prepare(`INSERT INTO accounts (id, inst, mask, name, owner, kind, mirror, note, sort)
       VALUES (?, 'Sample Bank', NULL, ?, 'You', 'cash', 'manual', '', ?)`);
-    acct.run(A, A_NAME, 900);
+    await acct.run(A, A_NAME, 900);
     const txn = db.prepare('INSERT INTO transactions (account_id, date, amount, description) VALUES (?, ?, ?, ?)');
-    txn.run(A, '2026-10-03', -42.5, 'Synthetic grocery');
-    txn.run(A, '2026-10-12', 300, 'Synthetic transfer in');
+    await txn.run(A, '2026-10-03', -42.5, 'Synthetic grocery');
+    await txn.run(A, '2026-10-12', 300, 'Synthetic transfer in');
     const bal = db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)');
-    bal.run(A, '2026-10-31', 2500);
-  } finally { db.close(); }
+    await bal.run(A, '2026-10-31', 2500);
+  } finally { await db.close(); }
 }
 
 const accountRow = (page, id) => page.locator(`.h-acc[data-account="${id}"]`);
@@ -117,9 +117,9 @@ async function addLastFour(page, request) {
 async function seedPair(request) {
   await resetDemo(request);
   return withLocalHousehold('2032-03-10T12:00:00.000Z', async s => {
-    setSetting(s.db, 'clock', '2032-03-10');
+    await setSetting(s.db, 'clock', '2032-03-10');
     const pair = await seedDuplicateRows(s, { sure: true });
-    refreshMergedAccounts(s.db, { now: '2032-03-10T12:00:00.000Z' });
+    await refreshMergedAccounts(s.db, { now: '2032-03-10T12:00:00.000Z' });
     return pair;
   });
 }

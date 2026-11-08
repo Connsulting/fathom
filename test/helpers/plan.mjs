@@ -31,7 +31,7 @@ export async function planRun(db, { engine = null, now = CLOCK, dataDir = null }
     }
   };
   // The plan handler reads only the household root from its household context.
-  const household = { root: dataDir ? servedStore(dataDir)?.root ?? null : null };
+  const household = { root: dataDir ? (await servedStore(dataDir))?.root ?? null : null };
   const s = createScheduler({
     db, config: { clock: now, dataDir }, engine, handlers: { plan }, household: () => household,
     tickMs: 3600000, holder: `test-plan-${process.pid}-${++seq}`, log: quiet,
@@ -47,10 +47,10 @@ export async function planRun(db, { engine = null, now = CLOCK, dataDir = null }
   }
 }
 
-export function claimPlanRun(db, { now = new Date().toISOString() } = {}) {
+export async function claimPlanRun(db, { now = new Date().toISOString() } = {}) {
   const job = JOBS.find((j) => j.id === 'plan');
-  db.prepare('INSERT OR IGNORE INTO jobs (id, name, cadence, does, cost, next_label, last_label, enabled, sort) VALUES (?, ?, ?, ?, NULL, NULL, NULL, 1, 100)')
+  await db.prepare('INSERT OR IGNORE INTO jobs (id, name, cadence, does, cost, next_label, last_label, enabled, sort) VALUES (?, ?, ?, ?, NULL, NULL, NULL, 1, 100)')
     .run(job.id, job.name, job.cadence, job.does);
-  return db.prepare("INSERT INTO job_runs (job_id, started_at, status, period_key, trigger) VALUES ('plan', ?, 'running', ?, 'manual') RETURNING id")
-    .get(now, `manual:${now}+test${++seq}`).id;
+  return (await db.prepare("INSERT INTO job_runs (job_id, started_at, status, period_key, trigger) VALUES ('plan', ?, 'running', ?, 'manual') RETURNING id")
+    .get(now, `manual:${now}+test${++seq}`)).id;
 }

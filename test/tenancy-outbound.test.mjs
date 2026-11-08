@@ -48,11 +48,11 @@ async function restart({ engine = 'fake', extra = {} } = {}) {
 }
 
 const storeFile = () => join(fx.dataDir, 'households', hh, 'fathom.sqlite');
-const count = (sql, ...args) => withSqlite(storeFile(), db => db.prepare(sql).get(...args).n);
-const spendRows = () => count('SELECT count(*) AS n FROM spend_ledger');
+const count = async (sql, ...args) => await withSqlite(storeFile(), async db => (await db.prepare(sql).get(...args)).n);
+const spendRows = async () => await count('SELECT count(*) AS n FROM spend_ledger');
 const outboxDir = () => join(fx.dataDir, 'households', hh, 'outbox');
 const outboxFiles = () => (existsSync(outboxDir()) ? readdirSync(outboxDir()).filter(n => !n.startsWith('.')).sort() : []);
-const flagsRow = () => ({ ...server.app.platform.prepare('SELECT jobs, email, simplefin, engine FROM household_outbound WHERE household_id = ?').get(hh) });
+const flagsRow = async () => ({ ...await server.app.platform.prepare('SELECT jobs, email, simplefin, engine FROM household_outbound WHERE household_id = ?').get(hh) });
 
 async function outbound(client) {
   const r = await client.request({ path: '/api/household/outbound' });
@@ -96,7 +96,7 @@ describe('the migrated household starts paused and resumes only explicitly', T, 
   test('member and admin both see every kind paused', async () => {
     assert.deepEqual(await outbound(member.client), ALL_PAUSED);
     assert.deepEqual(await outbound(admin.client), ALL_PAUSED);
-    assert.deepEqual(flagsRow(), { jobs: 0, email: 0, simplefin: 0, engine: 0 });
+    assert.deepEqual(await flagsRow(), { jobs: 0, email: 0, simplefin: 0, engine: 0 });
   });
 
   test('a member cannot change flags', async () => {
@@ -104,7 +104,7 @@ describe('the migrated household starts paused and resumes only explicitly', T, 
     assert.equal(r.status, 403);
     assert.deepEqual(r.json, ADMIN_REQUIRED);
     assert.deepEqual(await outbound(admin.client), ALL_PAUSED);
-    assert.deepEqual(flagsRow(), { jobs: 0, email: 0, simplefin: 0, engine: 0 });
+    assert.deepEqual(await flagsRow(), { jobs: 0, email: 0, simplefin: 0, engine: 0 });
   });
 
   test('bad bodies are 400 and change nothing', async () => {
@@ -113,7 +113,7 @@ describe('the migrated household starts paused and resumes only explicitly', T, 
       assert.equal(r.status, 400, `${JSON.stringify(body)} -> ${r.status}`);
       assert.equal(typeof r.json?.error, 'string');
     }
-    assert.deepEqual(flagsRow(), { jobs: 0, email: 0, simplefin: 0, engine: 0 });
+    assert.deepEqual(await flagsRow(), { jobs: 0, email: 0, simplefin: 0, engine: 0 });
   });
 
   test('while paused: manual jobs 409, uploads import with no job run, email records paused, SimpleFIN 409, Ask spends nothing', async () => {
@@ -121,32 +121,32 @@ describe('the migrated household starts paused and resumes only explicitly', T, 
     assert.equal(run.status, 409);
     assert.deepEqual(run.json, { error: 'outbound jobs are paused' });
 
-    const runs = count('SELECT count(*) AS n FROM job_runs');
+    const runs = await count('SELECT count(*) AS n FROM job_runs');
     const up = await uploadFiles(server.baseUrl, admin.session, [{ name: 'synthetic-paused.csv', bytes: Buffer.from(aggregatorCsv([
       { date: '2026-10-20', amount: '33.10', description: 'Synthetic paused row', account: 'Synthetic paused checking', number: '5550004444' },
     ])) }]);
     assert.equal(up.status, 200, up.text.slice(0, 300));
     assert.equal(up.json.files[0].status, 'imported');
     await pause(750);
-    assert.equal(count('SELECT count(*) AS n FROM job_runs'), runs, 'no job run was created');
+    assert.equal(await count('SELECT count(*) AS n FROM job_runs'), runs, 'no job run was created');
 
     const outboxBefore = outboxFiles();
-    const sendsBefore = count('SELECT count(*) AS n FROM email_sends');
+    const sendsBefore = await count('SELECT count(*) AS n FROM email_sends');
     const sent = await admin.client.postJson('/api/email/test', {});
     assert.equal(sent.status, 200, sent.text.slice(0, 300));
     assert.equal(sent.json.send.status, 'failed');
     assert.equal(sent.json.send.errorCode, 'paused');
-    assert.equal(count('SELECT count(*) AS n FROM email_sends'), sendsBefore + 1, 'the refused send is recorded');
+    assert.equal(await count('SELECT count(*) AS n FROM email_sends'), sendsBefore + 1, 'the refused send is recorded');
     assert.deepEqual(outboxFiles(), outboxBefore, 'nothing written to the household outbox');
 
     const token = Buffer.from('https://sfin.example.invalid/simplefin/claim/synthetic', 'utf8').toString('base64');
     const connect = await admin.client.postJson('/api/simplefin/connect', { token });
     assert.equal(connect.status, 409, connect.text.slice(0, 200));
 
-    const spend = spendRows();
+    const spend = await spendRows();
     const message = await ask('Synthetic paused question');
     assert.equal(message.notice, true, 'engine paused behaves as engine off');
-    assert.equal(spendRows(), spend, 'no spend_ledger row');
+    assert.equal(await spendRows(), spend, 'no spend_ledger row');
   });
 
   test('an admin resumes one kind; omitted kinds keep their state, and the change is audited', async () => {
@@ -154,8 +154,8 @@ describe('the migrated household starts paused and resumes only explicitly', T, 
     assert.deepEqual(body.jobs, RESUMED);
     for (const k of ['email', 'simplefin', 'engine']) assert.deepEqual(body[k], PAUSED, k);
     assert.deepEqual(await outbound(member.client), body, 'members see the same state');
-    assert.deepEqual(flagsRow(), { jobs: 1, email: 0, simplefin: 0, engine: 0 });
-    const audited = server.app.platform.prepare("SELECT count(*) AS n FROM audit_events WHERE action = 'household.outbound' AND household_id = ? AND outcome = 'ok'").get(hh).n;
+    assert.deepEqual(await flagsRow(), { jobs: 1, email: 0, simplefin: 0, engine: 0 });
+    const audited = (await server.app.platform.prepare("SELECT count(*) AS n FROM audit_events WHERE action = 'household.outbound' AND household_id = ? AND outcome = 'ok'").get(hh)).n;
     assert.ok(audited >= 1);
   });
 
@@ -189,21 +189,21 @@ describe('the migrated household starts paused and resumes only explicitly', T, 
   test('live engine with a missing credential: credential_unavailable, and Ask refuses', async () => {
     await restart({ engine: 'live', extra: { FATHOM_CLAUDE_CREDENTIAL_FILE: join(scratch, 'absent', 'credential') } });
     const { createAuthStore } = await src('src/auth/store.mjs');
-    createAuthStore(server.app.platform).setPlatformSetting('instance_model_cap_usd', 50);
+    await createAuthStore(server.app.platform).setPlatformSetting('instance_model_cap_usd', 50);
     const body = await setFlags({ engine: true });
     assert.deepEqual(body.engine, { enabled: true, effective: false, reason: 'credential_unavailable' });
-    const spend = spendRows();
+    const spend = await spendRows();
     assert.equal((await ask('Synthetic credential question')).notice, true);
-    assert.equal(spendRows(), spend);
+    assert.equal(await spendRows(), spend);
   });
 
   test('live engine with a credential and a household cap but no instance funding: funding_unavailable, refused before dispatch', async () => {
     const credential = writePrivate(join(scratch, 'credential', 'synthetic-credential'), 'synthetic-credential-not-valid\n');
     await restart({ engine: 'live', extra: { FATHOM_CLAUDE_CREDENTIAL_FILE: credential } });
-    server.app.platform.prepare("DELETE FROM platform_settings WHERE key = 'instance_model_cap_usd'").run();
+    await server.app.platform.prepare("DELETE FROM platform_settings WHERE key = 'instance_model_cap_usd'").run();
     assert.equal((await admin.client.postJson('/api/engine/cap', { usd: 25 })).status, 200);
     assert.deepEqual((await outbound(admin.client)).engine, { enabled: true, effective: false, reason: 'funding_unavailable' });
-    const spend = spendRows();
+    const spend = await spendRows();
     assert.equal((await ask('Synthetic funding question')).notice, true);
     const engine = server.app.runtimes.get(hh).engine;
     assert.equal(engine.isOn(), false, 'live mode without funding is off');
@@ -212,18 +212,18 @@ describe('the migrated household starts paused and resumes only explicitly', T, 
       assert.equal(err.code, 'funding_unavailable');
       return true;
     });
-    assert.equal(spendRows(), spend, 'no round was dispatched or recorded');
+    assert.equal(await spendRows(), spend, 'no round was dispatched or recorded');
   });
 
   test('fake engine with a zero household cap: funding_exhausted, and Ask refuses with the budget notice', async () => {
     await restart({ engine: 'fake' });
     assert.equal((await admin.client.postJson('/api/engine/cap', { usd: 0 })).status, 200);
     assert.deepEqual((await outbound(admin.client)).engine, { enabled: true, effective: false, reason: 'funding_exhausted' });
-    const spend = spendRows();
+    const spend = await spendRows();
     const message = await ask('Synthetic budget question');
     assert.equal(message.notice, true);
     assert.match(JSON.stringify(message), /budget/i);
-    assert.equal(spendRows(), spend);
+    assert.equal(await spendRows(), spend);
     assert.equal((await admin.client.postJson('/api/engine/cap', { usd: 200 })).status, 200);
     assert.deepEqual((await outbound(admin.client)).engine, RESUMED, 'with budget the resumed engine is effective');
   });
@@ -238,7 +238,7 @@ describe('the migrated household starts paused and resumes only explicitly', T, 
     const all = await setFlags({ jobs: true, email: true, simplefin: true, engine: true });
     for (const k of OUTBOUND_KINDS) assert.equal(all[k].enabled, true, k);
     const platform = server.app.platform;
-    platform.prepare("UPDATE households SET status = 'suspended' WHERE id = ?").run(hh);
+    await platform.prepare("UPDATE households SET status = 'suspended' WHERE id = ?").run(hh);
     try {
       assert.equal((await admin.client.request({ path: '/api/scenario' })).status, 403);
       assert.equal((await admin.client.request({ path: '/api/household/outbound' })).status, 403);
@@ -247,11 +247,11 @@ describe('the migrated household starts paused and resumes only explicitly', T, 
       const guard = (await src('src/platform/outbound.mjs')).outboundGuard(platform, hh);
       for (const k of OUTBOUND_KINDS) assert.equal(guard.enabled(k), false, `${k} is never enabled while suspended`);
     } finally {
-      platform.prepare("UPDATE households SET status = 'active' WHERE id = ?").run(hh);
+      await platform.prepare("UPDATE households SET status = 'active' WHERE id = ?").run(hh);
     }
     const back = await outbound(admin.client);
     for (const k of OUTBOUND_KINDS) assert.equal(back[k].enabled, true, `${k} kept its value`);
-    assert.deepEqual(flagsRow(), { jobs: 1, email: 1, simplefin: 1, engine: 1 });
+    assert.deepEqual(await flagsRow(), { jobs: 1, email: 1, simplefin: 1, engine: 1 });
   });
 });
 
@@ -287,13 +287,13 @@ test('pausing between engine rounds stops the next round', T, async () => {
 test('changing one household\'s flags leaves another household\'s row untouched', T, async () => {
   const two = await twoHouseholds();
   try {
-    const rowOf = id => ({ ...two.platform.prepare('SELECT * FROM household_outbound WHERE household_id = ?').get(id) });
-    const before = rowOf(two.B.id);
+    const rowOf = async id => ({ ...await two.platform.prepare('SELECT * FROM household_outbound WHERE household_id = ?').get(id) });
+    const before = await rowOf(two.B.id);
     const r = await two.A.client.postJson('/api/household/outbound', { email: false });
     assert.equal(r.status, 200, r.text.slice(0, 300));
     assert.equal(r.json.outbound.email.enabled, false);
-    assert.equal(rowOf(two.A.id).email, 0);
-    assert.deepEqual(rowOf(two.B.id), before, 'B unchanged');
+    assert.equal((await rowOf(two.A.id)).email, 0);
+    assert.deepEqual(await rowOf(two.B.id), before, 'B unchanged');
     const b = await two.B.client.request({ path: '/api/household/outbound' });
     assert.equal(b.status, 200);
     assert.deepEqual(b.json.outbound, ALL_PAUSED, 'a provisioned household starts paused');

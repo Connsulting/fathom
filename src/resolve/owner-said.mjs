@@ -12,8 +12,8 @@ const sentences = text => String(text ?? '').split(/(?<=[.!?])\s+|[\r\n]+/).map(
 
 // [{ref: 'preferences:<id>', source: 'memory', quote}] then, per note {fileId, name, text}, one
 // {ref: 'notes:<fileId>:<index>', source: 'note', name, quote} per sentence.
-export function ownerSaidRows(db, { notes = [] } = {}) {
-  const rows = listPreferences(db).map(p => ({ ref: `preferences:${p.id}`, source: 'memory', quote: p.text }));
+export async function ownerSaidRows(db, { notes = [] } = {}) {
+  const rows = (await listPreferences(db)).map(p => ({ ref: `preferences:${p.id}`, source: 'memory', quote: p.text }));
   for (const note of Array.isArray(notes) ? notes : []) {
     if (!note || note.fileId == null || typeof note.text !== 'string') continue;
     sentences(note.text).slice(0, MAX_SENTENCES).forEach((quote, i) =>
@@ -31,7 +31,7 @@ export const ownerSaidSentence = row => row.source === 'note'
 
 // The text of every current note upload; a file that cannot be read or is not UTF-8 is skipped.
 export async function readOwnerNotes(db, vault) {
-  const files = db.prepare("SELECT id,name,stored_path FROM files WHERE source_kind='notes' AND removed_at IS NULL AND stored_path IS NOT NULL ORDER BY id").all();
+  const files = await db.prepare("SELECT id,name,stored_path FROM files WHERE source_kind='notes' AND removed_at IS NULL AND stored_path IS NOT NULL ORDER BY id").all();
   const out = [];
   for (const file of files) {
     try {

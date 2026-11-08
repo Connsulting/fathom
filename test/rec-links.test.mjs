@@ -21,7 +21,7 @@ import { tempDb } from './helpers/server.mjs';
 
 const NOW = '2026-11-05';
 const S = scratch('fathom-rec-links-');
-after(() => S.cleanup());
+after(async () => await S.cleanup());
 
 const OPEN = s => !['hidden', 'done', 'dismissed'].includes(s);
 const housekeepingCount = sc => sc.recs.filter(r => r.housekeeping === true && OPEN(r.status)).length;
@@ -171,7 +171,7 @@ describe('demo store (AC1, AC4)', () => {
   let s;
   before(async () => {
     s = await tempDb();
-    seedDemo(s.db);
+    await seedDemo(s.db);
   });
   after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
 
@@ -184,8 +184,8 @@ describe('demo store (AC1, AC4)', () => {
     }
   });
 
-  test('AC4: every scenario rec carries owner, ownerOverride, goalKinds, serves and housekeeping, and passes recLinkError', () => {
-    const sc = buildScenario(s.db, { clock: NOW });
+  test('AC4: every scenario rec carries owner, ownerOverride, goalKinds, serves and housekeeping, and passes recLinkError', async () => {
+    const sc = await buildScenario(s.db, { clock: NOW });
     assert.equal(sc.recs.length, demo.recs.length);
     for (const r of sc.recs) {
       assert.equal(recLinkError(r), null, `${r.id}: ${recLinkError(r)}`);
@@ -197,14 +197,14 @@ describe('demo store (AC1, AC4)', () => {
       assert.deepEqual(r.goalKinds, DEMO_MAP[r.id][0], `${r.id} goalKinds`);
     }
     // The stored def does not duplicate the columns.
-    for (const row of s.db.prepare('SELECT id, def FROM recs').all()) {
+    for (const row of await s.db.prepare('SELECT id, def FROM recs').all()) {
       const def = JSON.parse(row.def);
       assert.ok(!('owner' in def) && !('goalKinds' in def), `${row.id} def holds no owner or goalKinds`);
     }
   });
 
-  test('AC4: links resolve against open goals: va529 serves the education goal, umbrella and a done goal rec are housekeeping', () => {
-    const sc = buildScenario(s.db, { clock: NOW });
+  test('AC4: links resolve against open goals: va529 serves the education goal, umbrella and a done goal rec are housekeeping', async () => {
+    const sc = await buildScenario(s.db, { clock: NOW });
     const rec = id => sc.recs.find(r => r.id === id);
     assert.deepEqual(rec('va529').serves.map(g => g.id), ['kids']);
     assert.equal(rec('va529').housekeeping, false);
@@ -217,17 +217,17 @@ describe('demo store (AC1, AC4)', () => {
     assert.equal(rec('mortgage').housekeeping, true);
   });
 
-  test('AC4: live.housekeeping counts open housekeeping recs (not hidden, done or dismissed)', () => {
-    const sc = buildScenario(s.db, { clock: NOW });
+  test('AC4: live.housekeeping counts open housekeeping recs (not hidden, done or dismissed)', async () => {
+    const sc = await buildScenario(s.db, { clock: NOW });
     assert.equal(typeof sc.live.housekeeping, 'number');
     const n = housekeepingCount(sc);
     assert.ok(n >= 2, 'umbrella and filingplan are open housekeeping recs');
     assert.equal(sc.live.housekeeping, n);
     // mortgage is housekeeping but done, so it is not counted; dismissing umbrella drops the count.
-    const after = recAction(ctxOf(s.db, { action: 'dismiss' }, { id: 'umbrella' })).scenario;
+    const after = (await recAction(ctxOf(s.db, { action: 'dismiss' }, { id: 'umbrella' }))).scenario;
     assert.equal(after.live.housekeeping, n - 1);
     assert.equal(after.live.housekeeping, housekeepingCount(after));
-    recAction(ctxOf(s.db, { action: 'start' }, { id: 'umbrella' }));
+    await recAction(ctxOf(s.db, { action: 'start' }, { id: 'umbrella' }));
   });
 });
 
@@ -238,8 +238,8 @@ describe('planner on the synthetic real store (AC1, AC4)', () => {
     await planRun(db, { now: NOW });
   });
 
-  test('AC4: every rec the planner writes carries its trigger goal kinds, a known owner and passes recLinkError', () => {
-    const rows = db.prepare("SELECT r.id, r.owner, r.owner_override, r.goal_kinds, p.trigger_id FROM recs r JOIN planner_recs p ON p.rec_id = r.id").all();
+  test('AC4: every rec the planner writes carries its trigger goal kinds, a known owner and passes recLinkError', async () => {
+    const rows = await db.prepare("SELECT r.id, r.owner, r.owner_override, r.goal_kinds, p.trigger_id FROM recs r JOIN planner_recs p ON p.rec_id = r.id").all();
     assert.ok(rows.length >= 10, 'the synthetic household gets its recs');
     for (const r of rows) {
       const t = byId(r.trigger_id);
@@ -247,24 +247,24 @@ describe('planner on the synthetic real store (AC1, AC4)', () => {
       assert.ok(isOwner(r.owner), `${r.id} owner ${r.owner}`);
       assert.equal(r.owner_override, 0, `${r.id} owner_override`);
     }
-    const sc = buildScenario(db, { clock: NOW });
+    const sc = await buildScenario(db, { clock: NOW });
     for (const r of sc.recs) {
       assert.equal(recLinkError(r), null, `${r.id}: ${recLinkError(r)}`);
       assert.deepEqual(r.goalKinds, [...byId(r.id).goalKinds], `${r.id} scenario goalKinds`);
     }
   });
 
-  test('AC4: an owner goal of a matching kind relinks a housekeeping rec without a re-plan; archiving it reverts', () => {
-    const before = buildScenario(db, { clock: NOW });
+  test('AC4: an owner goal of a matching kind relinks a housekeeping rec without a re-plan; archiving it reverts', async () => {
+    const before = await buildScenario(db, { clock: NOW });
     assert.equal(before.goals.length, 0, 'a real store starts without goals');
     const va = before.recs.find(r => r.id === 'va529');
     assert.equal(va.housekeeping, true, 'no goals: every rec is housekeeping');
     assert.deepEqual(va.serves, []);
     assert.equal(before.live.housekeeping, housekeepingCount(before));
-    const recsBefore = db.prepare('SELECT * FROM recs ORDER BY id').all().map(r => ({ ...r }));
-    const runs = db.prepare('SELECT count(*) AS n FROM job_runs').get().n;
+    const recsBefore = (await db.prepare('SELECT * FROM recs ORDER BY id').all()).map(r => ({ ...r }));
+    const runs = (await db.prepare('SELECT count(*) AS n FROM job_runs').get()).n;
 
-    const { goal, scenario } = goalCreate(ctxOf(db, { title: 'College for the kids' }));
+    const { goal, scenario } = await goalCreate(ctxOf(db, { title: 'College for the kids' }));
     const linked = scenario.recs.find(r => r.id === 'va529');
     assert.deepEqual(linked.serves.map(g => g.id), [goal.id]);
     assert.equal(linked.serves[0].origin, 'owner');
@@ -272,10 +272,10 @@ describe('planner on the synthetic real store (AC1, AC4)', () => {
     assert.equal(recLinkError(linked), null);
     assert.equal(scenario.recs.find(r => r.id === 'fed-q4-estimate').housekeeping, true, 'a tax rec does not link to an education goal');
     assert.equal(scenario.live.housekeeping, before.live.housekeeping - 1);
-    assert.deepEqual(db.prepare('SELECT * FROM recs ORDER BY id').all().map(r => ({ ...r })), recsBefore, 'no rec row was rewritten');
-    assert.equal(db.prepare('SELECT count(*) AS n FROM job_runs').get().n, runs, 'no planning run');
+    assert.deepEqual((await db.prepare('SELECT * FROM recs ORDER BY id').all()).map(r => ({ ...r })), recsBefore, 'no rec row was rewritten');
+    assert.equal((await db.prepare('SELECT count(*) AS n FROM job_runs').get()).n, runs, 'no planning run');
 
-    const archived = goalArchive(ctxOf(db, {}, { id: goal.id })).scenario;
+    const archived = (await goalArchive(ctxOf(db, {}, { id: goal.id }))).scenario;
     const back = archived.recs.find(r => r.id === 'va529');
     assert.deepEqual(back.serves, []);
     assert.equal(back.housekeeping, true);
@@ -286,14 +286,14 @@ describe('planner on the synthetic real store (AC1, AC4)', () => {
 test('AC4: missing-data is always housekeeping, whatever goals exist', async () => {
   const db = S.track(await createRealStore(S.dir(), { clock: NOW }));
   await planRun(db, { now: NOW });
-  const row = recRow(db, 'missing-data');
+  const row = await recRow(db, 'missing-data');
   assert.ok(row, 'an empty real store gets missing-data');
   assert.deepEqual(JSON.parse(row.goal_kinds), []);
   assert.equal(row.owner, 'you');
   for (const title of ['Retire early', 'College fund', 'A year of cash', 'Pay less tax', 'Give more to charity', 'HSA for medical bills', 'Pay off the house']) {
-    goalCreate(ctxOf(db, { title }));
+    await goalCreate(ctxOf(db, { title }));
   }
-  const sc = buildScenario(db, { clock: NOW });
+  const sc = await buildScenario(db, { clock: NOW });
   const md = sc.recs.find(r => r.id === 'missing-data');
   assert.equal(sc.goals.length, 7);
   assert.deepEqual(md.serves, []);

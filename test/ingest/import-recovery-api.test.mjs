@@ -69,17 +69,17 @@ async function leavePending(app, name, text) {
   const fileId = 'f-' + hash.slice(0, 24);
   const vault = await openVault(app.household);
   const storedPath = await storeFile({ vault, id: fileId, bytes, purpose: 'upload' });
-  app.household.db.prepare(`INSERT INTO files (id, name, mime, size, sha256, uploaded_at, stored_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`)
+  await app.household.db.prepare(`INSERT INTO files (id, name, mime, size, sha256, uploaded_at, stored_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`)
     .run(fileId, name, 'text/csv', bytes.length, hash, new Date().toISOString(), storedPath);
   return fileId;
 }
 
-const faultStore = (db, message) => db.exec(`CREATE TEMP TRIGGER IF NOT EXISTS h1_store_fault BEFORE INSERT ON main.transactions BEGIN SELECT RAISE(ABORT, '${message}'); END;`);
-const healStore = (db) => db.exec('DROP TRIGGER IF EXISTS temp.h1_store_fault');
+const faultStore = async (db, message) => await db.applySchema(`CREATE TEMP TRIGGER IF NOT EXISTS h1_store_fault BEFORE INSERT ON main.transactions BEGIN SELECT RAISE(ABORT, '${message}'); END;`);
+const healStore = async (db) => await db.applySchema('DROP TRIGGER IF EXISTS temp.h1_store_fault');
 
 const waitingIn = (sc, id) => sc.live.ingest.waiting.find((f) => f.id === id);
 const fileIn = (sc, id) => sc.live.ingest.files.find((f) => f.id === id);
-const rowOf = (db, id) => { const r = db.prepare('SELECT status, note FROM files WHERE id = ?').get(id); return r ? { ...r } : r; };
+const rowOf = async (db, id) => { const r = await db.prepare('SELECT status, note FROM files WHERE id = ?').get(id); return r ? { ...r } : r; };
 
 // Poll until fn returns a truthy value or the deadline passes; returns the last value.
 async function until(fn, ms = DEADLINE_MS) {
@@ -106,7 +106,7 @@ test('an interrupted upload is resumed by the next scheduler tick', T, () => wit
     assert.equal(fileIn(after, id)?.status, 'imported');
     assert.equal(after.live.services.imports.state, 'healthy');
     assert.equal(after.live.services.imports.files, 0);
-    assert.equal(instance.db.prepare('SELECT count(*) n FROM transactions WHERE file_id = ?').get(id).n, 2);
+    assert.equal((await instance.db.prepare('SELECT count(*) n FROM transactions WHERE file_id = ?').get(id)).n, 2);
   } finally { await s.close(); }
 }));
 
@@ -121,7 +121,7 @@ test('an interrupted upload is resumed when the server starts', T, () => withIns
   try {
     assert.equal(waitingIn(await second.app.getScenario(), id)?.status, 'pending', 'still pending before the start');
     // What the server does at load: start each household's scheduler, whose first tick runs at once.
-    second.app.runtimes.startAll();
+    await second.app.runtimes.startAll();
     const after = await until(async () => { const sc = await second.app.getScenario(); return waitingIn(sc, id) ? null : sc; });
     assert.ok(after, 'resumed on load within the deadline');
     assert.equal(fileIn(after, id)?.status, 'imported');
@@ -135,10 +135,10 @@ test('a failed file imports on Retry and on an identical re-upload, never as a d
   try {
     const textA = csv('failed retry', '31.00');
     const textB = csv('failed reupload', '32.00');
-    faultStore(db, 'synthetic store failure');
+    await faultStore(db, 'synthetic store failure');
     const a = await uploadOver(s.app, 'failed-retry-synthetic.csv', textA);
     const b = await uploadOver(s.app, 'failed-reupload-synthetic.csv', textB);
-    healStore(db);
+    await healStore(db);
     for (const r of [a, b]) {
       assert.equal(r.status, 200, r.text.slice(0, 300));
       assert.equal(r.json.files[0].status, 'failed');
@@ -146,7 +146,7 @@ test('a failed file imports on Retry and on an identical re-upload, never as a d
     const idA = a.json.files[0].fileId;
     const idB = b.json.files[0].fileId;
     for (const id of [idA, idB]) {
-      const row = rowOf(db, id);
+      const row = await rowOf(db, id);
       assert.equal(row.status, 'failed');
       assert.equal(row.note, 'ERR_SQLITE_ERROR', 'a non-transient class, never the message');
       assert.ok(!String(row.note).includes('synthetic store failure'));
@@ -161,8 +161,8 @@ test('a failed file imports on Retry and on an identical re-upload, never as a d
     await s.scheduler.tick();
     await s.scheduler.idle();
     await sleep(200);
-    assert.equal(rowOf(db, idA).status, 'failed');
-    assert.equal(rowOf(db, idB).status, 'failed');
+    assert.equal((await rowOf(db, idA)).status, 'failed');
+    assert.equal((await rowOf(db, idB)).status, 'failed');
 
     // Retry over HTTP.
     const retry = await s.app.postJson(`/api/files/${idA}/retry`, {});
@@ -189,21 +189,21 @@ test('a failed file imports on Retry and on an identical re-upload, never as a d
     sc = await s.app.getScenario();
     assert.equal(sc.live.services.imports.state, 'healthy');
     assert.equal(sc.live.services.imports.files, 0);
-  } finally { healStore(db); await s.close(); }
+  } finally { await healStore(db); await s.close(); }
 }));
 
 test('a transient failure is retried once by a tick and imports', T, () => withInstance(async (instance) => {
   const s = await serve(instance);
   const db = instance.db;
   try {
-    faultStore(db, 'database is locked');
+    await faultStore(db, 'database is locked');
     const up = await uploadOver(s.app, 'transient-once-synthetic.csv', csv('transient once', '41.00'));
-    healStore(db);
+    await healStore(db);
     assert.equal(up.status, 200, up.text.slice(0, 300));
     const f = up.json.files[0];
     assert.equal(f.status, 'failed');
     assert.equal(f.reasonCode, 'retry:store_locked');
-    assert.deepEqual(rowOf(db, f.fileId), { status: 'failed', note: 'retry:store_locked' });
+    assert.deepEqual(await rowOf(db, f.fileId), { status: 'failed', note: 'retry:store_locked' });
     const before = await s.app.getScenario();
     assert.equal(waitingIn(before, f.fileId)?.reasonCode, 'retry:store_locked');
     assert.equal(before.live.services.imports.state, 'retrying');
@@ -213,17 +213,17 @@ test('a transient failure is retried once by a tick and imports', T, () => withI
     assert.ok(after, 'retried within the deadline');
     assert.equal(fileIn(after, f.fileId)?.status, 'imported');
     assert.equal(after.live.services.imports.state, 'healthy');
-  } finally { healStore(db); await s.close(); }
+  } finally { await healStore(db); await s.close(); }
 }));
 
 test('a transient failure that fails again on its automatic retry is left failed and not retried again', T, () => withInstance(async (instance) => {
   const s = await serve(instance);
   const db = instance.db;
   try {
-    faultStore(db, 'database is locked');
+    await faultStore(db, 'database is locked');
     const up = await uploadOver(s.app, 'transient-twice-synthetic.csv', csv('transient twice', '42.00'));
     const id = up.json.files[0].fileId;
-    assert.deepEqual(rowOf(db, id), { status: 'failed', note: 'retry:store_locked' });
+    assert.deepEqual(await rowOf(db, id), { status: 'failed', note: 'retry:store_locked' });
 
     // The fault is still there on the one automatic retry.
     await s.scheduler.tick();
@@ -231,17 +231,17 @@ test('a transient failure that fails again on its automatic retry is left failed
     assert.ok(left, 'the automatic retry ran within the deadline');
     assert.equal(waitingIn(left, id).status, 'failed');
     assert.equal(left.live.services.imports.state, 'needs_you');
-    healStore(db);
+    await healStore(db);
 
     // No further automatic retry, even with the store healthy again.
     await s.scheduler.tick();
     await s.scheduler.idle();
     await sleep(200);
-    assert.deepEqual(rowOf(db, id), { status: 'failed', note: 'store_locked' });
+    assert.deepEqual(await rowOf(db, id), { status: 'failed', note: 'store_locked' });
 
     // The owner's Retry still imports it.
     const retry = await s.app.postJson(`/api/files/${id}/retry`, {});
     assert.equal(retry.status, 200, retry.text.slice(0, 300));
     assert.equal(retry.json.file.status, 'imported');
-  } finally { healStore(db); await s.close(); }
+  } finally { await healStore(db); await s.close(); }
 }));

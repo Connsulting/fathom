@@ -14,7 +14,7 @@ const FLAGS = ['--household', '--round', '--cost-usd', '--receipt-ref'];
 const fail = code => Object.assign(new Error(code), { code });
 const codeOf = e => (e && typeof e.code === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(e.code) ? e.code : 'reconcile_failed');
 
-function main(argv) {
+async function main(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i += 2) {
     if (!FLAGS.includes(argv[i]) || Object.hasOwn(args, argv[i]) || argv[i + 1] === undefined) throw fail('usage');
@@ -23,16 +23,16 @@ function main(argv) {
   if (!FLAGS.every(f => Object.hasOwn(args, f)) || !args['--household'] || !args['--round']) throw fail('usage');
   const text = args['--cost-usd'];
   const costUsd = /^\d+(\.\d+)?$/.test(text) ? Number(text) : NaN;
-  const platform = openOperatorPlatform();
+  const platform = await openOperatorPlatform();
   try {
-    return reconcileRound(platform, { householdId: args['--household'], roundId: args['--round'], costUsd, receiptRef: args['--receipt-ref'] });
+    return await reconcileRound(platform, { householdId: args['--household'], roundId: args['--round'], costUsd, receiptRef: args['--receipt-ref'] });
   } finally {
-    platform.close();
+    await platform.close();
   }
 }
 
 try {
-  console.log(`reconcile-spend: ${main(process.argv.slice(2))}`);
+  console.log(`reconcile-spend: ${await main(process.argv.slice(2))}`);
 } catch (e) {
   console.error(`reconcile-spend: ${codeOf(e)}`);
   process.exitCode = 1;

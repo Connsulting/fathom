@@ -55,7 +55,7 @@ before(async () => {
 after(() => t && t.close());
 
 const tick = () => { clock = new Date(clock.getTime() + 1000); };
-const rows = () => t.platform.prepare('SELECT * FROM api_keys ORDER BY created_at, id').all().map(r => ({ ...r }));
+const rows = async () => (await t.platform.prepare('SELECT * FROM api_keys ORDER BY created_at, id').all()).map(r => ({ ...r }));
 
 describe('constants and scopes', () => {
   test('prefix and scope list', () => {
@@ -156,13 +156,13 @@ describe('MCP secret', () => {
     assert.throws(() => realSecrets(dir, open).mcpSecret(), isCode('mcp_secret_invalid'), 'a group-readable file is refused');
   });
 
-  test('a key service whose secret is unavailable refuses every call with unavailable', () => {
+  test('a key service whose secret is unavailable refuses every call with unavailable', async () => {
     const none = createKeyService({ platform: t.platform, secret: () => { throw new Error('mcp_secret_missing'); }, creatorActive, now: () => clock });
-    const before = rows().length;
+    const before = (await rows()).length;
     assert.throws(() => none.create({ householdId: hh, name: 'No secret' }), isCode('unavailable'));
     assert.throws(() => none.list({ householdId: hh }), isCode('unavailable'));
     assert.throws(() => none.verify('fathom_' + 'Q'.repeat(43)), isCode('unavailable'));
-    assert.equal(rows().length, before, 'nothing stored without the secret');
+    assert.equal((await rows()).length, before, 'nothing stored without the secret');
   });
 });
 
@@ -178,7 +178,7 @@ describe('hashing', () => {
 });
 
 describe('key service', () => {
-  test('create issues a prefixed 43-char base64url key, shown once, and stores only its hash', () => {
+  test('create issues a prefixed 43-char base64url key, shown once, and stores only its hash', async () => {
     const { key, record } = svc.create({ name: 'Laptop agent' });
     assert.match(key, KEY_RE);
     assert.equal(key.length, 50);
@@ -189,11 +189,11 @@ describe('key service', () => {
     assert.equal(record.createdAt, clock.toISOString());
     assert.equal(record.lastUsedAt, null);
     assert.equal(record.revokedAt, null);
-    const row = t.platform.prepare('SELECT * FROM api_keys WHERE id = ?').get(record.id);
+    const row = await t.platform.prepare('SELECT * FROM api_keys WHERE id = ?').get(record.id);
     assert.equal(row.household_id, hh);
     assert.equal(row.key_hash, hashKey(key, SECRET));
     assert.deepEqual(JSON.parse(row.scopes), ['read']);
-    const dump = JSON.stringify(rows());
+    const dump = JSON.stringify(await rows());
     assert.ok(!dump.includes(key), 'the key is not stored');
     assert.ok(!dump.includes(key.slice(KEY_PREFIX.length)), 'no part of the key body is stored');
     tick();
@@ -213,23 +213,23 @@ describe('key service', () => {
     tick();
   });
 
-  test('create normalizes scopes and refuses unknown ones', () => {
+  test('create normalizes scopes and refuses unknown ones', async () => {
     const w = svc.create({ name: 'Writer', scopes: ['write:recs'] });
     assert.deepEqual(w.record.scopes, ['read', 'write:recs']);
-    const before = rows().length;
+    const before = (await rows()).length;
     assert.throws(() => svc.create({ name: 'Bad scope', scopes: ['admin'] }), isCode('bad_input'));
-    assert.equal(rows().length, before, 'nothing stored on bad input');
+    assert.equal((await rows()).length, before, 'nothing stored on bad input');
     tick();
   });
 
-  test('name is trimmed, 1 to 80 chars, with no control characters', () => {
+  test('name is trimmed, 1 to 80 chars, with no control characters', async () => {
     assert.equal(svc.create({ name: '  Padded name  ' }).record.name, 'Padded name');
     assert.equal(svc.create({ name: 'n'.repeat(80) }).record.name, 'n'.repeat(80));
-    const before = rows().length;
+    const before = (await rows()).length;
     for (const bad of ['', '   ', 'n'.repeat(81), 'line\nbreak', 'bell\u0007', 'tab\there', 'nul\u0000', undefined, 42, null]) {
       assert.throws(() => svc.create({ name: bad }), isCode('bad_input'), JSON.stringify(bad));
     }
-    assert.equal(rows().length, before);
+    assert.equal((await rows()).length, before);
     tick();
   });
 
@@ -267,7 +267,7 @@ describe('key service', () => {
 
   // Contradiction 1: with no users foreign key, verify fails closed on a creator who is no longer an
   // active member; ownerless keys do not depend on any member.
-  test('a creator-owned key verifies only while its creator is an active member; ownerless keys are unaffected', () => {
+  test('a creator-owned key verifies only while its creator is an active member; ownerless keys are unaffected', async () => {
     active.add(users.creator);
     const owned = svc.create({ name: 'Creator key', userId: users.creator });
     const ownerless = svc.create({ name: 'Ownerless key' });
@@ -276,7 +276,7 @@ describe('key service', () => {
     active.delete(users.creator);
     assert.equal(svc.verify(owned.key), null, 'a removed creator key no longer verifies');
     assert.equal(svc.verify(ownerless.key).id, ownerless.record.id);
-    assert.ok(rows().some(r => r.id === owned.record.id), 'verification alone deletes nothing');
+    assert.ok((await rows()).some(r => r.id === owned.record.id), 'verification alone deletes nothing');
     active.add(users.creator);
     assert.equal(svc.verify(owned.key).id, owned.record.id, 'an active creator verifies again');
     active.delete(users.creator);
@@ -313,8 +313,8 @@ describe('key service', () => {
     tick();
   });
 
-  test('verify compares against every stored row with timingSafeEqual', () => {
-    const total = rows().length;
+  test('verify compares against every stored row with timingSafeEqual', async () => {
+    const total = (await rows()).length;
     assert.ok(total > 5);
     // The key under test is created first and several rows are created after it, so a verifier
     // that returns on the first match would stop before reaching them.
@@ -323,9 +323,9 @@ describe('key service', () => {
       tick();
       svc.create({ name: `Later key ${i}` });
     }
-    const all = rows().length;
+    const all = (await rows()).length;
     assert.ok(all >= total + 6);
-    assert.equal(rows().findIndex(r => r.id === firstKey.record.id), total, 'the matched key sits before the later rows');
+    assert.equal((await rows()).findIndex(r => r.id === firstKey.record.id), total, 'the matched key sits before the later rows');
     const spy = mock.method(crypto, 'timingSafeEqual');
     syncBuiltinESMExports();
     try {
@@ -351,7 +351,7 @@ describe('key service', () => {
     tick();
   });
 
-  test('list is ordered by creation and never exposes a hash or a key', () => {
+  test('list is ordered by creation and never exposes a hash or a key', async () => {
     const list = svc.list();
     assert.ok(list.length > 10);
     for (const k of list) {
@@ -362,7 +362,7 @@ describe('key service', () => {
     const sorted = [...list].sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     assert.deepEqual(list.map(k => k.id), sorted.map(k => k.id));
     const text = JSON.stringify(list);
-    for (const r of rows()) assert.ok(!text.includes(r.key_hash), 'no hash in the listing');
+    for (const r of await rows()) assert.ok(!text.includes(r.key_hash), 'no hash in the listing');
     assert.ok(!/fathom_[A-Za-z0-9_-]{43}/.test(text), 'no key in the listing');
   });
 

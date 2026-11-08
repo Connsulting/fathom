@@ -23,7 +23,7 @@
 
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { openScope } from '../storage/index.mjs';
 import { readStoreMode, DB_FILE } from '../store/db.mjs';
 import { PLATFORM_FILE, LOCK_FILE, openPlatform, servedHousehold, storeIdentity } from './db.mjs';
 import { checkHouseholdRoot } from './runtime.mjs';
@@ -54,62 +54,62 @@ export const refuse = code => new StartupError(code, MESSAGES[code] || '');
 // Households that must have a root before the instance is served: the original household (any
 // status but deleted) and every active household. Read-only; a platform from before migration
 // 003 has no storage_root column, so every such household lacks one.
-function rootlessHouseholds(platformFile) {
-  const db = new DatabaseSync(platformFile, { readOnly: true });
+async function rootlessHouseholds(platformFile) {
+  const db = await openScope({ path: platformFile, readOnly: true, journal: null, busyTimeout: 0 });
   try {
-    const columns = db.prepare('PRAGMA table_info(households)').all().map(c => c.name);
+    const columns = (await db.columns('households')).map(c => c.name);
     const where = "(serves_store = 1 AND status != 'deleted') OR status = 'active'";
-    if (!columns.includes('storage_root')) return db.prepare(`SELECT count(*) AS n FROM households WHERE ${where}`).get().n;
-    return db.prepare(`SELECT count(*) AS n FROM households WHERE (${where}) AND storage_root IS NULL`).get().n;
+    if (!columns.includes('storage_root')) return (await db.prepare(`SELECT count(*) AS n FROM households WHERE ${where}`).get()).n;
+    return (await db.prepare(`SELECT count(*) AS n FROM households WHERE (${where}) AND storage_root IS NULL`).get()).n;
   } finally {
-    db.close();
+    await db.close();
   }
 }
 
-function modeOf(platformFile) {
-  const db = new DatabaseSync(platformFile, { readOnly: true });
+async function modeOf(platformFile) {
+  const db = await openScope({ path: platformFile, readOnly: true, journal: null, busyTimeout: 0 });
   try {
-    return db.prepare('SELECT mode FROM households WHERE serves_store = 1').get()?.mode ?? null;
+    return (await db.prepare('SELECT mode FROM households WHERE serves_store = 1').get())?.mode ?? null;
   } finally {
-    db.close();
+    await db.close();
   }
 }
 
-export function openInstance(config) {
+export async function openInstance(config) {
   const dataDir = config.dataDir;
   if (existsSync(join(dataDir, LOCK_FILE))) throw refuse('platform_migration_in_progress');
   if (existsSync(join(dataDir, TENANCY_LOCK_FILE))) throw refuse('tenancy_migration_in_progress');
   const platformFile = join(dataDir, PLATFORM_FILE);
   const rootStore = join(dataDir, DB_FILE);
   if (!existsSync(platformFile)) {
-    const legacy = readStoreMode(rootStore);
+    const legacy = await readStoreMode(rootStore);
     if (legacy === null) return null;
     throw refuse(legacy === 'demo' ? 'demo_store_outdated' : 'platform_migration_required');
   }
-  const mode = modeOf(platformFile);
+  const mode = await modeOf(platformFile);
   if (mode !== 'real' && mode !== 'demo') throw refuse('household_store_mismatch');
-  if (rootlessHouseholds(platformFile) > 0) throw refuse(mode === 'demo' ? 'demo_store_outdated' : 'tenancy_migration_required');
+  if (await rootlessHouseholds(platformFile) > 0) throw refuse(mode === 'demo' ? 'demo_store_outdated' : 'tenancy_migration_required');
   if (existsSync(rootStore)) throw refuse('tenancy_layout_conflict');
-  const platform = openPlatform(platformFile);
+  const platform = await openPlatform(platformFile);
   try {
-    const served = servedHousehold(platform);
+    const served = await servedHousehold(platform);
     if (!served || served.mode !== mode) throw refuse('household_store_mismatch');
     return { platform, mode };
   } catch (e) {
-    try { platform.close(); } catch { /* already closed */ }
+    try { await platform.close(); } catch { /* already closed */ }
     throw e;
   }
 }
 
 
 // Columns scripts/category-eval.mjs reads; a store without them refuses store_schema_required.
-export function openOperatorPlatform(env = process.env) {
+export async function openOperatorPlatform(env = process.env) {
   const dataDir = resolve(env.FATHOM_DATA == null || env.FATHOM_DATA === '' ? 'data' : env.FATHOM_DATA);
   if (existsSync(join(dataDir, LOCK_FILE))) throw refuse('platform_migration_in_progress');
   if (existsSync(join(dataDir, TENANCY_LOCK_FILE))) throw refuse('tenancy_migration_in_progress');
   const file = join(dataDir, PLATFORM_FILE);
   if (!existsSync(file)) throw refuse('platform_migration_required');
-  return openPlatform(file);
+  return await openPlatform(file);
 }
 
 const EVAL_COLUMNS = Object.freeze({
@@ -125,7 +125,7 @@ const EVAL_COLUMNS = Object.freeze({
 // platform_migration_required without a platform, household_unavailable unless the household is
 // active with its own root, store_missing, household_store_mismatch when the store's identity or
 // mode differs, and store_schema_required without the evaluation columns. The caller closes both.
-export function openReadOnlyHousehold({ dataDir }, householdId) {
+export async function openReadOnlyHousehold({ dataDir }, householdId) {
   if (existsSync(join(dataDir, LOCK_FILE))) throw refuse('platform_migration_in_progress');
   if (existsSync(join(dataDir, TENANCY_LOCK_FILE))) throw refuse('tenancy_migration_in_progress');
   const platformFile = join(dataDir, PLATFORM_FILE);
@@ -133,24 +133,22 @@ export function openReadOnlyHousehold({ dataDir }, householdId) {
   let db;
   let platform;
   try {
-    platform = new DatabaseSync(platformFile, { readOnly: true });
-    platform.exec('PRAGMA query_only = ON');
-    const row = platform.prepare('SELECT status, mode, storage_root FROM households WHERE id = ?').get(householdId);
+    platform = await openScope({ path: platformFile, readOnly: true, journal: null, busyTimeout: 0, queryOnly: true });
+    const row = await platform.prepare('SELECT status, mode, storage_root FROM households WHERE id = ?').get(householdId);
     if (!row || row.status !== 'active' || !row.storage_root) throw refuse('household_unavailable');
     const file = join(checkHouseholdRoot(dataDir, row.storage_root), DB_FILE);
     if (!existsSync(file)) throw refuse('store_missing');
-    db = new DatabaseSync(file, { readOnly: true });
-    db.exec('PRAGMA query_only = ON');
-    const mode = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'mode'").get()?.value ?? 'null');
-    if (mode !== row.mode || storeIdentity(db)?.householdId !== householdId) throw refuse('household_store_mismatch');
+    db = await openScope({ path: file, readOnly: true, journal: null, busyTimeout: 0, queryOnly: true });
+    const mode = JSON.parse((await db.prepare("SELECT value FROM settings WHERE key = 'mode'").get())?.value ?? 'null');
+    if (mode !== row.mode || (await storeIdentity(db))?.householdId !== householdId) throw refuse('household_store_mismatch');
     for (const [table, columns] of Object.entries(EVAL_COLUMNS)) {
-      const have = new Set(db.prepare(`PRAGMA table_info(${table})`).all().map(c => c.name));
+      const have = new Set((await db.columns(table)).map(c => c.name));
       if (columns.some(c => !have.has(c))) throw refuse('store_schema_required');
     }
     return { db, platform, householdId };
   } catch (error) {
-    try { db?.close(); } catch { /* already closed */ }
-    try { platform?.close(); } catch { /* already closed */ }
+    try { await db?.close(); } catch { /* already closed */ }
+    try { await platform?.close(); } catch { /* already closed */ }
     throw error;
   }
 }

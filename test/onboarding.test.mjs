@@ -45,11 +45,11 @@ describe('Tell us note save path', () => {
     const out = await O.saveNotes(ctxOf(s, engine, { text: NOTE }));
     assert.equal(out.file.status, 'waiting_for_engine');
     assert.equal(out.file.parser, 'model-import');
-    const row = one(s.db, 'SELECT * FROM files WHERE id=?', out.file.fileId);
+    const row = await one(s.db, 'SELECT * FROM files WHERE id=?', out.file.fileId);
     assert.match(row.name, /^Setup notes \d{4}-\d{2}-\d{2}\.md$/);
     assert.ok(!readFileSync(join(s.root,row.stored_path)).includes(Buffer.from('Virginia')));
-    assert.equal(count(s.db,'documents'), 0);
-    assert.equal(count(s.db,'facts'), 0);
+    assert.equal(await count(s.db,'documents'), 0);
+    assert.equal(await count(s.db,'facts'), 0);
     assert.equal(engine.extracts.length, 0);
     assert.equal(out.understood.waiting, true);
     assert.deepEqual(out.understood.facts, []);
@@ -59,8 +59,8 @@ describe('Tell us note save path', () => {
   test('engine off: the parser stores the note and it waits; nothing is read and nothing is invented', () => withStore(async (s) => {
     const out = await O.saveNotes(ctxOf(s, await offEngine(), { text: NOTE }));
     assert.equal(out.file.status, 'waiting_for_engine');
-    assert.equal(count(s.db, 'documents', "doc_type = 'notes'"), 0);
-    assert.equal(count(s.db, 'facts'), 0);
+    assert.equal(await count(s.db, 'documents', "doc_type = 'notes'"), 0);
+    assert.equal(await count(s.db, 'facts'), 0);
     assert.deepEqual(out.understood, { fileId: out.file.fileId, status: 'waiting_for_engine', engineOn: false, waiting: true, facts: [], goals: [], asked: 0 });
     assert.equal(out.scenario.live.heard.empty, true);
   }));
@@ -75,17 +75,17 @@ describe('Tell us note save path', () => {
     assert.equal(again.file.duplicateOf, first.file.fileId);
     assert.equal(again.file.fileId, first.file.fileId);
     assert.equal(again.understood.status, first.file.status);
-    assert.equal(count(s.db, 'files'), 1);
+    assert.equal(await count(s.db, 'files'), 1);
   }));
 
   test('a second, different note adds to the first (Setup for a returning owner)', () => withStore(async (s) => {
     const engine = await fakeEngine([[NOTES_OUT], [{ facts: [{ key: 'income.sCorp', value: 'true', confidence: 0.95 }], goals: [] }]]);
     await O.saveNotes(ctxOf(s, engine, { text: NOTE }));
     const more = await O.saveNotes(ctxOf(s, engine, { text: 'I also take a salary from my S corporation.' }));
-    assert.equal(count(s.db, 'files'), 2);
+    assert.equal(await count(s.db, 'files'), 2);
     assert.deepEqual(more.understood.facts, []);
     assert.equal(more.understood.waiting, true);
-    assert.equal(count(s.db,'facts'), 0);
+    assert.equal(await count(s.db,'facts'), 0);
   }));
 
   test('bad input is refused with a fixed message and nothing is stored', () => withStore(async (s) => {
@@ -97,7 +97,7 @@ describe('Tell us note save path', () => {
         return true;
       });
     }
-    assert.equal(count(s.db, 'files'), 0);
+    assert.equal(await count(s.db, 'files'), 0);
   }));
 
   // MT-03: the vault key is the instance platform key (FATHOM_PLATFORM_KEY_FILE), not a data key file.
@@ -111,7 +111,7 @@ describe('Tell us note save path', () => {
       });
       const ctx = ctxOf(s, await fakeEngine([]), { text: NOTE }, household);
       await assert.rejects(O.saveNotes(ctx), (err) => err.status === 409 && /FATHOM_PLATFORM_KEY_FILE/.test(err.message));
-      assert.equal(count(s.db, 'files'), 0);
+      assert.equal(await count(s.db, 'files'), 0);
       assert.deepEqual(readdirSync(s.root).filter((n) => n === 'files'), []);
     } finally { s.close(); }
   });
@@ -120,7 +120,7 @@ describe('Tell us note save path', () => {
 describe('what we heard (deriveHeard)', () => {
   const NOW = '2026-11-05T12:00:00Z';
   const fact = (db, key, value, extra = {}) => S.upsertFact(db, { key, value, now: NOW, ...extra });
-  const file = (db, id, name) => db.prepare("INSERT INTO files (id, name, mime, size, uploaded_at, status) VALUES (?, ?, 'text/plain', 1, ?, 'imported')").run(id, name, NOW);
+  const file = async (db, id, name) => await db.prepare("INSERT INTO files (id, name, mime, size, uploaded_at, status) VALUES (?, ?, 'text/plain', 1, ?, 'imported')").run(id, name, NOW);
 
   async function withDb(fn) {
     const t = await tempDb();
@@ -131,9 +131,9 @@ describe('what we heard (deriveHeard)', () => {
     assert.deepEqual(H.deriveHeard(db, { clock: '2026-11-05' }), { sections: [], deadlines: 0, pending: 0, empty: true });
   }));
 
-  test('facts, entities and accounts by kind come out with provenance and an edit target', () => withDb((db) => {
-    file(db, 'f-note', 'Setup notes 2026-11-05.md');
-    file(db, 'f-pnl', 'books.xlsx');
+  test('facts, entities and accounts by kind come out with provenance and an edit target', () => withDb(async (db) => {
+    await file(db, 'f-note', 'Setup notes 2026-11-05.md');
+    await file(db, 'f-pnl', 'books.xlsx');
     fact(db, 'household.filingStatus', 'mfj', { confirmed: true, src: 'you' });
     fact(db, 'household.state', 'va', { provenance: { fileId: 'f-note', parser: 'extract-notes' } });
     fact(db, 'household.dependents', 2, { provenance: { fileId: 'f-note', parser: 'extract-notes' } });
@@ -141,11 +141,11 @@ describe('what we heard (deriveHeard)', () => {
     fact(db, 'income.sCorp', true, { provenance: { fileId: 'f-note', parser: 'extract-notes' } });
     fact(db, 'income.agiEstimate', 380000);
     fact(db, 'household.expectingChild', 'maybe', { provenance: { fileId: 'f-note' } }); // wrong type: skipped
-    db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, file_id, parser) VALUES ('Northwind Advisory', '2026-01', 'Income', 100, 'f-pnl', 'pnl-workbook')").run();
-    db.prepare("INSERT INTO accounts (id, inst, name, kind, mirror, parser, file_id) VALUES ('a1', 'Example Bank', 'Checking', 'checking', 'manual', 'aggregator', 'f-pnl')").run();
-    db.prepare("INSERT INTO accounts (id, inst, name, kind, mirror, parser, file_id) VALUES ('a2', 'Example Bank', 'Reserve', 'checking', 'manual', 'aggregator', 'f-pnl')").run();
-    db.prepare("INSERT INTO accounts (id, inst, name, kind, mirror, parser) VALUES ('a3', 'Example Broker', 'Brokerage', 'taxable', 'manual', 'aggregator')").run();
-    db.prepare("INSERT INTO deadlines (date, label, title) VALUES ('2026-12-01', 'Dec 1', 'Soon'), ('2026-12-15', 'Dec 15', 'Later'), ('2028-01-01', 'Jan 1', 'Far')").run();
+    await db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, file_id, parser) VALUES ('Northwind Advisory', '2026-01', 'Income', 100, 'f-pnl', 'pnl-workbook')").run();
+    await db.prepare("INSERT INTO accounts (id, inst, name, kind, mirror, parser, file_id) VALUES ('a1', 'Example Bank', 'Checking', 'checking', 'manual', 'aggregator', 'f-pnl')").run();
+    await db.prepare("INSERT INTO accounts (id, inst, name, kind, mirror, parser, file_id) VALUES ('a2', 'Example Bank', 'Reserve', 'checking', 'manual', 'aggregator', 'f-pnl')").run();
+    await db.prepare("INSERT INTO accounts (id, inst, name, kind, mirror, parser) VALUES ('a3', 'Example Broker', 'Brokerage', 'taxable', 'manual', 'aggregator')").run();
+    await db.prepare("INSERT INTO deadlines (date, label, title) VALUES ('2026-12-01', 'Dec 1', 'Soon'), ('2026-12-15', 'Dec 15', 'Later'), ('2028-01-01', 'Jan 1', 'Far')").run();
 
     const h = H.deriveHeard(db, { clock: '2026-11-05' });
     assert.equal(h.empty, false);
@@ -171,8 +171,8 @@ describe('what we heard (deriveHeard)', () => {
     assert.equal(item('accounts', 'accounts:taxable').prov, 'Stored accounts');
   }));
 
-  test('an open question about a fact makes its edit target the Confirm deck, and the open count is reported', () => withDb((db) => {
-    file(db, 'f-note', 'Setup notes.md');
+  test('an open question about a fact makes its edit target the Confirm deck, and the open count is reported', () => withDb(async (db) => {
+    await file(db, 'f-note', 'Setup notes.md');
     fact(db, 'household.dependents', 2, { provenance: { fileId: 'f-note', parser: 'extract-notes' } });
     fact(db, 'household.state', 'VA', { provenance: { fileId: 'f-note', parser: 'extract-notes' } });
     C.ask(db, { kind: 'fact_check', subject: 'src|household.dependents|2', question: 'Is it 2?', options: C.FACT_CHECK_OPTIONS, context: { key: 'household.dependents', value: 2 }, fileId: 'f-note', now: NOW });
@@ -184,8 +184,8 @@ describe('what we heard (deriveHeard)', () => {
     assert.equal(items.find((i) => i.key === 'household.state').edit.route, 'onboarding');
   }));
 
-  test('file-sourced names are returned as plain strings, never tokens or markup', () => withDb((db) => {
-    file(db, 'f-x', '<img src=x onerror=1>{{fig.a}}.md');
+  test('file-sourced names are returned as plain strings, never tokens or markup', () => withDb(async (db) => {
+    await file(db, 'f-x', '<img src=x onerror=1>{{fig.a}}.md');
     fact(db, 'household.state', 'VA', { provenance: { fileId: 'f-x' } });
     const item = H.deriveHeard(db, { clock: '2026-11-05' }).sections[0].items[0];
     assert.equal(item.prov, 'From <img src=x onerror=1>{{fig.a}}.md', 'escaping is the renderer\'s job; the value is verbatim');

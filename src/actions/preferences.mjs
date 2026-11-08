@@ -4,12 +4,13 @@ import { tx } from '../store/db.mjs';
 import { ToolError } from '../tools/errors.mjs';
 import { requireActor, saveReceipt } from './receipts.mjs';
 import { requireEvidence } from './evidence.mjs';
+import { txWith } from '../store/db.mjs';
 
-export const listPreferences = db => db.prepare('SELECT id, text, actor_id AS actorId, definition_id AS definitionId FROM preferences ORDER BY created_at, id').all();
+export const listPreferences = async db => await db.prepare('SELECT id, text, actor_id AS actorId, definition_id AS definitionId FROM preferences ORDER BY created_at, id').all();
 
 // Every remembered preference, newest first, with where it came from. origin is 'ask', 'you',
 // or null for a row written before migration 028.
-export const listMemories = db => db.prepare(`SELECT id, text, actor_id AS actorId, definition_id AS definitionId, origin, conversation_key AS conversationKey,
+export const listMemories = async db => await db.prepare(`SELECT id, text, actor_id AS actorId, definition_id AS definitionId, origin, conversation_key AS conversationKey,
   created_at AS createdAt, updated_at AS updatedAt FROM preferences ORDER BY created_at DESC, id`).all();
 
 export function validatePreference(text) {
@@ -19,32 +20,32 @@ export function validatePreference(text) {
   return text.trim();
 }
 
-export function writePreference(ctx, { id, text, evidence }, { fromAsk = false, remove = false } = {}) {
-  const actorId = requireActor(ctx);
-  const linked = id ? ctx.db.prepare('SELECT definition_id FROM preferences WHERE id = ?').get(id)?.definition_id : null;
+export async function writePreference(ctx, { id, text, evidence }, { fromAsk = false, remove = false } = {}) {
+  const actorId = await requireActor(ctx);
+  const linked = id ? (await ctx.db.prepare('SELECT definition_id FROM preferences WHERE id = ?').get(id))?.definition_id : null;
   if (linked) {
     if (!remove) throw new ToolError('bad_input', 'Change the definition instead');
-    return { preference: null, ...deleteDefinition(ctx, linked) };
+    return { preference: null, ...await deleteDefinition(ctx, linked) };
   }
   const clean = remove ? null : validatePreference(text);
-  if (fromAsk) requireEvidence(ctx, clean, { evidence });
+  if (fromAsk) await requireEvidence(ctx, clean, { evidence });
   let receipt;
-  const preference = tx(ctx.db, () => {
-    const before = id ? ctx.db.prepare('SELECT * FROM preferences WHERE id = ?').get(id) : null;
+  const preference = await txWith(ctx, async (ctx) => {
+    const before = id ? await ctx.db.prepare('SELECT * FROM preferences WHERE id = ?').get(id) : null;
     if (id && !before) throw new ToolError('not_found', 'no such preference');
     if (before && !remove && before.text === clean) { receipt = null; return { id, text: clean }; }
     const now = new Date(ctx.now ?? Date.now()).toISOString();
     const key = id || randomUUID();
-    if (remove) ctx.db.prepare('DELETE FROM preferences WHERE id = ?').run(key);
-    else if (before) ctx.db.prepare('UPDATE preferences SET text = ?, actor_id = ?, updated_at = ? WHERE id = ?').run(clean, actorId, now, key);
+    if (remove) await ctx.db.prepare('DELETE FROM preferences WHERE id = ?').run(key);
+    else if (before) await ctx.db.prepare('UPDATE preferences SET text = ?, actor_id = ?, updated_at = ? WHERE id = ?').run(clean, actorId, now, key);
     else {
-      if (ctx.db.prepare('SELECT count(*) n FROM preferences').get().n >= 100) throw new ToolError('bad_input', 'Keep at most 100 preferences. Edit or delete one on the Memories page.');
+      if ((await ctx.db.prepare('SELECT count(*) n FROM preferences').get()).n >= 100) throw new ToolError('bad_input', 'Keep at most 100 preferences. Edit or delete one on the Memories page.');
       const conversationKey = typeof ctx.conversationKey === 'string' && /^ask:[a-f0-9]{12}$/.test(ctx.conversationKey) ? ctx.conversationKey : null;
-      ctx.db.prepare(`INSERT INTO preferences (id, text, actor_id, origin, conversation_key, created_at, updated_at)
+      await ctx.db.prepare(`INSERT INTO preferences (id, text, actor_id, origin, conversation_key, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)`).run(key, clean, actorId, fromAsk ? 'ask' : 'you', conversationKey, now, now);
     }
-    const after = remove ? null : ctx.db.prepare('SELECT * FROM preferences WHERE id = ?').get(key);
-    receipt = saveReceipt(ctx, { scope: 'write:preferences', kind: 'preference', id: key, label: 'Household preference',
+    const after = remove ? null : await ctx.db.prepare('SELECT * FROM preferences WHERE id = ?').get(key);
+    receipt = await saveReceipt(ctx, { scope: 'write:preferences', kind: 'preference', id: key, label: 'Household preference',
       before: before || null, after, from: before?.text || null, to: after?.text || null });
     return after ? { id: key, text: clean } : null;
   });

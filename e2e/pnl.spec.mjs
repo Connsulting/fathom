@@ -290,7 +290,7 @@ test('INF1 @mobile personal summaries stay visible apart from businesses with th
   try {
     const dir = state.dir();
     const db = state.track(await buildRealStore(dir));
-    db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES ('Asters', '2026-10', 'Groceries', -120, ?)")
+    await db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES ('Asters', '2026-10', 'Groceries', -120, ?)")
       .run(JSON.stringify({ sheet: "Aster's - (Actual Expenses)", cells: ['D2'] }));
     await planRun(db);
     app = await serveAppFixture({ db, authenticated: true, config: loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: '2026-11-05' }) });
@@ -310,7 +310,7 @@ test('INF1 @mobile personal summaries stay visible apart from businesses with th
     await noOverflow(page, 'spending ledger');
   } finally {
     if (app) await app.close();
-    state.cleanup();
+    await state.cleanup();
   }
 });
 
@@ -320,13 +320,13 @@ test('INF1 @mobile person-attributed summaries and historical client income keep
   try {
     const dir = state.dir();
     const db = state.track(await buildRealStore(dir));
-    addFact(db, 'household.names', { owner: 'Aster', spouse: 'Birch' });
+    await addFact(db, 'household.names', { owner: 'Aster', spouse: 'Birch' });
     const line = db.prepare('INSERT INTO pnl_lines(entity,period,category,amount,locator) VALUES (?,?,?,?,?)');
     for (const person of ['Aster', 'Birch']) for (const period of ['2025-03', '2026-10']) {
-      for (const category of ['Income', 'Groceries', 'Medical', 'Shopping']) line.run(person, period, category, category === 'Income' ? 2500 : -120,
+      for (const category of ['Income', 'Groceries', 'Medical', 'Shopping']) await line.run(person, period, category, category === 'Income' ? 2500 : -120,
         JSON.stringify({ sheet: `${person} Expenses` }));
     }
-    for (const period of ['2025-01', '2025-02', '2025-03']) line.run('Past Consulting', period, 'Client income', 800, null);
+    for (const period of ['2025-01', '2025-02', '2025-03']) await line.run('Past Consulting', period, 'Client income', 800, null);
     await planRun(db);
     app = await serveAppFixture({ db, authenticated: true, config: loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: '2026-11-05' }) });
     await page.context().addCookies([{ name: '__Host-fathom-session', value: app.session.token, domain: new URL(app.baseUrl).hostname, path: '/', secure: true, httpOnly: true, sameSite: 'Strict' }]);
@@ -358,6 +358,6 @@ test('INF1 @mobile person-attributed summaries and historical client income keep
     await noOverflow(page, 'personal summaries and income history');
   } finally {
     if (app) await app.close();
-    state.cleanup();
+    await state.cleanup();
   }
 });

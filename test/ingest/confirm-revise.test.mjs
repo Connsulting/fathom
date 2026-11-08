@@ -37,11 +37,11 @@ const canon = (v) => (Array.isArray(v) ? v.map(canon)
 
 // Every table's rows as canonical JSON strings, sorted. superseded_rows is compared without its id,
 // simplefin_connection without its ciphertext.
-function dataDump(db, skip = BOOKKEEPING) {
+async function dataDump(db, skip = BOOKKEEPING) {
   const out = {};
   for (const t of DB.listTables(db)) {
     if (skip.includes(t)) continue;
-    out[t] = db.prepare(`SELECT * FROM "${t}"`).all().map((r) => {
+    out[t] = (await db.prepare(`SELECT * FROM "${t}"`).all()).map((r) => {
       const row = { ...r };
       if (t === 'superseded_rows') delete row.id;
       // Ciphertext under each store's own key and a random IV: never equal across stores.
@@ -52,8 +52,8 @@ function dataDump(db, skip = BOOKKEEPING) {
   return out;
 }
 // Everything but the migration record, for "a refusal changes nothing".
-const fullDump = (db) => dataDump(db, ['schema_migrations']);
-const withoutQuestions = (db) => dataDump(db, [...BOOKKEEPING, 'confirm_items']);
+const fullDump = async (db) => await dataDump(db, ['schema_migrations']);
+const withoutQuestions = async (db) => await dataDump(db, [...BOOKKEEPING, 'confirm_items']);
 
 async function withStore(fn) {
   const s = await realStore();
@@ -64,7 +64,7 @@ async function withStore(fn) {
 // test acts, so the comparisons see only what the test's answers wrote.
 async function pairedStore() {
   const s = await realStore();
-  s.db.prepare('UPDATE packs_state SET updated_at = ?').run(SETUP_AT);
+  await s.db.prepare('UPDATE packs_state SET updated_at = ?').run(SETUP_AT);
   return s;
 }
 async function withTwoStores(fn) {
@@ -75,8 +75,8 @@ async function withTwoStores(fn) {
 
 const STATUS = { final: 409, not_answered: 409, stale: 409, bad_option: 400, not_found: 404 };
 // fn must throw ConfirmError(code) with err.reason (when given) and leave every table unchanged.
-function refused(db, fn, code, reason) {
-  const before = fullDump(db);
+async function refused(db, fn, code, reason) {
+  const before = await fullDump(db);
   assert.throws(fn, (err) => {
     assert.ok(err instanceof C.ConfirmError, `ConfirmError, got ${err && err.name}: ${err && err.message}`);
     assert.equal(err.code, code);
@@ -84,7 +84,7 @@ function refused(db, fn, code, reason) {
     if (reason !== undefined) assert.equal(err.reason, reason);
     return true;
   });
-  assert.deepEqual(fullDump(db), before, `a ${code} refusal changes nothing`);
+  assert.deepEqual(await fullDump(db), before, `a ${code} refusal changes nothing`);
 }
 
 // Synthetic extraction fixtures (the extract.test.mjs shapes).
@@ -294,15 +294,15 @@ test('the revise cases cover every confirm kind', () => {
 describe('revise equals answering the new option directly', () => {
   for (const [kind, c] of Object.entries(CASES)) {
     for (const [a, b] of c.pairs) {
-      test(`${kind}: answering ${a} then revising to ${b} leaves the store equal to answering ${b}`, () => withTwoStores(async (x, y) => {
+      test(`${kind}: answering ${a} then revising to ${b} leaves the store equal to answering ${b}`, async () => withTwoStores(async (x, y) => {
         const id = await c.setup(x);
         assert.equal(await c.setup(y), id, 'both stores give the item the same id');
-        assert.deepEqual(dataDump(x.db), dataDump(y.db), 'precondition: both stores are built identically');
+        assert.deepEqual(await dataDump(x.db), await dataDump(y.db), 'precondition: both stores are built identically');
         const options = C.getItem(x.db, id).options.map((o) => o.id);
         assert.ok(options.includes(a) && options.includes(b), `${a} and ${b} are offered`);
 
         C.answerItem(x.db, id, a, { now: ANSWER_AT });
-        const afterA = withoutQuestions(x.db);
+        const afterA = await withoutQuestions(x.db);
         const out = C.reviseItem(x.db, id, b, { now: NOW });
         assert.equal(out.item.id, id);
         assert.equal(out.item.status, 'answered');
@@ -310,8 +310,8 @@ describe('revise equals answering the new option directly', () => {
         assert.equal(typeof out.factsChanged, 'boolean');
 
         C.answerItem(y.db, id, b, { now: NOW });
-        assert.deepEqual(dataDump(x.db), dataDump(y.db), 'no row lost, duplicated or left on the old answer');
-        assert.notDeepEqual(afterA, withoutQuestions(y.db), `${a} and ${b} have different effects, so the revise did real work`);
+        assert.deepEqual(await dataDump(x.db), await dataDump(y.db), 'no row lost, duplicated or left on the old answer');
+        assert.notDeepEqual(afterA, await withoutQuestions(y.db), `${a} and ${b} have different effects, so the revise did real work`);
       }));
     }
   }
@@ -322,18 +322,18 @@ describe('reopen restores the store as it was before the answer', () => {
     for (const a of c.reopen) {
       test(`${kind}: answering ${a} then reopening restores every row and leaves the item pending`, () => withStore(async (s) => {
         const id = await c.setup(s);
-        const before = dataDump(s.db);
+        const before = await dataDump(s.db);
         C.answerItem(s.db, id, a, { now: ANSWER_AT });
-        assert.notDeepEqual(dataDump(s.db), before, 'the answer changed the store');
+        assert.notDeepEqual(await dataDump(s.db), before, 'the answer changed the store');
 
         const out = C.reopenItem(s.db, id, { now: NOW });
         assert.equal(out.item.id, id);
         assert.equal(out.item.status, 'pending');
         assert.equal(out.item.answer, null);
         assert.equal(typeof out.factsChanged, 'boolean');
-        assert.deepEqual(dataDump(s.db), before, 'every row the answer touched is restored');
-        assert.deepEqual(one(s.db, 'SELECT status, answer, answered_at FROM confirm_items WHERE id = ?', id), { status: 'pending', answer: null, answered_at: null });
-        assert.equal(one(s.db, 'SELECT count(*) AS n FROM confirm_auto_declined WHERE item_id = ?', id).n, 1, 'the reopen records exactly one auto-decline marker');
+        assert.deepEqual(await dataDump(s.db), before, 'every row the answer touched is restored');
+        assert.deepEqual(await one(s.db, 'SELECT status, answer, answered_at FROM confirm_items WHERE id = ?', id), { status: 'pending', answer: null, answered_at: null });
+        assert.equal((await one(s.db, 'SELECT count(*) AS n FROM confirm_auto_declined WHERE item_id = ?', id)).n, 1, 'the reopen records exactly one auto-decline marker');
         assert.ok(C.pendingItems(s.db).some((i) => i.id === id), 'the item is back in the pending queue');
         assert.equal(C.finalReason(s.db, C.getItem(s.db, id)), null, 'a pending item is not final');
 
@@ -353,24 +353,24 @@ describe('revise liveness and results', () => {
     const first = C.reviseItem(s.db, id, 'spouse', { now: NOW });
     assert.equal(first.item.answer, 'spouse');
     assert.equal(first.factsChanged, false, 'an owner answer touches no facts');
-    assert.equal(one(s.db, 'SELECT owner FROM accounts WHERE id = ?', subject).owner, 'Your spouse');
+    assert.equal((await one(s.db, 'SELECT owner FROM accounts WHERE id = ?', subject)).owner, 'Your spouse');
     assert.equal(C.finalReason(s.db, C.getItem(s.db, id)), null, 'not final right after a revise');
     const second = C.reviseItem(s.db, id, 'joint', { now: NOW });
     assert.equal(second.item.answer, 'joint');
-    assert.equal(one(s.db, 'SELECT owner FROM accounts WHERE id = ?', subject).owner, 'Joint');
-    assert.equal(one(s.db, 'SELECT answered_at FROM confirm_items WHERE id = ?', id).answered_at, NOW);
+    assert.equal((await one(s.db, 'SELECT owner FROM accounts WHERE id = ?', subject)).owner, 'Joint');
+    assert.equal((await one(s.db, 'SELECT answered_at FROM confirm_items WHERE id = ?', id)).answered_at, NOW);
   }));
 
   test('a fact_check revise and reopen report factsChanged', () => withStore(async (s) => {
     const id = await CASES.fact_check.setup(s);
     C.answerItem(s.db, id, 'yes', { now: ANSWER_AT });
-    assert.equal(one(s.db, "SELECT confirmed FROM facts WHERE key = 'household.state'").confirmed, 1);
+    assert.equal((await one(s.db, "SELECT confirmed FROM facts WHERE key = 'household.state'")).confirmed, 1);
     const revised = C.reviseItem(s.db, id, 'no', { now: NOW });
     assert.equal(revised.factsChanged, true);
-    assert.equal(one(s.db, "SELECT * FROM facts WHERE key = 'household.state'"), undefined, 'no removes the unconfirmed fact');
+    assert.equal(await one(s.db, "SELECT * FROM facts WHERE key = 'household.state'"), undefined, 'no removes the unconfirmed fact');
     const reopened = C.reopenItem(s.db, id, { now: NOW });
     assert.equal(reopened.factsChanged, true);
-    const restored = one(s.db, "SELECT value, confirmed FROM facts WHERE key = 'household.state'");
+    const restored = await one(s.db, "SELECT value, confirmed FROM facts WHERE key = 'household.state'");
     assert.ok(restored, 'the imported fact is back');
     assert.equal(JSON.parse(restored.value), 'CO');
     assert.equal(restored.confirmed, 0, 'and unconfirmed again');
@@ -379,34 +379,34 @@ describe('revise liveness and results', () => {
   test('revising to the stored answer changes nothing', () => withStore(async (s) => {
     const id = await CASES.account_owner.setup(s);
     C.answerItem(s.db, id, 'owner', { now: ANSWER_AT });
-    const before = fullDump(s.db);
+    const before = await fullDump(s.db);
     const out = C.reviseItem(s.db, id, 'owner', { now: NOW });
     assert.equal(out.item.answer, 'owner');
     assert.equal(out.item.status, 'answered');
-    assert.deepEqual(fullDump(s.db), before);
-    assert.equal(one(s.db, 'SELECT answered_at FROM confirm_items WHERE id = ?', id).answered_at, ANSWER_AT);
+    assert.deepEqual(await fullDump(s.db), before);
+    assert.equal((await one(s.db, 'SELECT answered_at FROM confirm_items WHERE id = ?', id)).answered_at, ANSWER_AT);
   }));
 });
 
 describe('refusals', () => {
   test('a pending item refuses revise and reopen with not_answered', () => withStore(async (s) => {
     const id = await CASES.account_owner.setup(s);
-    refused(s.db, () => C.reviseItem(s.db, id, 'owner', { now: NOW }), 'not_answered');
-    refused(s.db, () => C.reopenItem(s.db, id, { now: NOW }), 'not_answered');
+    await refused(s.db, () => C.reviseItem(s.db, id, 'owner', { now: NOW }), 'not_answered');
+    await refused(s.db, () => C.reopenItem(s.db, id, { now: NOW }), 'not_answered');
     assert.equal(C.finalReason(s.db, C.getItem(s.db, id)), null);
   }));
 
   test('an unknown item refuses with not_found', () => withStore(async (s) => {
     await CASES.account_owner.setup(s);
-    refused(s.db, () => C.reviseItem(s.db, 999999, 'owner', { now: NOW }), 'not_found');
-    refused(s.db, () => C.reopenItem(s.db, 999999, { now: NOW }), 'not_found');
+    await refused(s.db, () => C.reviseItem(s.db, 999999, 'owner', { now: NOW }), 'not_found');
+    await refused(s.db, () => C.reopenItem(s.db, 999999, { now: NOW }), 'not_found');
   }));
 
   test('a bad option refuses with bad_option and changes nothing', () => withStore(async (s) => {
     const id = await CASES.account_owner.setup(s);
     C.answerItem(s.db, id, 'owner', { now: ANSWER_AT });
-    refused(s.db, () => C.reviseItem(s.db, id, 'nobody', { now: NOW }), 'bad_option');
-    assert.equal(one(s.db, 'SELECT owner FROM accounts WHERE id = ?', C.getItem(s.db, id).subject).owner, 'You');
+    await refused(s.db, () => C.reviseItem(s.db, id, 'nobody', { now: NOW }), 'bad_option');
+    assert.equal((await one(s.db, 'SELECT owner FROM accounts WHERE id = ?', C.getItem(s.db, id).subject)).owner, 'You');
   }));
 
   test('an import after the answer makes it final (imported_since); finalReason reports it', () => withStore(async (s) => {
@@ -416,9 +416,9 @@ describe('refusals', () => {
     assert.equal(C.finalReason(s.db, C.getItem(s.db, id)), null, 'not final right after the answer');
     await imported(s, otherAccountFile());
     assert.equal(C.finalReason(s.db, C.getItem(s.db, id)), 'imported_since');
-    refused(s.db, () => C.reviseItem(s.db, id, 'spouse', { now: NOW }), 'final', 'imported_since');
-    refused(s.db, () => C.reopenItem(s.db, id, { now: NOW }), 'final', 'imported_since');
-    assert.equal(one(s.db, 'SELECT owner FROM accounts WHERE id = ?', subject).owner, 'You');
+    await refused(s.db, () => C.reviseItem(s.db, id, 'spouse', { now: NOW }), 'final', 'imported_since');
+    await refused(s.db, () => C.reopenItem(s.db, id, { now: NOW }), 'final', 'imported_since');
+    assert.equal((await one(s.db, 'SELECT owner FROM accounts WHERE id = ?', subject)).owner, 'You');
   }));
 
   test('an import that re-applies the remembered answer makes it final', () => withStore(async (s) => {
@@ -428,17 +428,17 @@ describe('refusals', () => {
     await imported(s, fixture('Chase7766_Activity_20320305.csv', 'text/csv'));
     const reason = C.finalReason(s.db, C.getItem(s.db, id));
     assert.ok(['used_since', 'imported_since'].includes(reason), `final, got ${reason}`);
-    refused(s.db, () => C.reviseItem(s.db, id, 'spouse', { now: NOW }), 'final', reason);
+    await refused(s.db, () => C.reviseItem(s.db, id, 'spouse', { now: NOW }), 'final', reason);
   }));
 
   test('a later change to a row the answer touched makes it final (changed_since)', () => withStore(async (s) => {
     const id = await CASES.account_owner.setup(s);
     const subject = C.getItem(s.db, id).subject;
     C.answerItem(s.db, id, 'owner', { now: ANSWER_AT });
-    s.db.prepare("UPDATE accounts SET owner = 'Joint' WHERE id = ?").run(subject);
-    refused(s.db, () => C.reviseItem(s.db, id, 'spouse', { now: NOW }), 'final', 'changed_since');
-    refused(s.db, () => C.reopenItem(s.db, id, { now: NOW }), 'final', 'changed_since');
-    assert.equal(one(s.db, 'SELECT owner FROM accounts WHERE id = ?', subject).owner, 'Joint');
+    await s.db.prepare("UPDATE accounts SET owner = 'Joint' WHERE id = ?").run(subject);
+    await refused(s.db, () => C.reviseItem(s.db, id, 'spouse', { now: NOW }), 'final', 'changed_since');
+    await refused(s.db, () => C.reopenItem(s.db, id, { now: NOW }), 'final', 'changed_since');
+    assert.equal((await one(s.db, 'SELECT owner FROM accounts WHERE id = ?', subject)).owner, 'Joint');
   }));
 
   test('answering a document_recipient question that both asked makes the employer answer final (changed_since)', () => withStore(async (s) => {
@@ -447,29 +447,29 @@ describe('refusals', () => {
     const docs = C.pendingItems(s.db).filter((i) => i.kind === 'document_recipient');
     assert.ok(docs.length >= 1, 'both asked per document');
     C.answerItem(s.db, docs[0].id, 'owner', { now: NOW });
-    refused(s.db, () => C.reviseItem(s.db, id, 'owner', { now: NOW }), 'final', 'changed_since');
-    refused(s.db, () => C.reopenItem(s.db, id, { now: NOW }), 'final', 'changed_since');
+    await refused(s.db, () => C.reviseItem(s.db, id, 'owner', { now: NOW }), 'final', 'changed_since');
+    await refused(s.db, () => C.reopenItem(s.db, id, { now: NOW }), 'final', 'changed_since');
     assert.equal(C.getItem(s.db, docs[0].id).answer, 'owner', 'the later answer stands');
   }));
 
   test('a refusal after a many-row answer rolls back every partial restore', () => withStore(async (s) => {
     const id = await CASES.employer_recipient.setup(s);
     C.answerItem(s.db, id, 'owner', { now: ANSWER_AT });
-    assert.ok(count(s.db, 'superseded_rows', "reason = 'summarized'") > 0, 'the answer archived and removed rows');
+    assert.ok(await count(s.db, 'superseded_rows', "reason = 'summarized'") > 0, 'the answer archived and removed rows');
     // The earliest-touched row (the W-2's, lowest id) is checked last when walking the log backwards.
-    s.db.prepare('UPDATE tax_payments SET amount = amount + 1 WHERE id = (SELECT min(id) FROM tax_payments)').run();
-    refused(s.db, () => C.reviseItem(s.db, id, 'spouse', { now: NOW }), 'final', 'changed_since');
-    refused(s.db, () => C.reopenItem(s.db, id, { now: NOW }), 'final', 'changed_since');
+    await s.db.prepare('UPDATE tax_payments SET amount = amount + 1 WHERE id = (SELECT min(id) FROM tax_payments)').run();
+    await refused(s.db, () => C.reviseItem(s.db, id, 'spouse', { now: NOW }), 'final', 'changed_since');
+    await refused(s.db, () => C.reopenItem(s.db, id, { now: NOW }), 'final', 'changed_since');
   }));
 
   test('an answer with no undo row is final (no_undo)', () => withStore(async (s) => {
     const id = await CASES.account_owner.setup(s);
     C.answerItem(s.db, id, 'owner', { now: ANSWER_AT });
-    assert.equal(count(s.db, 'confirm_undo', 'item_id = ?', id), 1, 'the answer stored an undo row');
-    s.db.prepare('DELETE FROM confirm_undo WHERE item_id = ?').run(id);
+    assert.equal(await count(s.db, 'confirm_undo', 'item_id = ?', id), 1, 'the answer stored an undo row');
+    await s.db.prepare('DELETE FROM confirm_undo WHERE item_id = ?').run(id);
     assert.equal(C.finalReason(s.db, C.getItem(s.db, id)), 'no_undo');
-    refused(s.db, () => C.reviseItem(s.db, id, 'spouse', { now: NOW }), 'final', 'no_undo');
-    refused(s.db, () => C.reopenItem(s.db, id, { now: NOW }), 'final', 'no_undo');
+    await refused(s.db, () => C.reviseItem(s.db, id, 'spouse', { now: NOW }), 'final', 'no_undo');
+    await refused(s.db, () => C.reopenItem(s.db, id, { now: NOW }), 'final', 'no_undo');
   }));
 
   test('a superseded item refuses revise and reopen with stale', () => withStore(async (s) => {
@@ -478,8 +478,8 @@ describe('refusals', () => {
     const item = C.getItem(s.db, id);
     assert.equal(item.answer, 'superseded', 'precondition: the newer value superseded the question');
     assert.equal(C.finalReason(s.db, item), 'stale');
-    refused(s.db, () => C.reviseItem(s.db, id, 'no', { now: NOW }), 'stale');
-    refused(s.db, () => C.reopenItem(s.db, id, { now: NOW }), 'stale');
+    await refused(s.db, () => C.reviseItem(s.db, id, 'no', { now: NOW }), 'stale');
+    await refused(s.db, () => C.reopenItem(s.db, id, { now: NOW }), 'stale');
   }));
 });
 

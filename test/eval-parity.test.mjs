@@ -108,13 +108,13 @@ test('AC5: synthetic usage rows fit the production SDK reservation bound', async
   ];
   const store = await createEvalStore();
   try {
-    const ledger = createEvalLedger({ db: store.db, maxUsd: 10 });
+    const ledger = await createEvalLedger({ db: store.db, maxUsd: 10 });
     for (const [i, fixture] of fixtures.entries()) {
       const request = { model: fixture.model, maxTokens: fixture.maxTokens, system: 'Use stored household data. ',
         messages: [{ role: 'user', content: 'Synthetic account context. '.repeat(Math.ceil(fixture.characters / 27)).slice(0, fixture.characters) }], tools: [] };
       ledger.record({ ts: new Date().toISOString(), purpose: fixture.model === TITLE_MODEL ? 'title' : 'chat',
         model: fixture.model, costUsd: usageCostUsd(fixture.model, fixture.usage), tokens: fixture.usage });
-      const row = store.db.prepare('SELECT model, cost_usd, tokens FROM spend_ledger ORDER BY id DESC LIMIT 1').get();
+      const row = await store.db.prepare('SELECT model, cost_usd, tokens FROM spend_ledger ORDER BY id DESC LIMIT 1').get();
       const actual = usageCostUsd(row.model, JSON.parse(row.tokens));
       const estimate = estimateEvalCost(request).costUsd;
       assert.equal(actual, row.cost_usd);
@@ -129,7 +129,7 @@ test('AC6: round receipts report estimate, actual and remaining without answer c
   const store = await createEvalStore();
   const rounds = [];
   try {
-    const ledger = createEvalLedger({ db: store.db, maxUsd: 1, onRound: r => rounds.push(r) });
+    const ledger = await createEvalLedger({ db: store.db, maxUsd: 1, onRound: r => rounds.push(r) });
     const request = { purpose: 'chat', system: 'Use data.', messages: [{ role: 'user', content: 'Describe it.' }], tools: [], maxTokens: 128 };
     ledger.begin(request);
     ledger.admitRound(request);

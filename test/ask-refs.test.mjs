@@ -31,9 +31,9 @@ const byKey = list => [...list].sort((a, b) => `${a.kind}:${a.id}`.localeCompare
 async function demoStore(t, env = {}) {
   const s = await tempDb();
   t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
-  seedDemo(s.db);
+  await seedDemo(s.db);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', ...env });
-  const runtime = createRuntimeEngine({ db: s.db, config });
+  const runtime = await createRuntimeEngine({ db: s.db, config });
   const packs = createLivePacks(s.db, { dataDir: s.dataDir });
   packs.refresh();
   return { ...s, root: s.dataDir, config, runtime, packs };
@@ -73,11 +73,11 @@ function contextOf(systemDynamic) {
 }
 
 // A visible rec whose id carries digits nothing else in the store states.
-function insertDigitRec(db, recId) {
-  const base = db.prepare("SELECT * FROM recs WHERE id = 'deferral'").get();
+async function insertDigitRec(db, recId) {
+  const base = await db.prepare("SELECT * FROM recs WHERE id = 'deferral'").get();
   const def = { ...JSON.parse(base.def), id: recId, title: 'Synthetic invoicing review',
     value: [{ cls: 'cash', text: 'About $2,750 of synthetic cash arrives early' }] };
-  db.prepare(`INSERT INTO recs (id, def, status, waiting_on, wake, tasks_done, window_close, window_label, pack_id, sort, updated_at, file_id, parser, locator)
+  await db.prepare(`INSERT INTO recs (id, def, status, waiting_on, wake, tasks_done, window_close, window_label, pack_id, sort, updated_at, file_id, parser, locator)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(recId, JSON.stringify(def), base.status, base.waiting_on, base.wake, base.tasks_done, base.window_close, base.window_label,
       base.pack_id, 999, base.updated_at, base.file_id, base.parser, base.locator);
@@ -87,7 +87,7 @@ function insertDigitRec(db, recId) {
 async function oldTransactions(db, now) {
   const newest = await callTool('transactions', { operation: 'search',  limit: 200 }, { db, now });
   const shown = new Set(newest.rows.map(r => String(r.id)));
-  return db.prepare('SELECT id, account_id, date, amount FROM transactions ORDER BY date ASC, id ASC').all()
+  return (await db.prepare('SELECT id, account_id, date, amount FROM transactions ORDER BY date ASC, id ASC').all())
     .filter(r => !shown.has(String(r.id))).map(r => ({ ...r }));
 }
 
@@ -140,7 +140,7 @@ test('parseRefs refuses more than 8 entries; exactly 8 pass', () => {
 
 test('transactions.search with ids returns an old transaction that is not among the newest 200', async t => {
   const s = await demoStore(t);
-  const now = clockNow(s.db);
+  const now = await clockNow(s.db);
   const old = await oldTransactions(s.db, now);
   assert.ok(old.length > 0, 'the demo store has more than 200 transactions');
   const pick = old[0];
@@ -159,15 +159,15 @@ test('transactions.search with ids returns an old transaction that is not among 
 
 test('resolveRefs keeps what the store knows, with a tool hint for each, and drops unknown ids of each kind', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
-  const txn = s.db.prepare('SELECT id FROM transactions ORDER BY id LIMIT 1').get();
+  const scenario = await buildScenario(s.db);
+  const txn = await s.db.prepare('SELECT id FROM transactions ORDER BY id LIMIT 1').get();
   const txnId = String(txn.id);
   const goalId = scenario.goals[0].id;
   assert.ok(scenario.fig.true_reserve, 'stored figure present');
   assert.ok(scenario.fig['trend.total'], 'trend figure present');
   assert.ok(scenario.fig['pace.rollup.total'], 'pace figure present');
   assert.ok(scenario.recs.some(r => r.id === 'daf' && r.status === 'hidden'), 'daf is the hidden demo rec');
-  const pending = s.db.prepare("SELECT id, kind FROM confirm_items WHERE status = 'pending' ORDER BY id LIMIT 1").get();
+  const pending = await s.db.prepare("SELECT id, kind FROM confirm_items WHERE status = 'pending' ORDER BY id LIMIT 1").get();
 
   const known = [
     { kind: 'account', id: 'a_biz' },
@@ -221,8 +221,8 @@ test('resolveRefs keeps what the store knows, with a tool hint for each, and dro
 
 test('resolveRefs maps a txn.<id> figure key to a transaction ref', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
-  const txn = s.db.prepare('SELECT id FROM transactions ORDER BY id DESC LIMIT 1').get();
+  const scenario = await buildScenario(s.db);
+  const txn = await s.db.prepare('SELECT id FROM transactions ORDER BY id DESC LIMIT 1').get();
   const out = await resolveRefs(s.db, scenario, [{ kind: 'figure', id: `txn.${txn.id}` }]);
   assert.equal(out.length, 1, JSON.stringify(out));
   assert.equal(out[0].kind, 'transaction');
@@ -232,7 +232,7 @@ test('resolveRefs maps a txn.<id> figure key to a transaction ref', async t => {
 
 test('resolveRefs of an empty list is empty', async t => {
   const s = await demoStore(t);
-  assert.deepEqual(await resolveRefs(s.db, buildScenario(s.db), []), []);
+  assert.deepEqual(await resolveRefs(s.db, await buildScenario(s.db), []), []);
 });
 
 /* ---------- the answerer ---------- */
@@ -281,7 +281,7 @@ test('answer without refs has no references in the context or provenance', async
 
 test('the scripted model calls the hinted tools for an account and a transaction reference and the cited amount is grounded', async t => {
   const s = await demoStore(t);
-  const now = clockNow(s.db);
+  const now = await clockNow(s.db);
   const old = await oldTransactions(s.db, now);
   assert.ok(old.length > 0, 'the demo store has more than 200 transactions');
 
@@ -333,8 +333,8 @@ test('the scripted model calls the hinted tools for an account and a transaction
 test('a number that appears only in a reference id or its hint is marked unverified', async t => {
   const s = await demoStore(t);
   const recId = 'rec8263';
-  insertDigitRec(s.db, recId);
-  const scenario = buildScenario(s.db);
+  await insertDigitRec(s.db, recId);
+  const scenario = await buildScenario(s.db);
   assert.ok(scenario.recs.some(r => r.id === recId), 'the synthetic rec is visible');
   const refs = [{ kind: 'rec', id: recId }];
   const resolved = await resolveRefs(s.db, scenario, refs);
@@ -386,7 +386,7 @@ function finalOf(r, what) {
   return evs.at(-1).data;
 }
 
-test('POST /api/threads (new thread): malformed context is 400; a valid context answers and stores the references', T, () => withServer({ env: FAKE }, async s => {
+test('POST /api/threads (new thread): malformed context is 400; a valid context answers and stores the references', T, async () => withServer({ env: FAKE }, async s => {
   expect400(await postJson(s.baseUrl, '/api/threads', { text: 'Synthetic question', context: BAD }), 'json bad kind');
   expect400(await postJson(s.baseUrl, '/api/threads', { text: 'Synthetic question', context: NOT_LIST }), 'json not a list');
   const ok = await postJson(s.baseUrl, '/api/threads', { text: 'Synthetic question', context: GOOD });
@@ -394,15 +394,15 @@ test('POST /api/threads (new thread): malformed context is 400; a valid context 
   expectRefs(ok.json.message, 'json');
   const db = await openStore(s.dbFile);
   try {
-    const row = db.prepare("SELECT provenance FROM messages WHERE conversation_key = ? AND role = 'fathom'").get(ok.json.thread.key);
+    const row = await db.prepare("SELECT provenance FROM messages WHERE conversation_key = ? AND role = 'fathom'").get(ok.json.thread.key);
     assert.deepEqual(JSON.parse(row.provenance).references, GOOD, 'stored with the reply');
-  } finally { db.close(); }
+  } finally { await db.close(); }
 
   expect400(await stream(s, '/api/threads', { text: 'Synthetic question', context: BAD }), 'stream bad kind');
   expectRefs(finalOf(await stream(s, '/api/threads', { text: 'Synthetic question', context: GOOD }), 'stream').message, 'stream');
 }));
 
-test('POST /api/ask (existing thread): malformed context is 400; a valid context answers', T, () => withServer({ env: FAKE }, async s => {
+test('POST /api/ask (existing thread): malformed context is 400; a valid context answers', T, async () => withServer({ env: FAKE }, async s => {
   const first = await postJson(s.baseUrl, '/api/threads', { text: 'Synthetic opener' });
   assert.equal(first.status, 200);
   const key = first.json.thread.key;
@@ -417,7 +417,7 @@ test('POST /api/ask (existing thread): malformed context is 400; a valid context
   expectRefs(finalOf(await stream(s, '/api/ask', { key, text: 'Synthetic follow-up', context: GOOD }), 'stream').message, 'stream');
 }));
 
-test('POST /api/threads with recId (rec thread): malformed context is 400; a valid context answers', T, () => withServer({ env: FAKE }, async s => {
+test('POST /api/threads with recId (rec thread): malformed context is 400; a valid context answers', T, async () => withServer({ env: FAKE }, async s => {
   expect400(await postJson(s.baseUrl, '/api/threads', { recId: 'dcfsa', text: 'Synthetic rec question', context: BAD }), 'json bad kind');
   expect400(await postJson(s.baseUrl, '/api/threads', { recId: 'dcfsa', text: 'Synthetic rec question', context: [{ kind: 'account', id: '' }] }), 'json empty id');
   const ok = await postJson(s.baseUrl, '/api/threads', { recId: 'dcfsa', text: 'Synthetic rec question', context: GOOD });
@@ -431,12 +431,12 @@ test('POST /api/threads with recId (rec thread): malformed context is 400; a val
 
 test('resolveRefs keeps a P&L entity and a real category row as /api/pnl keys them, and drops an invented category or unknown entity', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db, { packs: s.packs });
+  const scenario = await buildScenario(s.db, { packs: s.packs });
   const { pnlEntities, businessPnl } = await import('../src/pnl/business.mjs');
   const ent = pnlEntities({ db: s.db, clock: scenario.meta.clock }).find(e => e.kind === 'entity');
   assert.ok(ent, 'the demo store has a business entity');
   const real = businessPnl({ db: s.db, entity: ent.key, clock: scenario.meta.clock }).expenses.categories[0].category;
-  const out = resolveRefs(s.db, scenario, [
+  const out = await resolveRefs(s.db, scenario, [
     { kind: 'pnl', id: ent.key }, { kind: 'pnl', id: `${ent.key}|${real}` }, { kind: 'pnl', id: `${ent.key}|Synthetic invented category` },
     { kind: 'pnl', id: 'entity:nosuchbusiness' }, { kind: 'page', id: 'pnl' },
   ]);
@@ -449,15 +449,15 @@ test('resolveRefs keeps a P&L entity and a real category row as /api/pnl keys th
 /* ---------- the view qualifier: <id>@key=value;key=value ---------- */
 
 // The hint the store gives the plain id, so a qualified id is checked against it.
-const baseUse = (s, scenario, kind, id) => {
-  const out = resolveRefs(s.db, scenario, [{ kind, id }]);
+const baseUse = async (s, scenario, kind, id) => {
+  const out = await resolveRefs(s.db, scenario, [{ kind, id }]);
   assert.equal(out.length, 1, `${kind}:${id} resolves without a qualifier`);
   return out[0].use;
 };
 
 test('resolveRefs accepts a view qualifier on money, page, pnl and account ids, keeps the full id and adds the on-screen hint', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db, { packs: s.packs });
+  const scenario = await buildScenario(s.db, { packs: s.packs });
   const { pnlEntities } = await import('../src/pnl/business.mjs');
   const ent = pnlEntities({ db: s.db, clock: scenario.meta.clock }).find(e => e.kind === 'entity');
   assert.ok(ent, 'the demo store has a business entity');
@@ -476,14 +476,14 @@ test('resolveRefs accepts a view qualifier on money, page, pnl and account ids, 
   ];
   for (const [kind, id, q, words] of rows) {
     const full = `${id}@${q}`;
-    const out = resolveRefs(s.db, scenario, [{ kind, id: full }]);
-    assert.deepEqual(out, [{ kind, id: full, use: `${baseUse(s, scenario, kind, id)}; on screen: ${words}` }], full);
+    const out = await resolveRefs(s.db, scenario, [{ kind, id: full }]);
+    assert.deepEqual(out, [{ kind, id: full, use: `${await baseUse(s, scenario, kind, id)}; on screen: ${words}` }], full);
   }
 });
 
 test('resolveRefs: an invalid qualifier is not a qualifier; the whole id resolves as is and an unknown one drops', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db, { packs: s.packs });
+  const scenario = await buildScenario(s.db, { packs: s.packs });
   const bad = [
     { kind: 'page', id: 'pnl@month=2026-13' },
     { kind: 'page', id: 'pnl@month=2026-00' },
@@ -502,17 +502,17 @@ test('resolveRefs: an invalid qualifier is not a qualifier; the whole id resolve
     { kind: 'account', id: 'a_biz@month=2026-03;evil=1' },
     { kind: 'page', id: '@month=2026-03' },
   ];
-  const out = resolveRefs(s.db, scenario, bad);
+  const out = await resolveRefs(s.db, scenario, bad);
   assert.deepEqual(out, [], JSON.stringify(out));
   assert.ok(!JSON.stringify(out).includes('ignore the rules'), 'free text never reaches the prompt');
 });
 
 test('resolveRefs: an id that really contains @ still resolves whole', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db, { packs: s.packs });
+  const scenario = await buildScenario(s.db, { packs: s.packs });
   const category = 'Synthetic dues@club';
-  s.db.prepare('UPDATE transactions SET category = ? WHERE id = (SELECT id FROM transactions ORDER BY id LIMIT 1)').run(category);
-  const out = resolveRefs(s.db, scenario, [{ kind: 'spending', id: category }]);
+  await s.db.prepare('UPDATE transactions SET category = ? WHERE id = (SELECT id FROM transactions ORDER BY id LIMIT 1)').run(category);
+  const out = await resolveRefs(s.db, scenario, [{ kind: 'spending', id: category }]);
   assert.equal(out.length, 1, JSON.stringify(out));
   assert.equal(out[0].id, category);
   assert.ok(!out[0].use.includes('on screen'), out[0].use);
@@ -520,8 +520,8 @@ test('resolveRefs: an id that really contains @ still resolves whole', async t =
 
 test('resolveRefs: an id without a qualifier is unchanged', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db, { packs: s.packs });
-  const out = resolveRefs(s.db, scenario, [{ kind: 'money', id: 'overview' }, { kind: 'page', id: 'pnl' }, { kind: 'account', id: 'a_biz' }]);
+  const scenario = await buildScenario(s.db, { packs: s.packs });
+  const out = await resolveRefs(s.db, scenario, [{ kind: 'money', id: 'overview' }, { kind: 'page', id: 'pnl' }, { kind: 'account', id: 'a_biz' }]);
   assert.deepEqual(out.map(r => `${r.kind}:${r.id}`), ['money:overview', 'page:pnl', 'account:a_biz']);
   for (const r of out) assert.ok(!r.use.includes('on screen'), r.use);
   assert.equal(out[0].use, 'accounts.list, household.figures');
@@ -538,7 +538,7 @@ const MONTH_LABEL = m => `${['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'A
 
 test('pnl2-ac3 resolveRefs keeps a P&L category row with a month suffix, names the month in the hint, and drops an invalid suffix as an unknown category', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db, { packs: s.packs });
+  const scenario = await buildScenario(s.db, { packs: s.packs });
   const { pnlEntities, businessPnl } = await import('../src/pnl/business.mjs');
   const ent = pnlEntities({ db: s.db, clock: scenario.meta.clock }).find(e => e.kind === 'entity');
   assert.ok(ent, 'the demo store has a business entity');
@@ -546,7 +546,7 @@ test('pnl2-ac3 resolveRefs keeps a P&L category row with a month suffix, names t
   const real = p.expenses.categories[0].category;
   const month = p.months[Math.min(2, p.months.length - 1)];
   const label = MONTH_LABEL(month);
-  const out = resolveRefs(s.db, scenario, [
+  const out = await resolveRefs(s.db, scenario, [
     { kind: 'pnl', id: `${ent.key}|${real}|${month}` },
     { kind: 'pnl', id: `${ent.key}|${real}` },
     { kind: 'pnl', id: `${ent.key}|${real}|${month.slice(0, 4)}-13` },
@@ -567,12 +567,12 @@ test('pnl2-ac3 resolveRefs keeps a P&L category row with a month suffix, names t
 
 test('pnl2-ac3 resolveRefs keeps a spending category with a month suffix, names the month in the hint, and drops an invalid suffix as an unknown category', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db, { packs: s.packs });
-  const row = s.db.prepare("SELECT category, substr(date, 1, 7) AS month FROM transactions WHERE category IS NOT NULL AND category != '' ORDER BY date DESC LIMIT 1").get();
+  const scenario = await buildScenario(s.db, { packs: s.packs });
+  const row = await s.db.prepare("SELECT category, substr(date, 1, 7) AS month FROM transactions WHERE category IS NOT NULL AND category != '' ORDER BY date DESC LIMIT 1").get();
   assert.ok(row, 'the demo store has a categorized transaction');
   const { category, month } = row;
   const label = MONTH_LABEL(month);
-  const out = resolveRefs(s.db, scenario, [
+  const out = await resolveRefs(s.db, scenario, [
     { kind: 'spending', id: `${category}|${month}` },
     { kind: 'spending', id: category },
     { kind: 'spending', id: `${category}|${month.slice(0, 4)}-13` },

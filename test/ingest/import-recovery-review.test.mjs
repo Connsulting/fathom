@@ -54,7 +54,7 @@ async function leavePending(household, db, file) {
   const fileId = 'f-' + hash.slice(0, 24);
   const vault = await openVault(household);
   const storedPath = await storeFile({ vault, id: fileId, bytes, purpose: 'upload' });
-  db.prepare(`INSERT INTO files (id, name, mime, size, sha256, uploaded_at, stored_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`)
+  await db.prepare(`INSERT INTO files (id, name, mime, size, sha256, uploaded_at, stored_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`)
     .run(fileId, file.name, 'text/csv', bytes.length, hash, new Date().toISOString(), storedPath);
   return fileId;
 }
@@ -74,9 +74,9 @@ function scriptOnce(engine, script) {
   return { calls, restore() { engine.call = real; } };
 }
 
-const fileRow = (db, id) => { const r = db.prepare('SELECT status, note FROM files WHERE id = ?').get(id); return r ? { ...r } : r; };
-const proposalsOf = (db, fileId) => db.prepare('SELECT id, version, status, actor_id FROM import_proposals WHERE file_id = ? ORDER BY version').all(fileId).map((r) => ({ ...r }));
-const txCount = (db, fileId) => db.prepare('SELECT count(*) n FROM transactions WHERE file_id = ?').get(fileId).n;
+const fileRow = async (db, id) => { const r = await db.prepare('SELECT status, note FROM files WHERE id = ?').get(id); return r ? { ...r } : r; };
+const proposalsOf = async (db, fileId) => (await db.prepare('SELECT id, version, status, actor_id FROM import_proposals WHERE file_id = ? ORDER BY version').all(fileId)).map((r) => ({ ...r }));
+const txCount = async (db, fileId) => (await db.prepare('SELECT count(*) n FROM transactions WHERE file_id = ?').get(fileId)).n;
 
 async function until(fn, ms = DEADLINE_MS) {
   const end = Date.now() + ms;
@@ -108,21 +108,21 @@ test('a proposal the scheduler resume pass staged is restaged under the reviewin
 
     // The resume pass (actor 'fathom') interprets the interrupted file once and stages its proposal.
     await scheduler.tick();
-    const staged = await until(() => (fileRow(x.db, id)?.status !== 'pending' ? fileRow(x.db, id) : null));
+    const staged = await until(async () => ((await fileRow(x.db, id))?.status !== 'pending' ? await fileRow(x.db, id) : null));
     assert.ok(staged, 'the resume pass finished within the deadline');
     assert.equal(staged.status, 'needs_confirmation');
     await scheduler.idle?.();
-    const [first] = proposalsOf(x.db, id);
+    const [first] = await proposalsOf(x.db, id);
     assert.deepEqual({ version: first.version, status: first.status, actor: first.actor_id }, { version: 1, status: 'needs_confirmation', actor: BACKGROUND });
     assert.equal(engine.calls.length, 1, 'one model call interpreted the file');
-    assert.equal(fileSpend(x.db, id).calls, 1);
+    assert.equal((await fileSpend(x.db, id)).calls, 1);
 
     // The owner's review of the background proposal answers 409 proposal_stale, not forbidden.
     const review = await app.postJson(`/api/import-proposals/${first.id}/review`, { version: 1, decision: 'approve', evidence: 'looks right' });
     assert.equal(review.status, 409, review.text.slice(0, 300));
     assert.equal(review.json.code, 'proposal_stale');
-    assert.equal(fileRow(x.db, id).status, 'needs_confirmation', 'nothing imported by the refused review');
-    assert.equal(txCount(x.db, id), 0);
+    assert.equal((await fileRow(x.db, id)).status, 'needs_confirmation', 'nothing imported by the refused review');
+    assert.equal(await txCount(x.db, id), 0);
 
     // The client's recovery: Retry restages it under the owner with no model call.
     const retry = await app.postJson(`/api/files/${id}/retry`, {});
@@ -131,18 +131,18 @@ test('a proposal the scheduler resume pass staged is restaged under the reviewin
     assert.equal(retry.json.file.status, 'needs_confirmation');
     assert.equal(retry.json.file.proposalId, first.id);
     assert.equal(retry.json.file.version, 2);
-    const versions = proposalsOf(x.db, id);
+    const versions = await proposalsOf(x.db, id);
     assert.deepEqual(versions.map((p) => [p.version, p.status, p.actor_id]), [[1, 'superseded', BACKGROUND], [2, 'needs_confirmation', owner]]);
     assert.equal(engine.calls.length, 1, 'the restage made no second model call');
-    assert.equal(fileSpend(x.db, id).calls, 1);
+    assert.equal((await fileSpend(x.db, id)).calls, 1);
 
     // Approving the restaged version imports the rows.
     const approved = await app.postJson(`/api/import-proposals/${first.id}/review`, { version: 2, decision: 'approve', evidence: 'looks right' });
     assert.equal(approved.status, 200, approved.text.slice(0, 300));
     assert.equal(approved.json.status, 'imported');
     assert.equal(approved.json.receipt.actorId, owner);
-    assert.equal(fileRow(x.db, id).status, 'imported');
-    assert.equal(txCount(x.db, id), 2);
+    assert.equal((await fileRow(x.db, id)).status, 'imported');
+    assert.equal(await txCount(x.db, id), 2);
     assert.equal(engine.calls.length, 1);
   } finally {
     engine.restore();
@@ -160,9 +160,9 @@ test('liveness: a proposal the reviewing owner staged is approved directly', T, 
     const csv = MODEL_CSV('own staged');
     const own = await P.ingestFile(x.db, modelFile(csv), { ...x.opts, fake: await fakeFor(csv) });
     assert.equal(own.status, 'needs_confirmation');
-    assert.equal(proposalsOf(x.db, own.fileId)[0].actor_id, x.ctx.actorId);
+    assert.equal((await proposalsOf(x.db, own.fileId))[0].actor_id, x.ctx.actorId);
     assert.equal((await approve(x, own)).status, 'imported');
-    assert.equal(txCount(x.db, own.fileId), 2);
+    assert.equal(await txCount(x.db, own.fileId), 2);
   } finally { x.close(); }
 });
 
@@ -173,9 +173,9 @@ test('liveness: a proposal another real owner staged is still refused as forbidd
     const other = await P.ingestFile(x.db, modelFile(csv), { ...x.opts, actorId: 'actor-other-synthetic', fake: await fakeFor(csv) });
     assert.equal(other.status, 'needs_confirmation');
     await assert.rejects(reviewImport(x.ctx, { proposalId: other.proposalId, version: other.version, decision: 'approve', evidence: 'yes' }), (e) => e.code === 'forbidden');
-    assert.deepEqual(proposalsOf(x.db, other.fileId).map((p) => [p.version, p.status, p.actor_id]), [[1, 'needs_confirmation', 'actor-other-synthetic']]);
-    assert.equal(fileRow(x.db, other.fileId).status, 'needs_confirmation');
-    assert.equal(txCount(x.db, other.fileId), 0);
+    assert.deepEqual((await proposalsOf(x.db, other.fileId)).map((p) => [p.version, p.status, p.actor_id]), [[1, 'needs_confirmation', 'actor-other-synthetic']]);
+    assert.equal((await fileRow(x.db, other.fileId)).status, 'needs_confirmation');
+    assert.equal(await txCount(x.db, other.fileId), 0);
   } finally { x.close(); }
 });
 
@@ -186,18 +186,18 @@ test('reviewImport answers proposal_stale for a background proposal; a retry res
     const id = await leavePending(x.household, x.db, modelFile(csv));
     const resumed = await P.resumeImports(x.db, { ...x.opts, actorId: BACKGROUND, fake: await fakeFor(csv) });
     assert.deepEqual(resumed.resumed, [{ fileId: id, status: 'needs_confirmation' }]);
-    const [bg] = proposalsOf(x.db, id);
+    const [bg] = await proposalsOf(x.db, id);
     assert.equal(bg.actor_id, BACKGROUND);
     await assert.rejects(reviewImport(x.ctx, { proposalId: bg.id, version: bg.version, decision: 'approve', evidence: 'yes' }), (e) => e.code === 'proposal_stale');
-    assert.equal(fileSpend(x.db, id).calls, 1);
+    assert.equal((await fileSpend(x.db, id)).calls, 1);
     // No fake script is offered here, so a model call could not succeed.
     const restaged = await P.retryFile(x.db, id, x.opts);
     assert.equal(restaged.status, 'needs_confirmation');
     assert.equal(restaged.proposalId, bg.id);
     assert.equal(restaged.version, bg.version + 1);
-    assert.equal(fileSpend(x.db, id).calls, 1, 'the restage made no model call');
-    assert.equal(proposalsOf(x.db, id).at(-1).actor_id, x.ctx.actorId);
+    assert.equal((await fileSpend(x.db, id)).calls, 1, 'the restage made no model call');
+    assert.equal((await proposalsOf(x.db, id)).at(-1).actor_id, x.ctx.actorId);
     assert.equal((await approve(x, restaged)).status, 'imported');
-    assert.equal(txCount(x.db, id), 2);
+    assert.equal(await txCount(x.db, id), 2);
   } finally { x.close(); }
 });

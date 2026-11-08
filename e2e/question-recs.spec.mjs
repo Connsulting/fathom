@@ -31,10 +31,10 @@ test.describe('answerable questions on the synthetic planning household', () => 
     mkdirSync(dataDir);
     const db = await buildRealStore(dataDir, { clock, variant: { facts: { 'accounts.va529': undefined } } });
     // No institution on file, so the Virginia plan is asked rather than inferred.
-    db.prepare("UPDATE accounts SET display_name = 'College fund', inst = '' WHERE kind = '529'").run();
-    db.prepare('INSERT INTO goals (id, def, sort) VALUES (?, ?, 0)').run('question-college', JSON.stringify({ title: 'College savings', kind: 'education', horizon: 'This year' }));
+    await db.prepare("UPDATE accounts SET display_name = 'College fund', inst = '' WHERE kind = '529'").run();
+    await db.prepare('INSERT INTO goals (id, def, sort) VALUES (?, ?, 0)').run('question-college', JSON.stringify({ title: 'College savings', kind: 'education', horizon: 'This year' }));
     await planRun(db, { now: clock, dataDir });
-    db.close();
+    await db.close();
     const socket = createServer();
     await new Promise(done => socket.listen(Number(process.env.E2E_PORT || 0), 'localhost', done));
     const port = socket.address().port;
@@ -44,7 +44,7 @@ test.describe('answerable questions on the synthetic planning household', () => 
     const auth = createAuthStore(app.platform);
     const { user, token } = auth.invite(auth.servedHousehold().id, 'owner@example.test', { role: 'admin' });
     auth.consumeInvitation(token, user.id);
-    auth.markEnrolled(user.id);
+    await auth.markEnrolled(user.id);
     session = auth.createSession(user.id);
     householdId = auth.servedHousehold().id;
     // The served household's own store, through the server's runtime registry.
@@ -55,9 +55,9 @@ test.describe('answerable questions on the synthetic planning household', () => 
     if (app && dataDir) rmSync(dataDir, { recursive: true, force: true });
   });
   test.beforeEach(async ({ context }) => {
-    store.prepare("DELETE FROM facts WHERE key = 'accounts.va529'").run();
+    await store.prepare("DELETE FROM facts WHERE key = 'accounts.va529'").run();
     expect((await post('/api/jobs/plan/run', {})).status).toBe(200);
-    store.prepare("UPDATE recs SET status = CASE WHEN id = 'va529' THEN 'proposed' ELSE 'dismissed' END").run();
+    await store.prepare("UPDATE recs SET status = CASE WHEN id = 'va529' THEN 'proposed' ELSE 'dismissed' END").run();
     await context.addCookies([{ name: '__Host-fathom-session', value: session.token, domain: 'localhost', path: '/', secure: true, httpOnly: true, sameSite: 'Lax' }]);
     await context.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, body: '' }));
   });
@@ -127,7 +127,7 @@ test.describe('answerable questions on the synthetic planning household', () => 
     expect(refused.status).toBe(409);
     await form.getByRole('button', { name: 'Not now', exact: true }).click();
     await expect(page.locator('article.h-next [data-rec-answers="va529"]')).toHaveCount(0);
-    expect(store.prepare("SELECT value FROM facts WHERE key = 'accounts.va529'").get()).toBeUndefined();
+    expect(await store.prepare("SELECT value FROM facts WHERE key = 'accounts.va529'").get()).toBeUndefined();
     await page.goto(`${origin}/#/rec/va529`);
     await expect(page.locator('.h-dlg [data-rec-answers="va529"]')).toBeVisible();
   });

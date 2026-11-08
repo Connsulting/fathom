@@ -23,14 +23,14 @@ const TEST_SUBJECT = 'Fathom test email';
 const TEST_TEXT = 'This is a test email from Fathom. Email delivery is working.';
 const TEST_HTML = simpleDarkEmail({ title: TEST_SUBJECT, paragraphs: [TEST_TEXT] });
 
-const brief = (ctx, engine = ctx.engine) => composeBrief(ctx.db, { clock: (ctx.config && ctx.config.clock) || null, publicUrl: (ctx.config && ctx.config.publicUrl) || null, engine, householdId: ctx.household.householdId });
+const brief = async (ctx, engine = ctx.engine) => composeBrief(ctx.db, { clock: (ctx.config && ctx.config.clock) || null, publicUrl: (ctx.config && ctx.config.publicUrl) || null, engine, householdId: ctx.household.householdId });
 
 function transportOf(ctx) {
   if (!ctx.transport) throw new HttpError(503, 'email transport unavailable');
   return ctx.transport;
 }
 
-const history = ctx => listSends(ctx.db, { limit: HISTORY_LIMIT });
+const history = async ctx => await listSends(ctx.db, { limit: HISTORY_LIMIT });
 
 export async function getEmail(ctx) {
   const status = await ctx.household.emailRecipients.status();
@@ -40,36 +40,36 @@ export async function getEmail(ctx) {
   return {
     status,
     preview: { subject: b.subject, text: b.text, html: b.html, summarySrc: b.summarySrc },
-    history: history(ctx),
+    history: await history(ctx),
   };
 }
 
 export async function sendTestEmail(ctx) {
   const send = await sendEmail(ctx.db, { transport: transportOf(ctx), kind: 'test', subject: TEST_SUBJECT, text: TEST_TEXT, html: TEST_HTML });
-  return { send, history: history(ctx) };
+  return { send, history: await history(ctx) };
 }
 
 export async function sendBriefEmail(ctx) {
   const transport = transportOf(ctx);
   const b = await brief(ctx);
   const send = await sendEmail(ctx.db, { transport, kind: 'brief', subject: b.subject, text: b.text, html: b.html });
-  return { send, history: history(ctx) };
+  return { send, history: await history(ctx) };
 }
 
 const jobOut = j => ({ id: j.id, name: j.name, cadence: j.cadence, does: j.does, lastRun: j.lastRun ?? null, next: j.next, nextAt: j.nextAt });
 
-function jobsBody(ctx) {
+async function jobsBody(ctx) {
   const s = ctx.scheduler;
   return {
     jobs: s ? s.jobs().map(jobOut) : [],
     runs: s ? s.runs({ limit: RUNS_LIMIT }) : [],
-    timezone: ownerTimezone(ctx.db),
-    services: servicesOf(ctx),
+    timezone: await ownerTimezone(ctx.db),
+    services: await servicesOf(ctx),
   };
 }
 
-export function listJobs(ctx) {
-  return jobsBody(ctx);
+export async function listJobs(ctx) {
+  return await jobsBody(ctx);
 }
 
 // A manual run under the lease. Planning on a demo store is refused here, before the scheduler, so
@@ -86,7 +86,7 @@ export async function runJob(ctx) {
     }
     throw err;
   }
-  return { scenario: scenarioOf(ctx), run: run ?? null, jobs: jobsBody(ctx).jobs };
+  return { scenario: await scenarioOf(ctx), run: run ?? null, jobs: (await jobsBody(ctx)).jobs };
 }
 
 export async function getSubscriptions(ctx) {

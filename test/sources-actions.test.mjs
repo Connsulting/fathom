@@ -42,9 +42,9 @@ const isCode = (code) => (e) => e?.code === code;
 async function ingest(s, file, opts = {}) {
   const r = await P.ingestFile(s.db, file, s.opts(await offEngine(), opts));
   assert.equal(r.status, 'imported', `${file.name} imported`);
-  return { ...r, row: one(s.db, 'SELECT * FROM files WHERE id = ?', r.fileId) };
+  return { ...r, row: await one(s.db, 'SELECT * FROM files WHERE id = ?', r.fileId) };
 }
-const accountOfFile = (s, fileId) => one(s.db, `SELECT * FROM accounts WHERE id IN (
+const accountOfFile = async (s, fileId) => await one(s.db, `SELECT * FROM accounts WHERE id IN (
   SELECT account_id FROM transactions WHERE file_id = ? UNION SELECT account_id FROM balances WHERE file_id = ?
   UNION SELECT account_id FROM positions WHERE file_id = ?)`, fileId, fileId, fileId);
 
@@ -56,9 +56,9 @@ async function seeded(s) {
   const agg = await ingest(s, fixture('aggregator.csv', 'text/csv'));
   const bank = await ingest(s, fixture('Chase7766_Activity_20320305.csv', 'text/csv'));
   const pos = await ingest(s, fixture('positions.csv', 'text/csv'));
-  const cash = accountOfFile(s, bank.fileId);
-  const invest = accountOfFile(s, pos.fileId);
-  assert.equal(accountOfFile(s, agg.fileId).id, cash.id, 'precondition: both cash exports feed one account');
+  const cash = await accountOfFile(s, bank.fileId);
+  const invest = await accountOfFile(s, pos.fileId);
+  assert.equal((await accountOfFile(s, agg.fileId)).id, cash.id, 'precondition: both cash exports feed one account');
   return { agg, bank, pos, cash: cash.id, invest: invest.id };
 }
 
@@ -95,7 +95,7 @@ async function withApp(fn, seed = seeded) {
 
 /* ---------- archive an account (HTTP) ---------- */
 
-test('archive takes an account out of current accounts, household totals and Ask, keeps its transactions, and Undo restores it', () => withApp(async ({ api, cash }) => {
+test('archive takes an account out of current accounts, household totals and Ask, keeps its transactions, and Undo restores it', async () => withApp(async ({ api, cash }) => {
   const before = await api.scenario();
   assert.ok(idsOf(before).includes(cash));
   const total = totalOf(before);
@@ -126,7 +126,7 @@ test('archive takes an account out of current accounts, household totals and Ask
   assert.ok((await api.ask()).some((a) => a.id === cash));
 }));
 
-test('archiving twice is a no-op with no receipt, and restore with archived false gets its own receipt', () => withApp(async ({ api, invest }) => {
+test('archiving twice is a no-op with no receipt, and restore with archived false gets its own receipt', async () => withApp(async ({ api, invest }) => {
   const first = await api.post(`/api/accounts/${invest}/archive`, {});
   assert.equal(first.status, 200, first.text);
   const again = await api.post(`/api/accounts/${invest}/archive`, { archived: true });
@@ -145,7 +145,7 @@ test('archiving twice is a no-op with no receipt, and restore with archived fals
 
 /* ---------- remove an uploaded file (HTTP) ---------- */
 
-test('removing a file deletes its rows, recomputes figures, drops it from Sources, and Undo restores exactly', () => withApp(async ({ api, bank, cash }) => {
+test('removing a file deletes its rows, recomputes figures, drops it from Sources, and Undo restores exactly', async () => withApp(async ({ api, bank, cash }) => {
   const sourcesBefore = await api.sources();
   const before = await api.scenario();
   const txBefore = await api.txTotal(cash);
@@ -175,7 +175,7 @@ test('removing a file deletes its rows, recomputes figures, drops it from Source
   assert.deepEqual(await api.sources(), sourcesBefore, 'Sources is back exactly as it was');
 }));
 
-test('removing a file that leaves an account with no rows archives it; Undo after that account changed is refused', () => withApp(async ({ api, pos, invest }) => {
+test('removing a file that leaves an account with no rows archives it; Undo after that account changed is refused', async () => withApp(async ({ api, pos, invest }) => {
   const r = await api.post(`/api/files/${pos.fileId}/remove`, {});
   assert.equal(r.status, 200, r.text);
   assert.ok(!idsOf(r.json.scenario).includes(invest), 'the emptied account leaves current accounts');
@@ -186,7 +186,7 @@ test('removing a file that leaves an account with no rows archives it; Undo afte
   assert.ok(idsOf(await api.scenario()).includes(invest), 'the refused Undo changed nothing');
 }));
 
-test('unknown ids are 404', () => withApp(async ({ api }) => {
+test('unknown ids are 404', async () => withApp(async ({ api }) => {
   assert.equal((await api.post('/api/accounts/acct-no-such-account/archive', {})).status, 404);
   assert.equal((await api.post('/api/files/f-000000000000000000000000/remove', {})).status, 404);
   assert.equal((await api.post('/api/accounts/acct-no-such-account/merge', { withId: 'acct-no-such-other' })).status, 404);
@@ -202,8 +202,8 @@ async function mergePair(s) {
   await ingest(s, aggregatorFile('household-spending.csv', [
     { date: '2032-02-20', amount: '25.00', type: 'Checking', inst: INST, account: name, number: '', description: `${name} posting` },
   ]), { engine: null });
-  const file = one(s.db, "SELECT * FROM accounts WHERE name = ? AND coalesce(identity, '') NOT LIKE 'simplefin:%'", name).id;
-  s.db.prepare('INSERT INTO balances (account_id, date, amount, dedupe_key) VALUES (?, ?, ?, ?)').run(file, '2032-02-29', 500, `synthetic:${file}:feb`);
+  const file = (await one(s.db, "SELECT * FROM accounts WHERE name = ? AND coalesce(identity, '') NOT LIKE 'simplefin:%'", name)).id;
+  await s.db.prepare('INSERT INTO balances (account_id, date, amount, dedupe_key) VALUES (?, ?, ?, ?)').run(file, '2032-02-29', 500, `synthetic:${file}:feb`);
   const sfKey = 'synthetic-sources';
   const own = P.accountIdOf(`simplefin:${sfKey}`);
   const account = { inst: INST, name: 'Everyday x4321', mask: '4321', kind: 'checking' };
@@ -211,12 +211,12 @@ async function mergePair(s) {
     transactions: [{ date: '2032-02-29', amount: -10, description: 'Bridge posting', externalId: `bridge-${sfKey}` }] }] };
   const r = await P.ingestFile(s.db, textFile(`bridge-${sfKey}.json`, JSON.stringify(doc)), s.opts(null, { parser: SF.parser }));
   assert.equal(r.status, 'imported');
-  s.db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at, backfilled) VALUES (?, ?, 'mapped', ?, ?, 1)").run(sfKey, own, account.name, NOW);
-  s.db.prepare('INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES (?, ?, ?)').run(sfKey, JSON.stringify({ ...account, maskSure: true, balance: 1200, balanceDate: '2032-02-29' }), NOW);
+  await s.db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at, backfilled) VALUES (?, ?, 'mapped', ?, ?, 1)").run(sfKey, own, account.name, NOW);
+  await s.db.prepare('INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES (?, ?, ?)').run(sfKey, JSON.stringify({ ...account, maskSure: true, balance: 1200, balanceDate: '2032-02-29' }), NOW);
   return { file, own };
 }
 
-test('merge still works over HTTP and returns a receipt whose Undo reopens the merge', () => withApp(async ({ api, file, own }) => {
+test('merge still works over HTTP and returns a receipt whose Undo reopens the merge', async () => withApp(async ({ api, file, own }) => {
   const before = await api.scenario();
   assert.ok(idsOf(before).includes(file) && idsOf(before).includes(own));
   const r = await api.post(`/api/accounts/${file}/merge`, { withId: own });
@@ -242,17 +242,17 @@ async function withStore(fn, seed = seeded) {
 }
 const scenarioIds = (s) => idsOf(B.buildScenario(s.db, { clock: CLOCK }));
 const askIds = async (s) => (await T.callTool('accounts', { operation: 'list' }, toolCtx(s))).map((a) => a.id);
-const txCount = (s, id) => s.db.prepare('SELECT count(*) AS n FROM transactions WHERE account_id = ?').get(id).n;
+const txCount = async (s, id) => (await s.db.prepare('SELECT count(*) AS n FROM transactions WHERE account_id = ?').get(id)).n;
 
 test('sources.archive_account archives with a receipt and Undo; another actor or scope cannot undo it', () => withStore(async ({ s, cash }) => {
-  const txBefore = txCount(s, cash);
+  const txBefore = await txCount(s, cash);
   const out = await T.callTool('sources', { operation: 'archive_account', id: cash }, toolCtx(s));
   assert.ok(out.receipt?.id, 'a valid archive is not refused');
   assert.equal(out.receipt.scope, 'write:sources');
   assert.deepEqual(out.undo, undoArgs(out.receipt));
   assert.ok(!scenarioIds(s).includes(cash));
   assert.ok(!(await askIds(s)).includes(cash));
-  assert.equal(txCount(s, cash), txBefore);
+  assert.equal(await txCount(s, cash), txBefore);
   for (const other of [{ actorId: 'person-b' }, { scopes: ['write:goals'], channel: 'mcp' }]) {
     await assert.rejects(T.callTool('undo', { operation: 'undo', id: out.receipt.id }, toolCtx(s, other)));
     assert.ok(!scenarioIds(s).includes(cash));
@@ -264,17 +264,17 @@ test('sources.archive_account archives with a receipt and Undo; another actor or
 }));
 
 test('sources.remove_file removes rows with a receipt; the undo tool restores them; removing twice is a conflict', () => withStore(async ({ s, bank, cash }) => {
-  const txBefore = txCount(s, cash);
+  const txBefore = await txCount(s, cash);
   const scenarioBefore = B.buildScenario(s.db, { clock: CLOCK });
   const out = await T.callTool('sources', { operation: 'remove_file', id: bank.fileId }, toolCtx(s));
   assert.ok(out.receipt?.id, 'a valid removal is not refused');
   assert.deepEqual(out.undo, undoArgs(out.receipt));
-  assert.equal(txCount(s, cash), txBefore - bank.counts.rows.transaction);
+  assert.equal(await txCount(s, cash), txBefore - bank.counts.rows.transaction);
   assert.notEqual(totalOf(B.buildScenario(s.db, { clock: CLOCK })), totalOf(scenarioBefore));
   await assert.rejects(T.callTool('sources', { operation: 'remove_file', id: bank.fileId }, toolCtx(s)), isCode('conflict'));
   await assert.rejects(T.callTool('sources', { operation: 'remove_file', id: 'f-000000000000000000000000' }, toolCtx(s)), isCode('not_found'));
   await T.callTool('undo', { operation: 'undo', id: out.receipt.id }, toolCtx(s));
-  assert.equal(txCount(s, cash), txBefore);
+  assert.equal(await txCount(s, cash), txBefore);
   assert.equal(totalOf(B.buildScenario(s.db, { clock: CLOCK })), totalOf(scenarioBefore));
 }));
 
@@ -288,7 +288,7 @@ test('sources.merge_accounts merges with a receipt and the undo tool reopens it'
   assert.ok(ids.includes(file) && ids.includes(own), 'both accounts are back');
 }, mergePair));
 
-test('accounts.sources returns the same Sources view as GET /api/sources', () => withApp(async ({ s, api }) => {
+test('accounts.sources returns the same Sources view as GET /api/sources', async () => withApp(async ({ s, api }) => {
   const viaApi = await api.sources();
   const viaTool = listOf(await T.callTool('accounts', { operation: 'sources' }, toolCtx(s)));
   assert.deepEqual(viaTool, viaApi);
@@ -346,17 +346,17 @@ test('an archived account leaves accounts.holdings, with or without an account f
 test('removing a file removes its documents and recomputes a balance figure it owned without rows', () => withStore(async ({ s, bank, invest }) => {
   // A synthetic document read from the bank file, and the investment account's balance figure
   // pointed at that file the way an empty holdings snapshot owns a figure with no rows.
-  s.db.prepare("INSERT INTO documents (doc_type, tax_year, fields, file_id) VALUES ('w2', 2031, '{}', ?)").run(bank.fileId);
-  const fig = one(s.db, 'SELECT fig_key FROM accounts WHERE id = ?', invest).fig_key;
+  await s.db.prepare("INSERT INTO documents (doc_type, tax_year, fields, file_id) VALUES ('w2', 2031, '{}', ?)").run(bank.fileId);
+  const fig = (await one(s.db, 'SELECT fig_key FROM accounts WHERE id = ?', invest)).fig_key;
   assert.ok(fig, 'precondition: the investment account has a balance figure');
-  s.db.prepare('UPDATE figures SET file_id = ? WHERE key = ?').run(bank.fileId, fig);
-  const docs = () => s.db.prepare('SELECT count(*) AS n FROM documents WHERE file_id = ?').get(bank.fileId).n;
+  await s.db.prepare('UPDATE figures SET file_id = ? WHERE key = ?').run(bank.fileId, fig);
+  const docs = async () => (await s.db.prepare('SELECT count(*) AS n FROM documents WHERE file_id = ?').get(bank.fileId)).n;
   const out = await T.callTool('sources', { operation: 'remove_file', id: bank.fileId }, toolCtx(s));
-  assert.equal(docs(), 0, 'the planner no longer reads the removed file\'s documents');
-  const after = one(s.db, 'SELECT fig_key FROM accounts WHERE id = ?', invest).fig_key;
-  assert.ok(after && one(s.db, 'SELECT key FROM figures WHERE key = ?', after), 'the balance figure is recomputed from the remaining holdings');
+  assert.equal(await docs(), 0, 'the planner no longer reads the removed file\'s documents');
+  const after = (await one(s.db, 'SELECT fig_key FROM accounts WHERE id = ?', invest)).fig_key;
+  assert.ok(after && await one(s.db, 'SELECT key FROM figures WHERE key = ?', after), 'the balance figure is recomputed from the remaining holdings');
   await T.callTool('undo', { operation: 'undo', id: out.receipt.id }, toolCtx(s));
-  assert.equal(docs(), 1);
+  assert.equal(await docs(), 1);
 }));
 
 test('an archived account leaves accounts.net_worth and household.health by default', () => withStore(async ({ s, invest }) => {
@@ -379,7 +379,7 @@ const reupload = (app, file) => {
   return app.request({ method: 'POST', path: '/api/files', headers: { 'content-type': `multipart/form-data; boundary=${boundary}` }, body });
 };
 
-test('identical re-upload restores removed data through HTTP and consumes the original removal Undo', () => withApp(async ({ app, api, bank, cash }) => {
+test('identical re-upload restores removed data through HTTP and consumes the original removal Undo', async () => withApp(async ({ app, api, bank, cash }) => {
   const before = await api.scenario(), txBefore = await api.txTotal(cash);
   const removed = await api.post(`/api/files/${bank.fileId}/remove`);
   assert.equal(removed.status, 200, removed.text);
@@ -395,7 +395,7 @@ test('identical re-upload restores removed data through HTTP and consumes the or
   assert.equal(duplicate.json.files[0].status, 'duplicate', 'active identical uploads retain duplicate detection');
 }));
 
-test('a re-upload refuses an intervening source change with a conflict and leaves removal intact', () => withApp(async ({ app, api, pos, invest }) => {
+test('a re-upload refuses an intervening source change with a conflict and leaves removal intact', async () => withApp(async ({ app, api, pos, invest }) => {
   assert.equal((await api.post(`/api/files/${pos.fileId}/remove`)).status, 200);
   assert.equal((await api.post(`/api/accounts/${invest}/archive`, { archived: false })).status, 200);
   const refused = await reupload(app, fixture('positions.csv', 'text/csv'));

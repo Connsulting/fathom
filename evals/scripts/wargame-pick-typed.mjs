@@ -1,6 +1,6 @@
 import { callTool } from '../../src/tools/index.mjs';
-export function setup({ db }) {
-  db.prepare("UPDATE decisions SET status = 'open', decided_line = NULL WHERE wargame = 'deferral'").run();
+export async function setup({ db }) {
+  await db.prepare("UPDATE decisions SET status = 'open', decided_line = NULL WHERE wargame = 'deferral'").run();
 }
 export async function script({ turn, db, clock }) {
   const args = { operation: 'wargame', name: 'deferral' };

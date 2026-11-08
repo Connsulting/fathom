@@ -44,7 +44,7 @@ async function main() {
   const fileIds = parseArgs(cli.argv);
   try {
     const result = await buildYourPlans({ db: household.db, engine: household.engine, household, fileIds, clock: config.clock || undefined });
-    if (result.written) refreshLivePacks(household.db, { dataDir: household.root });
+    if (result.written) await refreshLivePacks(household.db, { dataDir: household.root });
     const counts = `${result.entries} entries from ${result.sources.length} sources, ${result.dropped} sections dropped, ${result.warnings.length} warnings`;
     console.log(`${NAME}: ${result.written ? 'built the Your plans pack' : 'nothing to write'}: ${counts}`);
   } catch (e) {

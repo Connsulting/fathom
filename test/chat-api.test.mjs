@@ -22,10 +22,10 @@ async function ok(resPromise) {
 
 async function readDb(file, fn) {
   const db = await openStore(file);
-  try { return await fn(db); } finally { db.close(); }
+  try { return await fn(db); } finally { await db.close(); }
 }
 
-const spendRows = file => readDb(file, db => db.prepare('SELECT * FROM spend_ledger ORDER BY id').all().map(r => ({ ...r })));
+const spendRows = async file => readDb(file, async db => (await db.prepare('SELECT * FROM spend_ledger ORDER BY id').all()).map(r => ({ ...r })));
 const ask = (s, body) => ok(postJson(s.baseUrl, '/api/ask', body));
 // A new Ask thread asked `text` first: { scenario, thread, message }.
 const askNew = (s, text) => ok(postJson(s.baseUrl, '/api/threads', { text }));
@@ -33,7 +33,7 @@ const askNew = (s, text) => ok(postJson(s.baseUrl, '/api/threads', { text }));
 const LEAVE = demo.ask.suggested.find(q => q.id === 'leave').q;
 const toolNames = message => message.provenance.tools.map(x => x.name);
 
-test('an Ask chip stores a grounded answer with provenance in the message row and the scenario', T, () => withServer({ env: FAKE }, async s => {
+test('an Ask chip stores a grounded answer with provenance in the message row and the scenario', T, async () => withServer({ env: FAKE }, async s => {
   const r = await askNew(s, LEAVE);
   const m = r.message;
   assert.equal(m.role, 'fathom');
@@ -49,12 +49,12 @@ test('an Ask chip stores a grounded answer with provenance in the message row an
   assert.equal(conv[0].role, 'me');
   assert.equal(conv[0].provenance.ownerInput.actorId, 'demo');
   assert.deepEqual(conv[1], m);
-  const stored = await readDb(s.dbFile, db => db.prepare("SELECT provenance FROM messages WHERE conversation_key = ? AND role = 'fathom'").get(r.thread.key));
+  const stored = await readDb(s.dbFile, async db => await db.prepare("SELECT provenance FROM messages WHERE conversation_key = ? AND role = 'fathom'").get(r.thread.key));
   assert.deepEqual(JSON.parse(stored.provenance), m.provenance);
   assert.ok(!stored.provenance.includes('<household.summary>'), 'no prompt text is stored');
 }));
 
-test('unmatched free text gets a grounded answer from the household summary with a bound literal', T, () => withServer({ env: FAKE }, async s => {
+test('unmatched free text gets a grounded answer from the household summary with a bound literal', T, async () => withServer({ env: FAKE }, async s => {
   const r = await askNew(s, 'How are things looking overall');
   const m = r.message;
   assert.equal(m.notice, false);
@@ -66,7 +66,7 @@ test('unmatched free text gets a grounded answer from the household summary with
 }));
 
 // The fake engine echoes the owner's amounts next to the household summary count, which grounds.
-test('free text with an owner-stated amount is sourced to the owner without correction', T, () => withServer({ env: FAKE }, async s => {
+test('free text with an owner-stated amount is sourced to the owner without correction', T, async () => withServer({ env: FAKE }, async s => {
   const r = await askNew(s, `Could we spend ${INVENTED} on a sailboat`);
   const m = r.message;
   assert.equal(m.notice, false);
@@ -83,7 +83,7 @@ test('free text with an owner-stated amount is sourced to the owner without corr
   assert.deepEqual(m.provenance.discipline.violations, []);
 }));
 
-test('free text with two owner-stated amounts sources both and stores one answer without correction', T, () => withServer({ env: FAKE }, async s => {
+test('free text with two owner-stated amounts sources both and stores one answer without correction', T, async () => withServer({ env: FAKE }, async s => {
   const r = await askNew(s, `Could we spend ${INVENTED} or ${INVENTED_2} on a sailboat`);
   const m = r.message;
   assert.equal(m.notice, false);
@@ -98,7 +98,7 @@ test('free text with two owner-stated amounts sources both and stores one answer
   assert.deepEqual(conv.map(x => x.role), ['me', 'fathom'], 'one answer for the turn');
 }));
 
-test('a rec thread question answers with the rec as its ref and provenance', T, () => withServer({ env: FAKE }, async s => {
+test('a rec thread question answers with the rec as its ref and provenance', T, async () => withServer({ env: FAKE }, async s => {
   const r = await ok(postJson(s.baseUrl, '/api/threads', { recId: 'deferral', questionId: 0 }));
   assert.equal(r.thread.recId, 'deferral');
   assert.equal(r.message.notice, false);
@@ -110,7 +110,7 @@ test('a rec thread question answers with the rec as its ref and provenance', T, 
   assert.ok(!('deferral' in r.scenario.live.conversations), 'no rec-keyed conversation');
 }));
 
-test('what-if runs a live conversation once, stores provenance and marks the pack done', T, () => withServer({ env: FAKE }, async s => {
+test('what-if runs a live conversation once, stores provenance and marks the pack done', T, async () => withServer({ env: FAKE }, async s => {
   const { scenario } = await ok(postJson(s.baseUrl, '/api/packs/giving/whatif', {}));
   const conv = scenario.live.conversations['pack:giving'];
   assert.equal(conv.length, 2);
@@ -131,7 +131,7 @@ test('what-if runs a live conversation once, stores provenance and marks the pac
   assert.equal(followUp.scenario.live.conversations['pack:giving'].length, 4);
 }));
 
-test('engine off stores the notice without spending; back on answers with provenance', T, () => withServer({ env: FAKE }, async s => {
+test('engine off stores the notice without spending; back on answers with provenance', T, async () => withServer({ env: FAKE }, async s => {
   await ok(postJson(s.baseUrl, '/api/engine', { on: false }));
   const before = (await spendRows(s.dbFile)).length;
   const off = await askNew(s, LEAVE);
@@ -146,7 +146,7 @@ test('engine off stores the notice without spending; back on answers with proven
   assert.ok(on.message.provenance);
 }));
 
-test('a zero cap stores the over-cap notice without spending; a restored cap answers', T, () => withServer({ env: FAKE }, async s => {
+test('a zero cap stores the over-cap notice without spending; a restored cap answers', T, async () => withServer({ env: FAKE }, async s => {
   await ok(postJson(s.baseUrl, '/api/engine/cap', { usd: 0 }));
   const before = (await spendRows(s.dbFile)).length;
   const capped = await askNew(s, LEAVE);
@@ -160,7 +160,7 @@ test('a zero cap stores the over-cap notice without spending; a restored cap ans
   assert.equal((await ask(s, { key: capped.thread.key, text: LEAVE })).message.notice, false);
 }));
 
-test('a server configured with FATHOM_ENGINE=off answers with the configuration notice', T, () => withServer({ env: { FATHOM_ENGINE: 'off' } }, async s => {
+test('a server configured with FATHOM_ENGINE=off answers with the configuration notice', T, async () => withServer({ env: { FATHOM_ENGINE: 'off' } }, async s => {
   const before = (await spendRows(s.dbFile)).length;
   const r = await askNew(s, LEAVE);
   assert.equal(r.message.notice, true);
@@ -172,7 +172,7 @@ test('a server configured with FATHOM_ENGINE=off answers with the configuration 
   assert.equal((await spendRows(s.dbFile)).length, before);
 }));
 
-test('each answer records spend rows in the clock month that the scenario ledger lists', T, () => withServer({ env: FAKE }, async s => {
+test('each answer records spend rows in the clock month that the scenario ledger lists', T, async () => withServer({ env: FAKE }, async s => {
   const first = await getScenario(s.baseUrl);
   const before = await spendRows(s.dbFile);
   await askNew(s, LEAVE);
@@ -197,9 +197,9 @@ test('each answer records spend rows in the clock month that the scenario ledger
 // and a What if on a pack leave every rec status unchanged; an explicit command comes back as a
 // proposal in provenance for the owner to confirm, and nothing is written until they do.
 const statuses = scenario => Object.fromEntries(scenario.recs.map(r => [r.id, r.status]));
-const toolRows = file => readDb(file, db => db.prepare("SELECT count(*) AS n FROM rec_events WHERE actor = 'tool'").get().n);
+const toolRows = async file => readDb(file, async db => (await db.prepare("SELECT count(*) AS n FROM rec_events WHERE actor = 'tool'").get()).n);
 
-test('Ask commands update recommendations with a receipt, while pack conversations remain read-only', T, () => withServer({ env: FAKE }, async s => {
+test('Ask commands update recommendations with a receipt, while pack conversations remain read-only', T, async () => withServer({ env: FAKE }, async s => {
   const { thread } = await ok(postJson(s.baseUrl, '/api/threads', { recId: 'deferral', text: 'Synthetic opening question' }));
   const changed = await ask(s, { key: thread.key, text: 'dismiss this' });
   assert.equal(statuses(changed.scenario).deferral, 'dismissed');

@@ -17,31 +17,31 @@ const args = { title: 'Parent education contribution', horizon: 'now', target: 4
 
 async function setup(t) {
   const s = await createEvalStore();
-  t.after(() => s.close());
-  s.db.prepare('INSERT INTO conversations (key, created_at) VALUES (?, ?)').run(key, now);
+  t.after(async () => await s.close());
+  await s.db.prepare('INSERT INTO conversations (key, created_at) VALUES (?, ?)').run(key, now);
   const ctx = { db: s.db, now, actorId: 'demo', ownerText: 'yeah', conversationKey: key, turnId: 'goal-turn' };
-  return { ...s, ctx, registry: () => createRegistryServer(tools, { purpose: 'chat', ctx }) };
+  return { ...s, ctx, registry: async () => await createRegistryServer(tools, { purpose: 'chat', ctx }) };
 }
-function storedGoal(db, text = note) {
+async function storedGoal(db, text = note) {
   const def = { id: 'education-note', title: 'Education savings', note: text, horizon: 'now', target: 8000, track: null };
-  db.prepare("INSERT INTO goals (id, def, sort, origin, created_at) VALUES (?, ?, 100, 'owner', ?)").run(def.id, JSON.stringify(def), now);
+  await db.prepare("INSERT INTO goals (id, def, sort, origin, created_at) VALUES (?, ?, 100, 'owner', ?)").run(def.id, JSON.stringify(def), now);
 }
-function message(db, text, provenance, role = 'fathom', thread = key) {
-  db.prepare('INSERT INTO messages (conversation_key, role, text, ts, provenance) VALUES (?, ?, ?, ?, ?)')
+async function message(db, text, provenance, role = 'fathom', thread = key) {
+  await db.prepare('INSERT INTO messages (conversation_key, role, text, ts, provenance) VALUES (?, ?, ?, ?, ?)')
     .run(thread, role, text, now, provenance ? JSON.stringify(provenance) : null);
 }
-function proposal(db, { sourced = true, target = 4000, thread = key } = {}) {
+async function proposal(db, { sourced = true, target = 4000, thread = key } = {}) {
   const text = `Create a goal for $${target.toLocaleString('en-US')} by 2026-12-31?`;
   const literals = sourced ? [
     { text: `$${target.toLocaleString('en-US')}`, index: text.indexOf('$'), source: 'household summary' },
     { text: '2026-12-31', index: text.indexOf('2026-12-31'), source: 'household summary' },
   ] : [];
-  message(db, renderAnswer(text, [], literals).join(''), { literals, grounding: { ok: sourced, unverified: sourced ? [] : [String(target)] } }, 'fathom', thread);
+  await message(db, renderAnswer(text, [], literals).join(''), { literals, grounding: { ok: sourced, unverified: sourced ? [] : [String(target)] } }, 'fathom', thread);
 }
 
 test('AC1: replay both failed goal call shapes through the Ask registry, then correct horizon', async t => {
   const { db, registry } = await setup(t);
-  storedGoal(db); proposal(db);
+  await storedGoal(db); await proposal(db);
   const r = registry();
   for (const extra of [{ note, track: null }, {}]) {
     const rejected = await r.invoke('update_goal', { operation: 'create', ...args, horizon: 'This year', ...extra });
@@ -87,14 +87,14 @@ test('AC3: schema and handler errors retain argument reasons without sibling hou
 
 test('AC4: stored goal definitions and notes, facts and available figures support goal values', async t => {
   const { db, registry } = await setup(t);
-  storedGoal(db);
+  await storedGoal(db);
   for (const input of [args, { ...args, target: 8000 }]) {
     assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...input })).isError);
   }
-  db.prepare("INSERT INTO facts (key, value, confirmed, updated_at) VALUES ('goal.syntheticTarget', '7319', 1, ?)").run(now);
-  db.prepare("INSERT INTO facts (key, value, confirmed, updated_at) VALUES ('goal.syntheticDate', ?, 1, ?)").run(JSON.stringify('2028-09-17'), now);
+  await db.prepare("INSERT INTO facts (key, value, confirmed, updated_at) VALUES ('goal.syntheticTarget', '7319', 1, ?)").run(now);
+  await db.prepare("INSERT INTO facts (key, value, confirmed, updated_at) VALUES ('goal.syntheticDate', ?, 1, ?)").run(JSON.stringify('2028-09-17'), now);
   assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: 7319, targetDate: '2028-09-17' })).isError);
-  const value = db.prepare('SELECT v FROM figures WHERE unavailable_reason IS NULL AND v > 0 LIMIT 1').get().v;
+  const value = (await db.prepare('SELECT v FROM figures WHERE unavailable_reason IS NULL AND v > 0 LIMIT 1').get()).v;
   assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: value })).isError);
 });
 
@@ -102,9 +102,9 @@ test('AC4: sourced immediate stored proposals accept short explicit confirmation
   const { db, ctx, registry } = await setup(t);
   let target = 97361;
   for (const reply of ['yes', 'yeah', 'sure', 'do it', 'go ahead', 'ok', 'okay', 'Yes, please create it.']) {
-    proposal(db, { target: ++target });
+    await proposal(db, { target: ++target });
     ctx.ownerText = reply;
-    assert.equal(db.prepare("SELECT count(*) AS n FROM goals WHERE json_extract(def, '$.target') = ?").get(target).n, 0);
+    assert.equal((await db.prepare("SELECT count(*) AS n FROM goals WHERE json_extract(def, '$.target') = ?").get(target)).n, 0);
     const out = await registry().invoke('update_goal', { operation: 'create', ...args, target });
     assert.ok(!out.isError, `${reply}: ${out.content[0].text}`);
   }
@@ -113,35 +113,35 @@ test('AC4: sourced immediate stored proposals accept short explicit confirmation
 test('AC4: invented, unsourced, negative, delayed and current-turn proposals confirm nothing', async t => {
   const { db, ctx, registry } = await setup(t);
   const input = { ...args, target: 97361 };
-  proposal(db, { sourced: false, target: input.target });
+  await proposal(db, { sourced: false, target: input.target });
   assert.equal((await registry().invoke('update_goal', { operation: 'create', ...input })).isError, true);
-  proposal(db, { target: input.target });
+  await proposal(db, { target: input.target });
   for (const reply of ['no', 'wait', 'not yet', 'yeah but wait', 'yes, do not create it', 'okay maybe later', 'surely not', 'yesterday']) {
     ctx.ownerText = reply;
     assert.equal((await registry().invoke('update_goal', { operation: 'create', ...input })).isError, true, reply);
   }
   ctx.ownerText = 'yeah';
-  message(db, 'Something unrelated.', null);
+  await message(db, 'Something unrelated.', null);
   assert.equal((await registry().invoke('update_goal', { operation: 'create', ...input })).isError, true);
   const before = registry();
-  proposal(db, { target: input.target });
+  await proposal(db, { target: input.target });
   assert.equal((await before.invoke('update_goal', { operation: 'create', ...input })).isError, true, 'only pre-existing assistant rows count');
   assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...input })).isError, 'next request can confirm saved proposal');
 });
 
 test('AC4: a stored confirmation belongs to its actor and thread', async t => {
   const { db, ctx, registry } = await setup(t);
-  proposal(db, { target: 97361 });
-  message(db, 'yeah', { ownerInput: { actorId: 'someone-else' } }, 'me');
+  await proposal(db, { target: 97361 });
+  await message(db, 'yeah', { ownerInput: { actorId: 'someone-else' } }, 'me');
   ctx.ownerText = null;
   assert.equal((await registry().invoke('update_goal', { operation: 'create', ...args, target: 97361 })).isError, true);
-  db.prepare("DELETE FROM messages WHERE role = 'me' AND conversation_key = ?").run(key);
-  message(db, 'yeah', { ownerInput: { actorId: 'demo' } }, 'me');
+  await db.prepare("DELETE FROM messages WHERE role = 'me' AND conversation_key = ?").run(key);
+  await message(db, 'yeah', { ownerInput: { actorId: 'demo' } }, 'me');
   assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: 97361 })).isError);
-  db.prepare('INSERT INTO conversations (key, created_at) VALUES (?, ?)').run('ask:abcdef012345', now);
-  message(db, 'An unrelated proposal.', null, 'fathom', 'ask:abcdef012345');
-  proposal(db, { target: 97372 });
-  message(db, 'yeah', { ownerInput: { actorId: 'demo' } }, 'me', 'ask:abcdef012345');
+  await db.prepare('INSERT INTO conversations (key, created_at) VALUES (?, ?)').run('ask:abcdef012345', now);
+  await message(db, 'An unrelated proposal.', null, 'fathom', 'ask:abcdef012345');
+  await proposal(db, { target: 97372 });
+  await message(db, 'yeah', { ownerInput: { actorId: 'demo' } }, 'me', 'ask:abcdef012345');
   ctx.conversationKey = 'ask:abcdef012345'; ctx.ownerText = null;
   const wrongThread = await registry().invoke('update_goal', { operation: 'create', ...args, title: 'Other thread', target: 97372 });
   assert.equal(wrongThread.isError, true);
@@ -152,12 +152,12 @@ test('AC4: a stored confirmation belongs to its actor and thread', async t => {
 
 test('AC4: goal evidence never loosens household fact attribution', async t => {
   const { db, ctx, registry } = await setup(t);
-  db.prepare("INSERT INTO facts (key, value, confirmed, updated_at) VALUES ('household.dependents', '2', 1, ?) ON CONFLICT(key) DO UPDATE SET value = '2'").run(now);
-  db.prepare("DELETE FROM facts WHERE key = 'household.birthYears'").run();
+  await db.prepare("INSERT INTO facts (key, value, confirmed, updated_at) VALUES ('household.dependents', '2', 1, ?) ON CONFLICT(key) DO UPDATE SET value = '2'").run(now);
+  await db.prepare("DELETE FROM facts WHERE key = 'household.birthYears'").run();
   const out = await registry().invoke('answer', { operation: 'fact', key: 'household.birthYears', value: { owner: 1974 }, evidence: 'yeah' });
   assert.equal(out.isError, true);
-  assert.equal(db.prepare("SELECT value FROM facts WHERE key = 'household.birthYears'").get(), undefined);
-  proposal(db, { target: 1969 });
+  assert.equal(await db.prepare("SELECT value FROM facts WHERE key = 'household.birthYears'").get(), undefined);
+  await proposal(db, { target: 1969 });
   assert.equal((await registry().invoke('answer', { operation: 'fact', key: 'household.birthYears', value: { owner: 1969 }, evidence: 'yeah' })).isError, true);
   ctx.ownerText = 'I was born in 1974';
   const good = await registry().invoke('answer', { operation: 'fact', key: 'household.birthYears', value: { owner: 1974 }, evidence: ctx.ownerText });
@@ -166,10 +166,10 @@ test('AC4: goal evidence never loosens household fact attribution', async t => {
 
 test('AC4: date components from a goal note are not target amounts', async t => {
   const { db, registry } = await setup(t);
-  db.prepare('DELETE FROM facts').run();
-  db.prepare('DELETE FROM goals').run();
-  db.prepare('DELETE FROM figures WHERE v IN (12, 31, 2026)').run();
-  storedGoal(db, 'Due 2026-12-31.');
+  await db.prepare('DELETE FROM facts').run();
+  await db.prepare('DELETE FROM goals').run();
+  await db.prepare('DELETE FROM figures WHERE v IN (12, 31, 2026)').run();
+  await storedGoal(db, 'Due 2026-12-31.');
   for (const target of [12, 31, 2026]) {
     const out = await registry().invoke('update_goal', { operation: 'create', ...args, target });
     assert.equal(out.isError, true, String(target));
@@ -180,7 +180,7 @@ test('AC4: date components from a goal note are not target amounts', async t => 
 
 test('AC4: a stored amount must match exactly rather than round to a proposed target', async t => {
   const { db, registry } = await setup(t);
-  storedGoal(db, 'Planned $97,361.49 by 2026-12-31.');
+  await storedGoal(db, 'Planned $97,361.49 by 2026-12-31.');
   const rounded = await registry().invoke('update_goal', { operation: 'create', ...args, target: 97361 });
   assert.equal(rounded.isError, true);
   assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: 97361.49 })).isError);
@@ -188,35 +188,35 @@ test('AC4: a stored amount must match exactly rather than round to a proposed ta
 
 test('SEC2: stored notes and sourced proposals keep identifier context for numeric evidence', async t => {
   const { db, ctx, registry } = await setup(t);
-  db.prepare('DELETE FROM facts').run();
-  db.prepare('DELETE FROM goals').run();
-  db.prepare('DELETE FROM figures').run();
-  storedGoal(db, 'Account ending in 4821, due 2028-09-17.');
-  const receipts = () => db.prepare('SELECT count(*) AS n FROM action_receipts').get().n;
+  await db.prepare('DELETE FROM facts').run();
+  await db.prepare('DELETE FROM goals').run();
+  await db.prepare('DELETE FROM figures').run();
+  await storedGoal(db, 'Account ending in 4821, due 2028-09-17.');
+  const receipts = async () => (await db.prepare('SELECT count(*) AS n FROM action_receipts').get()).n;
   for (const target of [4821, 2028, 9, 17]) {
     const out = await registry().invoke('update_goal', { operation: 'create', title: 'Savings', target });
     assert.equal(out.isError, true, String(target));
-    assert.equal(receipts(), 0);
+    assert.equal(await receipts(), 0);
   }
   for (const rendered of [false, true]) {
     const text = 'Create a savings goal for account ending in 4821?';
     const literals = [{ text: '4821', index: text.indexOf('4821'), source: 'account summary' }];
-    message(db, rendered ? renderAnswer(text, [], literals).join('') : text, { literals });
+    await message(db, rendered ? renderAnswer(text, [], literals).join('') : text, { literals });
     ctx.ownerText = 'yes';
     const rejected = await registry().invoke('update_goal', { operation: 'create', title: 'Savings', target: 4821 });
     assert.equal(rejected.isError, true);
-    assert.equal(receipts(), 0);
+    assert.equal(await receipts(), 0);
   }
   const accepted = await registry().invoke('update_goal', { operation: 'create', title: 'Savings', target: 8000 });
   assert.ok(!accepted.isError, accepted.content[0].text);
-  assert.equal(receipts(), 1);
+  assert.equal(await receipts(), 1);
 });
 
 test('SEC2: owner-stated range bounds persist through the Ask registry', async t => {
   const { db, ctx, registry } = await setup(t);
-  db.prepare('DELETE FROM facts').run();
-  db.prepare('DELETE FROM figures').run();
-  db.prepare('DELETE FROM goals').run();
+  await db.prepare('DELETE FROM facts').run();
+  await db.prepare('DELETE FROM figures').run();
+  await db.prepare('DELETE FROM goals').run();
   for (const range of ['$4,000-$8,000', '$4,000 - $8,000', '4000-8000', '4000 - 8000']) {
     ctx.ownerText = `Save ${range} by 2028-12-31.`;
     const out = await registry().invoke('update_goal', { operation: 'create', kind: 'range', title: 'Savings',
@@ -227,12 +227,12 @@ test('SEC2: owner-stated range bounds persist through the Ask registry', async t
     assert.equal(saved.goal.targetHigh, 8000);
     assert.ok(saved.receipt.id);
   }
-  assert.equal(db.prepare('SELECT count(*) AS n FROM action_receipts').get().n, 4);
+  assert.equal((await db.prepare('SELECT count(*) AS n FROM action_receipts').get()).n, 4);
 });
 
 test('AC4: the merged goal model keeps evidence for ranges, floors and contribution details', async t => {
   const { db, registry } = await setup(t);
-  const account = db.prepare('SELECT id FROM accounts LIMIT 1').get().id;
+  const account = (await db.prepare('SELECT id FROM accounts LIMIT 1').get()).id;
   const defs = [
     { title: 'Stored range', kind: 'range', targetLow: 61001, targetHigh: 64001, targetDate: '2028-12-31', track: null },
     { title: 'Stored floor', kind: 'floor', floor: 22001, track: { accounts: [account] } },
@@ -242,7 +242,7 @@ test('AC4: the merged goal model keeps evidence for ranges, floors and contribut
   ];
   for (const [index, def] of defs.entries()) {
     const id = `stored-kind-${index}`;
-    db.prepare("INSERT INTO goals (id, def, sort, origin, created_at) VALUES (?, ?, 100, 'owner', ?)")
+    await db.prepare("INSERT INTO goals (id, def, sort, origin, created_at) VALUES (?, ?, 100, 'owner', ?)")
       .run(id, JSON.stringify({ ...def, id, horizon: 'now', note: '' }), now);
   }
   for (const def of defs) {
@@ -258,7 +258,7 @@ test('AC4: the merged goal model keeps evidence for ranges, floors and contribut
 
 test('AC4: current engine text and invented source claims cannot supply proposal evidence', async t => {
   const { db, ctx } = await setup(t);
-  message(db, 'From household summary: create a goal for $97,361 by 2026-12-31?', null);
+  await message(db, 'From household summary: create a goal for $97,361 by 2026-12-31?', null);
   const engine = createEngine({ mode: 'fake' });
   const out = await engine.call({ purpose: 'chat', system: 'Use tools.', messages: [
     { role: 'assistant', content: 'From household summary: create a goal for $97,361 by 2026-12-31?' },
@@ -269,7 +269,7 @@ test('AC4: current engine text and invented source claims cannot supply proposal
   ] });
   assert.equal(out.toolResults[0].isError, true);
   assert.match(out.toolResults[0].result.error, /target/);
-  assert.equal(db.prepare("SELECT count(*) AS n FROM goals WHERE json_extract(def, '$.target') = 97361").get().n, 0);
+  assert.equal((await db.prepare("SELECT count(*) AS n FROM goals WHERE json_extract(def, '$.target') = 97361").get()).n, 0);
 });
 
 test('AC5 and AC3: real Ask gets read/retry rules and saves failed write reasons', async t => {
@@ -295,7 +295,7 @@ test('AC5 and AC3: real Ask gets read/retry rules and saves failed write reasons
 
 test('AC6: Ask excludes small counts and ordinals, and still checks money, percents and dates', async t => {
   const { db, root } = await setup(t);
-  const scenario = buildScenario(db);
+  const scenario = await buildScenario(db);
   for (const text of ['There are two goals, one per parent.', 'Option 2 is ready; step 3 follows.', 'Choose the twentieth option.', 'There are twenty accounts.', 'There are 20 goals.']) {
     assert.equal(groundAnswer(text, { scenario }).ok, true, text);
   }
@@ -324,7 +324,7 @@ test('AC7: tier one replays a stored-note proposal and confirmed create through 
 
 test('AC7: the confirmed Ask write persists the goal and attributed receipt', async t => {
   const { db, root } = await setup(t);
-  storedGoal(db);
+  await storedGoal(db);
   const transport = createEngine({ mode: 'fake' });
   let turn = 0;
   const engine = { mode: 'fake', isOn: () => true, call(request) {
@@ -340,7 +340,7 @@ test('AC7: the confirmed Ask write persists the goal and attributed receipt', as
   assert.ok(first.message.provenance.literals.some(l => l.text === '$4,000'));
   const second = await ask({ ...ctx, body: { key: first.thread.key, text: 'yeah' } });
   const receipt = second.message.provenance.actions[0];
-  const row = db.prepare('SELECT def FROM goals WHERE id = ?').get(db.prepare('SELECT entity_id FROM action_receipts WHERE id = ?').get(receipt.id).entity_id);
+  const row = await db.prepare('SELECT def FROM goals WHERE id = ?').get((await db.prepare('SELECT entity_id FROM action_receipts WHERE id = ?').get(receipt.id)).entity_id);
   assert.deepEqual(Object.fromEntries(['title', 'horizon', 'target', 'targetDate'].map(k => [k, JSON.parse(row.def)[k]])), args);
   assert.equal(receipt.actorId, 'demo');
 });

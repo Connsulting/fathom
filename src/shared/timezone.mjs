@@ -7,8 +7,8 @@ export function validTimezone(tz) {
   try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; } catch { return false; }
 }
 
-export function ownerTimezone(db) {
-  const tz = getSetting(db, 'timezone', null);
+export async function ownerTimezone(db) {
+  const tz = await getSetting(db, 'timezone', null);
   return validTimezone(tz) ? tz : DEFAULT_TIMEZONE;
 }
 

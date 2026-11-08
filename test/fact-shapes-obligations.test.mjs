@@ -30,14 +30,14 @@ test('C7 facts accept their declared shapes and reject malformed neighbors atomi
     const out = await callTool('answer',{operation:'fact',key,value,evidence},{...s.ctx,actorId:'synthetic-actor',ownerText:evidence});
     assert.ok(out.receipt);
     assert.deepEqual(out.value,value);
-    const before=s.db.prepare('SELECT value FROM facts WHERE key=?').get(key).value;
-    assert.throws(()=>recordFactAnswers(s.db,[{key,value:invalid}],{now}),FactAnswerError,key);
-    assert.equal(s.db.prepare('SELECT value FROM facts WHERE key=?').get(key).value,before);
+    const before=(await s.db.prepare('SELECT value FROM facts WHERE key=?').get(key)).value;
+    assert.throws(async ()=>await recordFactAnswers(s.db,[{key,value:invalid}],{now}),FactAnswerError,key);
+    assert.equal((await s.db.prepare('SELECT value FROM facts WHERE key=?').get(key)).value,before);
   }
-  recordFactAnswers(s.db,[{key:'accounts.rothFirstContributionYear',value:{ira:2021}}],{now});
-  assert.throws(()=>recordFactAnswers(s.db,[{key:'household.dependentBirthDates',value:[]}],{now}),FactAnswerError);
-  assert.throws(()=>recordFactAnswers(s.db,[{key:'household.dependentAges',value:[1.5]}],{now}),FactAnswerError);
-  const q=questionFor(['accounts.separationDate'],{accounts:s.db.prepare('SELECT * FROM accounts').all(),facts:{'accounts.planType':{ret:'401k',ira:'roth_ira'}}});
+  await recordFactAnswers(s.db,[{key:'accounts.rothFirstContributionYear',value:{ira:2021}}],{now});
+  assert.throws(async ()=>await recordFactAnswers(s.db,[{key:'household.dependentBirthDates',value:[]}],{now}),FactAnswerError);
+  assert.throws(async ()=>await recordFactAnswers(s.db,[{key:'household.dependentAges',value:[1.5]}],{now}),FactAnswerError);
+  const q=questionFor(['accounts.separationDate'],{accounts:await s.db.prepare('SELECT * FROM accounts').all(),facts:{'accounts.planType':{ret:'401k',ira:'roth_ira'}}});
   assert.deepEqual(q.fields.map(f=>f.path[0]),['ret']);
 });
 
@@ -45,19 +45,19 @@ test('account eligibility follows the plan type in the same atomic answer batch 
  const s=await spendingStore(t);s.account('plan','retirement','owner');
  const separation={key:'accounts.separationDate',value:{plan:'2035-01-01'}};
  const plan={key:'accounts.planType',value:{plan:'401k'}};
- recordFactAnswers(s.db,[separation,plan],{now});
- s.db.prepare("DELETE FROM facts WHERE key IN ('accounts.planType','accounts.separationDate')").run();
- recordFactAnswers(s.db,[plan,separation],{now});
- assert.throws(()=>recordFactAnswers(s.db,[{...plan,value:{plan:'traditional_ira'}},separation],{now}),FactAnswerError);
- assert.equal(JSON.parse(s.db.prepare("SELECT value FROM facts WHERE key='accounts.planType'").get().value).plan,'401k');
+ await recordFactAnswers(s.db,[separation,plan],{now});
+ await s.db.prepare("DELETE FROM facts WHERE key IN ('accounts.planType','accounts.separationDate')").run();
+ await recordFactAnswers(s.db,[plan,separation],{now});
+ assert.throws(async ()=>await recordFactAnswers(s.db,[{...plan,value:{plan:'traditional_ira'}},separation],{now}),FactAnswerError);
+ assert.equal(JSON.parse((await s.db.prepare("SELECT value FROM facts WHERE key='accounts.planType'").get()).value).plan,'401k');
 });
 
 test('answer.fact collects Roth basis for accounts identified by plan type and bridge counts it',async t=>{
  const s=await spendingStore(t);
  for(const [id,kind] of [['ira-plan','ira'],['workplace-ira','retirement']])s.account(id,kind,'owner');
- s.fact('accounts.planType',{'ira-plan':'roth_ira','workplace-ira':'roth_ira'});
+ await s.fact('accounts.planType',{'ira-plan':'roth_ira','workplace-ira':'roth_ira'});
  for(const id of ['ira-plan','workplace-ira']) {
-  s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run(id,'2026-10-31',10000);
+  await s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run(id,'2026-10-31',10000);
   const evidence='My Roth contribution basis is $2500.';
   const out=await callTool('answer',{operation:'fact',key:'accounts.rothBasis',value:{[id]:2500},evidence},{...s.ctx,actorId:'synthetic-actor',ownerText:evidence});
   assert.equal(out.value[id],2500);

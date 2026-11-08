@@ -31,6 +31,7 @@ import {
   browser, sessionBrowser, signIn, register, mcpList,
   platformModules, freshInstance, enrollMember, insertPasskey, count,
 } from './helpers/tenancy.mjs';
+import { mapSeries } from '../src/shared/series.mjs';
 
 const T = { timeout: 180_000 };
 const CLOCK = '2026-11-05';
@@ -69,7 +70,7 @@ async function startServer(t, dataDir, env = REAL) {
 // The complete migrated end state for a legacy fixture: platform rows equal the source rows,
 // memberships exactly one per enrolled user with the source role, the store keeps every financial
 // row and api key but no auth table, and only counts and hashes reach the journal.
-function assertMigrated(fx) {
+async function assertMigrated(fx) {
   const { dataDir, file, legacy } = fx;
   const platformFile = join(dataDir, PLATFORM_FILE);
   assert.ok(existsSync(platformFile), 'platform.sqlite is published');
@@ -79,7 +80,7 @@ function assertMigrated(fx) {
   const snaps = snapshotsIn(dataDir);
   assert.equal(snaps.length, 1, `exactly one source snapshot: ${snaps}`);
 
-  const p = withDb(platformFile, db => Object.fromEntries(PLATFORM_TABLES.map(t => [t, rows(db, t)])));
+  const p = await withDb(platformFile, async db => Object.fromEntries(await mapSeries(PLATFORM_TABLES, async t => [t, await rows(db, t)])));
   assert.equal(p.households.length, 1, 'one household');
   const household = p.households[0];
   assert.equal(typeof household.id, 'string');
@@ -125,14 +126,14 @@ function assertMigrated(fx) {
   assert.equal(p.platform_operations.length, 1, 'one platform operation row');
   assert.equal(p.platform_operations[0].status, 'done');
 
-  const storeTables = tableNames(file);
+  const storeTables = await tableNames(file);
   for (const t of AUTH_TABLES) assert.ok(!storeTables.includes(t), `the store no longer has ${t}`);
   assert.ok(storeTables.includes('api_keys') && storeTables.includes('store_identity'));
-  const identity = withDb(file, db => rows(db, 'store_identity'));
+  const identity = await withDb(file, async db => await rows(db, 'store_identity'));
   assert.equal(identity.length, 1);
   assert.equal(identity[0].household_id, hh, 'store_identity names the platform household');
   const expected = Object.fromEntries(Object.entries(fx.preDump).filter(([t]) => !AUTH_TABLES.includes(t) && t !== 'schema_migrations'));
-  const current = dump(file, { except: ['schema_migrations', 'store_identity'] });
+  const current = await dump(file, { except: ['schema_migrations', 'store_identity'] });
   for (const [table, entries] of Object.entries(current)) {
     if (!(table in expected)) {
       assert.deepEqual(entries, [], `new additive table ${table} starts empty`);
@@ -185,24 +186,24 @@ describe('offline migration of a schema 020 real store (AC1, AC3)', () => {
     noSecrets(r.output, fx, 'the refusal');
     assert.deepEqual(stable(fx.dataDir), fx.preHashes, 'the store and secret are byte-identical');
     assert.equal(existsSync(join(fx.dataDir, PLATFORM_FILE)), false);
-    assert.deepEqual(dump(fx.file), fx.preDump);
+    assert.deepEqual(await dump(fx.file), fx.preDump);
   });
 
   test('the script snapshots, moves every auth row into platform.sqlite and drops the auth tables from the store', T, async () => {
     const r = await migrateCli(fx.dataDir, fx.keyFile);
     assert.equal(r.code, 0, r.stderr);
     noSecrets(r.stdout + r.stderr, fx, 'the script output');
-    ({ householdId } = assertMigrated(fx));
+    ({ householdId } = await assertMigrated(fx));
   });
 
   test('a rerun of a completed migration is a no-op: same platform rows, store rows and snapshot', T, async () => {
     const platformFile = join(fx.dataDir, PLATFORM_FILE);
-    const before = { platform: dump(platformFile), store: dump(fx.file), snapshots: snapshotsIn(fx.dataDir) };
+    const before = { platform: await dump(platformFile), store: await dump(fx.file), snapshots: snapshotsIn(fx.dataDir) };
     const r = await migrateCli(fx.dataDir, fx.keyFile);
     assert.equal(r.code, 0, r.stderr);
-    assert.deepEqual({ platform: dump(platformFile), store: dump(fx.file), snapshots: snapshotsIn(fx.dataDir) }, before);
+    assert.deepEqual({ platform: await dump(platformFile), store: await dump(fx.file), snapshots: snapshotsIn(fx.dataDir) }, before);
     assert.equal(existsSync(join(fx.dataDir, LOCK_FILE)), false);
-    assertMigrated(fx);
+    await assertMigrated(fx);
   });
 
   test('the migration snapshot round-trips the stopped source with the synthetic backup key', T, async () => {
@@ -210,7 +211,7 @@ describe('offline migration of a schema 020 real store (AC1, AC3)', () => {
     const out = join(root, 'restored');
     const r = await snapshotCli(['restore', '--snapshot', snapshot, '--out', out], { FATHOM_BACKUP_KEY_FILE: fx.keyFile });
     assert.equal(r.code, 0, r.stderr);
-    assert.deepEqual(dump(join(out, 'fathom.sqlite')), fx.preDump, 'the restored store equals the pre-migration store');
+    assert.deepEqual(await dump(join(out, 'fathom.sqlite')), fx.preDump, 'the restored store equals the pre-migration store');
     assert.equal(readFileSync(join(out, 'api-key-secret'), 'utf8').trim(), fx.secretHex);
   });
 
@@ -241,9 +242,9 @@ describe('offline migration of a schema 020 real store (AC1, AC3)', () => {
       assert.equal(r.status, 410, 'a pre-migration link no longer redeems');
       assert.deepEqual(r.json, EXPIRED);
     }
-    withDb(join(fx.dataDir, PLATFORM_FILE), db => {
-      assert.equal(count(db, 'SELECT count(*) AS n FROM household_invitations WHERE consumed_at IS NULL AND revoked_at IS NULL'), 0, 'no live invitation');
-      assert.equal(count(db, 'SELECT count(*) AS n FROM household_memberships WHERE user_id = ?', fx.invitee.id), 0, 'the invitee did not join');
+    await withDb(join(fx.dataDir, PLATFORM_FILE), async db => {
+      assert.equal(await count(db, 'SELECT count(*) AS n FROM household_invitations WHERE consumed_at IS NULL AND revoked_at IS NULL'), 0, 'no live invitation');
+      assert.equal(await count(db, 'SELECT count(*) AS n FROM household_memberships WHERE user_id = ?', fx.invitee.id), 0, 'the invitee did not join');
     });
 
     for (const key of [fx.ownedKey.key, fx.ownerlessKey.key]) {
@@ -260,7 +261,7 @@ describe('pre-migration challenges do not complete after both migrations (AC1)',
     const fx = await legacyFixture(t);
     const r = await migrateCli(fx.dataDir, fx.keyFile);
     assert.equal(r.code, 0, r.stderr);
-    const { householdId } = assertMigrated(fx);
+    const { householdId } = await assertMigrated(fx);
     await migrateTenancyStore(fx.dataDir);
     const { baseUrl: base } = await startServer(t, fx.dataDir);
     const platformFile = join(fx.dataDir, PLATFORM_FILE);
@@ -276,7 +277,7 @@ describe('pre-migration challenges do not complete after both migrations (AC1)',
       { rp: { id: 'localhost' }, user: { id: fx.invitee.handle }, challenge: fx.registerChallenge.challenge }, { origin: base });
     const enrolled = await reg.post('/api/auth/register/verify', { token: fx.inviteToken, name: 'Synthetic device', response: credential });
     assert.ok([400, 410].includes(enrolled.status), `the deleted registration challenge is refused: ${enrolled.status}`);
-    assert.equal(withDb(platformFile, db => count(db, "SELECT count(*) AS n FROM household_memberships WHERE household_id = ? AND user_id = ?", householdId, fx.invitee.id)), 0);
+    assert.equal(await withDb(platformFile, async db => await count(db, "SELECT count(*) AS n FROM household_memberships WHERE household_id = ? AND user_id = ?", householdId, fx.invitee.id)), 0);
 
     // Liveness: a fresh sign-in ceremony with the same passkey succeeds.
     const fresh = await signIn(base, fx.admin.device, fx.admin.credentialId);
@@ -306,7 +307,7 @@ describe('the migration is offline (migration safety)', () => {
     }
     const again = await migrateCli(fx.dataDir, fx.keyFile);
     assert.equal(again.code, 0, again.stderr);
-    assertMigrated(fx);
+    await assertMigrated(fx);
   });
 });
 
@@ -326,9 +327,9 @@ describe('every caller refuses an unmigrated real store (AC3)', () => {
       }
       const migrated = await migrateCli(fx.dataDir, fx.keyFile);
       assert.equal(migrated.code, 0, migrated.stderr);
-      assertMigrated(fx);
+      await assertMigrated(fx);
       await migrateTenancyStore(fx.dataDir);
-      const household = ['--household', servedStore(fx.dataDir).householdId];
+      const household = ['--household', (await servedStore(fx.dataDir)).householdId];
       const keyed = { ...env, ...secretEnv(secretsFor(fx.dataDir)) };
       // The migrated household starts with outbound jobs paused: both job CLIs get past every
       // readiness check and stop at the pause, never running around it.
@@ -368,14 +369,14 @@ describe('preflight refusals change nothing (migration safety)', () => {
     }
     const ok = await migrateCli(fx.dataDir, fx.keyFile);
     assert.equal(ok.code, 0, ok.stderr);
-    assertMigrated(fx);
+    await assertMigrated(fx);
   });
 
   test('orphan auth rows refuse orphan_auth_rows; removing the orphan lets the migration run', T, async t => {
     const fx = await legacyFixture(t);
-    withDb(fx.file, db => {
+    await withDb(fx.file, async db => {
       db.exec('PRAGMA foreign_keys = OFF');
-      db.prepare('INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, 0, ?, ?, ?)')
+      await db.prepare('INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, 0, ?, ?, ?)')
         .run('pk-orphan-synthetic', 'usr-missing-synthetic', Buffer.from('synthetic'), '["internal"]', 'Orphan', Date.now());
     });
     const before = stable(fx.dataDir);
@@ -383,28 +384,28 @@ describe('preflight refusals change nothing (migration safety)', () => {
     assert.equal(r.code, 1, r.stderr);
     assert.match(r.stderr, /orphan_auth_rows/);
     unchanged(fx, before);
-    withDb(fx.file, db => { db.prepare("DELETE FROM passkeys WHERE id = 'pk-orphan-synthetic'").run(); });
+    await withDb(fx.file, async db => { await db.prepare("DELETE FROM passkeys WHERE id = 'pk-orphan-synthetic'").run(); });
     const ok = await migrateCli(fx.dataDir, fx.keyFile);
     assert.equal(ok.code, 0, ok.stderr);
-    assertMigrated(fx);
+    await assertMigrated(fx);
   });
 
   test('two households refuse ambiguous_household; back to one household the migration runs', T, async t => {
     const fx = await legacyFixture(t);
-    withDb(fx.file, db => {
+    await withDb(fx.file, async db => {
       // 018 pins households to id 1; rebuild the table without that CHECK to hold a second one.
       db.exec('PRAGMA foreign_keys = OFF');
       db.exec('BEGIN');
-      db.exec('CREATE TABLE households_rebuilt (id INTEGER PRIMARY KEY)');
-      db.exec('INSERT INTO households_rebuilt (id) SELECT id FROM households');
-      db.exec('DROP TABLE households');
-      db.exec('ALTER TABLE households_rebuilt RENAME TO households');
-      db.exec('INSERT INTO households (id) VALUES (2)');
-      db.prepare('INSERT INTO users (id, household_id, email, role, user_handle, created_at, enrolled_at) VALUES (?, 2, ?, ?, ?, ?, ?)')
+      await db.applySchema('CREATE TABLE households_rebuilt (id INTEGER PRIMARY KEY)');
+      await db.applySchema('INSERT INTO households_rebuilt (id) SELECT id FROM households');
+      await db.applySchema('DROP TABLE households');
+      await db.applySchema('ALTER TABLE households_rebuilt RENAME TO households');
+      await db.applySchema('INSERT INTO households (id) VALUES (2)');
+      await db.prepare('INSERT INTO users (id, household_id, email, role, user_handle, created_at, enrolled_at) VALUES (?, 2, ?, ?, ?, ?, ?)')
         .run('usr-second-household', 'second-household@example.test', 'admin', randomBytes(32).toString('base64url'), Date.now(), Date.now());
       db.exec('COMMIT');
       db.exec('PRAGMA foreign_keys = ON');
-      assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+      assert.deepEqual((await db.foreignKeyCheck()), []);
     });
     const before = stable(fx.dataDir);
     const r = await migrateCli(fx.dataDir, fx.keyFile);
@@ -412,13 +413,13 @@ describe('preflight refusals change nothing (migration safety)', () => {
     assert.match(r.stderr, /ambiguous_household/);
     assert.ok(!r.stderr.includes('second-household@example.test'));
     unchanged(fx, before);
-    withDb(fx.file, db => {
-      db.prepare("DELETE FROM users WHERE id = 'usr-second-household'").run();
-      db.prepare('DELETE FROM households WHERE id = 2').run();
+    await withDb(fx.file, async db => {
+      await db.prepare("DELETE FROM users WHERE id = 'usr-second-household'").run();
+      await db.prepare('DELETE FROM households WHERE id = 2').run();
     });
     const ok = await migrateCli(fx.dataDir, fx.keyFile);
     assert.equal(ok.code, 0, ok.stderr);
-    assertMigrated(fx);
+    await assertMigrated(fx);
   });
 
   test('a lock file with no journal refuses stale_lock_mismatch; without it the migration runs', T, async t => {
@@ -432,21 +433,21 @@ describe('preflight refusals change nothing (migration safety)', () => {
     rmSync(join(fx.dataDir, LOCK_FILE));
     const ok = await migrateCli(fx.dataDir, fx.keyFile);
     assert.equal(ok.code, 0, ok.stderr);
-    assertMigrated(fx);
+    await assertMigrated(fx);
   });
 
   test('a demo store refuses not_real_store; the same store in real mode migrates', T, async t => {
     const fx = await legacyFixture(t);
-    withDb(fx.file, db => { db.prepare("UPDATE settings SET value = '\"demo\"' WHERE key = 'mode'").run(); });
+    await withDb(fx.file, async db => { await db.prepare("UPDATE settings SET value = '\"demo\"' WHERE key = 'mode'").run(); });
     const before = stable(fx.dataDir);
     const r = await migrateCli(fx.dataDir, fx.keyFile);
     assert.equal(r.code, 1, r.stderr);
     assert.match(r.stderr, /not_real_store/);
     unchanged(fx, before);
-    withDb(fx.file, db => { db.prepare("UPDATE settings SET value = '\"real\"' WHERE key = 'mode'").run(); });
+    await withDb(fx.file, async db => { await db.prepare("UPDATE settings SET value = '\"real\"' WHERE key = 'mode'").run(); });
     const ok = await migrateCli(fx.dataDir, fx.keyFile);
     assert.equal(ok.code, 0, ok.stderr);
-    assertMigrated(fx);
+    await assertMigrated(fx);
   });
 });
 
@@ -463,7 +464,7 @@ describe('abrupt termination and phase faults resume to the same end state (migr
         }
         if (BEFORE_PUBLISH.includes(phase)) {
           assert.equal(existsSync(join(fx.dataDir, PLATFORM_FILE)), false, 'nothing is published before verify completes');
-          const source = sourceAuthRows(fx.file);
+          const source = await sourceAuthRows(fx.file);
           for (const table of AUTH_TABLES) assert.deepEqual(source[table], fx.legacy[table], `${table} rows are intact`);
         }
         if (mode === 'kill' && phase !== 'preflight') {
@@ -475,7 +476,7 @@ describe('abrupt termination and phase faults resume to the same end state (migr
         }
         const again = await migrateCli(fx.dataDir, fx.keyFile);
         assert.equal(again.code, 0, again.stderr);
-        assertMigrated(fx);
+        await assertMigrated(fx);
         if (phase === 'complete') {
           await migrateTenancyStore(fx.dataDir);
           const server = await startServer(t, fx.dataDir);
@@ -505,7 +506,7 @@ describe('household membership on a real instance (AC1)', () => {
   let operator;
   const as = person => sessionBrowser(base, person.token);
   const membership = id => store.membership(id, hh);
-  const storeFile = () => servedStore(dataDir).file;
+  const storeFile = async () => (await servedStore(dataDir)).file;
 
   before(async () => {
     root = await tempDir('fathom-mt01-members-');
@@ -516,10 +517,10 @@ describe('household membership on a real instance (AC1)', () => {
     const m = await platformModules();
     platform = m.openPlatform(join(dataDir, PLATFORM_FILE));
     store = m.createAuthStore(platform);
-    admin = enrollMember(store, hh, 'admin@example.test', 'admin');
-    member = enrollMember(store, hh, 'member@example.test', 'member');
+    admin = await enrollMember(store, hh, 'admin@example.test', 'admin');
+    member = await enrollMember(store, hh, 'member@example.test', 'member');
     // An operator whose membership was removed: the account stays because of the operator grant.
-    operator = enrollMember(store, hh, 'operator@example.test', 'member');
+    operator = await enrollMember(store, hh, 'operator@example.test', 'member');
     const granted = await operatorCli(['grant', operator.email], dataDir);
     assert.equal(granted.code, 0, granted.stderr);
     const removed = await as(admin).post(`/api/admin/users/${operator.id}/remove`, {});
@@ -528,7 +529,7 @@ describe('household membership on a real instance (AC1)', () => {
   }, T);
 
   after(async () => {
-    platform?.close();
+    await platform?.close();
     if (server) await server.stop();
     rmSync(root, { recursive: true, force: true });
   });
@@ -552,11 +553,11 @@ describe('household membership on a real instance (AC1)', () => {
     assert.equal(dup.status, 409, dup.text);
     await assert.rejects(async () => store.invite(hh, member.email), err => err.status === 409);
     assert.deepEqual(pick(membership(member.id), ['role', 'status']), { role: 'member', status: 'active' });
-    assert.equal(count(platform, 'SELECT count(*) AS n FROM household_invitations WHERE email = ?', member.email), 1, 'only the original, consumed invitation');
+    assert.equal(await count(platform, 'SELECT count(*) AS n FROM household_invitations WHERE email = ?', member.email), 1, 'only the original, consumed invitation');
     const fresh = await as(admin).post('/api/admin/users/invite', { email: 'fresh-invite@example.test', role: 'member' });
     assert.equal(fresh.status, 200, fresh.text);
     assert.deepEqual(fresh.json, { sent: true });
-    assert.equal(count(platform, 'SELECT count(*) AS n FROM household_invitations WHERE email = ? AND consumed_at IS NULL AND revoked_at IS NULL',
+    assert.equal(await count(platform, 'SELECT count(*) AS n FROM household_invitations WHERE email = ? AND consumed_at IS NULL AND revoked_at IS NULL',
       'fresh-invite@example.test'), 1);
   });
 
@@ -564,8 +565,8 @@ describe('household membership on a real instance (AC1)', () => {
     const email = 'reinvited@example.test';
     const first = await store.invite(hh, email, { role: 'member' });
     const second = await store.invite(hh, email, { role: 'member' });
-    assert.equal(store.invitation(first.token), null, 'the first link is revoked');
-    assert.equal(store.invitation(second.token).email, email);
+    assert.equal(await store.invitation(first.token), null, 'the first link is revoked');
+    assert.equal((await store.invitation(second.token)).email, email);
     const old = await browser(base).post('/api/auth/register/options', { token: first.token, name: 'Synthetic device' });
     assert.equal(old.status, 410);
     assert.deepEqual(old.json, EXPIRED);
@@ -578,7 +579,7 @@ describe('household membership on a real instance (AC1)', () => {
   });
 
   test('accepting needs the invited email, takes the role from the invitation only and is single use', T, async () => {
-    const joiner = enrollMember(store, hh, 'joiner@example.test', 'member');
+    const joiner = await enrollMember(store, hh, 'joiner@example.test', 'member');
     await store.grantOperator(joiner.id);
     assert.equal((await as(admin).post(`/api/admin/users/${joiner.id}/remove`, {})).status, 200);
     assert.equal(membership(joiner.id).status, 'removed');
@@ -590,7 +591,7 @@ describe('household membership on a real instance (AC1)', () => {
     assert.equal(wrong.status, 403, wrong.text);
     assert.equal(membership(joiner.id).status, 'removed', 'no membership is created for a mismatched email');
     assert.deepEqual(pick(membership(member.id), ['role', 'status']), { role: 'member', status: 'active' });
-    assert.notEqual(store.invitation(invitation.token), null, 'a refused accept leaves the invitation live');
+    assert.notEqual(await store.invitation(invitation.token), null, 'a refused accept leaves the invitation live');
 
     const accepted = await sessionBrowser(base, joinerSession).post('/api/auth/invitations/accept', { token: invitation.token, role: 'admin' });
     assert.equal(accepted.status, 200, accepted.text);
@@ -610,13 +611,13 @@ describe('household membership on a real instance (AC1)', () => {
     const m = as(member);
     const invite = await m.post('/api/admin/users/invite', { email: 'by-member@example.test', role: 'admin' });
     assert.equal(invite.status, 403);
-    assert.equal(count(platform, 'SELECT count(*) AS n FROM household_invitations WHERE email = ?', 'by-member@example.test'), 0);
+    assert.equal(await count(platform, 'SELECT count(*) AS n FROM household_invitations WHERE email = ?', 'by-member@example.test'), 0);
     assert.equal((await m.post(`/api/admin/users/${member.id}/role`, { role: 'admin' })).status, 403, 'no self escalation');
     assert.equal((await m.post(`/api/admin/users/${admin.id}/role`, { role: 'member' })).status, 403);
     assert.equal(membership(member.id).role, 'member');
     assert.equal(membership(admin.id).role, 'admin');
 
-    const target = enrollMember(store, hh, 'role-liveness@example.test', 'member');
+    const target = await enrollMember(store, hh, 'role-liveness@example.test', 'member');
     const before = membership(target.id).version;
     const promoted = await as(admin).post(`/api/admin/users/${target.id}/role`, { role: 'admin' });
     assert.equal(promoted.status, 200, promoted.text);
@@ -627,7 +628,7 @@ describe('household membership on a real instance (AC1)', () => {
   });
 
   test('the last admin cannot be demoted or removed (409)', T, async () => {
-    assert.equal(count(platform, "SELECT count(*) AS n FROM household_memberships WHERE household_id = ? AND role = 'admin' AND status = 'active'", hh), 1);
+    assert.equal(await count(platform, "SELECT count(*) AS n FROM household_memberships WHERE household_id = ? AND role = 'admin' AND status = 'active'", hh), 1);
     const demote = await as(admin).post(`/api/admin/users/${admin.id}/role`, { role: 'member' });
     assert.equal(demote.status, 409, demote.text);
     const remove = await as(admin).post(`/api/admin/users/${admin.id}/remove`, {});
@@ -650,7 +651,7 @@ describe('household membership on a real instance (AC1)', () => {
       assert.equal(r.status, 403, path);
       assert.deepEqual(r.json, MEMBERSHIP_REQUIRED, path);
     }
-    const keysBefore = count(platform, 'SELECT count(*) AS n FROM api_keys');
+    const keysBefore = await count(platform, 'SELECT count(*) AS n FROM api_keys');
     const key = await o.post('/api/keys', { name: 'Operator agent' });
     assert.equal(key.status, 403);
     assert.deepEqual(key.json, MEMBERSHIP_REQUIRED);
@@ -659,16 +660,16 @@ describe('household membership on a real instance (AC1)', () => {
       body: `--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="synthetic.csv"\r\nContent-Type: text/csv\r\n\r\nDate,Amount\r\n2026-01-02,-1.00\r\n--${boundary}--\r\n` });
     assert.equal(upload.status, 403);
     assert.deepEqual(upload.json, MEMBERSHIP_REQUIRED);
-    assert.equal(count(platform, 'SELECT count(*) AS n FROM api_keys'), keysBefore);
-    assert.equal(withDb(storeFile(), db => count(db, 'SELECT count(*) AS n FROM files')), 0);
+    assert.equal(await count(platform, 'SELECT count(*) AS n FROM api_keys'), keysBefore);
+    assert.equal(await withDb(await storeFile(), async db => await count(db, 'SELECT count(*) AS n FROM files')), 0);
     for (const path of ['/api/scenario', '/api/keys', '/api/files']) assert.equal((await as(admin).get(path)).status, 200, `admin ${path}`);
   });
 
   test('an admin cannot list, re-role, remove or revoke passkeys of a user outside the household (404)', T, async () => {
-    const pk = insertPasskey(platform, operator.id);
+    const pk = await insertPasskey(platform, operator.id);
     const before = {
-      passkeys: count(platform, 'SELECT count(*) AS n FROM passkeys WHERE user_id = ?', operator.id),
-      sessions: count(platform, 'SELECT count(*) AS n FROM auth_sessions WHERE user_id = ?', operator.id),
+      passkeys: await count(platform, 'SELECT count(*) AS n FROM passkeys WHERE user_id = ?', operator.id),
+      sessions: await count(platform, 'SELECT count(*) AS n FROM auth_sessions WHERE user_id = ?', operator.id),
     };
     const list = await as(admin).get('/api/admin/users');
     assert.equal(list.status, 200);
@@ -681,14 +682,14 @@ describe('household membership on a real instance (AC1)', () => {
       assert.equal(r.status, 404, path);
     }
     assert.deepEqual({
-      passkeys: count(platform, 'SELECT count(*) AS n FROM passkeys WHERE user_id = ?', operator.id),
-      sessions: count(platform, 'SELECT count(*) AS n FROM auth_sessions WHERE user_id = ?', operator.id),
+      passkeys: await count(platform, 'SELECT count(*) AS n FROM passkeys WHERE user_id = ?', operator.id),
+      sessions: await count(platform, 'SELECT count(*) AS n FROM auth_sessions WHERE user_id = ?', operator.id),
     }, before, 'the outsider keeps passkeys and sessions');
     assert.equal(store.isOperator(operator.id), true);
     assert.equal((await as(operator).get('/api/identity')).status, 200);
 
-    const target = enrollMember(store, hh, 'passkey-target@example.test', 'member');
-    const tpk = insertPasskey(platform, target.id);
+    const target = await enrollMember(store, hh, 'passkey-target@example.test', 'member');
+    const tpk = await insertPasskey(platform, target.id);
     const revoked = await as(admin).post(`/api/admin/users/${target.id}/passkeys/${tpk}/revoke`, {});
     assert.equal(revoked.status, 200, revoked.text);
     assert.deepEqual(revoked.json.passkeys, []);
@@ -703,7 +704,7 @@ describe('household membership on a real instance (AC1)', () => {
   });
 
   test('removing a member revokes their sessions and MCP keys and deletes the account', T, async () => {
-    const leaver = enrollMember(store, hh, 'leaver@example.test', 'member');
+    const leaver = await enrollMember(store, hh, 'leaver@example.test', 'member');
     const created = await as(leaver).post('/api/keys', { name: 'Leaver agent' });
     assert.equal(created.status, 200, created.text);
     const adminKey = (await as(admin).post('/api/keys', { name: 'Admin agent' })).json.key;
@@ -711,21 +712,21 @@ describe('household membership on a real instance (AC1)', () => {
     const removed = await as(admin).post(`/api/admin/users/${leaver.id}/remove`, {});
     assert.equal(removed.status, 200, removed.text);
     assert.equal((await as(leaver).get('/api/scenario')).status, 401, 'the session is revoked');
-    assert.equal(count(platform, 'SELECT count(*) AS n FROM auth_sessions WHERE user_id = ?', leaver.id), 0);
+    assert.equal(await count(platform, 'SELECT count(*) AS n FROM auth_sessions WHERE user_id = ?', leaver.id), 0);
     assert.equal((await mcpList(base, created.json.key)).status, 401, 'the MCP key no longer authenticates');
-    assert.equal(count(platform, 'SELECT count(*) AS n FROM api_keys WHERE user_id = ?', leaver.id), 0, 'the key row is deleted');
+    assert.equal(await count(platform, 'SELECT count(*) AS n FROM api_keys WHERE user_id = ?', leaver.id), 0, 'the key row is deleted');
     assert.equal(store.getUser(leaver.id), null, 'no membership and no operator grant: the account is deleted');
     assert.equal((await mcpList(base, adminKey)).status, 200, 'other keys keep working');
   });
 
   test('an MCP key whose creator is no longer an active member is refused even if its row remains', T, async () => {
-    const holder = enrollMember(store, hh, 'key-holder@example.test', 'member');
+    const holder = await enrollMember(store, hh, 'key-holder@example.test', 'member');
     const created = await as(holder).post('/api/keys', { name: 'Holder agent' });
     assert.equal(created.status, 200, created.text);
     assert.equal((await mcpList(base, created.json.key)).status, 200);
-    platform.prepare("UPDATE household_memberships SET status = 'removed' WHERE user_id = ? AND household_id = ?").run(holder.id, hh);
+    await platform.prepare("UPDATE household_memberships SET status = 'removed' WHERE user_id = ? AND household_id = ?").run(holder.id, hh);
     assert.equal((await mcpList(base, created.json.key)).status, 401);
-    platform.prepare("UPDATE household_memberships SET status = 'active' WHERE user_id = ? AND household_id = ?").run(holder.id, hh);
+    await platform.prepare("UPDATE household_memberships SET status = 'active' WHERE user_id = ? AND household_id = ?").run(holder.id, hh);
     assert.equal((await mcpList(base, created.json.key)).status, 200);
   });
 });
@@ -744,15 +745,15 @@ describe('admin credential scoping and audit attribution (AC1)', () => {
   let admin;
   const secrets = [];
   const as = person => sessionBrowser(base, person.token);
-  const passkeysOf = id => count(platform, 'SELECT count(*) AS n FROM passkeys WHERE user_id = ?', id);
-  const sessionsOf = id => count(platform, 'SELECT count(*) AS n FROM auth_sessions WHERE user_id = ?', id);
-  const openInvitations = id => count(platform,
+  const passkeysOf = async id => await count(platform, 'SELECT count(*) AS n FROM passkeys WHERE user_id = ?', id);
+  const sessionsOf = async id => await count(platform, 'SELECT count(*) AS n FROM auth_sessions WHERE user_id = ?', id);
+  const openInvitations = async id => await count(platform,
     'SELECT count(*) AS n FROM household_invitations WHERE user_id = ? AND household_id = ? AND consumed_at IS NULL AND revoked_at IS NULL', id, hh);
-  const lastAuditId = () => platform.prepare('SELECT coalesce(max(id), 0) AS n FROM audit_events').get().n;
-  const auditSince = id => platform.prepare('SELECT * FROM audit_events WHERE id > ? ORDER BY id').all(id).map(r => ({ ...r }));
+  const lastAuditId = async () => (await platform.prepare('SELECT coalesce(max(id), 0) AS n FROM audit_events').get()).n;
+  const auditSince = async id => (await platform.prepare('SELECT * FROM audit_events WHERE id > ? ORDER BY id').all(id)).map(r => ({ ...r }));
   const AUDIT_COLUMNS = ['action', 'actor_user_id', 'at', 'household_id', 'id', 'outcome', 'target_user_id'];
-  const enroll = (email, role = 'member') => {
-    const person = enrollMember(store, hh, email, role);
+  const enroll = async (email, role = 'member') => {
+    const person = await enrollMember(store, hh, email, role);
     secrets.push(email, person.token);
     return person;
   };
@@ -789,11 +790,11 @@ describe('admin credential scoping and audit attribution (AC1)', () => {
     const m = await platformModules();
     platform = m.openPlatform(join(dataDir, PLATFORM_FILE));
     store = m.createAuthStore(platform);
-    admin = enroll('scope-admin@example.test', 'admin');
+    admin = await enroll('scope-admin@example.test', 'admin');
   }, T);
 
   after(async () => {
-    platform?.close();
+    await platform?.close();
     if (server) await server.stop();
     rmSync(root, { recursive: true, force: true });
   });
@@ -802,23 +803,23 @@ describe('admin credential scoping and audit attribution (AC1)', () => {
     // An enrolled operator who has never been a member of the household.
     const email = 'scope-outsider@example.test';
     const outsider = { id: `usr-${randomBytes(6).toString('hex')}`, email };
-    platform.prepare('INSERT INTO users (id, email, user_handle, created_at, enrolled_at) VALUES (?, ?, ?, ?, ?)')
+    await platform.prepare('INSERT INTO users (id, email, user_handle, created_at, enrolled_at) VALUES (?, ?, ?, ?, ?)')
       .run(outsider.id, email, randomBytes(32).toString('base64url'), Date.now() - 60_000, Date.now() - 60_000);
     store.grantOperator(outsider.id);
     outsider.token = store.createSession(outsider.id).token;
-    const pk = insertPasskey(platform, outsider.id);
+    const pk = await insertPasskey(platform, outsider.id);
     secrets.push(email, outsider.token, pk);
-    const held = () => ({ passkeys: passkeysOf(outsider.id), sessions: sessionsOf(outsider.id) });
-    const kept = held();
+    const held = async () => ({ passkeys: await passkeysOf(outsider.id), sessions: await sessionsOf(outsider.id) });
+    const kept = await held();
     assert.deepEqual(kept, { passkeys: 1, sessions: 1 });
     assert.equal(store.membership(outsider.id, hh), null, 'no membership row in the household');
 
     for (const state of ['live', 'expired']) {
       const invited = await as(admin).post('/api/admin/users/invite', { email, role: 'member' });
       assert.equal(invited.status, 200, `${state}: ${invited.text}`);
-      assert.equal(openInvitations(outsider.id), 1, `${state}: one open invitation`);
+      assert.equal(await openInvitations(outsider.id), 1, `${state}: one open invitation`);
       if (state === 'expired') {
-        platform.prepare('UPDATE household_invitations SET expires_at = ? WHERE user_id = ? AND household_id = ? AND consumed_at IS NULL AND revoked_at IS NULL')
+        await platform.prepare('UPDATE household_invitations SET expires_at = ? WHERE user_id = ? AND household_id = ? AND consumed_at IS NULL AND revoked_at IS NULL')
           .run(Date.now() - 1000, outsider.id, hh);
       }
 
@@ -832,15 +833,15 @@ describe('admin credential scoping and audit attribution (AC1)', () => {
 
       const revoke = await as(admin).post(`/api/admin/users/${outsider.id}/passkeys/${pk}/revoke`, {});
       assert.equal(revoke.status, 404, `${state}: ${revoke.text}`);
-      assert.deepEqual(held(), kept, `${state}: passkeys and sessions unchanged by the refused revocation`);
+      assert.deepEqual(await held(), kept, `${state}: passkeys and sessions unchanged by the refused revocation`);
       assert.equal((await as(outsider).get('/api/identity')).status, 200, `${state}: the outsider's session still works`);
 
       const removed = await as(admin).post(`/api/admin/users/${outsider.id}/remove`, {});
       assert.equal(removed.status, 200, `${state}: ${removed.text}`);
-      assert.equal(openInvitations(outsider.id), 0, `${state}: the invitation is revoked`);
+      assert.equal(await openInvitations(outsider.id), 0, `${state}: the invitation is revoked`);
       assert.notEqual(store.getUser(outsider.id), null, `${state}: the account is kept`);
       assert.equal(store.isOperator(outsider.id), true, `${state}: the operator grant is kept`);
-      assert.deepEqual(held(), kept, `${state}: removing the invitee leaves passkeys and global sessions untouched`);
+      assert.deepEqual(await held(), kept, `${state}: removing the invitee leaves passkeys and global sessions untouched`);
       assert.equal(store.membership(outsider.id, hh), null, `${state}: no membership is created`);
       const who = await as(outsider).get('/api/identity');
       assert.equal(who.status, 200, `${state}: the outsider is still signed in`);
@@ -854,33 +855,33 @@ describe('admin credential scoping and audit attribution (AC1)', () => {
     secrets.push(email);
     const invited = await as(admin).post('/api/admin/users/invite', { email, role: 'member' });
     assert.equal(invited.status, 200, invited.text);
-    const user = store.findUser(email);
+    const user = await store.findUser(email);
     assert.ok(user && user.enrolledAt === null, 'a new, never-enrolled account');
-    assert.equal(openInvitations(user.id), 1);
+    assert.equal(await openInvitations(user.id), 1);
     const listed = (await as(admin).get('/api/admin/users')).json.users.find(u => u.id === user.id);
     assert.deepEqual(pick(listed, ['role', 'enrolledAt', 'passkeys']), { role: 'member', enrolledAt: null, passkeys: [] });
     const removed = await as(admin).post(`/api/admin/users/${user.id}/remove`, {});
     assert.equal(removed.status, 200, removed.text);
     assert.equal(store.getUser(user.id), null, 'the never-enrolled account is deleted');
-    assert.equal(count(platform, 'SELECT count(*) AS n FROM household_invitations WHERE user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL', user.id), 0);
+    assert.equal(await count(platform, 'SELECT count(*) AS n FROM household_invitations WHERE user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL', user.id), 0);
   });
 
   test('an admin lists and revokes an active member\'s passkeys; the revocation is audited with ids only', T, async () => {
     const start = Date.now();
-    const member = enroll('scope-member@example.test');
-    const pk = insertPasskey(platform, member.id);
+    const member = await enroll('scope-member@example.test');
+    const pk = await insertPasskey(platform, member.id);
     secrets.push(pk);
     const list = await as(admin).get('/api/admin/users');
     assert.equal(list.status, 200, list.text);
     assert.deepEqual(list.json.users.find(u => u.id === member.id).passkeys.map(p => p.id), [pk], 'an active member\'s passkeys are listed');
 
-    const mark = lastAuditId();
+    const mark = await lastAuditId();
     const revoked = await as(admin).post(`/api/admin/users/${member.id}/passkeys/${pk}/revoke`, {});
     assert.equal(revoked.status, 200, revoked.text);
     assert.deepEqual(revoked.json.passkeys, []);
-    assert.equal(passkeysOf(member.id), 0);
-    assert.equal(sessionsOf(member.id), 0, 'the member\'s sessions are revoked with the passkey');
-    const rowsNow = auditSince(mark);
+    assert.equal(await passkeysOf(member.id), 0);
+    assert.equal(await sessionsOf(member.id), 0, 'the member\'s sessions are revoked with the passkey');
+    const rowsNow = await auditSince(mark);
     assertIdsOnly(rowsNow, [admin.id, member.id], start);
     assert.deepEqual(pick(only(rowsNow, 'passkey.revoke'), ['actor_user_id', 'target_user_id', 'household_id', 'outcome']),
       { actor_user_id: admin.id, target_user_id: member.id, household_id: hh, outcome: 'ok' });
@@ -888,14 +889,14 @@ describe('admin credential scoping and audit attribution (AC1)', () => {
 
   test('a user revoking their own passkey writes a passkey.revoke audit row with ids only', T, async () => {
     const start = Date.now();
-    const user = enroll('scope-self@example.test');
-    const [keep, drop] = [insertPasskey(platform, user.id), insertPasskey(platform, user.id)];
+    const user = await enroll('scope-self@example.test');
+    const [keep, drop] = [await insertPasskey(platform, user.id), await insertPasskey(platform, user.id)];
     secrets.push(keep, drop);
-    const mark = lastAuditId();
+    const mark = await lastAuditId();
     const revoked = await as(user).post(`/api/auth/passkeys/${drop}/revoke`, {});
     assert.equal(revoked.status, 200, revoked.text);
     assert.deepEqual(revoked.json.passkeys.map(p => p.id), [keep]);
-    const rowsNow = auditSince(mark);
+    const rowsNow = await auditSince(mark);
     assertIdsOnly(rowsNow, [user.id], start);
     const row = only(rowsNow, 'passkey.revoke');
     assert.deepEqual(pick(row, ['actor_user_id', 'target_user_id', 'outcome']), { actor_user_id: user.id, target_user_id: user.id, outcome: 'ok' });
@@ -905,21 +906,21 @@ describe('admin credential scoping and audit attribution (AC1)', () => {
 
   test('role changes and member removals over HTTP record the acting admin, with ids only', T, async () => {
     const start = Date.now();
-    const target = enroll('scope-role@example.test');
-    const leaver = enroll('scope-leaver@example.test');
+    const target = await enroll('scope-role@example.test');
+    const leaver = await enroll('scope-leaver@example.test');
 
-    let mark = lastAuditId();
+    let mark = await lastAuditId();
     const promoted = await as(admin).post(`/api/admin/users/${target.id}/role`, { role: 'admin' });
     assert.equal(promoted.status, 200, promoted.text);
-    let rowsNow = auditSince(mark);
+    let rowsNow = await auditSince(mark);
     assertIdsOnly(rowsNow, [admin.id, target.id], start);
     assert.deepEqual(pick(only(rowsNow, 'membership.role'), ['actor_user_id', 'target_user_id', 'household_id', 'outcome']),
       { actor_user_id: admin.id, target_user_id: target.id, household_id: hh, outcome: 'ok' });
 
-    mark = lastAuditId();
+    mark = await lastAuditId();
     const removed = await as(admin).post(`/api/admin/users/${leaver.id}/remove`, {});
     assert.equal(removed.status, 200, removed.text);
-    rowsNow = auditSince(mark);
+    rowsNow = await auditSince(mark);
     assertIdsOnly(rowsNow, [admin.id, leaver.id], start);
     assert.deepEqual(pick(only(rowsNow, 'membership.remove'), ['actor_user_id', 'target_user_id', 'household_id', 'outcome']),
       { actor_user_id: admin.id, target_user_id: leaver.id, household_id: hh, outcome: 'ok' });
@@ -934,22 +935,22 @@ describe('instance operators (AC1)', () => {
     const { householdId: hh } = await freshInstance(dataDir, 'real');
     const m = await platformModules();
     const platform = m.openPlatform(join(dataDir, PLATFORM_FILE));
-    t.after(() => platform.close());
+    t.after(async () => await platform.close());
     const store = m.createAuthStore(platform);
-    const first = enrollMember(store, hh, 'first-operator@example.test', 'admin');
-    const second = enrollMember(store, hh, 'second-operator@example.test', 'member');
+    const first = await enrollMember(store, hh, 'first-operator@example.test', 'admin');
+    const second = await enrollMember(store, hh, 'second-operator@example.test', 'member');
     await store.invite(hh, 'pending-operator@example.test', { role: 'member' });
 
     const pending = await operatorCli(['grant', 'pending-operator@example.test'], dataDir);
     assert.equal(pending.code, 1, 'a pending user cannot be an operator');
     assert.ok(!pending.stderr.includes('pending-operator@example.test'));
-    assert.equal(count(platform, 'SELECT count(*) AS n FROM instance_operators'), 0);
+    assert.equal(await count(platform, 'SELECT count(*) AS n FROM instance_operators'), 0);
 
-    const audits = count(platform, 'SELECT count(*) AS n FROM audit_events');
+    const audits = await count(platform, 'SELECT count(*) AS n FROM audit_events');
     const granted = await operatorCli(['grant', first.email], dataDir);
     assert.equal(granted.code, 0, granted.stderr);
     assert.equal(store.isOperator(first.id), true);
-    assert.ok(count(platform, 'SELECT count(*) AS n FROM audit_events') > audits, 'the grant is audited');
+    assert.ok(await count(platform, 'SELECT count(*) AS n FROM audit_events') > audits, 'the grant is audited');
 
     const last = await operatorCli(['revoke', first.email], dataDir);
     assert.equal(last.code, 1, last.stderr);
@@ -981,7 +982,7 @@ describe('second-household provisioning gate (AC3)', () => {
   let member;
   let operator;
   const as = person => sessionBrowser(base, person.token);
-  const households = () => count(platform, 'SELECT count(*) AS n FROM households');
+  const households = async () => await count(platform, 'SELECT count(*) AS n FROM households');
   const provision = (person, adminEmail) => as(person).post('/api/operator/households', { displayName: 'Synthetic Second Household', adminEmail });
 
   before(async () => {
@@ -993,15 +994,15 @@ describe('second-household provisioning gate (AC3)', () => {
     const m = await platformModules();
     platform = m.openPlatform(join(dataDir, PLATFORM_FILE));
     store = m.createAuthStore(platform);
-    admin = enrollMember(store, hh, 'gate-admin@example.test', 'admin');
-    member = enrollMember(store, hh, 'gate-member@example.test', 'member');
-    operator = enrollMember(store, hh, 'gate-operator@example.test', 'member');
+    admin = await enrollMember(store, hh, 'gate-admin@example.test', 'admin');
+    member = await enrollMember(store, hh, 'gate-member@example.test', 'member');
+    operator = await enrollMember(store, hh, 'gate-operator@example.test', 'member');
     const granted = await operatorCli(['grant', operator.email], dataDir);
     assert.equal(granted.code, 0, granted.stderr);
   }, T);
 
   after(async () => {
-    platform?.close();
+    await platform?.close();
     if (server) await server.stop();
     rmSync(root, { recursive: true, force: true });
   });
@@ -1011,37 +1012,37 @@ describe('second-household provisioning gate (AC3)', () => {
       const r = await provision(person, 'not-provisioned@example.test');
       assert.equal(r.status, 403, r.text);
     }
-    assert.equal(households(), 1);
+    assert.equal(await households(), 1);
   });
 
   test('an explicit disabled gate refuses provisioning; enabling it provisions; a provisioning household still counts', T, async () => {
-    assert.equal(store.getPlatformSetting('multi_household_enabled', false), true, 'release migration enables provisioning');
-    store.setPlatformSetting('multi_household_enabled', false);
-    assert.equal(store.getPlatformSetting('multi_household_enabled', false), false, 'the gate defaults to off');
+    assert.equal(await store.getPlatformSetting('multi_household_enabled', false), true, 'release migration enables provisioning');
+    await store.setPlatformSetting('multi_household_enabled', false);
+    assert.equal(await store.getPlatformSetting('multi_household_enabled', false), false, 'the gate defaults to off');
     const gated = await provision(operator, 'second-admin@example.test');
     assert.equal(gated.status, 409, gated.text);
     assert.equal(gated.json.code, 'multi_household_gated');
     assert.equal(typeof gated.json.error, 'string');
-    assert.equal(households(), 1);
-    assert.equal(count(platform, 'SELECT count(*) AS n FROM household_invitations WHERE email = ?', 'second-admin@example.test'), 0);
+    assert.equal(await households(), 1);
+    assert.equal(await count(platform, 'SELECT count(*) AS n FROM household_invitations WHERE email = ?', 'second-admin@example.test'), 0);
 
-    store.setPlatformSetting('multi_household_enabled', true);
+    await store.setPlatformSetting('multi_household_enabled', true);
     const made = await provision(operator, 'second-admin@example.test');
     assert.equal(made.status, 200, made.text);
     assert.equal(made.json.household.status, 'provisioning');
     assert.equal(typeof made.json.household.id, 'string');
     assert.notEqual(made.json.household.id, hh);
-    const row = platform.prepare('SELECT * FROM households WHERE id = ?').get(made.json.household.id);
+    const row = await platform.prepare('SELECT * FROM households WHERE id = ?').get(made.json.household.id);
     assert.deepEqual(pick(row, ['status', 'mode', 'serves_store']), { status: 'provisioning', mode: 'real', serves_store: 0 });
-    const invitation = platform.prepare('SELECT * FROM household_invitations WHERE email = ?').get('second-admin@example.test');
+    const invitation = await platform.prepare('SELECT * FROM household_invitations WHERE email = ?').get('second-admin@example.test');
     assert.deepEqual(pick(invitation, ['household_id', 'role']), { household_id: made.json.household.id, role: 'admin' });
     assert.equal((await as(admin).get('/api/identity')).json.identity.householdId, hh, 'the served household is unchanged');
 
-    store.setPlatformSetting('multi_household_enabled', false);
+    await store.setPlatformSetting('multi_household_enabled', false);
     const third = await provision(operator, 'third-admin@example.test');
     assert.equal(third.status, 409, third.text);
     assert.equal(third.json.code, 'multi_household_gated');
-    assert.equal(households(), 2);
+    assert.equal(await households(), 2);
   });
 
   test('store level: a sole provisioning real household blocks another; deleted households do not count', T, async t => {
@@ -1051,20 +1052,20 @@ describe('second-household provisioning gate (AC3)', () => {
     const p = m.openPlatform(join(dir, PLATFORM_FILE));
     t.after(() => p.close());
     const s = m.createAuthStore(p);
-    s.setPlatformSetting('multi_household_enabled', false);
-    const op = enrollMember(s, householdId, 'store-operator@example.test', 'admin');
+    await s.setPlatformSetting('multi_household_enabled', false);
+    const op = await enrollMember(s, householdId, 'store-operator@example.test', 'admin');
     await s.grantOperator(op.id);
-    p.prepare("UPDATE households SET status = 'provisioning' WHERE id = ?").run(householdId);
+    await p.prepare("UPDATE households SET status = 'provisioning' WHERE id = ?").run(householdId);
     const request = email => s.provisionHousehold({ displayName: 'Synthetic Other Household', adminEmail: email }, { actorId: op.id });
     const gated = err => err.status === 409 && err.code === 'multi_household_gated';
     await assert.rejects(async () => request('blocked-admin@example.test'), gated);
-    assert.equal(count(p, 'SELECT count(*) AS n FROM households'), 1);
+    assert.equal(await count(p, 'SELECT count(*) AS n FROM households'), 1);
 
-    p.prepare("UPDATE households SET status = 'deleted' WHERE id = ?").run(householdId);
+    await p.prepare("UPDATE households SET status = 'deleted' WHERE id = ?").run(householdId);
     const made = await request('allowed-admin@example.test');
     assert.equal(made.household.status, 'provisioning');
     assert.equal(typeof made.token, 'string');
-    assert.equal(count(p, "SELECT count(*) AS n FROM households WHERE status != 'deleted' AND mode = 'real'"), 1);
+    assert.equal(await count(p, "SELECT count(*) AS n FROM households WHERE status != 'deleted' AND mode = 'real'"), 1);
     await assert.rejects(async () => request('blocked-again@example.test'), gated, 'the new provisioning household counts');
   });
 
@@ -1075,15 +1076,15 @@ describe('second-household provisioning gate (AC3)', () => {
     const p = m.openPlatform(join(dir, PLATFORM_FILE));
     t.after(() => p.close());
     const s = m.createAuthStore(p);
-    s.setPlatformSetting('multi_household_enabled', false);
-    assert.equal(s.getPlatformSetting('multi_household_enabled', false), false);
-    const op = enrollMember(s, householdId, 'demo-operator@example.test', 'admin');
+    await s.setPlatformSetting('multi_household_enabled', false);
+    assert.equal(await s.getPlatformSetting('multi_household_enabled', false), false);
+    const op = await enrollMember(s, householdId, 'demo-operator@example.test', 'admin');
     await s.grantOperator(op.id);
     for (const email of ['demo-second@example.test', 'demo-third@example.test']) {
       const made = await s.provisionHousehold({ displayName: 'Synthetic Demo Household', adminEmail: email }, { actorId: op.id });
       assert.equal(made.household.status, 'provisioning');
     }
-    assert.equal(count(p, 'SELECT count(*) AS n FROM households'), 3);
+    assert.equal(await count(p, 'SELECT count(*) AS n FROM households'), 3);
   });
 });
 
@@ -1097,18 +1098,18 @@ describe('startup with a platform database (AC3)', () => {
     await startServer(t, dataDir);
     const platformFile = join(dataDir, PLATFORM_FILE);
     assert.ok(existsSync(platformFile));
-    const list = withDb(platformFile, db => rows(db, 'households'));
+    const list = await withDb(platformFile, async db => await rows(db, 'households'));
     assert.equal(list.length, 1);
     assert.deepEqual(pick(list[0], ['status', 'mode', 'serves_store']), { status: 'active', mode: 'real', serves_store: 1 });
-    const storeFile = servedStore(dataDir).file;
-    assert.equal(withDb(storeFile, db => rows(db, 'store_identity'))[0].household_id, list[0].id);
-    for (const table of AUTH_TABLES) assert.ok(!tableNames(storeFile).includes(table), table);
+    const storeFile = (await servedStore(dataDir)).file;
+    assert.equal((await withDb(storeFile, async db => await rows(db, 'store_identity')))[0].household_id, list[0].id);
+    for (const table of AUTH_TABLES) assert.ok(!(await tableNames(storeFile)).includes(table), table);
   });
 
   test('a fresh demo creates its synthetic platform automatically and stays open', T, async t => {
     const dataDir = join(await scratch(t), 'data');
     const server = await startServer(t, dataDir, { FATHOM_ENGINE: 'fake' });
-    const list = withDb(join(dataDir, PLATFORM_FILE), db => rows(db, 'households'));
+    const list = await withDb(join(dataDir, PLATFORM_FILE), async db => await rows(db, 'households'));
     assert.equal(list.length, 1);
     assert.equal(list[0].mode, 'demo');
     assert.equal((await browser(server.baseUrl).get('/api/scenario')).status, 200);
@@ -1119,7 +1120,7 @@ describe('startup with a platform database (AC3)', () => {
     // by code); the instance itself still starts for the others.
     const dataDir = join(await scratch(t), 'data');
     await freshInstance(dataDir, 'real');
-    withDb(servedStore(dataDir).file, db => { db.prepare("UPDATE store_identity SET household_id = 'hh-synthetic-other'").run(); });
+    await withDb((await servedStore(dataDir)).file, async db => { await db.prepare("UPDATE store_identity SET household_id = 'hh-synthetic-other'").run(); });
     const r = await expectServerExit({ dataDir, env: REAL });
     assert.equal(r.started, true, r.output);
     assert.match(r.output, /household runtime unavailable household_store_mismatch/);
@@ -1170,11 +1171,11 @@ describe('offline source snapshot helper (AC3)', () => {
     assert.ok(bytes.subarray(0, MAGIC.length).equals(MAGIC));
     assert.equal(bytes.indexOf('SQLite format 3'), -1, 'not plaintext SQLite');
     noSecrets(bytes.toString('latin1'), fx, 'the ciphertext');
-    assert.deepEqual(dump(fx.file), fx.preDump, 'the source is unchanged');
+    assert.deepEqual(await dump(fx.file), fx.preDump, 'the source is unchanged');
     const out = join(root, 'restored');
     const r = await restore(snapshot, out);
     assert.equal(r.code, 0, r.stderr);
-    assert.deepEqual(dump(join(out, 'fathom.sqlite')), fx.preDump);
+    assert.deepEqual(await dump(join(out, 'fathom.sqlite')), fx.preDump);
     assert.equal(readFileSync(join(out, 'api-key-secret'), 'utf8').trim(), fx.secretHex);
   });
 
@@ -1250,7 +1251,7 @@ describe('rollback from the migration snapshot (migration safety)', () => {
     const fx = await legacyFixture(t, { files: true });
     const migrated = await migrateCli(fx.dataDir, fx.keyFile);
     assert.equal(migrated.code, 0, migrated.stderr);
-    const { snapshot } = assertMigrated(fx);
+    const { snapshot } = await assertMigrated(fx);
     const retained = stable(fx.dataDir);
     const out = join(fx.root, 'rolled-back');
     const r = await snapshotCli(['rollback', '--snapshot', snapshot, '--from', fx.dataDir, '--out', out], { FATHOM_BACKUP_KEY_FILE: fx.keyFile });
@@ -1263,7 +1264,7 @@ describe('rollback from the migration snapshot (migration safety)', () => {
       assert.ok(readFileSync(join(out, rel)).equals(bytes), `${rel} is byte-identical`);
     }
     assert.equal(readFileSync(join(out, 'api-key-secret'), 'utf8').trim(), fx.secretHex);
-    assert.deepEqual(dump(join(out, 'fathom.sqlite')), fx.preDump, 'the store is the pre-migration store');
+    assert.deepEqual(await dump(join(out, 'fathom.sqlite')), fx.preDump, 'the store is the pre-migration store');
     assert.deepEqual(stable(fx.dataDir), retained, 'the migrated directory is untouched');
 
     const outHashes = stable(out);
@@ -1276,7 +1277,7 @@ describe('rollback from the migration snapshot (migration safety)', () => {
     const fx = await legacyFixture(t);
     const migrated = await migrateCli(fx.dataDir, fx.keyFile);
     assert.equal(migrated.code, 0, migrated.stderr);
-    const { snapshot } = assertMigrated(fx);
+    const { snapshot } = await assertMigrated(fx);
     const rollback = (from, out) => snapshotCli(['rollback', '--snapshot', snapshot, '--from', from, '--out', out], { FATHOM_BACKUP_KEY_FILE: fx.keyFile });
     const dataBefore = stable(fx.dataDir);
     const listing = readdirSync(fx.dataDir).sort();
@@ -1302,7 +1303,7 @@ describe('rollback from the migration snapshot (migration safety)', () => {
     const sibling = join(fx.root, 'rolled-back');
     const ok = await rollback(fx.dataDir, sibling);
     assert.equal(ok.code, 0, ok.stderr);
-    assert.deepEqual(dump(join(sibling, 'fathom.sqlite')), fx.preDump);
+    assert.deepEqual(await dump(join(sibling, 'fathom.sqlite')), fx.preDump);
     assert.deepEqual(stable(fx.dataDir), dataBefore, 'the migrated directory is untouched');
   });
 });

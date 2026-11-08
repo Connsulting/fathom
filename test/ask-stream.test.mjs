@@ -38,7 +38,7 @@ const streamPost = (s, path, body, headers = {}) =>
 
 /* ---------- the stream protocol over HTTP ---------- */
 
-test('POST /api/threads streams start, progress and a final event equal to the JSON answer, and no text', T, () => withServer({ env: FAKE }, async s => {
+test('POST /api/threads streams start, progress and a final event equal to the JSON answer, and no text', T, async () => withServer({ env: FAKE }, async s => {
   const r = await streamPost(s, '/api/threads', { text: QUICK });
   assert.equal(r.status, 200);
   assert.match(r.headers['content-type'], /^text\/event-stream/);
@@ -67,12 +67,12 @@ test('POST /api/threads streams start, progress and a final event equal to the J
   // The stored turn is written once.
   const db = await openStore(s.dbFile);
   try {
-    const rows = db.prepare('SELECT role FROM messages WHERE conversation_key = ? ORDER BY id').all(final.thread.key);
+    const rows = await db.prepare('SELECT role FROM messages WHERE conversation_key = ? ORDER BY id').all(final.thread.key);
     assert.deepEqual(rows.map(x => x.role), ['me', 'fathom']);
-  } finally { db.close(); }
+  } finally { await db.close(); }
 }));
 
-test('POST /api/ask streams in an existing thread; JSON requests are unchanged', T, () => withServer({ env: FAKE }, async s => {
+test('POST /api/ask streams in an existing thread; JSON requests are unchanged', T, async () => withServer({ env: FAKE }, async s => {
   const first = await postJson(s.baseUrl, '/api/threads', { text: QUICK });
   assert.equal(first.status, 200);
   assert.match(first.headers['content-type'], /^application\/json/);
@@ -84,7 +84,7 @@ test('POST /api/ask streams in an existing thread; JSON requests are unchanged',
   assert.equal(evs.at(-1).data.scenario.live.conversations[key].length, 4);
 }));
 
-test('a validation error before the stream starts is an ordinary JSON error; no stream starts', T, () => withServer({ env: FAKE }, async s => {
+test('a validation error before the stream starts is an ordinary JSON error; no stream starts', T, async () => withServer({ env: FAKE }, async s => {
   const bad = await streamPost(s, '/api/ask', { key: 'ask:0123456789ab', text: '' });
   assert.equal(bad.status, 400);
   assert.match(bad.headers['content-type'], /^application\/json/);
@@ -92,7 +92,7 @@ test('a validation error before the stream starts is an ordinary JSON error; no 
   assert.equal(missing.status, 404);
 }));
 
-test('a client that disconnects mid-stream still gets its answer stored once', T, () => withServer({ env: { FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '40' } }, async s => {
+test('a client that disconnects mid-stream still gets its answer stored once', T, async () => withServer({ env: { FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '40' } }, async s => {
   const url = new URL(s.baseUrl);
   const payload = JSON.stringify({ text: QUICK });
   const key = await new Promise((resolve, reject) => {
@@ -113,7 +113,7 @@ test('a client that disconnects mid-stream still gets its answer stored once', T
   for (let i = 0; i < 50 && rows.length < 2; i++) {
     await new Promise(r => setTimeout(r, 100));
     const db = await openStore(s.dbFile);
-    try { rows = db.prepare('SELECT role, text FROM messages WHERE conversation_key = ? ORDER BY id').all(key); } finally { db.close(); }
+    try { rows = await db.prepare('SELECT role, text FROM messages WHERE conversation_key = ? ORDER BY id').all(key); } finally { await db.close(); }
   }
   assert.deepEqual(rows.map(x => x.role), ['me', 'fathom']);
   assert.match(rows[1].text, /fx-src/);
@@ -161,9 +161,9 @@ test('live SDK partial messages map to tool and text events', async () => {
 async function demoAnswerer(t) {
   const s = await tempDb();
   t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
-  seedDemo(s.db);
+  await seedDemo(s.db);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' });
-  const engine = createRuntimeEngine({ db: s.db, config });
+  const engine = await createRuntimeEngine({ db: s.db, config });
   // The temp store's directory stands in as the household root.
   const packs = createLivePacks(s.db, { dataDir: s.dataDir });
   packs.refresh();

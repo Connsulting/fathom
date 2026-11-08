@@ -76,12 +76,12 @@ export function validateGuesses(batchItems, parsed) {
 }
 
 // Up to `limit` pending items with no guess row, oldest first, with their file metadata.
-function nextBatch(db, limit) {
-  return db.prepare(`SELECT ci.id, ci.kind, ci.question, ci.options, ci.context, f.name AS file_name, f.source_kind, f.parser,
+async function nextBatch(db, limit) {
+  return (await db.prepare(`SELECT ci.id, ci.kind, ci.question, ci.options, ci.context, f.name AS file_name, f.source_kind, f.parser,
                             f.period_from, f.period_to, ci.file_id
                      FROM confirm_items ci LEFT JOIN files f ON f.id = ci.file_id
                      WHERE ci.status = 'pending' AND ci.kind NOT IN ('transaction_category','category_mapping') AND NOT EXISTS (SELECT 1 FROM confirm_guesses g WHERE g.item_id = ci.id)
-                     ORDER BY ci.id LIMIT ?`).all(limit).map((r) => ({
+                     ORDER BY ci.id LIMIT ?`).all(limit)).map((r) => ({
     id: r.id,
     kind: r.kind,
     question: r.question,
@@ -96,16 +96,16 @@ function nextBatch(db, limit) {
 const codeOf = (error) => (error && typeof error.name === 'string' && error.name !== 'Error' ? error.name : 'error');
 
 // One row per item sent; an item removed meanwhile is skipped.
-function storeBatch(db, items, accepted, { model, ts }) {
+async function storeBatch(db, items, accepted, { model, ts }) {
   const byItem = new Map(accepted.map((g) => [g.item, g]));
   const put = db.prepare(`INSERT INTO confirm_guesses (item_id, option_id, reason, model, ts)
                           SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM confirm_items WHERE id = ?)
                           ON CONFLICT(item_id) DO UPDATE SET option_id = excluded.option_id, reason = excluded.reason,
                             model = excluded.model, ts = excluded.ts`);
-  tx(db, () => {
+  await tx(db, async (db) => {
     for (const item of items) {
       const g = byItem.get(item.id);
-      put.run(item.id, g ? g.option : null, g ? g.reason : null, String(model ?? 'unknown'), ts, item.id);
+      await put.run(item.id, g ? g.option : null, g ? g.reason : null, String(model ?? 'unknown'), ts, item.id);
     }
   });
   return byItem.size;
@@ -119,12 +119,12 @@ export async function guessPending(db, engine, { now, batchSize = 20, maxBatches
   if (fake === undefined && engine.mode !== 'live') return { skipped: 'not_live' };
   const size = Number.isInteger(batchSize) && batchSize > 0 ? batchSize : 20;
   const batches = [];
-  const mark = db.prepare('SELECT coalesce(max(id), 0) AS id FROM spend_ledger').get().id;
+  const mark = (await db.prepare('SELECT coalesce(max(id), 0) AS id FROM spend_ledger').get()).id;
   const spend = db.prepare("SELECT coalesce(sum(cost_usd), 0) AS s FROM spend_ledger WHERE purpose = 'confirm' AND id > ?");
-  const costUsd = () => Number(Math.max(Number(spend.get(mark).s) || 0,
+  const costUsd = async () => Number(Math.max(Number((await spend.get(mark)).s) || 0,
     batches.reduce((n, b) => n + (Number(b.costUsd) || 0), 0)).toFixed(12));
   for (let k = 0; k < maxBatches; k++) {
-    const items = nextBatch(db, size);
+    const items = await nextBatch(db, size);
     if (!items.length) break;
     let response;
     try {
@@ -134,14 +134,14 @@ export async function guessPending(db, engine, { now, batchSize = 20, maxBatches
         ...(fake === undefined ? {} : { fake: fake[k] ?? [] }),
       });
     } catch (error) {
-      return { batches, costUsd: costUsd(), stopped: codeOf(error) };
+      return { batches, costUsd: await costUsd(), stopped: codeOf(error) };
     }
     let parsed;
-    try { parsed = JSON.parse(response.text); } catch { return { batches, costUsd: costUsd(), stopped: 'bad_response' }; }
+    try { parsed = JSON.parse(response.text); } catch { return { batches, costUsd: await costUsd(), stopped: 'bad_response' }; }
     const ts = now || new Date().toISOString();
-    const guessed = storeBatch(db, items, validateGuesses(items, parsed), { model: response.model, ts });
+    const guessed = await storeBatch(db, items, validateGuesses(items, parsed), { model: response.model, ts });
     batches.push({ items: items.length, guessed, costUsd: response.costUsd, model: response.model });
   }
   if (!batches.length) return { skipped: 'none_pending' };
-  return { batches, costUsd: costUsd() };
+  return { batches, costUsd: await costUsd() };
 }

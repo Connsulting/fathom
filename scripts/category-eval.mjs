@@ -28,12 +28,12 @@ export function calibration(scores) {
 }
 const percentile=(values,p)=>values.length?values.toSorted((a,b)=>a-b)[Math.max(0,Math.ceil(values.length*p)-1)]:null;
 export async function evaluateCategories(db,jev,{sampleSize=1000}={}) {
-  const input=loadCategoryInputs(db);
+  const input=await loadCategoryInputs(db);
   const rows=input.transactions.map(t=>({...t,truth:t.imported_category??t.category,truthParser:t.category_parser??t.parser}))
     .filter(t=>t.truthParser==='aggregator' && sourceBucket(t.truthParser,t.truth));
   const sample=sampleRows(rows,sampleSize), scores=[], stages={history:[],rules:[],model:[]};
   const names=Object.keys(CATEGORY_TABLES.aggregator).filter(c=>sourceBucket('aggregator',c));
-  const householdNames=parseJson(db.prepare("SELECT value FROM facts WHERE key='household.names'").get()?.value,{});
+  const householdNames=parseJson((await db.prepare("SELECT value FROM facts WHERE key='household.names'").get())?.value,{});
   const pending=[];
   for(const row of sample) {
     const target={...row,category:null,imported_category:null,category_declined:0,truth:undefined,truthParser:undefined};
@@ -76,9 +76,9 @@ export async function evaluateCategories(db,jev,{sampleSize=1000}={}) {
     latencyMs:{p50:percentile(stats.latenciesMs,.5),p95:percentile(stats.latenciesMs,.95)},...(stopped?{stopped}:{})};
 }
 // The household's model admission: its outbound engine flag and instance funding, as for the engine.
-export function evalAdmission(platform,householdId) {
-  if(readOutbound(platform,householdId)?.engine!==true) return 'engine_paused';
-  return instanceFunded(platform)?null:'funding_unavailable';
+export async function evalAdmission(platform,householdId) {
+  if((await readOutbound(platform,householdId))?.engine!==true) return 'engine_paused';
+  return await instanceFunded(platform)?null:'funding_unavailable';
 }
 export async function main(argv=process.argv.slice(2)) {
   let store, accountingDb, accountingPlatform;
@@ -87,21 +87,21 @@ export async function main(argv=process.argv.slice(2)) {
     const path=rest[0]??process.env.FATHOM_DATA;
     const sampleSize=Number(rest[1]??1000), maxCostUsd=Number(rest[2]??.05);
     if(!path || !Number.isInteger(sampleSize) || sampleSize<1 || sampleSize>10000 || !Number.isFinite(maxCostUsd) || maxCostUsd<0 || maxCostUsd>1) throw new Error();
-    store=openReadOnlyHousehold({dataDir:resolve(path)},householdId);
-    const admit=()=>evalAdmission(store.platform,householdId);
-    const refused=admit();
+    store=await openReadOnlyHousehold({dataDir:resolve(path)},householdId);
+    const admit=async ()=>await evalAdmission(store.platform,householdId);
+    const refused=await admit();
     if(refused) {console.error(`category_eval_failed: ${refused}`);return 1;}
     const config=loadConfig({...process.env,FATHOM_ENGINE:'live',FATHOM_DATA:resolve(path),FATHOM_DEMO:'0'});
-    accountingPlatform=openOperatorPlatform({FATHOM_DATA:resolve(path)});
-    const household=accountingPlatform.prepare('SELECT generation,storage_root FROM households WHERE id=?').get(householdId);
-    accountingDb=openHouseholdDb({dataDir:resolve(path),householdId,storageRoot:household.storage_root});
-    const engine=createRuntimeEngine({db:accountingDb,platform:accountingPlatform,householdId,generation:household.generation,config,
-      allowed:()=>evalAdmission(accountingPlatform,householdId)==null,funded:()=>instanceFunded(accountingPlatform)});
+    accountingPlatform=await openOperatorPlatform({FATHOM_DATA:resolve(path)});
+    const household=await accountingPlatform.prepare('SELECT generation,storage_root FROM households WHERE id=?').get(householdId);
+    accountingDb=await openHouseholdDb({dataDir:resolve(path),householdId,storageRoot:household.storage_root});
+    const engine=await createRuntimeEngine({db:accountingDb,platform:accountingPlatform,householdId,generation:household.generation,config,
+      allowed:async ()=>await evalAdmission(accountingPlatform,householdId)==null,funded:async ()=>await instanceFunded(accountingPlatform)});
     const jev=await createJev({maxCostUsd,admit,complete:engine.complete});
     if(!jev.isOn()) throw new Error();
     const result=await evaluateCategories(store.db,jev,{sampleSize});
     console.log(JSON.stringify(result)); return result.stopped?1:0;
   } catch {console.error('category_eval_failed');return 1;}
-  finally {accountingDb?.close();accountingPlatform?.close();store?.db.close();store?.platform.close();}
+  finally {await accountingDb?.close();await accountingPlatform?.close();await store?.db.close();await store?.platform.close();}
 }
 if(import.meta.url===pathToFileURL(process.argv[1]??'').href) process.exitCode=await main();

@@ -18,6 +18,7 @@ import { KIND_WORDS } from '../../src/shared/tokens.mjs';
 import { createEngine, EngineOffError, BudgetExceededError, ModelCallError } from '../../src/engine/index.mjs';
 import { buildBrief, briefSummary, renderBrief, composeBrief, stripLayout, appLink, urgencyOf } from '../../src/email/brief.mjs';
 import { C } from '../../src/email/palette.mjs';
+import { forEachSeries } from '../../src/shared/series.mjs';
 
 const CLOCK = scenarioDemo.meta.clock; // 2026-11-05
 const URL_BASE = 'https://fathom.example.invalid';
@@ -25,8 +26,8 @@ const MONEY = /-?\$\d[\d,]*(?:\.\d+)?[KMB]?/g;
 
 async function seeded() {
   const t = await tempDb();
-  seedDemo(t.db);
-  return { ...t, done() { try { t.db.close(); } catch { /* closed */ } rmSync(t.dataDir, { recursive: true, force: true }); } };
+  await seedDemo(t.db);
+  return { ...t, async done() { try { await t.db.close(); } catch { /* closed */ } rmSync(t.dataDir, { recursive: true, force: true }); } };
 }
 
 async function withSeeded(fn) {
@@ -54,9 +55,9 @@ const textOf = (html) => html.replace(/<style[\s\S]*?<\/style>/g, '').replace(/<
 const hrefs = (html) => [...html.matchAll(/href="([^"]*)"/g)].map((m) => m[1].replace(/&amp;/g, '&'));
 const off = async (model) => briefSummary(model, { engine: offEngine() });
 
-test('the model carries the verdict, needs-you recs with windows, and only 90 day deadlines', () => withSeeded(async (db) => {
-  const sc = buildScenario(db, { clock: CLOCK });
-  const model = buildBrief(db, { clock: CLOCK, publicUrl: null });
+test('the model carries the verdict, needs-you recs with windows, and only 90 day deadlines', async () => withSeeded(async (db) => {
+  const sc = await buildScenario(db, { clock: CLOCK });
+  const model = await buildBrief(db, { clock: CLOCK, publicUrl: null });
   const needs = needsYou(sc.recs);
   assert.equal(model.verdict.level, verdictLevel(sc.recs));
   assert.equal(model.verdict.level, 'attention');
@@ -80,26 +81,26 @@ test('the model carries the verdict, needs-you recs with windows, and only 90 da
   assert.ok(!text.includes(later.title), 'a deadline past 90 days is left out');
 }));
 
-test('deadlines for done, dismissed or hidden recs are left out', () => withSeeded(async (db) => {
-  const sc = buildScenario(db, { clock: CLOCK });
+test('deadlines for done, dismissed or hidden recs are left out', async () => withSeeded(async (db) => {
+  const sc = await buildScenario(db, { clock: CLOCK });
   const end = addDays(CLOCK, 90);
   const linked = [...new Set(sc.deadlines.filter((d) => d.recId && d.date >= CLOCK && d.date <= end).map((d) => d.recId))];
   assert.ok(linked.length >= 3, 'the demo links at least three recs to near deadlines');
   const statuses = ['done', 'dismissed', 'hidden'];
-  linked.forEach((id, i) => db.prepare('UPDATE recs SET status = ? WHERE id = ?').run(statuses[i % 3], id));
-  const model = buildBrief(db, { clock: CLOCK, publicUrl: null });
+  await forEachSeries(linked, async (id, i) => await db.prepare('UPDATE recs SET status = ? WHERE id = ?').run(statuses[i % 3], id));
+  const model = await buildBrief(db, { clock: CLOCK, publicUrl: null });
   const want = sc.deadlines.filter((d) => !d.recId && d.date >= CLOCK && d.date <= end);
   assert.deepEqual(model.deadlines.map((d) => d.title), want.map((d) => d.title));
 }));
 
-test('stale ingest sources are counted in the footer line; dataThrough comes from the scenario', () => withSeeded(async (db) => {
+test('stale ingest sources are counted in the footer line; dataThrough comes from the scenario', async () => withSeeded(async (db) => {
   const asOf = addDays(CLOCK, -96);
-  db.prepare("INSERT INTO sources (id, label, as_of, kind, last_ingest_at, note) VALUES ('ing:synthetic-bank', 'Synthetic Bank export', ?, 'bank_csv', ?, '')")
+  await db.prepare("INSERT INTO sources (id, label, as_of, kind, last_ingest_at, note) VALUES ('ing:synthetic-bank', 'Synthetic Bank export', ?, 'bank_csv', ?, '')")
     .run(asOf, `${asOf}T12:00:00.000Z`);
-  db.prepare("INSERT INTO sources (id, label, as_of, kind, last_ingest_at, note) VALUES ('ing:synthetic-fresh', 'Synthetic Fresh export', ?, 'bank_csv', ?, '')")
+  await db.prepare("INSERT INTO sources (id, label, as_of, kind, last_ingest_at, note) VALUES ('ing:synthetic-fresh', 'Synthetic Fresh export', ?, 'bank_csv', ?, '')")
     .run(addDays(CLOCK, -3), `${CLOCK}T12:00:00.000Z`);
-  const sc = buildScenario(db, { clock: CLOCK });
-  const model = buildBrief(db, { clock: CLOCK, publicUrl: null });
+  const sc = await buildScenario(db, { clock: CLOCK });
+  const model = await buildBrief(db, { clock: CLOCK, publicUrl: null });
   assert.equal(model.freshness.dataThrough, sc.meta.dataThrough);
   assert.deepEqual(model.freshness.stale.map((s) => [s.label, s.ageDays]), [['Synthetic Bank export', 96]]);
   const { text, html } = renderBrief(model, await off(model));
@@ -108,9 +109,9 @@ test('stale ingest sources are counted in the footer line; dataThrough comes fro
   assert.ok(!text.includes('Synthetic Bank export'), 'the skim does not list source names');
 }));
 
-test('engine spend in the footer equals the scenario values', () => withSeeded(async (db) => {
-  const sc = buildScenario(db, { clock: CLOCK });
-  const model = buildBrief(db, { clock: CLOCK, publicUrl: null });
+test('engine spend in the footer equals the scenario values', async () => withSeeded(async (db) => {
+  const sc = await buildScenario(db, { clock: CLOCK });
+  const model = await buildBrief(db, { clock: CLOCK, publicUrl: null });
   for (const key of ['engine.budget.used', 'engine.budget.monthly', 'engine.budget.left']) {
     assert.equal(figByKey(model, key).v, sc.fig[key].v, key);
   }
@@ -120,9 +121,9 @@ test('engine spend in the footer equals the scenario values', () => withSeeded(a
   assert.ok(text.includes(`Engine spend ${used.text} of ${cap.text}.`));
 }));
 
-test('no amount appears that is not a registry figure; the tax percent is computed from registry figures', () => withSeeded(async (db) => {
-  const sc = buildScenario(db, { clock: CLOCK });
-  const model = buildBrief(db, { clock: CLOCK, publicUrl: URL_BASE });
+test('no amount appears that is not a registry figure; the tax percent is computed from registry figures', async () => withSeeded(async (db) => {
+  const sc = await buildScenario(db, { clock: CLOCK });
+  const model = await buildBrief(db, { clock: CLOCK, publicUrl: URL_BASE });
   for (const f of model.figures) {
     if (Object.hasOwn(sc.fig, f.key)) {
       const s = sc.fig[f.key];
@@ -148,19 +149,19 @@ test('no amount appears that is not a registry figure; the tax percent is comput
   assert.deepEqual(pcts, [`${t.pct}%`], 'the only percent printed is the tax tile');
 }));
 
-test('tiles with missing data are dropped, never a placeholder', () => withSeeded(async (db) => {
-  const full = buildBrief(db, { clock: CLOCK, publicUrl: URL_BASE });
+test('tiles with missing data are dropped, never a placeholder', async () => withSeeded(async (db) => {
+  const full = await buildBrief(db, { clock: CLOCK, publicUrl: URL_BASE });
   assert.ok(full.tiles.tax && full.tiles.next && full.tiles.confirm);
   const fullHtml = renderBrief(full, await off(full)).html;
   assert.ok(/Tax paid/.test(fullHtml) && /Next deadline/.test(fullHtml) && /To confirm/.test(fullHtml));
 
-  const noTax = buildBrief(db, { clock: CLOCK });
+  const noTax = await buildBrief(db, { clock: CLOCK });
   noTax.tiles.tax = null;
   const a = renderBrief(noTax, await off(noTax));
   assert.ok(!/Tax paid/.test(a.html) && !/Tax paid/.test(a.text));
   assert.ok(/Next deadline/.test(a.html) && /To confirm/.test(a.html));
 
-  const none = buildBrief(db, { clock: CLOCK });
+  const none = await buildBrief(db, { clock: CLOCK });
   none.tiles = { tax: null, next: null, confirm: null };
   const b = renderBrief(none, await off(none));
   for (const w of ['Tax paid', 'Next deadline', 'To confirm']) assert.ok(!b.html.includes(w) && !b.text.includes(w), `${w} dropped`);
@@ -168,8 +169,8 @@ test('tiles with missing data are dropped, never a placeholder', () => withSeede
   assert.ok(/Needs you/.test(b.html), 'the rest of the email still renders');
 
   // Data driven omission: no pending confirm cards, no deadlines in range, one tax figure absent.
-  db.prepare('DELETE FROM deadlines').run();
-  const sparse = buildBrief(db, { clock: CLOCK });
+  await db.prepare('DELETE FROM deadlines').run();
+  const sparse = await buildBrief(db, { clock: CLOCK });
   assert.equal(sparse.tiles.next, null);
   assert.deepEqual(sparse.deadlines, []);
   assert.ok(!renderBrief(sparse, await off(sparse)).html.includes('Next 90 days'), 'no strip without deadlines');
@@ -200,18 +201,18 @@ test('deadline strip places dots proportionally and collapses colliding labels',
   assert.deepEqual(stripLayout([]), { dots: [], labels: [] });
 });
 
-test('deep links use the app routes with a publicUrl, and none without', () => withSeeded(async (db) => {
+test('deep links use the app routes with a publicUrl, and none without', async () => withSeeded(async (db) => {
   assert.equal(appLink(URL_BASE, 'rec', 'a b'), `${URL_BASE}/#/rec/a%20b`);
   assert.equal(appLink(URL_BASE, 'confirm'), `${URL_BASE}/#/confirm`);
   assert.equal(appLink(null, 'add'), null);
 
-  const plain = buildBrief(db, { clock: CLOCK, publicUrl: null });
+  const plain = await buildBrief(db, { clock: CLOCK, publicUrl: null });
   const p = renderBrief(plain, await off(plain));
   assert.ok(!/https?:\/\//.test(p.text), 'no URL in the text');
   assert.ok(!/href=/.test(p.html), 'no link in the html');
   assert.ok(!/Open &rarr;|Open Fathom/.test(p.html), 'no dead buttons');
 
-  const model = buildBrief(db, { clock: `${CLOCK}`, publicUrl: `${URL_BASE}///` });
+  const model = await buildBrief(db, { clock: `${CLOCK}`, publicUrl: `${URL_BASE}///` });
   const { text, html } = renderBrief(model, await off(model));
   const links = hrefs(html);
   assert.ok(links.includes(`${URL_BASE}/#/brief`), 'Open Fathom');
@@ -221,21 +222,21 @@ test('deep links use the app routes with a publicUrl, and none without', () => w
   assert.ok(!/[^:]\/\//.test(text.replace(/https?:\/\//g, '')) && links.every((l) => !/[^:]\/\//.test(l.replace(/^https?:\/\//, ''))), 'no double slash');
 }));
 
-test('a rec waiting on data links to Add files', () => withSeeded(async (db) => {
-  const model = buildBrief(db, { clock: CLOCK, publicUrl: URL_BASE });
+test('a rec waiting on data links to Add files', async () => withSeeded(async (db) => {
+  const model = await buildBrief(db, { clock: CLOCK, publicUrl: URL_BASE });
   model.needs.push({ id: 'x', title: 'Two more statements would sharpen the plan', titleParts: [{ t: 'Two more statements would sharpen the plan' }], windowLabel: '', days: null, urgency: 'info', cta: 'Add files', url: `${URL_BASE}/#/add` });
   const { html, text } = renderBrief(model, await off(model));
   assert.ok(hrefs(html).includes(`${URL_BASE}/#/add`));
   assert.ok(html.includes('Add files') && text.includes('Add files: '));
-  db.prepare("UPDATE recs SET status = 'proposed' WHERE id = 'spsep'").run();
-  const m2 = buildBrief(db, { clock: CLOCK, publicUrl: URL_BASE });
+  await db.prepare("UPDATE recs SET status = 'proposed' WHERE id = 'spsep'").run();
+  const m2 = await buildBrief(db, { clock: CLOCK, publicUrl: URL_BASE });
   const row = m2.needs.find((n) => n.id === 'spsep');
   assert.equal(row.cta, 'Add files');
   assert.equal(row.url, `${URL_BASE}/#/add`);
 }));
 
-test('the needs list is capped and says how many more', () => withSeeded(async (db) => {
-  const model = buildBrief(db, { clock: CLOCK, publicUrl: URL_BASE });
+test('the needs list is capped and says how many more', async () => withSeeded(async (db) => {
+  const model = await buildBrief(db, { clock: CLOCK, publicUrl: URL_BASE });
   const proto = model.needs[0];
   while (model.needs.length < 9) model.needs.push({ ...proto, id: `x${model.needs.length}`, titleParts: [{ t: `Extra item ${model.needs.length}` }], url: `${URL_BASE}/#/rec/x${model.needs.length}` });
   const { html, text } = renderBrief(model, await off(model));
@@ -243,9 +244,9 @@ test('the needs list is capped and says how many more', () => withSeeded(async (
   assert.ok(!html.includes('Extra item 8'));
 }));
 
-test('the sub-line is the verdict sub unless the model summary passed acceptSummary; one sentence only', () => withSeeded(async (db) => {
-  const sc = buildScenario(db, { clock: CLOCK });
-  const model = buildBrief(db, { clock: CLOCK, publicUrl: null });
+test('the sub-line is the verdict sub unless the model summary passed acceptSummary; one sentence only', async () => withSeeded(async (db) => {
+  const sc = await buildScenario(db, { clock: CLOCK });
+  const model = await buildBrief(db, { clock: CLOCK, publicUrl: null });
   const sub = sc.verdict.attention.sub;
   const base = renderBrief(model, await off(model));
   assert.ok(base.html.includes(sub) && base.text.includes(sub), 'verdict sub when the engine is off');
@@ -262,8 +263,8 @@ test('the sub-line is the verdict sub unless the model summary passed acceptSumm
   assert.ok(!out.text.includes(sub) && !out.html.includes(sub), 'the summary replaces the sub-line');
 }));
 
-test('r2 item 2 and r3: summaries with literal amounts, number words or unknown tokens fall back to the template', () => withSeeded(async (db) => {
-  const model = buildBrief(db, { clock: CLOCK, publicUrl: null });
+test('r2 item 2 and r3: summaries with literal amounts, number words or unknown tokens fall back to the template', async () => withSeeded(async (db) => {
+  const model = await buildBrief(db, { clock: CLOCK, publicUrl: null });
   figByKey(model, 'engine.budget.left').notes = ['7 eligible days'];
   assert.equal(figByKey(model, 'engine.budget.monthly').v, 200, 'demo cap is a round figure value');
   const rejected = [
@@ -286,8 +287,8 @@ test('r2 item 2 and r3: summaries with literal amounts, number words or unknown 
   }
 }));
 
-test('a summary citing a known figure token is accepted and rendered', () => withSeeded(async (db) => {
-  const model = buildBrief(db, { clock: CLOCK, publicUrl: null });
+test('a summary citing a known figure token is accepted and rendered', async () => withSeeded(async (db) => {
+  const model = await buildBrief(db, { clock: CLOCK, publicUrl: null });
   const used = figByKey(model, 'engine.budget.used');
   const engine = scriptedEngine({ text: 'Spend so far is {f:engine.budget.used}.' });
   const s = await briefSummary(model, { engine });
@@ -300,8 +301,8 @@ test('a summary citing a known figure token is accepted and rendered', () => wit
   assert.ok(!text.includes('{f:'), 'no raw token printed');
 }));
 
-test('a createEngine fake-mode engine is used when scripted and falls back when it has no script or is off', () => withSeeded(async (db) => {
-  const model = buildBrief(db, { clock: CLOCK, publicUrl: null });
+test('a createEngine fake-mode engine is used when scripted and falls back when it has no script or is off', async () => withSeeded(async (db) => {
+  const model = await buildBrief(db, { clock: CLOCK, publicUrl: null });
   const ok = await briefSummary(model, { engine: createEngine({ mode: 'fake', responses: [{ text: 'Spend so far is {f:engine.budget.left}.' }] }) });
   assert.equal(ok.src, 'model');
   assert.ok(ok.costUsd > 0);
@@ -311,8 +312,8 @@ test('a createEngine fake-mode engine is used when scripted and falls back when 
   assert.equal(off.src, 'template');
 }));
 
-test('engine off, budget exceeded and call errors fall back to the template', () => withSeeded(async (db) => {
-  const model = buildBrief(db, { clock: CLOCK, publicUrl: null });
+test('engine off, budget exceeded and call errors fall back to the template', async () => withSeeded(async (db) => {
+  const model = await buildBrief(db, { clock: CLOCK, publicUrl: null });
   for (const error of [new EngineOffError(), new BudgetExceededError(), new ModelCallError(), new Error('synthetic failure')]) {
     const s = await briefSummary(model, { engine: scriptedEngine({ error }) });
     assert.equal(s.src, 'template', error.name);
@@ -323,7 +324,7 @@ test('engine off, budget exceeded and call errors fall back to the template', ()
   assert.equal(s.src, 'template', 'no engine');
 }));
 
-test('composeBrief returns the rendered parts, the summary source and the model', () => withSeeded(async (db) => {
+test('composeBrief returns the rendered parts, the summary source and the model', async () => withSeeded(async (db) => {
   const viaModel = await composeBrief(db, { clock: CLOCK, publicUrl: null, engine: scriptedEngine({ text: 'Spend so far is {f:engine.budget.used}.' }) });
   assert.equal(viaModel.summarySrc, 'model');
   assert.equal(viaModel.costUsd, 0.002);
@@ -334,14 +335,14 @@ test('composeBrief returns the rendered parts, the summary source and the model'
   assert.equal(viaTemplate.summarySrc, 'template');
 }));
 
-test('hostile stored text is escaped in the HTML and plain in the text part', () => withSeeded(async (db) => {
+test('hostile stored text is escaped in the HTML and plain in the text part', async () => withSeeded(async (db) => {
   const deadlineTitle = '<img src=x onerror=alert(1)> Synthetic deadline';
   const recTitle = '<img src=y onerror=alert(3)> Synthetic rec';
-  db.prepare('INSERT INTO deadlines (date, label, title, rec_id, hard) VALUES (?, ?, ?, NULL, 0)').run(addDays(CLOCK, 10), 'Soon', deadlineTitle);
-  const sc = buildScenario(db, { clock: CLOCK });
+  await db.prepare('INSERT INTO deadlines (date, label, title, rec_id, hard) VALUES (?, ?, ?, NULL, 0)').run(addDays(CLOCK, 10), 'Soon', deadlineTitle);
+  const sc = await buildScenario(db, { clock: CLOCK });
   const target = needsYou(sc.recs)[0];
-  const row = db.prepare('SELECT def FROM recs WHERE id = ?').get(target.id);
-  db.prepare('UPDATE recs SET def = ? WHERE id = ?').run(JSON.stringify({ ...JSON.parse(row.def), title: recTitle }), target.id);
+  const row = await db.prepare('SELECT def FROM recs WHERE id = ?').get(target.id);
+  await db.prepare('UPDATE recs SET def = ? WHERE id = ?').run(JSON.stringify({ ...JSON.parse(row.def), title: recTitle }), target.id);
 
   const { text, html } = await composeBrief(db, { clock: CLOCK, publicUrl: URL_BASE, engine: offEngine() });
   assert.ok(!/<img/i.test(html), 'no raw img');
@@ -352,8 +353,8 @@ test('hostile stored text is escaped in the HTML and plain in the text part', ()
   assert.ok(!html.includes(deadlineTitle), 'deadline title is never raw in the html');
 }));
 
-test('the HTML is dark, email safe and structured like the mock on the demo store', () => withSeeded(async (db) => {
-  const model = buildBrief(db, { clock: CLOCK, publicUrl: URL_BASE });
+test('the HTML is dark, email safe and structured like the mock on the demo store', async () => withSeeded(async (db) => {
+  const model = await buildBrief(db, { clock: CLOCK, publicUrl: URL_BASE });
   const { html, subject } = renderBrief(model, await off(model));
   assert.equal(subject, `Fathom brief for November 2026: ${model.needs.length} things need you`);
 
@@ -392,8 +393,8 @@ test('the HTML is dark, email safe and structured like the mock on the demo stor
   assert.ok(!/<h[1-6]|<p[ >]|<ol|<ul|<li/.test(html), 'tables and divs only');
 }));
 
-test('the plain-text alternative is a short skim with the links', () => withSeeded(async (db) => {
-  const model = buildBrief(db, { clock: CLOCK, publicUrl: URL_BASE });
+test('the plain-text alternative is a short skim with the links', async () => withSeeded(async (db) => {
+  const model = await buildBrief(db, { clock: CLOCK, publicUrl: URL_BASE });
   const { text } = renderBrief(model, await off(model));
   assert.ok(text.startsWith('FATHOM · November 2026 brief\n'));
   for (const w of ['Tax paid:', 'Next deadline:', 'To confirm:', 'Needs you', 'Next 90 days', `Open Fathom: ${URL_BASE}/#/brief`, 'Advisory only']) assert.ok(text.includes(w), w);

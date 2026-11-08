@@ -14,13 +14,13 @@ import { demoRouteBehavior } from '../src/public-demo/control.mjs';
 test('real passkey sessions authorize only the household admin and never accept paths, keys or a household selector', async () => {
   const f = await backupFixture();
   try {
-    const count = () => f.platform.prepare('SELECT count(*) AS n FROM household_backup_operations').get().n;
+    const count = async () => (await f.platform.prepare('SELECT count(*) AS n FROM household_backup_operations').get()).n;
     assert.equal((await f.A.member.client.post('/api/household/backups')).status, 403);
     for (const body of [{ householdId: f.B.id }, { destination: f.destination }, { keyFile: f.keys.backupKeyFile }, { path: '../foreign' }]) {
       assert.equal((await f.A.admin.client.post('/api/household/backups', body)).status, 400);
     }
     assert.equal((await f.A.admin.client.post(`/api/household/backups?householdId=${f.B.id}`)).status, 400);
-    assert.equal(count(), 0);
+    assert.equal(await count(), 0);
     const queued = await f.A.admin.client.post('/api/household/backups');
     assert.equal(queued.status, 200, queued.text);
     assert.equal(queued.json.status, 'queued');
@@ -34,7 +34,7 @@ test('real passkey sessions authorize only the household admin and never accept 
     assert.ok(status.json.fileCount >= 5);
     assert.ok(status.json.byteCount > 0);
     assert.deepEqual(Object.keys(status.json).sort(), ['byteCount', 'code', 'fileCount', 'operationId', 'status']);
-    const row = f.platform.prepare('SELECT * FROM household_backup_operations WHERE id = ?').get(id);
+    const row = await f.platform.prepare('SELECT * FROM household_backup_operations WHERE id = ?').get(id);
     assert.ok(existsSync(row.bundle_file));
     assert.ok(row.bundle_file.startsWith(f.destination + '/'));
     assert.equal(demoRouteBehavior('POST', '/api/household/backups'), 'off');
@@ -54,7 +54,7 @@ test('disconnecting an in-flight MCP tool cannot leak its request or abandon its
   try {
     f = await backupFixture({ engine: 'live', engineOptions: { testTransport: { baseURL: emulator.baseURL } } });
     await f.A.admin.client.post('/api/household/outbound', { jobs: false, engine: true });
-    setInstanceCap(f.platform, 100); setAllocation(f.platform, f.A.id, 50);
+    await setInstanceCap(f.platform, 100); await setAllocation(f.platform, f.A.id, 50);
     ctx = f.context(f.A.id);
     const key = await f.A.admin.client.post('/api/keys', { name: 'Synthetic disconnect probe', scopes: ['read', 'write:imports'] });
     assert.equal(key.status, 200, key.text);
@@ -83,8 +83,8 @@ test('disconnecting an in-flight MCP tool cannot leak its request or abandon its
     finished = true;
     const status = await f.A.admin.client.get(`/api/household/backups/${queued.json.operationId}/status`);
     assert.equal(status.json.status, 'done', status.text);
-    assert.equal(f.platform.prepare('SELECT status FROM households WHERE id = ?').get(f.A.id).status, 'active');
-    assert.equal(f.context(f.A.id).db.prepare("SELECT count(*) AS n FROM action_receipts WHERE scope = 'write:imports' AND json_extract(after_state, '$.status') = 'built'").get().n, 1);
+    assert.equal((await f.platform.prepare('SELECT status FROM households WHERE id = ?').get(f.A.id)).status, 'active');
+    assert.equal((await f.context(f.A.id).db.prepare("SELECT count(*) AS n FROM action_receipts WHERE scope = 'write:imports' AND json_extract(after_state, '$.status') = 'built'").get()).n, 1);
   } finally {
     clearTimeout(timer); response.open(); client?.destroy();
     if (f && ctx && !finished) f.server.app.runtimes.release(ctx);
@@ -100,7 +100,7 @@ test('an admin can inspect a draining backup, and unavailable configuration refu
     rmSync(f.keys.backupKeyFile);
     const refused = await f.A.admin.client.post('/api/household/backups');
     assert.equal(refused.status, 409);
-    assert.equal(f.platform.prepare('SELECT count(*) AS n FROM household_backup_operations').get().n, 0);
+    assert.equal((await f.platform.prepare('SELECT count(*) AS n FROM household_backup_operations').get()).n, 0);
     writeFileSync(f.keys.backupKeyFile, keyBytes, { mode: 0o600 });
     held = f.context(f.A.id); f.server.app.runtimes.acquire(held);
     const queued = await f.A.admin.client.post('/api/household/backups');
@@ -122,26 +122,26 @@ test('the OS commands use the same configured destination and exact household co
     const snap = await backup(f);
     assert.equal((await f.A.admin.client.get('/api/scenario')).status, 200);
     const options = { env: { ...process.env, ...f.server.env }, encoding: 'utf8', timeout: 30000 };
-    const count = f.platform.prepare('SELECT count(*) AS n FROM household_backup_operations').get().n;
+    const count = (await f.platform.prepare('SELECT count(*) AS n FROM household_backup_operations').get()).n;
     const active = spawnSync(process.execPath, ['scripts/restore-household.mjs', '--household', f.A.id, '--confirm', f.A.id, '--bundle', snap.file], options);
     assert.equal(active.status, 1); assert.match(active.stderr, /source_in_use/);
-    assert.equal(f.platform.prepare('SELECT count(*) AS n FROM household_backup_operations').get().n, count);
+    assert.equal((await f.platform.prepare('SELECT count(*) AS n FROM household_backup_operations').get()).n, count);
     assert.equal((await f.A.admin.client.get('/api/scenario')).status, 200, 'a running service is never suspended by a refused offline command');
     await f.server.close();
     const made = spawnSync(process.execPath, ['scripts/backup-household.mjs', '--household', f.A.id], options);
     assert.equal(made.status, 0, made.stderr);
     const status = JSON.parse(made.stdout);
     assert.equal(status.status, 'done'); assert.ok(!made.stdout.includes(f.destination));
-    const platform = openPlatform(join(f.dataDir, 'platform.sqlite'));
-    const op = platform.prepare('SELECT * FROM household_backup_operations WHERE id = ?').get(status.operationId);
+    const platform = await openPlatform(join(f.dataDir, 'platform.sqlite'));
+    const op = await platform.prepare('SELECT * FROM household_backup_operations WHERE id = ?').get(status.operationId);
     assert.ok(op.bundle_file.startsWith(f.destination + '/'));
-    platform.close();
+    await platform.close();
     const refused = spawnSync(process.execPath, ['scripts/restore-household.mjs', '--household', f.A.id, '--confirm', f.B.id, '--bundle', op.bundle_file], options);
     assert.equal(refused.status, 1); assert.match(refused.stderr, /restore_confirmation_required/);
     const restored = spawnSync(process.execPath, ['scripts/restore-household.mjs', '--household', f.A.id, '--confirm', f.A.id, '--bundle', op.bundle_file], options);
     assert.equal(restored.status, 0, restored.stderr); assert.equal(JSON.parse(restored.stdout).status, 'done');
     server = await startRuntime({ dataDir: f.dataDir, keys: f.keys, engine: 'off' });
-    assert.equal(marker(server.app.runtimes.get(f.A.id)), 'alpha');
-    assert.equal(marker(server.app.runtimes.get(f.B.id)), 'bravo');
+    assert.equal(await marker(server.app.runtimes.get(f.A.id)), 'alpha');
+    assert.equal(await marker(server.app.runtimes.get(f.B.id)), 'bravo');
   } finally { await server?.close(); await f.close(); }
 });

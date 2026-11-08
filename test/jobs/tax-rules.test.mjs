@@ -19,25 +19,25 @@ import {
 
 const NOW = '2026-11-05';
 const S = scratch('fathom-tax-rules-');
-after(() => S.cleanup());
+after(async () => await S.cleanup());
 
-const plan = (db, now = NOW) => planRun(db, { now });
+const plan = async (db, now = NOW) => planRun(db, { now });
 const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
 const near = (actual, expected, what) =>
   assert.ok(typeof actual === 'number' && Math.abs(actual - expected) <= 0.011, `${what}: expected ${expected}, got ${actual}`);
-const fig = (db, key) => {
-  const row = figureRow(db, key);
+const fig = async (db, key) => {
+  const row = await figureRow(db, key);
   assert.ok(row, `figure ${key} exists`);
   return row;
 };
-const absent = (db, key, why = '') => assert.equal(figureRow(db, key), null, `${key} is not produced${why ? `: ${why}` : ''}`);
+const absent = async (db, key, why = '') => assert.equal(await figureRow(db, key), null, `${key} is not produced${why ? `: ${why}` : ''}`);
 const notesOf = row => (row && row.locator && Array.isArray(row.locator.notes) ? row.locator.notes : []);
 
 // The planner's own path to computeFigures, for reading `info` off a store.
-function computeFor(db, clock = NOW) {
-  const data = loadPlanningData(db, clock);
+async function computeFor(db, clock = NOW) {
+  const data = await loadPlanningData(db, clock);
   const stored = {};
-  for (const r of db.prepare('SELECT key, value, src, confirmed FROM facts').all()) {
+  for (const r of await db.prepare('SELECT key, value, src, confirmed FROM facts').all()) {
     stored[r.key] = { value: parseJson(r.value, null), src: r.src, confirmed: !!r.confirmed };
   }
   const owner = ownerFactsOf(stored);
@@ -50,7 +50,7 @@ function computeFor(db, clock = NOW) {
 async function planned(variant = {}) {
   const db = await S.store({ variant });
   const result = await plan(db);
-  return { db, result, info: computeFor(db).info };
+  return { db, result, info: (await computeFor(db)).info };
 }
 
 // Readable notes the plan pins (MGN1, R2-5, MG10).
@@ -147,16 +147,16 @@ describe('MG3 child tax credit phase-out', () => {
     const { db, result } = await planned({
       payroll: [w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: 150000, medicareWages: 150000, box12: [] })],
     });
-    const agi = fig(db, 'agi.est').v;
+    const agi = (await fig(db, 'agi.est')).v;
     assert.ok(agi > 400000, `agi.est ${agi} is over the threshold`);
     const expected = Math.max(0, 2200 - 50 * Math.ceil(Math.round((agi - 400000) * 100) / 100000));
-    const proj = fig(db, 'tax.fed.proj');
+    const proj = await fig(db, 'tax.fed.proj');
     const step = proj.locator.steps.filter(s => s.label === 'Child tax credit').at(-1);
     assert.ok(step, 'the federal total names the child tax credit step');
     near(step.value, expected, 'child tax credit after phase-out');
     assert.ok(expected > 0, 'the variant keeps part of the credit');
     assert.ok(!result.warnings.includes('ctc_phaseout_unsupported'));
-    for (const f of plannerFigures(db)) {
+    for (const f of await plannerFigures(db)) {
       assert.ok(!(f.locator.assumptions || []).includes('ctc_phaseout_unsupported'), `${f.key} carries no ctc_phaseout_unsupported`);
     }
   });
@@ -315,10 +315,10 @@ describe('MG4 QBI netting', () => {
     // still under the unchanged cap. agi.est is unchanged.
     const base = await planned();
     const carried = await planned({ facts: { 'tax.prior.qbiLossCarryforward': 10000 } });
-    near(r2(fig(base.db, 'tax.fed.qbi').v - fig(carried.db, 'tax.fed.qbi').v), 2000, 'tax.fed.qbi drop');
-    near(fig(carried.db, 'agi.est').v, fig(base.db, 'agi.est').v, 'agi.est unchanged');
-    assert.ok(notesOf(fig(base.db, 'tax.fed.qbi')).includes(NOTE.noPriorLoss), 'without the fact the QBI figure says no carryforward was applied');
-    assert.ok(!notesOf(fig(carried.db, 'tax.fed.qbi')).includes(NOTE.noPriorLoss), 'with the fact the note is gone');
+    near(r2((await fig(base.db, 'tax.fed.qbi')).v - (await fig(carried.db, 'tax.fed.qbi')).v), 2000, 'tax.fed.qbi drop');
+    near((await fig(carried.db, 'agi.est')).v, (await fig(base.db, 'agi.est')).v, 'agi.est unchanged');
+    assert.ok(notesOf(await fig(base.db, 'tax.fed.qbi')).includes(NOTE.noPriorLoss), 'without the fact the QBI figure says no carryforward was applied');
+    assert.ok(!notesOf(await fig(carried.db, 'tax.fed.qbi')).includes(NOTE.noPriorLoss), 'with the fact the note is gone');
   });
 });
 
@@ -336,8 +336,8 @@ const MIXEDDOC = Object.freeze({
   payroll: [w2Doc({ employerName: SCORP.name, person: 'owner', wages: 55000, medicareWages: 60000, box12: [{ code: 'D', amount: 5000 }] })],
 });
 const withContribs = (variant, list, facts = {}) => ({ ...variant, facts: { ...(variant.facts || {}), ...facts, 'retirement.contributions': list } });
-const wagesLine = (db, person) => fig(db, 'agi.est').locator.parts.wages.find(w => w.person === person && w.source === 'own S corp');
-const bizLine = (db, id) => fig(db, 'agi.est').locator.parts.businesses.find(b => b.id === id);
+const wagesLine = async (db, person) => (await fig(db, 'agi.est')).locator.parts.wages.find(w => w.person === person && w.source === 'own S corp');
+const bizLine = async (db, id) => (await fig(db, 'agi.est')).locator.parts.businesses.find(b => b.id === id);
 
 describe('MG5 self-employed retirement deduction', () => {
   test('MG5: a 10,000 SEP contribution lowers AGI and QBI for a sole proprietor', () => {
@@ -370,11 +370,11 @@ describe('MG5 self-employed retirement deduction', () => {
     // 5,000, so the deduction falls 1,000 while the 20%-of-taxable cap (also down 1,000) does not bind.
     const base = await planned();
     const sep = await planned(withContribs({}, [{ person: 'spouse', plan: 'sep', type: 'employer', roth: false, amount: 5000 }]));
-    const q0 = fig(base.db, 'tax.fed.qbi').v;
-    const pre0 = r2(fig(base.db, 'tax.fed.taxable').v + q0);
+    const q0 = (await fig(base.db, 'tax.fed.qbi')).v;
+    const pre0 = r2((await fig(base.db, 'tax.fed.taxable')).v + q0);
     assert.ok(q0 < 0.2 * pre0 - 1000, `precondition: the cap does not bind (qbi ${q0}, cap ${0.2 * pre0})`);
-    near(r2(fig(base.db, 'agi.est').v - fig(sep.db, 'agi.est').v), 5000, 'agi.est drop');
-    near(r2(q0 - fig(sep.db, 'tax.fed.qbi').v), 1000, 'tax.fed.qbi drop');
+    near(r2((await fig(base.db, 'agi.est')).v - (await fig(sep.db, 'agi.est')).v), 5000, 'agi.est drop');
+    near(r2(q0 - (await fig(sep.db, 'tax.fed.qbi')).v), 1000, 'tax.fed.qbi drop');
     assert.deepEqual(sep.info.blocked, [], 'a valid SEP does not block');
   });
 
@@ -388,17 +388,17 @@ describe('MG5 self-employed retirement deduction', () => {
     const withFact = await planned(withContribs({}, fact));
     const withLine = await planned({ pnlExtra });
     const withBoth = await planned(withContribs({ pnlExtra }, fact));
-    near(fig(withFact.db, 'agi.est').v, fig(base.db, 'agi.est').v, 'the fact alone leaves agi.est unchanged');
-    near(r2(fig(base.db, 'agi.est').v - fig(withLine.db, 'agi.est').v), 12000, 'the P and L line lowers agi.est through the K-1');
-    near(fig(withBoth.db, 'agi.est').v, fig(withLine.db, 'agi.est').v, 'not a second time');
+    near((await fig(withFact.db, 'agi.est')).v, (await fig(base.db, 'agi.est')).v, 'the fact alone leaves agi.est unchanged');
+    near(r2((await fig(base.db, 'agi.est')).v - (await fig(withLine.db, 'agi.est')).v), 12000, 'the P and L line lowers agi.est through the K-1');
+    near((await fig(withBoth.db, 'agi.est')).v, (await fig(withLine.db, 'agi.est')).v, 'not a second time');
   });
 
   test('MG5: a contribution over the plan limit is excluded from the estimate', async () => {
     // Spouse SEP 50,000 > 0.20 x 61,337.25 = 12,267.45 (worksheet item 1).
     const over = await planned(withContribs({}, [{ person: 'spouse', plan: 'sep', type: 'employer', amount: 50000 }]));
     assert.ok(over.info.gaps.some(g => g.code === 'retirement_contribution_over_limit'), `blocked: ${over.info.blocked}`);
-    assert.ok(fig(over.db, 'agi.est').locator.partial);
-    assert.ok(fig(over.db, 'tax.fed.proj').locator.partial);
+    assert.ok((await fig(over.db, 'agi.est')).locator.partial);
+    assert.ok((await fig(over.db, 'tax.fed.proj')).locator.partial);
     // liveness: a 5,000 SEP for the same spouse publishes (previous test).
   });
 
@@ -407,11 +407,11 @@ describe('MG5 self-employed retirement deduction', () => {
     const entities = [SCORP, SOLE_PROP, wren];
     const loose = await planned(withContribs({ entities }, [{ person: 'spouse', plan: 'sep', type: 'employer', amount: 1000 }]));
     assert.ok(loose.info.gaps.some(g => g.code === 'retirement_contribution_unattributed'), `blocked: ${loose.info.blocked}`);
-    assert.ok(fig(loose.db, 'agi.est').locator.partial);
+    assert.ok((await fig(loose.db, 'agi.est')).locator.partial);
     // liveness: naming the sponsor publishes.
     const named = await planned(withContribs({ entities }, [{ person: 'spouse', plan: 'sep', type: 'employer', amount: 1000, entity: SOLE_PROP.slug }]));
     assert.deepEqual(named.info.blocked, []);
-    assert.ok(figureRow(named.db, 'agi.est'), 'agi.est with the sponsor named');
+    assert.ok(await figureRow(named.db, 'agi.est'), 'agi.est with the sponsor named');
   });
 
   test('MG5: a 10,000 deferral attributed to the owner\'s sole prop lowers AGI by exactly 10,000', async () => {
@@ -420,23 +420,23 @@ describe('MG5 self-employed retirement deduction', () => {
     // the 1040; the Northwind wage line is untouched.
     const base = await planned(MIXED);
     const def = await planned(withContribs(MIXED, [{ person: 'owner', plan: 'own-corp-401k', type: 'deferral', roth: false, amount: 10000, entity: 'juniper-works' }]));
-    near(r2(fig(base.db, 'agi.est').v - fig(def.db, 'agi.est').v), 10000, 'agi.est drop');
-    near(wagesLine(def.db, 'owner').agi, wagesLine(base.db, 'owner').agi, 'Northwind wage line unchanged');
-    near(bizLine(def.db, 'juniper-works').retire, 10000, 'Juniper retire');
+    near(r2((await fig(base.db, 'agi.est')).v - (await fig(def.db, 'agi.est')).v), 10000, 'agi.est drop');
+    near((await wagesLine(def.db, 'owner')).agi, (await wagesLine(base.db, 'owner')).agi, 'Northwind wage line unchanged');
+    near((await bizLine(def.db, 'juniper-works')).retire, 10000, 'Juniper retire');
   });
 
   test('MG5: the same deferral attributed to the S corp lowers AGI by exactly 10,000 through wages', async () => {
     const base = await planned(MIXED);
     const def = await planned(withContribs(MIXED, [{ person: 'owner', plan: 'own-corp-401k', type: 'deferral', roth: false, amount: 10000, entity: SCORP.slug }]));
-    near(r2(fig(base.db, 'agi.est').v - fig(def.db, 'agi.est').v), 10000, 'agi.est drop');
-    near(r2(wagesLine(base.db, 'owner').agi - wagesLine(def.db, 'owner').agi), 10000, 'Northwind box 1 wages drop');
-    near(bizLine(def.db, 'juniper-works').retire || 0, 0, 'Juniper retire');
+    near(r2((await fig(base.db, 'agi.est')).v - (await fig(def.db, 'agi.est')).v), 10000, 'agi.est drop');
+    near(r2((await wagesLine(base.db, 'owner')).agi - (await wagesLine(def.db, 'owner')).agi), 10000, 'Northwind box 1 wages drop');
+    near((await bizLine(def.db, 'juniper-works')).retire || 0, 0, 'Juniper retire');
   });
 
   test('MG5: an own-plan deferral with an unknown sponsor is excluded', async () => {
     const loose = await planned(withContribs(MIXED, [{ person: 'owner', plan: 'own-corp-401k', type: 'deferral', roth: false, amount: 10000 }]));
     assert.ok(loose.info.gaps.some(g => g.code === 'retirement_contribution_unattributed'), `blocked: ${loose.info.blocked}`);
-    assert.ok(fig(loose.db, 'agi.est').locator.partial);
+    assert.ok((await fig(loose.db, 'agi.est')).locator.partial);
   });
 
   test('MG5: an S corp W-2 deferral does not hide a sole prop deferral', async () => {
@@ -446,13 +446,13 @@ describe('MG5 self-employed retirement deduction', () => {
     // thisPlanDeferrals 5,000. Juniper: regular 15,000 <= 24,500, valid.
     const base = await planned(MIXEDDOC);
     const def = await planned(withContribs(MIXEDDOC, [{ person: 'owner', plan: 'own-corp-401k', type: 'deferral', roth: false, amount: 10000, entity: 'juniper-works' }]));
-    near(r2(fig(base.db, 'agi.est').v - fig(def.db, 'agi.est').v), 10000, 'agi.est drop');
+    near(r2((await fig(base.db, 'agi.est')).v - (await fig(def.db, 'agi.est')).v), 10000, 'agi.est drop');
     for (const db of [base.db, def.db]) {
-      const w = wagesLine(db, 'owner');
+      const w = await wagesLine(db, 'owner');
       near(w.gross, 60000, 'Northwind gross');
       near(w.agi, 55000, 'Northwind box 1 after the 5,000 document deferral');
     }
-    const inputs = fig(def.db, 'room.solo401k').locator.inputs;
+    const inputs = (await fig(def.db, 'room.solo401k')).locator.inputs;
     near(inputs.allPlanDeferrals, 15000, 'allPlanDeferrals');
     near(inputs.thisPlanDeferrals, 5000, 'thisPlanDeferrals');
   });
@@ -462,8 +462,8 @@ describe('MG5 self-employed retirement deduction', () => {
     // document: agi.est unchanged, allPlanDeferrals stays 5,000.
     const base = await planned(MIXEDDOC);
     const def = await planned(withContribs(MIXEDDOC, [{ person: 'owner', plan: 'own-corp-401k', type: 'deferral', roth: false, amount: 3000, entity: SCORP.slug }]));
-    near(fig(def.db, 'agi.est').v, fig(base.db, 'agi.est').v, 'agi.est unchanged');
-    near(fig(def.db, 'room.solo401k').locator.inputs.allPlanDeferrals, 5000, 'allPlanDeferrals');
+    near((await fig(def.db, 'agi.est')).v, (await fig(base.db, 'agi.est')).v, 'agi.est unchanged');
+    near((await fig(def.db, 'room.solo401k')).locator.inputs.allPlanDeferrals, 5000, 'allPlanDeferrals');
   });
 
   test('MG5: an outside-plan fact without an employer is unknown when outside documents exist', async () => {
@@ -474,10 +474,10 @@ describe('MG5 self-employed retirement deduction', () => {
     const doc = w2Doc({ employerName: 'Example Employer Inc', person: 'owner', relation: 'outside', wages: 90000, medicareWages: 96000, box12: [{ code: 'D', amount: 6000 }] });
     const loose = await planned(withContribs({ payroll: [doc] }, [{ person: 'owner', plan: 'outside-401k', type: 'deferral', amount: 6000 }]));
     assert.ok((loose.info.confirm.retirement || []).includes('retirement.otherPlanDeferrals'), `confirm: ${JSON.stringify(loose.info.confirm)}`);
-    for (const k of ['room.solo401k', 'room.solo401k.employee', 'room.solo401k.employer', 'room.solo401k.pretax']) absent(loose.db, k);
+    for (const k of ['room.solo401k', 'room.solo401k.employee', 'room.solo401k.employer', 'room.solo401k.pretax']) await absent(loose.db, k);
     const named = await planned(withContribs({ payroll: [doc] }, [{ person: 'owner', plan: 'outside-401k', type: 'deferral', amount: 6000, employer: 'Example Employer Inc' }]));
-    near(fig(named.db, 'room.solo401k').locator.inputs.allPlanDeferrals, 6000, 'allPlanDeferrals');
-    near(fig(named.db, 'room.solo401k.employee').v, 18500, 'room.solo401k.employee');
+    near((await fig(named.db, 'room.solo401k')).locator.inputs.allPlanDeferrals, 6000, 'allPlanDeferrals');
+    near((await fig(named.db, 'room.solo401k.employee')).v, 18500, 'room.solo401k.employee');
   });
 
   test('MG5: unread outside-plan deferrals assume zero with a precision gap', async () => {
@@ -488,12 +488,12 @@ describe('MG5 self-employed retirement deduction', () => {
     const deferral = [{ person: 'spouse', plan: 'own-corp-401k', type: 'deferral', amount: 5000, entity: SOLE_PROP.slug }];
     const unknown = await planned(withContribs({ payroll: [doc] }, deferral));
     assert.ok(unknown.info.gaps.some(g => g.code === 'w2_box12_unreadable'));
-    assert.ok(fig(unknown.db, 'agi.est').locator.partial);
+    assert.ok((await fig(unknown.db, 'agi.est')).locator.partial);
     const known = { 'retirement.otherPlanDeferrals': { spouse: { deferral: 0, catchUp: 0 } } };
     const without = await planned({ payroll: [doc], facts: known });
     const withDeferral = await planned(withContribs({ payroll: [doc] }, deferral, known));
     assert.deepEqual(withDeferral.info.blocked, []);
-    near(r2(fig(without.db, 'agi.est').v - fig(withDeferral.db, 'agi.est').v), 5000, 'agi.est drop once known');
+    near(r2((await fig(without.db, 'agi.est')).v - (await fig(withDeferral.db, 'agi.est')).v), 5000, 'agi.est drop once known');
   });
 
   test('MG5: IRA room compensation is net of the SE retirement deduction', async () => {
@@ -508,8 +508,8 @@ describe('MG5 self-employed retirement deduction', () => {
     };
     const base = await planned(variant);
     const sep = await planned(withContribs(variant, [{ person: 'owner', plan: 'sep', type: 'employer', amount: 1700 }]));
-    assert.equal(fig(base.db, 'room.ira.owner').v, 7500);
-    const room = fig(sep.db, 'room.ira.owner');
+    assert.equal((await fig(base.db, 'room.ira.owner')).v, 7500);
+    const room = await fig(sep.db, 'room.ira.owner');
     near(room.v, 7221.79, 'room.ira.owner');
     near(room.locator.inputs.compensation.owner, 7221.79, 'IRA compensation');
   });
@@ -605,44 +605,44 @@ describe('MG6 Roth catch-up', () => {
     // Box 3 160,000 > 150,000: the 11,250 catch-up must be Roth. Pre-tax room 24,500 + 45,000 =
     // 69,500; total 69,500 + 11,250 = 80,750.
     const { db } = await planned(corp61({ payroll: [box3(CEDAR, 160000)], facts: { 'retirement.planOffersRoth': true } }));
-    assert.equal(fig(db, 'room.solo401k.employee').v, 24500);
-    assert.equal(fig(db, 'room.solo401k.employer').v, 45000);
-    assert.equal(fig(db, 'room.solo401k.rothCatchUp').v, 11250);
-    absent(db, 'room.solo401k.catchUp', 'the catch-up is Roth only');
-    assert.equal(fig(db, 'room.solo401k.pretax').v, 69500);
-    assert.equal(fig(db, 'room.solo401k').v, 80750);
-    for (const k of ['room.solo401k.employee', 'room.solo401k.pretax']) assert.ok(notesOf(fig(db, k)).includes(NOTE.rothElect), `${k} says Roth does not lower tax`);
+    assert.equal((await fig(db, 'room.solo401k.employee')).v, 24500);
+    assert.equal((await fig(db, 'room.solo401k.employer')).v, 45000);
+    assert.equal((await fig(db, 'room.solo401k.rothCatchUp')).v, 11250);
+    await absent(db, 'room.solo401k.catchUp', 'the catch-up is Roth only');
+    assert.equal((await fig(db, 'room.solo401k.pretax')).v, 69500);
+    assert.equal((await fig(db, 'room.solo401k')).v, 80750);
+    for (const k of ['room.solo401k.employee', 'room.solo401k.pretax']) assert.ok(notesOf(await fig(db, k)).includes(NOTE.rothElect), `${k} says Roth does not lower tax`);
   });
 
   test('MG6: an affected participant without a confirmed Roth feature has zero catch-up with a reason', async () => {
     // Sized with catch-up disabled: employee 24,500; catch-up 0; employer min(45,000, 47,500,
     // 180,000 - 24,500) = 45,000. rothCatchUp 0; pre-tax and total 69,500.
     const unconfirmed = await planned(corp61({ payroll: [box3(CEDAR, 160000)] }));
-    const roth = fig(unconfirmed.db, 'room.solo401k.rothCatchUp');
+    const roth = await fig(unconfirmed.db, 'room.solo401k.rothCatchUp');
     assert.equal(roth.v, 0);
     assert.ok(notesOf(roth).includes(NOTE.rothConfirm), 'the zero names the missing confirmation');
-    assert.equal(fig(unconfirmed.db, 'room.solo401k.pretax').v, 69500);
-    assert.equal(fig(unconfirmed.db, 'room.solo401k').v, 69500);
-    assert.equal(fig(unconfirmed.db, 'room.solo401k.employer').v, 45000);
-    absent(unconfirmed.db, 'room.solo401k.catchUp');
+    assert.equal((await fig(unconfirmed.db, 'room.solo401k.pretax')).v, 69500);
+    assert.equal((await fig(unconfirmed.db, 'room.solo401k')).v, 69500);
+    assert.equal((await fig(unconfirmed.db, 'room.solo401k.employer')).v, 45000);
+    await absent(unconfirmed.db, 'room.solo401k.catchUp');
     assert.equal(unconfirmed.info.retireCatchUp, 'retirement.planOffersRoth');
 
     const none = await planned(corp61({ payroll: [box3(CEDAR, 160000)], facts: { 'retirement.planOffersRoth': false } }));
-    const rothNone = fig(none.db, 'room.solo401k.rothCatchUp');
+    const rothNone = await fig(none.db, 'room.solo401k.rothCatchUp');
     assert.equal(rothNone.v, 0);
     assert.ok(notesOf(rothNone).includes(NOTE.rothNone), 'the zero names the plan without Roth');
-    assert.equal(fig(none.db, 'room.solo401k').v, 69500);
+    assert.equal((await fig(none.db, 'room.solo401k')).v, 69500);
     assert.equal(none.info.retireCatchUp, undefined, 'nothing left to ask');
   });
 
   test('MG6: exactly 150,000 is not affected', async () => {
     // "Exceeded" is strictly greater: 150,000 is not over, so the 11,250 catch-up may be pre-tax.
     const { db, info } = await planned(corp61({ payroll: [box3(CEDAR, 150000)] }));
-    assert.equal(fig(db, 'room.solo401k.employee').v, 24500);
-    assert.equal(fig(db, 'room.solo401k.catchUp').v, 11250);
-    absent(db, 'room.solo401k.rothCatchUp');
-    assert.equal(fig(db, 'room.solo401k.pretax').v, 80750);
-    assert.equal(fig(db, 'room.solo401k').v, 80750);
+    assert.equal((await fig(db, 'room.solo401k.employee')).v, 24500);
+    assert.equal((await fig(db, 'room.solo401k.catchUp')).v, 11250);
+    await absent(db, 'room.solo401k.rothCatchUp');
+    assert.equal((await fig(db, 'room.solo401k.pretax')).v, 80750);
+    assert.equal((await fig(db, 'room.solo401k')).v, 80750);
     assert.equal(info.retireCatchUp, undefined);
   });
 
@@ -650,9 +650,9 @@ describe('MG6 Roth catch-up', () => {
     // No 2025 W-2 and no fact: regular employee and employer room still show; total, catch-up,
     // Roth catch-up and pre-tax wait for last year's box 3 wages.
     const { db, info } = await planned(corp61());
-    assert.equal(fig(db, 'room.solo401k.employee').v, 24500);
-    assert.equal(fig(db, 'room.solo401k.employer').v, 45000);
-    for (const k of ['room.solo401k', 'room.solo401k.catchUp', 'room.solo401k.rothCatchUp', 'room.solo401k.pretax']) absent(db, k, 'catch-up treatment unknown');
+    assert.equal((await fig(db, 'room.solo401k.employee')).v, 24500);
+    assert.equal((await fig(db, 'room.solo401k.employer')).v, 45000);
+    for (const k of ['room.solo401k', 'room.solo401k.catchUp', 'room.solo401k.rothCatchUp', 'room.solo401k.pretax']) await absent(db, k, 'catch-up treatment unknown');
     assert.equal(info.retireCatchUp, 'retirement.priorYearFicaWages');
   });
 
@@ -660,17 +660,17 @@ describe('MG6 Roth catch-up', () => {
     // A 2025 W-2 with box 1 wages 160,000 and no socialSecurityWages field leaves box 3 unknown.
     const doc = w2Doc({ taxYear: 2025, employerName: CEDAR, person: 'owner', wages: 160000 });
     const { db, info } = await planned(corp61({ payroll: [doc] }));
-    absent(db, 'room.solo401k.rothCatchUp');
-    absent(db, 'room.solo401k.catchUp');
+    await absent(db, 'room.solo401k.rothCatchUp');
+    await absent(db, 'room.solo401k.catchUp');
     assert.equal(info.retireCatchUp, 'retirement.priorYearFicaWages');
   });
 
   test('MG6: an owner fact supplies the wages', async () => {
     // retirement.priorYearFicaWages {owner: 160,000} replaces the document: same as the first MG6 case.
     const { db, info } = await planned(corp61({ facts: { 'retirement.priorYearFicaWages': { owner: 160000 }, 'retirement.planOffersRoth': true } }));
-    assert.equal(fig(db, 'room.solo401k.rothCatchUp').v, 11250);
-    assert.equal(fig(db, 'room.solo401k.pretax').v, 69500);
-    assert.equal(fig(db, 'room.solo401k').v, 80750);
+    assert.equal((await fig(db, 'room.solo401k.rothCatchUp')).v, 11250);
+    assert.equal((await fig(db, 'room.solo401k.pretax')).v, 69500);
+    assert.equal((await fig(db, 'room.solo401k')).v, 80750);
     assert.equal(info.retireCatchUp, undefined);
   });
 
@@ -679,9 +679,9 @@ describe('MG6 Roth catch-up', () => {
     // and no wage data is needed. Wren Studio 5,000 a month is the owner's only business.
     const wren = { name: 'Wren Studio', type: 'sole_prop', owner: 'owner', income: 5000, expenses: {} };
     const { db, info } = await planned({ entities: [wren, SOLE_PROP], facts: { 'household.birthYears': { owner: 1965, spouse: 1983 } } });
-    absent(db, 'room.solo401k.rothCatchUp');
-    assert.equal(fig(db, 'room.solo401k.catchUp').v, 11250);
-    const steps = fig(db, 'room.solo401k').locator.steps;
+    await absent(db, 'room.solo401k.rothCatchUp');
+    assert.equal((await fig(db, 'room.solo401k.catchUp')).v, 11250);
+    const steps = (await fig(db, 'room.solo401k')).locator.steps;
     assert.ok(steps.some(s => /Roth catch-up rule does not apply/i.test(`${s.label} ${s.formula ?? ''}`)), 'a step names the self-employed exemption');
     assert.equal(info.retireCatchUp, undefined);
   });
@@ -694,26 +694,26 @@ describe('MG6 Roth catch-up', () => {
     // 12,500, x 37,000, no Roth figure. Box 3 140,000 (not affected): x 48,250.
     const facts = { 'household.birthYears': { owner: 1965, spouse: 1983 } };
     const roth = await planned({ payroll: [box3(SCORP.name, 160000, 120000)], facts: { ...facts, 'retirement.planOffersRoth': true } });
-    assert.equal(fig(roth.db, 'wg.salary.s50.x').v, 37000);
-    assert.equal(fig(roth.db, 'wg.salary.s50.roth').v, 11250);
-    assert.equal(contentValue(roth.db, 'wargame').salary.xLabel, 'Pre-tax retirement room');
+    assert.equal((await fig(roth.db, 'wg.salary.s50.x')).v, 37000);
+    assert.equal((await fig(roth.db, 'wg.salary.s50.roth')).v, 11250);
+    assert.equal((await contentValue(roth.db, 'wargame')).salary.xLabel, 'Pre-tax retirement room');
 
     const unconfirmed = await planned({ payroll: [box3(SCORP.name, 160000, 120000)], facts });
-    assert.equal(fig(unconfirmed.db, 'wg.salary.s50.x').v, 37000);
-    absent(unconfirmed.db, 'wg.salary.s50.roth');
-    assert.match(contentValue(unconfirmed.db, 'wargame').salary.takeaway, /confirm your plan offers Roth deferrals/i);
+    assert.equal((await fig(unconfirmed.db, 'wg.salary.s50.x')).v, 37000);
+    await absent(unconfirmed.db, 'wg.salary.s50.roth');
+    assert.match((await contentValue(unconfirmed.db, 'wargame')).salary.takeaway, /confirm your plan offers Roth deferrals/i);
 
     const clear = await planned({ payroll: [box3(SCORP.name, 140000, 120000)], facts });
-    assert.equal(fig(clear.db, 'wg.salary.s50.x').v, 48250);
-    absent(clear.db, 'wg.salary.s50.roth');
+    assert.equal((await fig(clear.db, 'wg.salary.s50.x')).v, 48250);
+    await absent(clear.db, 'wg.salary.s50.roth');
   });
 
   test('MG6: unread outside deferrals leave sized room and salary curves with a precision gap', async () => {
     const doc = w2Doc({ employerName: 'Example Employer Inc', person: 'owner', relation: 'outside', wages: 200000, medicareWages: 200000 });
     const { db, info } = await planned({ payroll: [doc] });
-    for (const k of ROOM_KEYS) if (figureRow(db, k)) assert.ok(fig(db, k).locator.gaps.some(g => g.code === 'w2_box12_unreadable'));
-    assert.ok(figureRow(db, 'room.sep'));
-    assert.ok(fig(db, 'wg.salary.s50.x').locator.partial);
+    for (const k of ROOM_KEYS) if (await figureRow(db, k)) assert.ok((await fig(db, k)).locator.gaps.some(g => g.code === 'w2_box12_unreadable'));
+    assert.ok(await figureRow(db, 'room.sep'));
+    assert.ok((await fig(db, 'wg.salary.s50.x')).locator.partial);
     assert.ok(info.gaps.some(g => g.code === 'w2_box12_unreadable'));
   });
 
@@ -721,8 +721,8 @@ describe('MG6 Roth catch-up', () => {
     // retirement.otherPlanDeferrals {owner: 24,500}: at s = 50,000, employee 0, employer
     // min(12,500, 50,000, 50,000) = 12,500, x 12,500. Current salary 60,000: employee room 0.
     const { db } = await planned({ facts: { 'retirement.otherPlanDeferrals': { owner: { deferral: 24500, catchUp: 0 } } } });
-    assert.equal(fig(db, 'wg.salary.s50.x').v, 12500);
-    assert.equal(fig(db, 'room.solo401k.employee').v, 0);
+    assert.equal((await fig(db, 'wg.salary.s50.x')).v, 12500);
+    assert.equal((await fig(db, 'room.solo401k.employee')).v, 0);
   });
 
   test('MG6: catch-up-only room after outside deferrals fill the regular limit', async () => {
@@ -730,11 +730,11 @@ describe('MG6 Roth catch-up', () => {
     // min(11,250 - 0, 180,000) = 11,250; employer min(45,000, 72,000, 180,000 - 11,250) = 45,000.
     // Pre-tax 0 + 45,000 + 11,250 = 56,250 = total.
     const { db } = await planned(corp61({ payroll: [box3(CEDAR, 140000)], facts: { 'retirement.otherPlanDeferrals': { owner: { deferral: 24500, catchUp: 0 } } } }));
-    assert.equal(fig(db, 'room.solo401k.employee').v, 0);
-    assert.equal(fig(db, 'room.solo401k.catchUp').v, 11250);
-    assert.equal(fig(db, 'room.solo401k.employer').v, 45000);
-    assert.equal(fig(db, 'room.solo401k.pretax').v, 56250);
-    assert.equal(fig(db, 'room.solo401k').v, 56250);
+    assert.equal((await fig(db, 'room.solo401k.employee')).v, 0);
+    assert.equal((await fig(db, 'room.solo401k.catchUp')).v, 11250);
+    assert.equal((await fig(db, 'room.solo401k.employer')).v, 45000);
+    assert.equal((await fig(db, 'room.solo401k.pretax')).v, 56250);
+    assert.equal((await fig(db, 'room.solo401k')).v, 56250);
   });
 
   test('MG6: a 30,000 salary at 61 without a Roth feature keeps employer room', async () => {
@@ -749,20 +749,20 @@ describe('MG6 Roth catch-up', () => {
       facts: { 'household.birthYears': { owner: 1965, spouse: 1983 }, ...facts },
     });
     const off = await planned(small());
-    assert.equal(fig(off.db, 'room.solo401k.employee').v, 24500);
-    assert.equal(fig(off.db, 'room.solo401k.employer').v, 5500);
-    assert.equal(fig(off.db, 'room.solo401k.rothCatchUp').v, 0);
-    assert.ok(notesOf(fig(off.db, 'room.solo401k.rothCatchUp')).includes(NOTE.rothConfirm));
-    absent(off.db, 'room.solo401k.catchUp');
-    assert.equal(fig(off.db, 'room.solo401k.pretax').v, 30000);
-    assert.equal(fig(off.db, 'room.solo401k').v, 30000);
+    assert.equal((await fig(off.db, 'room.solo401k.employee')).v, 24500);
+    assert.equal((await fig(off.db, 'room.solo401k.employer')).v, 5500);
+    assert.equal((await fig(off.db, 'room.solo401k.rothCatchUp')).v, 0);
+    assert.ok(notesOf(await fig(off.db, 'room.solo401k.rothCatchUp')).includes(NOTE.rothConfirm));
+    await absent(off.db, 'room.solo401k.catchUp');
+    assert.equal((await fig(off.db, 'room.solo401k.pretax')).v, 30000);
+    assert.equal((await fig(off.db, 'room.solo401k')).v, 30000);
 
     const on = await planned(small({ 'retirement.planOffersRoth': true }));
-    assert.equal(fig(on.db, 'room.solo401k.employee').v, 24500);
-    assert.equal(fig(on.db, 'room.solo401k.rothCatchUp').v, 5500);
-    assert.equal(fig(on.db, 'room.solo401k.employer').v, 0);
-    assert.equal(fig(on.db, 'room.solo401k.pretax').v, 24500);
-    assert.equal(fig(on.db, 'room.solo401k').v, 30000);
+    assert.equal((await fig(on.db, 'room.solo401k.employee')).v, 24500);
+    assert.equal((await fig(on.db, 'room.solo401k.rothCatchUp')).v, 5500);
+    assert.equal((await fig(on.db, 'room.solo401k.employer')).v, 0);
+    assert.equal((await fig(on.db, 'room.solo401k.pretax')).v, 24500);
+    assert.equal((await fig(on.db, 'room.solo401k')).v, 30000);
   });
 });
 
@@ -777,25 +777,25 @@ describe('MG9 Virginia529', () => {
   const AGES = { 'household.birthYears': { owner: 1950, spouse: 1983 } };
   const va529 = async (entry, { older = false } = {}) => {
     const db = await S.store({ variant: { facts: AGES } });
-    if (older) db.prepare("UPDATE accounts SET owner = 'owner' WHERE kind = '529'").run();
-    const id = accountIdByMask(db, MASKS.college);
-    addFact(db, 'accounts.va529', { [id]: entry });
-    if (entry.carryforward === undefined) addFact(db, 'accounts.va529CarryforwardDefault', { [id]: { undone: true } });
+    if (older) await db.prepare("UPDATE accounts SET owner = 'owner' WHERE kind = '529'").run();
+    const id = await accountIdByMask(db, MASKS.college);
+    await addFact(db, 'accounts.va529', { [id]: entry });
+    if (entry.carryforward === undefined) await addFact(db, 'accounts.va529CarryforwardDefault', { [id]: { undone: true } });
     await plan(db);
-    return { db, info: computeFor(db).info };
+    return { db, info: (await computeFor(db)).info };
   };
 
   test('MG9: the accounts the planner names for the owner carry the shared account label, not the imported name', async () => {
     const { db } = await va529({ virginiaPlan: true, carryforward: 0 }, { older: true });
-    const id = accountIdByMask(db, MASKS.college);
-    db.prepare("UPDATE accounts SET display_name = 'Kid college fund' WHERE id = ?").run(id);
+    const id = await accountIdByMask(db, MASKS.college);
+    await db.prepare("UPDATE accounts SET display_name = 'Kid college fund' WHERE id = ?").run(id);
     await plan(db);
-    const shared = accountNaming(db).label(db.prepare('SELECT * FROM accounts WHERE id = ?').get(id));
+    const shared = (await accountNaming(db)).label(await db.prepare('SELECT * FROM accounts WHERE id = ?').get(id));
     assert.match(shared, /^Kid college fund/, 'the shared label follows the owner\'s name');
-    assert.deepEqual(computeFor(db).info.va529.age70, [shared], 'an age-70 account is named by the shared label');
-    addFact(db, 'accounts.va529', { [id]: { virginiaPlan: true } });
+    assert.deepEqual((await computeFor(db)).info.va529.age70, [shared], 'an age-70 account is named by the shared label');
+    await addFact(db, 'accounts.va529', { [id]: { virginiaPlan: true } });
     await plan(db);
-    assert.deepEqual(computeFor(db).info.va529.missing, [shared], 'an account with answers missing is named by the shared label');
+    assert.deepEqual((await computeFor(db)).info.va529.missing, [shared], 'an account with answers missing is named by the shared label');
   });
 
   test('MG9: an age-70 owner deducts this year\'s contributions plus carryforward in full', async () => {
@@ -804,25 +804,25 @@ describe('MG9 Virginia529', () => {
     // No capped account, so no deduction-left figure.
     const base = await planned({ facts: AGES });
     const old = await va529({ virginiaPlan: true, carryforward: 5000 }, { older: true });
-    assert.equal(fig(base.db, 'va529.deduction').v, 1000);
-    const d = fig(old.db, 'va529.deduction');
+    assert.equal((await fig(base.db, 'va529.deduction')).v, 1000);
+    const d = await fig(old.db, 'va529.deduction');
     assert.equal(d.v, 6000);
     assert.equal(d.kind, 'm');
-    near(r2(fig(base.db, 'tax.va.proj').v - fig(old.db, 'tax.va.proj').v), 287.5, 'tax.va.proj drop');
-    absent(old.db, 'va529.deductionLeft', 'age-70 accounts have no cap');
+    near(r2((await fig(base.db, 'tax.va.proj')).v - (await fig(old.db, 'tax.va.proj')).v), 287.5, 'tax.va.proj drop');
+    await absent(old.db, 'va529.deductionLeft', 'age-70 accounts have no cap');
     assert.equal(old.info.va529.age70Count, 1);
     assert.equal(old.info.va529.eligible, 0);
     near(old.info.va529.deduction, 6000, 'info.va529.deduction');
-    const saved = figureRow(old.db, 'va529.taxSaved');
+    const saved = await figureRow(old.db, 'va529.taxSaved');
     if (saved) assert.equal(saved.v, 0, 'nothing capped is left to save');
   });
 
   test('MG9: a capped account with a carryforward that fills the cap has no room left', async () => {
     // min(4,000, 1,000 + 5,000) = 4,000; left 4,000 - 4,000 = 0; tax saved by full use 0.
     const { db } = await va529({ virginiaPlan: true, carryforward: 5000 });
-    assert.equal(fig(db, 'va529.deduction').v, 4000);
-    assert.equal(fig(db, 'va529.deductionLeft').v, 0);
-    assert.equal(fig(db, 'va529.taxSaved').v, 0);
+    assert.equal((await fig(db, 'va529.deduction')).v, 4000);
+    assert.equal((await fig(db, 'va529.deductionLeft')).v, 0);
+    assert.equal((await fig(db, 'va529.taxSaved')).v, 0);
   });
 
   test('MG9: a missing carryforward leaves Virginia estimates usable', async () => {
@@ -831,29 +831,29 @@ describe('MG9 Virginia529', () => {
     assert.equal(info.vaBlocked, null);
     assert.ok(info.gaps.some(g => g.code === 'va529_answers_missing'));
     assert.ok(info.va529.missing.some(n => n.startsWith('College 529')), `missing: ${info.va529.missing}`);
-    for (const k of ['tax.va.proj', 'sh.va.required', 'sh.va.remaining']) assert.ok(fig(db, k).locator.partial);
-    assert.ok(fig(db, 'tax.va.proj').locator.gaps.some(g => g.code === 'va529_answers_missing'));
-    assert.ok(figureRow(db, 'tax.fed.proj'), 'federal tax is still produced');
+    for (const k of ['tax.va.proj', 'sh.va.required', 'sh.va.remaining']) assert.ok((await fig(db, k)).locator.partial);
+    assert.ok((await fig(db, 'tax.va.proj')).locator.gaps.some(g => g.code === 'va529_answers_missing'));
+    assert.ok(await figureRow(db, 'tax.fed.proj'), 'federal tax is still produced');
   });
 
   test('MG9: missing college plan answers leave Virginia tax usable', async () => {
     // With no institution on file the plan is asked, not inferred.
     const db = await S.store({ variant: { facts: { 'accounts.va529': undefined } } });
-    db.prepare("UPDATE accounts SET inst = '' WHERE kind = '529'").run();
+    await db.prepare("UPDATE accounts SET inst = '' WHERE kind = '529'").run();
     await plan(db);
-    const info = computeFor(db).info;
+    const info = (await computeFor(db)).info;
     assert.equal(info.vaBlocked, null);
     assert.ok(info.gaps.some(g => g.code === 'va529_answers_missing'));
-    assert.ok(fig(db, 'tax.va.proj').locator.partial);
-    assert.ok(figureRow(db, 'tax.fed.proj'));
+    assert.ok((await fig(db, 'tax.va.proj')).locator.partial);
+    assert.ok(await figureRow(db, 'tax.fed.proj'));
   });
 
   test('MG9: a complete non-Virginia plan answer still publishes Virginia tax', async () => {
     // liveness: virginiaPlan false is complete with no other answers; no subtraction applies.
     const { db, info } = await va529({ virginiaPlan: false });
     assert.equal(info.vaBlocked, null);
-    assert.ok(figureRow(db, 'tax.va.proj'), 'tax.va.proj produced');
-    absent(db, 'va529.deductionLeft');
+    assert.ok(await figureRow(db, 'tax.va.proj'), 'tax.va.proj produced');
+    await absent(db, 'va529.deductionLeft');
   });
 });
 
@@ -868,31 +868,31 @@ describe('MG10 safe-harbor targets', () => {
     // currentTarget = 90% x tax.fed.proj. sh.fed.required = min(33,000, currentTarget), kind e
     // exactly when the projection is lower.
     const { db, info } = await planned();
-    const proj = fig(db, 'tax.fed.proj').v;
-    const prior = fig(db, 'sh.fed.priorTarget');
-    const priorRem = fig(db, 'sh.fed.priorRemaining');
-    const current = fig(db, 'sh.fed.currentTarget');
+    const proj = (await fig(db, 'tax.fed.proj')).v;
+    const prior = await fig(db, 'sh.fed.priorTarget');
+    const priorRem = await fig(db, 'sh.fed.priorRemaining');
+    const current = await fig(db, 'sh.fed.currentTarget');
     assert.equal(prior.v, 33000);
     assert.equal(priorRem.v, 15000);
     near(current.v, r2(0.9 * proj), 'currentTarget');
     assert.deepEqual([prior.kind, priorRem.kind, current.kind], ['m', 'm', 'e']);
     assert.ok(current.v > prior.v, 'precondition: the prior-year target binds for the synthetic household');
-    const required = fig(db, 'sh.fed.required');
+    const required = await fig(db, 'sh.fed.required');
     assert.equal(required.v, Math.min(prior.v, current.v));
     assert.equal(required.kind, current.v < prior.v ? 'e' : 'm');
     assert.equal(info.shBasis, 'prior');
     assert.ok((current.locator.assumptions || []).includes('projection_target'));
     assert.ok(notesOf(current).includes(NOTE.projection), 'currentTarget explains it is a projection');
-    for (const k of ['sh.fed.priorTarget', 'sh.fed.required']) assert.ok(notesOf(fig(db, k)).includes(NOTE.priorFull), `${k} notes the full-year prior return`);
+    for (const k of ['sh.fed.priorTarget', 'sh.fed.required']) assert.ok(notesOf(await fig(db, k)).includes(NOTE.priorFull), `${k} notes the full-year prior return`);
   });
 
   test('MG10: when the projection is the lower target the required figure is an estimate', async () => {
     // Prior federal tax 200,000 (fact, no return document): priorTarget 220,000 > 90% of the
     // projection, so required = currentTarget, kind e, basis current.
     const { db, info } = await planned({ priorReturn: false, facts: { 'tax.prior.federal': 200000, 'tax.prior.agi': 240000 } });
-    const current = fig(db, 'sh.fed.currentTarget');
-    assert.equal(fig(db, 'sh.fed.priorTarget').v, 220000);
-    const required = fig(db, 'sh.fed.required');
+    const current = await fig(db, 'sh.fed.currentTarget');
+    assert.equal((await fig(db, 'sh.fed.priorTarget')).v, 220000);
+    const required = await fig(db, 'sh.fed.required');
     assert.equal(required.v, current.v);
     assert.equal(required.kind, 'e');
     assert.equal(info.shBasis, 'current');
@@ -900,12 +900,12 @@ describe('MG10 safe-harbor targets', () => {
 
   test('MG10: without a prior return only the projection target is written', async () => {
     const { db, info } = await planned({ priorReturn: false });
-    absent(db, 'sh.fed.priorTarget');
-    absent(db, 'sh.fed.priorRemaining');
-    const current = fig(db, 'sh.fed.currentTarget');
+    await absent(db, 'sh.fed.priorTarget');
+    await absent(db, 'sh.fed.priorRemaining');
+    const current = await fig(db, 'sh.fed.currentTarget');
     assert.equal(current.kind, 'e');
-    assert.equal(fig(db, 'sh.fed.required').kind, 'e');
-    assert.equal(fig(db, 'sh.fed.required').v, current.v);
+    assert.equal((await fig(db, 'sh.fed.required')).kind, 'e');
+    assert.equal((await fig(db, 'sh.fed.required')).v, current.v);
     assert.equal(info.shBasis, undefined);
   });
 });
@@ -991,15 +991,15 @@ describe('MGN1 readable notes', () => {
   test('MGN1: tax figures carry readable notes', async () => {
     // Codes stay in locator.assumptions; locator.notes carries the sentences, none with a digit.
     const { db } = await planned();
-    const agi = fig(db, 'agi.est');
+    const agi = await fig(db, 'agi.est');
     assert.ok(notesOf(agi).includes(NOTE.magi), 'agi.est names AGI for MAGI');
     assert.ok(notesOf(agi).includes(NOTE.noPriorLoss), 'agi.est names the missing QBI carryforward (D2)');
-    assert.ok(notesOf(fig(db, 'tax.va.proj')).includes(NOTE.vaExempt), 'tax.va.proj names the exemptions');
-    const t27 = notesOf(fig(db, 'wg.deferral.d50.tax2027'));
+    assert.ok(notesOf(await fig(db, 'tax.va.proj')).includes(NOTE.vaExempt), 'tax.va.proj names the exemptions');
+    const t27 = notesOf(await fig(db, 'wg.deferral.d50.tax2027'));
     assert.ok(t27.includes(NOTE.nextYear), 'next-year tax names the parameter proxy');
     assert.ok(t27.includes(NOTE.nextFlat), 'next-year tax names the flat income assumption');
-    assert.ok(notesOf(fig(db, 'room.solo401k')).includes(NOTE.planTerms), 'room figures name the plan-terms assumption');
-    for (const f of plannerFigures(db)) {
+    assert.ok(notesOf(await fig(db, 'room.solo401k')).includes(NOTE.planTerms), 'room figures name the plan-terms assumption');
+    for (const f of await plannerFigures(db)) {
       const notes = notesOf(f);
       assert.ok(notes.length <= 5, `${f.key} has at most five notes`);
       for (const n of notes) {

@@ -3,6 +3,7 @@ import { goalPace, paceRollup, monthlyPace, paceMeter, finite, isoDate, rangePac
   qualifyingContributions, MOVE_DAYS } from '../calc/pace.mjs';
 import { kindOf, isGoalOwner, PRIORITIES, PERSONS } from '../shared/goals.mjs';
 import { ownerOf } from '../jobs/planner/data.mjs';
+import { filterSeries, flatMapSeries, mapSeries } from '../shared/series.mjs';
 
 const sum = values => Math.round(values.reduce((s, v) => s + v, 0) * 100) / 100;
 const endOfMonth = period => /^\d{4}-\d{2}$/.test(period ?? '')
@@ -11,8 +12,8 @@ const rows = (table, ids) => ({ table, ids, count: ids.length });
 const sourceRows = (table, ids) => ({ rows: rows(table, ids) });
 const earliest = dates => dates.length && dates.every(isoDate) ? dates.toSorted()[0] : null;
 
-export function paceClock(db, override) {
-  const clock = override || getSetting(db, 'clock', null) || new Date().toISOString().slice(0, 10);
+export async function paceClock(db, override) {
+  const clock = override || await getSetting(db, 'clock', null) || new Date().toISOString().slice(0, 10);
   if (!isoDate(clock)) throw new TypeError('Pace requires an ISO clock date');
   return clock;
 }
@@ -24,10 +25,10 @@ function actualValue(v, dependencies, sources, label = 'Tracked stored value') {
 
 // One account's stored values up to the clock, oldest first: [{date, value}], value an actual figure
 // (balances, or positions summed per as_of date) or null when a snapshot is incomplete.
-export function accountHistory(db, id, clock) {
-  if (!db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(id)) return [];
+export async function accountHistory(db, id, clock) {
+  if (!await db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(id)) return [];
   const snapshots = new Map();
-  const positions = db.prepare('SELECT id, as_of, value, quantity, price FROM positions WHERE account_id = ? AND as_of <= ? ORDER BY as_of, id').all(id, clock);
+  const positions = await db.prepare('SELECT id, as_of, value, quantity, price FROM positions WHERE account_id = ? AND as_of <= ? ORDER BY as_of, id').all(id, clock);
   for (const p of positions) {
     if (!isoDate(p.as_of)) continue;
     const snap = snapshots.get(p.as_of) || { values: [], ids: [] };
@@ -37,7 +38,7 @@ export function accountHistory(db, id, clock) {
   }
   const out = new Map([...snapshots].map(([date, s]) => [date,
     s.values.every(finite) ? actualValue(sum(s.values), [{ kind: 'brokerage_positions', asOf: date }], [sourceRows('positions', s.ids)]) : null]));
-  for (const b of db.prepare('SELECT id, date, amount FROM balances WHERE account_id = ? AND date <= ? ORDER BY date, id').all(id, clock)) {
+  for (const b of await db.prepare('SELECT id, date, amount FROM balances WHERE account_id = ? AND date <= ? ORDER BY date, id').all(id, clock)) {
     if (!isoDate(b.date)) continue;
     out.set(b.date, finite(b.amount) ? actualValue(b.amount, [{ kind: 'balances', asOf: b.date }], [sourceRows('balances', [b.id])]) : null);
   }
@@ -51,12 +52,12 @@ function combine(values) {
 
 function makeReader(db, clock) {
   const histories = new Map();
-  const history = id => {
-    if (!histories.has(id)) histories.set(id, accountHistory(db, id, clock));
+  const history = async id => {
+    if (!histories.has(id)) histories.set(id, await accountHistory(db, id, clock));
     return histories.get(id);
   };
-  function dependency(table, id, seen) {
-    if (table === 'figures') return figure(id, seen);
+  async function dependency(table, id, seen) {
+    if (table === 'figures') return await figure(id, seen);
     const columns = {
       balances: ['id', 'date', 'balances'], positions: ['id', 'as_of', 'brokerage_positions'],
       transactions: ['id', 'date', 'bank_csv'], pnl_lines: ['id', 'period', 'pnl_workbook'],
@@ -66,7 +67,7 @@ function makeReader(db, clock) {
     const spec = columns[table];
     if (!spec) return null;
     const [key, column, kind] = spec;
-    const row = db.prepare(`SELECT * FROM ${table} WHERE ${key} = ?`).get(id);
+    const row = await db.prepare(`SELECT * FROM ${table} WHERE ${key} = ?`).get(id);
     if (!row) return null;
     let date = column ? row[column] : null;
     let cadenceKind = kind;
@@ -83,15 +84,15 @@ function makeReader(db, clock) {
     }
     return { dependencies: [{ kind: cadenceKind, asOf: date }], locator: { sources: [sourceRows(table, [id])] } };
   }
-  function figure(key, seen = new Set()) {
+  async function figure(key, seen = new Set()) {
     if (seen.has(key)) return null;
     const next = new Set(seen).add(key);
-    const f = db.prepare('SELECT * FROM figures WHERE key = ?').get(key);
+    const f = await db.prepare('SELECT * FROM figures WHERE key = ?').get(key);
     if (!f || f.kind !== 'a' || f.unavailable_reason || !finite(f.v)) return null;
     const loc = parse(f.locator, null);
     let deps;
     if (loc?.rows && Array.isArray(loc.rows.ids) && loc.rows.ids.length && (loc.rows.count ?? loc.rows.ids.length) === loc.rows.ids.length) {
-      deps = loc.rows.ids.map(id => dependency(loc.rows.table, id, next));
+      deps = await mapSeries(loc.rows.ids, async id => await dependency(loc.rows.table, id, next));
     } else if (f.parser === 'demo-seed' && isoDate(loc?.asOf) && loc?.cadenceKind) {
       deps = [{ dependencies: [{ kind: loc.cadenceKind, asOf: loc.asOf }], locator: { sources: [sourceRows('figures', [key])] } }];
     } else return null;
@@ -100,41 +101,41 @@ function makeReader(db, clock) {
     if (!value.dataThrough || value.dependencies.some(d => !isoDate(d.asOf) || d.asOf > clock)) return null;
     return value;
   }
-  function tracked(goal) {
+  async function tracked(goal) {
     const tr = goal.track;
-    if (tr?.figure) return figure(tr.figure);
+    if (tr?.figure) return await figure(tr.figure);
     if (!Array.isArray(tr?.accounts) || !tr.accounts.length) return null;
-    return combine([...new Set(tr.accounts)].map(id => history(id).at(-1)?.value));
+    return combine(await mapSeries([...new Set(tr.accounts)], async id => (await history(id)).at(-1)?.value));
   }
-  function observations(goal) {
+  async function observations(goal) {
     if (goal.track?.figure) {
-      const value = figure(goal.track.figure);
+      const value = await figure(goal.track.figure);
       if (!value) return [];
       const accountIds = new Set();
       let complete = true;
       for (const s of value.locator.sources.filter(s => s.rows?.table !== 'figures')) {
         if (!['balances', 'positions'].includes(s.rows?.table)) { complete = false; break; }
         for (const id of s.rows.ids) {
-          const row = db.prepare(`SELECT account_id FROM ${s.rows.table} WHERE id = ?`).get(id);
+          const row = await db.prepare(`SELECT account_id FROM ${s.rows.table} WHERE id = ?`).get(id);
           if (row) accountIds.add(row.account_id); else complete = false;
         }
       }
       if (complete && accountIds.size) {
         const ids = [...accountIds];
-        const latest = combine(ids.map(id => history(id).filter(s => s.date <= value.dataThrough).at(-1)?.value));
-        if (latest && latest.v === value.v) return [...accountMonths(ids, value.dataThrough), value];
+        const latest = combine(await mapSeries(ids, async id => (await history(id)).filter(s => s.date <= value.dataThrough).at(-1)?.value));
+        if (latest && latest.v === value.v) return [...await accountMonths(ids, value.dataThrough), value];
       }
       return [value];
     }
     const ids = [...new Set(goal.track?.accounts || [])];
-    return accountMonths(ids, clock);
+    return await accountMonths(ids, clock);
   }
-  function accountMonths(ids, through) {
+  async function accountMonths(ids, through) {
     if (!ids.length) return [];
-    const before = id => history(id).filter(s => s.date <= through);
-    const months = new Set(ids.flatMap(id => before(id).map(s => s.date.slice(0, 7))));
-    return [...months].toSorted().flatMap(month => {
-      const value = combine(ids.map(id => before(id).filter(s => s.date.slice(0, 7) === month).at(-1)?.value));
+    const before = async id => (await history(id)).filter(s => s.date <= through);
+    const months = new Set(await flatMapSeries(ids, async id => (await before(id)).map(s => s.date.slice(0, 7))));
+    return await flatMapSeries([...months].toSorted(), async month => {
+      const value = combine(await mapSeries(ids, async id => (await before(id)).filter(s => s.date.slice(0, 7) === month).at(-1)?.value));
       return value ? [value] : [];
     });
   }
@@ -142,21 +143,21 @@ function makeReader(db, clock) {
   // Transactions are the basis only when every destination account has a transaction in the tax
   // year up to the clock; otherwise the entered amount; otherwise no progress source, with
   // partial_contribution_coverage when some but not all accounts are covered.
-  function contributions(goal) {
+  async function contributions(goal) {
     const year = goal.taxYear;
     const ids = Number.isInteger(year) && Array.isArray(goal.accounts)
-      ? [...new Set(goal.accounts)].filter(id => typeof id === 'string' && db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(id)) : [];
+      ? await filterSeries([...new Set(goal.accounts)], async id => typeof id === 'string' && await db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(id)) : [];
     const start = `${year}-01-01`;
     const end = [`${year}-12-31`, clock].toSorted()[0];
     const latest = db.prepare('SELECT id, date FROM transactions WHERE account_id = ? AND date >= ? AND date <= ? ORDER BY date DESC, id DESC LIMIT 1');
-    const coverage = new Map(ids.flatMap(id => {
-      const row = latest.get(id, start, end);
+    const coverage = new Map(await flatMapSeries(ids, async id => {
+      const row = await latest.get(id, start, end);
       return row ? [[id, row]] : [];
     }));
     if (ids.length && coverage.size === ids.length) {
       // Debits a few days either side of the year are read so a move across the year end still pairs.
       const shift = (date, days) => new Date(Date.parse(date + 'T00:00:00Z') + days * 86400000).toISOString().slice(0, 10);
-      const rows = db.prepare(`SELECT t.id, t.account_id, t.date, t.amount, t.description, coalesce(i.category, t.category) AS category
+      const rows = await db.prepare(`SELECT t.id, t.account_id, t.date, t.amount, t.description, coalesce(i.category, t.category) AS category
         FROM transactions t LEFT JOIN transaction_category_imports i ON i.transaction_id = t.id
         WHERE t.account_id IN (${ids.map(() => '?').join(', ')}) AND t.date >= ? AND t.date <= ? ORDER BY t.date, t.id`)
         .all(...ids, shift(start, -MOVE_DAYS), [shift(end, MOVE_DAYS), clock].toSorted()[0]);
@@ -171,7 +172,7 @@ function makeReader(db, clock) {
         return actualValue(sum(mine.map(r => r.amount)), accountIds.map(id => ({ kind: 'bank_csv', asOf: coverage.get(id).date })), sources,
           'Contributions recorded in the tax year');
       };
-      const holders = new Map(ids.map(id => [id, ownerOf(db.prepare('SELECT owner FROM accounts WHERE id = ?').get(id).owner)]));
+      const holders = new Map(await mapSeries(ids, async id => [id, ownerOf((await db.prepare('SELECT owner FROM accounts WHERE id = ?').get(id)).owner)]));
       const attributed = [...holders.values()].every(h => PERSONS.includes(h));
       const people = attributed ? PERSONS.flatMap(person => {
         const held = ids.filter(id => holders.get(id) === person);
@@ -208,8 +209,8 @@ export function goalPathChanged(previous, next) {
     || JSON.stringify(tracking(previous.track)) !== JSON.stringify(tracking(next.track));
 }
 
-function factOf(db, key) {
-  const r = db.prepare('SELECT * FROM facts WHERE key = ?').get(key);
+async function factOf(db, key) {
+  const r = await db.prepare('SELECT * FROM facts WHERE key = ?').get(key);
   if (!r || !r.confirmed || r.src === 'planner') return null;
   return { row: r, value: parse(r.value, null), source: sourceRows('facts', [key]) };
 }
@@ -223,11 +224,11 @@ function factFigure(fact, field, kind = 'a') {
   return out;
 }
 
-function metersOf(db, clock, reader) {
+async function metersOf(db, clock, reader) {
   const year = clock.slice(0, 4);
-  const retirement = factOf(db, `pace.retirement.${year}`);
-  const tax = factOf(db, `pace.tax.${year}`);
-  const income = factOf(db, `pace.income.${year}`);
+  const retirement = await factOf(db, `pace.retirement.${year}`);
+  const tax = await factOf(db, `pace.tax.${year}`);
+  const income = await factOf(db, `pace.income.${year}`);
   const incomeActual = reader.figure('inc.ytd.total');
   const result = (used, limit) => ({ ...paceMeter({ used, limit, clock }), deadline: `${year}-12-31` });
   return {
@@ -237,8 +238,8 @@ function metersOf(db, clock, reader) {
   };
 }
 
-function savingsSeries(db, clock) {
-  const fact = factOf(db, `pace.householdSavings.${clock.slice(0, 4)}`);
+async function savingsSeries(db, clock) {
+  const fact = await factOf(db, `pace.householdSavings.${clock.slice(0, 4)}`);
   if (!fact || !fact.value || !Array.isArray(fact.value.observations)) return { series: null, reason: 'missing_household_savings_plan', dataEnd: null };
   const value = fact.value;
   const goal = { id: 'householdSavings', target: value.target, targetDate: value.targetDate,
@@ -248,11 +249,11 @@ function savingsSeries(db, clock) {
   return monthlyPace({ goal, observations, clock });
 }
 
-export function buildPace(db, { clock: override } = {}) {
-  const clock = paceClock(db, override);
+export async function buildPace(db, { clock: override } = {}) {
+  const clock = await paceClock(db, override);
   const reader = makeReader(db, clock);
   // Done goals (done_at set, or a seed def whose status is done) are not paced.
-  const defs = db.prepare('SELECT id, def FROM goals WHERE archived_at IS NULL AND done_at IS NULL ORDER BY sort, created_at, id').all()
+  const defs = (await db.prepare('SELECT id, def FROM goals WHERE archived_at IS NULL AND done_at IS NULL ORDER BY sort, created_at, id').all())
     .map(r => ({ ...parse(r.def, {}), id: r.id })).filter(g => g.status !== 'done');
   const paceOf = goal => {
     const kind = kindOf(goal);
@@ -271,7 +272,7 @@ export function buildPace(db, { clock: override } = {}) {
   const goals = defs.map(paceOf);
   return { clock, rollup: paceRollup(goals, clock), goals,
     series: { goals: Object.fromEntries(defs.map(goal => [goal.id, seriesOf(goal)])),
-      householdSavings: savingsSeries(db, clock) }, meters: metersOf(db, clock, reader) };
+      householdSavings: await savingsSeries(db, clock) }, meters: await metersOf(db, clock, reader) };
 }
 
 export function indexPaceFigures(pace) {

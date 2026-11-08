@@ -33,10 +33,10 @@ const contrast = (a, b) => {
 async function seeded(fn) {
   const t = await tempDb();
   try {
-    seedDemo(t.db);
+    await seedDemo(t.db);
     return await fn(t.db);
   } finally {
-    try { t.db.close(); } catch { /* closed */ }
+    try { await t.db.close(); } catch { /* closed */ }
     rmSync(t.dataDir, { recursive: true, force: true });
   }
 }
@@ -101,16 +101,16 @@ test('the palette is Horizon dark and every declared text pair meets WCAG AA', (
   assert.ok(contrast(C.ink, C.accent) >= 7);
 });
 
-test('the monthly brief is dark', () => seeded(async (db) => {
-  const model = buildBrief(db, { clock: CLOCK, publicUrl: URL_BASE });
+test('the monthly brief is dark', async () => seeded(async (db) => {
+  const model = await buildBrief(db, { clock: CLOCK, publicUrl: URL_BASE });
   const { html } = renderBrief(model, { src: 'template', text: '' });
   assertDark(html, 'brief');
   assert.ok(html.includes('Open Fathom'), 'button');
   for (const word of ['Tax paid', 'Next deadline', 'To confirm', 'Needs you', 'Next 90 days']) assert.ok(html.includes(word), word);
 }));
 
-test('the monthly brief is dark without links and with no tiles', () => seeded(async (db) => {
-  const model = buildBrief(db, { clock: CLOCK, publicUrl: null });
+test('the monthly brief is dark without links and with no tiles', async () => seeded(async (db) => {
+  const model = await buildBrief(db, { clock: CLOCK, publicUrl: null });
   const { html } = renderBrief({ ...model, tiles: { tax: null, next: null, confirm: null }, deadlines: [] }, { src: 'template', text: '' });
   assertDark(html, 'brief without links');
 }));
@@ -119,10 +119,10 @@ test('the deadline alert is dark, with and without links', async () => {
   const t = await tempDb();
   try {
     const now = '2032-06-01T11:00:00.000Z';
-    t.db.prepare('INSERT INTO deadlines (date, label, title, rec_id, hard) VALUES (?, ?, ?, ?, ?)').run(addDays('2032-06-01', 3), 'x', 'Synthetic deadline', null, 0);
-    t.db.prepare(`INSERT INTO recs (id, def, status, tasks_done, window_close, window_label, sort, updated_at)
+    await t.db.prepare('INSERT INTO deadlines (date, label, title, rec_id, hard) VALUES (?, ?, ?, ?, ?)').run(addDays('2032-06-01', 3), 'x', 'Synthetic deadline', null, 0);
+    await t.db.prepare(`INSERT INTO recs (id, def, status, tasks_done, window_close, window_label, sort, updated_at)
                   VALUES (?, ?, 'proposed', '[]', ?, ?, 0, ?)`).run('syn-rec', JSON.stringify({ id: 'syn-rec', title: 'Synthetic rec' }), addDays('2032-06-01', 5), 'By soon', now);
-    const due = dueAlerts(t.db, { clock: '2032-06-01' });
+    const due = await dueAlerts(t.db, { clock: '2032-06-01' });
     assert.equal(due.length, 2);
     for (const publicUrl of [URL_BASE, null]) {
       const { html } = renderAlerts(due, { clock: '2032-06-01', publicUrl });
@@ -130,7 +130,7 @@ test('the deadline alert is dark, with and without links', async () => {
       assert.ok(html.includes('Synthetic deadline'));
     }
   } finally {
-    try { t.db.close(); } catch { /* closed */ }
+    try { await t.db.close(); } catch { /* closed */ }
     rmSync(t.dataDir, { recursive: true, force: true });
   }
 });

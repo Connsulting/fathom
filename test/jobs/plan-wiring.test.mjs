@@ -18,7 +18,7 @@ import { serveAppFixture, instanceSecretsOf } from '../helpers/server.mjs';
 import { scratch, buildRealStore, householdOf, dumpTables, parseJson, PACKS_DIR, CLOCK } from '../helpers/real-store.mjs';
 
 const S = scratch('fathom-plan-wiring-');
-after(() => S.cleanup());
+after(async () => await S.cleanup());
 
 const quiet = { log() {} };
 const JOB_TABLES = new Set(['jobs', 'job_runs', 'job_lock']);
@@ -44,7 +44,7 @@ async function demoStore() {
   const dir = S.dir();
   const { secrets } = await instanceSecretsOf(dir, 'demo');
   const platformKey = secrets.platformKey();
-  const { db, platform } = createInstance(dir, { mode: 'demo', init: seedDemo, platformKey });
+  const { db, platform } = await createInstance(dir, { mode: 'demo', init: seedDemo, platformKey });
   platformKey.fill(0);
   S.track(platform);
   return { dir, db: S.track(db) };
@@ -61,14 +61,14 @@ async function serve(db, config, scheduler) {
   return serveAppFixture({ authenticated: true, db, config, scheduler });
 }
 
-const planRuns = db => db.prepare("SELECT * FROM job_runs WHERE job_id = 'plan' ORDER BY id").all().map(r => ({ ...r }));
-const planner = db => db.prepare('SELECT rec_id, first_run, last_run FROM planner_recs').all();
-const nonJobTables = db => dumpTables(db, listTables(db).filter(t => !JOB_TABLES.has(t)));
-const allTables = db => dumpTables(db, listTables(db));
+const planRuns = async db => (await db.prepare("SELECT * FROM job_runs WHERE job_id = 'plan' ORDER BY id").all()).map(r => ({ ...r }));
+const planner = async db => await db.prepare('SELECT rec_id, first_run, last_run FROM planner_recs').all();
+const nonJobTables = async db => await dumpTables(db, (await listTables(db)).filter(t => !JOB_TABLES.has(t)));
+const allTables = async db => await dumpTables(db, await listTables(db));
 
 // Exactly one plan run, ok, with the given trigger, a counts note, and every planner rec on it.
-function assertOnePlanRun(db, trigger) {
-  const runs = planRuns(db);
+async function assertOnePlanRun(db, trigger) {
+  const runs = await planRuns(db);
   assert.equal(runs.length, 1, 'exactly one job_runs row for plan');
   const [run] = runs;
   assert.equal(run.status, 'ok');
@@ -82,7 +82,7 @@ function assertOnePlanRun(db, trigger) {
   for (const k of ['model', 'template', 'kept']) assert.equal(typeof note.prose[k], 'number', `note.prose.${k}`);
   assert.ok(note.recs.active > 0, 'the run planned recs');
   assert.ok(!('byTrigger' in note), 'counts only: no per-trigger states');
-  const recs = planner(db);
+  const recs = await planner(db);
   assert.equal(recs.length, note.recs.active);
   for (const r of recs) {
     assert.equal(r.first_run, run.id, `${r.rec_id} first_run`);
@@ -98,7 +98,7 @@ describe('plan runs on a real store go through the scheduler', () => {
     try {
       const run = await s.runNow('plan');
       assert.equal(run.status, 'ok');
-      assert.equal(assertOnePlanRun(db, 'manual').id, run.id);
+      assert.equal((await assertOnePlanRun(db, 'manual')).id, run.id);
       assert.match(run.periodKey, /^manual:/);
     } finally {
       await s.stop();
@@ -114,7 +114,7 @@ describe('plan runs on a real store go through the scheduler', () => {
       const r = await app.postJson('/api/jobs/plan/run', {});
       assert.equal(r.status, 200, r.text.slice(0, 300));
       assert.deepEqual(Object.keys(r.json).sort(), ['jobs', 'run', 'scenario']);
-      const run = assertOnePlanRun(db, 'manual');
+      const run = await assertOnePlanRun(db, 'manual');
       assert.equal(r.json.run.id, run.id);
       assert.equal(r.json.run.status, 'ok');
       assert.equal(r.json.run.note.recs.active, parseJson(run.note).recs.active);
@@ -132,10 +132,10 @@ describe('plan runs on a real store go through the scheduler', () => {
     const s = schedulerOn(db, { clock: null, dataDir: dir }, { now: () => new Date(NIGHTLY) });
     try {
       await s.tick();
-      const run = assertOnePlanRun(db, 'scheduled');
+      const run = await assertOnePlanRun(db, 'scheduled');
       assert.equal(run.period_key, '2026-11-05');
       await s.tick();
-      assert.equal(planRuns(db).length, 1, 'one attempt per period');
+      assert.equal((await planRuns(db)).length, 1, 'one attempt per period');
     } finally {
       await s.stop();
     }
@@ -147,7 +147,7 @@ describe('plan runs on a real store go through the scheduler', () => {
     try {
       const run = await s.trigger('plan', 'ingest');
       assert.ok(run, 'the trigger ran');
-      assert.equal(assertOnePlanRun(db, 'ingest').id, run.id);
+      assert.equal((await assertOnePlanRun(db, 'ingest')).id, run.id);
       assert.match(run.periodKey, /^ingest:/);
     } finally {
       await s.stop();
@@ -166,12 +166,12 @@ describe('plan runs on a real store go through the scheduler', () => {
       const r = await app.postJson('/api/jobs/plan/run', {});
       assert.equal(r.status, 409, r.text.slice(0, 300));
       assert.equal(r.json.error, 'another scheduler holds the job lock');
-      assert.equal(planRuns(db).length, 0, 'nothing ran');
-      assert.equal(planner(db).length, 0, 'nothing planned');
+      assert.equal((await planRuns(db)).length, 0, 'nothing ran');
+      assert.equal((await planner(db)).length, 0, 'nothing planned');
       await other.stop();
       const ok = await app.postJson('/api/jobs/plan/run', {});
       assert.equal(ok.status, 200, ok.text.slice(0, 300));
-      assertOnePlanRun(db, 'manual');
+      await assertOnePlanRun(db, 'manual');
     } finally {
       await app.close();
       await s.stop();
@@ -183,7 +183,7 @@ describe('plan runs on a real store go through the scheduler', () => {
 describe('plan runs on a demo store', () => {
   test('scheduled and ingest runs are recorded skipped and change no planner tables', async () => {
     const { dir, db } = await demoStore();
-    const before = nonJobTables(db);
+    const before = await nonJobTables(db);
     const s = schedulerOn(db, { clock: null, dataDir: dir }, { now: () => new Date(NIGHTLY) });
     try {
       await s.tick();
@@ -192,10 +192,10 @@ describe('plan runs on a demo store', () => {
     } finally {
       await s.stop();
     }
-    const runs = planRuns(db);
+    const runs = await planRuns(db);
     assert.deepEqual(runs.map(r => [r.trigger, r.status]), [['scheduled', 'skipped'], ['ingest', 'skipped']]);
     for (const r of runs) assert.equal(r.note, null);
-    assert.deepEqual(nonJobTables(db), before, 'only the job tables changed');
+    assert.deepEqual(await nonJobTables(db), before, 'only the job tables changed');
   });
 
   test('POST /api/jobs/plan/run answers 409 with the error text and changes nothing', async () => {
@@ -203,12 +203,12 @@ describe('plan runs on a demo store', () => {
     const config = demoConfig(dir);
     const s = schedulerOn(db, config);
     const app = await serve(db, config, s);
-    const before = allTables(db);
+    const before = await allTables(db);
     try {
       const r = await app.postJson('/api/jobs/plan/run', {});
       assert.equal(r.status, 409);
       assert.equal(r.json.error, 'planning runs on real stores only');
-      assert.deepEqual(allTables(db), before, 'demo store unchanged');
+      assert.deepEqual(await allTables(db), before, 'demo store unchanged');
     } finally {
       await app.close();
       await s.stop();
@@ -218,9 +218,9 @@ describe('plan runs on a demo store', () => {
 
 test('runPlanning without runId throws TypeError and changes nothing', async () => {
   const { db } = await realStore();
-  const before = allTables(db);
+  const before = await allTables(db);
   for (const opts of [{ now: CLOCK, packDirs: [PACKS_DIR] }, { now: CLOCK, packDirs: [PACKS_DIR], runId: '1' }, undefined]) {
     assert.throws(() => runPlanning(db, null, opts), TypeError);
   }
-  assert.deepEqual(allTables(db), before);
+  assert.deepEqual(await allTables(db), before);
 });

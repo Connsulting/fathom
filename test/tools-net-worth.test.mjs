@@ -10,21 +10,21 @@ async function fixture(t) {
   const s = await tempDb();
   t.after(() => s.close());
   const { db } = s;
-  db.prepare("INSERT INTO sources (id,label,kind,as_of) VALUES ('ing:balances','Synthetic balances','balances','2026-10-31')").run();
+  await db.prepare("INSERT INTO sources (id,label,kind,as_of) VALUES ('ing:balances','Synthetic balances','balances','2026-10-31')").run();
   for (const [id, kind] of [['cash','checking'],['invest','taxable'],['retire','retirement'],['roth','roth'],['debt','card'],['biz','business'],['silent','checking']]) {
-    db.prepare("INSERT INTO accounts (id,name,kind,mask,source_id) VALUES (?,?,?,'1234','ing:balances')").run(id, `Synthetic ${id}`, kind);
+    await db.prepare("INSERT INTO accounts (id,name,kind,mask,source_id) VALUES (?,?,?,'1234','ing:balances')").run(id, `Synthetic ${id}`, kind);
   }
   const ins = db.prepare("INSERT INTO balances (account_id,date,amount) VALUES (?,?,?)");
   for (const [id,a,b] of [['cash',1000.11,1100.12],['invest',2000.22,2300.32],['retire',3000.33,3100.43],['roth',500,550],['debt',400,450],['biz',700,750]]) {
-    ins.run(id,'2026-08-31',a);
-    if (id !== 'cash') ins.run(id,'2026-10-31',b);
+    await ins.run(id,'2026-08-31',a);
+    if (id !== 'cash') await ins.run(id,'2026-10-31',b);
   }
   return { ...s, ctx: { db, dataDir: s.dataDir, clock: '2026-11-05' } };
 }
 
 test('net worth totals and each monthly part match buildTrend, including debt and carried balances', async t => {
   const { db, ctx } = await fixture(t);
-  const expected = buildTrend(db, ctx.clock).trend;
+  const expected = (await buildTrend(db, ctx.clock)).trend;
   const result = await callTool('accounts', { operation: 'net_worth', series: true, months: 3 }, ctx);
   assert.equal(result.total.value, expected.points.at(-1).total);
   assert.deepEqual(result.groups.map(g => [g.key,g.figure.value]), Object.entries(expected.points.at(-1).parts));
@@ -48,7 +48,7 @@ test('net worth filters accounts, excludes business, supports treatment and expl
   const groups = await callTool('accounts', { operation: 'net_worth', groupBy: 'treatment' }, ctx);
   assert.ok(groups.gaps.some(g => g.code === 'missing_fact' && g.message.includes('retire')));
   assert.equal(groups.groups.find(g => g.key === 'taxable').figure.value, 2300.32);
-  db.prepare("INSERT INTO facts (key,value,updated_at) VALUES ('accounts.planType',?, '2026-11-01')").run(JSON.stringify({ retire: '401k' }));
+  await db.prepare("INSERT INTO facts (key,value,updated_at) VALUES ('accounts.planType',?, '2026-11-01')").run(JSON.stringify({ retire: '401k' }));
   const typed = await callTool('accounts', { operation: 'net_worth', groupBy: 'treatment', accounts: ['retire','roth'] }, ctx);
   assert.equal(typed.groups.find(g => g.key === 'pretax').figure.value, 3100.43);
   assert.ok(!typed.gaps.some(g => g.code === 'missing_fact'));
@@ -61,11 +61,11 @@ test('net worth filters accounts, excludes business, supports treatment and expl
 
 test('empty and one-month stores return an unavailable or actual total without invented history', async t => {
   const { db, ctx } = await fixture(t);
-  db.exec('DELETE FROM balances');
+  await db.applySchema('DELETE FROM balances');
   const empty = await callTool('accounts', { operation: 'net_worth', series: true }, ctx);
   assert.equal(empty.total.value, null);
   assert.ok(empty.gaps.some(g => g.code === 'missing_fact'));
-  db.prepare("INSERT INTO balances (account_id,date,amount) VALUES ('cash','2026-10-31',42.25)").run();
+  await db.prepare("INSERT INTO balances (account_id,date,amount) VALUES ('cash','2026-10-31',42.25)").run();
   const one = await callTool('accounts', { operation: 'net_worth', series: true }, ctx);
   assert.equal(one.total.value, 42.25);
   assert.equal(one.series.length, 1);
@@ -74,7 +74,7 @@ test('empty and one-month stores return an unavailable or actual total without i
 
 test('account detail preserves the API result and adds a referenceable balance envelope', async t => {
   const { db, ctx } = await fixture(t);
-  const api = accountDetail({ db, params: { id: 'cash' }, config: { clock: ctx.clock } });
+  const api = await accountDetail({ db, params: { id: 'cash' }, config: { clock: ctx.clock } });
   const result = await callTool('accounts', { operation: 'detail', id: 'cash' }, ctx);
   const { balance, ...rest } = result;
   const { balance: apiBalance, ...apiRest } = api;
@@ -89,9 +89,9 @@ test('account detail preserves the API result and adds a referenceable balance e
 
 test('monthly positions fill missing balances and respect the clock and balance precedence', async t => {
   const { db, ctx } = await fixture(t);
-  db.prepare("INSERT INTO accounts (id,name,kind) VALUES ('positions','Synthetic positions','brokerage')").run();
+  await db.prepare("INSERT INTO accounts (id,name,kind) VALUES ('positions','Synthetic positions','brokerage')").run();
   for (const [date,value] of [['2026-09-30',123.45],['2026-10-31',234.56],['2026-12-31',999]]) {
-    db.prepare("INSERT INTO positions (account_id,symbol,value,as_of) VALUES ('positions','SYN',?,?)").run(value,date);
+    await db.prepare("INSERT INTO positions (account_id,symbol,value,as_of) VALUES ('positions','SYN',?,?)").run(value,date);
   }
   const result = await callTool('accounts', { operation: 'net_worth', accounts: ['positions'], series: true }, ctx);
   assert.equal(result.total.value, 234.56);
@@ -100,18 +100,18 @@ test('monthly positions fill missing balances and respect the clock and balance 
   const detail = await callTool('accounts', { operation: 'detail', id: 'positions' }, ctx);
   assert.equal(detail.balance.value, 999, 'detail uses the same latest reading as the API');
   await assertRefsResolve(result, ctx);
-  db.prepare("INSERT INTO balances (account_id,date,amount) VALUES ('positions','2026-10-01',12.34)").run();
+  await db.prepare("INSERT INTO balances (account_id,date,amount) VALUES ('positions','2026-10-01',12.34)").run();
   assert.equal((await callTool('accounts', { operation: 'net_worth', accounts: ['positions'] }, ctx)).total.value, 12.34);
 });
 
 test('unpriced positions stay unavailable and unknown treatment strings remain explicit gaps', async t => {
   const { db, ctx } = await fixture(t);
-  db.prepare("INSERT INTO accounts (id,name,kind) VALUES ('unpriced','Synthetic unpriced','brokerage')").run();
-  db.prepare("INSERT INTO positions (account_id,symbol,as_of) VALUES ('unpriced','SYN','2026-10-31')").run();
+  await db.prepare("INSERT INTO accounts (id,name,kind) VALUES ('unpriced','Synthetic unpriced','brokerage')").run();
+  await db.prepare("INSERT INTO positions (account_id,symbol,as_of) VALUES ('unpriced','SYN','2026-10-31')").run();
   const unpriced = await callTool('accounts', { operation: 'detail', id: 'unpriced' }, ctx);
   assert.equal(unpriced.balance.value, null);
   assert.ok(unpriced.balance.gaps.some(g => g.code === 'missing_fact'));
-  db.prepare("UPDATE accounts SET kind='constructor' WHERE id='retire'").run();
+  await db.prepare("UPDATE accounts SET kind='constructor' WHERE id='retire'").run();
   const out = await callTool('accounts', { operation: 'net_worth', accounts: ['retire'], groupBy: 'treatment' }, ctx);
   assert.equal(out.total.value, 3100.43);
   assert.equal(out.groups[0].key, 'unknown');

@@ -16,7 +16,7 @@ import { proposalBasis, proposalTools } from '../src/actions/proposals.mjs';
 import { tools } from '../src/tools/index.mjs';
 
 const s = scratch('fathom-refresh-');
-after(() => s.cleanup());
+after(async () => await s.cleanup());
 const now = '2026-11-08T12:00:00.000Z';
 const note = { name: 'Synthetic notes.md', mime: 'text/markdown', text: '# Household notes\n\nUse short answers.' };
 async function setup() {
@@ -46,15 +46,15 @@ test('MCP base64 imports share the HTTP pipeline, imports read matches list, ret
     const bytes = Buffer.from(note.text);
     const imported = await rpc.call('refresh', { operation: 'import_file', name: note.name, mime: note.mime, contentBase64: bytes.toString('base64') });
     assert.equal(imported.file.status, 'waiting_for_engine');
-    const row = ctx.db.prepare('SELECT * FROM files WHERE id=?').get(imported.file.id);
+    const row = await ctx.db.prepare('SELECT * FROM files WHERE id=?').get(imported.file.id);
     assert.equal(row.name, note.name);
     assert.equal(row.size, bytes.length);
     assert.equal(imported.undo.available, false);
     const other = await setup();
     const route = await uploadFiles({ ...api(other), uploads: [{ field: 'files', name: note.name, mime: note.mime, bytes }] });
-    const otherRow = other.db.prepare('SELECT * FROM files WHERE id=?').get(route.files[0].fileId);
+    const otherRow = await other.db.prepare('SELECT * FROM files WHERE id=?').get(route.files[0].fileId);
     for (const k of ['id','name','mime','size','sha256','status','parser','counts']) assert.equal(row[k], otherRow[k], k);
-    assert.deepEqual(await rpc.call('household', { operation: 'imports' }), listFiles(api(ctx)));
+    assert.deepEqual(await rpc.call('household', { operation: 'imports' }), await listFiles(api(ctx)));
     const retried = await rpc.call('refresh', { operation: 'retry_import', fileId: imported.file.id });
     const retryRoute = await retryFile({ ...api(other), params: { id: imported.file.id } });
     assert.deepEqual(retried.file, { ...retryRoute.file, id: retryRoute.file.fileId });
@@ -70,13 +70,13 @@ test('refresh validates size, encoding, job allowlist, queue capability and demo
   for (const input of [ { ...note, text: 'a'.repeat(1024 * 1024) }, { ...note, contentBase64: 'YWJj' },
     { name: note.name, mime: note.mime, contentBase64: '???' }, { name: note.name, mime: note.mime } ])
     await assert.rejects(callTool('refresh', { operation: 'import_file', ...input }, ctx));
-  assert.equal(ctx.db.prepare('SELECT count(*) n FROM files').get().n, 0);
+  assert.equal((await ctx.db.prepare('SELECT count(*) n FROM files').get()).n, 0);
   await assert.rejects(callTool('refresh', { operation: 'import_file', ...note }, { ...ctx, household: { ...ctx.household, db: {} } }), /own this store/);
-  assert.equal(ctx.db.prepare('SELECT count(*) n FROM action_receipts').get().n, 0);
+  assert.equal((await ctx.db.prepare('SELECT count(*) n FROM action_receipts').get()).n, 0);
   for (const job of ['brief-email','deadline-alerts','trash-purge']) await assert.rejects(callTool('refresh', { operation: 'run_job', job }, ctx));
   for (const args of [ { operation: 'import_file', ...note }, { operation: 'retry_import', fileId: 'unknown' }, { operation: 'build_your_plans' }, { operation: 'run_job', job: 'plan' }, { operation: 'run_job', job: 'confirm-guess' } ])
     await assert.rejects(callTool('refresh', args, { ...ctx, channel: 'ask' }));
-  setSetting(ctx.db, 'mode', 'demo');
+  await setSetting(ctx.db, 'mode', 'demo');
   await assert.rejects(callTool('refresh', { operation: 'run_job', job: 'plan' }, ctx), /real stores only/);
   await assert.rejects(runJob({ ...api(ctx), params: { id: 'plan' } }), /real stores only/);
 });
@@ -134,7 +134,7 @@ for (const operation of ['import_file','retry_import','build_your_plans','plan',
     assert.equal(queued?.isError, undefined, JSON.stringify(queued));
     assert.equal(queued.result.status ?? queued.result.run?.status, 'queued');
     assert.equal(queued.result.undo.available, false);
-    const receipt = ctx.db.prepare('SELECT * FROM action_receipts WHERE id=?').get(queued.result.receipt.id);
+    const receipt = await ctx.db.prepare('SELECT * FROM action_receipts WHERE id=?').get(queued.result.receipt.id);
     const outcome = JSON.parse(receipt.after_value);
     assert.notEqual(outcome.status, 'queued');
     assert.notEqual(outcome.status, 'failed', JSON.stringify(outcome));
@@ -149,13 +149,13 @@ test('refresh proposals snapshot files, settings and jobs, and queue failures pe
     let p;
     await proposalTools(tools).find(t => t.name === 'refresh').handler({ ...args, propose: true }, { ...ctx, channel: 'ask', onProposal: v => { p = v; }, queueAfterTools() {} });
     assert.equal(typeof p.basis, 'string');
-    assert.equal(p.basis, proposalBasis(ctx.db, 'refresh', p.scopes, p.args));
+    assert.equal(p.basis, await proposalBasis(ctx.db, 'refresh', p.scopes, p.args));
   }
   let task;
   const result = await callTool('refresh', { operation: 'run_job', job: 'confirm-guess' }, { ...ctx, channel: 'ask', queueAfterTools: fn => { task = fn; } });
   ctx.services.scheduler.runNow = async () => { throw new Error('synthetic failure with private details'); };
   await task();
-  const outcome = JSON.parse(ctx.db.prepare('SELECT after_value FROM action_receipts WHERE id=?').get(result.receipt.id).after_value);
+  const outcome = JSON.parse((await ctx.db.prepare('SELECT after_value FROM action_receipts WHERE id=?').get(result.receipt.id)).after_value);
   assert.equal(outcome.status, 'failed');
   assert.ok(!JSON.stringify(outcome).includes('private details'));
 });
@@ -184,7 +184,7 @@ test('HTTP proposal confirmation executes a pasted-note refresh and persisted re
   const proposed = await app.postJson('/api/threads', { text: 'Import the following note: ' + note.text });
   assert.equal(proposed.status, 200, proposed.text);
   assert.equal(proposed.json.message.provenance.pendingAction.operation, 'import_file');
-  assert.equal(instance.db.prepare('SELECT count(*) n FROM files').get().n, 0);
+  assert.equal((await instance.db.prepare('SELECT count(*) n FROM files').get()).n, 0);
   const beforeCalls = calls;
   const confirmed = await app.postJson('/api/ask', { key: proposed.json.thread.key, text: 'yes' });
   assert.equal(confirmed.status, 200, confirmed.text);
@@ -260,13 +260,13 @@ test('large import lists keep newest rows within the tool result bound and prese
   const ctx = await setup();
   const insert = ctx.db.prepare('INSERT INTO files(id,name,uploaded_at,status) VALUES (?,?,?,?)');
   ctx.db.exec('BEGIN');
-  for (let i = 0; i < 1500; i++) insert.run(`file-${i}`, 'Synthetic file ' + 'x'.repeat(180), now, 'imported');
+  for (let i = 0; i < 1500; i++) await insert.run(`file-${i}`, 'Synthetic file ' + 'x'.repeat(180), now, 'imported');
   ctx.db.exec('COMMIT');
-  ctx.db.prepare('UPDATE files SET removed_at = ? WHERE id = ?').run(now, 'file-1499');
+  await ctx.db.prepare('UPDATE files SET removed_at = ? WHERE id = ?').run(now, 'file-1499');
   const result = await callTool('household', { operation: 'imports' }, ctx);
   assert.equal(result.truncated, true);
   assert.equal(result.files[0].id, 'file-1498');
   assert.ok(!result.files.some(file => file.id === 'file-1499'));
   assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 256 * 1024);
-  assert.deepEqual(result, listFiles(api(ctx)));
+  assert.deepEqual(result, await listFiles(api(ctx)));
 });

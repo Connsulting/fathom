@@ -119,9 +119,9 @@ const NO_FIX = new Set(['incomplete_month', 'unequal_periods', 'outside_househol
 async function demoAsker(t) {
   const s = await tempDb();
   t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
-  seedDemo(s.db);
+  await seedDemo(s.db);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' });
-  const engine = createRuntimeEngine({ db: s.db, config });
+  const engine = await createRuntimeEngine({ db: s.db, config });
   const packs = createLivePacks(s.db, { dataDir: s.dataDir });
   packs.refresh();
   const root = s.dataDir;
@@ -276,25 +276,25 @@ test('H4-AC1b every fact label is plain and has an answer shape (or its base key
 async function missingFactsStore(t) {
   const dir = mkdtempSync(join(tmpdir(), 'h4-gaps-'));
   const db = await createRealStore(dir, { clock: '2026-11-05' });
-  t.after(() => { closeRealStore(db); rmSync(dir, { recursive: true, force: true }); });
+  t.after(async () => { await closeRealStore(db); rmSync(dir, { recursive: true, force: true }); });
   const ctx = { db, dataDir: householdOf(db).root, clock: '2026-11-05', now: new Date('2026-11-05T12:00:00Z'), channel: 'mcp' };
-  const account = (id, kind, owner) => db.prepare("INSERT INTO accounts(id,inst,name,kind,owner,parser) VALUES (?, 'Synthetic Bank', ?, ?, ?, 'aggregator')")
+  const account = async (id, kind, owner) => await db.prepare("INSERT INTO accounts(id,inst,name,kind,owner,parser) VALUES (?, 'Synthetic Bank', ?, ?, ?, 'aggregator')")
     .run(id, id, kind, owner);
-  account('checking', 'checking', 'Household');
+  await account('checking', 'checking', 'Household');
   for (const [id, kind] of [['plan', 'retirement'], ['rothacct', 'roth'], ['broker', 'taxable'], ['mortgage', 'loan']]) {
-    account(id, kind, 'owner');
-    db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run(id, '2026-10-31', 10000);
+    await account(id, kind, 'owner');
+    await db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run(id, '2026-10-31', 10000);
   }
   let n = 0;
   for (let m = 1; m <= 10; m++) {
     const date = `2026-${String(m).padStart(2, '0')}-10`;
     for (const [amount, category, description] of [[-300, 'Mortgage', 'Mortgage'], [-100, 'Groceries', 'Market'], [-200, 'Childcare', 'Daycare'], [1000, 'Income', 'Salary']]) {
-      db.prepare('INSERT INTO transactions(account_id,date,amount,category,description,parser,dedupe_key) VALUES (?,?,?,?,?,?,?)')
+      await db.prepare('INSERT INTO transactions(account_id,date,amount,category,description,parser,dedupe_key) VALUES (?,?,?,?,?,?,?)')
         .run('checking', date, amount, category, description, 'aggregator', `h4-${++n}`);
     }
   }
   // A mortgage with only its payment known: the other terms are missing.
-  addFact(db, 'obligations.mortgage', { monthlyPayment: 300 });
+  await addFact(db, 'obligations.mortgage', { monthlyPayment: 300 });
   return ctx;
 }
 

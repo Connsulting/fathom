@@ -33,7 +33,7 @@ const HOUSEHOLD = 'hh-ingest-check';
 // The pipeline's view of a household: its store (in its root), in-flight set and vault.
 async function throwawayHousehold(tmp) {
   const root = await householdRoot({ dataRoot: tmp, householdId: HOUSEHOLD, relativeRoot: `households/${HOUSEHOLD}`, create: true });
-  const db = createStoreFile(join(root.path, DB_FILE), d => setSetting(d, 'mode', 'real'));
+  const db = await createStoreFile(join(root.path, DB_FILE), async d => await setSetting(d, 'mode', 'real'));
   const key = randomBytes(32);
   const handle = dataKeyHandle({ householdId: HOUSEHOLD, version: 1, key });
   key.fill(0);
@@ -64,7 +64,7 @@ const line = obj => {
   return keys.length ? keys.map(k => `${k}=${obj[k]}`).join(' ') : 'none';
 };
 
-function totals(results, db) {
+async function totals(results, db) {
   const t = { status: {}, rows: {}, duplicates: 0, revised: 0, superseded: 0, warnings: {}, queue: {} };
   for (const r of results) {
     add(t.status, label(r.status));
@@ -73,7 +73,7 @@ function totals(results, db) {
     for (const [code, n] of Object.entries(c.warningCodes || {})) add(t.warnings, label(code), n);
     for (const k of ['duplicates', 'revised', 'superseded']) if (Number.isFinite(c[k])) t[k] += c[k];
   }
-  for (const q of db.prepare("SELECT kind, count(*) AS n FROM confirm_items WHERE status = 'pending' GROUP BY kind").all()) {
+  for (const q of await db.prepare("SELECT kind, count(*) AS n FROM confirm_items WHERE status = 'pending' GROUP BY kind").all()) {
     add(t.queue, label(q.kind), q.n);
   }
   return t;
@@ -118,7 +118,7 @@ async function main(argv) {
     const engine = await createRuntimeEngine({ db, config });
     for (const pass of [1, 2]) {
       const { results } = await ingestFiles(db, readFiles(paths), { household, engine, config, now: new Date().toISOString() });
-      print(pass, totals(results, db));
+      print(pass, await totals(results, db));
     }
     return 0;
   } catch (err) {
@@ -126,7 +126,7 @@ async function main(argv) {
     console.error(`ingest-check failed: ${code}`);
     return 1;
   } finally {
-    try { if (db) db.close(); } catch { /* already closed */ }
+    try { if (db) await db.close(); } catch { /* already closed */ }
     rmSync(tmp, { recursive: true, force: true });
   }
 }

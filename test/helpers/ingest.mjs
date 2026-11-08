@@ -168,8 +168,8 @@ export async function realStore({ engine = 'off' } = {}) {
     config,
     household,
     opts: (eng, extra = {}) => ({ actorId: 'actor-synthetic', engine: eng, config, now: NOW, household, ...extra }),
-    close() {
-      store.close();
+    async close() {
+      await store.close();
       rmSync(store.dataDir, { recursive: true, force: true });
     },
   };
@@ -215,10 +215,10 @@ export async function offEngine() {
   return { mode: 'off', isOn: () => false, call: (req) => inner.call(req), extract: (req) => inner.extract(req) };
 }
 
-export const all = (db, sql, ...args) => db.prepare(sql).all(...args).map((r) => ({ ...r }));
-export const one = (db, sql, ...args) => { const r = db.prepare(sql).get(...args); return r ? { ...r } : r; };
-export const count = (db, table, where = '1 = 1', ...args) => db.prepare(`SELECT count(*) AS n FROM ${table} WHERE ${where}`).get(...args).n;
-export const items = (db, kind) => all(db, 'SELECT * FROM confirm_items WHERE kind = ? ORDER BY id', kind);
+export const all = async (db, sql, ...args) => (await db.prepare(sql).all(...args)).map((r) => ({ ...r }));
+export const one = async (db, sql, ...args) => { const r = await db.prepare(sql).get(...args); return r ? { ...r } : r; };
+export const count = async (db, table, where = '1 = 1', ...args) => (await db.prepare(`SELECT count(*) AS n FROM ${table} WHERE ${where}`).get(...args)).n;
+export const items = async (db, kind) => await all(db, 'SELECT * FROM confirm_items WHERE kind = ? ORDER BY id', kind);
 export const parseJson = (s) => (s == null ? s : JSON.parse(s));
 
 export async function ingest() { return src('src/ingest/pipeline.mjs'); }

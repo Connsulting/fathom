@@ -10,7 +10,7 @@ try {
   if (cli.argv.length) {
     console.error('Usage: node scripts/category-coverage.mjs --household <id>');
     process.exitCode = 2;
-  } else console.log(JSON.stringify(categoryCoverage(cli.household.db)));
+  } else console.log(JSON.stringify(await categoryCoverage(cli.household.db)));
 } catch (error) {
   console.error(typeof error?.code === 'string' && /^[a-z_]{1,64}$/.test(error.code) ? error.code : 'category_coverage_failed');
   process.exitCode = 1;

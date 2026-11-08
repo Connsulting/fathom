@@ -56,12 +56,12 @@ export function lengthLabel(min) {
   return [h ? `${h} hr` : '', m ? `${m} min` : ''].filter(Boolean).join(' ');
 }
 
-const openRows = db => db.prepare('SELECT * FROM advisor_reviews WHERE closed_at IS NULL ORDER BY id').all();
+const openRows = async db => await db.prepare('SELECT * FROM advisor_reviews WHERE closed_at IS NULL ORDER BY id').all();
 
 // recId -> the rec's `advisor` field: { verdict: 'pending'|'confirmed'|'vetoed', note, date, reviewId }.
-export function recAdvisorMap(db) {
+export async function recAdvisorMap(db) {
   const out = new Map();
-  for (const r of openRows(db)) {
+  for (const r of await openRows(db)) {
     if (!r.rec_id) continue;
     out.set(r.rec_id, r.verdict
       ? { verdict: r.verdict, note: r.note, date: dayLabel(r.reviewed_on), reviewedOn: r.reviewed_on, reviewId: r.id }
@@ -71,28 +71,28 @@ export function recAdvisorMap(db) {
 }
 
 // Sets rec.advisor on each rec from the tables (null when it was never sent).
-export function withAdvisor(db, recs) {
-  const map = recAdvisorMap(db);
+export async function withAdvisor(db, recs) {
+  const map = await recAdvisorMap(db);
   for (const r of recs) r.advisor = map.get(r.id) || null;
   return recs;
 }
 
-export function getCheckin(db) {
-  const row = db.prepare('SELECT * FROM advisor_checkin WHERE id = 1').get();
+export async function getCheckin(db) {
+  const row = await db.prepare('SELECT * FROM advisor_checkin WHERE id = 1').get();
   if (!row) return { when: '', length: '', date: null, time: null, lengthMin: null };
   return { when: whenLabel(row.date, row.time), length: lengthLabel(row.length_min), date: row.date, time: row.time || null, lengthMin: row.length_min };
 }
 
-export function listPackets(db) {
-  return db.prepare('SELECT id, created_at, clock, rec_ids FROM advisor_packets ORDER BY created_at DESC, id').all().map(p => {
+export async function listPackets(db) {
+  return (await db.prepare('SELECT id, created_at, clock, rec_ids FROM advisor_packets ORDER BY created_at DESC, id').all()).map(p => {
     let ids = [];
     try { ids = JSON.parse(p.rec_ids); } catch { ids = []; }
     return { id: p.id, createdAt: p.created_at, date: dayLabel(p.clock), recIds: Array.isArray(ids) ? ids : [] };
   });
 }
 
-function nextCheckin(db, fromContent) {
-  const c = getCheckin(db);
+async function nextCheckin(db, fromContent) {
+  const c = await getCheckin(db);
   if (c.date || !fromContent || typeof fromContent.when !== 'string' || !fromContent.when) return c;
   return { ...c, when: fromContent.when, length: typeof fromContent.length === 'string' ? fromContent.length : '' };
 }
@@ -100,9 +100,9 @@ function nextCheckin(db, fromContent) {
 // The scenario's advisor section: narrative keys (name, role, agenda, notAsking, shared, experts)
 // from the content row, review state from the tables. `recs` is the scenario's rec list; hidden
 // recs never show. pending stays a list of rec ids (CONTRACT); waiting carries the send dates.
-export function advisorSection(db, base, recs) {
+export async function advisorSection(db, base, recs) {
   const visible = new Map(recs.filter(r => r.status !== 'hidden').map(r => [r.id, r]));
-  const rows = openRows(db);
+  const rows = await openRows(db);
   const waiting = rows.filter(r => !r.verdict && visible.has(r.rec_id))
     .map(r => ({ reviewId: r.id, recId: r.rec_id, title: visible.get(r.rec_id).title, sent: dayLabel(r.sent_at), sentOn: r.sent_at.slice(0, 10) }));
   const reviewed = rows.filter(r => r.verdict && (!r.rec_id || visible.has(r.rec_id)))
@@ -116,39 +116,39 @@ export function advisorSection(db, base, recs) {
     ...base,
     // The owner-set check-in; before one is set, a check-in label from the content row (a store
     // from before migration 011) still shows, without a date.
-    next: nextCheckin(db, base.next),
+    next: await nextCheckin(db, base.next),
     reviewed,
     pending: waiting.map(w => w.recId),
     waiting,
-    packets: listPackets(db),
+    packets: await listPackets(db),
   };
 }
 
 // ---------------------------------------------------------------- writes (callers wrap in tx)
 
-function recRow(db, recId) {
-  const row = typeof recId === 'string' ? db.prepare('SELECT * FROM recs WHERE id = ?').get(recId) : null;
+async function recRow(db, recId) {
+  const row = typeof recId === 'string' ? await db.prepare('SELECT * FROM recs WHERE id = ?').get(recId) : null;
   if (!row || row.status === 'hidden') throw new AdvisorError(404, `no recommendation ${recId}`);
   return row;
 }
 
 // Marks a rec for review. Idempotent while a review is waiting; a reviewed rec sent again closes
 // the old verdict and opens a new review. Returns the open review row id.
-export function sendToAdvisor(db, recId, { now }) {
-  const row = recRow(db, recId);
-  const open = db.prepare('SELECT * FROM advisor_reviews WHERE rec_id = ? AND closed_at IS NULL').get(recId);
+export async function sendToAdvisor(db, recId, { now }) {
+  const row = await recRow(db, recId);
+  const open = await db.prepare('SELECT * FROM advisor_reviews WHERE rec_id = ? AND closed_at IS NULL').get(recId);
   if (open && !open.verdict) return open.id;
-  if (open) db.prepare("UPDATE advisor_reviews SET closed_at = ?, closed_reason = 'sent again' WHERE id = ?").run(now, open.id);
+  if (open) await db.prepare("UPDATE advisor_reviews SET closed_at = ?, closed_reason = 'sent again' WHERE id = ?").run(now, open.id);
   let title = '';
   try { title = String(JSON.parse(row.def).title || ''); } catch { title = ''; }
-  return Number(db.prepare('INSERT INTO advisor_reviews (rec_id, title, sent_at) VALUES (?, ?, ?)').run(recId, title, now).lastInsertRowid);
+  return Number((await db.prepare('INSERT INTO advisor_reviews (rec_id, title, sent_at) VALUES (?, ?, ?) RETURNING id').get(recId, title, now)).id);
 }
 
 // Records the advisor's verdict on a waiting review. `dismiss(row)` moves a vetoed rec to
 // dismissed through the rec action path. Returns the rec id.
-export function recordVerdict(db, reviewId, { verdict, note, date, now }, dismiss) {
+export async function recordVerdict(db, reviewId, { verdict, note, date, now }, dismiss) {
   const id = Number(reviewId);
-  const r = Number.isInteger(id) ? db.prepare('SELECT * FROM advisor_reviews WHERE id = ?').get(id) : null;
+  const r = Number.isInteger(id) ? await db.prepare('SELECT * FROM advisor_reviews WHERE id = ?').get(id) : null;
   if (!r || r.closed_at || !r.rec_id) throw new AdvisorError(404, `no open review ${reviewId}`);
   if (r.verdict) throw new AdvisorError(409, 'that review already has a verdict');
   if (!VERDICTS.includes(verdict)) throw new AdvisorError(400, 'verdict must be confirmed or vetoed');
@@ -156,19 +156,19 @@ export function recordVerdict(db, reviewId, { verdict, note, date, now }, dismis
   const text = (note || '').trim();
   if (text.length > MAX_NOTE) throw new AdvisorError(400, `note is longer than ${MAX_NOTE} characters`);
   if (!isIsoDate(date)) throw new AdvisorError(400, 'date must be YYYY-MM-DD');
-  const row = recRow(db, r.rec_id);
-  const pr = db.prepare('SELECT grounding_hash FROM planner_recs WHERE rec_id = ?').get(r.rec_id);
-  db.prepare('UPDATE advisor_reviews SET verdict = ?, note = ?, reviewed_on = ?, recorded_at = ?, grounding_hash = ? WHERE id = ?')
+  const row = await recRow(db, r.rec_id);
+  const pr = await db.prepare('SELECT grounding_hash FROM planner_recs WHERE rec_id = ?').get(r.rec_id);
+  await db.prepare('UPDATE advisor_reviews SET verdict = ?, note = ?, reviewed_on = ?, recorded_at = ?, grounding_hash = ? WHERE id = ?')
     .run(verdict, escapeUserText(text), date, now, pr ? pr.grounding_hash : null, id);
   if (verdict === 'vetoed' && row.status !== 'dismissed') dismiss(row);
   return r.rec_id;
 }
 
-export function setCheckin(db, { date, time, lengthMin, now }) {
+export async function setCheckin(db, { date, time, lengthMin, now }) {
   if (!isIsoDate(date)) throw new AdvisorError(400, 'date must be YYYY-MM-DD');
   if (time != null && time !== '' && (typeof time !== 'string' || !TIME.test(time))) throw new AdvisorError(400, 'time must be HH:MM');
   if (!Number.isInteger(lengthMin) || lengthMin < 5 || lengthMin > MAX_LENGTH_MIN) throw new AdvisorError(400, `length must be 5 to ${MAX_LENGTH_MIN} minutes`);
-  db.prepare(`INSERT INTO advisor_checkin (id, date, time, length_min, updated_at) VALUES (1, ?, ?, ?, ?)
+  await db.prepare(`INSERT INTO advisor_checkin (id, date, time, length_min, updated_at) VALUES (1, ?, ?, ?, ?)
               ON CONFLICT(id) DO UPDATE SET date = excluded.date, time = excluded.time, length_min = excluded.length_min, updated_at = excluded.updated_at`)
     .run(date, time || null, lengthMin, now);
 }
@@ -176,18 +176,18 @@ export function setCheckin(db, { date, time, lengthMin, now }) {
 // Planner hook, inside its write transaction after applyRecs: a veto on a planner rec whose
 // grounding hash changed since the verdict no longer holds. The review closes ('inputs changed')
 // and the rec returns to proposed when the veto's dismiss is still its last status change.
-export function liftStaleVetoes(db, { now }) {
-  const stale = db.prepare(`SELECT ar.id, ar.rec_id, r.status FROM advisor_reviews ar
+export async function liftStaleVetoes(db, { now }) {
+  const stale = await db.prepare(`SELECT ar.id, ar.rec_id, r.status FROM advisor_reviews ar
       JOIN planner_recs pr ON pr.rec_id = ar.rec_id JOIN recs r ON r.id = ar.rec_id
       WHERE ar.closed_at IS NULL AND ar.verdict = 'vetoed' AND ar.grounding_hash IS NOT NULL
         AND pr.retired_at IS NULL AND pr.grounding_hash IS NOT ar.grounding_hash`).all();
   const last = db.prepare('SELECT action, arg FROM rec_events WHERE rec_id = ? AND from_status IS NOT to_status ORDER BY id DESC LIMIT 1');
   for (const s of stale) {
-    db.prepare("UPDATE advisor_reviews SET closed_at = ?, closed_reason = 'inputs changed' WHERE id = ?").run(now, s.id);
-    const ev = last.get(s.rec_id);
+    await db.prepare("UPDATE advisor_reviews SET closed_at = ?, closed_reason = 'inputs changed' WHERE id = ?").run(now, s.id);
+    const ev = await last.get(s.rec_id);
     if (s.status === 'dismissed' && ev && ev.action === 'dismiss' && ev.arg === VETO_REASON) {
-      db.prepare("UPDATE recs SET status = 'proposed', updated_at = ? WHERE id = ?").run(now, s.rec_id);
-      db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor)
+      await db.prepare("UPDATE recs SET status = 'proposed', updated_at = ? WHERE id = ?").run(now, s.rec_id);
+      await db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor)
                   VALUES (?, ?, 'advisor_veto_lifted', 'inputs changed', 'dismissed', 'proposed', 'planner')`).run(s.rec_id, now);
     }
   }
@@ -196,25 +196,25 @@ export function liftStaleVetoes(db, { now }) {
 
 // Read-only status for Ask and MCP: who reviewed what, when. Titles stay token text; the tool
 // resolves them.
-export function advisorStatus(db) {
-  const recs = new Map(db.prepare('SELECT id, def, status FROM recs').all().map(r => {
+export async function advisorStatus(db) {
+  const recs = new Map((await db.prepare('SELECT id, def, status FROM recs').all()).map(r => {
     let def = {};
     try { def = JSON.parse(r.def); } catch { def = {}; }
     return [r.id, { title: def.title || '', status: r.status }];
   }));
-  const rows = db.prepare('SELECT * FROM advisor_reviews ORDER BY id').all().filter(r => !r.rec_id || (recs.get(r.rec_id) || {}).status !== 'hidden');
+  const rows = (await db.prepare('SELECT * FROM advisor_reviews ORDER BY id').all()).filter(r => !r.rec_id || (recs.get(r.rec_id) || {}).status !== 'hidden');
   const item = r => {
     const out = { recId: r.rec_id, title: r.rec_id ? recs.get(r.rec_id)?.title || r.title : r.title, sentOn: r.sent_at.slice(0, 10) };
     if (r.verdict) Object.assign(out, { verdict: r.verdict, note: r.note, reviewedOn: r.reviewed_on, recordedOn: String(r.recorded_at || '').slice(0, 10) });
     if (r.closed_at) Object.assign(out, { closedOn: r.closed_at.slice(0, 10), closedReason: r.closed_reason });
     return out;
   };
-  const c = getCheckin(db);
+  const c = await getCheckin(db);
   return {
     nextCheckin: c.date ? { date: c.date, time: c.time, lengthMin: c.lengthMin, label: c.when } : null,
     waiting: rows.filter(r => !r.closed_at && !r.verdict).map(item),
     reviewed: rows.filter(r => !r.closed_at && r.verdict).map(item),
     history: rows.filter(r => r.closed_at).map(item),
-    packets: listPackets(db).map(p => ({ id: p.id, date: p.createdAt.slice(0, 10), recIds: p.recIds })),
+    packets: (await listPackets(db)).map(p => ({ id: p.id, date: p.createdAt.slice(0, 10), recIds: p.recIds })),
   };
 }

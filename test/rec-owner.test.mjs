@@ -20,14 +20,14 @@ import { tempDb } from './helpers/server.mjs';
 
 const NOW = '2026-11-05';
 const S = scratch('fathom-rec-owner-');
-after(() => S.cleanup());
+after(async () => await S.cleanup());
 
-const plan = (db, now = NOW) => planRun(db, { now });
+const plan = async (db, now = NOW) => planRun(db, { now });
 const ctxOf = (db, params = {}, body = {}) => ({ db, config: { clock: NOW }, params, body });
-const act = (db, id, action, arg) => recAction(ctxOf(db, { id }, arg === undefined ? { action } : { action, arg }));
-const ownerOf = (db, id) => ({ ...db.prepare('SELECT owner, owner_override FROM recs WHERE id = ?').get(id) });
-const eventCount = (db, id) => db.prepare('SELECT count(*) AS n FROM rec_events WHERE rec_id = ?').get(id).n;
-const lastEvent = (db, id) => ({ ...db.prepare('SELECT action, arg, from_status, to_status, actor FROM rec_events WHERE rec_id = ? ORDER BY id DESC LIMIT 1').get(id) });
+const act = async (db, id, action, arg) => await recAction(ctxOf(db, { id }, arg === undefined ? { action } : { action, arg }));
+const ownerOf = async (db, id) => ({ ...await db.prepare('SELECT owner, owner_override FROM recs WHERE id = ?').get(id) });
+const eventCount = async (db, id) => (await db.prepare('SELECT count(*) AS n FROM rec_events WHERE rec_id = ?').get(id)).n;
+const lastEvent = async (db, id) => ({ ...await db.prepare('SELECT action, arg, from_status, to_status, actor FROM rec_events WHERE rec_id = ? ORDER BY id DESC LIMIT 1').get(id) });
 const rejects = (fn, status) => assert.throws(fn, e => e instanceof HttpError && e.status === status, `HTTP ${status}`);
 const isCode = code => err => err instanceof ToolError && err.code === code;
 const OPEN = s => !['hidden', 'done', 'dismissed'].includes(s);
@@ -45,7 +45,7 @@ const SPOUSE_RECS = ['year-end-retirement', 'solo401k-setup', 'scorp-salary', 'i
 
 async function demoStore() {
   const s = await tempDb();
-  seedDemo(s.db);
+  await seedDemo(s.db);
   return s;
 }
 
@@ -58,32 +58,32 @@ describe('planner default owners (AC2)', () => {
     await plan(base);
   });
 
-  test('each planner rec gets its trigger default owner with no override', () => {
+  test('each planner rec gets its trigger default owner with no override', async () => {
     for (const [id, owner] of Object.entries(BASE_OWNERS)) {
-      assert.deepEqual(ownerOf(base, id), { owner, owner_override: 0 }, id);
+      assert.deepEqual(await ownerOf(base, id), { owner, owner_override: 0 }, id);
     }
   });
 
   test('where the spouse owns the S corp, its retirement and business recs default to the spouse', async () => {
     const db = await S.store({ variant: SPOUSE_CORP });
     await plan(db);
-    assert.equal(recRow(db, 'scorp-salary').def.scenario, 'salary', 'precondition: the salary war game is modelled');
-    assert.equal(recRow(db, 'invoice-deferral').def.scenario, 'deferral', 'precondition: the deferral war game is modelled');
-    for (const id of SPOUSE_RECS) assert.deepEqual(ownerOf(db, id), { owner: 'spouse', owner_override: 0 }, id);
+    assert.equal((await recRow(db, 'scorp-salary')).def.scenario, 'salary', 'precondition: the salary war game is modelled');
+    assert.equal((await recRow(db, 'invoice-deferral')).def.scenario, 'deferral', 'precondition: the deferral war game is modelled');
+    for (const id of SPOUSE_RECS) assert.deepEqual(await ownerOf(db, id), { owner: 'spouse', owner_override: 0 }, id);
     // liveness: the same recs on the base household belong to the owner
-    for (const id of SPOUSE_RECS) assert.equal(ownerOf(base, id).owner, 'you', `base ${id}`);
+    for (const id of SPOUSE_RECS) assert.equal((await ownerOf(base, id)).owner, 'you', `base ${id}`);
     // Recs with no person rule keep their static owner.
-    assert.equal(ownerOf(db, 'va529').owner, 'both');
-    assert.equal(ownerOf(db, 'fed-q4-estimate').owner, 'you');
+    assert.equal((await ownerOf(db, 'va529')).owner, 'both');
+    assert.equal((await ownerOf(db, 'fed-q4-estimate')).owner, 'you');
   });
 
   test('a non-overridden owner follows the planner default: a static backfill converges after one run', async () => {
     const db = await S.store({ variant: SPOUSE_CORP });
     await plan(db);
     // As migration 019 leaves a store: the static trigger owner, no override.
-    db.prepare("UPDATE recs SET owner = 'you', owner_override = 0 WHERE id = 'year-end-retirement'").run();
+    await db.prepare("UPDATE recs SET owner = 'you', owner_override = 0 WHERE id = 'year-end-retirement'").run();
     await plan(db);
-    assert.deepEqual(ownerOf(db, 'year-end-retirement'), { owner: 'spouse', owner_override: 0 });
+    assert.deepEqual(await ownerOf(db, 'year-end-retirement'), { owner: 'spouse', owner_override: 0 });
   });
 });
 
@@ -94,13 +94,13 @@ describe('owner action through recAction (AC2)', () => {
   before(async () => { s = await demoStore(); });
   after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
 
-  test('AC4: setting an owner stores it with the override flag, records a ui event and returns the scenario', () => {
-    const before = s.db.prepare("SELECT status FROM recs WHERE id = 'va529'").get().status;
-    assert.deepEqual(ownerOf(s.db, 'va529'), { owner: 'both', owner_override: 0 });
-    const r = act(s.db, 'va529', 'owner', 'spouse');
-    assert.deepEqual(ownerOf(s.db, 'va529'), { owner: 'spouse', owner_override: 1 });
-    assert.deepEqual(lastEvent(s.db, 'va529'), { action: 'owner', arg: 'spouse', from_status: before, to_status: before, actor: 'ui' });
-    assert.equal(s.db.prepare("SELECT status FROM recs WHERE id = 'va529'").get().status, before, 'status unchanged');
+  test('AC4: setting an owner stores it with the override flag, records a ui event and returns the scenario', async () => {
+    const before = (await s.db.prepare("SELECT status FROM recs WHERE id = 'va529'").get()).status;
+    assert.deepEqual(await ownerOf(s.db, 'va529'), { owner: 'both', owner_override: 0 });
+    const r = await act(s.db, 'va529', 'owner', 'spouse');
+    assert.deepEqual(await ownerOf(s.db, 'va529'), { owner: 'spouse', owner_override: 1 });
+    assert.deepEqual(await lastEvent(s.db, 'va529'), { action: 'owner', arg: 'spouse', from_status: before, to_status: before, actor: 'ui' });
+    assert.equal((await s.db.prepare("SELECT status FROM recs WHERE id = 'va529'").get()).status, before, 'status unchanged');
     const rec = r.scenario.recs.find(x => x.id === 'va529');
     assert.equal(rec.owner, 'spouse');
     assert.equal(rec.ownerOverride, true);
@@ -111,33 +111,33 @@ describe('owner action through recAction (AC2)', () => {
     assert.equal(other.ownerOverride, false, 'other recs are untouched');
   });
 
-  test('accepts every valid owner', () => {
+  test('accepts every valid owner', async () => {
     for (const o of OWNERS) {
-      const r = act(s.db, 'vaq4', 'owner', o);
+      const r = await act(s.db, 'vaq4', 'owner', o);
       assert.equal(r.scenario.recs.find(x => x.id === 'vaq4').owner, o, o);
-      assert.deepEqual(ownerOf(s.db, 'vaq4'), { owner: o, owner_override: 1 }, o);
+      assert.deepEqual(await ownerOf(s.db, 'vaq4'), { owner: o, owner_override: 1 }, o);
     }
   });
 
-  test('an unknown owner is a 400 and writes nothing', () => {
-    const before = ownerOf(s.db, 'dcfsa');
-    const events = eventCount(s.db, 'dcfsa');
-    for (const bad of ['nobody', 'Spouse', 'YOU', '', null, 3, ['you']]) rejects(() => act(s.db, 'dcfsa', 'owner', bad), 400);
-    rejects(() => act(s.db, 'dcfsa', 'owner'), 400);
-    assert.deepEqual(ownerOf(s.db, 'dcfsa'), before);
-    assert.equal(eventCount(s.db, 'dcfsa'), events);
+  test('an unknown owner is a 400 and writes nothing', async () => {
+    const before = await ownerOf(s.db, 'dcfsa');
+    const events = await eventCount(s.db, 'dcfsa');
+    for (const bad of ['nobody', 'Spouse', 'YOU', '', null, 3, ['you']]) rejects(async () => await act(s.db, 'dcfsa', 'owner', bad), 400);
+    rejects(async () => await act(s.db, 'dcfsa', 'owner'), 400);
+    assert.deepEqual(await ownerOf(s.db, 'dcfsa'), before);
+    assert.equal(await eventCount(s.db, 'dcfsa'), events);
     // liveness: a valid owner on the same rec is accepted
-    act(s.db, 'dcfsa', 'owner', 'advisor');
-    assert.equal(ownerOf(s.db, 'dcfsa').owner, 'advisor');
+    await act(s.db, 'dcfsa', 'owner', 'advisor');
+    assert.equal((await ownerOf(s.db, 'dcfsa')).owner, 'advisor');
   });
 
-  test('a hidden or missing rec is a 404 and writes nothing', () => {
-    assert.equal(s.db.prepare("SELECT status FROM recs WHERE id = 'daf'").get().status, 'hidden');
-    const before = ownerOf(s.db, 'daf');
-    rejects(() => act(s.db, 'daf', 'owner', 'spouse'), 404);
-    rejects(() => act(s.db, 'no-such-rec', 'owner', 'spouse'), 404);
-    assert.deepEqual(ownerOf(s.db, 'daf'), before);
-    assert.equal(eventCount(s.db, 'daf'), 0);
+  test('a hidden or missing rec is a 404 and writes nothing', async () => {
+    assert.equal((await s.db.prepare("SELECT status FROM recs WHERE id = 'daf'").get()).status, 'hidden');
+    const before = await ownerOf(s.db, 'daf');
+    rejects(async () => await act(s.db, 'daf', 'owner', 'spouse'), 404);
+    rejects(async () => await act(s.db, 'no-such-rec', 'owner', 'spouse'), 404);
+    assert.deepEqual(await ownerOf(s.db, 'daf'), before);
+    assert.equal(await eventCount(s.db, 'daf'), 0);
   });
 });
 
@@ -147,13 +147,13 @@ describe('an owner override survives planning (AC2)', () => {
   test('a second planning run keeps the override even where the planner default differs; others follow the default', async () => {
     const db = await S.store();
     await plan(db);
-    act(db, 'year-end-retirement', 'owner', 'spouse');
-    act(db, 'hsa-room', 'owner', 'you'); // the same as the default, but owner-set
+    await act(db, 'year-end-retirement', 'owner', 'spouse');
+    await act(db, 'hsa-room', 'owner', 'you'); // the same as the default, but owner-set
     await plan(db);
-    assert.deepEqual(ownerOf(db, 'year-end-retirement'), { owner: 'spouse', owner_override: 1 }, 'default is you; the override stays');
-    assert.deepEqual(ownerOf(db, 'hsa-room'), { owner: 'you', owner_override: 1 });
-    assert.deepEqual(ownerOf(db, 'solo401k-setup'), { owner: 'you', owner_override: 0 });
-    const sc = buildScenario(db, { clock: NOW });
+    assert.deepEqual(await ownerOf(db, 'year-end-retirement'), { owner: 'spouse', owner_override: 1 }, 'default is you; the override stays');
+    assert.deepEqual(await ownerOf(db, 'hsa-room'), { owner: 'you', owner_override: 1 });
+    assert.deepEqual(await ownerOf(db, 'solo401k-setup'), { owner: 'you', owner_override: 0 });
+    const sc = await buildScenario(db, { clock: NOW });
     const yr = sc.recs.find(r => r.id === 'year-end-retirement');
     assert.equal(yr.owner, 'spouse');
     assert.equal(yr.ownerOverride, true);
@@ -163,33 +163,33 @@ describe('an owner override survives planning (AC2)', () => {
   test('the override survives retire then revive', async () => {
     const db = await S.store();
     await plan(db);
-    act(db, 'va529', 'owner', 'advisor');
-    addFact(db, 'accounts.has529', false, { src: 'you', confirmed: true });
+    await act(db, 'va529', 'owner', 'advisor');
+    await addFact(db, 'accounts.has529', false, { src: 'you', confirmed: true });
     await plan(db);
-    assert.ok(plannerRec(db, 'va529').retired_at, 'precondition: retired');
-    assert.deepEqual(ownerOf(db, 'va529'), { owner: 'advisor', owner_override: 1 });
-    removeFact(db, 'accounts.has529');
+    assert.ok((await plannerRec(db, 'va529')).retired_at, 'precondition: retired');
+    assert.deepEqual(await ownerOf(db, 'va529'), { owner: 'advisor', owner_override: 1 });
+    await removeFact(db, 'accounts.has529');
     await plan(db);
-    assert.equal(plannerRec(db, 'va529').retired_at, null, 'precondition: revived');
-    assert.equal(recRow(db, 'va529').status, 'proposed');
-    assert.deepEqual(ownerOf(db, 'va529'), { owner: 'advisor', owner_override: 1 });
+    assert.equal((await plannerRec(db, 'va529')).retired_at, null, 'precondition: revived');
+    assert.equal((await recRow(db, 'va529')).status, 'proposed');
+    assert.deepEqual(await ownerOf(db, 'va529'), { owner: 'advisor', owner_override: 1 });
   });
 
   test('the override survives a precision gap and its resolution', async () => {
     const db = await S.store();
     await plan(db);
-    act(db, 'va-q4-estimate', 'owner', 'automatic');
-    db.prepare("UPDATE transactions SET category = 'Uncategorized' WHERE lower(category) LIKE '%charit%' OR lower(category) LIKE '%donat%'").run();
-    addFact(db, 'tax.itemizedEstimate', 40000);
+    await act(db, 'va-q4-estimate', 'owner', 'automatic');
+    await db.prepare("UPDATE transactions SET category = 'Uncategorized' WHERE lower(category) LIKE '%charit%' OR lower(category) LIKE '%donat%'").run();
+    await addFact(db, 'tax.itemizedEstimate', 40000);
     await plan(db, '2026-11-20');
-    assert.equal(recRow(db, 'va-q4-estimate').status, 'proposed', 'estimate remains actionable');
-    assert.ok(recRow(db, 'va-q4-estimate').def.gaps.some(g => g.code === 'va_itemized_missing'));
-    assert.deepEqual(ownerOf(db, 'va-q4-estimate'), { owner: 'automatic', owner_override: 1 });
-    addFact(db, 'tax.vaItemizedEstimate', 20000);
+    assert.equal((await recRow(db, 'va-q4-estimate')).status, 'proposed', 'estimate remains actionable');
+    assert.ok((await recRow(db, 'va-q4-estimate')).def.gaps.some(g => g.code === 'va_itemized_missing'));
+    assert.deepEqual(await ownerOf(db, 'va-q4-estimate'), { owner: 'automatic', owner_override: 1 });
+    await addFact(db, 'tax.vaItemizedEstimate', 20000);
     await plan(db, '2026-11-20');
-    assert.equal(recRow(db, 'va-q4-estimate').status, 'proposed', 'precondition: unblocked');
-    assert.deepEqual(ownerOf(db, 'va-q4-estimate'), { owner: 'automatic', owner_override: 1 });
-    const ev = recEvents(db, 'va-q4-estimate').filter(e => e.action === 'owner');
+    assert.equal((await recRow(db, 'va-q4-estimate')).status, 'proposed', 'precondition: unblocked');
+    assert.deepEqual(await ownerOf(db, 'va-q4-estimate'), { owner: 'automatic', owner_override: 1 });
+    const ev = (await recEvents(db, 'va-q4-estimate')).filter(e => e.action === 'owner');
     assert.equal(ev.length, 1, 'one owner event, from the owner');
   });
 });
@@ -214,29 +214,29 @@ describe('MCP owner tool and linked recs (AC2, AC4)', () => {
   });
 
   test('AC4: act_on_recommendation.owner sets the owner, records set_owner by tool and returns the linked rec', async () => {
-    const status = s.db.prepare("SELECT status FROM recs WHERE id = 'va529'").get().status;
+    const status = (await s.db.prepare("SELECT status FROM recs WHERE id = 'va529'").get()).status;
     const r = await call('act_on_recommendation', { operation: 'owner',  id: 'va529', owner: 'spouse' });
     assert.equal(r.id, 'va529');
     assert.equal(r.owner, 'spouse');
     assert.equal(r.ownerOverride, true);
     assert.equal(r.housekeeping, false);
     assert.ok(Array.isArray(r.serves) && r.serves.length > 0);
-    assert.deepEqual(ownerOf(s.db, 'va529'), { owner: 'spouse', owner_override: 1 });
-    assert.deepEqual(lastEvent(s.db, 'va529'), { action: 'set_owner', arg: 'spouse', from_status: status, to_status: status, actor: 'demo' });
+    assert.deepEqual(await ownerOf(s.db, 'va529'), { owner: 'spouse', owner_override: 1 });
+    assert.deepEqual(await lastEvent(s.db, 'va529'), { action: 'set_owner', arg: 'spouse', from_status: status, to_status: status, actor: 'demo' });
     assert.equal((await call('recommendations', { operation: 'detail',  id: 'va529' })).owner, 'spouse');
   });
 
   test('act_on_recommendation.owner accepts every valid owner and refuses a bad owner or a hidden rec', async () => {
     for (const o of OWNERS) assert.equal((await call('act_on_recommendation', { operation: 'owner',  id: 'vaq4', owner: o })).owner, o, o);
-    const before = ownerOf(s.db, 'vaq4');
-    const events = eventCount(s.db, 'vaq4');
+    const before = await ownerOf(s.db, 'vaq4');
+    const events = await eventCount(s.db, 'vaq4');
     for (const bad of ['nobody', 'Spouse', '']) await assert.rejects(call('act_on_recommendation', { operation: 'owner',  id: 'vaq4', owner: bad }), isCode('bad_input'), bad);
     await assert.rejects(call('act_on_recommendation', { operation: 'owner',  id: 'vaq4' }), isCode('bad_input'));
     await assert.rejects(call('act_on_recommendation', { operation: 'owner',  id: 'daf', owner: 'spouse' }), isCode('not_found'));
     await assert.rejects(call('act_on_recommendation', { operation: 'owner',  id: 'no-such-rec', owner: 'spouse' }), isCode('not_found'));
-    assert.deepEqual(ownerOf(s.db, 'vaq4'), before);
-    assert.equal(eventCount(s.db, 'vaq4'), events);
-    assert.equal(ownerOf(s.db, 'daf').owner_override, 0);
+    assert.deepEqual(await ownerOf(s.db, 'vaq4'), before);
+    assert.equal(await eventCount(s.db, 'vaq4'), events);
+    assert.equal((await ownerOf(s.db, 'daf')).owner_override, 0);
   });
 
   test('AC4: recommendations.list and recommendations.detail expose owner, ownerOverride, housekeeping and serves', async () => {
@@ -260,15 +260,15 @@ describe('MCP owner tool and linked recs (AC2, AC4)', () => {
     assert.ok(n > 0);
     const sum = await call('household', { operation: 'summary' });
     assert.equal(sum.housekeepingCount, n);
-    assert.equal(sum.housekeepingCount, buildScenario(s.db, { clock: '2026-11-05' }).live.housekeeping, 'the same definition as the scenario');
+    assert.equal(sum.housekeepingCount, (await buildScenario(s.db, { clock: '2026-11-05' })).live.housekeeping, 'the same definition as the scenario');
   });
 
   test('AC4: an owner goal titled with brace text stays literal in serves from every rec tool', async () => {
     const gctx = (body = {}, params = {}) => ({ db: s.db, config: { clock: '2026-11-05' }, body, params });
     // Only the owner goal is open, so the retirement rec serves exactly it.
-    for (const g of buildScenario(s.db, { clock: '2026-11-05' }).goals) goalArchive(gctx({}, { id: g.id }));
+    for (const g of (await buildScenario(s.db, { clock: '2026-11-05' })).goals) await goalArchive(gctx({}, { id: g.id }));
     const TITLE = 'Retire {f:cash.total}';
-    const goal = goalCreate(gctx({ title: TITLE })).goal;
+    const goal = (await goalCreate(gctx({ title: TITLE }))).goal;
     const check = (r, what) => {
       assert.deepEqual(r.serves.map(g => [g.id, g.title, g.origin]), [[goal.id, TITLE, 'owner']], what);
       // Rec text is still token-resolved.

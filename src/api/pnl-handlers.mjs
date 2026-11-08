@@ -23,8 +23,8 @@ const list = (query, key) => {
   return v === undefined ? [] : v.split(',').map((s) => s.trim()).filter(Boolean);
 };
 
-function read(ctx, fn) {
-  const clock = resolveClock(ctx.db, ctx.config && ctx.config.clock);
+async function read(ctx, fn) {
+  const clock = await resolveClock(ctx.db, ctx.config && ctx.config.clock);
   try {
     return fn(ctx.query || {}, clock);
   } catch (e) {
@@ -33,9 +33,9 @@ function read(ctx, fn) {
   }
 }
 
-export function getPnl(ctx) {
-  return read(ctx, (q, clock) => {
-    const entities = pnlEntities({ db: ctx.db, clock });
+export async function getPnl(ctx) {
+  return await read(ctx, async (q, clock) => {
+    const entities = await pnlEntities({ db: ctx.db, clock });
     const entity = one(q, 'entity') ?? entities[0]?.key;
     if (entity === undefined) {
       // No business data: still refuse a malformed or inverted range, as a store with data would.
@@ -43,29 +43,29 @@ export function getPnl(ctx) {
       if (from && to) checkRange(from, to);
       return { entities, pnl: null, figures: {}, sources: {} };
     }
-    const { figures, sources, ...pnl } = businessPnl({ db: ctx.db, entity, from: one(q, 'from'), to: one(q, 'to'), clock });
+    const { figures, sources, ...pnl } = await businessPnl({ db: ctx.db, entity, from: one(q, 'from'), to: one(q, 'to'), clock });
     return { entities, pnl, figures, sources };
   });
 }
 
-export function getPnlRows(ctx) {
-  return read(ctx, (q, clock) => businessPnlRows({
+export async function getPnlRows(ctx) {
+  return await read(ctx, async (q, clock) => await businessPnlRows({
     db: ctx.db, entity: one(q, 'entity'), from: one(q, 'from'), to: one(q, 'to'),
     section: one(q, 'section'), category: one(q, 'category'), month: one(q, 'month'), clock,
   }));
 }
 
-export function getSpending(ctx) {
-  return read(ctx, (q, clock) => {
-    const { figures, sources, ...spending } = householdSpending({
+export async function getSpending(ctx) {
+  return await read(ctx, async (q, clock) => {
+    const { figures, sources, ...spending } = await householdSpending({
       db: ctx.db, from: one(q, 'from'), to: one(q, 'to'), include: list(q, 'include'), exclude: list(q, 'exclude'), clock,
     });
     return { spending, figures, sources };
   });
 }
 
-export function getSpendingRows(ctx) {
-  return read(ctx, (q, clock) => householdSpendingRows({
+export async function getSpendingRows(ctx) {
+  return await read(ctx, async (q, clock) => await householdSpendingRows({
     db: ctx.db, from: one(q, 'from'), to: one(q, 'to'), include: list(q, 'include'), exclude: list(q, 'exclude'),
     bucket: one(q, 'bucket'), category: one(q, 'category'), month: one(q, 'month'), clock,
   }));

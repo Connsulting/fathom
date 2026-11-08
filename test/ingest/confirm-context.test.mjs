@@ -35,8 +35,8 @@ const withHousehold = (fn) => withStore(async (s) => {
 });
 
 // Account id by mask and institution ('' for the positions accounts, which carry none).
-const acct = (db, mask, inst) => one(db, "SELECT id FROM accounts WHERE mask = ? AND coalesce(inst, '') = ?", mask, inst).id;
-const fileIdOf = (db, name) => one(db, 'SELECT id FROM files WHERE name = ?', name).id;
+const acct = async (db, mask, inst) => (await one(db, "SELECT id FROM accounts WHERE mask = ? AND coalesce(inst, '') = ?", mask, inst)).id;
+const fileIdOf = async (db, name) => (await one(db, 'SELECT id FROM files WHERE name = ?', name)).id;
 const pendingFor = (db, kind, subject) => {
   const item = C.pendingItems(db).find((i) => i.kind === kind && i.subject === subject);
   assert.ok(item, `a pending ${kind} for ${subject}`);
@@ -47,8 +47,8 @@ describe('account cards', () => {
   let X;
   before(async () => { X = await src('src/ingest/context.mjs'); });
 
-  test('Everyday Checking: institution, mask, holder, both files, range, row counts, latest balance and recent rows with provenance', () => withHousehold((s) => {
-    const id = acct(s.db, '4455', 'Chase');
+  test('Everyday Checking: institution, mask, holder, both files, range, row counts, latest balance and recent rows with provenance', () => withHousehold(async (s) => {
+    const id = await acct(s.db, '4455', 'Chase');
     const d = X.cardDetail(s.db, pendingFor(s.db, 'account_owner', id));
     assert.equal(d.type, 'account');
     const v = d.account;
@@ -62,10 +62,10 @@ describe('account cards', () => {
     assert.ok(v.files.every((f) => typeof f.id === 'string' && f.id.length > 0));
     assert.equal(v.from, '2026-10-01');
     assert.equal(v.to, '2026-10-14');
-    assert.equal(v.rows.transactions, count(s.db, 'transactions', 'account_id = ?', id), 'the stored transaction count');
-    assert.equal(v.rows.balances, count(s.db, 'balances', 'account_id = ?', id));
+    assert.equal(v.rows.transactions, await count(s.db, 'transactions', 'account_id = ?', id), 'the stored transaction count');
+    assert.equal(v.rows.balances, await count(s.db, 'balances', 'account_id = ?', id));
     assert.equal(v.rows.positions, 0);
-    const chase = fileIdOf(s.db, CHASE_FILE);
+    const chase = await fileIdOf(s.db, CHASE_FILE);
     assert.deepEqual(v.balance, {
       amount: 5551.96, date: '2026-10-14', fileId: chase, fileName: CHASE_FILE, basis: 'balance', sources: [{ fileId: chase, fileName: CHASE_FILE }],
     });
@@ -76,23 +76,23 @@ describe('account cards', () => {
     assert.ok(v.recent.every((r) => [AGG_FILE, CHASE_FILE].includes(r.fileName)));
   }));
 
-  test('Individual TOD: the other three same-named accounts are listed and mask, holder and institution differ', () => withHousehold((s) => {
-    const id = acct(s.db, '1111', 'Example Brokerage');
-    const spouseTod = acct(s.db, '2222', 'Example Brokerage');
+  test('Individual TOD: the other three same-named accounts are listed and mask, holder and institution differ', () => withHousehold(async (s) => {
+    const id = await acct(s.db, '1111', 'Example Brokerage');
+    const spouseTod = await acct(s.db, '2222', 'Example Brokerage');
     const d = X.cardDetail(s.db, pendingFor(s.db, 'account_owner', id));
     assert.equal(d.type, 'account');
     assert.equal(d.account.holder, 'Avery Example');
-    assert.deepEqual(d.sameName.map((v) => v.id).sort(), [spouseTod, acct(s.db, '1111', ''), acct(s.db, '2222', '')].sort());
+    assert.deepEqual(d.sameName.map((v) => v.id).sort(), [spouseTod, await acct(s.db, '1111', ''), await acct(s.db, '2222', '')].sort());
     assert.ok(d.sameName.every((v) => v.name === 'Individual TOD'));
     assert.equal(d.sameName.find((v) => v.id === spouseTod).holder, 'Blair Example');
     for (const field of ['mask', 'holder', 'institution']) assert.ok(d.differs.includes(field), `differs names ${field}, got ${d.differs}`);
     assert.ok(d.differs.every((f) => ACCOUNT_FIELDS.includes(f)), `only view fields, got ${d.differs}`);
   }));
 
-  test('a positions account shows its holdings total as the balance, from the positions file', () => withHousehold((s) => {
-    const id = acct(s.db, '1111', '');
+  test('a positions account shows its holdings total as the balance, from the positions file', () => withHousehold(async (s) => {
+    const id = await acct(s.db, '1111', '');
     const v = X.cardDetail(s.db, pendingFor(s.db, 'account_owner', id)).account;
-    const pos = fileIdOf(s.db, POS_FILE);
+    const pos = await fileIdOf(s.db, POS_FILE);
     assert.deepEqual(v.balance, {
       amount: 1250, date: '2026-10-31', fileId: pos, fileName: POS_FILE, basis: 'holdings', sources: [{ fileId: pos, fileName: POS_FILE }],
     });
@@ -110,10 +110,10 @@ describe('account cards', () => {
     const second = positionsFile('positions-part-b.csv', [{ symbol: 'FUNDB', quantity: '4', price: '100.00', value: '400.00' }], { extra: ['Z5550002222'] });
     await P.ingestFiles(s.db, [first], s.opts(await offEngine()));
     await P.ingestFiles(s.db, [second], s.opts(await offEngine()));
-    const id = acct(s.db, '2222', '');
-    const stored = all(s.db, 'SELECT symbol, as_of, file_id FROM positions WHERE account_id = ? ORDER BY symbol', id);
-    const a = fileIdOf(s.db, first.name);
-    const b = fileIdOf(s.db, second.name);
+    const id = await acct(s.db, '2222', '');
+    const stored = await all(s.db, 'SELECT symbol, as_of, file_id FROM positions WHERE account_id = ? ORDER BY symbol', id);
+    const a = await fileIdOf(s.db, first.name);
+    const b = await fileIdOf(s.db, second.name);
     assert.deepEqual(stored, [{ symbol: 'FUNDA', as_of: '2032-03-05', file_id: a }, { symbol: 'FUNDB', as_of: '2032-03-05', file_id: b }],
       'precondition: both files keep their rows on the same account and date');
     const item = C.listItems(s.db, { status: 'all' }).find((i) => i.kind === 'account_owner' && i.subject === id);
@@ -128,8 +128,8 @@ describe('account cards', () => {
     assert.ok(bal.fileName.includes(first.name) && bal.fileName.includes(second.name));
   }));
 
-  test('an account_kind card uses the same view; an account with no same-named sibling differs in nothing', () => withHousehold((s) => {
-    const id = acct(s.db, '3344', 'Example Card');
+  test('an account_kind card uses the same view; an account with no same-named sibling differs in nothing', () => withHousehold(async (s) => {
+    const id = await acct(s.db, '3344', 'Example Card');
     C.reopenItem(s.db, C.listItems(s.db, { status: 'answered' }).find(i => i.kind === 'account_kind' && i.subject === id).id, { now: NOW });
     const d = X.cardDetail(s.db, pendingFor(s.db, 'account_kind', id));
     assert.equal(d.type, 'account');
@@ -253,9 +253,9 @@ describe('compare cards', () => {
     const item = C.pendingItems(s.db).find((i) => i.kind === 'account_match');
     assert.ok(item, 'an account_match is pending');
     const { candidateId, sfKey } = item.context;
-    const candidate = one(s.db, "SELECT id FROM accounts WHERE inst = 'Other bank' AND name = 'Joint checking'").id;
+    const candidate = (await one(s.db, "SELECT id FROM accounts WHERE inst = 'Other bank' AND name = 'Joint checking'")).id;
     assert.equal(candidateId, candidate, 'precondition: the Other bank account is the candidate');
-    const namesake = acct(s.db, '9876', 'Example Bank');
+    const namesake = await acct(s.db, '9876', 'Example Bank');
     const viewOf = (id) => X.cardDetail(s.db, C.listItems(s.db, { status: 'all' }).find((i) => i.kind === 'account_owner' && i.subject === id)).account;
     const d = X.cardDetail(s.db, item);
     assert.equal(d.type, 'compare');
@@ -272,7 +272,7 @@ describe('compare cards', () => {
     assert.deepEqual(d.sameName[0], viewOf(namesake), 'each same-named account is a full view');
     assert.equal(d.sameName[0].holder, 'Blair Example');
 
-    const stored = JSON.parse(one(s.db, 'SELECT snapshot FROM simplefin_snapshots WHERE sf_key = ?', sfKey).snapshot);
+    const stored = JSON.parse((await one(s.db, 'SELECT snapshot FROM simplefin_snapshots WHERE sf_key = ?', sfKey)).snapshot);
     assert.deepEqual(d.snapshot, {
       recent: stored.recent.slice(0, 3).map((r) => ({ date: r.date, amount: Number(r.amount), description: r.description, name: r.description })),
       balanceDate: stored.balanceDate,

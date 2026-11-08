@@ -2,7 +2,7 @@ import { HttpError, sendJson } from './http.mjs';
 import { safePath, safeHousehold } from '../../web/auth/return-path.js';
 import { checkAssertion } from './household-context.mjs';
 
-export const identityOf = (req, auth) => auth.identity(req);
+export const identityOf = async (req, auth) => await auth.identity(req);
 
 // After the body is read: the session must still hold, pass the route's access check, still carry
 // the asserted household context (a switch meanwhile is 409 stale) and still name the household

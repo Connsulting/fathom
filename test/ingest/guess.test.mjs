@@ -80,8 +80,8 @@ function assertScenarioGuess(guess, { option, label, source = 'engine', model = 
   assert.ok(!FIXED_TEXTS().includes(guess.evidence), 'the evidence is not a fixed reason sentence');
 }
 const script = (guesses) => [{ text: JSON.stringify({ guesses }) }];
-const guessRows = (db) => all(db, 'SELECT item_id, option_id, reason, model, ts FROM confirm_guesses ORDER BY item_id');
-const rowOf = (db, id) => one(db, 'SELECT item_id, option_id, reason, model, ts FROM confirm_guesses WHERE item_id = ?', id);
+const guessRows = async (db) => await all(db, 'SELECT item_id, option_id, reason, model, ts FROM confirm_guesses ORDER BY item_id');
+const rowOf = async (db, id) => await one(db, 'SELECT item_id, option_id, reason, model, ts FROM confirm_guesses WHERE item_id = ?', id);
 const userText = (req) => {
   assert.equal(req.messages.length, 1);
   assert.equal(req.messages[0].role, 'user');
@@ -170,10 +170,10 @@ describe('guessPending', () => {
     assert.equal(out.batches.length, 1);
     assert.equal(out.batches[0].guessed, 2);
     assert.equal(out.batches[0].model, 'fake');
-    assert.equal(rowOf(s.db, owner.id).option_id, 'owner');
-    assert.deepEqual(rowOf(s.db, kind.id), { item_id: kind.id, option_id: 'checking', reason: G.REASON_TEXT.source_file, model: 'fake', ts: NOW });
-    assert.equal(count(s.db, 'confirm_guesses'), pending.length, 'a row for every item sent');
-    assert.equal(count(s.db, 'spend_ledger', "purpose = 'confirm'"), 1, 'the cost is recorded under confirm');
+    assert.equal((await rowOf(s.db, owner.id)).option_id, 'owner');
+    assert.deepEqual(await rowOf(s.db, kind.id), { item_id: kind.id, option_id: 'checking', reason: G.REASON_TEXT.source_file, model: 'fake', ts: NOW });
+    assert.equal(await count(s.db, 'confirm_guesses'), pending.length, 'a row for every item sent');
+    assert.equal(await count(s.db, 'spend_ledger', "purpose = 'confirm'"), 1, 'the cost is recorded under confirm');
 
     const items = FR.ingestState(s.db).items;
     const byId = (id) => items.find((i) => i.id === id);
@@ -185,9 +185,9 @@ describe('guessPending', () => {
   test('the scenario guess is null when the stored row has no option or an option no longer offered', () => withStore(async (s) => {
     const [a, b, c] = queue(s.db, 3);
     const insert = s.db.prepare('INSERT INTO confirm_guesses (item_id, option_id, reason, model, ts) VALUES (?, ?, ?, ?, ?)');
-    insert.run(a, null, null, 'fake', NOW);
-    insert.run(b, 'retired-option', 'Synthetic reason', 'fake', NOW);
-    insert.run(c, 'cash', 'Synthetic reason', 'fake', NOW);
+    await insert.run(a, null, null, 'fake', NOW);
+    await insert.run(b, 'retired-option', 'Synthetic reason', 'fake', NOW);
+    await insert.run(c, 'cash', 'Synthetic reason', 'fake', NOW);
     const items = FR.ingestState(s.db).items;
     const byId = (id) => items.find((i) => i.id === id);
     assert.equal(byId(a).guess, null);
@@ -221,26 +221,26 @@ describe('guessPending', () => {
     assert.equal(engine.calls.length, 1);
 
     const kept = { [id(7)]: 'checking', [id(8)]: '529', [id(10)]: 'checking', [id(11)]: 'cash' };
-    const rows = guessRows(s.db);
+    const rows = await guessRows(s.db);
     assert.deepEqual(rows.map((r) => r.item_id), ids, 'a row for every item sent and none for items outside the batch');
     for (const r of rows) {
       assert.equal(r.option_id, kept[r.item_id] ?? null, `item ${r.item_id}`);
       assert.equal(r.model, 'fake');
       assert.equal(r.ts, NOW);
     }
-    assert.equal(rowOf(s.db, id(7)).reason, G.REASON_TEXT.imported_values, 'free text next to a valid basis is not stored');
-    assert.equal(rowOf(s.db, id(8)).reason, G.REASON_TEXT.question);
-    assert.equal(rowOf(s.db, id(10)).reason, G.REASON_TEXT.account_name);
-    assert.equal(rowOf(s.db, id(11)).reason, G.REASON_TEXT.document_type);
-    assert.equal(rowOf(s.db, 999999), undefined);
-    assert.equal(rowOf(s.db, answered), undefined);
+    assert.equal((await rowOf(s.db, id(7))).reason, G.REASON_TEXT.imported_values, 'free text next to a valid basis is not stored');
+    assert.equal((await rowOf(s.db, id(8))).reason, G.REASON_TEXT.question);
+    assert.equal((await rowOf(s.db, id(10))).reason, G.REASON_TEXT.account_name);
+    assert.equal((await rowOf(s.db, id(11))).reason, G.REASON_TEXT.document_type);
+    assert.equal(await rowOf(s.db, 999999), undefined);
+    assert.equal(await rowOf(s.db, answered), undefined);
 
     const second = runtimeEngine(s.db);
     const again = await G.guessPending(s.db, second, { now: NOW, fake: [] });
     assert.equal(second.calls.length, 0, 'nothing is re-sent');
     assert.ok(again.skipped === 'none_pending' || (Array.isArray(again.batches) && again.batches.length === 0), JSON.stringify(again));
-    assert.equal(count(s.db, 'confirm_guesses'), ids.length);
-    assert.equal(count(s.db, 'spend_ledger', "purpose = 'confirm'"), 1);
+    assert.equal(await count(s.db, 'confirm_guesses'), ids.length);
+    assert.equal(await count(s.db, 'spend_ledger', "purpose = 'confirm'"), 1);
   }));
 
   test('validateGuesses keeps only guesses that pass every rule', () => withStore(async (s) => {
@@ -322,12 +322,12 @@ describe('guessPending', () => {
         { item: noisy, option: 'cash', basis: 'source_file', reason: 'The import reports $100k of income, 100 thousand.' },
         { item: bad, option: 'checking', basis: 'not_a_code', reason: 'Named like a checking account' },
       ])] });
-      assert.equal(count(s.db, 'confirm_guesses'), 3, 'a row for every item sent');
-      assert.deepEqual(rowOf(s.db, good), { item_id: good, option_id: 'checking', reason: EXPECTED.account_name, model: 'fake', ts: NOW });
-      assert.deepEqual(rowOf(s.db, noisy), { item_id: noisy, option_id: 'cash', reason: EXPECTED.source_file, model: 'fake', ts: NOW });
-      assert.equal(rowOf(s.db, bad).option_id, null);
-      assert.equal(rowOf(s.db, bad).reason, null);
-      for (const r of guessRows(s.db)) if (r.reason !== null) assert.equal(/\p{N}/u.test(r.reason), false);
+      assert.equal(await count(s.db, 'confirm_guesses'), 3, 'a row for every item sent');
+      assert.deepEqual(await rowOf(s.db, good), { item_id: good, option_id: 'checking', reason: EXPECTED.account_name, model: 'fake', ts: NOW });
+      assert.deepEqual(await rowOf(s.db, noisy), { item_id: noisy, option_id: 'cash', reason: EXPECTED.source_file, model: 'fake', ts: NOW });
+      assert.equal((await rowOf(s.db, bad)).option_id, null);
+      assert.equal((await rowOf(s.db, bad)).reason, null);
+      for (const r of await guessRows(s.db)) if (r.reason !== null) assert.equal(/\p{N}/u.test(r.reason), false);
       const items = FR.ingestState(s.db).items;
       const byId = (id) => items.find((i) => i.id === id);
       assertScenarioGuess(byId(good).guess, { option: 'checking', label: 'Checking' });
@@ -366,45 +366,45 @@ describe('guessPending', () => {
         assert.equal(new Set(own).size, 1, `one item's data per payload, got ${[...new Set(own)].join(',')}`);
       }
     }
-    assert.equal(count(s.db, 'confirm_guesses'), 25);
-    assert.equal(count(s.db, 'spend_ledger', "purpose = 'confirm'"), 2);
+    assert.equal(await count(s.db, 'confirm_guesses'), 25);
+    assert.equal(await count(s.db, 'spend_ledger', "purpose = 'confirm'"), 2);
   }));
 
   describe('guessPending returns costUsd, the run spend including failed calls, equal to the confirm ledger delta', () => {
-    const confirmSpend = (db) => one(db, "SELECT coalesce(sum(cost_usd), 0) AS s FROM spend_ledger WHERE purpose = 'confirm'").s;
+    const confirmSpend = async (db) => (await one(db, "SELECT coalesce(sum(cost_usd), 0) AS s FROM spend_ledger WHERE purpose = 'confirm'")).s;
     const near = (a, b) => Math.abs(a - b) < 1e-9;
     const empty = JSON.stringify({ guesses: [] });
 
     test('a normal two-batch run: costUsd is the ledger delta and the sum of the batch costs', () => withStore(async (s) => {
       queue(s.db, 25);
-      const before = confirmSpend(s.db);
+      const before = await confirmSpend(s.db);
       const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, batchSize: 20, fake: [[{ text: empty, costUsd: 0.5 }], [{ text: empty, costUsd: 0.25 }]] });
       assert.equal(out.batches.length, 2);
       assert.ok(near(out.costUsd, 0.75), `costUsd ${out.costUsd}`);
-      assert.ok(near(out.costUsd, confirmSpend(s.db) - before));
+      assert.ok(near(out.costUsd, await confirmSpend(s.db) - before));
       assert.ok(near(out.costUsd, out.batches.reduce((n, b) => n + b.costUsd, 0)));
     }));
 
     test('an unparseable response still counts its cost', () => withStore(async (s) => {
       queue(s.db, 2);
-      const before = confirmSpend(s.db);
+      const before = await confirmSpend(s.db);
       const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, fake: [[{ text: 'not json', costUsd: 0.05 }]] });
       assert.equal(out.stopped, 'bad_response');
       assert.deepEqual(out.batches, []);
       assert.ok(near(out.costUsd, 0.05), `costUsd ${out.costUsd}`);
-      assert.ok(near(out.costUsd, confirmSpend(s.db) - before));
+      assert.ok(near(out.costUsd, await confirmSpend(s.db) - before));
     }));
 
     test('a ledger-recorded failed call counts its cost, after an earlier good batch', () => withStore(async (s) => {
       queue(s.db, 25);
-      const before = confirmSpend(s.db);
+      const before = await confirmSpend(s.db);
       const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, batchSize: 20, fake: [[{ text: empty, costUsd: 0.5 }], [{ text: '', status: 'error_max_turns', costUsd: 0.25 }]] });
       assert.equal(typeof out.stopped, 'string', JSON.stringify(out));
       assert.notEqual(out.stopped, 'bad_response');
       assert.equal(out.batches.length, 1);
       assert.ok(near(out.batches[0].costUsd, 0.5));
       assert.ok(near(out.costUsd, 0.75), `costUsd ${out.costUsd}`);
-      assert.ok(near(out.costUsd, confirmSpend(s.db) - before));
+      assert.ok(near(out.costUsd, await confirmSpend(s.db) - before));
     }));
   });
 
@@ -412,9 +412,9 @@ describe('guessPending', () => {
     const ids = queue(s.db, 3);
     const engine = runtimeEngine(s.db);
     await G.guessPending(s.db, engine, { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', basis: 'question' })))] });
-    assert.equal(count(s.db, 'confirm_guesses', 'option_id IS NOT NULL'), 3, 'precondition: every guess was kept');
+    assert.equal(await count(s.db, 'confirm_guesses', 'option_id IS NOT NULL'), 3, 'precondition: every guess was kept');
     for (const id of ids) {
-      assert.deepEqual(one(s.db, 'SELECT status, answer, answered_at FROM confirm_items WHERE id = ?', id), { status: 'pending', answer: null, answered_at: null });
+      assert.deepEqual(await one(s.db, 'SELECT status, answer, answered_at FROM confirm_items WHERE id = ?', id), { status: 'pending', answer: null, answered_at: null });
     }
     assert.deepEqual(C.pendingItems(s.db).map((i) => i.id), ids);
   }));
@@ -428,8 +428,8 @@ describe('guessPending makes no guess when it must not', () => {
     const out = await G.guessPending(s.db, engine, { now: NOW, fake: [script([])] });
     assert.deepEqual(out, { skipped: 'engine_off' });
     assert.equal(engine.calls.length, 0);
-    assert.equal(count(s.db, 'spend_ledger'), 0);
-    assert.equal(count(s.db, 'confirm_guesses'), 0);
+    assert.equal(await count(s.db, 'spend_ledger'), 0);
+    assert.equal(await count(s.db, 'confirm_guesses'), 0);
   }));
 
   test('fake mode with no per-call script: skipped not_live, no call and no ledger row', () => withStore(async (s) => {
@@ -438,8 +438,8 @@ describe('guessPending makes no guess when it must not', () => {
     const out = await G.guessPending(s.db, engine, { now: NOW });
     assert.deepEqual(out, { skipped: 'not_live' });
     assert.equal(engine.calls.length, 0);
-    assert.equal(count(s.db, 'spend_ledger'), 0);
-    assert.equal(count(s.db, 'confirm_guesses'), 0);
+    assert.equal(await count(s.db, 'spend_ledger'), 0);
+    assert.equal(await count(s.db, 'confirm_guesses'), 0);
   }));
 
   test('engine mode off gives no guess', () => withStore(async (s) => {
@@ -448,7 +448,7 @@ describe('guessPending makes no guess when it must not', () => {
     const out = await G.guessPending(s.db, engine, { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', basis: 'question' })))] });
     assert.equal(out.skipped, 'engine_off');
     assert.equal(engine.calls.length, 0);
-    assert.equal(count(s.db, 'confirm_guesses'), 0);
+    assert.equal(await count(s.db, 'confirm_guesses'), 0);
     assert.ok(FR.ingestState(s.db).items.every((i) => i.guess === null));
   }));
 
@@ -457,18 +457,18 @@ describe('guessPending makes no guess when it must not', () => {
     DB.setSetting(s.db, 'cap', { usd: 0 });
     const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', basis: 'question' })))] });
     assert.equal(typeof out.stopped, 'string', JSON.stringify(out));
-    assert.equal(count(s.db, 'confirm_guesses'), 0);
-    assert.equal(count(s.db, 'spend_ledger'), 0);
+    assert.equal(await count(s.db, 'confirm_guesses'), 0);
+    assert.equal(await count(s.db, 'spend_ledger'), 0);
   }));
 
   test('a month already spent past the cap stops the run with no stored guesses', () => withStore(async (s) => {
     const ids = queue(s.db, 2);
-    s.db.prepare('INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens) VALUES (?, ?, ?, ?, ?, ?)')
+    await s.db.prepare('INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens) VALUES (?, ?, ?, ?, ?, ?)')
       .run(NOW, NOW.slice(0, 7), 'chat', 250, 'fake', '{}');
     const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', basis: 'question' })))] });
     assert.equal(typeof out.stopped, 'string', JSON.stringify(out));
-    assert.equal(count(s.db, 'confirm_guesses'), 0);
-    assert.equal(count(s.db, 'spend_ledger'), 1, 'nothing more is spent');
+    assert.equal(await count(s.db, 'confirm_guesses'), 0);
+    assert.equal(await count(s.db, 'spend_ledger'), 1, 'nothing more is spent');
     assert.ok(C.pendingItems(s.db).length === 2);
   }));
 
@@ -478,7 +478,7 @@ describe('guessPending makes no guess when it must not', () => {
     const out = await G.guessPending(s.db, engine, { now: NOW });
     assert.equal(engine.calls.length, 1);
     assert.equal(typeof out.stopped, 'string', JSON.stringify(out));
-    assert.equal(count(s.db, 'confirm_guesses'), 0);
+    assert.equal(await count(s.db, 'confirm_guesses'), 0);
   }));
 });
 
@@ -531,7 +531,7 @@ describe('imports trigger the confirm-guess job through the scheduler', () => {
       assert.ok(C.pendingItems(s.db).length > 0, 'the upload asked questions');
       assert.deepEqual(sorted(scheduler.calls), [['confirm-guess', 'ingest'], ['freshness', 'ingest'], ['plan', 'ingest']], 'one trigger each');
       await pause(100);
-      assert.equal(count(s.db, 'confirm_guesses'), 0, 'no guess outside the scheduler job');
+      assert.equal(await count(s.db, 'confirm_guesses'), 0, 'no guess outside the scheduler job');
       assert.ok(engine.calls.every((req) => req.purpose !== 'confirm'), 'no confirm call outside the scheduler job');
     } finally {
       await app.close();
@@ -554,7 +554,7 @@ describe('imports trigger the confirm-guess job through the scheduler', () => {
       assert.equal(stillWaiting.json.file.status, 'waiting_for_engine');
       assert.deepEqual(scheduler.calls, [], 'an unsuccessful retry does not trigger');
 
-      s.db.prepare("INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES (?, ?, 'test', ?, 0)")
+      await s.db.prepare("INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES (?, ?, 'test', ?, 0)")
         .run(signature, JSON.stringify(MAPPING), NOW);
       const done = await app.postJson(`/api/files/${file.fileId}/retry`, {});
       assert.equal(done.status, 200, done.text.slice(0, 300));
@@ -589,7 +589,7 @@ describe('guess CLI (npm run confirm:guess runs the confirm-guess job once throu
     const store = await tempInstance({ mode: 'real', init: (db) => DB.setSetting(db, 'mode', 'real') });
     try {
       queue(store.db, 1);
-      store.close();
+      await store.close();
       const r = await runCommand(process.execPath, ['src/jobs/guess-cli.mjs', '--household', store.householdId], { env: { FATHOM_DATA: store.dataDir, FATHOM_ENGINE: 'off', FATHOM_DEMO: '0' } });
       assert.equal(r.code, 0, r.stderr);
       const lines = r.stdout.trim().split('\n').filter(Boolean);
@@ -600,13 +600,13 @@ describe('guess CLI (npm run confirm:guess runs the confirm-guess job once throu
       assert.ok(!r.stdout.includes('Synthetic account'), 'no question text is printed');
       const db = DB.openDb(store.file);
       try {
-        const runs = db.prepare("SELECT status, trigger, period_key FROM job_runs WHERE job_id = 'confirm-guess'").all().map((x) => ({ ...x }));
+        const runs = (await db.prepare("SELECT status, trigger, period_key FROM job_runs WHERE job_id = 'confirm-guess'").all()).map((x) => ({ ...x }));
         assert.equal(runs.length, 1, 'one job_runs row for the CLI run');
         assert.equal(runs[0].status, 'skipped');
         assert.equal(runs[0].trigger, 'manual');
         assert.match(runs[0].period_key, /^manual:/);
-        assert.equal(db.prepare('SELECT count(*) AS n FROM confirm_guesses').get().n, 0);
-      } finally { db.close(); }
+        assert.equal((await db.prepare('SELECT count(*) AS n FROM confirm_guesses').get()).n, 0);
+      } finally { await db.close(); }
     } finally {
       rmSync(store.dataDir, { recursive: true, force: true });
     }
@@ -631,7 +631,7 @@ test('confirm guesses scrub imported filenames on the outbound transport and ret
   const off = await offEngine();
   await P.ingestFile(s.db, fixture('Chase7766_Activity_20320305.csv', 'text/csv'), s.opts(off));
   const filename = 'synthetic_900-12-3456_900-70-1234_90-1234567.csv';
-  s.db.prepare('UPDATE files SET name = ?').run(filename);
+  await s.db.prepare('UPDATE files SET name = ?').run(filename);
   const { DEFAULT_MODEL } = await src('src/engine/pricing.mjs');
   const originalFetch = globalThis.fetch;
   const payloads = [];
@@ -648,7 +648,7 @@ test('confirm guesses scrub imported filenames on the outbound transport and ret
     assert.equal(payloads.length, 1);
     assert.ok(!/900-12-3456|900-70-1234|90-1234567/.test(JSON.stringify(payloads)), 'outbound filenames contain no tax identifiers');
     assert.ok(JSON.stringify(payloads).includes('synthetic_XXX-XX-XXXX_XXX-XX-XXXX_XX-XXXXXXX.csv'));
-    assert.equal(one(s.db, 'SELECT name FROM files').name, filename);
+    assert.equal((await one(s.db, 'SELECT name FROM files')).name, filename);
     assert.deepEqual(payloads[0].output_config.format.schema, G.GUESS_SCHEMA);
   } finally { globalThis.fetch = originalFetch; }
 }));

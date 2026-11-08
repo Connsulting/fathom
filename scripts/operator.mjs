@@ -18,12 +18,12 @@ function codeOf(e) {
   return 'operator_failed';
 }
 
-function main([command, email, ...extra]) {
+async function main([command, email, ...extra]) {
   if (!['grant', 'revoke'].includes(command) || blank(email) || extra.length) throw fail('usage');
-  const platform = openOperatorPlatform();
+  const platform = await openOperatorPlatform();
   try {
     const store = createAuthStore(platform);
-    const user = store.findUser(email);
+    const user = await store.findUser(email);
     if (!user) throw fail('no_such_user');
     if (command === 'grant') {
       if (user.enrolledAt == null) throw fail('not_enrolled');
@@ -33,12 +33,12 @@ function main([command, email, ...extra]) {
     store.revokeOperator(user.id, { actorId: null });
     return 'revoked';
   } finally {
-    platform.close();
+    await platform.close();
   }
 }
 
 try {
-  console.log(`operator: ${main(process.argv.slice(2))}`);
+  console.log(`operator: ${await main(process.argv.slice(2))}`);
 } catch (e) {
   console.error(`operator: ${codeOf(e)}`);
   process.exitCode = 1;

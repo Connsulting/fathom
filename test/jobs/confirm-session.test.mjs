@@ -20,10 +20,10 @@ import { loadConfig } from '../../src/config.mjs';
 const NOW = '2026-11-05';
 const KEY = 'giving.annualEstimate';
 const S = scratch('fathom-confirm-session-');
-after(() => S.cleanup());
+after(async () => await S.cleanup());
 
-const plan = db => planRun(db, { now: NOW });
-const plannerChecks = (db, key = KEY) => db.prepare("SELECT id, status, answer, subject, context FROM confirm_items WHERE kind = 'fact_check'").all()
+const plan = async db => planRun(db, { now: NOW });
+const plannerChecks = async (db, key = KEY) => (await db.prepare("SELECT id, status, answer, subject, context FROM confirm_items WHERE kind = 'fact_check'").all())
   .map(r => ({ ...r, context: parseJson(r.context, {}) })).filter(r => r.context.src === 'planner' && r.context.key === key);
 const notesFact = value => ({ facts: [{ key: KEY, value: String(value), confidence: 0.95 }] });
 const NOTES_VALUE = 1;
@@ -32,10 +32,10 @@ const NOTES_VALUE = 1;
 async function disagreeing() {
   const db = await S.store({ variant: {} });
   await addNotes(db, notesFact(NOTES_VALUE));
-  const notes = factRow(db, KEY);
+  const notes = await factRow(db, KEY);
   assert.ok(notes && notes.value === NOTES_VALUE && String(notes.src).startsWith('ing:notes:'), `notes fact stored: ${JSON.stringify(notes)}`);
   await plan(db);
-  const pending = plannerChecks(db).filter(c => c.status === 'pending');
+  const pending = (await plannerChecks(db)).filter(c => c.status === 'pending');
   assert.equal(pending.length, 1, `one pending planner check: ${JSON.stringify(pending)}`);
   const [check] = pending;
   assert.notEqual(check.context.value, NOTES_VALUE, 'the derived value differs from the notes fact');
@@ -45,65 +45,65 @@ async function disagreeing() {
 
 test('a planner check whose derived value differs from the notes fact is answered yes: the derived value is confirmed', async () => {
   const { db, check } = await disagreeing();
-  const { item } = answerItem(db, check.id, 'yes');
+  const { item } = await answerItem(db, check.id, 'yes');
   assert.equal(item.status, 'answered');
   assert.equal(item.answer, 'yes');
-  const fact = factRow(db, KEY);
+  const fact = await factRow(db, KEY);
   assert.equal(fact.value, check.context.value);
   assert.equal(fact.confirmed, 1);
   await plan(db);
-  assert.equal(plannerChecks(db).filter(c => c.status === 'pending').length, 0, 'a rerun asks nothing new');
+  assert.equal((await plannerChecks(db)).filter(c => c.status === 'pending').length, 0, 'a rerun asks nothing new');
 });
 
 test('a planner check whose derived value differs from the notes fact is answered no: the notes fact is kept', async () => {
   const { db, check } = await disagreeing();
-  const before = factRow(db, KEY);
-  const { item } = answerItem(db, check.id, 'no');
+  const before = await factRow(db, KEY);
+  const { item } = await answerItem(db, check.id, 'no');
   assert.equal(item.answer, 'no');
-  const fact = factRow(db, KEY);
+  const fact = await factRow(db, KEY);
   assert.equal(fact.value, NOTES_VALUE);
   assert.equal(fact.src, before.src);
   await plan(db);
-  assert.equal(plannerChecks(db).filter(c => c.status === 'pending').length, 0, 'a rerun asks nothing new');
-  assert.equal(factRow(db, KEY).value, NOTES_VALUE);
+  assert.equal((await plannerChecks(db)).filter(c => c.status === 'pending').length, 0, 'a rerun asks nothing new');
+  assert.equal((await factRow(db, KEY)).value, NOTES_VALUE);
 });
 
 test('a planner check goes stale only when the notes fact changes, and the next run asks it again', async () => {
   const { db, check } = await disagreeing();
-  db.prepare('UPDATE facts SET value = ? WHERE key = ?').run(JSON.stringify(NOTES_VALUE + 1), KEY);
-  assert.throws(() => answerItem(db, check.id, 'yes'), e => e instanceof ConfirmError && e.code === 'stale');
-  assert.equal(getItem(db, check.id).status, 'pending', 'a stale refusal changes nothing');
+  await db.prepare('UPDATE facts SET value = ? WHERE key = ?').run(JSON.stringify(NOTES_VALUE + 1), KEY);
+  assert.throws(async () => await answerItem(db, check.id, 'yes'), e => e instanceof ConfirmError && e.code === 'stale');
+  assert.equal((await getItem(db, check.id)).status, 'pending', 'a stale refusal changes nothing');
   await plan(db);
-  const again = getItem(db, check.id);
+  const again = await getItem(db, check.id);
   assert.equal(again.status, 'pending');
   assert.equal(again.context.stored, NOTES_VALUE + 1, 'asked again against the current notes value');
   assert.ok(!again.question.includes(KEY), 'the comparison retains the notes value without exposing its fact key');
   assert.match(again.question, new RegExp(`notes say ${NOTES_VALUE + 1}\\.`));
-  assert.equal(answerItem(db, check.id, 'no').item.answer, 'no');
+  assert.equal((await answerItem(db, check.id, 'no')).item.answer, 'no');
 });
 
 test('heal: a pending planner check asked before context.stored existed is refused as stale, then re-asked with the field', async () => {
   const { db, check } = await disagreeing();
   const { stored, ...old } = check.context;
   void stored;
-  db.prepare('UPDATE confirm_items SET context = ? WHERE id = ?').run(JSON.stringify(old), check.id);
-  assert.throws(() => answerConfirm({ db, config: {}, params: { id: String(check.id) }, body: { answer: 'yes' } }),
+  await db.prepare('UPDATE confirm_items SET context = ? WHERE id = ?').run(JSON.stringify(old), check.id);
+  assert.throws(async () => await answerConfirm({ db, config: {}, params: { id: String(check.id) }, body: { answer: 'yes' } }),
     e => e.status === 409 && e.code === 'stale');
   await plan(db);
-  const healed = getItem(db, check.id);
+  const healed = await getItem(db, check.id);
   assert.equal(healed.status, 'pending');
   assert.equal(healed.context.stored, NOTES_VALUE);
-  assert.equal(plannerChecks(db).filter(c => c.status === 'pending').length, 1, 'one pending check, no duplicate');
-  const { item } = answerItem(db, check.id, 'yes');
+  assert.equal((await plannerChecks(db)).filter(c => c.status === 'pending').length, 1, 'one pending check, no duplicate');
+  const { item } = await answerItem(db, check.id, 'yes');
   assert.equal(item.answer, 'yes');
-  assert.equal(factRow(db, KEY).value, check.context.value);
+  assert.equal((await factRow(db, KEY)).value, check.context.value);
 });
 
 test('a pending planner check for a key with no disagreement left is closed as superseded', async () => {
   const { db, check } = await disagreeing();
-  db.prepare('DELETE FROM facts WHERE key = ?').run(KEY);
+  await db.prepare('DELETE FROM facts WHERE key = ?').run(KEY);
   await plan(db);
-  const closed = getItem(db, check.id);
+  const closed = await getItem(db, check.id);
   assert.equal(closed.status, 'answered');
   assert.equal(closed.answer, 'superseded');
 });
@@ -113,7 +113,7 @@ test('a pending planner check for a key with no disagreement left is closed as s
 test('a war game the planner could not build is recorded with a plain reason and what unlocks it', async () => {
   const db = await S.store({ variant: { entities: [SOLE_PROP] } });
   await plan(db);
-  const wg = contentValue(db, 'wargame');
+  const wg = await contentValue(db, 'wargame');
   assert.ok(wg && !wg.salary, 'no salary war game without an S corp');
   const nb = wg.notBuilt && wg.notBuilt.salary;
   assert.ok(nb, `salary not-built reason stored: ${JSON.stringify(wg)}`);
@@ -127,7 +127,7 @@ test('a war game the planner could not build is recorded with a plain reason and
 test('a built war game has no not-built reason', async () => {
   const db = await S.store({ variant: {} });
   await plan(db);
-  const wg = contentValue(db, 'wargame');
+  const wg = await contentValue(db, 'wargame');
   assert.ok(wg.salary, 'the salary war game is built');
   assert.ok(!(wg.notBuilt && wg.notBuilt.salary));
 });
@@ -152,7 +152,7 @@ test('soon debounces a burst of triggers into one run recorded with its trigger'
     assert.equal(runs.length, 0, 'nothing runs during the burst');
     await wait(250);
     assert.deepEqual(runs, ['confirm'], 'one run after the burst');
-    const row = db.prepare("SELECT trigger, period_key, status FROM job_runs WHERE job_id = 'plan' ORDER BY id DESC LIMIT 1").get();
+    const row = await db.prepare("SELECT trigger, period_key, status FROM job_runs WHERE job_id = 'plan' ORDER BY id DESC LIMIT 1").get();
     assert.equal(row.trigger, 'confirm');
     assert.match(row.period_key, /^confirm:/);
     assert.equal(row.status, 'ok');
@@ -191,17 +191,17 @@ test('a confirm answer schedules the plan debounced, and immediately once the qu
   const calls = [];
   const scheduler = { soon: (jobId, reason, opts) => calls.push([jobId, reason, !!(opts && opts.immediate)]) };
   for (const n of [1, 2]) {
-    ask(db, { kind: 'fact_check', subject: `test|household.k${n}|true`, question: 'Synthetic question?', options: FACT_CHECK_OPTIONS,
+    await ask(db, { kind: 'fact_check', subject: `test|household.k${n}|true`, question: 'Synthetic question?', options: FACT_CHECK_OPTIONS,
       context: { key: `household.k${n}`, value: true, src: 'test' } });
   }
-  const ids = db.prepare("SELECT id FROM confirm_items WHERE status = 'pending' ORDER BY id").all().map(r => r.id);
+  const ids = (await db.prepare("SELECT id FROM confirm_items WHERE status = 'pending' ORDER BY id").all()).map(r => r.id);
   const ctx = id => ({ db, config: {}, scheduler, params: { id: String(id) }, body: { answer: 'yes' } });
-  answerConfirm(ctx(ids[0]));
+  await answerConfirm(ctx(ids[0]));
   assert.deepEqual(calls, [['plan', 'confirm', false]], 'one item still pending: debounced');
-  answerConfirm(ctx(ids[1]));
+  await answerConfirm(ctx(ids[1]));
   assert.deepEqual(calls[1], ['plan', 'confirm', true], 'queue empty: immediate');
-  db.prepare("UPDATE settings SET value = '\"demo\"' WHERE key = 'mode'").run();
-  schedulePlan({ db, scheduler });
+  await db.prepare("UPDATE settings SET value = '\"demo\"' WHERE key = 'mode'").run();
+  await schedulePlan({ db, scheduler });
   assert.equal(calls.length, 2, 'a demo store schedules nothing');
 });
 

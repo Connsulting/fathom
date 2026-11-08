@@ -21,7 +21,7 @@ import {
   mkdirSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, unlinkSync,
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { DatabaseSync, backup } from 'node:sqlite';
+import { openScope } from '../storage/index.mjs';
 import { DB_FILE } from '../store/db.mjs';
 import { codeError } from './db.mjs';
 import { loadBackupKey } from './backup-key.mjs';
@@ -45,21 +45,14 @@ const sha256 = buf => createHash('sha256').update(buf).digest('hex');
 // Open fathom.sqlite on one connection holding SQLite's exclusive lock for as long as it stays
 // open. Any other open connection (an idle server or CLI holds a shared lock in WAL mode) makes
 // this fail at once with source_in_use and nothing is changed.
-export function openSourceExclusive(file) {
+export async function openSourceExclusive(file) {
   if (!existsSync(file)) throw codeError('store_missing');
-  const db = new DatabaseSync(file);
   try {
-    db.exec('PRAGMA busy_timeout = 0');
-    db.exec('PRAGMA locking_mode = EXCLUSIVE');
-    db.exec('BEGIN EXCLUSIVE');
-    db.exec('COMMIT');
-    db.exec('PRAGMA foreign_keys = ON');
+    return await openScope({ path: file, journal: null, exclusive: true });
   } catch (e) {
-    try { db.close(); } catch { /* already closed */ }
-    if (e && (e.errcode === 5 || e.errcode === 6)) throw codeError('source_in_use');
+    if (e?.code === 'storage_busy') throw codeError('source_in_use');
     throw codeError('source_unreadable');
   }
-  return db;
 }
 
 const sideFiles = file => [file, `${file}-journal`, `${file}-wal`, `${file}-shm`];
@@ -71,7 +64,7 @@ export async function copyDatabase(db, target) {
   for (const f of sideFiles(target)) rmSync(f, { force: true });
   closeSync(openSync(target, 'wx', 0o600));
   try {
-    await backup(db, target);
+    await db.backupTo(target);
   } catch {
     for (const f of sideFiles(target)) rmSync(f, { force: true });
     throw codeError('database_copy_failed');
@@ -177,7 +170,7 @@ export async function createSourceSnapshot({
   const k = key ?? loadBackupKey(keyFile);
   if (typeof operationId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(operationId)) throw codeError('operation_invalid');
   if (existsSync(out)) throw codeError('snapshot_exists');
-  const own = db ? null : openSourceExclusive(join(dataDir, DB_FILE));
+  const own = db ? null : await openSourceExclusive(join(dataDir, DB_FILE));
   const source = db ?? own;
   let archive;
   let digest;
@@ -194,7 +187,7 @@ export async function createSourceSnapshot({
       entries.push({ path: rel, data: await databaseBytes(handle, copyTarget) });
     }
     if (new Set(entries.map(e => e.path)).size !== entries.length) throw codeError('snapshot_source_invalid');
-    digest = logicalDigest(source);
+    digest = await logicalDigest(source);
     const packed = pack({ operationId, createdAt: new Date().toISOString(), logicalDigest: digest,
       ...(householdBackup ? { householdBackup } : {}), }, entries);
     manifest = packed.manifest;

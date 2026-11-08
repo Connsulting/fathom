@@ -37,23 +37,23 @@ async function store(t, { demo = false } = {}) {
 }
 
 // Two mirrored accounts with stored balances and one without.
-function seedAccounts(db) {
-  db.prepare("INSERT INTO sources (id, label, as_of) VALUES ('bank', 'Bank export', '2032-03-01')").run();
+async function seedAccounts(db) {
+  await db.prepare("INSERT INTO sources (id, label, as_of) VALUES ('bank', 'Bank export', '2032-03-01')").run();
   const acct = db.prepare('INSERT INTO accounts (id, inst, name, kind, fig_key, parser) VALUES (?, ?, ?, ?, ?, ?)');
-  acct.run('a1', 'Example Bank', 'Savings', 'checking', 'bal.a1', 'test');
-  acct.run('a2', 'Example Broker', 'Retirement', 'retirement', 'bal.a2', 'test');
-  acct.run('a3', 'Example Bank', 'New account', 'checking', null, 'test');
+  await acct.run('a1', 'Example Bank', 'Savings', 'checking', 'bal.a1', 'test');
+  await acct.run('a2', 'Example Broker', 'Retirement', 'retirement', 'bal.a2', 'test');
+  await acct.run('a3', 'Example Bank', 'New account', 'checking', null, 'test');
   const fig = db.prepare("INSERT INTO figures (key, v, src, kind, label, updated_at) VALUES (?, ?, 'bank', 'a', ?, ?)");
-  fig.run('bal.a1', 12000, 'Savings', NOW);
-  fig.run('bal.a2', 30000, 'Retirement', NOW);
-  fig.run('cash.total', 15000, 'Cash', NOW);
+  await fig.run('bal.a1', 12000, 'Savings', NOW);
+  await fig.run('bal.a2', 30000, 'Retirement', NOW);
+  await fig.run('cash.total', 15000, 'Cash', NOW);
 }
 
 const rejects = (fn, status, re) => assert.throws(fn, e => e instanceof HttpError && e.status === status && (!re || re.test(e.message)));
 
 test('create, edit, archive, restore and delete an owner goal', async t => {
   const s = await store(t);
-  const r = goalCreate(s.ctx({ title: '  A year of cash  ', horizon: '1-3y', target: 60000, targetDate: '2034-01-31', note: 'Parked.' }));
+  const r = await goalCreate(s.ctx({ title: '  A year of cash  ', horizon: '1-3y', target: 60000, targetDate: '2034-01-31', note: 'Parked.' }));
   const g = r.goal;
   assert.match(g.id, /^g[a-f0-9]{12}$/);
   assert.equal(g.title, 'A year of cash');
@@ -64,41 +64,41 @@ test('create, edit, archive, restore and delete an owner goal', async t => {
   assert.equal(r.scenario.src['goal-target'].label, 'You typed this');
   assert.equal(g.progress, undefined, 'no tracked value, no progress');
 
-  const e = goalUpdate(s.ctx({ title: 'Twelve months of cash', target: null }, { id: g.id })).goal;
+  const e = (await goalUpdate(s.ctx({ title: 'Twelve months of cash', target: null }, { id: g.id }))).goal;
   assert.equal(e.title, 'Twelve months of cash');
   assert.equal(e.note, 'Parked.', 'absent fields keep their value');
   assert.equal(e.target, null);
 
-  assert.equal(goalArchive(s.ctx({}, { id: g.id })).goal.archived, true);
-  assert.equal(goalArchive(s.ctx({ archived: false }, { id: g.id })).goal.archived, false);
-  const d = goalDelete(s.ctx({}, { id: g.id }));
+  assert.equal((await goalArchive(s.ctx({}, { id: g.id }))).goal.archived, true);
+  assert.equal((await goalArchive(s.ctx({ archived: false }, { id: g.id }))).goal.archived, false);
+  const d = await goalDelete(s.ctx({}, { id: g.id }));
   assert.equal(d.scenario.goals.length, 0);
-  assert.equal(s.db.prepare('SELECT count(*) AS n FROM goals').get().n, 0);
-  rejects(() => goalDelete(s.ctx({}, { id: g.id })), 404);
+  assert.equal((await s.db.prepare('SELECT count(*) AS n FROM goals').get()).n, 0);
+  rejects(async () => await goalDelete(s.ctx({}, { id: g.id })), 404);
 });
 
 test('goal input validation: required title, length caps, horizons, non-negative targets, real dates, known sources', async t => {
   const s = await store(t);
-  seedAccounts(s.db);
-  rejects(() => goalCreate(s.ctx({})), 400, /title is required/);
-  rejects(() => goalCreate(s.ctx({ title: '   ' })), 400, /title is required/);
-  rejects(() => goalCreate(s.ctx({ title: 'x'.repeat(121) })), 400, /over 120/);
-  rejects(() => goalCreate(s.ctx({ title: 'two\nlines' })), 400, /not allowed/);
-  rejects(() => goalCreate(s.ctx({ title: 'ok', note: 'n'.repeat(501) })), 400, /over 500/);
-  rejects(() => goalCreate(s.ctx({ title: 'ok', horizon: 'someday' })), 400, /horizon/);
-  rejects(() => goalCreate(s.ctx({ title: 'ok', target: -1 })), 400, /negative/);
-  rejects(() => goalCreate(s.ctx({ title: 'ok', target: '500' })), 400, /number/);
-  rejects(() => goalCreate(s.ctx({ title: 'ok', target: Infinity })), 400);
-  rejects(() => goalCreate(s.ctx({ title: 'ok', targetDate: '2032-02-30' })), 400, /date/);
-  rejects(() => goalCreate(s.ctx({ title: 'ok', targetDate: 'soon' })), 400, /date/);
-  rejects(() => goalCreate(s.ctx({ title: 'ok', track: { accounts: ['nope'] } })), 400, /unknown account/);
-  rejects(() => goalCreate(s.ctx({ title: 'ok', track: { figure: 'bal.a1' } })), 400, /unknown figure/, 'only known figures');
-  rejects(() => goalCreate(s.ctx({ title: 'ok', track: { figure: 'cash.personal' } })), 400, /unknown figure/, 'a known figure the store lacks');
-  rejects(() => goalCreate(s.ctx({ title: 'ok', track: 'a1' })), 400, /track/);
-  rejects(() => goalUpdate(s.ctx({ title: 'x' }, { id: '../etc' })), 404);
-  assert.equal(s.db.prepare('SELECT count(*) AS n FROM goals').get().n, 0, 'nothing written');
+  await seedAccounts(s.db);
+  rejects(async () => await goalCreate(s.ctx({})), 400, /title is required/);
+  rejects(async () => await goalCreate(s.ctx({ title: '   ' })), 400, /title is required/);
+  rejects(async () => await goalCreate(s.ctx({ title: 'x'.repeat(121) })), 400, /over 120/);
+  rejects(async () => await goalCreate(s.ctx({ title: 'two\nlines' })), 400, /not allowed/);
+  rejects(async () => await goalCreate(s.ctx({ title: 'ok', note: 'n'.repeat(501) })), 400, /over 500/);
+  rejects(async () => await goalCreate(s.ctx({ title: 'ok', horizon: 'someday' })), 400, /horizon/);
+  rejects(async () => await goalCreate(s.ctx({ title: 'ok', target: -1 })), 400, /negative/);
+  rejects(async () => await goalCreate(s.ctx({ title: 'ok', target: '500' })), 400, /number/);
+  rejects(async () => await goalCreate(s.ctx({ title: 'ok', target: Infinity })), 400);
+  rejects(async () => await goalCreate(s.ctx({ title: 'ok', targetDate: '2032-02-30' })), 400, /date/);
+  rejects(async () => await goalCreate(s.ctx({ title: 'ok', targetDate: 'soon' })), 400, /date/);
+  rejects(async () => await goalCreate(s.ctx({ title: 'ok', track: { accounts: ['nope'] } })), 400, /unknown account/);
+  rejects(async () => await goalCreate(s.ctx({ title: 'ok', track: { figure: 'bal.a1' } })), 400, /unknown figure/, 'only known figures');
+  rejects(async () => await goalCreate(s.ctx({ title: 'ok', track: { figure: 'cash.personal' } })), 400, /unknown figure/, 'a known figure the store lacks');
+  rejects(async () => await goalCreate(s.ctx({ title: 'ok', track: 'a1' })), 400, /track/);
+  rejects(async () => await goalUpdate(s.ctx({ title: 'x' }, { id: '../etc' })), 404);
+  assert.equal((await s.db.prepare('SELECT count(*) AS n FROM goals').get()).n, 0, 'nothing written');
   // Zero is a valid target; markup is stored as typed.
-  const g = goalCreate(s.ctx({ title: '<b>{f:x}</b>', target: 0 })).goal;
+  const g = (await goalCreate(s.ctx({ title: '<b>{f:x}</b>', target: 0 }))).goal;
   assert.equal(g.title, '<b>{f:x}</b>');
   assert.equal(g.target, 0);
   assert.equal(validateGoal({ title: 'a', target: 1.006 }).value.target, 1.01);
@@ -106,82 +106,82 @@ test('goal input validation: required title, length caps, horizons, non-negative
 
 test('progress comes from tracked stored data with its provenance, never a partial sum', async t => {
   const s = await store(t);
-  seedAccounts(s.db);
-  const one = goalCreate(s.ctx({ title: 'Savings goal', target: 24000, track: { accounts: ['a1'] } })).goal;
+  await seedAccounts(s.db);
+  const one = (await goalCreate(s.ctx({ title: 'Savings goal', target: 24000, track: { accounts: ['a1'] } }))).goal;
   assert.deepEqual(one.progress, { cur: 'bal.a1', target: `goal.${one.id}.target` }, 'one account: its own figure and source');
   assert.equal(one.trackLabel, 'Savings');
 
-  const two = goalCreate(s.ctx({ title: 'Everything', target: 84000, track: { accounts: ['a1', 'a2'] } }));
+  const two = await goalCreate(s.ctx({ title: 'Everything', target: 84000, track: { accounts: ['a1', 'a2'] } }));
   const cur = two.scenario.fig[`goal.${two.goal.id}.current`];
   assert.deepEqual(cur, { v: 42000, src: 'goal-track', kind: 'a', label: 'Goal progress: tracked accounts' });
   assert.equal(two.goal.progress.cur, `goal.${two.goal.id}.current`);
 
-  const fig = goalCreate(s.ctx({ title: 'Cash', target: 30000, track: { figure: 'cash.total' } })).goal;
+  const fig = (await goalCreate(s.ctx({ title: 'Cash', target: 30000, track: { figure: 'cash.total' } }))).goal;
   assert.equal(fig.progress.cur, 'cash.total');
   assert.equal(fig.trackLabel, 'All cash');
 
-  const waiting = goalCreate(s.ctx({ title: 'New money', target: 1000, track: { accounts: ['a1', 'a3'] } }));
+  const waiting = await goalCreate(s.ctx({ title: 'New money', target: 1000, track: { accounts: ['a1', 'a3'] } }));
   assert.equal(waiting.goal.progress, undefined);
   assert.equal(waiting.goal.trackWaiting, true);
   assert.equal(waiting.scenario.fig[`goal.${waiting.goal.id}.current`], undefined);
 
   // A figure kept only for reference (not current) never feeds a goal or the model.
-  s.db.prepare("UPDATE figures SET unavailable_reason = 'Account reclassified' WHERE key = 'bal.a1'").run();
-  const stale = buildScenario(s.db, { clock: s.config.clock }).goals.find(g => g.id === one.id);
+  await s.db.prepare("UPDATE figures SET unavailable_reason = 'Account reclassified' WHERE key = 'bal.a1'").run();
+  const stale = (await buildScenario(s.db, { clock: s.config.clock })).goals.find(g => g.id === one.id);
   assert.equal(stale.progress, undefined);
   assert.equal(stale.current, undefined);
   assert.equal(stale.trackWaiting, true);
   const sum = await callTool('household', { operation: 'summary', }, { db: s.db, now: NOW });
   assert.equal(sum.goals.find(g => g.id === one.id).current, undefined);
-  s.db.prepare("UPDATE figures SET unavailable_reason = NULL WHERE key = 'bal.a1'").run();
+  await s.db.prepare("UPDATE figures SET unavailable_reason = NULL WHERE key = 'bal.a1'").run();
 
-  const noTarget = goalCreate(s.ctx({ title: 'Just tracking', track: { accounts: ['a1'] } })).goal;
+  const noTarget = (await goalCreate(s.ctx({ title: 'Just tracking', track: { accounts: ['a1'] } }))).goal;
   assert.equal(noTarget.progress, undefined, 'no target, no bar');
   assert.equal(noTarget.current, 'bal.a1');
 });
 
 test('seed goals can be archived and deleted but not edited; demo reset restores them', async t => {
   const s = await store(t, { demo: true });
-  const before = buildScenario(s.db, { clock: s.config.clock }).goals.map(g => g.id);
-  rejects(() => goalUpdate(s.ctx({ title: 'x' }, { id: 'reserve' })), 409, /demo/);
-  goalArchive(s.ctx({}, { id: 'reserve' }));
-  goalCreate(s.ctx({ title: 'A boat' }));
-  curveSet(s.ctx({ id: 'ret_life', value: 0.9 }));
-  const mid = buildScenario(s.db, { clock: s.config.clock });
+  const before = (await buildScenario(s.db, { clock: s.config.clock })).goals.map(g => g.id);
+  rejects(async () => await goalUpdate(s.ctx({ title: 'x' }, { id: 'reserve' })), 409, /demo/);
+  await goalArchive(s.ctx({}, { id: 'reserve' }));
+  await goalCreate(s.ctx({ title: 'A boat' }));
+  await curveSet(s.ctx({ id: 'ret_life', value: 0.9 }));
+  const mid = await buildScenario(s.db, { clock: s.config.clock });
   assert.equal(mid.goals.find(g => g.id === 'reserve').archived, true);
   assert.equal(mid.goals.length, before.length + 1);
   await demoReset(s.ctx());
-  const after = buildScenario(s.db, { clock: s.config.clock });
+  const after = await buildScenario(s.db, { clock: s.config.clock });
   assert.deepEqual(after.goals.map(g => g.id), before);
   assert.ok(after.goals.every(g => !g.archived && g.origin === 'seed'));
-  assert.equal(getSetting(s.db, 'curve.positions', null), null);
+  assert.equal(await getSetting(s.db, 'curve.positions', null), null);
 });
 
 test('curve positions persist, validate and feed onboarding priorities on a real store', async t => {
   const s = await store(t);
-  const sc = buildScenario(s.db, { clock: s.config.clock });
+  const sc = await buildScenario(s.db, { clock: s.config.clock });
   assert.deepEqual(sc.curve.map(c => c.id), CURVE_AXES.map(a => a.id), 'a real store gets the default axes');
   // Every axis sits in the middle except effort, which defaults to "Do not make me think".
   assert.deepEqual(Object.fromEntries(sc.curve.map(c => [c.id, c.value])), { tax_cash: 0.5, ret_life: 0.5, effort: 1, human: 0.5 });
   assert.deepEqual(sc.onboarding.priorities.map(p => p.id), CURVE_AXES.map(a => a.id));
   assert.equal(sc.onboarding.priorities[0].label, 'Pay less tax this year vs Keep cash flexible');
 
-  const r = curveSet(s.ctx({ id: 'tax_cash', value: 0.234 }));
+  const r = await curveSet(s.ctx({ id: 'tax_cash', value: 0.234 }));
   assert.equal(r.scenario.curve.find(c => c.id === 'tax_cash').value, 0.23);
   assert.equal(r.scenario.onboarding.priorities.find(p => p.id === 'tax_cash').value, 0.23, 'one setting feeds both');
-  curveSet(s.ctx({ positions: { effort: 1, human: 0 } }));
-  assert.equal(getSetting(s.db, 'curve.positions', null), null);
-  const fresh = buildScenario(s.db, { clock: s.config.clock });
+  await curveSet(s.ctx({ positions: { effort: 1, human: 0 } }));
+  assert.equal(await getSetting(s.db, 'curve.positions', null), null);
+  const fresh = await buildScenario(s.db, { clock: s.config.clock });
   assert.deepEqual(Object.fromEntries(fresh.curve.filter(a => ['tax_cash', 'effort', 'human'].includes(a.id)).map(a => [a.id, a.value])), { tax_cash: 0.23, effort: 1, human: 0 });
-  rejects(() => curveSet(s.ctx({ id: 'nope', value: 0.5 })), 400, /unknown/);
-  rejects(() => curveSet(s.ctx({ id: 'effort', value: 1.5 })), 400, /0 to 1/);
-  rejects(() => curveSet(s.ctx({ id: 'effort', value: '0.5' })), 400, /0 to 1/);
-  rejects(() => curveSet(s.ctx({ positions: [] })), 400);
+  rejects(async () => await curveSet(s.ctx({ id: 'nope', value: 0.5 })), 400, /unknown/);
+  rejects(async () => await curveSet(s.ctx({ id: 'effort', value: 1.5 })), 400, /0 to 1/);
+  rejects(async () => await curveSet(s.ctx({ id: 'effort', value: '0.5' })), 400, /0 to 1/);
+  rejects(async () => await curveSet(s.ctx({ positions: [] })), 400);
 });
 
 test('recs link to the goals they serve, by topic, and archived goals do not link', async t => {
   const s = await store(t, { demo: true });
-  const sc = buildScenario(s.db, { clock: s.config.clock });
+  const sc = await buildScenario(s.db, { clock: s.config.clock });
   const rec = id => sc.recs.find(r => r.id === id);
   assert.deepEqual(rec('va529').serves.map(g => g.id), ['kids'], 'the 529 rec serves the education goal');
   assert.ok(rec('spsep').serves.some(g => g.id === 'port4'), 'a retirement rec serves the retirement goal');
@@ -191,11 +191,11 @@ test('recs link to the goals they serve, by topic, and archived goals do not lin
 
   // A rec links at most three goals; archive the demo's contribution goal (a retirement goal too)
   // so the new owner goal is within the cap.
-  goalArchive(s.ctx({}, { id: 'ira-fill' }));
-  const g = goalCreate(s.ctx({ title: 'Retire at 55' })).goal;
-  const after = goalCreate(s.ctx({ title: 'unrelated' })).scenario;
+  await goalArchive(s.ctx({}, { id: 'ira-fill' }));
+  const g = (await goalCreate(s.ctx({ title: 'Retire at 55' }))).goal;
+  const after = (await goalCreate(s.ctx({ title: 'unrelated' }))).scenario;
   assert.ok(after.recs.find(r => r.id === 'backdoor').serves.some(x => x.id === g.id && x.origin === 'owner'));
-  const archived = goalArchive(s.ctx({}, { id: g.id })).scenario;
+  const archived = (await goalArchive(s.ctx({}, { id: g.id }))).scenario;
   assert.ok(!archived.recs.find(r => r.id === 'backdoor').serves.some(x => x.id === g.id));
 
   // A specific topic beats tax; tracking a 529 account makes a goal an education goal.
@@ -227,11 +227,11 @@ test('the planner ranks recs that tie on their window by goal, then by curve lea
 
 test('the household summary grounds on goals, typed targets and curve leans', async t => {
   const s = await store(t);
-  seedAccounts(s.db);
-  goalCreate(s.ctx({ title: 'Savings goal', horizon: '3-10y', target: 24000, track: { accounts: ['a1'] } }));
-  const hidden = goalCreate(s.ctx({ title: 'Hidden' })).goal;
-  goalArchive(s.ctx({}, { id: hidden.id }));
-  curveSet(s.ctx({ id: 'ret_life', value: 0.2 }));
+  await seedAccounts(s.db);
+  await goalCreate(s.ctx({ title: 'Savings goal', horizon: '3-10y', target: 24000, track: { accounts: ['a1'] } }));
+  const hidden = (await goalCreate(s.ctx({ title: 'Hidden' }))).goal;
+  await goalArchive(s.ctx({}, { id: hidden.id }));
+  await curveSet(s.ctx({ id: 'ret_life', value: 0.2 }));
   const sum = await callTool('household', { operation: 'summary', }, { db: s.db, now: NOW });
   assert.equal(sum.goals.length, 1, 'archived goals are left out');
   const g = sum.goals[0];
@@ -247,7 +247,7 @@ test('the household summary grounds on goals, typed targets and curve leans', as
 
 async function fakeAnswerer(s) {
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' });
-  const engine = createRuntimeEngine({ db: s.db, config });
+  const engine = await createRuntimeEngine({ db: s.db, config });
   const packs = createLivePacks(s.db, { dataDir: s.root });
   packs.refresh();
   return { engine, answerer: createLiveAnswerer({ engine, packs, root: s.root, services: { engine, config: { dataDir: s.root } } }) };
@@ -256,9 +256,9 @@ async function fakeAnswerer(s) {
 test('"add a goal" in Ask saves a goal with a durable Undo receipt', async t => {
   const s = await store(t, { demo: true });
   const { engine, answerer } = await fakeAnswerer(s);
-  const before = s.db.prepare('SELECT count(*) n FROM goals').get().n;
+  const before = (await s.db.prepare('SELECT count(*) n FROM goals').get()).n;
   const r = await threadCreate({ db: s.db, config: s.config, answerer, engine, body: { text: 'Add a goal: a boat fund of $40k, next few years' }, params: {} });
-  assert.equal(s.db.prepare('SELECT count(*) n FROM goals').get().n, before + 1);
+  assert.equal((await s.db.prepare('SELECT count(*) n FROM goals').get()).n, before + 1);
   assert.ok(r.message.provenance.tools.some(x => x.name === 'update_goal'));
   assert.equal(r.message.provenance.actions[0].after.target, 40000);
   assert.equal(r.message.provenance.actions[0].after.horizon, '1-3y');

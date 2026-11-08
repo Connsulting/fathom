@@ -11,7 +11,7 @@ const ref = (call, path = '') => ({ tool: call.name, args: call.args, path });
 const table = () => ({ source: ref(calls[1], 'series.goals.reserve.series'), columns: ['month', 'plan.envelope'] });
 const reason = (op, args, expected, results = calls) => assert.deepEqual(validateBlock(op, args, results), { ok: false, reason: expected });
 before(async () => {
-  store = await tempDb(); seedDemo(store.db);
+  store = await tempDb(); await seedDemo(store.db);
   const ctx = { db: store.db, dataDir: store.dataDir, now: new Date('2026-11-05T15:00:00Z') };
   calls = [];
   for (const [name, args] of [['household', { operation: 'figures' }], ['goals', { operation: 'pace' }],
@@ -21,7 +21,7 @@ before(async () => {
   figures = calls[0].result;
   pace = { source: ref(calls[1], 'series.goals.reserve.series'), x: 'month', kind: 'line', series: [{ path: 'plan.envelope' }] };
 });
-after(() => store?.close());
+after(async () => await store?.close());
 
 test('real demo tool results validate without re-running their calls', () => {
   assert.equal(validateBlock('chart', pace, calls).ok, true);

@@ -1,11 +1,11 @@
 // Household facts: flat dotted keys with JSON values and provenance (docs/architecture.md, Facts).
 // A confirmed fact is never overwritten by an unconfirmed one and never deleted by an import.
 
-export function upsertFact(db, { key, value, src = null, asOf = null, confirmed = false, provenance = {}, now } = {}) {
+export async function upsertFact(db, { key, value, src = null, asOf = null, confirmed = false, provenance = {}, now } = {}) {
   if (typeof key !== 'string' || key.trim() === '') throw new TypeError('A fact key is required');
   const json = JSON.stringify(value);
   if (json === undefined) throw new TypeError('A fact value must be JSON');
-  const existing = db.prepare('SELECT value, src, as_of, confirmed, file_id, parser, locator FROM facts WHERE key = ?').get(key);
+  const existing = await db.prepare('SELECT value, src, as_of, confirmed, file_id, parser, locator FROM facts WHERE key = ?').get(key);
   if (existing && existing.confirmed && !confirmed) return { written: false, reason: 'confirmed' };
   const { fileId = null, parser = null, locator = null } = provenance || {};
   const loc = locator == null || typeof locator === 'string' ? locator : JSON.stringify(locator);
@@ -16,7 +16,7 @@ export function upsertFact(db, { key, value, src = null, asOf = null, confirmed 
     && existing.locator === loc) {
     return { written: false, changed: false, reason: 'unchanged' };
   }
-  db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
+  await db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT(key) DO UPDATE SET value = excluded.value, src = excluded.src, as_of = excluded.as_of,
                 confirmed = excluded.confirmed, file_id = excluded.file_id, parser = excluded.parser,
@@ -26,9 +26,9 @@ export function upsertFact(db, { key, value, src = null, asOf = null, confirmed 
 }
 
 // { 'household.state': 'VA', ... } with JSON-decoded values; malformed rows are skipped.
-export function getFacts(db) {
+export async function getFacts(db) {
   const out = {};
-  for (const row of db.prepare('SELECT key, value FROM facts ORDER BY key').all()) {
+  for (const row of await db.prepare('SELECT key, value FROM facts ORDER BY key').all()) {
     try { out[row.key] = JSON.parse(row.value); } catch { /* skip a malformed value */ }
   }
   return withInferredRecFacts(out);
@@ -47,8 +47,8 @@ export function withInferredRecFacts(facts) {
 }
 
 // Deletes the fact only when it is unconfirmed and came from that file.
-export function deleteFact(db, key, { fileId } = {}) {
+export async function deleteFact(db, key, { fileId } = {}) {
   if (fileId == null) return { deleted: false };
-  const r = db.prepare('DELETE FROM facts WHERE key = ? AND file_id = ? AND confirmed = 0').run(key, fileId);
+  const r = await db.prepare('DELETE FROM facts WHERE key = ? AND file_id = ? AND confirmed = 0').run(key, fileId);
   return { deleted: r.changes > 0 };
 }

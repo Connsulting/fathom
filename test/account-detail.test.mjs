@@ -13,7 +13,7 @@ async function twoAccounts(s) {
   assert.equal(r1.status, 'imported');
   const r2 = await P.ingestFile(s.db, aggregatorFile('second.csv', [row({ account: 'Other 1111 1111', number: '9991111', inst: 'Harbor', description: 'Other account row', date: '2032-02-09' })]), s.opts(null));
   assert.equal(r2.status, 'imported');
-  const ids = s.db.prepare('SELECT id, inst FROM accounts ORDER BY inst').all();
+  const ids = await s.db.prepare('SELECT id, inst FROM accounts ORDER BY inst').all();
   return { chase: ids.find((x) => x.inst === 'Chase').id, harbor: ids.find((x) => x.inst === 'Harbor').id };
 }
 
@@ -62,24 +62,24 @@ test('the balance date is the balance row, not the newest transaction', async ()
   try {
     const { chase } = await twoAccounts(s);
     assert.equal(accountDetail(ctx(s, chase)).balance.asOf, null);
-    s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(chase, '2032-01-15', 100);
+    await s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(chase, '2032-01-15', 100);
     const d = accountDetail(ctx(s, chase));
     assert.equal(d.balance.asOf, '2032-01-15');
     assert.equal(d.txn.to, '2032-02-07');
     // Positions newer than the balance row do not move the date: the balance row is what is shown.
-    s.db.prepare('INSERT INTO positions (account_id, as_of, symbol, value) VALUES (?, ?, ?, ?)').run(chase, '2032-02-05', 'XYZ', 50);
+    await s.db.prepare('INSERT INTO positions (account_id, as_of, symbol, value) VALUES (?, ?, ?, ?)').run(chase, '2032-02-05', 'XYZ', 50);
     assert.equal(accountDetail(ctx(s, chase)).balance.asOf, '2032-01-15');
     // With no balance row the positions date is used.
-    s.db.prepare('DELETE FROM balances WHERE account_id = ?').run(chase);
+    await s.db.prepare('DELETE FROM balances WHERE account_id = ?').run(chase);
     assert.equal(accountDetail(ctx(s, chase)).balance.asOf, '2032-02-05');
     // An empty holdings snapshot dated after the positions makes the balance 0 as of that date.
-    s.db.prepare(`INSERT INTO files (id, name, mime, size, uploaded_at, status, period_to) VALUES ('empty1', 'empty.csv', 'text/csv', 0, '2032-03-01', 'parsed', '2032-03-31')`).run();
-    s.db.prepare(`INSERT INTO figures (key, v, src, kind, label, file_id, locator, updated_at) VALUES (?, 0, NULL, 'a', 'x', 'empty1', ?, '2032-03-31')`)
+    await s.db.prepare(`INSERT INTO files (id, name, mime, size, uploaded_at, status, period_to) VALUES ('empty1', 'empty.csv', 'text/csv', 0, '2032-03-01', 'parsed', '2032-03-31')`).run();
+    await s.db.prepare(`INSERT INTO figures (key, v, src, kind, label, file_id, locator, updated_at) VALUES (?, 0, NULL, 'a', 'x', 'empty1', ?, '2032-03-31')`)
       .run(`acct.${chase}.balance`, JSON.stringify({ field: 'holdings' }));
-    s.db.prepare('UPDATE accounts SET fig_key = ? WHERE id = ?').run(`acct.${chase}.balance`, chase);
+    await s.db.prepare('UPDATE accounts SET fig_key = ? WHERE id = ?').run(`acct.${chase}.balance`, chase);
     assert.equal(accountDetail(ctx(s, chase)).balance.asOf, '2032-03-31');
     // Positions dated after that snapshot win again.
-    s.db.prepare('INSERT INTO positions (account_id, as_of, symbol, value) VALUES (?, ?, ?, ?)').run(chase, '2032-04-30', 'XYZ', 60);
+    await s.db.prepare('INSERT INTO positions (account_id, as_of, symbol, value) VALUES (?, ?, ?, ?)').run(chase, '2032-04-30', 'XYZ', 60);
     assert.equal(accountDetail(ctx(s, chase)).balance.asOf, '2032-04-30');
   } finally {
     s.close();
@@ -92,7 +92,7 @@ test('paging does not skip or repeat rows that share a date', async () => {
   try {
     const { chase } = await twoAccounts(s);
     const add = s.db.prepare('INSERT INTO transactions (account_id, date, amount, description) VALUES (?, ?, ?, ?)');
-    for (let i = 0; i < 5; i++) add.run(chase, '2032-02-07', 100 + i, `Tie ${i}`);
+    for (let i = 0; i < 5; i++) await add.run(chase, '2032-02-07', 100 + i, `Tie ${i}`);
     const seen = [];
     let cursor = null;
     for (let i = 0; i < 20; i++) {
@@ -126,9 +126,9 @@ test('a connected account lists SimpleFIN with its sync and balance dates and ca
   const { accountDetail } = await src('src/api/account-detail.mjs');
   try {
     const { chase } = await twoAccounts(s);
-    s.db.prepare(`INSERT INTO simplefin_connection (id, access_blob, connected_at, last_sync_at, status, accounts) VALUES (1, 'x', '2032-02-01T00:00:00.000Z', '2032-02-08T09:30:00.000Z', 'ok', 1)`).run();
-    s.db.prepare(`INSERT INTO simplefin_accounts (sf_key, account_id, status, name, backfilled, created_at) VALUES ('k1', ?, 'mapped', 'Synthetic', 1, '2032-02-01')`).run(chase);
-    s.db.prepare(`INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES ('k1', ?, '2032-02-08T09:30:00.000Z')`).run(JSON.stringify({ balance: 12, balanceDate: '2032-02-08' }));
+    await s.db.prepare(`INSERT INTO simplefin_connection (id, access_blob, connected_at, last_sync_at, status, accounts) VALUES (1, 'x', '2032-02-01T00:00:00.000Z', '2032-02-08T09:30:00.000Z', 'ok', 1)`).run();
+    await s.db.prepare(`INSERT INTO simplefin_accounts (sf_key, account_id, status, name, backfilled, created_at) VALUES ('k1', ?, 'mapped', 'Synthetic', 1, '2032-02-01')`).run(chase);
+    await s.db.prepare(`INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES ('k1', ?, '2032-02-08T09:30:00.000Z')`).run(JSON.stringify({ balance: 12, balanceDate: '2032-02-08' }));
     const d = accountDetail(ctx(s, chase));
     const sf = d.feeds.find((f) => f.kind === 'simplefin');
     assert.ok(sf, 'SimpleFIN is a feed of this account');

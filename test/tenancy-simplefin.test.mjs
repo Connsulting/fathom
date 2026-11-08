@@ -41,7 +41,7 @@ test('HTTP connect, sync, matching, watermark, dedupe and disconnect isolate col
     fx = await twoHouseholds({ extra: { FATHOM_SIMPLEFIN_ALLOWED_HOSTS: 'bridge.example.test', FATHOM_CLOCK: '2026-11-01' } });
     for (const hh of [fx.A, fx.B]) {
       await fx.ctx(hh.id).scheduler.tick();
-      fx.ctx(hh.id).db.prepare(`INSERT INTO accounts (id, inst, mask, name, kind, mirror) VALUES ('colliding-imported-id', 'Synthetic Bank', '1234', 'Imported checking', 'checking', 'manual')`).run();
+      await fx.ctx(hh.id).db.prepare(`INSERT INTO accounts (id, inst, mask, name, kind, mirror) VALUES ('colliding-imported-id', 'Synthetic Bank', '1234', 'Imported checking', 'checking', 'manual')`).run();
       assert.equal((await hh.client.postJson('/api/household/outbound', { jobs: true, simplefin: true })).status, 200);
       const connected = await hh.client.postJson('/api/simplefin/connect', { token: token(`claim/${hh === fx.A ? 'alpha' : 'bravo'}`) });
       assert.equal(connected.status, 200, connected.text);
@@ -49,31 +49,31 @@ test('HTTP connect, sync, matching, watermark, dedupe and disconnect isolate col
       assert.equal(connected.json.run.status, 'ok', connected.text);
     }
     const a = fx.ctx(fx.A.id), b = fx.ctx(fx.B.id);
-    const conn = hh => ({ ...hh.db.prepare('SELECT * FROM simplefin_connection').get() });
-    const transactions = hh => hh.db.prepare('SELECT amount, description FROM transactions').all().map(r => ({ ...r }));
-    assert.notEqual(conn(a).access_blob, conn(b).access_blob);
-    for (const hh of [a, b]) assert.equal(hh.db.prepare('SELECT account_id FROM simplefin_accounts').get().account_id, 'colliding-imported-id');
-    assert.ok(!conn(a).access_blob.includes('synthetic'));
-    assert.equal(transactions(a).length, 1); assert.equal(transactions(b).length, 1);
-    assert.equal(transactions(a)[0].amount, -10); assert.equal(transactions(b)[0].amount, -20);
-    assert.match(transactions(a)[0].description, /Alpha/); assert.match(transactions(b)[0].description, /Bravo/);
-    assert.equal(a.db.prepare('SELECT sf_key FROM simplefin_accounts').get().sf_key, b.db.prepare('SELECT sf_key FROM simplefin_accounts').get().sf_key);
-    assert.equal(a.db.prepare('SELECT backfilled FROM simplefin_accounts').get().backfilled, 1);
-    const bBefore = conn(b);
+    const conn = async hh => ({ ...await hh.db.prepare('SELECT * FROM simplefin_connection').get() });
+    const transactions = async hh => (await hh.db.prepare('SELECT amount, description FROM transactions').all()).map(r => ({ ...r }));
+    assert.notEqual((await conn(a)).access_blob, (await conn(b)).access_blob);
+    for (const hh of [a, b]) assert.equal((await hh.db.prepare('SELECT account_id FROM simplefin_accounts').get()).account_id, 'colliding-imported-id');
+    assert.ok(!(await conn(a)).access_blob.includes('synthetic'));
+    assert.equal((await transactions(a)).length, 1); assert.equal((await transactions(b)).length, 1);
+    assert.equal((await transactions(a))[0].amount, -10); assert.equal((await transactions(b))[0].amount, -20);
+    assert.match((await transactions(a))[0].description, /Alpha/); assert.match((await transactions(b))[0].description, /Bravo/);
+    assert.equal((await a.db.prepare('SELECT sf_key FROM simplefin_accounts').get()).sf_key, (await b.db.prepare('SELECT sf_key FROM simplefin_accounts').get()).sf_key);
+    assert.equal((await a.db.prepare('SELECT backfilled FROM simplefin_accounts').get()).backfilled, 1);
+    const bBefore = await conn(b);
     const again = await fx.A.client.postJson('/api/jobs/simplefin-sync/run', {});
     assert.equal(again.json.run.status, 'ok', again.text);
-    assert.equal(transactions(a).length, 1);
-    assert.deepEqual(conn(b), bBefore);
+    assert.equal((await transactions(a)).length, 1);
+    assert.deepEqual(await conn(b), bBefore);
     const gets = calls.filter(c => c.method === 'GET');
     assert.notEqual(new URL(gets[0].url, 'http://test.invalid').searchParams.get('start-date'), new URL(gets.at(-1).url, 'http://test.invalid').searchParams.get('start-date'));
     epoch = 1;
     assert.equal((await fx.B.client.postJson('/api/jobs/simplefin-sync/run', {})).json.run.status, 'ok');
-    assert.equal(transactions(a).length, 1); assert.equal(transactions(b).length, 2);
-    const beforeDisconnect = transactions(a);
+    assert.equal((await transactions(a)).length, 1); assert.equal((await transactions(b)).length, 2);
+    const beforeDisconnect = await transactions(a);
     assert.equal((await fx.A.client.postJson('/api/simplefin/disconnect', {})).json.disconnected, true);
-    assert.equal(a.db.prepare('SELECT count(*) AS n FROM simplefin_connection').get().n, 0);
-    assert.deepEqual(transactions(a), beforeDisconnect);
-    assert.equal(b.db.prepare('SELECT count(*) AS n FROM simplefin_connection').get().n, 1);
+    assert.equal((await a.db.prepare('SELECT count(*) AS n FROM simplefin_connection').get()).n, 0);
+    assert.deepEqual(await transactions(a), beforeDisconnect);
+    assert.equal((await b.db.prepare('SELECT count(*) AS n FROM simplefin_connection').get()).n, 1);
     const safeCalls = calls.length;
     for (const url of ['http://bridge.example.test/claim', 'https://127.0.0.1/claim', 'https://outside.example.test/claim', 'https://user:secret@bridge.example.test/claim']) {
       const result = await fx.A.client.postJson('/api/simplefin/connect', { token: Buffer.from(url).toString('base64') });

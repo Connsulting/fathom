@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statfsSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { openScope } from '../storage/index.mjs';
 import { DB_FILE, getSetting, listMigrations, openDb, schemaVersion } from '../store/db.mjs';
 import { codeError, newOperationId, storeIdentity } from './db.mjs';
 import { checkHouseholdRoot } from './runtime.mjs';
@@ -9,33 +9,30 @@ import { loadBackupKey, loadPlatformKey } from './backup-key.mjs';
 import { createSourceSnapshot, openSourceExclusive, readSnapshotFile, sha256File } from './snapshot.mjs';
 import { fsyncDir, fsyncFile, writeFileAtomic } from './fsutil.mjs';
 import { dataKeyHandle, isId, openConnectionSecret, openObject, PURPOSES, readRegularFile, unwrapWrappedKey } from './household-vault.mjs';
+import { mapSeries } from '../shared/series.mjs';
 
 const FORMAT = 'fathom-household-backup/1';
 const TREES = ['files', 'packs', 'outbox'];
 const retentionMs = config => (config.backupRetentionDays ?? 7) * 86400000;
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
-const instanceId = platform => JSON.parse(platform.prepare("SELECT value FROM platform_settings WHERE key = 'backup_instance_id'").get().value);
-const operation = (p, id) => p.prepare('SELECT * FROM household_backup_operations WHERE id = ?').get(id);
-const household = (p, id) => p.prepare('SELECT * FROM households WHERE id = ?').get(id);
-const memberships = (p, id) => p.prepare('SELECT user_id AS userId, role, status, version FROM household_memberships WHERE household_id = ? ORDER BY user_id').all(id).map(r => ({ ...r }));
+const instanceId = async platform => JSON.parse((await platform.prepare("SELECT value FROM platform_settings WHERE key = 'backup_instance_id'").get()).value);
+const operation = async (p, id) => await p.prepare('SELECT * FROM household_backup_operations WHERE id = ?').get(id);
+const household = async (p, id) => await p.prepare('SELECT * FROM households WHERE id = ?').get(id);
+const memberships = async (p, id) => (await p.prepare('SELECT user_id AS userId, role, status, version FROM household_memberships WHERE household_id = ? ORDER BY user_id').all(id)).map(r => ({ ...r }));
 const safeFile = path => path === DB_FILE || (typeof path === 'string' && TREES.includes(path.split('/')[0])
   && path.split('/').length > 1 && path.split('/').every(part => /^[A-Za-z0-9._-]+$/.test(part) && part !== '.' && part !== '..'));
 const inDir = (parent, path) => { const r = relative(parent, path); return r === '' || (!r.startsWith('..') && !isAbsolute(r)); };
 const assert = (ok, code) => { if (!ok) throw codeError(code); };
-const transaction = (p, fn) => {
-  p.exec('BEGIN IMMEDIATE');
-  try { const r = fn(); p.exec('COMMIT'); return r; }
-  catch (e) { p.exec('ROLLBACK'); throw e; }
-};
-const phase = (p, id, name) => p.prepare('UPDATE household_backup_operations SET phase = ?, updated_at = ? WHERE id = ?').run(name, Date.now(), id);
+const transaction = (p, fn) => p.transaction(fn);
+const phase = async (p, id, name) => await p.prepare('UPDATE household_backup_operations SET phase = ?, updated_at = ? WHERE id = ?').run(name, Date.now(), id);
 const result = row => ({ operationId: row.id, status: row.status, code: row.code, fileCount: row.file_count, byteCount: row.byte_count });
 const availableBytes = path => { const s = statfsSync(path); return Number(s.bavail) * Number(s.bsize); };
 function spaceFor(path, bytes, space = availableBytes) { assert(space(path) >= bytes, 'backup_space_required'); }
 
-function activeHousehold(platform, id) {
-  const row = isId(id) ? household(platform, id) : null;
+async function activeHousehold(platform, id) {
+  const row = isId(id) ? await household(platform, id) : null;
   assert(row?.status === 'active' && row.storage_root, 'household_unavailable');
-  assert(!platform.prepare("SELECT 1 FROM household_backup_operations WHERE household_id = ? AND status IN ('queued', 'running')").get(id), 'household_operation_busy');
+  assert(!await platform.prepare("SELECT 1 FROM household_backup_operations WHERE household_id = ? AND status IN ('queued', 'running')").get(id), 'household_operation_busy');
   return row;
 }
 
@@ -68,17 +65,17 @@ function syncTree(path) {
   fsyncFile(path);
 }
 
-function keyMetadata(platform, id) {
-  const rows = platform.prepare('SELECT key_version, wrapped_key, status FROM household_data_keys WHERE household_id = ? ORDER BY key_version').all(id);
+async function keyMetadata(platform, id) {
+  const rows = await platform.prepare('SELECT key_version, wrapped_key, status FROM household_data_keys WHERE household_id = ? ORDER BY key_version').all(id);
   assert(rows.length && rows.some(r => r.status === 'active'), 'data_key_missing');
   return rows.map(r => ({ version: r.key_version, wrappedKey: Buffer.from(r.wrapped_key).toString('base64'), status: r.status }));
 }
 
-function keyHandles(platform, config, id, keys) {
+async function keyHandles(platform, config, id, keys) {
   const master = loadPlatformKey(config.platformKeyFile);
   try {
-    return new Map(keys.map(k => {
-      const current = platform.prepare('SELECT wrapped_key FROM household_data_keys WHERE household_id = ? AND key_version = ?').get(id, k.version);
+    return new Map(await mapSeries(keys, async k => {
+      const current = await platform.prepare('SELECT wrapped_key FROM household_data_keys WHERE household_id = ? AND key_version = ?').get(id, k.version);
       assert(current, 'data_key_missing');
       const raw = unwrapWrappedKey(master, { householdId: id, version: k.version, wrapped: current.wrapped_key });
       try {
@@ -90,18 +87,18 @@ function keyHandles(platform, config, id, keys) {
   } finally { master.fill(0); }
 }
 
-function validateStore(db, id, mode, version) {
-  assert(storeIdentity(db)?.householdId === id && getSetting(db, 'mode') === mode, 'backup_identity_mismatch');
+async function validateStore(db, id, mode, version) {
+  assert((await storeIdentity(db))?.householdId === id && await getSetting(db, 'mode') === mode, 'backup_identity_mismatch');
   const expected = listMigrations().map(m => ({ id: m.id, name: m.name }));
-  const actual = db.prepare('SELECT id, name FROM schema_migrations ORDER BY id').all().map(r => ({ ...r }));
-  assert(schemaVersion(db) === version && JSON.stringify(expected) === JSON.stringify(actual), 'backup_schema_mismatch');
-  assert(db.prepare('PRAGMA integrity_check').all().every(r => r.integrity_check === 'ok') && !db.prepare('PRAGMA foreign_key_check').all().length, 'backup_store_invalid');
+  const actual = (await db.prepare('SELECT id, name FROM schema_migrations ORDER BY id').all()).map(r => ({ ...r }));
+  assert(await schemaVersion(db) === version && JSON.stringify(expected) === JSON.stringify(actual), 'backup_schema_mismatch');
+  assert((await db.integrityCheck()).every(r => r === 'ok') && !(await db.foreignKeyCheck()).length, 'backup_store_invalid');
 }
 
-function validateVault(db, files, handles) {
+async function validateVault(db, files, handles) {
   const known = new Set();
   for (const [table, purpose, size] of [['files', PURPOSES.upload, 'size'], ['advisor_packets', PURPOSES.advisorPacket, 'bytes']]) {
-    for (const row of db.prepare(`SELECT id, stored_path, sha256, ${size} AS size FROM ${table} WHERE stored_path IS NOT NULL`).all()) {
+    for (const row of await db.prepare(`SELECT id, stored_path, sha256, ${size} AS size FROM ${table} WHERE stored_path IS NOT NULL`).all()) {
       assert(isId(row.id) && row.stored_path === `files/${row.id}.bin`, 'vault_stored_path_invalid');
       const blob = files.get(row.stored_path);
       assert(blob?.length >= 9, 'vault_object_missing');
@@ -124,7 +121,7 @@ function validateVault(db, files, handles) {
     }
     assert(valid, 'backup_vault_invalid');
   }
-  const conn = db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get();
+  const conn = await db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get();
   if (conn) {
     const blob = Buffer.from(conn.access_blob, 'base64');
     assert(blob.length >= 9 && handles.has(blob.readUInt32BE(5)), 'data_key_missing');
@@ -139,23 +136,23 @@ function readVault(root) {
   return new Map(readdirSync(path).map(n => [`files/${n}`, readRegularFile(join(path, n))]));
 }
 
-function preflight(platform, config, row, { verifyObjects = true } = {}) {
+async function preflight(platform, config, row, { verifyObjects = true } = {}) {
   const root = checkHouseholdRoot(config.dataDir, row.storage_root);
-  const db = new DatabaseSync(join(root, DB_FILE), { readOnly: true });
+  const db = await openScope({ path: join(root, DB_FILE), readOnly: true, journal: null, busyTimeout: 0 });
   try {
-    const keys = keyMetadata(platform, row.id);
+    const keys = await keyMetadata(platform, row.id);
     const version = listMigrations().at(-1).id;
-    validateStore(db, row.id, row.mode, version);
-    if (verifyObjects) validateVault(db, readVault(root), keyHandles(platform, config, row.id, keys));
-    const bytes = Number(db.prepare('PRAGMA page_count').get().page_count) * Number(db.prepare('PRAGMA page_size').get().page_size)
+    await validateStore(db, row.id, row.mode, version);
+    if (verifyObjects) await validateVault(db, readVault(root), await keyHandles(platform, config, row.id, keys));
+    const bytes = (await db.sizeBytes())
       + TREES.reduce((n, name) => n + treeBytes(root, join(root, name)), 0);
-    return { root, bytes, metadata: { format: FORMAT, instanceId: instanceId(platform), householdId: row.id,
-      generation: row.generation, mode: row.mode, schemaVersion: version, keys, memberships: memberships(platform, row.id) } };
-  } finally { db.close(); }
+    return { root, bytes, metadata: { format: FORMAT, instanceId: await instanceId(platform), householdId: row.id,
+      generation: row.generation, mode: row.mode, schemaVersion: version, keys, memberships: await memberships(platform, row.id) } };
+  } finally { await db.close(); }
 }
 
-function insertOperation(platform, row, { id, kind, file, target = null, hash = null, count = 0, bytes = 0, retention = 7 * 86400000 }) {
-  platform.prepare(`INSERT INTO household_backup_operations
+async function insertOperation(platform, row, { id, kind, file, target = null, hash = null, count = 0, bytes = 0, retention = 7 * 86400000 }) {
+  await platform.prepare(`INSERT INTO household_backup_operations
     (id, household_id, kind, status, phase, bundle_file, bundle_hash, source_root, source_generation, target_root, file_count, byte_count, created_at, updated_at, expires_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(id, row.id, kind, kind === 'backup' ? 'queued' : 'running', kind === 'backup' ? 'queued' : 'validated', file, hash, row.storage_root,
@@ -163,14 +160,14 @@ function insertOperation(platform, row, { id, kind, file, target = null, hash = 
 }
 
 async function suspend({ platform, config, runtimes }, op) {
-  transaction(platform, () => {
-    const row = household(platform, op.household_id);
+  transaction(platform, async (platform) => {
+    const row = await household(platform, op.household_id);
     assert(row.storage_root === op.source_root && row.generation === op.source_generation && ['active', 'suspended'].includes(row.status), 'restore_source_changed');
-    platform.prepare("UPDATE households SET status = 'suspended', updated_at = ? WHERE id = ?").run(Date.now(), row.id);
-    phase(platform, op.id, 'suspended');
+    await platform.prepare("UPDATE households SET status = 'suspended', updated_at = ? WHERE id = ?").run(Date.now(), row.id);
+    await phase(platform, op.id, 'suspended');
   });
   await runtimes?.quiesce(op.household_id);
-  return openSourceExclusive(join(checkHouseholdRoot(config.dataDir, op.source_root), DB_FILE));
+  return await openSourceExclusive(join(checkHouseholdRoot(config.dataDir, op.source_root), DB_FILE));
 }
 
 export async function backupHousehold({ platform, config, runtimes = null, householdId, operationId = null, space = availableBytes } = {}) {
@@ -181,154 +178,154 @@ export async function backupHousehold({ platform, config, runtimes = null, house
     const dest = destination(config);
     let source;
     if (operationId) {
-      op = operation(platform, operationId);
+      op = await operation(platform, operationId);
       assert(op?.kind === 'backup' && op.status === 'queued' && op.household_id === householdId, 'backup_operation_invalid');
-      source = household(platform, householdId);
+      source = await household(platform, householdId);
       assert(source?.status === 'active' && source.storage_root === op.source_root && source.generation === op.source_generation, 'household_unavailable');
-    } else source = activeHousehold(platform, householdId);
-    const frozen = preflight(platform, config, source);
+    } else source = await activeHousehold(platform, householdId);
+    const frozen = await preflight(platform, config, source);
     spaceFor(dest, frozen.bytes * 3 + 1048576, space);
     if (!op) {
       const id = newOperationId();
-      insertOperation(platform, source, { id, kind: 'backup', file: join(dest, `${id}.fsnap`), retention: retentionMs(config) });
-      op = operation(platform, id);
+      await insertOperation(platform, source, { id, kind: 'backup', file: join(dest, `${id}.fsnap`), retention: retentionMs(config) });
+      op = await operation(platform, id);
     }
-    platform.prepare("UPDATE household_backup_operations SET status = 'running' WHERE id = ?").run(op.id);
+    await platform.prepare("UPDATE household_backup_operations SET status = 'running' WHERE id = ?").run(op.id);
     db = await suspend({ platform, config, runtimes }, op);
-    validateStore(db, householdId, source.mode, frozen.metadata.schemaVersion);
-    validateVault(db, readVault(frozen.root), keyHandles(platform, config, householdId, frozen.metadata.keys));
+    await validateStore(db, householdId, source.mode, frozen.metadata.schemaVersion);
+    await validateVault(db, readVault(frozen.root), await keyHandles(platform, config, householdId, frozen.metadata.keys));
     const snap = await createSourceSnapshot({ db, dataDir: frozen.root, key, out: op.bundle_file, files: [DB_FILE, ...TREES], operationId: op.id,
-      householdBackup: { ...frozen.metadata, memberships: memberships(platform, householdId) } });
+      householdBackup: { ...frozen.metadata, memberships: await memberships(platform, householdId) } });
     const opened = readSnapshotFile(snap.file, key);
-    db.close(); db = null;
-    transaction(platform, () => {
-      platform.prepare("UPDATE household_backup_operations SET status = 'done', phase = 'complete', bundle_hash = ?, file_count = ?, byte_count = ?, updated_at = ? WHERE id = ?")
+    await db.close(); db = null;
+    transaction(platform, async (platform) => {
+      await platform.prepare("UPDATE household_backup_operations SET status = 'done', phase = 'complete', bundle_hash = ?, file_count = ?, byte_count = ?, updated_at = ? WHERE id = ?")
         .run(snap.sha256, opened.files.size, readFileSync(snap.file).length, Date.now(), op.id);
-      platform.prepare("UPDATE households SET status = 'active', updated_at = ? WHERE id = ? AND storage_root = ? AND generation = ? AND status = 'suspended'")
+      await platform.prepare("UPDATE households SET status = 'active', updated_at = ? WHERE id = ? AND storage_root = ? AND generation = ? AND status = 'suspended'")
         .run(Date.now(), householdId, op.source_root, op.source_generation);
-      platform.prepare("INSERT INTO audit_events (at, household_id, action, outcome) VALUES (?, ?, 'household.backup', 'ok')").run(Date.now(), householdId);
+      await platform.prepare("INSERT INTO audit_events (at, household_id, action, outcome) VALUES (?, ?, 'household.backup', 'ok')").run(Date.now(), householdId);
     });
-    return { ...result(operation(platform, op.id)), file: snap.file };
+    return { ...result(await operation(platform, op.id)), file: snap.file };
   } catch (err) {
-    db?.close(); db = null;
-    if (op) transaction(platform, () => {
-      platform.prepare("UPDATE household_backup_operations SET status = 'failed', code = 'backup_failed', updated_at = ? WHERE id = ?").run(Date.now(), op.id);
-      platform.prepare("UPDATE households SET status = 'active', updated_at = ? WHERE id = ? AND storage_root = ? AND generation = ? AND status = 'suspended'")
+    await db?.close(); db = null;
+    if (op) transaction(platform, async (platform) => {
+      await platform.prepare("UPDATE household_backup_operations SET status = 'failed', code = 'backup_failed', updated_at = ? WHERE id = ?").run(Date.now(), op.id);
+      await platform.prepare("UPDATE households SET status = 'active', updated_at = ? WHERE id = ? AND storage_root = ? AND generation = ? AND status = 'suspended'")
         .run(Date.now(), householdId, op.source_root, op.source_generation);
     });
     throw err;
   } finally {
-    db?.close(); key.fill(0);
+    await db?.close(); key.fill(0);
   }
 }
 
-function openBundle(platform, config, id, file) {
+async function openBundle(platform, config, id, file) {
   const key = loadBackupKey(config.backupKeyFile);
   let bundle;
   try { bundle = readSnapshotFile(file, key); } finally { key.fill(0); }
   const meta = bundle.manifest.householdBackup;
-  assert(meta?.format === FORMAT && meta.householdId === id && meta.instanceId === instanceId(platform), 'backup_identity_mismatch');
-  assert(meta.mode === household(platform, id)?.mode, 'backup_identity_mismatch');
+  assert(meta?.format === FORMAT && meta.householdId === id && meta.instanceId === await instanceId(platform), 'backup_identity_mismatch');
+  assert(meta.mode === (await household(platform, id))?.mode, 'backup_identity_mismatch');
   assert(meta.schemaVersion === listMigrations().at(-1).id, 'backup_schema_mismatch');
   assert(Array.isArray(meta.keys) && meta.keys.length && Array.isArray(meta.memberships), 'backup_metadata_invalid');
   assert(bundle.files.has(DB_FILE) && [...bundle.files.keys()].every(safeFile), 'backup_inventory_invalid');
-  return { ...bundle, meta, handles: keyHandles(platform, config, id, meta.keys) };
+  return { ...bundle, meta, handles: await keyHandles(platform, config, id, meta.keys) };
 }
 
-function validateStage(root, bundle, { compare = true } = {}) {
+async function validateStage(root, bundle, { compare = true } = {}) {
   treeBytes(root, root);
   if (compare) for (const [path, data] of bundle.files) {
     assert(readRegularFile(join(root, path)).equals(data), 'backup_inventory_invalid');
   }
-  const db = new DatabaseSync(join(root, DB_FILE), { readOnly: true });
+  const db = await openScope({ path: join(root, DB_FILE), readOnly: true, journal: null, busyTimeout: 0 });
   try {
-    validateStore(db, bundle.meta.householdId, bundle.meta.mode, bundle.meta.schemaVersion);
-    validateVault(db, readVault(root), bundle.handles);
-  } finally { db.close(); }
+    await validateStore(db, bundle.meta.householdId, bundle.meta.mode, bundle.meta.schemaVersion);
+    await validateVault(db, readVault(root), bundle.handles);
+  } finally { await db.close(); }
 }
 
-function reconcileStore(platform, sourceRoot, targetRoot, id) {
-  const source = new DatabaseSync(join(sourceRoot, DB_FILE), { readOnly: true });
-  const db = openDb(join(targetRoot, DB_FILE));
+async function reconcileStore(platform, sourceRoot, targetRoot, id) {
+  const source = await openScope({ path: join(sourceRoot, DB_FILE), readOnly: true, journal: null, busyTimeout: 0 });
+  const db = await openDb(join(targetRoot, DB_FILE));
   try {
-    assert(storeIdentity(source)?.householdId === id && storeIdentity(db)?.householdId === id, 'backup_identity_mismatch');
-    transaction(db, () => {
-      db.exec('DELETE FROM spend_ledger');
+    assert((await storeIdentity(source))?.householdId === id && (await storeIdentity(db))?.householdId === id, 'backup_identity_mismatch');
+    transaction(db, async (db) => {
+      await db.prepare('DELETE FROM spend_ledger').run();
       const insert = db.prepare('INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens, round_id) VALUES (?, ?, ?, ?, ?, ?, ?)');
-      const legacy = source.prepare('SELECT * FROM spend_ledger WHERE round_id IS NULL').all();
-      const carried = platform.prepare("SELECT * FROM model_rounds WHERE household_id = ? AND kind = 'carry'").all(id);
+      const legacy = await source.prepare('SELECT * FROM spend_ledger WHERE round_id IS NULL').all();
+      const carried = await platform.prepare("SELECT * FROM model_rounds WHERE household_id = ? AND kind = 'carry'").all(id);
       const carryMonths = new Set(carried.map(r => r.month));
-      for (const r of legacy) if (!carryMonths.has(r.yyyymm)) insert.run(r.ts, r.yyyymm, r.purpose, r.cost_usd, r.model, r.tokens, null);
-      for (const r of platform.prepare('SELECT * FROM model_rounds WHERE household_id = ?').all(id)) {
+      for (const r of legacy) if (!carryMonths.has(r.yyyymm)) await insert.run(r.ts, r.yyyymm, r.purpose, r.cost_usd, r.model, r.tokens, null);
+      for (const r of await platform.prepare('SELECT * FROM model_rounds WHERE household_id = ?').all(id)) {
         const cost = r.state === 'settled' ? r.cost_usd : Math.max(r.reserved_usd, r.cost_usd ?? 0);
-        insert.run(new Date(r.reserved_at).toISOString(), r.month, r.purpose ?? 'carry', cost, r.model, '{}', r.id);
+        await insert.run(new Date(r.reserved_at).toISOString(), r.month, r.purpose ?? 'carry', cost, r.model, '{}', r.id);
       }
-      db.prepare("UPDATE job_runs SET status = 'interrupted', finished_at = ?, note = 'household_restored' WHERE status = 'running'").run(new Date().toISOString());
-      db.exec('DELETE FROM job_lock');
-      db.exec("UPDATE simplefin_connection SET status = 'error', error_code = 'restored_confirmation_required'");
+      await db.prepare("UPDATE job_runs SET status = 'interrupted', finished_at = ?, note = 'household_restored' WHERE status = 'running'").run(new Date().toISOString());
+      await db.prepare('DELETE FROM job_lock').run();
+      await db.prepare("UPDATE simplefin_connection SET status = 'error', error_code = 'restored_confirmation_required'").run();
     });
-    db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-  } finally { source.close(); db.close(); }
+    await db.checkpoint();
+  } finally { await source.close(); await db.close(); }
   fsyncFile(join(targetRoot, DB_FILE)); fsyncDir(join(targetRoot, DB_FILE));
 }
 
 async function continueRestore(options, id, onPhase = () => {}) {
   const { platform, config, runtimes } = options;
-  let op = operation(platform, id);
+  let op = await operation(platform, id);
   if (op.status === 'done') return { ...result(op), membershipDrift: op.membership_drift, rollbackExpiresAt: op.rollback_expires_at };
-  const bundle = openBundle(platform, config, op.household_id, op.bundle_file);
+  const bundle = await openBundle(platform, config, op.household_id, op.bundle_file);
   assert(bundle.sha256 === op.bundle_hash, 'backup_inventory_invalid');
   const root = checkHouseholdRoot(config.dataDir, op.target_root);
-  validateStage(root, bundle, { compare: ['validated', 'suspended'].includes(op.phase) });
+  await validateStage(root, bundle, { compare: ['validated', 'suspended'].includes(op.phase) });
   if (['validated', 'suspended'].includes(op.phase)) {
     const source = await suspend(options, op);
-    source.close();
+    await source.close();
     await onPhase('suspended');
-    transaction(platform, () => {
-      const current = household(platform, op.household_id);
+    transaction(platform, async (platform) => {
+      const current = await household(platform, op.household_id);
       assert(current.status === 'suspended' && current.storage_root === op.source_root && current.generation === op.source_generation, 'restore_source_changed');
-      const drift = JSON.stringify(memberships(platform, op.household_id)) === JSON.stringify(bundle.meta.memberships) ? 0 : 1;
-      platform.prepare('UPDATE households SET storage_root = ?, generation = generation + 1, updated_at = ? WHERE id = ?').run(op.target_root, Date.now(), op.household_id);
-      platform.prepare("UPDATE api_keys SET revoked_at = coalesce(revoked_at, ?), revoked_code = CASE WHEN revoked_at IS NULL THEN 'household_restored' ELSE revoked_code END WHERE household_id = ?")
+      const drift = JSON.stringify(await memberships(platform, op.household_id)) === JSON.stringify(bundle.meta.memberships) ? 0 : 1;
+      await platform.prepare('UPDATE households SET storage_root = ?, generation = generation + 1, updated_at = ? WHERE id = ?').run(op.target_root, Date.now(), op.household_id);
+      await platform.prepare("UPDATE api_keys SET revoked_at = coalesce(revoked_at, ?), revoked_code = CASE WHEN revoked_at IS NULL THEN 'household_restored' ELSE revoked_code END WHERE household_id = ?")
         .run(new Date().toISOString(), op.household_id);
-      platform.prepare('DELETE FROM auth_sessions WHERE household_id = ?').run(op.household_id);
-      platform.prepare('UPDATE household_outbound SET jobs = 0, email = 0, simplefin = 0, engine = 0, updated_at = ? WHERE household_id = ?').run(Date.now(), op.household_id);
-      platform.prepare("UPDATE household_backup_operations SET phase = 'switched', membership_drift = ?, rollback_expires_at = ?, updated_at = ? WHERE id = ?")
+      await platform.prepare('DELETE FROM auth_sessions WHERE household_id = ?').run(op.household_id);
+      await platform.prepare('UPDATE household_outbound SET jobs = 0, email = 0, simplefin = 0, engine = 0, updated_at = ? WHERE household_id = ?').run(Date.now(), op.household_id);
+      await platform.prepare("UPDATE household_backup_operations SET phase = 'switched', membership_drift = ?, rollback_expires_at = ?, updated_at = ? WHERE id = ?")
         .run(drift, op.expires_at, Date.now(), id);
     });
     await onPhase('switched');
-    op = operation(platform, id);
+    op = await operation(platform, id);
   }
-  const current = household(platform, op.household_id);
+  const current = await household(platform, op.household_id);
   assert(current.status === 'suspended' && current.storage_root === op.target_root && current.generation === op.source_generation + 1, 'restore_source_changed');
   await runtimes?.quiesce(op.household_id);
   if (op.phase === 'switched') {
-    reconcileStore(platform, checkHouseholdRoot(config.dataDir, op.source_root), root, op.household_id);
-    phase(platform, id, 'finalized');
+    await reconcileStore(platform, checkHouseholdRoot(config.dataDir, op.source_root), root, op.household_id);
+    await phase(platform, id, 'finalized');
     await onPhase('finalized');
   }
-  transaction(platform, () => {
-    platform.prepare("UPDATE households SET status = 'active', updated_at = ? WHERE id = ?").run(Date.now(), op.household_id);
-    platform.prepare("UPDATE household_backup_operations SET status = 'done', phase = 'complete', updated_at = ? WHERE id = ?").run(Date.now(), id);
-    platform.prepare("INSERT INTO audit_events (at, household_id, action, outcome) VALUES (?, ?, 'household.restore', 'ok')").run(Date.now(), op.household_id);
+  transaction(platform, async (platform) => {
+    await platform.prepare("UPDATE households SET status = 'active', updated_at = ? WHERE id = ?").run(Date.now(), op.household_id);
+    await platform.prepare("UPDATE household_backup_operations SET status = 'done', phase = 'complete', updated_at = ? WHERE id = ?").run(Date.now(), id);
+    await platform.prepare("INSERT INTO audit_events (at, household_id, action, outcome) VALUES (?, ?, 'household.restore', 'ok')").run(Date.now(), op.household_id);
   });
-  op = operation(platform, id);
+  op = await operation(platform, id);
   return { ...result(op), membershipDrift: op.membership_drift, rollbackExpiresAt: op.rollback_expires_at };
 }
 
 export async function restoreHousehold({ platform, config, runtimes = null, householdId, confirmation, file, onPhase = () => {}, space = availableBytes } = {}) {
   assert(confirmation === householdId && isId(householdId), 'restore_confirmation_required');
-  const pending = platform.prepare("SELECT * FROM household_backup_operations WHERE household_id = ? AND kind = 'restore' AND status = 'running'").get(householdId);
+  const pending = await platform.prepare("SELECT * FROM household_backup_operations WHERE household_id = ? AND kind = 'restore' AND status = 'running'").get(householdId);
   if (pending) {
     assert(sha256File(file) === pending.bundle_hash, 'backup_inventory_invalid');
     return continueRestore({ platform, config, runtimes }, pending.id, onPhase);
   }
-  const row = activeHousehold(platform, householdId);
-  const bundle = openBundle(platform, config, householdId, file);
-  const source = preflight(platform, config, row, { verifyObjects: false });
+  const row = await activeHousehold(platform, householdId);
+  const bundle = await openBundle(platform, config, householdId, file);
+  const source = await preflight(platform, config, row, { verifyObjects: false });
   if (!runtimes) {
-    const lock = openSourceExclusive(join(source.root, DB_FILE));
-    lock.close();
+    const lock = await openSourceExclusive(join(source.root, DB_FILE));
+    await lock.close();
   }
   const bytes = [...bundle.files.values()].reduce((n, b) => n + b.length, 0);
   spaceFor(config.dataDir, bytes * 2 + source.bytes + 1048576, space);
@@ -343,9 +340,9 @@ export async function restoreHousehold({ platform, config, runtimes = null, hous
       mkdirSync(dirname(output), { recursive: true, mode: 0o700 });
       writeFileAtomic(output, data);
     }
-    validateStage(root, bundle);
+    await validateStage(root, bundle);
     syncTree(root); fsyncDir(root);
-    insertOperation(platform, row, { id, kind: 'restore', file: resolve(file), target, hash: bundle.sha256, count: bundle.files.size, bytes, retention: retentionMs(config) });
+    await insertOperation(platform, row, { id, kind: 'restore', file: resolve(file), target, hash: bundle.sha256, count: bundle.files.size, bytes, retention: retentionMs(config) });
     recorded = true;
     await onPhase('validated');
     return await continueRestore({ platform, config, runtimes }, id, onPhase);
@@ -356,22 +353,22 @@ export async function restoreHousehold({ platform, config, runtimes = null, hous
 }
 
 export async function recoverHouseholdOperations({ platform, config, runtimes = null } = {}) {
-  const operations = platform.prepare("SELECT * FROM household_backup_operations WHERE status = 'running' ORDER BY created_at").all();
+  const operations = await platform.prepare("SELECT * FROM household_backup_operations WHERE status = 'running' ORDER BY created_at").all();
   for (const op of operations) {
     if (op.kind === 'restore') {
       try { await continueRestore({ platform, config, runtimes }, op.id); }
       catch { console.error('fathom: restore recovery blocked', 'restore_recovery_required'); }
     }
-    else transaction(platform, () => {
-      platform.prepare("UPDATE households SET status = 'active' WHERE id = ? AND storage_root = ? AND generation = ? AND status = 'suspended'")
+    else transaction(platform, async (platform) => {
+      await platform.prepare("UPDATE households SET status = 'active' WHERE id = ? AND storage_root = ? AND generation = ? AND status = 'suspended'")
         .run(op.household_id, op.source_root, op.source_generation);
-      platform.prepare("UPDATE household_backup_operations SET status = 'failed', code = 'backup_interrupted', updated_at = ? WHERE id = ?").run(Date.now(), op.id);
+      await platform.prepare("UPDATE household_backup_operations SET status = 'failed', code = 'backup_interrupted', updated_at = ? WHERE id = ?").run(Date.now(), op.id);
     });
   }
 }
 
 const PUBLIC_CODES = new Set(['backup_key_invalid', 'backup_destination_invalid', 'household_unavailable', 'household_operation_busy', 'backup_space_required']);
-export function createBackupRunner({ platform, config, runtimes }) {
+export async function createBackupRunner({ platform, config, runtimes }) {
   let pending = Promise.resolve();
   let stopped = false;
   const code = err => PUBLIC_CODES.has(err?.code) ? err.code : 'backup_failed';
@@ -380,24 +377,24 @@ export function createBackupRunner({ platform, config, runtimes }) {
       if (stopped) return;
       try { await backupHousehold({ platform, config, runtimes, householdId: op.household_id, operationId: op.id }); }
       catch (err) {
-        platform.prepare("UPDATE household_backup_operations SET status = 'failed', code = ?, updated_at = ? WHERE id = ?").run(code(err), Date.now(), op.id);
+        await platform.prepare("UPDATE household_backup_operations SET status = 'failed', code = ?, updated_at = ? WHERE id = ?").run(code(err), Date.now(), op.id);
       }
     });
   };
-  for (const op of platform.prepare("SELECT * FROM household_backup_operations WHERE kind = 'backup' AND status = 'queued' ORDER BY created_at").all()) run(op);
+  for (const op of await platform.prepare("SELECT * FROM household_backup_operations WHERE kind = 'backup' AND status = 'queued' ORDER BY created_at").all()) run(op);
   return {
     code,
-    queue(id) {
-      const row = activeHousehold(platform, id);
+    async queue(id) {
+      const row = await activeHousehold(platform, id);
       const key = loadBackupKey(config.backupKeyFile); key.fill(0);
       const dest = destination(config);
       const operationId = newOperationId();
-      insertOperation(platform, row, { id: operationId, kind: 'backup', file: join(dest, `${operationId}.fsnap`), retention: retentionMs(config) });
-      setImmediate(() => { if (!stopped) run(operation(platform, operationId)); });
+      await insertOperation(platform, row, { id: operationId, kind: 'backup', file: join(dest, `${operationId}.fsnap`), retention: retentionMs(config) });
+      setImmediate(async () => { if (!stopped) run(await operation(platform, operationId)); });
       return { operationId, status: 'queued' };
     },
-    status(id, operationId) {
-      const row = platform.prepare("SELECT * FROM household_backup_operations WHERE household_id = ? AND id = ? AND kind = 'backup'").get(id, operationId);
+    async status(id, operationId) {
+      const row = await platform.prepare("SELECT * FROM household_backup_operations WHERE household_id = ? AND id = ? AND kind = 'backup'").get(id, operationId);
       return row ? result(row) : null;
     },
     async idle() { await new Promise(done => setImmediate(done)); await pending; },

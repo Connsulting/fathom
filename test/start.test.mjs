@@ -56,13 +56,13 @@ test('FATHOM_DEMO=0 on an empty data dir serves a valid empty scenario', T, asyn
     const sc = await s.getScenario();
     // The startup tick may run the nightly plan job; any rec is the planner's, never a seeded one.
     const { openDb } = await src('src/store/db.mjs');
-    const db = openDb(servedStore(s.dataDir).file);
+    const db = openDb((await servedStore(s.dataDir)).file);
     let planned;
     let identity;
     try {
-      planned = db.prepare('SELECT rec_id FROM planner_recs').all().map(r => r.rec_id);
-      identity = db.prepare('SELECT household_id FROM store_identity').get();
-    } finally { db.close(); }
+      planned = (await db.prepare('SELECT rec_id FROM planner_recs').all()).map(r => r.rec_id);
+      identity = await db.prepare('SELECT household_id FROM store_identity').get();
+    } finally { await db.close(); }
     const served = await withPlatform(s.platformFile, (platform, store) => store.servedHousehold());
     assert.equal(served.mode, 'real');
     assert.equal(identity.household_id, served.id, 'the new store names the served household');

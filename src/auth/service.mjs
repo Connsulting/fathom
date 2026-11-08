@@ -9,6 +9,7 @@ import { authLinkMail, passkeyAddedMail, accountRecoveredMail } from './mail.mjs
 import { readCookie, setCookie, SESSION_COOKIE, CEREMONY_COOKIE } from './cookies.mjs';
 import { createClientAddressResolver } from './client-ip.mjs';
 import { createHouseholdStorage } from '../platform/db.mjs';
+import { mapSeries } from '../shared/series.mjs';
 
 const badVerification = () => new HttpError(400, 'passkey verification failed');
 const expiredLink = () => new HttpError(410, 'link expired or already used');
@@ -45,21 +46,21 @@ export function createAuthService({ platform, config, transport, secrets = null,
   const rpID = origin ? new URL(origin).hostname : null;
   const currentSession = req => readCookie(req, SESSION_COOKIE);
   const currentUser = req => store.session(currentSession(req));
-  function identityFor(user) {
+  async function identityFor(user) {
     if (!user) return null;
-    const memberships = store.activeMemberships(user.id);
+    const memberships = await store.activeMemberships(user.id);
     const bound = user.sessionHouseholdId ?? store.defaultHousehold(user.id);
     const current = memberships.find(m => m.householdId === bound) || null;
-    const active = current ? db.prepare('SELECT status FROM households WHERE id = ?').get(current.householdId)?.status === 'active' : false;
+    const active = current ? (await db.prepare('SELECT status FROM households WHERE id = ?').get(current.householdId))?.status === 'active' : false;
     return {
       id: user.id, email: user.email, login: user.email, name: user.email,
       householdId: current ? current.householdId : null, role: active ? current.role : null,
       operator: store.isOperator(user.id), memberships, contextVersion: user.contextVersion ?? null,
     };
   }
-  const identityOfUser = id => identityFor(store.getUser(id));
+  const identityOfUser = async id => await identityFor(store.getUser(id));
   // The identity of a session token's user, with that session's household and context version.
-  const identityOfSession = token => identityFor(store.session(token));
+  const identityOfSession = async token => await identityFor(store.session(token));
   // Listeners told the session key (sha256 of the session token) whose household context ended:
   // a switch or a sign-out. The router ends that session's streams.
   const contextListeners = new Set();
@@ -71,15 +72,15 @@ export function createAuthService({ platform, config, transport, secrets = null,
     }
   }
   // True when the identity holds an active membership in its own household and that household is active.
-  function servedMember(identity) {
+  async function servedMember(identity) {
     if (!identity || typeof identity.householdId !== 'string' || !identity.role) return false;
-    return db.prepare('SELECT status FROM households WHERE id = ?').get(identity.householdId)?.status === 'active';
+    return (await db.prepare('SELECT status FROM households WHERE id = ?').get(identity.householdId))?.status === 'active';
   }
-  const servedAdmin = identity => servedMember(identity) && identity.role === 'admin';
-  function requireUser(req, { admin = false } = {}) {
-    const identity = identityFor(currentUser(req));
+  const servedAdmin = async identity => await servedMember(identity) && identity.role === 'admin';
+  async function requireUser(req, { admin = false } = {}) {
+    const identity = await identityFor(currentUser(req));
     if (!identity) throw unauthorized();
-    if (admin && !servedAdmin(identity)) throw new HttpError(403, 'administrator required');
+    if (admin && !await servedAdmin(identity)) throw new HttpError(403, 'administrator required');
     return identity;
   }
   // The admin's own household (requireUser with admin has already checked the membership).
@@ -88,29 +89,29 @@ export function createAuthService({ platform, config, transport, secrets = null,
   function creatorActive(userId, householdId) {
     return typeof userId === 'string' && typeof householdId === 'string' && store.membership(userId, householdId)?.status === 'active';
   }
-  function rate(req, kind) {
+  async function rate(req, kind) {
     const address = clientAddress(req);
     if (kind === 'recover' || kind === 'invite' || kind === 'device') {
-      store.rateLimit(`${kind}:global`, { limit: 120, windowMs: 10 * 60_000 });
-      store.rateLimit(`${kind}:socket:${address}`, { limit: 60, windowMs: 10 * 60_000 });
+      await store.rateLimit(`${kind}:global`, { limit: 120, windowMs: 10 * 60_000 });
+      await store.rateLimit(`${kind}:socket:${address}`, { limit: 60, windowMs: 10 * 60_000 });
     } else {
-      store.rateLimit('ceremony:global', { limit: 240 });
-      store.rateLimit(`ceremony:socket:${address}`, { limit: 120 });
+      await store.rateLimit('ceremony:global', { limit: 240 });
+      await store.rateLimit(`ceremony:socket:${address}`, { limit: 120 });
     }
   }
   // Adding a passkey, or asking for an add-a-device link, with only a session needs a sign-in from
   // the last 10 minutes. Both answer the same 403.
-  function requireRecentSignin(req) {
+  async function requireRecentSignin(req) {
     const session = currentSession(req);
-    const signedInAt = store.sessionSignedInAt(session);
+    const signedInAt = await store.sessionSignedInAt(session);
     if (signedInAt === null || now() - signedInAt >= RECENT_SIGNIN_TTL) throw recentSigninRequired();
     return session;
   }
   // An emailed link is an invitation (enrolls a new account) or a recovery or add-passkey token
   // (an enrolled account). An invitation for an enrolled account is redeemed by accepting it.
-  function registrationContext(req, body) {
+  async function registrationContext(req, body) {
     if (body.token !== undefined) {
-      const invitation = store.invitation(body.token);
+      const invitation = await store.invitation(body.token);
       if (invitation) {
         const user = store.userRow(invitation.userId);
         if (!user || user.enrolled_at !== null) throw expiredLink();
@@ -122,35 +123,35 @@ export function createAuthService({ platform, config, transport, secrets = null,
       if (!user || user.enrolled_at === null) throw expiredLink();
       return { user, token: body.token, purpose: token.purpose, session: null };
     }
-    const user = requireUser(req);
-    const session = requireRecentSignin(req);
+    const user = await requireUser(req);
+    const session = await requireRecentSignin(req);
     return { user: store.userRow(user.id), token: null, purpose: null, session };
   }
-  function recheckRegistration(req, body, context) {
-    const fresh = registrationContext(req, body);
+  async function recheckRegistration(req, body, context) {
+    const fresh = await registrationContext(req, body);
     if (fresh.user.id !== context.user.id || fresh.user.user_handle !== context.user.user_handle
       || fresh.token !== context.token || fresh.purpose !== context.purpose || fresh.session !== context.session) throw badVerification();
     return fresh;
   }
-  function challengeCookie(req, res, data) {
-    store.revokeChallenge(readCookie(req, CEREMONY_COOKIE));
-    const challenge = store.createChallenge(data);
+  async function challengeCookie(req, res, data) {
+    await store.revokeChallenge(readCookie(req, CEREMONY_COOKIE));
+    const challenge = await store.createChallenge(data);
     setCookie(res, CEREMONY_COOKIE, challenge, now());
   }
-  function consumeChallenge(req, res, ceremony, token) {
-    const challenge = store.consumeChallenge(readCookie(req, CEREMONY_COOKIE));
+  async function consumeChallenge(req, res, ceremony, token) {
+    const challenge = await store.consumeChallenge(readCookie(req, CEREMONY_COOKIE));
     setCookie(res, CEREMONY_COOKIE, null);
-    if (token !== undefined && !store.token(token) && !store.invitation(token)) throw expiredLink();
+    if (token !== undefined && !store.token(token) && !await store.invitation(token)) throw expiredLink();
     if (!challenge || challenge.ceremony !== ceremony) throw badVerification();
     return challenge;
   }
   function freshChallenge(challenge) {
     if (challenge.expires_at <= now()) throw badVerification();
   }
-  function revokeFailedMail(token, purpose) {
+  async function revokeFailedMail(token, purpose) {
     try {
-      if (purpose === 'invite') store.revokeInvitation(token);
-      else store.revokeToken(token);
+      if (purpose === 'invite') await store.revokeInvitation(token);
+      else await store.revokeToken(token);
     } catch { /* The process may already have closed its store. */ }
     console.error('fathom: auth mail failed', 'send_failed');
   }
@@ -160,7 +161,7 @@ export function createAuthService({ platform, config, transport, secrets = null,
       if (!transport) throw new Error();
       await transport.send(message);
     } catch {
-      revokeFailedMail(token, purpose);
+      await revokeFailedMail(token, purpose);
       throw new HttpError(503, 'authentication email unavailable');
     }
   }
@@ -170,8 +171,8 @@ export function createAuthService({ platform, config, transport, secrets = null,
     const recovery = purpose === 'recovery';
     const recipients = new Set([user.email]);
     if (recovery) {
-      for (const { householdId } of store.activeMemberships(user.id)) {
-        for (const admin of store.householdAdmins(householdId)) recipients.add(admin.email);
+      for (const { householdId } of await store.activeMemberships(user.id)) {
+        for (const admin of await store.householdAdmins(householdId)) recipients.add(admin.email);
       }
     }
     for (const to of recipients) {
@@ -194,12 +195,12 @@ export function createAuthService({ platform, config, transport, secrets = null,
       return validHandle(raw) ? digest(raw) : null;
     },
     onContextEnded(listener) { contextListeners.add(listener); return () => contextListeners.delete(listener); },
-    identity: req => demo ? null : identityFor(currentUser(req)),
-    session({ req }) { return { identity: demo ? null : identityFor(currentUser(req)), demo }; },
+    identity: async req => demo ? null : await identityFor(currentUser(req)),
+    async session({ req }) { return { identity: demo ? null : await identityFor(currentUser(req)), demo }; },
     async registerOptions({ req, res, body }) {
-      rate(req, 'ceremony');
+      await rate(req, 'ceremony');
       passkeyName(body.name);
-      const context = registrationContext(req, body);
+      const context = await registrationContext(req, body);
       let options;
       try {
         options = await generateRegistrationOptions({
@@ -208,20 +209,20 @@ export function createAuthService({ platform, config, transport, secrets = null,
           attestationType: 'none',
           authenticatorSelection: { residentKey: 'required', requireResidentKey: true, userVerification: 'required' },
           extensions: { credProps: true },
-          excludeCredentials: store.listPasskeys(context.user.id).map(({ id, transports }) => ({ id, transports })),
+          excludeCredentials: (await store.listPasskeys(context.user.id)).map(({ id, transports }) => ({ id, transports })),
         });
       } catch { throw badVerification(); }
-      recheckRegistration(req, body, context);
-      options.excludeCredentials = store.listPasskeys(context.user.id).map(({ id, transports }) => ({ id, transports, type: 'public-key' }));
+      await recheckRegistration(req, body, context);
+      options.excludeCredentials = (await store.listPasskeys(context.user.id)).map(({ id, transports }) => ({ id, transports, type: 'public-key' }));
       const invitation = context.purpose === 'invite';
-      challengeCookie(req, res, { ceremony: 'register', userId: context.user.id, token: invitation ? null : context.token,
+      await challengeCookie(req, res, { ceremony: 'register', userId: context.user.id, token: invitation ? null : context.token,
         invitation: invitation ? context.token : null, session: context.session, challenge: options.challenge });
       return { options };
     },
     async registerVerify({ req, res, body }) {
-      const challenge = consumeChallenge(req, res, 'register', body.token);
-      rate(req, 'ceremony');
-      const context = registrationContext(req, body);
+      const challenge = await consumeChallenge(req, res, 'register', body.token);
+      await rate(req, 'ceremony');
+      const context = await registrationContext(req, body);
       const linkHash = context.token ? digest(context.token) : null;
       const invitation = context.purpose === 'invite';
       if (challenge.user_id !== context.user.id
@@ -239,26 +240,26 @@ export function createAuthService({ platform, config, transport, secrets = null,
       } catch { throw badVerification(); }
       if (!verified.verified || !verified.registrationInfo?.userVerified) throw badVerification();
       const credential = verified.registrationInfo.credential;
-      const result = store.transaction(() => {
+      const result = await store.transaction(async (store) => {
         freshChallenge(challenge);
-        const fresh = recheckRegistration(req, body, context);
-        if (db.prepare('SELECT 1 FROM passkeys WHERE id = ?').get(credential.id)) throw badVerification();
+        const fresh = await recheckRegistration(req, body, context);
+        if (await db.prepare('SELECT 1 FROM passkeys WHERE id = ?').get(credential.id)) throw badVerification();
         if (fresh.purpose === 'invite') {
           store.consumeInvitation(fresh.token, fresh.user.id);
         } else if (fresh.token) {
           const consumed = store.consumeToken(fresh.token);
           if (!consumed || consumed.userId !== fresh.user.id || consumed.purpose !== fresh.purpose) throw expiredLink();
           if (fresh.purpose === 'recovery') {
-            db.prepare('DELETE FROM passkeys WHERE user_id = ?').run(fresh.user.id);
+            await db.prepare('DELETE FROM passkeys WHERE user_id = ?').run(fresh.user.id);
             store.revokeUserSessions(fresh.user.id);
-            db.prepare("DELETE FROM auth_tokens WHERE user_id = ? AND purpose = 'add-passkey'").run(fresh.user.id);
+            await db.prepare("DELETE FROM auth_tokens WHERE user_id = ? AND purpose = 'add-passkey'").run(fresh.user.id);
           }
         }
         const transports = Array.isArray(credential.transports)
           ? credential.transports.filter(value => typeof value === 'string' && ['ble', 'hybrid', 'internal', 'nfc', 'usb', 'cable', 'smart-card'].includes(value)) : [];
-        db.prepare('INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        await db.prepare('INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
           .run(credential.id, fresh.user.id, credential.publicKey, credential.counter, JSON.stringify(transports), name, now());
-        store.markEnrolled(fresh.user.id);
+        await store.markEnrolled(fresh.user.id);
         // Invite and recovery replace this browser's session. An add-a-device link never revokes a
         // session: the browser keeps a live session of the same user, or gets a new one beside any other.
         let session = null;
@@ -269,27 +270,27 @@ export function createAuthService({ platform, config, transport, secrets = null,
           session = store.createSession(fresh.user.id);
         }
         const sessionUser = store.session(session ? session.token : currentSession(req));
-        return { identity: sessionUser?.id === fresh.user.id ? identityFor(sessionUser) : identityOfUser(fresh.user.id), session };
+        return { identity: sessionUser?.id === fresh.user.id ? await identityFor(sessionUser) : await identityOfUser(fresh.user.id), session };
       });
       if (result.session) setCookie(res, SESSION_COOKIE, result.session, now());
       await sendSecurityNotices(result.identity, context.purpose);
       return { identity: result.identity };
     },
     async signinOptions({ req, res }) {
-      rate(req, 'ceremony');
+      await rate(req, 'ceremony');
       let options;
       try { options = await generateAuthenticationOptions({ rpID, userVerification: 'required', timeout: CHALLENGE_TTL }); }
       catch { throw badVerification(); }
       delete options.allowCredentials;
-      challengeCookie(req, res, { ceremony: 'signin', challenge: options.challenge });
+      await challengeCookie(req, res, { ceremony: 'signin', challenge: options.challenge });
       return { options };
     },
     async signinVerify({ req, res, body }) {
-      const challenge = consumeChallenge(req, res, 'signin');
-      rate(req, 'ceremony');
+      const challenge = await consumeChallenge(req, res, 'signin');
+      await rate(req, 'ceremony');
       const response = body.response;
       if (typeof response?.id !== 'string' || !response.id || response.id.length > 2048) throw badVerification();
-      const credential = db.prepare('SELECT * FROM passkeys WHERE id = ?').get(response.id);
+      const credential = await db.prepare('SELECT * FROM passkeys WHERE id = ?').get(response.id);
       if (!credential) throw badVerification();
       const user = store.userRow(credential.user_id);
       const userHandle = response.response?.userHandle;
@@ -301,132 +302,132 @@ export function createAuthService({ platform, config, transport, secrets = null,
           credential: { id: credential.id, publicKey: credential.public_key, counter: credential.counter, transports: JSON.parse(credential.transports) } });
       } catch { throw badVerification(); }
       if (!verified.verified || !verified.authenticationInfo?.userVerified) throw badVerification();
-      const result = store.transaction(() => {
+      const result = await store.transaction(async (store) => {
         freshChallenge(challenge);
-        const current = db.prepare('SELECT * FROM passkeys WHERE id = ?').get(credential.id);
+        const current = await db.prepare('SELECT * FROM passkeys WHERE id = ?').get(credential.id);
         const fresh = store.userRow(user.id);
         if (!current || !fresh || fresh.enrolled_at === null || fresh.user_handle !== userHandle
           || current.user_id !== user.id || current.counter !== credential.counter
           || current.created_at !== credential.created_at || !Buffer.from(current.public_key).equals(Buffer.from(credential.public_key))) throw badVerification();
-        db.prepare('UPDATE passkeys SET counter = ? WHERE id = ?').run(verified.authenticationInfo.newCounter, credential.id);
+        await db.prepare('UPDATE passkeys SET counter = ? WHERE id = ?').run(verified.authenticationInfo.newCounter, credential.id);
         store.revokeSession(currentSession(req));
         const session = store.createSession(user.id);
-        return { session, identity: identityOfSession(session.token) };
+        return { session, identity: await identityOfSession(session.token) };
       });
       setCookie(res, SESSION_COOKIE, result.session, now());
       return { identity: result.identity };
     },
-    recover({ req, body }) {
-      rate(req, 'recover');
+    async recover({ req, body }) {
+      await rate(req, 'recover');
       let email;
       try { email = normalizeEmail(body.email); } catch { email = null; }
-      store.rateLimit(`recover:email:${email ?? 'invalid'}`, { limit: 10, windowMs: 20 * 60_000 });
-      const user = email ? store.findUser(email) : null;
+      await store.rateLimit(`recover:email:${email ?? 'invalid'}`, { limit: 10, windowMs: 20 * 60_000 });
+      const user = email ? await store.findUser(email) : null;
       if (user?.enrolledAt != null) {
         const issued = store.createToken(user.id, 'recovery');
-        void Promise.resolve().then(() => sendLink(user, issued.token, 'recovery')).catch(() => {});
+        void Promise.resolve().then(async () => sendLink(user, issued.token, 'recovery')).catch(() => {});
       }
       return { ...GENERIC_MAIL };
     },
-    signout({ req, res }) {
-      const user = requireUser(req);
+    async signout({ req, res }) {
+      const user = await requireUser(req);
       const session = currentSession(req);
       const ceremony = readCookie(req, CEREMONY_COOKIE);
-      store.transaction(() => {
+      await store.transaction(async (store) => {
         store.revokeSession(session);
         store.clearAddPasskey(user.id);
-        store.revokeChallenge(ceremony);
+        await store.revokeChallenge(ceremony);
       });
       contextEnded(session);
       setCookie(res, SESSION_COOKIE, null);
       setCookie(res, CEREMONY_COOKIE, null);
       return { signedOut: true };
     },
-    passkeys({ req }) { return { passkeys: store.listPasskeys(requireUser(req).id) }; },
-    revokePasskey({ req, res, params }) {
-      const user = requireUser(req);
+    async passkeys({ req }) { return { passkeys: await store.listPasskeys((await requireUser(req)).id) }; },
+    async revokePasskey({ req, res, params }) {
+      const user = await requireUser(req);
       if (!store.revokePasskey(user.id, params.id, { actorId: user.id, householdId: user.householdId })) throw new HttpError(404, 'no such passkey');
       setCookie(res, SESSION_COOKIE, null);
-      return { passkeys: store.listPasskeys(user.id) };
+      return { passkeys: await store.listPasskeys(user.id) };
     },
-    users({ req }) {
-      const admin = requireUser(req, { admin: true });
+    async users({ req }) {
+      const admin = await requireUser(req, { admin: true });
       // Only an active member's passkeys are listed; a pending invitee may hold an account elsewhere.
-      return { users: store.listPeople(adminHousehold(admin)).map(person => ({
-        ...person, passkeys: person.status === 'active' ? store.listPasskeys(person.id) : [],
+      return { users: await mapSeries((await store.listPeople(adminHousehold(admin))), async person => ({
+        ...person, passkeys: person.status === 'active' ? await store.listPasskeys(person.id) : [],
       })) };
     },
     async invite({ req, body }) {
-      const admin = requireUser(req, { admin: true });
-      rate(req, 'invite');
+      const admin = await requireUser(req, { admin: true });
+      await rate(req, 'invite');
       const issued = store.invite(adminHousehold(admin), body.email, { role: body.role, inviterId: admin.id });
       await sendLink(issued.user, issued.token, 'invite');
       return { ...GENERIC_MAIL };
     },
     // An add-a-device link goes to the session user's own address; the body is ignored.
     async requestDeviceLink({ req }) {
-      const user = requireUser(req);
-      requireRecentSignin(req);
-      rate(req, 'device');
-      store.rateLimit(`device:user:${user.id}`, { limit: 10, windowMs: 20 * 60_000 });
+      const user = await requireUser(req);
+      await requireRecentSignin(req);
+      await rate(req, 'device');
+      await store.rateLimit(`device:user:${user.id}`, { limit: 10, windowMs: 20 * 60_000 });
       const { token } = store.createToken(user.id, 'add-passkey');
       await sendLink(user, token, 'add-passkey');
       return { ...GENERIC_MAIL };
     },
     // Admin actions resolve the target inside the admin's household first: anyone else is 404
     // before any change.
-    setRole({ req, params, body }) {
-      const admin = requireUser(req, { admin: true });
+    async setRole({ req, params, body }) {
+      const admin = await requireUser(req, { admin: true });
       const hh = adminHousehold(admin);
-      if (!store.person(hh, params.id)) throw new HttpError(404, 'no such user');
+      if (!await store.person(hh, params.id)) throw new HttpError(404, 'no such user');
       return { user: store.setRole(hh, params.id, body.role, { actorId: admin.id }) };
     },
-    removeUser({ req, params }) {
-      const admin = requireUser(req, { admin: true });
+    async removeUser({ req, params }) {
+      const admin = await requireUser(req, { admin: true });
       if (!store.removeMember(adminHousehold(admin), params.id, { actorId: admin.id })) throw new HttpError(404, 'no such user');
       return { removed: true };
     },
     // Only an active member's passkeys: a pending invitee's are 404 with nothing changed.
-    adminRevokePasskey({ req, params }) {
-      const admin = requireUser(req, { admin: true });
+    async adminRevokePasskey({ req, params }) {
+      const admin = await requireUser(req, { admin: true });
       const hh = adminHousehold(admin);
-      if (store.person(hh, params.id)?.status !== 'active'
+      if ((await store.person(hh, params.id))?.status !== 'active'
         || !store.revokePasskey(params.id, params.keyId, { actorId: admin.id, householdId: hh })) throw new HttpError(404, 'no such passkey');
-      return { passkeys: store.listPasskeys(params.id) };
+      return { passkeys: await store.listPasskeys(params.id) };
     },
     // Select the session's household (docs/multi-tenancy.md, Active household and switching): only
     // an active membership in an active household, else the generic 403. Rotates the session's
     // context version, so every tab still asserting the old one is refused, and ends this session's
     // streams. Returns the new identity and { id, name, role } of the household.
-    switchHousehold({ req, body }) {
-      requireUser(req);
-      rate(req, 'ceremony');
+    async switchHousehold({ req, body }) {
+      await requireUser(req);
+      await rate(req, 'ceremony');
       if (typeof body.householdId !== 'string' || !body.householdId) throw new HttpError(400, 'householdId must be a household id');
       const raw = currentSession(req);
       const household = store.switchHousehold(raw, body.householdId);
       contextEnded(raw);
-      return { identity: identityOfSession(raw), household };
+      return { identity: await identityOfSession(raw), household };
     },
     // A signed-in user joins a household through an invitation to their own address.
-    acceptInvitation({ req, body }) {
-      const user = requireUser(req);
-      rate(req, 'ceremony');
+    async acceptInvitation({ req, body }) {
+      const user = await requireUser(req);
+      await rate(req, 'ceremony');
       store.acceptInvitation(body.token, user.id);
-      return { identity: identityFor(currentUser(req)) };
+      return { identity: await identityFor(currentUser(req)) };
     },
     // An operator provisions another household; the gate refuses it with 409 multi_household_gated.
     // Its storage (root, empty store, data key when available, all-paused outbound) is created
     // before the invitation is sent; the household turns active when its first admin joins. A
     // storage failure revokes the invitation and leaves a provisioning row with no root.
     async provisionHousehold({ req, body }) {
-      const user = requireUser(req);
+      const user = await requireUser(req);
       if (!store.isOperator(user.id)) throw new HttpError(403, 'operator required');
-      rate(req, 'invite');
+      await rate(req, 'invite');
       const made = store.provisionHousehold({ displayName: body.displayName, adminEmail: body.adminEmail }, { actorId: user.id });
       try {
-        createHouseholdStorage({ platform, dataDir: config.dataDir, householdId: made.household.id, mode: demo ? 'demo' : 'real', secrets });
+        await createHouseholdStorage({ platform, dataDir: config.dataDir, householdId: made.household.id, mode: demo ? 'demo' : 'real', secrets });
       } catch (err) {
-        store.revokeInvitation(made.token);
+        await store.revokeInvitation(made.token);
         console.error('fathom: household storage failed', typeof err?.code === 'string' && /^[a-z_]{1,64}$/.test(err.code) ? err.code : 'unknown');
         throw new HttpError(503, 'household storage unavailable');
       }

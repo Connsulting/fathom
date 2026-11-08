@@ -134,7 +134,7 @@ test('AC3 fallbackTitle is null for empty input', () => {
 test('AC3 fallbackTitle works with a scenario built from a store', async () => {
   const t = await tempDb();
   try {
-    const sc = buildScenario(t.db, { clock: CLOCK });
+    const sc = await buildScenario(t.db, { clock: CLOCK });
     assert.equal(fallbackTitle(sc, 'Synthetic store question'), 'Synthetic store question');
   } finally {
     t.close();
@@ -153,11 +153,11 @@ async function namingStore(t) {
   const db = s.db;
   const msg = db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES (?, ?, ?, '[]', ?, ?)");
   let n = 0;
-  const add = (key, role, text, notice = 0) => msg.run(key, role, text, notice, `2026-11-05T09:00:${String(n++).padStart(2, '0')}.000Z`);
-  const thread = createThread(db, '2026-11-05T09:00:00.000Z');
-  const other = createThread(db, '2026-11-05T09:00:00.000Z');
-  add(other.key, 'me', OTHER[0]);
-  add(other.key, 'fathom', `<p>${OTHER[1]}</p>`);
+  const add = async (key, role, text, notice = 0) => await msg.run(key, role, text, notice, `2026-11-05T09:00:${String(n++).padStart(2, '0')}.000Z`);
+  const thread = await createThread(db, '2026-11-05T09:00:00.000Z');
+  const other = await createThread(db, '2026-11-05T09:00:00.000Z');
+  await add(other.key, 'me', OTHER[0]);
+  await add(other.key, 'fathom', `<p>${OTHER[1]}</p>`);
   return { db, thread, other, add };
 }
 
@@ -186,7 +186,7 @@ function stubEngine(reply, { on = true, during } = {}) {
   };
 }
 
-const rowOf = (db, key) => ({ ...db.prepare('SELECT title, title_source FROM conversations WHERE key = ?').get(key) });
+const rowOf = async (db, key) => ({ ...await db.prepare('SELECT title, title_source FROM conversations WHERE key = ?').get(key) });
 
 test('AC3 createThread makes an untitled ask thread', async t => {
   const { db, thread, other } = await namingStore(t);
@@ -195,7 +195,7 @@ test('AC3 createThread makes an untitled ask thread', async t => {
   assert.notEqual(thread.key, other.key);
   assert.equal(thread.title, null);
   assert.equal(thread.turns, 0);
-  assert.deepEqual(rowOf(db, thread.key), { title: null, title_source: null });
+  assert.deepEqual(await rowOf(db, thread.key), { title: null, title_source: null });
 });
 
 test('AC3 nameThread does nothing before the first owner message has a reply', async t => {
@@ -205,12 +205,12 @@ test('AC3 nameThread does nothing before the first owner message has a reply', a
   add(thread.key, 'me', FIRST_Q);
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null, 'the first question has no reply yet');
   assert.equal(calls.length, 0);
-  assert.deepEqual(rowOf(db, thread.key), { title: null, title_source: null });
+  assert.deepEqual(await rowOf(db, thread.key), { title: null, title_source: null });
   add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
   const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
   assert.ok(out != null, 'one completed turn names the thread');
   assert.equal(calls.length, 1);
-  assert.deepEqual(rowOf(db, thread.key), { title: 'Quarterly estimate planning', title_source: 'auto' });
+  assert.deepEqual(await rowOf(db, thread.key), { title: 'Quarterly estimate planning', title_source: 'auto' });
 });
 
 test('AC3 nameThread names a thread after its first completed turn', async t => {
@@ -224,7 +224,7 @@ test('AC3 nameThread names a thread after its first completed turn', async t => 
     assert.deepEqual(out, { title: 'Quarterly estimate planning', titleSource: 'auto', from: 'model' });
     assert.equal(calls.length, 1);
     assert.equal(calls[0].purpose, 'title');
-    assert.deepEqual(rowOf(db, thread.key), { title: 'Quarterly estimate planning', title_source: 'auto' });
+    assert.deepEqual(await rowOf(db, thread.key), { title: 'Quarterly estimate planning', title_source: 'auto' });
     add(thread.key, 'me', 'Synthetic estimate question two');
     add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
     assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null, 'never renamed after the first naming');
@@ -239,7 +239,7 @@ test('AC3 nameThread names a thread after its first completed turn', async t => 
     const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
     assert.deepEqual(out, { title: FIRST_Q, titleSource: 'auto', from: 'fallback' });
     assert.equal(calls.length, 0);
-    assert.deepEqual(rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
+    assert.deepEqual(await rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
   }
   // Fallback after one turn when the model title is invalid.
   {
@@ -268,7 +268,7 @@ test('AC3 nameThread sends one title call with only this thread and stores the m
   }
   for (const text of OTHER) assert.ok(!sent.includes(text), `nothing from another thread: ${text}`);
   assert.ok(!sent.includes('<p>'), 'messages are sent as plain text');
-  assert.deepEqual(rowOf(db, thread.key), { title: 'Quarterly estimate planning', title_source: 'auto' });
+  assert.deepEqual(await rowOf(db, thread.key), { title: 'Quarterly estimate planning', title_source: 'auto' });
 
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null, 'an auto-named thread is not renamed');
   assert.equal(calls.length, 1);
@@ -302,7 +302,7 @@ test('AC3 an invalid model title falls back to the first owner message', async t
     const { engine, calls } = stubEngine(reply);
     await nameThread({ db, engine, key: thread.key, clock: CLOCK });
     assert.equal(calls.length, 2);
-    assert.deepEqual(rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' }, JSON.stringify(reply));
+    assert.deepEqual(await rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' }, JSON.stringify(reply));
   }
 });
 
@@ -312,7 +312,7 @@ test('AC3 with the engine off nameThread makes no call and stores the fallback',
   const { engine, calls } = stubEngine({ title: 'Quarterly estimate planning' }, { on: false });
   await nameThread({ db, engine, key: thread.key, clock: CLOCK });
   assert.equal(calls.length, 0);
-  assert.deepEqual(rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
+  assert.deepEqual(await rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
 });
 
 test('AC3 an engine error such as over the cap stores the fallback', async t => {
@@ -322,18 +322,18 @@ test('AC3 an engine error such as over the cap stores the fallback', async t => 
     const { engine, calls } = stubEngine(error);
     await nameThread({ db, engine, key: thread.key, clock: CLOCK });
     assert.equal(calls.length, 1);
-    assert.deepEqual(rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' }, error.name);
+    assert.deepEqual(await rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' }, error.name);
   }
 });
 
 test('AC3 a thread already named by hand is never sent for a title', async t => {
   const { db, thread, add } = await namingStore(t);
   twoTurns(add, thread.key);
-  db.prepare("UPDATE conversations SET title = 'Synthetic manual name', title_source = 'manual' WHERE key = ?").run(thread.key);
+  await db.prepare("UPDATE conversations SET title = 'Synthetic manual name', title_source = 'manual' WHERE key = ?").run(thread.key);
   const { engine, calls } = stubEngine({ title: 'Quarterly estimate planning' });
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
   assert.equal(calls.length, 0);
-  assert.deepEqual(rowOf(db, thread.key), { title: 'Synthetic manual name', title_source: 'manual' });
+  assert.deepEqual(await rowOf(db, thread.key), { title: 'Synthetic manual name', title_source: 'manual' });
 });
 
 test('AC3 a thread whose first message has no usable title text is never sent for a title again', async t => {
@@ -345,21 +345,21 @@ test('AC3 a thread whose first message has no usable title text is never sent fo
   const { engine, calls } = stubEngine({ title: '<b>Quarterly</b> estimates' });
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
   assert.equal(calls.length, 2);
-  assert.deepEqual(rowOf(db, thread.key), { title: null, title_source: 'auto' });
+  assert.deepEqual(await rowOf(db, thread.key), { title: null, title_source: 'auto' });
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
   assert.equal(calls.length, 2, 'no further engine call');
-  assert.deepEqual(rowOf(db, thread.key), { title: null, title_source: 'auto' });
+  assert.deepEqual(await rowOf(db, thread.key), { title: null, title_source: 'auto' });
 });
 
 test('AC3 a manual rename made while the title call runs survives', async t => {
   const { db, thread, add } = await namingStore(t);
   twoTurns(add, thread.key);
   const { engine, calls } = stubEngine({ title: 'Quarterly estimate planning' }, {
-    during: () => db.prepare("UPDATE conversations SET title = 'Synthetic manual name', title_source = 'manual' WHERE key = ?").run(thread.key),
+    during: async () => await db.prepare("UPDATE conversations SET title = 'Synthetic manual name', title_source = 'manual' WHERE key = ?").run(thread.key),
   });
   await nameThread({ db, engine, key: thread.key, clock: CLOCK });
   assert.equal(calls.length, 1);
-  assert.deepEqual(rowOf(db, thread.key), { title: 'Synthetic manual name', title_source: 'manual' });
+  assert.deepEqual(await rowOf(db, thread.key), { title: 'Synthetic manual name', title_source: 'manual' });
 });
 
 test('AC3 a model title with words the owner never typed is accepted when the conversation has a topic word', async t => {
@@ -374,7 +374,7 @@ test('AC3 a model title with words the owner never typed is accepted when the co
   const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
   assert.deepEqual(out, { title: 'Retirement portfolio target from spending', titleSource: 'auto', from: 'model' });
   assert.equal(calls.length, 1);
-  assert.deepEqual(rowOf(db, thread.key), { title: 'Retirement portfolio target from spending', title_source: 'auto' });
+  assert.deepEqual(await rowOf(db, thread.key), { title: 'Retirement portfolio target from spending', title_source: 'auto' });
 });
 
 test('AC3 conversation words come from reply text as well as owner text', async t => {
@@ -412,7 +412,7 @@ test('AC3 fraction and multiplier words never pass in a model title, even in the
   const { engine, calls } = stubEngine({ title: 'Save a quarter of income' });
   await nameThread({ db, engine, key: thread.key, clock: CLOCK });
   assert.equal(calls.length, 2);
-  assert.deepEqual(rowOf(db, thread.key), { title: fallbackTitle(SC, first), title_source: 'auto' });
+  assert.deepEqual(await rowOf(db, thread.key), { title: fallbackTitle(SC, first), title_source: 'auto' });
 });
 
 test('AC3 titleWords normalizes case, plurals, possessives and hyphens', () => {
@@ -489,7 +489,7 @@ function seqEngine(replies, { on = true } = {}) {
 }
 
 const titleCalls = calls => calls.filter(c => c.purpose === 'title').length;
-const rejects = db => getSetting(db, 'ask.titleRejects', null);
+const rejects = async db => await getSetting(db, 'ask.titleRejects', null);
 
 test('AC8: model titles keep conversation identifiers and refuse invented numbers or money', () => {
   const conversationWords = words('Discuss 529 contributions, the 401(k), estimates for 2026, and account 1234.');
@@ -509,8 +509,8 @@ test('AC9: rejected title retries once with a plain reason before falling back',
   assert.deepEqual(await nameThread({ db, engine, key: thread.key }), { title: '529 contributions', titleSource: 'auto', from: 'model' });
   assert.equal(calls.length, 2);
   assert.match(calls[1].messages.at(-1).content, /currency|percent|numbers.*conversation/i);
-  assert.deepEqual(rejects(db), { number: 1 });
-  const other = createThread(db, '2026-11-05T09:00:00Z');
+  assert.deepEqual(await rejects(db), { number: 1 });
+  const other = await createThread(db, '2026-11-05T09:00:00Z');
   twoTurns(add, other.key);
   const invalid = seqEngine([{ title: '$4,000 plan' }]);
   assert.equal((await nameThread({ db, engine: invalid.engine, key: other.key })).from, 'fallback');
@@ -523,7 +523,7 @@ test('AC10: opening an old fallback thread after many turns repairs its title on
     add(thread.key, 'me', 'Have I made 529 contributions in 2026?');
     add(thread.key, 'fathom', '<p>The 529 contributions are stored.</p>');
   }
-  db.prepare("UPDATE conversations SET title = ?, title_source = 'auto' WHERE key = ?").run('Have I made 529 contributions in 2026?', thread.key);
+  await db.prepare("UPDATE conversations SET title = ?, title_source = 'auto' WHERE key = ?").run('Have I made 529 contributions in 2026?', thread.key);
   const { engine, calls } = seqEngine([{ title: '529 contributions' }]);
   const ctx = { db, engine, config: {}, params: { id: thread.id } };
   const opened = await threadGet(ctx);
@@ -536,14 +536,14 @@ test('AC10: opening an old fallback thread after many turns repairs its title on
 test('AC10: rejected repair is consumed once and manual names survive opening', async t => {
   const { db, thread, add } = await namingStore(t);
   twoTurns(add, thread.key);
-  db.prepare("UPDATE conversations SET title = ?, title_source = 'auto' WHERE key = ?").run(FIRST_Q, thread.key);
+  await db.prepare("UPDATE conversations SET title = ?, title_source = 'auto' WHERE key = ?").run(FIRST_Q, thread.key);
   const { engine, calls } = seqEngine([{ title: '$4,000 plan' }]);
   const ctx = { db, engine, config: {}, params: { id: thread.id } };
   assert.equal((await threadGet(ctx)).thread.title, FIRST_Q);
   assert.equal(calls.length, 2, 'one repair attempt, with one correction retry');
   await threadGet(ctx);
   assert.equal(calls.length, 2, 'opening again cannot repeat the consumed repair');
-  db.prepare("UPDATE conversations SET title = 'Manual 529 plan', title_source = 'manual' WHERE key = ?").run(thread.key);
+  await db.prepare("UPDATE conversations SET title = 'Manual 529 plan', title_source = 'manual' WHERE key = ?").run(thread.key);
   assert.equal((await threadGet(ctx)).thread.title, 'Manual 529 plan');
   assert.equal(calls.length, 2);
 });
@@ -551,11 +551,11 @@ test('AC10: rejected repair is consumed once and manual names survive opening', 
 test('AC10: answering an old fallback thread also repairs its title', async t => {
   const { db, thread, add } = await namingStore(t);
   for (let i = 0; i < 3; i++) twoTurns(add, thread.key);
-  db.prepare("UPDATE conversations SET title = ?, title_source = 'auto' WHERE key = ?").run(FIRST_Q, thread.key);
+  await db.prepare("UPDATE conversations SET title = ?, title_source = 'auto' WHERE key = ?").run(FIRST_Q, thread.key);
   const { engine, calls } = seqEngine([{ title: 'Quarterly estimate planning' }]);
   await ask({ db, engine, config: {}, body: { key: thread.key, text: 'Continue the estimate plan.' },
     answerer: { answer: async () => ({ paragraphs: ['The estimate plan is available.'], refs: [] }) } });
-  assert.equal(rowOf(db, thread.key).title, 'Quarterly estimate planning');
+  assert.equal((await rowOf(db, thread.key)).title, 'Quarterly estimate planning');
   assert.equal(calls.length, 1);
 });
 
@@ -575,9 +575,9 @@ test('AC3 a rejected model title records only its reason in ask.titleRejects', a
     twoTurns(add, thread.key);
     const { engine } = seqEngine([reply]);
     await nameThread({ db, engine, key: thread.key, clock: CLOCK });
-    assert.deepEqual(rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' }, 'falls back');
-    assert.deepEqual(rejects(db), { [reason]: 2 }, reason);
-    if (leak) assert.ok(!JSON.stringify(rejects(db)).includes(leak), `no title text stored for ${reason}`);
+    assert.deepEqual(await rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' }, 'falls back');
+    assert.deepEqual(await rejects(db), { [reason]: 2 }, reason);
+    if (leak) assert.ok(!JSON.stringify(await rejects(db)).includes(leak), `no title text stored for ${reason}`);
   }
 });
 
@@ -586,38 +586,38 @@ test('AC3 unparseable title JSON records unparsable and a thrown call records ca
     const { db, thread, add } = await namingStore(t);
     twoTurns(add, thread.key);
     await nameThread({ db, engine: seqEngine([reply]).engine, key: thread.key, clock: CLOCK });
-    assert.deepEqual(rejects(db), { unparsable: 2 }, JSON.stringify(reply));
-    assert.deepEqual(rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
+    assert.deepEqual(await rejects(db), { unparsable: 2 }, JSON.stringify(reply));
+    assert.deepEqual(await rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
   }
   const { db, thread, add } = await namingStore(t);
   twoTurns(add, thread.key);
   await nameThread({ db, engine: seqEngine([new Error('synthetic transport failure')]).engine, key: thread.key, clock: CLOCK });
-  assert.deepEqual(rejects(db), { call_failed: 1 });
-  assert.ok(!JSON.stringify(rejects(db)).includes('synthetic transport failure'), 'no error text stored');
-  assert.deepEqual(rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
+  assert.deepEqual(await rejects(db), { call_failed: 1 });
+  assert.ok(!JSON.stringify(await rejects(db)).includes('synthetic transport failure'), 'no error text stored');
+  assert.deepEqual(await rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
 });
 
 test('AC3 ask.titleRejects counts repeats per reason and an accepted title or a disabled engine records nothing', async t => {
   const { db, thread, add } = await namingStore(t);
-  assert.equal(rejects(db), null, 'nothing recorded yet');
+  assert.equal(await rejects(db), null, 'nothing recorded yet');
   twoTurns(add, thread.key);
   await nameThread({ db, engine: seqEngine([{ title: 'Spend 4000 on the estimates' }]).engine, key: thread.key, clock: CLOCK });
-  assert.deepEqual(rejects(db), { number: 2 });
-  const second = createThread(db, '2026-11-05T09:00:00.000Z');
+  assert.deepEqual(await rejects(db), { number: 2 });
+  const second = await createThread(db, '2026-11-05T09:00:00.000Z');
   twoTurns(add, second.key);
   await nameThread({ db, engine: seqEngine([{ title: 'Spend 5000 on the estimates' }]).engine, key: second.key, clock: CLOCK });
-  assert.deepEqual(rejects(db), { number: 4 }, 'incremented');
-  const third = createThread(db, '2026-11-05T09:00:00.000Z');
+  assert.deepEqual(await rejects(db), { number: 4 }, 'incremented');
+  const third = await createThread(db, '2026-11-05T09:00:00.000Z');
   twoTurns(add, third.key);
   await nameThread({ db, engine: seqEngine([{ title: 'Half the estimates' }]).engine, key: third.key, clock: CLOCK });
-  assert.deepEqual(rejects(db), { number: 4, money_word: 2 });
-  const fourth = createThread(db, '2026-11-05T09:00:00.000Z');
+  assert.deepEqual(await rejects(db), { number: 4, money_word: 2 });
+  const fourth = await createThread(db, '2026-11-05T09:00:00.000Z');
   twoTurns(add, fourth.key);
   await nameThread({ db, engine: seqEngine([{ title: 'Quarterly estimate planning' }]).engine, key: fourth.key, clock: CLOCK });
-  const fifth = createThread(db, '2026-11-05T09:00:00.000Z');
+  const fifth = await createThread(db, '2026-11-05T09:00:00.000Z');
   twoTurns(add, fifth.key);
   await nameThread({ db, engine: seqEngine([{ title: 'Spend 4000' }], { on: false }).engine, key: fifth.key, clock: CLOCK });
-  assert.deepEqual(rejects(db), { number: 4, money_word: 2 }, 'accepted and engine-off threads add nothing');
+  assert.deepEqual(await rejects(db), { number: 4, money_word: 2 }, 'accepted and engine-off threads add nothing');
 });
 
 // ---------------------------------------------------------------- one fallback repair after naming
@@ -634,7 +634,7 @@ test('AC10 a fallback-titled thread is repaired on its next answered turn and an
   const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
   assert.deepEqual(out, { title: 'Quarterly estimate planning', titleSource: 'auto', from: 'model' });
   assert.equal(titleCalls(calls), 3, 'exactly one retry call');
-  assert.deepEqual(rowOf(db, thread.key), { title: 'Quarterly estimate planning', title_source: 'auto' });
+  assert.deepEqual(await rowOf(db, thread.key), { title: 'Quarterly estimate planning', title_source: 'auto' });
   add(thread.key, 'me', 'Synthetic estimate question three');
   add(thread.key, 'fathom', '<p>Synthetic estimate answer three</p>');
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
@@ -651,13 +651,13 @@ test('AC3 a rejected retry keeps the fallback, records the reason and is not tri
   add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
   assert.equal(titleCalls(calls), 4);
-  assert.deepEqual(rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
-  assert.deepEqual(rejects(db), { number: 2, money_word: 2 });
+  assert.deepEqual(await rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
+  assert.deepEqual(await rejects(db), { number: 2, money_word: 2 });
   add(thread.key, 'me', 'Synthetic estimate question three');
   add(thread.key, 'fathom', '<p>Synthetic estimate answer three</p>');
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
   assert.equal(titleCalls(calls), 4, 'the retry happens once');
-  assert.deepEqual(rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
+  assert.deepEqual(await rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
 });
 
 test('AC3 a thread whose first title came from the model gets no retry at turn 2', async t => {
@@ -670,7 +670,7 @@ test('AC3 a thread whose first title came from the model gets no retry at turn 2
   add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
   assert.equal(titleCalls(calls), 1);
-  assert.deepEqual(rowOf(db, thread.key), { title: 'Quarterly estimate planning', title_source: 'auto' });
+  assert.deepEqual(await rowOf(db, thread.key), { title: 'Quarterly estimate planning', title_source: 'auto' });
 });
 
 test('AC3 a manual rename before turn 2 prevents the retry', async t => {
@@ -679,12 +679,12 @@ test('AC3 a manual rename before turn 2 prevents the retry', async t => {
   add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
   const { engine, calls } = seqEngine([{ title: 'Spend 4000 on the estimates' }, { title: 'Spend 4000 on the estimates' }, { title: 'Quarterly estimate planning' }]);
   await nameThread({ db, engine, key: thread.key, clock: CLOCK });
-  db.prepare("UPDATE conversations SET title = 'Synthetic manual name', title_source = 'manual' WHERE key = ?").run(thread.key);
+  await db.prepare("UPDATE conversations SET title = 'Synthetic manual name', title_source = 'manual' WHERE key = ?").run(thread.key);
   add(thread.key, 'me', 'Synthetic estimate question two');
   add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
   assert.equal(titleCalls(calls), 2);
-  assert.deepEqual(rowOf(db, thread.key), { title: 'Synthetic manual name', title_source: 'manual' });
+  assert.deepEqual(await rowOf(db, thread.key), { title: 'Synthetic manual name', title_source: 'manual' });
 });
 
 test('AC3 a manual rename made while the retry call runs survives', async t => {
@@ -697,11 +697,11 @@ test('AC3 a manual rename made while the retry call runs survives', async t => {
   add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
   const racing = { ...seq.engine, call: async req => {
     const res = await seq.engine.call(req);
-    db.prepare("UPDATE conversations SET title = 'Synthetic manual name', title_source = 'manual' WHERE key = ?").run(thread.key);
+    await db.prepare("UPDATE conversations SET title = 'Synthetic manual name', title_source = 'manual' WHERE key = ?").run(thread.key);
     return res;
   } };
   await nameThread({ db, engine: racing, key: thread.key, clock: CLOCK });
-  assert.deepEqual(rowOf(db, thread.key), { title: 'Synthetic manual name', title_source: 'manual' });
+  assert.deepEqual(await rowOf(db, thread.key), { title: 'Synthetic manual name', title_source: 'manual' });
 });
 
 test('AC3 no retry call when the engine is off at turn 2 or the first title was null', async t => {
@@ -716,7 +716,7 @@ test('AC3 no retry call when the engine is off at turn 2 or the first title was 
     add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
     assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
     assert.equal(titleCalls(calls), 2);
-    assert.deepEqual(rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
+    assert.deepEqual(await rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
   }
   {
     const { db, thread, add } = await namingStore(t);
@@ -728,7 +728,7 @@ test('AC3 no retry call when the engine is off at turn 2 or the first title was 
     add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
     assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
     assert.equal(titleCalls(calls), 2, 'a NULL title is never retried');
-    assert.deepEqual(rowOf(db, thread.key), { title: null, title_source: 'auto' });
+    assert.deepEqual(await rowOf(db, thread.key), { title: null, title_source: 'auto' });
   }
 });
 

@@ -2,6 +2,7 @@ import { matchTransfers, normalizeMerchant, spendingAccount } from '../categorie
 import { round } from './figure.mjs';
 import { monthIndex, monthAt } from './aggregate.mjs';
 import { listPreferences } from '../actions/preferences.mjs';
+import { mapSeries } from '../shared/series.mjs';
 
 const sum = rows => rows.reduce((s, r) => s + r.amount, 0);
 const source = (table, rows) => ({ table, ids: rows.map(r => r.id).slice(0, 50), count: rows.length });
@@ -15,15 +16,15 @@ const PAID_OFF = [
 ];
 const paidOffStatement = text => PAID_OFF.some(re => re.test(text.trim()));
 
-export function inferMortgage(db, clock, stated) {
+export async function inferMortgage(db, clock, stated) {
   const values = { ...(stated || {}) }, assumptions = [], sources = [], inferred = {};
   const inactive = (status, message, evidence = []) => ({ status, message, values: status === 'paid_off' ? { paidOff: true } : values,
     sources: evidence, assumptions: [], inferred: {}, missing: [], observedMonthly: null, principalAndInterest: null,
     present: false, loan: null, payments: [], asOf: null });
-  const memory = listPreferences(db).find(m => paidOffStatement(m.text));
-  const accounts = db.prepare('SELECT * FROM accounts WHERE archived_at IS NULL ORDER BY id').all();
+  const memory = (await listPreferences(db)).find(m => paidOffStatement(m.text));
+  const accounts = await db.prepare('SELECT * FROM accounts WHERE archived_at IS NULL ORDER BY id').all();
   const namedLoans = accounts.filter(a => a.kind === 'loan' && /mortgage|home loan|housing loan/i.test(`${a.name || ''} ${a.display_name || ''}`));
-  const balances = new Map(namedLoans.map(a => [a.id, db.prepare('SELECT id,date,amount FROM balances WHERE account_id=? AND date<=? ORDER BY date DESC,id DESC LIMIT 1').get(a.id, clock)]));
+  const balances = new Map(await mapSeries(namedLoans, async a => [a.id, await db.prepare('SELECT id,date,amount FROM balances WHERE account_id=? AND date<=? ORDER BY date DESC,id DESC LIMIT 1').get(a.id, clock)]));
   const loans = namedLoans.filter(a => Math.abs(balances.get(a.id)?.amount ?? 0) > 0);
   if (values.paidOff === true || values.status === 'paid_off' || values.balance === 0 || memory) {
     // A memory wins over loan data that still shows a balance; the result says so.
@@ -39,7 +40,7 @@ export function inferMortgage(db, clock, stated) {
   const loan = loans.length === 1 ? loans[0] : null;
   const active = new Map(accounts.map(a => [a.id, a]));
   const firstMonth = monthIndex(clock.slice(0, 7)) - 12;
-  const transactions = db.prepare('SELECT * FROM transactions WHERE date>=? AND date<=? ORDER BY date,id').all(`${monthAt(firstMonth)}-01`, clock);
+  const transactions = await db.prepare('SELECT * FROM transactions WHERE date>=? AND date<=? ORDER BY date,id').all(`${monthAt(firstMonth)}-01`, clock);
   const credits = loan ? transactions.filter(t => t.account_id === loan.id && t.amount > 0 && paymentText(t.description)) : [];
   const outflows = transactions.filter(t => t.amount < 0 && spendingAccount(active.get(t.account_id) || {}));
   const matches = matchTransfers(outflows, credits);
@@ -62,7 +63,7 @@ export function inferMortgage(db, clock, stated) {
   const observedMonthly = months.size ? round(complete.reduce((s, t) => s + Math.abs(t.amount), 0) / months.size) : null;
   if (loan) sources.push(source('accounts', [loan]));
   if (payments.length) sources.push(source('transactions', payments));
-  const snapshots = loan ? db.prepare('SELECT id,date,amount FROM balances WHERE account_id=? AND date<=? ORDER BY date,id').all(loan.id, clock) : [];
+  const snapshots = loan ? await db.prepare('SELECT id,date,amount FROM balances WHERE account_id=? AND date<=? ORDER BY date,id').all(loan.id, clock) : [];
   const newest = snapshots.at(-1);
   if (newest) sources.push(source('balances', snapshots));
   const add = (key, value, explanation) => {

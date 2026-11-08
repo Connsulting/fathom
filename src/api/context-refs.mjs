@@ -75,14 +75,14 @@ const visibleRec = (scenario, id) => arr(scenario.recs).find(r => r && r.id === 
 const txnHint = id => `transactions.search with ids [${id}]`;
 const recHint = id => `recommendations.detail with id ${id}`;
 
-function transactionRef(db, id) {
-  const row = /^\d+$/.test(id) ? db.prepare('SELECT id FROM transactions WHERE id = ?').get(Number(id)) : null;
+async function transactionRef(db, id) {
+  const row = /^\d+$/.test(id) ? await db.prepare('SELECT id FROM transactions WHERE id = ?').get(Number(id)) : null;
   return row ? { kind: 'transaction', id: String(row.id), use: txnHint(row.id) } : null;
 }
 
 // The categories an entity's P&L shows: its default range and the longest range the P&L allows
 // (36 months) ending at the app clock month, income and expenses.
-function pnlCategories(db, entity, clock) {
+async function pnlCategories(db, entity, clock) {
   const out = new Set();
   const month = String(clock || '').slice(0, 7);
   const ranges = [{}];
@@ -93,7 +93,7 @@ function pnlCategories(db, entity, clock) {
   }
   for (const r of ranges) {
     let p = null;
-    try { p = businessPnl({ db, entity, clock, ...r }); } catch { p = null; }
+    try { p = await businessPnl({ db, entity, clock, ...r }); } catch { p = null; }
     for (const s of ['income', 'expenses']) for (const c of (p && p[s] && Array.isArray(p[s].categories) ? p[s].categories : [])) out.add(c.category);
   }
   return out;
@@ -124,22 +124,22 @@ function splitQualifier(id) {
 }
 
 // One ref, with or without a view qualifier.
-function resolveRef(db, scenario, ref) {
+async function resolveRef(db, scenario, ref) {
   const sq = ref && typeof ref.id === 'string' ? splitQualifier(ref.id) : null;
-  if (!sq) return resolveOne(db, scenario, ref);
-  const r = resolveOne(db, scenario, { kind: ref.kind, id: sq.base });
+  if (!sq) return await resolveOne(db, scenario, ref);
+  const r = await resolveOne(db, scenario, { kind: ref.kind, id: sq.base });
   return r ? { kind: r.kind, id: `${r.id}@${sq.q}`, use: `${r.use}; on screen: ${sq.words}` } : null;
 }
 
 // One ref as { kind, id, use } or null when the store does not know it.
-function resolveOne(db, scenario, { kind, id }) {
+async function resolveOne(db, scenario, { kind, id }) {
   const plain = s => resolveTokens(scenario, String(s ?? ''), false);
   switch (kind) {
     case 'account':
-      return db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(id)
+      return await db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(id)
         ? { kind, id, use: `transactions.search with accountId ${id}, accounts.list, accounts.holdings with id ${id}` } : null;
     case 'transaction':
-      return transactionRef(db, id);
+      return await transactionRef(db, id);
     case 'rec':
       return visibleRec(scenario, id) ? { kind, id, use: recHint(id) } : null;
     case 'step': {
@@ -151,7 +151,7 @@ function resolveOne(db, scenario, { kind, id }) {
     case 'goal':
       return arr(scenario.goals).some(g => g && g.id === id && !g.archived) ? { kind, id, use: 'goals.list, goals.pace' } : null;
     case 'figure': {
-      if (id.startsWith('txn.')) return transactionRef(db, id.slice(4));
+      if (id.startsWith('txn.')) return await transactionRef(db, id.slice(4));
       if (!scenario.fig || !Object.hasOwn(scenario.fig, id)) return null;
       return { kind, id, use: `write it as the token {f:${id}}; household.figures with keys [${id}] for its source` };
     }
@@ -164,22 +164,22 @@ function resolveOne(db, scenario, { kind, id }) {
       const category = bar < 0 ? '' : base.slice(bar + 1);
       const clock = scenario.meta && scenario.meta.clock;
       let ent = null;
-      try { ent = pnlEntities({ db, clock }).find(e => e.key === key) || null; } catch { ent = null; }
+      try { ent = (await pnlEntities({ db, clock })).find(e => e.key === key) || null; } catch { ent = null; }
       if (!ent) return null;
       // A category row must be one of this entity's real P&L categories before its name reaches
       // the prompt: an invented or misspelled category drops the reference.
-      if (category && !pnlCategories(db, key, clock).has(category)) return null;
+      if (category && !(await pnlCategories(db, key, clock)).has(category)) return null;
       return { kind, id, use: `business.pnl with entity ${plain(ent.label)}${category ? `, the ${category} lines` : ''}${month ? `, ${month} only` : ''}` };
     }
     case 'spending': {
       const { base, month } = splitMonth(id);
-      return base && db.prepare('SELECT 1 FROM transactions WHERE category = ? LIMIT 1').get(base)
+      return base && await db.prepare('SELECT 1 FROM transactions WHERE category = ? LIMIT 1').get(base)
         ? { kind, id, use: `transactions.search with category ${base}${month ? `, ${month} only` : ''}, business.pnl` } : null;
     }
     case 'confirm': {
       const rows = id.startsWith('group:')
-        ? db.prepare("SELECT question FROM confirm_items WHERE status = 'pending' AND kind = ? ORDER BY id").all(id.slice(6))
-        : /^\d+$/.test(id) ? db.prepare("SELECT question FROM confirm_items WHERE status = 'pending' AND id = ?").all(Number(id)) : [];
+        ? await db.prepare("SELECT question FROM confirm_items WHERE status = 'pending' AND kind = ? ORDER BY id").all(id.slice(6))
+        : /^\d+$/.test(id) ? await db.prepare("SELECT question FROM confirm_items WHERE status = 'pending' AND id = ?").all(Number(id)) : [];
       if (!rows.length) return null;
       const questions = rows.slice(0, MAX_GROUP_QUESTIONS).map(r => plain(r.question)).filter(Boolean);
       return { kind, id, use: `Confirm card question, no tool reads it: ${questions.join(' / ') || 'none'}` };
@@ -196,11 +196,11 @@ function resolveOne(db, scenario, { kind, id }) {
   }
 }
 
-export function resolveRefs(db, scenario, refs) {
+export async function resolveRefs(db, scenario, refs) {
   const out = [];
   const seen = new Set();
   for (const ref of arr(refs)) {
-    const r = resolveRef(db, scenario || {}, ref);
+    const r = await resolveRef(db, scenario || {}, ref);
     if (!r || seen.has(`${r.kind}:${r.id}`)) continue;
     seen.add(`${r.kind}:${r.id}`);
     out.push(r);

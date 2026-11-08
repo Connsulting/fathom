@@ -27,20 +27,20 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     const { household } = cli;
     if (household.mode !== 'real') throw new Error();
     const db = household.db;
-    const pairs = detectAccountPairs(db);
+    const pairs = await detectAccountPairs(db);
     const counts = { pairs:pairs.length, sure:pairs.filter(p=>p.confidence==='sure').length, likely:pairs.filter(p=>p.confidence==='likely').length, merged:0 };
     if (apply) {
-      queueAccountPairs(db);
+      await queueAccountPairs(db);
       for (const p of pairs.filter(p=>p.confidence==='sure')) {
-        const current = detectAccountPairs(db).find(x=>x.candidateId===p.candidateId && x.ownId===p.ownId && x.confidence==='sure');
+        const current = (await detectAccountPairs(db)).find(x=>x.candidateId===p.candidateId && x.ownId===p.ownId && x.confidence==='sure');
         if (!current) continue;
-        const q = db.prepare("SELECT id FROM confirm_items WHERE kind='account_match' AND subject=? AND status='pending'").get(`merge:${p.candidateId}:${p.ownId}`);
+        const q = await db.prepare("SELECT id FROM confirm_items WHERE kind='account_match' AND subject=? AND status='pending'").get(`merge:${p.candidateId}:${p.ownId}`);
         if (!q) continue;
-        answerItem(db,q.id,'same');
+        await answerItem(db,q.id,'same');
         counts.merged += 1;
       }
       // Older merges left survivors without the institution or last 4 a merge now carries over.
-      backfillMergedIdentity(db);
+      await backfillMergedIdentity(db);
       if (counts.merged) {
         scheduler = createScheduler({db,config,engine:null,handlers:defaultHandlers(),log:{log(){}},
           allowed:()=>household.outbound.enabled('jobs'),household:()=>household});

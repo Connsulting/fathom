@@ -10,13 +10,13 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   const { householdId, rest } = householdArg(argv);
   if (rest.length) throw codeError('backup_arguments_invalid');
   const config = loadConfig(env);
-  const opened = openInstance(config);
+  const opened = await openInstance(config);
   if (!opened) throw codeError('household_unavailable');
   try {
     const result = await backupHousehold({ platform: opened.platform, config, householdId });
     const { file, ...status } = result;
     console.log(JSON.stringify(status));
-  } finally { opened.platform.close(); }
+  } finally { await opened.platform.close(); }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

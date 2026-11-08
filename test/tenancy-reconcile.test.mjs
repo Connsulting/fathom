@@ -41,10 +41,10 @@ const refused = (name, code) => err => {
   return true;
 };
 
-const roundsOf = (platform, id) => platform.prepare("SELECT * FROM model_rounds WHERE household_id = ? AND kind = 'round' ORDER BY reserved_at, rowid").all(id).map(r => ({ ...r }));
-const roundById = (platform, id) => ({ ...platform.prepare('SELECT * FROM model_rounds WHERE id = ?').get(id) });
-const outboundRows = platform => platform.prepare('SELECT * FROM household_outbound ORDER BY household_id').all().map(r => ({ ...r }));
-const audits = platform => platform.prepare("SELECT * FROM audit_events WHERE action = 'model.reconcile' ORDER BY id").all().map(r => ({ ...r }));
+const roundsOf = async (platform, id) => (await platform.prepare("SELECT * FROM model_rounds WHERE household_id = ? AND kind = 'round' ORDER BY reserved_at, rowid").all(id)).map(r => ({ ...r }));
+const roundById = async (platform, id) => ({ ...await platform.prepare('SELECT * FROM model_rounds WHERE id = ?').get(id) });
+const outboundRows = async platform => (await platform.prepare('SELECT * FROM household_outbound ORDER BY household_id').all()).map(r => ({ ...r }));
+const audits = async platform => (await platform.prepare("SELECT * FROM audit_events WHERE action = 'model.reconcile' ORDER BY id").all()).map(r => ({ ...r }));
 const month = () => new Date().toISOString().slice(0, 7);
 
 async function withLive(options, fn) {
@@ -61,17 +61,17 @@ async function withLive(options, fn) {
 
 // Runs the command against the instance; household_outbound must be byte-identical afterwards.
 async function reconcile(two, { household, round, cost, receipt }) {
-  const flags = outboundRows(two.platform);
+  const flags = await outboundRows(two.platform);
   const r = await runCommand(process.execPath, ['scripts/reconcile-spend.mjs', '--household', household, '--round', round,
     '--cost-usd', cost, '--receipt-ref', receipt], { env: { FATHOM_DATA: two.dataDir } });
-  assert.deepEqual(outboundRows(two.platform), flags, 'reconcile-spend never changes outbound flags');
+  assert.deepEqual(await outboundRows(two.platform), flags, 'reconcile-spend never changes outbound flags');
   return r;
 }
 const ok = (r, code) => { assert.equal(r.code, 0, r.stdout + r.stderr); assert.equal(r.stdout, `reconcile-spend: ${code}\n`); assert.equal(r.stderr, ''); };
 const no = (r, code) => { assert.equal(r.code, 1, r.stdout + r.stderr); assert.equal(r.stderr, `reconcile-spend: ${code}\n`); assert.equal(r.stdout, ''); };
 
-function noReceiptInAudit(platform, ...texts) {
-  for (const row of platform.prepare('SELECT * FROM audit_events').all()) {
+async function noReceiptInAudit(platform, ...texts) {
+  for (const row of await platform.prepare('SELECT * FROM audit_events').all()) {
     const s = JSON.stringify(row);
     for (const t of texts) assert.ok(!s.includes(t), 'audit rows never carry receipt text');
   }
@@ -81,17 +81,17 @@ function noReceiptInAudit(platform, ...texts) {
 async function heldRound(two, emulator, id) {
   emulator.script([{ destroy: true }]);
   await assert.rejects(two.ctx(id).engine.call(CALL));
-  const row = roundsOf(two.platform, id).at(-1);
+  const row = (await roundsOf(two.platform, id)).at(-1);
   assert.equal(row.state, 'held');
   assert.equal(row.hold_code, 'cost_unknown');
   return row;
 }
 
 describe('node scripts/reconcile-spend.mjs', T, () => {
-  test('refuses bad receipt references, bad costs, unknown and foreign rounds, and changes nothing', T, () => withLive({}, async ({ two, emulator, A, B }) => {
+  test('refuses bad receipt references, bad costs, unknown and foreign rounds, and changes nothing', T, async () => withLive({}, async ({ two, emulator, A, B }) => {
     const held = await heldRound(two, emulator, A);
     await two.ctx(B).engine.call(CALL);
-    const [settledB] = roundsOf(two.platform, B);
+    const [settledB] = await roundsOf(two.platform, B);
     assert.equal(settledB.state, 'settled');
     const good = { household: A, round: held.id, cost: '0.01', receipt: RECEIPT };
     const bad = ['', '   ', 'r'.repeat(200), '../x'];
@@ -100,39 +100,39 @@ describe('node scripts/reconcile-spend.mjs', T, () => {
     no(await reconcile(two, { ...good, round: 'mr-synthetic-unknown' }), 'no_such_round');
     no(await reconcile(two, { ...good, round: settledB.id }), 'foreign_round');
     no(await reconcile(two, { ...good, household: B }), 'foreign_round');
-    assert.deepEqual(roundById(two.platform, held.id), held, 'the held round is unchanged');
-    assert.deepEqual(roundById(two.platform, settledB.id), settledB, 'the other household\'s round is unchanged');
-    assert.ok(audits(two.platform).every(a => a.outcome !== 'ok'), 'no refusal is audited as ok');
-    noReceiptInAudit(two.platform, RECEIPT, '../x', 'r'.repeat(200));
+    assert.deepEqual(await roundById(two.platform, held.id), held, 'the held round is unchanged');
+    assert.deepEqual(await roundById(two.platform, settledB.id), settledB, 'the other household\'s round is unchanged');
+    assert.ok((await audits(two.platform)).every(a => a.outcome !== 'ok'), 'no refusal is audited as ok');
+    await noReceiptInAudit(two.platform, RECEIPT, '../x', 'r'.repeat(200));
   }));
 
-  test('settles a known-cost hold once, idempotently, without enabling outbound work; the household can call again', T, () => withLive({}, async ({ two, emulator, A }) => {
+  test('settles a known-cost hold once, idempotently, without enabling outbound work; the household can call again', T, async () => withLive({}, async ({ two, emulator, A }) => {
     const { budget, outbound } = { budget: await src('src/platform/model-budget.mjs'), outbound: await src('src/platform/outbound.mjs') };
     const held = await heldRound(two, emulator, A);
     assert.ok(held.reserved_usd > 0.01, 'precondition: the cost fits the reservation');
     outbound.setOutbound(two.platform, A, { engine: false });
-    const flags = outboundRows(two.platform);
+    const flags = await outboundRows(two.platform);
 
     ok(await reconcile(two, { household: A, round: held.id, cost: '0.01', receipt: RECEIPT }), 'settled');
-    const settled = roundById(two.platform, held.id);
+    const settled = await roundById(two.platform, held.id);
     assert.equal(settled.state, 'settled');
     near(settled.cost_usd, 0.01, 'settled cost');
     assert.equal(settled.receipt_ref, RECEIPT);
     near(await budget.committedUsd(two.platform, { householdId: A, month: month() }), 0.01, 'the unused reservation is released');
-    let rows = audits(two.platform);
+    let rows = await audits(two.platform);
     assert.equal(rows.length, 1);
     assert.equal(rows[0].household_id, A);
     assert.equal(rows[0].outcome, 'ok');
-    assert.deepEqual(outboundRows(two.platform), flags, 'flags unchanged');
+    assert.deepEqual(await outboundRows(two.platform), flags, 'flags unchanged');
     assert.equal(outbound.readOutbound(two.platform, A).engine, false, 'reconciling never resumes a paused engine');
 
     ok(await reconcile(two, { household: A, round: held.id, cost: '0.01', receipt: RECEIPT }), 'unchanged');
-    assert.deepEqual(roundById(two.platform, held.id), settled);
-    rows = audits(two.platform);
+    assert.deepEqual(await roundById(two.platform, held.id), settled);
+    rows = await audits(two.platform);
     assert.equal(rows.filter(a => a.outcome === 'ok').length, 1, 'an unchanged repeat adds no settlement');
     no(await reconcile(two, { household: A, round: held.id, cost: '0.02', receipt: RECEIPT }), 'already_settled');
-    assert.deepEqual(roundById(two.platform, held.id), settled, 'a different cost never resettles');
-    noReceiptInAudit(two.platform, RECEIPT);
+    assert.deepEqual(await roundById(two.platform, held.id), settled, 'a different cost never resettles');
+    await noReceiptInAudit(two.platform, RECEIPT);
 
     // Liveness: with the hold cleared and the engine resumed by the admin, a fresh context calls again.
     outbound.setOutbound(two.platform, A, { engine: true });
@@ -141,27 +141,27 @@ describe('node scripts/reconcile-spend.mjs', T, () => {
     await side.engine.call(CALL);
     assert.equal(emulator.requests.length, before + 1, 'the household is admitted again');
     await side.engine.status();
-    const mirrors = side.household.db.prepare('SELECT * FROM spend_ledger WHERE round_id = ?').all(held.id);
+    const mirrors = await side.household.db.prepare('SELECT * FROM spend_ledger WHERE round_id = ?').all(held.id);
     assert.equal(mirrors.length, 1, 'the reconciled round is mirrored once');
     near(mirrors[0].cost_usd, 0.01, 'mirrored cost');
   }));
 
-  test('an over-bound cost keeps the hold as reservation_bound_exceeded with the debt recorded; others keep calling', T, () => withLive({}, async ({ two, emulator, A, B }) => {
+  test('an over-bound cost keeps the hold as reservation_bound_exceeded with the debt recorded; others keep calling', T, async () => withLive({}, async ({ two, emulator, A, B }) => {
     const budget = await src('src/platform/model-budget.mjs');
     const pricing = await src('src/engine/pricing.mjs');
     const held = await heldRound(two, emulator, A);
     assert.ok(held.reserved_usd < 5, 'precondition: 5 exceeds the reservation');
     no(await reconcile(two, { household: A, round: held.id, cost: '5', receipt: RECEIPT }), 'reservation_bound_exceeded');
-    const kept = roundById(two.platform, held.id);
+    const kept = await roundById(two.platform, held.id);
     assert.equal(kept.state, 'held');
     assert.equal(kept.hold_code, 'reservation_bound_exceeded');
     near(kept.cost_usd, 5, 'the debt is recorded');
     near(await budget.committedUsd(two.platform, { householdId: A, month: month() }), 5, 'the debt counts in full');
-    assert.ok(audits(two.platform).some(a => a.household_id === A && a.outcome === 'reservation_bound_exceeded'));
+    assert.ok((await audits(two.platform)).some(a => a.household_id === A && a.outcome === 'reservation_bound_exceeded'));
 
     // The ordinary command cannot disguise it as a within-bound settlement.
     no(await reconcile(two, { household: A, round: held.id, cost: '0.01', receipt: RECEIPT }), 'reservation_bound_exceeded');
-    assert.deepEqual(roundById(two.platform, held.id), kept);
+    assert.deepEqual(await roundById(two.platform, held.id), kept);
     const side = await two.side(A);
     const sent = emulator.requests.length;
     await assert.rejects(side.engine.call(CALL), refused('ModelAccountingError', 'accounting_hold'));
@@ -175,18 +175,18 @@ describe('node scripts/reconcile-spend.mjs', T, () => {
     const usage = { input_tokens: 2_000_000, output_tokens: 10 };
     emulator.script([{ usage }]);
     await assert.rejects(two.ctx(B).engine.call(CALL));
-    const over = roundsOf(two.platform, B).at(-1);
+    const over = (await roundsOf(two.platform, B)).at(-1);
     assert.equal(over.state, 'held');
     assert.equal(over.hold_code, 'reservation_bound_exceeded');
     near(over.cost_usd, pricing.usageCostUsd(emulator.requests.at(-1).model, usage), 'provider cost recorded');
     no(await reconcile(two, { household: B, round: over.id, cost: '0.01', receipt: 'rcpt-synthetic-0002' }), 'reservation_bound_exceeded');
-    assert.deepEqual(roundById(two.platform, over.id), over);
-    noReceiptInAudit(two.platform, RECEIPT, 'rcpt-synthetic-0002');
+    assert.deepEqual(await roundById(two.platform, over.id), over);
+    await noReceiptInAudit(two.platform, RECEIPT, 'rcpt-synthetic-0002');
   }));
 
-  test('the serving runtime refuses while the hold lasts and answers again once the round is reconciled', T, () => withLive({}, async ({ two, emulator, A }) => {
+  test('the serving runtime refuses while the hold lasts and answers again once the round is reconciled', T, async () => withLive({}, async ({ two, emulator, A }) => {
     const serving = two.server.app.runtimes.get(A).engine;
-    const flags = outboundRows(two.platform);
+    const flags = await outboundRows(two.platform);
     const held = await heldRound(two, emulator, A);
     assert.equal(two.server.app.runtimes.get(A).engine, serving, 'the same serving engine');
     const sent = emulator.requests.length;
@@ -200,12 +200,12 @@ describe('node scripts/reconcile-spend.mjs', T, () => {
     const res = await serving.call(CALL);
     assert.equal(res.text, 'Synthetic answer with no figures.');
     assert.equal(emulator.requests.length, sent + 1, 'the serving engine dispatched the round');
-    assert.equal(roundsOf(two.platform, A).at(-1).state, 'settled');
+    assert.equal((await roundsOf(two.platform, A)).at(-1).state, 'settled');
     assert.equal(serving.isOn(), true);
-    assert.deepEqual(outboundRows(two.platform), flags, 'household_outbound unchanged');
+    assert.deepEqual(await outboundRows(two.platform), flags, 'household_outbound unchanged');
   }));
 
-  test('the serving runtime stays refused after an over-bound reconcile', T, () => withLive({}, async ({ two, emulator, A }) => {
+  test('the serving runtime stays refused after an over-bound reconcile', T, async () => withLive({}, async ({ two, emulator, A }) => {
     const serving = two.server.app.runtimes.get(A).engine;
     const held = await heldRound(two, emulator, A);
     no(await reconcile(two, { household: A, round: held.id, cost: '5', receipt: RECEIPT }), 'reservation_bound_exceeded');
@@ -215,33 +215,33 @@ describe('node scripts/reconcile-spend.mjs', T, () => {
     assert.equal(emulator.requests.length, sent, 'nothing dispatched');
   }));
 
-  test('a round still in flight is refused; an expired reservation is reconciled', T, () => withLive({}, async ({ two, emulator, B }) => {
+  test('a round still in flight is refused; an expired reservation is reconciled', T, async () => withLive({}, async ({ two, emulator, B }) => {
     const budget = await src('src/platform/model-budget.mjs');
     emulator.script([{ hang: true }, { hang: true }]);
     const inFlight = two.ctx(B).engine.call(CALL).then(r => r, e => e);
     await emulator.waitForRequests(1);
-    const [live] = roundsOf(two.platform, B);
+    const [live] = await roundsOf(two.platform, B);
     assert.equal(live.state, 'reserved');
     no(await reconcile(two, { household: B, round: live.id, cost: '0.01', receipt: RECEIPT }), 'round_in_flight');
-    assert.deepEqual(roundById(two.platform, live.id), live, 'the in-flight round is untouched');
+    assert.deepEqual(await roundById(two.platform, live.id), live, 'the in-flight round is untouched');
 
     // A round reserved more than RESERVATION_TTL_MS ago (a crashed process) is reconcilable.
     const old = await two.side(B, { ...two.engineOptions, fundingNow: () => Date.now() - budget.RESERVATION_TTL_MS - 60_000 });
     const crashed = old.engine.call(CALL).then(r => r, e => e);
     await emulator.waitForRequests(2);
-    const stale = roundsOf(two.platform, B).find(r => r.id !== live.id);
+    const stale = (await roundsOf(two.platform, B)).find(r => r.id !== live.id);
     assert.equal(stale.state, 'reserved');
     assert.ok(stale.expires_at < Date.now(), 'precondition: the reservation has expired');
     ok(await reconcile(two, { household: B, round: stale.id, cost: '0.01', receipt: RECEIPT }), 'settled');
-    const settled = roundById(two.platform, stale.id);
+    const settled = await roundById(two.platform, stale.id);
     assert.equal(settled.state, 'settled');
     near(settled.cost_usd, 0.01, 'reconciled cost');
-    assert.equal(roundById(two.platform, live.id).state, 'reserved', 'the other round is still in flight');
+    assert.equal((await roundById(two.platform, live.id)).state, 'reserved', 'the other round is still in flight');
 
     await emulator.close();
     await inFlight;
     await crashed;
-    const after = roundById(two.platform, stale.id);
+    const after = await roundById(two.platform, stale.id);
     assert.equal(after.state, 'settled', 'the late failure of the crashed round never reopens it');
     near(after.cost_usd, 0.01, 'cost unchanged');
   }));

@@ -76,15 +76,15 @@ async function seed(side, canary, number) {
   s.key = key.key;
   s.keyId = key.record.id;
   s.recId = `syn-${canary.toLowerCase()}`;
-  ctx.db.prepare("INSERT INTO recs (id, def, status, tasks_done, sort, updated_at) VALUES (?, ?, 'proposed', '[]', 0, ?)")
+  await ctx.db.prepare("INSERT INTO recs (id, def, status, tasks_done, sort, updated_at) VALUES (?, ?, 'proposed', '[]', 0, ?)")
     .run(s.recId, JSON.stringify({ id: s.recId, title: `${canary} review`, summary: `${canary} summary`, domain: 'data' }), NOW);
   await ok(hh.client.postJson('/api/advisor/reviews', { recId: s.recId }), `${side} review`);
   s.packetId = (await ok(hh.client.postJson('/api/advisor/packets', {}), `${side} packet`)).packetId;
   const factKey = `synthetic.${canary.toLowerCase()}`;
-  s.confirmId = Number(ctx.db.prepare(`INSERT INTO confirm_items (kind, subject, question, options, context, status, created_at)
+  s.confirmId = Number((await ctx.db.prepare(`INSERT INTO confirm_items (kind, subject, question, options, context, status, created_at)
     VALUES ('fact_check', ?, ?, ?, ?, 'pending', ?)`).run(factKey, `Is the ${canary} fact right?`, OPTIONS,
-    JSON.stringify({ key: factKey, value: `${canary} value` }), NOW).lastInsertRowid);
-  s.accountId = ctx.db.prepare('SELECT id FROM accounts WHERE name LIKE ?').get(`%${canary}%`).id;
+    JSON.stringify({ key: factKey, value: `${canary} value` }), NOW)).lastInsertRowid);
+  s.accountId = (await ctx.db.prepare('SELECT id FROM accounts WHERE name LIKE ?').get(`%${canary}%`)).id;
   await ok(hh.client.postJson('/api/email/test', {}), `${side} test email`);
   seeds[side] = s;
 }
@@ -251,11 +251,11 @@ describe('household A sees only its own data on every financial route', T, () =>
 
 test('a scripted tool round reads the private pack entry of its own household only, and spends in its own ledger', T, async () => {
   const { tools } = await src('src/tools/index.mjs');
-  const spend = db => db.prepare('SELECT count(*) AS n FROM spend_ledger').get().n;
+  const spend = async db => (await db.prepare('SELECT count(*) AS n FROM spend_ledger').get()).n;
   for (const [hh, own, other] of [[h.A, A_CANARY, B_CANARY], [h.B, B_CANARY, A_CANARY]]) {
     const ctx = h.ctx(hh.id);
     const otherCtx = h.ctx(hh === h.A ? h.B.id : h.A.id);
-    const [mine, theirs] = [spend(ctx.db), spend(otherCtx.db)];
+    const [mine, theirs] = [await spend(ctx.db), await spend(otherCtx.db)];
     const res = await ctx.engine.call({
       purpose: 'chat', messages: [{ role: 'user', content: 'Synthetic question' }], tools: tools.filter(t => t.kind === 'read'),
       toolContext: { db: ctx.db, now: NOW, dataDir: ctx.root },
@@ -265,8 +265,8 @@ test('a scripted tool round reads the private pack entry of its own household on
     assert.equal(res.toolResults[0].isError ?? false, false, results.slice(0, 300));
     assert.ok(results.includes(own), 'own entry');
     assert.ok(!results.includes(other), 'never the other household\'s entry');
-    assert.ok(spend(ctx.db) > mine, 'spend recorded in its own ledger');
-    assert.equal(spend(otherCtx.db), theirs, 'the other ledger is untouched');
+    assert.ok(await spend(ctx.db) > mine, 'spend recorded in its own ledger');
+    assert.equal(await spend(otherCtx.db), theirs, 'the other ledger is untouched');
   }
 });
 
@@ -355,10 +355,10 @@ describe('there is no default household', T, () => {
   test('a provisioning household with no root is never served', async () => {
     const id = 'hh-synthetic-provisioning';
     const at = Date.now();
-    h.platform.prepare(`INSERT INTO households (id, status, mode, display_name, serves_store, created_at, updated_at)
+    await h.platform.prepare(`INSERT INTO households (id, status, mode, display_name, serves_store, created_at, updated_at)
       VALUES (?, 'provisioning', 'real', 'Synthetic provisioning', 0, ?, ?)`).run(id, at, at);
     const member = await enrollSession(h.platform, id, 'provisioning-member@example.test', 'member');
-    h.platform.prepare('UPDATE auth_sessions SET household_id = ? WHERE hash = ?').run(id, sessionHash(member.token));
+    await h.platform.prepare('UPDATE auth_sessions SET household_id = ? WHERE hash = ?').run(id, sessionHash(member.token));
     const headers = { cookie: member.cookie };
     for (const path of financial()) {
       const r = await request(h.baseUrl, { path, headers });
@@ -377,7 +377,7 @@ describe('there is no default household', T, () => {
 test('each household context is frozen and holds its own DB, root, vault and runtime objects', T, async () => {
   const { storeIdentity } = await src('src/platform/db.mjs');
   for (const id of [h.A.id, h.B.id]) {
-    const row = h.platform.prepare('SELECT status, storage_root FROM households WHERE id = ?').get(id);
+    const row = await h.platform.prepare('SELECT status, storage_root FROM households WHERE id = ?').get(id);
     assert.deepEqual({ ...row }, { status: 'active', storage_root: `households/${id}` }, 'B activated on its first admin enrollment');
   }
   const a = h.app.runtimes.get(h.A.id);

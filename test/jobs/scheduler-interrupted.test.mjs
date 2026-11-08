@@ -10,6 +10,7 @@ import { rmSync } from 'node:fs';
 import { tempDb } from '../helpers/server.mjs';
 import { JOBS, localParts, periodKey, createScheduler } from '../../src/jobs/scheduler.mjs';
 import { serviceStatus } from '../../src/jobs/service-status.mjs';
+import { forEachSeries } from '../../src/shared/series.mjs';
 
 const NY = 'America/New_York';
 const RETRY_MS = 15 * 60000;
@@ -27,7 +28,7 @@ const turn = () => new Promise((r) => setImmediate(r));
 
 async function store() {
   const t = await tempDb();
-  return { ...t, done() { try { t.db.close(); } catch { /* closed */ } rmSync(t.dataDir, { recursive: true, force: true }); } };
+  return { ...t, async done() { try { await t.db.close(); } catch { /* closed */ } rmSync(t.dataDir, { recursive: true, force: true }); } };
 }
 
 function clockAt(iso) {
@@ -37,7 +38,7 @@ function clockAt(iso) {
   return c;
 }
 
-const runsOf = (db, jobId) => db.prepare('SELECT * FROM job_runs WHERE job_id = ? ORDER BY id').all(jobId).map((r) => ({ ...r }));
+const runsOf = async (db, jobId) => (await db.prepare('SELECT * FROM job_runs WHERE job_id = ? ORDER BY id').all(jobId)).map((r) => ({ ...r }));
 const keyAt = (jobId, iso) => periodKey(JOBS.find((j) => j.id === jobId).schedule, localParts(new Date(iso), NY));
 
 function schedulerFor(t, { handlers, clock, holder = 'holder-new' }) {
@@ -47,37 +48,37 @@ function schedulerFor(t, { handlers, clock, holder = 'holder-new' }) {
   });
 }
 
-function ensureJobRows(db) {
+async function ensureJobRows(db) {
   const ins = db.prepare("INSERT OR IGNORE INTO jobs (id, name, cadence, does, cost, next_label, last_label, enabled, sort) VALUES (?, ?, ?, ?, NULL, '', '', 1, ?)");
-  JOBS.forEach((j, i) => ins.run(j.id, j.name, j.cadence, j.does, 100 + i));
+  await forEachSeries(JOBS, async (j, i) => await ins.run(j.id, j.name, j.cadence, j.does, 100 + i));
 }
 
 // A run claimed by a holder that died: running, never finished, its lease long expired.
-function abandoned(db, { leaseExpires = STALE_LEASE, holder = 'holder-dead' } = {}) {
-  ensureJobRows(db);
-  const id = db.prepare(`INSERT INTO job_runs (job_id, started_at, status, period_key, trigger) VALUES (?, ?, 'running', ?, 'scheduled') RETURNING id`)
-    .get(JOB, STALE_START, keyAt(JOB, NOW)).id;
-  db.prepare('INSERT INTO job_lock (id, holder, expires_at) VALUES (1, ?, ?)').run(holder, leaseExpires);
+async function abandoned(db, { leaseExpires = STALE_LEASE, holder = 'holder-dead' } = {}) {
+  await ensureJobRows(db);
+  const id = (await db.prepare(`INSERT INTO job_runs (job_id, started_at, status, period_key, trigger) VALUES (?, ?, 'running', ?, 'scheduled') RETURNING id`)
+    .get(JOB, STALE_START, keyAt(JOB, NOW))).id;
+  await db.prepare('INSERT INTO job_lock (id, holder, expires_at) VALUES (1, ?, ?)').run(holder, leaseExpires);
   return id;
 }
 
-const statusOf = (t, s, clock) => serviceStatus({ db: t.db, outbound: { ...ALL_ON }, engine: null, scheduler: s, now: clock.now() });
+const statusOf = async (t, s, clock) => await serviceStatus({ db: t.db, outbound: { ...ALL_ON }, engine: null, scheduler: s, now: clock.now() });
 
 test('an abandoned running row is marked interrupted, reads retrying, then runs again and reads healthy', async () => {
   const t = await store();
   try {
     const clock = clockAt(NOW);
-    const id = abandoned(t.db);
+    const id = await abandoned(t.db);
     let calls = 0;
     const s = schedulerFor(t, { handlers: { [JOB]: async () => { calls += 1; return { note: { alerts: 0 } }; } }, clock });
 
     await s.tick();
-    const row = t.db.prepare('SELECT * FROM job_runs WHERE id = ?').get(id);
+    const row = await t.db.prepare('SELECT * FROM job_runs WHERE id = ?').get(id);
     assert.equal(row.status, 'interrupted', 'the abandoned row is interrupted');
     assert.equal(row.error_class, 'interrupted');
     assert.ok(row.finished_at, 'finished_at is set');
     assert.ok(Date.parse(row.finished_at) >= Date.parse(STALE_START));
-    assert.equal(t.db.prepare('SELECT holder FROM job_lock WHERE id = 1').get().holder, 'holder-new', 'the tick holds the lease');
+    assert.equal((await t.db.prepare('SELECT holder FROM job_lock WHERE id = 1').get()).holder, 'holder-new', 'the tick holds the lease');
 
     const svc = (await statusOf(t, s, clock)).jobs[JOB];
     assert.equal(svc.state, 'retrying', 'the interrupted run is visible as retrying');
@@ -89,7 +90,7 @@ test('an abandoned running row is marked interrupted, reads retrying, then runs 
 
     clock.advance(RETRY_MS + MIN);
     await s.tick();
-    const rows = runsOf(t.db, JOB);
+    const rows = await runsOf(t.db, JOB);
     assert.equal(rows.length, 2, 'the job runs again once');
     assert.equal(rows[1].period_key, `${keyAt(JOB, NOW)}+retry`);
     assert.equal(rows[1].trigger, 'retry');
@@ -111,21 +112,21 @@ test('a run still in flight in this process is not marked interrupted by a tick'
     const manual = s.runNow(JOB);
     for (let i = 0; i < 50 && !started; i++) await turn();
     assert.equal(started, 1, 'the manual run is in its handler');
-    const mine = runsOf(t.db, JOB);
+    const mine = await runsOf(t.db, JOB);
     assert.equal(mine.length, 1);
     assert.equal(mine[0].status, 'running');
 
     clock.advance(MIN);
     await s.tick();
-    const during = t.db.prepare('SELECT * FROM job_runs WHERE id = ?').get(mine[0].id);
+    const during = await t.db.prepare('SELECT * FROM job_runs WHERE id = ?').get(mine[0].id);
     assert.equal(during.status, 'running', 'this process\'s own run is not interrupted');
     assert.equal(during.error_class, null);
-    assert.equal(runsOf(t.db, JOB).length, 1, 'the tick skips a job already running here');
+    assert.equal((await runsOf(t.db, JOB)).length, 1, 'the tick skips a job already running here');
 
     gate.resolve();
     const done = await manual;
     assert.equal(done.status, 'ok');
-    assert.equal(t.db.prepare('SELECT status FROM job_runs WHERE id = ?').get(mine[0].id).status, 'ok');
+    assert.equal((await t.db.prepare('SELECT status FROM job_runs WHERE id = ?').get(mine[0].id)).status, 'ok');
   } finally { t.done(); }
 });
 
@@ -133,10 +134,10 @@ test('a running row under a live lease held by another holder is left alone', as
   const t = await store();
   try {
     const clock = clockAt(NOW);
-    const id = abandoned(t.db, { holder: 'holder-alive', leaseExpires: '2026-11-05T15:04:00.000Z' });
+    const id = await abandoned(t.db, { holder: 'holder-alive', leaseExpires: '2026-11-05T15:04:00.000Z' });
     const s = schedulerFor(t, { handlers: { [JOB]: async () => ({}) }, clock });
     await s.tick();
-    assert.equal(t.db.prepare('SELECT status FROM job_runs WHERE id = ?').get(id).status, 'running', 'no lease, no recovery');
-    assert.equal(runsOf(t.db, JOB).length, 1);
+    assert.equal((await t.db.prepare('SELECT status FROM job_runs WHERE id = ?').get(id)).status, 'running', 'no lease, no recovery');
+    assert.equal((await runsOf(t.db, JOB)).length, 1);
   } finally { t.done(); }
 });

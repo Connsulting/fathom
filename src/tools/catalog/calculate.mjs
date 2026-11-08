@@ -145,7 +145,7 @@ async function operandTerms(operand, ctx, where, depth, { list = false } = {}) {
     const { name, unit, ...assumption } = operand.assumption;
     if (typeof name !== 'string' || !name.trim() || name.length > 60) throw bad(`${where}.assumption.name must be 1 to 60 characters`);
     if (typeof unit !== 'string') throw bad(`${where}.assumption.unit is required`);
-    const record = checkAssumption(assumption, { name, unit, path: `${where}.assumption (${name})` }, ctx);
+    const record = await checkAssumption(assumption, { name, unit, path: `${where}.assumption (${name})` }, ctx);
     return [{ value: record.value, unit, kind: ASSUMPTION_KIND, asOf: null, gaps: [], words: `${name} ${record.stated}`,
       inputs: [], assumptions: [record], steps: [] }];
   }
@@ -311,7 +311,7 @@ export const operations = Object.keys(OPS).map(name => ({
   summary: SUMMARIES[name][0], route: SUMMARIES[name][1], routes: [],
   params: PARAMS[name] || base,
   required: Object.keys(PARAMS[name] || base),
-  handler: (params, ctx) => handler(params, ctx, name),
+  handler: async (params, ctx) => handler(params, ctx, name),
 }));
 
 // Section 4 rules 2 to 6.

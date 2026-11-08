@@ -1,5 +1,5 @@
 export async function script({ db }) {
-  const row = db.prepare("SELECT id FROM accounts WHERE owner = ? AND kind = 'taxable' ORDER BY id LIMIT 1").get('{n:spouse}');
+  const row = await db.prepare("SELECT id FROM accounts WHERE owner = ? AND kind = 'taxable' ORDER BY id LIMIT 1").get('{n:spouse}');
   if (!row) throw new Error('The synthetic household needs a spouse-owned brokerage account.');
   return [
     { toolCalls: [{ name: 'accounts', args: { operation: 'list' } },

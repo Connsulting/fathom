@@ -27,8 +27,8 @@ async function emailReason(ctx) {
   return status.state === 'dev' || status.state === 'configured' ? null : 'not_configured';
 }
 
-function simplefinReason(ctx) {
-  const row = ctx.household.db.prepare('SELECT status FROM simplefin_connection WHERE id = 1').get();
+async function simplefinReason(ctx) {
+  const row = await ctx.household.db.prepare('SELECT status FROM simplefin_connection WHERE id = 1').get();
   return row?.status === 'ok' ? null : 'not_connected';
 }
 
@@ -44,23 +44,23 @@ async function engineReason(ctx) {
 }
 
 async function outboundBody(ctx) {
-  const flags = readOutbound(ctx.platform, ctx.household.householdId);
+  const flags = await readOutbound(ctx.platform, ctx.household.householdId);
   const reasons = {
     jobs: ctx.household.scheduler ? null : 'not_configured',
     email: flags.email ? await emailReason(ctx) : null,
-    simplefin: flags.simplefin ? simplefinReason(ctx) : null,
+    simplefin: flags.simplefin ? await simplefinReason(ctx) : null,
     engine: flags.engine ? await engineReason(ctx) : null,
   };
   return { outbound: Object.fromEntries(OUTBOUND_KINDS.map(k => [k, verdict(flags[k], reasons[k])])) };
 }
 
-export function getOutbound(ctx) {
+export async function getOutbound(ctx) {
   return outboundBody(ctx);
 }
 
-export function setOutboundFlags(ctx) {
+export async function setOutboundFlags(ctx) {
   try {
-    setOutbound(ctx.platform, ctx.household.householdId, ctx.body, { actorUserId: ctx.identity?.id ?? null });
+    await setOutbound(ctx.platform, ctx.household.householdId, ctx.body, { actorUserId: ctx.identity?.id ?? null });
   } catch (err) {
     if (err?.code === 'bad_outbound') throw new HttpError(400, 'body must be an object of jobs, email, simplefin and engine booleans');
     throw err;

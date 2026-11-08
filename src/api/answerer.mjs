@@ -668,10 +668,10 @@ function noticeFor(error, engine) {
 }
 
 // The manifest packs effectively active now (base status plus overrides), with their rows.
-function activeManifestPacks(db, packs) {
+async function activeManifestPacks(db, packs) {
   const out = [];
   if (!packs) return out;
-  for (const row of db.prepare('SELECT id, def, active, exploring FROM packs_state ORDER BY sort, id').all()) {
+  for (const row of await db.prepare('SELECT id, def, active, exploring FROM packs_state ORDER BY sort, id').all()) {
     const def = parseJson(row.def, null);
     if (!def) continue;
     const pack = packs.backing(row.id, def);
@@ -681,8 +681,8 @@ function activeManifestPacks(db, packs) {
   return out;
 }
 
-function packConversationContext(db, packs, rowId) {
-  const row = db.prepare('SELECT def FROM packs_state WHERE id = ?').get(rowId);
+async function packConversationContext(db, packs, rowId) {
+  const row = await db.prepare('SELECT def FROM packs_state WHERE id = ?').get(rowId);
   const raw = row ? parseJson(row.def, {}) : {};
   const def = packs ? packs.view(rowId, raw) : raw;
   const pack = packs ? packs.backing(rowId, raw) : null;
@@ -732,11 +732,11 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
     const summary = await read('household', { operation: 'summary' }, toolCtx(db, now));
     const sourceReads = [{ name: 'household', args: { operation: 'summary' }, result: summary },
       ...(context?.recommendation ? [{ name: 'recommendations', args: { operation: 'detail', id: context.recommendation.id }, result: context.recommendation }] : [])];
-    const active = activeManifestPacks(db, packs);
+    const active = await activeManifestPacks(db, packs);
     const packIds = active.map(a => a.pack.id).sort();
     const packContextText = packContext(active.map(({ pack }) => ({ pack, status: 'active' })));
     const prompt = buildChatPrompt({ packContextText, summary, context, history, question, today: scenario.meta && scenario.meta.clock });
-    prompt.systemDynamic += '\n<household_preferences>\n' + JSON.stringify(listPreferences(db)) + '\n</household_preferences>';
+    prompt.systemDynamic += '\n<household_preferences>\n' + JSON.stringify(await listPreferences(db)) + '\n</household_preferences>';
     const writes = !!actionContext?.actorId;
     const available = writes ? proposalTools(REGISTRY.filter(t => !t.mcpOnly)) : REGISTRY.filter(t => !t.mcpOnly && t.kind === 'read');
     const offered = available.map(tool => tool.kind !== 'read' ? tool : { ...tool, async handler(args, ctx) {
@@ -754,7 +754,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
     const turnResults = [];
     const blocks = [];
     const toolContext = { turnResults: () => turnResults, onBlock: block => blocks.push(block), ...actionContext, ...toolCtx(db, now), channel: 'ask', ...(writes ? { onProposal } : {}) };
-    toolContext.ownerStatements = () => ownerStatements(toolContext);
+    toolContext.ownerStatements = async () => await ownerStatements(toolContext);
     const request = { purpose: 'chat', system: prompt.system, systemDynamic: prompt.systemDynamic, messages: prompt.messages,
       tools: offered, toolContext, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}),
       ...(stream.engineEvent ? { onEvent: stream.engineEvent } : {}) };
@@ -878,8 +878,8 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
   return {
     async answer({ db, key, questionId, text, clock, refs, onEvent, actorId, ownerText, turnId, replan, queuePlan, scopes, staleNote } = {}) {
       if (typeof key !== 'string' || !key) throw new TypeError('answer needs a conversation key');
-      const scenario = buildScenario(db, { clock, packs });
-      const now = clockNow(db, clock);
+      const scenario = await buildScenario(db, { clock, packs });
+      const now = await clockNow(db, clock);
       const hasQ = questionId !== undefined && questionId !== null;
       let question;
       let baseRefs = [];
@@ -899,9 +899,9 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
         context = { recommendation: await read('recommendations', { operation: 'detail', id: rec.id }, toolCtx(db, now)) };
         baseRefs = [...baseRefs, rec.id];
       } else if (key.startsWith('pack:')) {
-        context = packConversationContext(db, packs, key.slice(5)).context;
+        context = (await packConversationContext(db, packs, key.slice(5))).context;
       }
-      const references = resolveRefs(db, scenario, refs);
+      const references = await resolveRefs(db, scenario, refs);
       if (references.length) context = { ...(context || {}), references };
       // A note from Fathom (a refused or out-of-date proposal) goes to the model with the question
       // and leads the reply; the stored owner message stays the owner's own words.
@@ -916,8 +916,8 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
     },
 
     async whatIf({ db, packId, clock, onEvent } = {}) {
-      const scenario = buildScenario(db, { clock, packs });
-      const { def, context } = packConversationContext(db, packs, packId);
+      const scenario = await buildScenario(db, { clock, packs });
+      const { def, context } = await packConversationContext(db, packs, packId);
       const prompt = def.whatIf && def.whatIf.prompt ? def.whatIf.prompt : '';
       const key = 'pack:' + packId;
       // The prompt opens the conversation; drop an earlier copy of it (a prior notice round).
@@ -926,7 +926,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
       const baseRefs = (def.whatIf && Array.isArray(def.whatIf.unlocks) ? def.whatIf.unlocks : []).map(u => u && u.recId);
       // A manifest prompt is literal text; an illustrative demo prompt may carry scenario tokens.
       const question = typeof def.manifest === 'string' ? prompt : plain(scenario, prompt);
-      return run({ db, scenario, now: clockNow(db, clock), question, context, history, baseRefs, onEvent, fakeArgs: { key, whatIfPack: def } });
+      return run({ db, scenario, now: await clockNow(db, clock), question, context, history, baseRefs, onEvent, fakeArgs: { key, whatIfPack: def } });
     },
   };
 }

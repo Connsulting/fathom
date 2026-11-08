@@ -32,101 +32,101 @@ const WORKS = 'entity:sampleworks';
 const BIZ = 'account:biz';
 const WB_FILE = { id: 'f_wb', name: 'Example studio workbook.xlsx' };
 
-function store(t) {
+async function store(t) {
   const dir = mkdtempSync(join(tmpdir(), 'fathom-pnl-'));
-  const s = createInstance(dir, { mode: 'real' });
-  setSetting(s.db, 'clock', CLOCK);
-  t.after(() => { s.db.close(); s.platform.close(); rmSync(dir, { recursive: true, force: true }); });
+  const s = await createInstance(dir, { mode: 'real' });
+  await setSetting(s.db, 'clock', CLOCK);
+  t.after(async () => { await s.db.close(); await s.platform.close(); rmSync(dir, { recursive: true, force: true }); });
   return { ...s, dir };
 }
 
-function fact(db, key, value) {
-  db.prepare(`INSERT INTO facts (key, value, src, confirmed, updated_at) VALUES (?, ?, 'you', 1, '2032-01-01T00:00:00Z')
+async function fact(db, key, value) {
+  await db.prepare(`INSERT INTO facts (key, value, src, confirmed, updated_at) VALUES (?, ?, 'you', 1, '2032-01-01T00:00:00Z')
     ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, JSON.stringify(value));
 }
 
-function account(db, id, kind, name, extra = {}) {
-  db.prepare('INSERT INTO accounts (id, kind, inst, name, owner, sort) VALUES (?, ?, ?, ?, ?, ?)')
+async function account(db, id, kind, name, extra = {}) {
+  await db.prepare('INSERT INTO accounts (id, kind, inst, name, owner, sort) VALUES (?, ?, ?, ?, ?, ?)')
     .run(id, kind, extra.inst ?? 'Example Bank', name, extra.owner ?? null, extra.sort ?? 0);
 }
 
 let dedupe = 0;
-function txn(db, account_id, date, amount, description, category = null) {
-  const q = db.prepare('INSERT INTO transactions (account_id, date, amount, description, category, parser, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?)')
+async function txn(db, account_id, date, amount, description, category = null) {
+  const q = await db.prepare('INSERT INTO transactions (account_id, date, amount, description, category, parser, dedupe_key) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(account_id, date, amount, description, category, 'aggregator', `pnl-test:${++dedupe}`);
   return Number(q.lastInsertRowid);
 }
 
-function file(db, f = WB_FILE) {
-  db.prepare("INSERT INTO files (id, name, uploaded_at, status) VALUES (?, ?, '2032-07-02T00:00:00Z', 'imported')").run(f.id, f.name);
+async function file(db, f = WB_FILE) {
+  await db.prepare("INSERT INTO files (id, name, uploaded_at, status) VALUES (?, ?, '2032-07-02T00:00:00Z', 'imported')").run(f.id, f.name);
 }
 
-function line(db, entity, period, category, amount, fileId = WB_FILE.id) {
-  const q = db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, file_id, parser, locator) VALUES (?, ?, ?, ?, ?, 'pnl-workbook', ?)")
+async function line(db, entity, period, category, amount, fileId = WB_FILE.id) {
+  const q = await db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, file_id, parser, locator) VALUES (?, ?, ?, ?, ?, 'pnl-workbook', ?)")
     .run(entity, period, category, amount, fileId, `sheet:${period}:${category}`);
   return Number(q.lastInsertRowid);
 }
 
 // The shared business fixture. Returns ids the tests need.
-function business(db) {
+async function business(db) {
   const ids = { lines: {}, txns: {} };
-  file(db);
-  fact(db, 'business.entities', [{ name: 'Example Studio', type: 'llc' }, { name: 'Sample Works', type: 'sole_prop' }, { name: 'Idle Venture', type: 'llc' }]);
-  fact(db, 'accounts.businessEntity', { studio_chk: 'Example Studio' });
-  account(db, 'studio_chk', 'checking', 'Studio checking', { sort: 1 });
-  account(db, 'biz', 'business', 'Business checking', { sort: 2 });
-  account(db, 'home', 'checking', 'Everyday checking', { sort: 3 });
+  await file(db);
+  await fact(db, 'business.entities', [{ name: 'Example Studio', type: 'llc' }, { name: 'Sample Works', type: 'sole_prop' }, { name: 'Idle Venture', type: 'llc' }]);
+  await fact(db, 'accounts.businessEntity', { studio_chk: 'Example Studio' });
+  await account(db, 'studio_chk', 'checking', 'Studio checking', { sort: 1 });
+  await account(db, 'biz', 'business', 'Business checking', { sort: 2 });
+  await account(db, 'home', 'checking', 'Everyday checking', { sort: 3 });
 
   // Example Studio workbook, 2032-01..06.
   const revenue = { 1: 10000, 2: 12000, 3: 9000, 4: 11000, 5: 10500, 6: 9500 };
   for (let m = 1; m <= 6; m++) {
     const p = `2032-${pad(m)}`;
-    ids.lines[`rev:${m}`] = line(db, 'Example Studio', p, 'Consulting revenue', revenue[m]);
-    line(db, 'Example Studio', p, 'Software', -300);
-    line(db, 'Example Studio', p, 'Rent & Office', -1200);
+    ids.lines[`rev:${m}`] = await line(db, 'Example Studio', p, 'Consulting revenue', revenue[m]);
+    await line(db, 'Example Studio', p, 'Software', -300);
+    await line(db, 'Example Studio', p, 'Rent & Office', -1200);
   }
-  ids.lines['rev:3b'] = line(db, 'Example Studio', '2032-03', 'Consulting revenue', -500); // a chargeback stays income
-  ids.lines['fees:1'] = line(db, 'Example Studio', '2032-01', 'Refunds and fees', 50);     // category sum is negative: expense
-  ids.lines['fees:2'] = line(db, 'Example Studio', '2032-02', 'Refunds and fees', -200);
+  ids.lines['rev:3b'] = await line(db, 'Example Studio', '2032-03', 'Consulting revenue', -500); // a chargeback stays income
+  ids.lines['fees:1'] = await line(db, 'Example Studio', '2032-01', 'Refunds and fees', 50);     // category sum is negative: expense
+  ids.lines['fees:2'] = await line(db, 'Example Studio', '2032-02', 'Refunds and fees', -200);
   // Prior year 2031-01..06.
   for (let m = 1; m <= 6; m++) {
-    line(db, 'Example Studio', `2031-${pad(m)}`, 'Consulting revenue', 8000);
-    line(db, 'Example Studio', `2031-${pad(m)}`, 'Software', -250);
+    await line(db, 'Example Studio', `2031-${pad(m)}`, 'Consulting revenue', 8000);
+    await line(db, 'Example Studio', `2031-${pad(m)}`, 'Software', -250);
   }
   // After the clock: never counts.
-  line(db, 'Example Studio', '2032-12', 'Consulting revenue', 77777);
+  await line(db, 'Example Studio', '2032-12', 'Consulting revenue', 77777);
 
   // Example Studio's stated account: Jan..Aug income and tools; Jan..Jun are covered by the workbook.
   for (let m = 1; m <= 8; m++) {
-    ids.txns[`in:${m}`] = txn(db, 'studio_chk', `2032-${pad(m)}-12`, 3000, `Studio client payment ${m}`, 'Income');
-    ids.txns[`tools:${m}`] = txn(db, 'studio_chk', `2032-${pad(m)}-20`, -400, `Studio tools ${m}`, 'Business');
+    ids.txns[`in:${m}`] = await txn(db, 'studio_chk', `2032-${pad(m)}-12`, 3000, `Studio client payment ${m}`, 'Income');
+    ids.txns[`tools:${m}`] = await txn(db, 'studio_chk', `2032-${pad(m)}-20`, -400, `Studio tools ${m}`, 'Business');
   }
-  txn(db, 'studio_chk', '2032-11-20', 9999, 'Studio client payment late', 'Income'); // after the clock
+  await txn(db, 'studio_chk', '2032-11-20', 9999, 'Studio client payment late', 'Income'); // after the clock
 
   // Sample Works workbook 2032-01..03; one Feb line under an alias of the entity.
-  db.prepare("INSERT INTO entity_aliases (alias, entity, created_at) VALUES ('sampleworksllc', 'Sample Works', '2032-01-01T00:00:00Z')").run();
+  await db.prepare("INSERT INTO entity_aliases (alias, entity, created_at) VALUES ('sampleworksllc', 'Sample Works', '2032-01-01T00:00:00Z')").run();
   for (const [m, fee, cost] of [[1, 4000, -1000], [2, 4500, -1100], [3, 5000, -1200]]) {
-    line(db, 'Sample Works', `2032-${pad(m)}`, 'Design fees', fee);
-    line(db, 'Sample Works', `2032-${pad(m)}`, 'Contractors', cost);
-    line(db, 'Sample Works', `2032-${pad(m)}`, 'Fees & "Charges"', -25);
+    await line(db, 'Sample Works', `2032-${pad(m)}`, 'Design fees', fee);
+    await line(db, 'Sample Works', `2032-${pad(m)}`, 'Contractors', cost);
+    await line(db, 'Sample Works', `2032-${pad(m)}`, 'Fees & "Charges"', -25);
   }
-  line(db, 'Sample Works LLC', '2032-02', 'Design fees', 500);
+  await line(db, 'Sample Works LLC', '2032-02', 'Design fees', 500);
 
   // The unassigned business account: income, business costs with a refund, left-out buckets and an
   // uncategorized outflow larger than the Business category.
-  ids.txns.invoiceA = txn(db, 'biz', '2032-03-03', 5000, 'Client invoice A', 'Income');
-  ids.txns.invoiceB = txn(db, 'biz', '2032-04-03', 4000, 'Client invoice B', 'Income');
-  ids.txns.hosting = txn(db, 'biz', '2032-03-09', -700, 'Hosting service', 'Business');
-  ids.txns.refund = txn(db, 'biz', '2032-04-11', 100, 'Hosting refund', 'Business');
-  ids.txns.transfer = txn(db, 'biz', '2032-05-02', -1000, 'Owner draw', 'Internal Transfers');
-  ids.txns.tax = txn(db, 'biz', '2032-05-14', -1500, 'Quarterly estimate', 'Taxes');
-  ids.txns.saving = txn(db, 'biz', '2032-05-20', -2000, 'Retirement plan deposit', 'Investment');
-  ids.txns.excluded = txn(db, 'biz', '2032-06-01', -77, 'Ignored adjustment', 'Ignore');
-  ids.txns.personal = txn(db, 'biz', '2032-06-04', -123.45, 'Weekend groceries', 'Groceries');
-  ids.txns.uncat = txn(db, 'biz', '2032-06-18', -650, 'Unknown vendor', null);
+  ids.txns.invoiceA = await txn(db, 'biz', '2032-03-03', 5000, 'Client invoice A', 'Income');
+  ids.txns.invoiceB = await txn(db, 'biz', '2032-04-03', 4000, 'Client invoice B', 'Income');
+  ids.txns.hosting = await txn(db, 'biz', '2032-03-09', -700, 'Hosting service', 'Business');
+  ids.txns.refund = await txn(db, 'biz', '2032-04-11', 100, 'Hosting refund', 'Business');
+  ids.txns.transfer = await txn(db, 'biz', '2032-05-02', -1000, 'Owner draw', 'Internal Transfers');
+  ids.txns.tax = await txn(db, 'biz', '2032-05-14', -1500, 'Quarterly estimate', 'Taxes');
+  ids.txns.saving = await txn(db, 'biz', '2032-05-20', -2000, 'Retirement plan deposit', 'Investment');
+  ids.txns.excluded = await txn(db, 'biz', '2032-06-01', -77, 'Ignored adjustment', 'Ignore');
+  ids.txns.personal = await txn(db, 'biz', '2032-06-04', -123.45, 'Weekend groceries', 'Groceries');
+  ids.txns.uncat = await txn(db, 'biz', '2032-06-18', -650, 'Unknown vendor', null);
 
   // Household rows never reach a business P&L.
-  txn(db, 'home', '2032-03-05', -88, 'Corner market', 'Groceries');
+  await txn(db, 'home', '2032-03-05', -88, 'Corner market', 'Groceries');
   return ids;
 }
 
@@ -216,15 +216,15 @@ const sumItems = (items) => r2(items.reduce((s, i) => s + i.amount, 0));
 
 /* ---------------------------------------------------------------- pl-ac1 */
 
-test('pl-ac1 entities: every business name with data plus the unassigned business account, aliases merged, ordered', (t) => {
-  const { db } = store(t);
-  business(db);
-  const list = pnlEntities({ db });
+test('pl-ac1 entities: every business name with data plus the unassigned business account, aliases merged, ordered', async (t) => {
+  const { db } = await store(t);
+  await business(db);
+  const list = await pnlEntities({ db });
   assert.deepEqual(list.map((e) => e.key), [STUDIO, WORKS, BIZ], 'Idle Venture has no data and is not listed; the alias is not its own entity');
   const [studio, works, biz] = list;
   assert.equal(studio.kind, 'entity');
   assert.equal(studio.label, 'Example Studio');
-  const studioRow = db.prepare("SELECT * FROM accounts WHERE id='studio_chk'").get();
+  const studioRow = await db.prepare("SELECT * FROM accounts WHERE id='studio_chk'").get();
   assert.deepEqual(studio.accounts, [{ id: 'studio_chk', label: accountLabel(studioRow) }]);
   assert.equal(studio.workbook.from, '2031-01');
   assert.equal(studio.workbook.to, '2032-06', 'the after-clock workbook line is not counted');
@@ -243,10 +243,10 @@ test('pl-ac1 entities: every business name with data plus the unassigned busines
   assert.ok(!list.some((e) => e.accounts.some((a) => a.id === 'home')), 'household accounts are never a P&L');
 });
 
-test('pl-ac1 workbook-only entity: categories, monthly income, positive expenses and net; totals are the sum of months; category sign rule', (t) => {
-  const { db } = store(t);
-  business(db);
-  const p = businessPnl({ db, entity: WORKS });
+test('pl-ac1 workbook-only entity: categories, monthly income, positive expenses and net; totals are the sum of months; category sign rule', async (t) => {
+  const { db } = await store(t);
+  await business(db);
+  const p = await businessPnl({ db, entity: WORKS });
   assert.equal(p.entity.key, WORKS);
   assert.equal(p.from, '2032-01');
   assert.equal(p.to, '2032-03');
@@ -270,7 +270,7 @@ test('pl-ac1 workbook-only entity: categories, monthly income, positive expenses
   assert.deepEqual(p.leftOut, []);
 
   // Sign rule: a category is income when its lines sum positive, else expense, whatever one line's sign.
-  const s = businessPnl({ db, entity: STUDIO, from: '2032-01', to: '2032-06' });
+  const s = await businessPnl({ db, entity: STUDIO, from: '2032-01', to: '2032-06' });
   const rev = cat(s.income, 'Consulting revenue');
   assert.equal(val(s, rev.months['2032-03']), 8500, 'a negative line inside an income category lowers it');
   assert.ok(!s.income.categories.some((c) => c.category === 'Refunds and fees'));
@@ -281,10 +281,10 @@ test('pl-ac1 workbook-only entity: categories, monthly income, positive expenses
   assert.equal(val(s, refunds.total), 150);
 });
 
-test('pl-ac1 transactions-only unassigned business account: buckets map to income and expenses, the rest is left out, Uncategorized is an expense with its share', (t) => {
-  const { db } = store(t);
-  business(db);
-  const p = businessPnl({ db, entity: BIZ });
+test('pl-ac1 transactions-only unassigned business account: buckets map to income and expenses, the rest is left out, Uncategorized is an expense with its share', async (t) => {
+  const { db } = await store(t);
+  await business(db);
+  const p = await businessPnl({ db, entity: BIZ });
   assert.equal(p.entity.kind, 'account');
   assert.equal(p.from, '2032-01');
   assert.equal(p.to, '2032-06');
@@ -315,10 +315,10 @@ test('pl-ac1 transactions-only unassigned business account: buckets map to incom
   assert.ok(Math.abs(p.uncategorized.share - 650 / 1250) < 1e-6, 'share of expenses');
 });
 
-test('pl-ac1 precedence: workbook months use the workbook, other months use transactions, never both; covered rows reported', (t) => {
-  const { db } = store(t);
-  business(db);
-  const p = businessPnl({ db, entity: STUDIO });
+test('pl-ac1 precedence: workbook months use the workbook, other months use transactions, never both; covered rows reported', async (t) => {
+  const { db } = await store(t);
+  await business(db);
+  const p = await businessPnl({ db, entity: STUDIO });
   assert.equal(p.from, '2032-01');
   assert.equal(p.to, '2032-08');
   assert.deepEqual(p.months, months('2032-01', '2032-08'));
@@ -353,32 +353,32 @@ test('pl-ac1 precedence: workbook months use the workbook, other months use tran
   assert.equal(val(p, cat(p.expenses, 'Business').total), 800);
 
   // Plain names match by normalized name.
-  assert.equal(val(p, businessPnl({ db, entity: '  example STUDIO ' }).net.total), 57550);
+  assert.equal(val(p, (await businessPnl({ db, entity: '  example STUDIO ' })).net.total), 57550);
 });
 
-test('pl-ac1 a single business name takes the kind business account; a second name makes it its own P&L', (t) => {
-  const { db } = store(t);
-  fact(db, 'business.entities', [{ name: 'Solo Example Co', type: 'llc' }]);
-  account(db, 'solo', 'business', 'Operating account');
-  txn(db, 'solo', '2032-02-10', 2000, 'Retainer', 'Income');
-  txn(db, 'solo', '2032-02-15', -300, 'Tools subscription', 'Business');
-  const one = pnlEntities({ db });
+test('pl-ac1 a single business name takes the kind business account; a second name makes it its own P&L', async (t) => {
+  const { db } = await store(t);
+  await fact(db, 'business.entities', [{ name: 'Solo Example Co', type: 'llc' }]);
+  await account(db, 'solo', 'business', 'Operating account');
+  await txn(db, 'solo', '2032-02-10', 2000, 'Retainer', 'Income');
+  await txn(db, 'solo', '2032-02-15', -300, 'Tools subscription', 'Business');
+  const one = await pnlEntities({ db });
   assert.deepEqual(one.map((e) => [e.key, e.kind]), [['entity:soloexampleco', 'entity']]);
   assert.deepEqual(one[0].accounts.map((a) => a.id), ['solo']);
   assert.equal(one[0].workbook, null);
-  const p = businessPnl({ db, entity: 'entity:soloexampleco' });
+  const p = await businessPnl({ db, entity: 'entity:soloexampleco' });
   assert.equal(val(p, p.income.total), 2000);
   assert.equal(val(p, p.expenses.total), 300);
   assert.equal(p.monthSources.find((m) => m.month === '2032-02').source, 'transactions');
 
-  fact(db, 'business.entities', [{ name: 'Solo Example Co', type: 'llc' }, { name: 'Second Example Co', type: 'llc' }]);
-  assert.deepEqual(pnlEntities({ db }).map((e) => [e.key, e.kind]), [['account:solo', 'account']]);
+  await fact(db, 'business.entities', [{ name: 'Solo Example Co', type: 'llc' }, { name: 'Second Example Co', type: 'llc' }]);
+  assert.deepEqual((await pnlEntities({ db })).map((e) => [e.key, e.kind]), [['account:solo', 'account']]);
 });
 
-test('pl-ac1 prior year present when it has data and null otherwise; default range is January to the latest data month; rows after the clock ignored', (t) => {
-  const { db } = store(t);
-  business(db);
-  const p = businessPnl({ db, entity: STUDIO });
+test('pl-ac1 prior year present when it has data and null otherwise; default range is January to the latest data month; rows after the clock ignored', async (t) => {
+  const { db } = await store(t);
+  await business(db);
+  const p = await businessPnl({ db, entity: STUDIO });
   assert.ok(p.prior, 'Example Studio has 2031 lines');
   assert.equal(p.prior.from, '2031-01');
   assert.equal(p.prior.to, '2031-08');
@@ -391,44 +391,44 @@ test('pl-ac1 prior year present when it has data and null otherwise; default ran
   assert.ok(!JSON.stringify(p).includes('77777'), 'the 2032-12 workbook line is after the clock');
   assert.equal(val(p, p.income.total), 67500, 'the 2032-11-20 transaction is after the clock');
 
-  const narrow = businessPnl({ db, entity: STUDIO, from: '2032-02', to: '2032-03' });
+  const narrow = await businessPnl({ db, entity: STUDIO, from: '2032-02', to: '2032-03' });
   assert.equal(narrow.prior.from, '2031-02');
   assert.equal(narrow.prior.to, '2031-03');
   assert.equal(val(narrow, narrow.prior.income), 16000);
-  assert.equal(businessPnl({ db, entity: BIZ }).prior, null);
-  assert.equal(businessPnl({ db, entity: WORKS }).prior, null);
+  assert.equal((await businessPnl({ db, entity: BIZ })).prior, null);
+  assert.equal((await businessPnl({ db, entity: WORKS })).prior, null);
 
   // An explicit clock moves the default range and drops later rows.
-  const early = businessPnl({ db, entity: STUDIO, clock: '2032-07-15' });
+  const early = await businessPnl({ db, entity: STUDIO, clock: '2032-07-15' });
   assert.equal(early.to, '2032-07');
   assert.equal(val(early, early.income.months['2032-07']), 3000);
   assert.equal(val(early, early.expenses.total), 9150, 'the Jul 20 cost is after that clock');
 });
 
-test('pl-ac1 errors: unknown entity, from after to, more than 120 months, malformed months; nearby valid input is accepted', (t) => {
-  const { db } = store(t);
-  business(db);
-  assert.equal(code(() => businessPnl({ db, entity: 'entity:nosuchname' })), 'unknown_entity');
-  assert.equal(code(() => businessPnl({ db, entity: 'No Such Name' })), 'unknown_entity');
-  assert.equal(code(() => businessPnl({ db, entity: 'Idle Venture' })), 'unknown_entity', 'a name with no data is not a P&L');
-  assert.equal(code(() => businessPnl({ db, entity: 'Example Studio' })), 'ok');
-  assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2032-05', to: '2032-04' })), 'bad_range');
-  assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2032-04', to: '2032-04' })), 'ok');
-  assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2022-08', to: '2032-08' })), 'bad_range', '121 months');
-  assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2022-09', to: '2032-08' })), 'ok', '120 months');
+test('pl-ac1 errors: unknown entity, from after to, more than 120 months, malformed months; nearby valid input is accepted', async (t) => {
+  const { db } = await store(t);
+  await business(db);
+  assert.equal(code(async () => await businessPnl({ db, entity: 'entity:nosuchname' })), 'unknown_entity');
+  assert.equal(code(async () => await businessPnl({ db, entity: 'No Such Name' })), 'unknown_entity');
+  assert.equal(code(async () => await businessPnl({ db, entity: 'Idle Venture' })), 'unknown_entity', 'a name with no data is not a P&L');
+  assert.equal(code(async () => await businessPnl({ db, entity: 'Example Studio' })), 'ok');
+  assert.equal(code(async () => await businessPnl({ db, entity: STUDIO, from: '2032-05', to: '2032-04' })), 'bad_range');
+  assert.equal(code(async () => await businessPnl({ db, entity: STUDIO, from: '2032-04', to: '2032-04' })), 'ok');
+  assert.equal(code(async () => await businessPnl({ db, entity: STUDIO, from: '2022-08', to: '2032-08' })), 'bad_range', '121 months');
+  assert.equal(code(async () => await businessPnl({ db, entity: STUDIO, from: '2022-09', to: '2032-08' })), 'ok', '120 months');
   for (const bad of ['2032-13', '2032-1', '2032/01', 'soon', '2032-00']) {
-    assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: bad, to: '2032-08' })), 'bad_range', bad);
-    assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2032-01', to: bad })), 'bad_range', bad);
+    assert.equal(code(async () => await businessPnl({ db, entity: STUDIO, from: bad, to: '2032-08' })), 'bad_range', bad);
+    assert.equal(code(async () => await businessPnl({ db, entity: STUDIO, from: '2032-01', to: bad })), 'bad_range', bad);
   }
-  assert.equal(code(() => businessPnlRows({ db, entity: 'entity:nosuchname', section: 'income', category: 'Income' })), 'unknown_entity');
-  assert.equal(code(() => businessPnlRows({ db, entity: STUDIO, section: 'income', category: 'Income', from: '2032-13' })), 'bad_range');
+  assert.equal(code(async () => await businessPnlRows({ db, entity: 'entity:nosuchname', section: 'income', category: 'Income' })), 'unknown_entity');
+  assert.equal(code(async () => await businessPnlRows({ db, entity: STUDIO, section: 'income', category: 'Income', from: '2032-13' })), 'bad_range');
 });
 
 test('pl-ac1 demo store: workbook entities own their mapped business checking account', async (t) => {
   const s = await tempDb();
   t.after(() => s.close());
-  seedDemo(s.db);
-  const list = pnlEntities({ db: s.db });
+  await seedDemo(s.db);
+  const list = await pnlEntities({ db: s.db });
   const ents = list.filter((e) => e.kind === 'entity');
   assert.equal(ents.length, 2);
   for (const e of ents) assert.ok(e.workbook && e.workbook.lines > 0, e.key);
@@ -438,7 +438,7 @@ test('pl-ac1 demo store: workbook entities own their mapped business checking ac
   assert.equal(list.length, 2);
   assert.ok(own.transactions.rows > 0);
   for (const e of list) {
-    const p = businessPnl({ db: s.db, entity: e.key });
+    const p = await businessPnl({ db: s.db, entity: e.key });
     assert.ok(p.income.total || p.expenses.total, e.key);
     for (const a of p.entity.accounts) assert.ok(!/[{}]/.test(a.label), `demo tokens resolved in ${a.label}`);
   }
@@ -446,17 +446,17 @@ test('pl-ac1 demo store: workbook entities own their mapped business checking ac
 
 /* ---------------------------------------------------------------- pl-ac3 */
 
-test('pl-ac3 every business figure resolves with source, detail and provenance; workbook cells name pnl_lines; a mixed total uses pnl:mixed with monthly sums', (t) => {
-  const { db } = store(t);
-  const ids = business(db);
+test('pl-ac3 every business figure resolves with source, detail and provenance; workbook cells name pnl_lines; a mixed total uses pnl:mixed with monthly sums', async (t) => {
+  const { db } = await store(t);
+  const ids = await business(db);
   for (const entity of [STUDIO, WORKS, BIZ]) {
-    const p = businessPnl({ db, entity });
+    const p = await businessPnl({ db, entity });
     checkSources(p);
     const keys = figKeysOf(p);
     assert.ok(keys.length > 10, entity);
     for (const k of keys) checkFigure(p, k);
   }
-  const p = businessPnl({ db, entity: STUDIO });
+  const p = await businessPnl({ db, entity: STUDIO });
 
   const wb = checkFigure(p, cat(p.income, 'Consulting revenue').months['2032-01']);
   assert.equal(wb.src, 'pnl:workbook');
@@ -487,19 +487,19 @@ test('pl-ac3 every business figure resolves with source, detail and provenance; 
   assert.deepEqual(total.sums.map((s) => s.asOf), ['workbook', 'workbook', 'workbook', 'workbook', 'workbook', 'workbook', 'transactions', 'transactions']);
   assert.equal(r2(total.sums.reduce((a, s) => a + s.v, 0)), r2(total.v));
 
-  const biz = businessPnl({ db, entity: BIZ });
+  const biz = await businessPnl({ db, entity: BIZ });
   const unc = checkFigure(biz, biz.uncategorized.amount);
   assert.deepEqual(prov(unc, 'transactions').ids, [ids.txns.uncat]);
   const left = checkFigure(biz, biz.leftOut.find((l) => l.key === 'tax').amount);
   assert.equal(prov(left, 'transactions').count, 1);
 });
 
-test('pl-ac3 businessPnlRows lists exactly the rows behind a cell, and their amounts sum to it', (t) => {
-  const { db } = store(t);
-  const ids = business(db);
-  const p = businessPnl({ db, entity: STUDIO });
-  const check = (opts, cell, expect) => {
-    const r = businessPnlRows({ db, entity: STUDIO, ...opts });
+test('pl-ac3 businessPnlRows lists exactly the rows behind a cell, and their amounts sum to it', async (t) => {
+  const { db } = await store(t);
+  const ids = await business(db);
+  const p = await businessPnl({ db, entity: STUDIO });
+  const check = async (opts, cell, expect) => {
+    const r = await businessPnlRows({ db, entity: STUDIO, ...opts });
     assert.equal(r.total, expect.count, JSON.stringify(opts));
     assert.equal(r.items.length, expect.count);
     const sum = sumItems(r.items);
@@ -517,27 +517,27 @@ test('pl-ac3 businessPnlRows lists exactly the rows behind a cell, and their amo
     }
     return r;
   };
-  const wb = check({ section: 'income', category: 'Consulting revenue' }, cat(p.income, 'Consulting revenue').total, { count: 7 });
+  const wb = await check({ section: 'income', category: 'Consulting revenue' }, cat(p.income, 'Consulting revenue').total, { count: 7 });
   assert.ok(wb.items.every((i) => i.kind === 'workbook' && i.description === 'Workbook line' && /^\d{4}-\d{2}$/.test(i.date)));
   assert.equal(wb.items[0].account, WB_FILE.name);
   assert.ok(wb.items.some((i) => i.id === ids.lines['rev:3b']));
-  const mar = check({ section: 'income', category: 'Consulting revenue', month: '2032-03' }, cat(p.income, 'Consulting revenue').months['2032-03'], { count: 2 });
+  const mar = await check({ section: 'income', category: 'Consulting revenue', month: '2032-03' }, cat(p.income, 'Consulting revenue').months['2032-03'], { count: 2 });
   assert.deepEqual(mar.items.map((i) => i.id).sort((a, b) => a - b), [ids.lines['rev:3'], ids.lines['rev:3b']].sort((a, b) => a - b));
-  check({ section: 'expenses', category: 'Refunds and fees' }, cat(p.expenses, 'Refunds and fees').total, { count: 2 });
-  const tools = check({ section: 'expenses', category: 'Business' }, cat(p.expenses, 'Business').total, { count: 2 });
+  await check({ section: 'expenses', category: 'Refunds and fees' }, cat(p.expenses, 'Refunds and fees').total, { count: 2 });
+  const tools = await check({ section: 'expenses', category: 'Business' }, cat(p.expenses, 'Business').total, { count: 2 });
   assert.deepEqual(tools.items.map((i) => i.id), [ids.txns['tools:8'], ids.txns['tools:7']], 'covered Jan..Jun rows are not behind the cell');
   assert.ok(tools.items.every((i) => i.kind === 'transaction'));
-  check({ section: 'income', category: 'Income', month: '2032-07' }, cat(p.income, 'Income').months['2032-07'], { count: 1 });
+  await check({ section: 'income', category: 'Income', month: '2032-07' }, cat(p.income, 'Income').months['2032-07'], { count: 1 });
 
-  const b = businessPnl({ db, entity: BIZ });
-  const bizRows = (opts) => businessPnlRows({ db, entity: BIZ, ...opts });
-  const unc = bizRows({ section: 'expenses', category: 'Uncategorized' });
+  const b = await businessPnl({ db, entity: BIZ });
+  const bizRows = async (opts) => await businessPnlRows({ db, entity: BIZ, ...opts });
+  const unc = await bizRows({ section: 'expenses', category: 'Uncategorized' });
   assert.deepEqual(unc.items.map((i) => i.id), [ids.txns.uncat]);
   assert.equal(r2(-sumItems(unc.items)), val(b, cat(b.expenses, 'Uncategorized').total));
-  const biz = bizRows({ section: 'expenses', category: 'Business' });
+  const biz = await bizRows({ section: 'expenses', category: 'Business' });
   assert.deepEqual(biz.items.map((i) => i.id), [ids.txns.refund, ids.txns.hosting]);
   assert.equal(r2(-sumItems(biz.items)), 600);
-  assert.deepEqual(bizRows({ section: 'income', category: 'Business' }).items, [], 'a category in the other section has no rows');
+  assert.deepEqual((await bizRows({ section: 'income', category: 'Business' })).items, [], 'a category in the other section has no rows');
 });
 
 /* ---------------------------------------------------------------- pnl2-ac2, pnl2-ac3 */
@@ -546,9 +546,9 @@ test('pl-ac3 businessPnlRows lists exactly the rows behind a cell, and their amo
 // response's `sum` figure) to that cell and list only that month; the rows for the range sum to the
 // category total; uncapped items add up to the sum; each item's figure is its counted value, and an
 // expense row's value is its amount negated. Returns how many cells it checked.
-function checkRowsMatchCells(db, entity, p) {
+async function checkRowsMatchCells(db, entity, p) {
   let cells = 0;
-  const fetch = (section, category, month) => businessPnlRows({ db, entity, from: p.from, to: p.to, section, category, ...(month ? { month } : {}) });
+  const fetch = async (section, category, month) => await businessPnlRows({ db, entity, from: p.from, to: p.to, section, category, ...(month ? { month } : {}) });
   const items = (r, section, where) => {
     for (const i of r.items) {
       const f = r.figures[i.fig];
@@ -567,7 +567,7 @@ function checkRowsMatchCells(db, entity, p) {
       for (const m of p.months) {
         const where = `${entity} ${section} ${c.category} ${m}`;
         if (!c.months[m]) continue;
-        const r = fetch(section, c.category, m);
+        const r = await fetch(section, c.category, m);
         assert.ok(r.sum, `${where}: the response has a sum figure`);
         assert.equal(val(r, r.sum), val(p, c.months[m]), `${where}: sum equals the cell`);
         assert.ok(r.items.length > 0, `${where}: a cell has rows`);
@@ -576,7 +576,7 @@ function checkRowsMatchCells(db, entity, p) {
         cells++;
       }
       const where = `${entity} ${section} ${c.category} range`;
-      const r = fetch(section, c.category, null);
+      const r = await fetch(section, c.category, null);
       assert.ok(r.sum, `${where}: the response has a sum figure`);
       assert.equal(val(r, r.sum), val(p, c.total), `${where}: sum equals the category total`);
       for (const i of r.items) assert.ok(String(i.date).slice(0, 7) >= p.from && String(i.date).slice(0, 7) <= p.to, `${where}: item ${i.id} is in the range`);
@@ -586,27 +586,27 @@ function checkRowsMatchCells(db, entity, p) {
   return cells;
 }
 
-test('pnl2-ac2 pnl2-ac3 business rows: for every category and every month cell the rows sum to the cell, only that month, items carry their counted value', (t) => {
-  const { db } = store(t);
-  const ids = business(db);
+test('pnl2-ac2 pnl2-ac3 business rows: for every category and every month cell the rows sum to the cell, only that month, items carry their counted value', async (t) => {
+  const { db } = await store(t);
+  const ids = await business(db);
   let cells = 0;
   for (const [entity, opts] of [[STUDIO, {}], [STUDIO, { from: '2032-02', to: '2032-07' }], [WORKS, {}], [BIZ, {}]]) {
-    const p = businessPnl({ db, entity, ...opts });
-    cells += checkRowsMatchCells(db, entity, p);
+    const p = await businessPnl({ db, entity, ...opts });
+    cells += await checkRowsMatchCells(db, entity, p);
   }
   assert.ok(cells > 30, `checked ${cells} cells`);
 
   // The refund is a negative expense value; the chargeback is a negative income value.
-  const biz = businessPnlRows({ db, entity: BIZ, section: 'expenses', category: 'Business', month: '2032-04' });
+  const biz = await businessPnlRows({ db, entity: BIZ, section: 'expenses', category: 'Business', month: '2032-04' });
   assert.deepEqual(biz.items.map((i) => [i.id, i.amount, i.value]), [[ids.txns.refund, 100, -100]]);
   assert.equal(val(biz, biz.sum), -100);
-  const mar = businessPnlRows({ db, entity: STUDIO, section: 'income', category: 'Consulting revenue', month: '2032-03' });
+  const mar = await businessPnlRows({ db, entity: STUDIO, section: 'income', category: 'Consulting revenue', month: '2032-03' });
   const cb = mar.items.find((i) => i.id === ids.lines['rev:3b']);
   assert.equal(cb.value, -500);
   assert.equal(val(mar, mar.sum), 8500);
 
   // An empty month of a real category: no items and a zero sum.
-  const none = businessPnlRows({ db, entity: STUDIO, section: 'expenses', category: 'Refunds and fees', month: '2032-03' });
+  const none = await businessPnlRows({ db, entity: STUDIO, section: 'expenses', category: 'Refunds and fees', month: '2032-03' });
   assert.deepEqual(none.items, []);
   assert.equal(none.total, 0);
   assert.equal(val(none, none.sum), 0);
@@ -615,38 +615,38 @@ test('pnl2-ac2 pnl2-ac3 business rows: for every category and every month cell t
 test('pnl2-ac2 business rows on the demo store: every month cell and every total matches its rows sum', async (t) => {
   const s = await tempDb();
   t.after(() => s.close());
-  seedDemo(s.db);
+  await seedDemo(s.db);
   let cells = 0;
-  for (const e of pnlEntities({ db: s.db })) cells += checkRowsMatchCells(s.db, e.key, businessPnl({ db: s.db, entity: e.key }));
+  for (const e of await pnlEntities({ db: s.db })) cells += await checkRowsMatchCells(s.db, e.key, await businessPnl({ db: s.db, entity: e.key }));
   assert.ok(cells > 0, 'the demo has month cells');
 });
 
-test('pnl2-ac2 a capped rows read still sums every matching row, not just the listed items', (t) => {
-  const { db } = store(t);
-  account(db, 'busy', 'business', 'Busy checking');
-  fact(db, 'business.entities', [{ name: 'Busy Example Co', type: 'llc' }]);
+test('pnl2-ac2 a capped rows read still sums every matching row, not just the listed items', async (t) => {
+  const { db } = await store(t);
+  await account(db, 'busy', 'business', 'Busy checking');
+  await fact(db, 'business.entities', [{ name: 'Busy Example Co', type: 'llc' }]);
   const n = ITEM_LIMIT + 25;
-  for (let i = 0; i < n; i++) txn(db, 'busy', `2032-05-${pad((i % 28) + 1)}`, -(1 + (i % 7)), `Synthetic tool ${i}`, 'Business');
-  txn(db, 'busy', '2032-06-02', 900, 'Synthetic invoice', 'Income');
-  const entity = pnlEntities({ db })[0].key;
-  const p = businessPnl({ db, entity });
+  for (let i = 0; i < n; i++) await txn(db, 'busy', `2032-05-${pad((i % 28) + 1)}`, -(1 + (i % 7)), `Synthetic tool ${i}`, 'Business');
+  await txn(db, 'busy', '2032-06-02', 900, 'Synthetic invoice', 'Income');
+  const entity = (await pnlEntities({ db }))[0].key;
+  const p = await businessPnl({ db, entity });
   const c = cat(p.expenses, 'Business');
-  const r = businessPnlRows({ db, entity, section: 'expenses', category: 'Business', month: '2032-05' });
+  const r = await businessPnlRows({ db, entity, section: 'expenses', category: 'Business', month: '2032-05' });
   assert.equal(r.total, n);
   assert.ok(r.items.length <= ITEM_LIMIT && r.items.length > 0, 'items are capped');
   assert.ok(Buffer.byteLength(JSON.stringify(r)) <= 256 * 1024);
   assert.equal(r.truncated, true);
   assert.equal(val(r, r.sum), val(p, c.months['2032-05']), 'the sum counts every row');
   assert.notEqual(r2(r.items.reduce((a, i) => a + i.value, 0)), val(r, r.sum), 'the listed items alone fall short');
-  const all = businessPnlRows({ db, entity, section: 'expenses', category: 'Business' });
+  const all = await businessPnlRows({ db, entity, section: 'expenses', category: 'Business' });
   assert.equal(val(all, all.sum), val(p, c.total));
 });
 
 /* ---------------------------------------------------------------- pl-ac4 */
 
 test('pl-ac4 the module exports the contract, takes one object, never writes, and the HTTP routes return the same values', async (t) => {
-  const { db, dir } = store(t);
-  business(db);
+  const { db, dir } = await store(t);
+  await business(db);
   for (const name of ['pnlEntities', 'businessPnl', 'businessPnlRows', 'householdSpending', 'householdSpendingRows', 'PnlError']) {
     assert.equal(typeof PNL[name], 'function', name);
   }
@@ -657,15 +657,15 @@ test('pl-ac4 the module exports the contract, takes one object, never writes, an
   assert.equal(e.code, 'bad_range');
   assert.ok(e instanceof Error);
 
-  const changes = () => db.prepare('SELECT total_changes() AS n').get().n;
-  const before = changes();
-  const list = pnlEntities({ db });
-  const direct = businessPnl({ db, entity: STUDIO });
-  const directRows = businessPnlRows({ db, entity: STUDIO, section: 'income', category: 'Consulting revenue' });
-  businessPnl({ db, entity: BIZ, from: '2032-01', to: '2032-12' });
-  PNL.householdSpending({ db });
-  code(() => businessPnl({ db, entity: 'entity:nosuchname' }));
-  assert.equal(changes(), before, 'P&L reads never write the store');
+  const changes = async () => (await db.prepare('SELECT total_changes() AS n').get()).n;
+  const before = await changes();
+  const list = await pnlEntities({ db });
+  const direct = await businessPnl({ db, entity: STUDIO });
+  const directRows = await businessPnlRows({ db, entity: STUDIO, section: 'income', category: 'Consulting revenue' });
+  await businessPnl({ db, entity: BIZ, from: '2032-01', to: '2032-12' });
+  await PNL.householdSpending({ db });
+  code(async () => await businessPnl({ db, entity: 'entity:nosuchname' }));
+  assert.equal(await changes(), before, 'P&L reads never write the store');
 
   const srv = await serveAppFixture({ authenticated: true, db, config: { clock: CLOCK, dataDir: dir }, answerer: null });
   t.after(() => srv.close());
@@ -703,22 +703,22 @@ test('pl-ac4 the module exports the contract, takes one object, never writes, an
   await get(`/api/pnl/rows?entity=${encodeURIComponent('entity:nosuchname')}&section=income&category=Income`, 404);
   await get(`/api/pnl/rows?entity=${encodeURIComponent(STUDIO)}&section=sideways&category=Income`, 400);
   await get(`/api/pnl/rows?entity=${encodeURIComponent(STUDIO)}&section=income&category=Income&month=2032-7`, 400);
-  assert.equal(changes(), before, 'the HTTP reads never write the store');
+  assert.equal(await changes(), before, 'the HTTP reads never write the store');
 });
 
 
 test('PN1: P&L lists spending ledgers separately and restores original tab names from locators', async t => {
-  const { db, root } = store(t);
-  file(db);
-  const id = line(db, 'Asters', '2032-03', 'Medical', -120);
-  db.prepare('UPDATE pnl_lines SET locator = ? WHERE id = ?').run(JSON.stringify({ sheet: "Aster's - (Actual Expenses)", cells: ['D2'] }), id);
-  line(db, 'Example Studio', '2032-03', 'Income', 500);
-  fact(db, 'pnl.ledgers', { "Aster's": { kind: 'spending' } });
-  const entities = pnlEntities({ db, clock: CLOCK });
+  const { db, root } = await store(t);
+  await file(db);
+  const id = await line(db, 'Asters', '2032-03', 'Medical', -120);
+  await db.prepare('UPDATE pnl_lines SET locator = ? WHERE id = ?').run(JSON.stringify({ sheet: "Aster's - (Actual Expenses)", cells: ['D2'] }), id);
+  await line(db, 'Example Studio', '2032-03', 'Income', 500);
+  await fact(db, 'pnl.ledgers', { "Aster's": { kind: 'spending' } });
+  const entities = await pnlEntities({ db, clock: CLOCK });
   assert.equal(entities.find(e => e.key === 'entity:asters').label, "Aster's");
   assert.equal(entities.find(e => e.key === 'entity:asters').kind, 'spending');
   assert.equal(entities.find(e => e.key === STUDIO).kind, 'entity');
-  const p = businessPnl({ db, entity: "Aster's", clock: CLOCK });
+  const p = await businessPnl({ db, entity: "Aster's", clock: CLOCK });
   assert.equal(p.entity.kind, 'spending');
   assert.equal(p.entity.label, "Aster's");
   assert.equal(p.figures[p.expenses.total].v, 120);

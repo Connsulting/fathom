@@ -33,7 +33,7 @@ async function fails(resPromise, status) {
 
 async function readDb(file, fn) {
   const db = await openStore(file);
-  try { return await fn(db); } finally { db.close(); }
+  try { return await fn(db); } finally { await db.close(); }
 }
 
 const create = (s, body, headers) => postJson(s.baseUrl, '/api/keys', body, headers);
@@ -140,7 +140,7 @@ describe('key routes', () => {
 
   test('the platform holds only a hash of the key', async () => {
     const { key, record } = (await ok(create(s, { name: 'Hash only', scopes: ['write:recs'] }))).json;
-    const rows = await readDb(s.platformFile, db => db.prepare('SELECT * FROM api_keys').all().map(r => ({ ...r })));
+    const rows = await readDb(s.platformFile, async db => (await db.prepare('SELECT * FROM api_keys').all()).map(r => ({ ...r })));
     const row = rows.find(r => r.id === record.id);
     assert.ok(row);
     assert.equal(row.household_id, s.householdId);

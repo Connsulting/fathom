@@ -39,8 +39,8 @@ function scriptedEngine(turns) {
 
 async function proposed(t) {
   const s = await createEvalStore();
-  t.after(() => s.close());
-  s.db.prepare('INSERT INTO recs (id, def, status, updated_at) VALUES (?, ?, ?, ?)')
+  t.after(async () => await s.close());
+  await s.db.prepare('INSERT INTO recs (id, def, status, updated_at) VALUES (?, ?, ?, ?)')
     .run(REC, JSON.stringify({ id: REC, title: TITLE, summary: 'A synthetic rec.', tasks: [] }), 'proposed', now);
   const engine = scriptedEngine([[
     { toolCalls: [{ name: 'act_on_recommendation', args: { operation: 'status', id: REC, status: 'dismissed', propose: true } }] },
@@ -72,7 +72,7 @@ test('AC3 the card for a dismissed recommendation shows its title and Not for us
   noCodes(card);
 
   const out = await handlers.proposalDecide({ ...ctx, params: { id: first.thread.id, messageId: first.message.id }, body: { decision: 'confirm' } });
-  assert.equal(db.prepare('SELECT status FROM recs WHERE id = ?').get(REC).status, 'dismissed', 'the change ran');
+  assert.equal((await db.prepare('SELECT status FROM recs WHERE id = ?').get(REC)).status, 'dismissed', 'the change ran');
   assert.equal(out.message.provenance.actions?.length, 1, 'one receipt');
   const receipt = plain(chat.workHtml(out.message));
   assert.ok(receipt.includes(SENTENCE), receipt);
@@ -90,11 +90,11 @@ test('AC3 the card for a dismissed recommendation shows its title and Not for us
 test('AC3 a stored proposal from before descriptions renders a readable sentence, never argument lines', async t => {
   const { db, ctx, first } = await proposed(t);
   const id = Number(first.message.id.slice(1));
-  const row = db.prepare('SELECT provenance FROM messages WHERE id = ?').get(id);
+  const row = await db.prepare('SELECT provenance FROM messages WHERE id = ?').get(id);
   const provenance = JSON.parse(row.provenance);
   delete provenance.pendingAction.description;
   delete provenance.pendingAction.details;
-  db.prepare('UPDATE messages SET provenance = ? WHERE id = ?').run(JSON.stringify(provenance), id);
+  await db.prepare('UPDATE messages SET provenance = ? WHERE id = ?').run(JSON.stringify(provenance), id);
   const served = await handlers.threadGet({ ...ctx, params: { id: first.thread.id } });
   const card = plain(chat.pendingActionHtml(served.messages.find(m => m.id === first.message.id)));
   assert.ok(card.includes(SENTENCE), card);

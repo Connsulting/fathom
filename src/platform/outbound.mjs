@@ -16,15 +16,16 @@
 
 
 import { codeError } from './db.mjs';
+import { atomically } from '../storage/index.mjs';
 
 export const OUTBOUND_KINDS = Object.freeze(['jobs', 'email', 'simplefin', 'engine']);
 
 const ALL_PAUSED = Object.freeze(Object.fromEntries(OUTBOUND_KINDS.map(k => [k, false])));
 
-const rowOf = (platform, id) => platform.prepare('SELECT jobs, email, simplefin, engine FROM household_outbound WHERE household_id = ?').get(id);
+const rowOf = async (platform, id) => await platform.prepare('SELECT jobs, email, simplefin, engine FROM household_outbound WHERE household_id = ?').get(id);
 
-export function readOutbound(platform, householdId) {
-  const row = typeof householdId === 'string' ? rowOf(platform, householdId) : null;
+export async function readOutbound(platform, householdId) {
+  const row = typeof householdId === 'string' ? await rowOf(platform, householdId) : null;
   if (!row) return { ...ALL_PAUSED };
   return Object.fromEntries(OUTBOUND_KINDS.map(k => [k, row[k] === 1]));
 }
@@ -38,48 +39,39 @@ function checkPatch(patch) {
   return keys;
 }
 
-export function initOutbound(platform, householdId, { enabled = false, now = Date.now(), actorUserId = null } = {}) {
+export async function initOutbound(platform, householdId, { enabled = false, now = Date.now(), actorUserId = null } = {}) {
   const v = enabled ? 1 : 0;
-  platform.prepare(`INSERT INTO household_outbound (household_id, jobs, email, simplefin, engine, updated_at, updated_by)
+  await platform.prepare(`INSERT INTO household_outbound (household_id, jobs, email, simplefin, engine, updated_at, updated_by)
     VALUES (?, ?, ?, ?, ?, ?, ?)`).run(householdId, v, v, v, v, now, actorUserId);
 }
 
-export function setOutbound(platform, householdId, patch, { actorUserId = null, now = Date.now() } = {}) {
+export async function setOutbound(platform, householdId, patch, { actorUserId = null, now = Date.now() } = {}) {
   const keys = checkPatch(patch);
   if (typeof householdId !== 'string') throw codeError('bad_outbound');
-  const nested = platform.isTransaction;
-  platform.exec(nested ? 'SAVEPOINT outbound_write' : 'BEGIN IMMEDIATE');
-  try {
-    const next = { ...readOutbound(platform, householdId) };
+  atomically(platform, async platform => {
+    const next = { ...await readOutbound(platform, householdId) };
     for (const k of keys) next[k] = patch[k];
     const flag = k => (next[k] ? 1 : 0);
-    platform.prepare(`INSERT INTO household_outbound (household_id, jobs, email, simplefin, engine, updated_at, updated_by)
+    await platform.prepare(`INSERT INTO household_outbound (household_id, jobs, email, simplefin, engine, updated_at, updated_by)
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(household_id) DO UPDATE SET jobs = excluded.jobs, email = excluded.email, simplefin = excluded.simplefin,
         engine = excluded.engine, updated_at = excluded.updated_at, updated_by = excluded.updated_by`)
       .run(householdId, flag('jobs'), flag('email'), flag('simplefin'), flag('engine'), now, actorUserId);
-    platform.prepare(`INSERT INTO audit_events (at, actor_user_id, household_id, target_user_id, action, outcome)
+    await platform.prepare(`INSERT INTO audit_events (at, actor_user_id, household_id, target_user_id, action, outcome)
       VALUES (?, ?, ?, NULL, 'household.outbound', 'ok')`).run(now, actorUserId, householdId);
-    platform.exec(nested ? 'RELEASE outbound_write' : 'COMMIT');
-  } catch (e) {
-    if (nested) {
-      platform.exec('ROLLBACK TO outbound_write');
-      platform.exec('RELEASE outbound_write');
-    } else platform.exec('ROLLBACK');
-    throw e;
-  }
-  return readOutbound(platform, householdId);
+  });
+  return await readOutbound(platform, householdId);
 }
 
 export function outboundGuard(platform, householdId) {
   const status = platform.prepare('SELECT status FROM households WHERE id = ?');
   return Object.freeze({
     householdId,
-    enabled(kind) {
+    async enabled(kind) {
       if (!OUTBOUND_KINDS.includes(kind)) return false;
       try {
-        if (status.get(householdId)?.status !== 'active') return false;
-        return readOutbound(platform, householdId)[kind] === true;
+        if ((await status.get(householdId))?.status !== 'active') return false;
+        return (await readOutbound(platform, householdId))[kind] === true;
       } catch {
         return false;
       }

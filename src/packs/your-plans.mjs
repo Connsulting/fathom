@@ -220,7 +220,7 @@ async function gatherSources(db, vault, fileIds, warnings, coverage, excludedDoc
   const addFile = async id => {
     if (seen.has(id)) return;
     seen.add(id);
-    const file = fileRow.get(id);
+    const file = await fileRow.get(id);
     if (!file) {
       const reason = `No file with id ${id}; it was skipped.`;
       warnings.push(reason);
@@ -232,11 +232,11 @@ async function gatherSources(db, vault, fileIds, warnings, coverage, excludedDoc
     for (const reason of warnings.slice(before)) coverage.push(knowledgeGap({ stage: 'source-read', name: file.name || id, fileId: id, reason }));
     if (source) sources.push(source);
   };
-  const docs = db.prepare("SELECT id, fields, file_id FROM documents WHERE doc_type IN ('plan', 'benefits') ORDER BY id").all();
+  const docs = await db.prepare("SELECT id, fields, file_id FROM documents WHERE doc_type IN ('plan', 'benefits') ORDER BY id").all();
   for (const doc of docs) {
     if (excludedDocuments.includes(doc.id)) continue;
     if (doc.file_id) {
-      const removed = db.prepare('SELECT removed_at FROM files WHERE id = ?').get(doc.file_id);
+      const removed = await db.prepare('SELECT removed_at FROM files WHERE id = ?').get(doc.file_id);
       if (!removed?.removed_at) await addFile(doc.file_id);
       continue;
     }
@@ -316,19 +316,19 @@ export async function buildYourPlans({ db, engine, household, fileIds = [], excl
   if (!Array.isArray(fileIds) || !fileIds.every(id => typeof id === 'string')) throw new TypeError('fileIds must be strings');
   if (!Array.isArray(excludeDocumentIds) || !excludeDocumentIds.every(id => Number.isSafeInteger(id) && id > 0)) throw new TypeError('excludeDocumentIds must be document ids');
   for (const id of excludeDocumentIds) {
-    if (!db.prepare("SELECT 1 FROM documents WHERE id = ? AND file_id IS NULL AND doc_type IN ('plan', 'benefits')").get(id)) {
+    if (!await db.prepare("SELECT 1 FROM documents WHERE id = ? AND file_id IS NULL AND doc_type IN ('plan', 'benefits')").get(id)) {
       throw new YourPlansRefusal('Only a text-only plan or benefits document can be removed from this pack.');
     }
   }
   const root = household.root;
   guardTarget(root);
   const vault = await openVault(household);
-  const day = resolveClock(db, clock);
+  const day = await resolveClock(db, clock);
   const dir = yourPlansDir(resolve(root));
   const warnings = [];
   const coverage = [];
-  const excludedDocuments = [...new Set([...getSetting(db, 'yourPlans.excludedDocuments', []), ...excludeDocumentIds])];
-  if (excludeDocumentIds.length) setSetting(db, 'yourPlans.excludedDocuments', excludedDocuments);
+  const excludedDocuments = [...new Set([...await getSetting(db, 'yourPlans.excludedDocuments', []), ...excludeDocumentIds])];
+  if (excludeDocumentIds.length) await setSetting(db, 'yourPlans.excludedDocuments', excludedDocuments);
   const sources = await gatherSources(db, vault, fileIds, warnings, coverage, excludedDocuments);
   const entries = [];
   let dropped = 0;
@@ -342,7 +342,7 @@ export async function buildYourPlans({ db, engine, household, fileIds = [], excl
       const reason = 'Document extraction could not finish. Rebuild the pack to try again.';
       warnings.push(`${source.name}: ${reason}`);
       coverage.push(knowledgeGap({ stage: 'extraction', name: source.name, fileId: source.fileId, reason }));
-      setSetting(db, 'yourPlans.coverage', coverage);
+      await setSetting(db, 'yourPlans.coverage', coverage);
       if (error instanceof EngineOffError || error instanceof BudgetExceededError || error instanceof ModelAccountingError) throw error;
       continue;
     }
@@ -369,11 +369,11 @@ export async function buildYourPlans({ db, engine, household, fileIds = [], excl
     }
   }
   const named = sources.map(s => ({ fileId: s.fileId, name: s.name }));
-  setSetting(db, 'yourPlans.coverage', coverage);
+  await setSetting(db, 'yourPlans.coverage', coverage);
   if (!entries.length) return { written: false, dir, entries: 0, sources: named, warnings, dropped, coverage };
   writePack(dir, { entries, clock: day });
-  setSetting(db, 'yourPlans', { builtAt: new Date().toISOString(), entries: entries.length, dropped, sources: named.map(s => s.name), fileIds });
-  const generation = getSetting(db, 'packs.generation', 0);
-  setSetting(db, 'packs.generation', (Number.isInteger(generation) ? generation : 0) + 1);
+  await setSetting(db, 'yourPlans', { builtAt: new Date().toISOString(), entries: entries.length, dropped, sources: named.map(s => s.name), fileIds });
+  const generation = await getSetting(db, 'packs.generation', 0);
+  await setSetting(db, 'packs.generation', (Number.isInteger(generation) ? generation : 0) + 1);
   return { written: true, dir, entries: entries.length, sources: named, warnings, dropped, coverage };
 }

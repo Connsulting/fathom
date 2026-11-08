@@ -10,11 +10,11 @@
 // whether streamed text or a draft tag ever existed. The demo's fake engine echoes the two
 // invented amounts in INVENTED, so the first answer is regenerated once.
 
-import { DatabaseSync } from 'node:sqlite';
+import { openScope } from '../src/storage/index.mjs';
 import { test, expect, REMOTE, resetDemo, gotoRoute, ASK_THREAD_URL, askInput } from './helpers.mjs';
 import { householdStoreFile, localDataDir } from './local-store.mjs';
 
-const STORE = () => householdStoreFile(localDataDir());
+const STORE = async () => await householdStoreFile(localDataDir());
 const INVENTED = 'Is 4,321 or 5,432 the right amount for this?';
 const QUICK = 'Give me a quick read on where the household stands right now';
 const STEP_REVISED = 'Revised to remove 2 unchecked figures';
@@ -139,16 +139,16 @@ test('@mobile @st2 a stored draft note is not rendered and no draft tag shows', 
   const stored = await read();
   const steps = stored.provenance.work.items.filter((x) => x.k === 'step').map((x) => x.label);
   // A message stored before regenerations stopped keeping the first attempt carries a draft note.
-  const db = new DatabaseSync(STORE());
+  const db = await openScope({ path: await STORE(), journal: null, busyTimeout: 0 });
   try {
     db.exec('PRAGMA busy_timeout = 5000');
     const id = Number(String(stored.id).replace(/^m/, ''));
-    const row = db.prepare('SELECT provenance FROM messages WHERE id = ?').get(id);
+    const row = await db.prepare('SELECT provenance FROM messages WHERE id = ?').get(id);
     const prov = JSON.parse(row.provenance);
     prov.work.items.splice(1, 0, { k: 'note', text: DRAFT_NOTE, draft: true });
-    db.prepare('UPDATE messages SET provenance = ? WHERE id = ?').run(JSON.stringify(prov), id);
+    await db.prepare('UPDATE messages SET provenance = ? WHERE id = ?').run(JSON.stringify(prov), id);
   } finally {
-    db.close();
+    await db.close();
   }
   expect((await read()).provenance.work.items.some((x) => x.draft)).toBe(true);
 

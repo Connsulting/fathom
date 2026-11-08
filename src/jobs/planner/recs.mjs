@@ -32,8 +32,8 @@ export function buildDef(hit, fields) {
 }
 
 // Status-changing event = from_status differs from to_status; most recent = highest id (T6).
-function lastStatusEvent(db, recId) {
-  return db.prepare('SELECT * FROM rec_events WHERE rec_id = ? AND from_status IS NOT to_status ORDER BY id DESC LIMIT 1').get(recId) || null;
+async function lastStatusEvent(db, recId) {
+  return await db.prepare('SELECT * FROM rec_events WHERE rec_id = ? AND from_status IS NOT to_status ORDER BY id DESC LIMIT 1').get(recId) || null;
 }
 
 // RQ2: a rec is done by its answer when its last status change completed an answered question
@@ -73,16 +73,16 @@ export function sortOrder(results, prefs = {}) {
   return new Map(hits.map((x, sort) => [x.r.trigger.id, sort]));
 }
 
-export function applyRecs(db, results, ctx) {
+export async function applyRecs(db, results, ctx) {
   const { clock, now, runId, prose, packOverride, warn, prefs } = ctx;
-  const recRows = new Map(db.prepare('SELECT * FROM recs').all().map(r => [r.id, r]));
-  const prRows = new Map(db.prepare('SELECT * FROM planner_recs').all().map(r => [r.rec_id, r]));
+  const recRows = new Map((await db.prepare('SELECT * FROM recs').all()).map(r => [r.id, r]));
+  const prRows = new Map((await db.prepare('SELECT * FROM planner_recs').all()).map(r => [r.rec_id, r]));
   const sorts = sortOrder(results, prefs);
   const counts = { new: 0, updated: 0, retired: 0, unchanged: 0 };
   const byTrigger = {};
   const domains = new Set();
   const event = db.prepare('INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, ?, ?, ?, ?, ?)');
-  const record = (id, action, arg, from, to) => event.run(id, now, action, arg == null ? null : String(arg), from, to, 'planner');
+  const record = async (id, action, arg, from, to) => await event.run(id, now, action, arg == null ? null : String(arg), from, to, 'planner');
   const mark = (id, outcome, domain) => {
     byTrigger[id] = outcome;
     counts[outcome] += 1;
@@ -92,10 +92,10 @@ export function applyRecs(db, results, ctx) {
   // A stored def's primary question is answered by the facts this run planned over.
   const answered = def => !!ctx.stepEnv && questionAnswered(def.question, ctx.stepEnv);
   // Open, or waiting on the planner's own block: a status the planner may complete for an answer.
-  const completable = row => {
+  const completable = async row => {
     if (BLOCKABLE.includes(row.status)) return true;
     if (row.status !== 'waiting') return false;
-    const last = lastStatusEvent(db, row.id);
+    const last = await lastStatusEvent(db, row.id);
     return !!last && last.actor === 'planner' && last.action === 'block';
   };
 
@@ -130,12 +130,12 @@ export function applyRecs(db, results, ctx) {
       const sort = sorts.get(id);
       if (!rr) {
         const status = overridden(hit.packId) ? 'hidden' : 'proposed';
-        db.prepare(`INSERT INTO recs (id, def, status, waiting_on, wake, tasks_done, window_close, window_label, pack_id, sort, updated_at, file_id, parser, locator,
+        await db.prepare(`INSERT INTO recs (id, def, status, waiting_on, wake, tasks_done, window_close, window_label, pack_id, sort, updated_at, file_id, parser, locator,
                       owner, owner_override, goal_kinds)
                     VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, NULL, 'planner', ?, ?, 0, ?)`)
           .run(id, defText, status, JSON.stringify(def.tasks.map(() => false)), close, label, hit.packId, sort, now, JSON.stringify({ trigger: id }),
             recOwner, goalKinds);
-        db.prepare(`INSERT INTO planner_recs (rec_id, trigger_id, grounding_hash, prose_src, first_run, last_run, retired_at, retired_reason, retired_from, held_from)
+        await db.prepare(`INSERT INTO planner_recs (rec_id, trigger_id, grounding_hash, prose_src, first_run, last_run, retired_at, retired_reason, retired_from, held_from)
                     VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)`).run(id, id, p.hash, p.src, runId, runId);
         mark(id, 'new', t.domain);
         continue;
@@ -145,7 +145,7 @@ export function applyRecs(db, results, ctx) {
       let revived = false;
       const events = [];
       if (pr.retired_at) {
-        const last = lastStatusEvent(db, id);
+        const last = await lastStatusEvent(db, id);
         if (last && last.actor === 'planner' && last.action === 'retire') {
           const to = overridden(hit.packId) ? 'hidden' : 'proposed';
           events.push(['revive', null, status, to]);
@@ -155,7 +155,7 @@ export function applyRecs(db, results, ctx) {
         revived = true;
       }
       if (pr.held_from) {
-        const last = lastStatusEvent(db, id);
+        const last = await lastStatusEvent(db, id);
         if (status === 'waiting' && last && last.actor === 'planner' && last.action === 'block') {
           events.push(['unblock', null, status, pr.held_from]);
           status = pr.held_from;
@@ -164,7 +164,7 @@ export function applyRecs(db, results, ctx) {
       }
       // RQ2: a rec done by its answer reopens when the trigger now asks for something else (an
       // action, or a question not yet answered), so new work is never hidden under Done.
-      if (status === 'done' && doneByAnswer(lastStatusEvent(db, id)) && !answered(def)) {
+      if (status === 'done' && doneByAnswer(await lastStatusEvent(db, id)) && !answered(def)) {
         events.push(['reopen', null, status, 'proposed']);
         status = 'proposed';
         waitingOn = null;
@@ -178,15 +178,15 @@ export function applyRecs(db, results, ctx) {
       const rowChanged = rr.def !== defText || rr.window_close !== close || rr.window_label !== label || rr.pack_id !== hit.packId
         || rr.status !== status || rr.waiting_on !== waitingOn || rr.tasks_done !== tasksDone || rr.goal_kinds !== goalKinds || rr.owner !== owner;
       if (rowChanged) {
-        db.prepare(`UPDATE recs SET def = ?, status = ?, waiting_on = ?, tasks_done = ?, window_close = ?, window_label = ?, pack_id = ?, sort = ?, updated_at = ?,
+        await db.prepare(`UPDATE recs SET def = ?, status = ?, waiting_on = ?, tasks_done = ?, window_close = ?, window_label = ?, pack_id = ?, sort = ?, updated_at = ?,
                       goal_kinds = ?, owner = ? WHERE id = ?`).run(defText, status, waitingOn, tasksDone, close, label, hit.packId, sort, now, goalKinds, owner, id);
       } else if (rr.sort !== sort) {
-        db.prepare('UPDATE recs SET sort = ? WHERE id = ?').run(sort, id);
+        await db.prepare('UPDATE recs SET sort = ? WHERE id = ?').run(sort, id);
       }
-      for (const [action, arg, from, to] of events) record(id, action, arg, from, to);
+      for (const [action, arg, from, to] of events) await record(id, action, arg, from, to);
       const prChanged = revived || pr.held_from != null || pr.grounding_hash !== p.hash || pr.prose_src !== p.src;
       if (rowChanged || prChanged) {
-        db.prepare(`UPDATE planner_recs SET trigger_id = ?, grounding_hash = ?, prose_src = ?, last_run = ?, retired_at = NULL, retired_reason = NULL,
+        await db.prepare(`UPDATE planner_recs SET trigger_id = ?, grounding_hash = ?, prose_src = ?, last_run = ?, retired_at = NULL, retired_reason = NULL,
                       retired_from = NULL, held_from = NULL WHERE rec_id = ?`).run(id, p.hash, p.src, runId, id);
       }
       mark(id, revived ? 'new' : rowChanged || prChanged ? 'updated' : 'unchanged', t.domain);
@@ -196,15 +196,15 @@ export function applyRecs(db, results, ctx) {
     // RQ2: a question rec whose question is answered is done, whether its trigger is now held or
     // no longer applies; it never waits on a hold and is never dismissed for being answered.
     const storedDef = parseJson(rr.def, {});
-    if (completable(rr) && answered(storedDef)) {
+    if (await completable(rr) && answered(storedDef)) {
       // A row stored before RQ2 may carry the household gap list; an answered question reads none.
       const answeredDef = { ...storedDef };
       delete answeredDef.gaps;
-      db.prepare("UPDATE recs SET status = 'done', waiting_on = NULL, wake = NULL, def = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(answeredDef), now, id);
-      record(id, 'answered', null, rr.status, 'done');
-      if (res.state === 'blocked') db.prepare('UPDATE planner_recs SET held_from = NULL, last_run = ? WHERE rec_id = ?').run(runId, id);
+      await db.prepare("UPDATE recs SET status = 'done', waiting_on = NULL, wake = NULL, def = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(answeredDef), now, id);
+      await record(id, 'answered', null, rr.status, 'done');
+      if (res.state === 'blocked') await db.prepare('UPDATE planner_recs SET held_from = NULL, last_run = ? WHERE rec_id = ?').run(runId, id);
       else {
-        db.prepare('UPDATE planner_recs SET retired_at = ?, retired_reason = ?, retired_from = ?, held_from = NULL, last_run = ? WHERE rec_id = ?')
+        await db.prepare('UPDATE planner_recs SET retired_at = ?, retired_reason = ?, retired_from = ?, held_from = NULL, last_run = ? WHERE rec_id = ?')
           .run(clock, 'The question was answered.', rr.status, runId, id);
       }
       mark(id, res.state === 'blocked' ? 'updated' : 'retired', t.domain);
@@ -212,9 +212,9 @@ export function applyRecs(db, results, ctx) {
     }
     if (res.state === 'blocked') {
       if (BLOCKABLE.includes(rr.status)) {
-        db.prepare("UPDATE recs SET status = 'waiting', waiting_on = 'data', updated_at = ? WHERE id = ?").run(now, id);
-        record(id, 'block', res.reason, rr.status, 'waiting');
-        db.prepare('UPDATE planner_recs SET held_from = ?, last_run = ? WHERE rec_id = ?').run(rr.status, runId, id);
+        await db.prepare("UPDATE recs SET status = 'waiting', waiting_on = 'data', updated_at = ? WHERE id = ?").run(now, id);
+        await record(id, 'block', res.reason, rr.status, 'waiting');
+        await db.prepare('UPDATE planner_recs SET held_from = ?, last_run = ? WHERE rec_id = ?').run(rr.status, runId, id);
         mark(id, 'updated', t.domain);
       } else {
         mark(id, 'unchanged', t.domain);
@@ -225,14 +225,14 @@ export function applyRecs(db, results, ctx) {
       ? `Its window closed on ${dayLabel(rr.window_close)}.`
       : 'The condition behind it no longer holds in your data.';
     if (ACTIVE.includes(rr.status)) {
-      db.prepare("UPDATE recs SET status = 'dismissed', waiting_on = NULL, updated_at = ? WHERE id = ?").run(now, id);
-      record(id, 'retire', reason, rr.status, 'dismissed');
+      await db.prepare("UPDATE recs SET status = 'dismissed', waiting_on = NULL, updated_at = ? WHERE id = ?").run(now, id);
+      await record(id, 'retire', reason, rr.status, 'dismissed');
     } else {
       // MGN2: a done, dismissed or hidden rec keeps the owner's status; the event records the
       // retirement without a status change, so it is never the planner's last word.
-      record(id, 'retire', reason, rr.status, rr.status);
+      await record(id, 'retire', reason, rr.status, rr.status);
     }
-    db.prepare('UPDATE planner_recs SET retired_at = ?, retired_reason = ?, retired_from = ?, held_from = NULL, last_run = ? WHERE rec_id = ?')
+    await db.prepare('UPDATE planner_recs SET retired_at = ?, retired_reason = ?, retired_from = ?, held_from = NULL, last_run = ? WHERE rec_id = ?')
       .run(clock, reason, rr.status, runId, id);
     mark(id, 'retired', t.domain);
   }

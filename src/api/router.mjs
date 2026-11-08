@@ -293,7 +293,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
       const candidate = compiled.find(r => (r.method === req.method || (req.method === 'HEAD' && r.method === 'GET')) && matchPath(r.parts, segments));
       route = candidate || null;
       const publicPage = read && ['/signin', '/enroll', '/auth/auth.js', '/auth/auth.css', '/auth/return-path.js', '/favicon.svg'].includes(path);
-      let identity = gated ? identityOf(req, auth) : null;
+      let identity = gated ? await identityOf(req, auth) : null;
       if (gated && !candidate?.public && !publicPage && !identity) {
         sendUnauthorized(req, res, isApi);
         return;
@@ -331,11 +331,11 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
           body = await readJsonBody(req);
         }
         if (gated && !r.public) {
-          identity = revalidateRequest({ authenticate: () => identityOf(req, auth), checkAccess: fresh => checkAccess(r, fresh), assertion, household, runtimes });
+          identity = revalidateRequest({ authenticate: async () => await identityOf(req, auth), checkAccess: fresh => checkAccess(r, fresh), assertion, household, runtimes });
         }
         // A write to a seeded demo household drops its synthetic marker.
         const seeded = household && !gated && !config.publicDemo && r.method === 'POST' && path !== '/api/demo/reset' ? household.db : null;
-        const changesBefore = seeded ? seeded.prepare('SELECT total_changes() AS n').get().n : 0;
+        const changesBefore = seeded ? (await seeded.prepare('SELECT total_changes() AS n').get()).n : 0;
         const events = r.stream && wantsEventStream(req) ? createEventStream(req, res) : null;
         const sessionKey = gated && r.stream ? auth.sessionKey(req) : null;
         if (sessionKey) {
@@ -344,8 +344,8 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
           sessionStreams.get(sessionKey).add(streamEntry.cancel);
         }
         const caller = identity;
-        const principal = gated && household ? { check() {
-          const now = identityOf(req, auth);
+        const principal = gated && household ? { async check() {
+          const now = await identityOf(req, auth);
           return Boolean(now) && now.id === caller.id && now.householdId === caller.householdId
             && now.contextVersion === caller.contextVersion && auth.servedMember(now);
         } } : null;
@@ -353,10 +353,10 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
         // Nothing household-scoped leaves (a stream event or the final body) once the session no
         // longer holds this context: a member removed, a passkey revoked, a sign-out or a switch
         // meanwhile ends the stream or refuses the response, whichever path revoked the session.
-        const contextLost = () => (!principal || principal.check() ? null
-          : identityOf(req, auth) ? staleContext() : new HttpError(401, 'unauthorized'));
-        const onEvent = events ? event => {
-          const lost = contextLost();
+        const contextLost = async () => (!principal || principal.check() ? null
+          : await identityOf(req, auth) ? staleContext() : new HttpError(401, 'unauthorized'));
+        const onEvent = events ? async event => {
+          const lost = await contextLost();
           if (lost) events.fail(lost);
           else events.send(event);
         } : null;
@@ -367,7 +367,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
             scheduler: household?.scheduler, transport: household?.transport, platform, config, identity, auth, backups,
             get keys() { if (config.publicDemo) throw demoOff(); return keys; },
             params, query, body, uploads, req, res,
-            assertResponseContext() { const lost = contextLost(); if (lost) throw lost; },
+            async assertResponseContext() { const lost = await contextLost(); if (lost) throw lost; },
             ...(onEvent ? { onEvent } : {}),
           }));
         } catch (err) {
@@ -377,11 +377,11 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
           events.fail(err);
           return;
         } finally {
-          if (seeded && seeded.prepare('SELECT total_changes() AS n').get().n !== changesBefore) {
-            seeded.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
+          if (seeded && (await seeded.prepare('SELECT total_changes() AS n').get()).n !== changesBefore) {
+            await seeded.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
           }
         }
-        const lost = contextLost();
+        const lost = await contextLost();
         if (lost) {
           if (!events) throw lost;
           events.fail(lost);

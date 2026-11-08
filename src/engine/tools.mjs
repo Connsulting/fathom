@@ -5,7 +5,7 @@ import { compileSchema } from './schema.mjs';
 import { operationScopes } from '../tools/tools.mjs';
 import { WRITE_SCOPES } from '../shared/action-scopes.mjs';
 
-export function createRegistryServer(registry = [], { purpose, ctx } = {}) {
+export async function createRegistryServer(registry = [], { purpose, ctx } = {}) {
   if (!Array.isArray(registry)) throw new TypeError('Tool registry must be an array');
   const names = new Set();
   const offered = [];
@@ -20,7 +20,7 @@ export function createRegistryServer(registry = [], { purpose, ctx } = {}) {
   }
   offered.sort((a, b) => a.entry.name.localeCompare(b.entry.name));
   if (ctx?.conversationKey && ctx.actorId && typeof ctx.db?.prepare === 'function') {
-    ctx = { ...ctx, evidenceMessageId: ctx.db.prepare('SELECT coalesce(max(id), 0) AS id FROM messages WHERE conversation_key = ?').get(ctx.conversationKey).id };
+    ctx = { ...ctx, evidenceMessageId: (await ctx.db.prepare('SELECT coalesce(max(id), 0) AS id FROM messages WHERE conversation_key = ?').get(ctx.conversationKey)).id };
   }
   const results = [];
   const shared = ctx?.turnResults?.() ?? results;

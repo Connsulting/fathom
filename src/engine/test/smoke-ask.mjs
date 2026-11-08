@@ -33,20 +33,20 @@ export async function runAskSmoke({ mode = 'fake', credentialFile = null } = {})
   const platformKey = secrets.platformKey();
   let made;
   try {
-    made = createInstance(dataDir, { mode: 'demo', init: seedDemo, platformKey });
+    made = await createInstance(dataDir, { mode: 'demo', init: seedDemo, platformKey });
   } finally {
     platformKey.fill(0);
   }
   const { db, platform, householdId } = made;
   let household = null;
   try {
-    createAuthStore(platform).setPlatformSetting(FUNDING_SETTING, 25);
-    setAllocation(platform, householdId, 25);
-    household = createHouseholdContext({ householdId, mode: 'demo', db, config, platform, secrets });
-    const lastId = db.prepare('SELECT coalesce(max(id), 0) AS id FROM spend_ledger').get().id;
-    const { key } = createThread(db, clockNow(db));
+    await createAuthStore(platform).setPlatformSetting(FUNDING_SETTING, 25);
+    await setAllocation(platform, householdId, 25);
+    household = await createHouseholdContext({ householdId, mode: 'demo', db, config, platform, secrets });
+    const lastId = (await db.prepare('SELECT coalesce(max(id), 0) AS id FROM spend_ledger').get()).id;
+    const { key } = await createThread(db, await clockNow(db));
     const reply = await household.answerer.answer({ db, key, text: SMOKE_QUESTION });
-    const spendRows = db.prepare('SELECT purpose, model, yyyymm, cost_usd FROM spend_ledger WHERE id > ? ORDER BY id').all(lastId)
+    const spendRows = (await db.prepare('SELECT purpose, model, yyyymm, cost_usd FROM spend_ledger WHERE id > ? ORDER BY id').all(lastId))
       .map(r => ({ purpose: r.purpose, model: r.model, yyyymm: r.yyyymm, costUsd: r.cost_usd }));
     return {
       groundingOk: !reply.notice && reply.provenance?.grounding?.ok === true,
@@ -57,8 +57,8 @@ export async function runAskSmoke({ mode = 'fake', credentialFile = null } = {})
     };
   } finally {
     if (household) await household.close();
-    else db.close();
-    platform.close();
+    else await db.close();
+    await platform.close();
     await rm(dataDir, { recursive: true, force: true });
   }
 }

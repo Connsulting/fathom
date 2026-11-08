@@ -46,7 +46,7 @@ export async function script({ turn,db,clock }) {
     if (turn.expected.some(e=>e.kind==='portfolio')) targetArgs.roundTo=1;
     if (turn.expected.some(e=>e.kind==='portfolio')) {
       if (turn.required.some(r=>r.predicates.some(p=>p.path==='definition'))) await call('retirement',{operation:'target',...targetArgs});
-      const meta=JSON.parse(db.prepare("SELECT value FROM content WHERE key='meta'").get().value);
+      const meta=JSON.parse((await db.prepare("SELECT value FROM content WHERE key='meta'").get()).value);
       const through=isoFromLabel(meta.dataThrough),date=new Date(through);
       const complete=date.getUTCDate()===new Date(Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+1,0)).getUTCDate();
       const to=new Date(Date.UTC(date.getUTCFullYear(),date.getUTCMonth()+(complete ? 1 : 0),0)).toISOString().slice(0,7);

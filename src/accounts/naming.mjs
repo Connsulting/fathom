@@ -7,13 +7,13 @@ import { lastFour } from '../ingest/account-match.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
 import { tokenScope } from '../scenario/build.mjs';
 
-export function accountNaming(db) {
-  const householdNames = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {};
-  const holders = new Map(db.prepare('SELECT account_id, holder FROM account_holders').all().map((r) => [r.account_id, r.holder]));
+export async function accountNaming(db) {
+  const householdNames = parseJson((await db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get())?.value, {}) || {};
+  const holders = new Map((await db.prepare('SELECT account_id, holder FROM account_holders').all()).map((r) => [r.account_id, r.holder]));
   // A connected account's mask is shown only when the bridge is sure of it (or its name ends with
   // the same digits), the rule detectAccountPairs uses; otherwise labels leave it out.
   const unsure = new Set();
-  for (const r of db.prepare(`SELECT m.account_id, a.mask, s.snapshot FROM simplefin_accounts m JOIN simplefin_snapshots s ON s.sf_key = m.sf_key
+  for (const r of await db.prepare(`SELECT m.account_id, a.mask, s.snapshot FROM simplefin_accounts m JOIN simplefin_snapshots s ON s.sf_key = m.sf_key
       JOIN accounts a ON a.id = m.account_id WHERE m.status = 'mapped' AND a.identity LIKE 'simplefin:%'`).all()) {
     const snap = parseJson(r.snapshot, {}) || {};
     const shown = r.mask;
@@ -21,22 +21,22 @@ export function accountNaming(db) {
   }
   // The business a business-owned account is named for: the owner's answer for that account, else the
   // household's only business.
-  const stated = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'accounts.businessEntity' AND (src IS NULL OR src != 'planner')").get()?.value, {}) || {};
-  const listed = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'business.entities'").get()?.value, []);
-  const entities = new Map([...(Array.isArray(listed) ? listed.map((e) => e && e.name) : []), ...db.prepare('SELECT DISTINCT entity FROM pnl_lines').all().map((r) => r.entity)]
+  const stated = parseJson((await db.prepare("SELECT value FROM facts WHERE key = 'accounts.businessEntity' AND (src IS NULL OR src != 'planner')").get())?.value, {}) || {};
+  const listed = parseJson((await db.prepare("SELECT value FROM facts WHERE key = 'business.entities'").get())?.value, []);
+  const entities = new Map([...(Array.isArray(listed) ? listed.map((e) => e && e.name) : []), ...(await db.prepare('SELECT DISTINCT entity FROM pnl_lines').all()).map((r) => r.entity)]
     .filter((n) => typeof n === 'string' && n.trim()).map((n) => [n.trim().toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(), n.trim()]));
   const onlyBusiness = entities.size === 1 ? [...entities.values()][0] : '';
   // The demo seed writes names as {n:key} tokens. They are resolved here, so a label never carries one
   // whatever path builds it (first render, rename response, tool output).
   let scope = null;
-  const demoScope = () => (scope ??= tokenScope(db));
-  const plain = (s) => (s == null ? s : resolveTokens(demoScope(), String(s), false));
+  const demoScope = async () => (scope ??= await tokenScope(db));
+  const plain = async (s) => (s == null ? s : resolveTokens(await demoScope(), String(s), false));
   const byId = new Map();
-  for (const a of db.prepare('SELECT * FROM accounts').all()) {
+  for (const a of await db.prepare('SELECT * FROM accounts').all()) {
     const demo = a.parser === 'demo-seed';
-    const names = demo ? { ...(demoScope().names.me ? { me: demoScope().names.me } : {}), ...(demoScope().names.spouse ? { spouse: demoScope().names.spouse } : {}), ...householdNames } : householdNames;
-    const businessName = typeof stated?.[a.id] === 'string' && stated[a.id].trim() ? stated[a.id].trim() : (onlyBusiness || (demo ? String(demoScope().names.biz ?? '') : ''));
-    const row = { ...(demo ? { ...a, inst: plain(a.inst), name: plain(a.name), owner: plain(a.owner) } : a), householdNames, holder: holders.get(a.id) || null, businessName, ...(unsure.has(a.id) ? { maskSure: false } : {}) };
+    const names = demo ? { ...((await demoScope()).names.me ? { me: (await demoScope()).names.me } : {}), ...((await demoScope()).names.spouse ? { spouse: (await demoScope()).names.spouse } : {}), ...householdNames } : householdNames;
+    const businessName = typeof stated?.[a.id] === 'string' && stated[a.id].trim() ? stated[a.id].trim() : (onlyBusiness || (demo ? String((await demoScope()).names.biz ?? '') : ''));
+    const row = { ...(demo ? { ...a, inst: await plain(a.inst), name: await plain(a.name), owner: await plain(a.owner) } : a), householdNames, holder: holders.get(a.id) || null, businessName, ...(unsure.has(a.id) ? { maskSure: false } : {}) };
     // The demo's names decide the prefix only; the default name keeps following the stored household names.
     const prefix = labelPrefix({ ...row, householdNames: names });
     byId.set(a.id, { ...row, labelPrefix: prefix, labelText: accountLabel({ ...row, labelPrefix: prefix }) });
@@ -50,8 +50,8 @@ export function accountNaming(db) {
 }
 
 // Account rows from any query, carrying the hints that keep their label the household's label.
-export function withLabelHints(db, rows) {
-  const naming = accountNaming(db);
+export async function withLabelHints(db, rows) {
+  const naming = await accountNaming(db);
   return rows.map((a) => ({ ...a, ...naming.hint(a.id) }));
 }
 
@@ -79,8 +79,8 @@ export function relabelStoredFigure(naming, row) {
   return out;
 }
 
-export function applyNaming(db, { series, src, fig } = {}) {
-  const naming = accountNaming(db);
+export async function applyNaming(db, { series, src, fig } = {}) {
+  const naming = await accountNaming(db);
   for (const row of naming.byId.values()) {
     const key = seriesKeyOf(row.id);
     if (series && series[key] && typeof series[key] === 'object') series[key].label = trendLabel(row);

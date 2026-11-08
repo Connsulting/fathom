@@ -26,15 +26,15 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     const config = loadConfig(env);
     validatePublicUrl(config.publicUrl, { required: true });
     if (config.demo === true) throw new Error();
-    opened = openInstance(config);
+    opened = await openInstance(config);
     if (!opened || opened.mode !== 'real') throw new Error();
     store = createAuthStore(opened.platform);
     store.sweep();
-    const household = servedHousehold(opened.platform);
+    const household = await servedHousehold(opened.platform);
     if (!household || household.status === 'deleted') throw new Error();
-    issued = store.transaction(() => {
+    issued = await store.transaction(async (store) => {
       const hh = household.id;
-      const enrolled = store.listPeople(hh).some(person => person.enrolledAt !== null && store.membership(person.id, hh)?.status === 'active');
+      const enrolled = (await store.listPeople(hh)).some(person => person.enrolledAt !== null && store.membership(person.id, hh)?.status === 'active');
       if (enrolled) throw new Error();
       return store.invite(hh, email, { role: 'admin' });
     });
@@ -45,12 +45,12 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     return 0;
   } catch (err) {
     if (issued) {
-      try { store.revokeInvitation(issued.token); } catch { /* Store may be unavailable. */ }
+      try { await store.revokeInvitation(issued.token); } catch { /* Store may be unavailable. */ }
     }
     console.error(`user invite: ${err?.name === 'StartupError' ? err.code : 'bootstrap failed'}`);
     return 1;
   } finally {
-    opened?.platform.close();
+    await opened?.platform.close();
   }
 }
 

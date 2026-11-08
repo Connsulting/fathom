@@ -44,15 +44,15 @@ test('expected figures come from current demo rows and respond to a changed stor
   const store = await createEvalStore();
   try {
     const descriptor = { kind: 'figure', key: 'hsa_left' };
-    const before = expectedFigures(store.db, [descriptor]);
-    store.db.prepare('UPDATE figures SET v = v + 13 WHERE key = ?').run(descriptor.key);
-    assert.equal(expectedFigures(store.db, [descriptor])[0], before[0] + 13);
+    const before = await expectedFigures(store.db, [descriptor]);
+    await store.db.prepare('UPDATE figures SET v = v + 13 WHERE key = ?').run(descriptor.key);
+    assert.equal((await expectedFigures(store.db, [descriptor]))[0], before[0] + 13);
     const cases = await loadCases();
-    for (const c of cases) for (const turn of c.turns) assert.ok(expectedFigures(store.db, turn.expected).every(Number.isFinite), c.id);
+    for (const c of cases) for (const turn of c.turns) assert.ok((await expectedFigures(store.db, turn.expected)).every(Number.isFinite), c.id);
     const spending = cases.find(c => c.id === 'spending-annual-exclusions').turns[0].expected;
-    const prior = expectedFigures(store.db, spending)[0];
-    store.db.prepare("UPDATE transactions SET amount = amount - 17 WHERE id = (SELECT min(id) FROM transactions WHERE category = 'health')").run();
-    assert.ok(expectedFigures(store.db, spending)[0] > prior);
+    const prior = (await expectedFigures(store.db, spending))[0];
+    await store.db.prepare("UPDATE transactions SET amount = amount - 17 WHERE id = (SELECT min(id) FROM transactions WHERE category = 'health')").run();
+    assert.ok((await expectedFigures(store.db, spending))[0] > prior);
   } finally { await store.close(); }
 });
 
@@ -108,9 +108,9 @@ test('earlier-turn values and context-only tokens fail independently of producti
   const store = await createEvalStore();
   try {
     const text = '{f:hsa_left}';
-    const scenario = buildScenario(store.db);
+    const scenario = await buildScenario(store.db);
     assert.equal(groundAnswer(text, { scenario }).ok, true);
-    const figures = Object.fromEntries(store.db.prepare('SELECT key,v FROM figures').all().map(r => [r.key, r.v]));
+    const figures = Object.fromEntries((await store.db.prepare('SELECT key,v FROM figures').all()).map(r => [r.key, r.v]));
     assert.equal(gradeFigures(text, [], { figures }).ok, false);
     const sourced = [{ name: 'household', args: { operation: 'figures',  keys: ['hsa_left'] }, result: [{ key: 'hsa_left', v: figures.hsa_left }] }];
     assert.equal(gradeFigures(text, sourced, { figures }).ok, true);
@@ -177,14 +177,14 @@ test('security picks and claimed payments fail even when the answer also refuses
 test('annual expectations use complete covered months rather than a partial last month', async () => {
   const store = await createEvalStore();
   try {
-    const meta = JSON.parse(store.db.prepare("SELECT value FROM content WHERE key='meta'").get().value);
+    const meta = JSON.parse((await store.db.prepare("SELECT value FROM content WHERE key='meta'").get()).value);
     meta.dataThrough = 'Mar 10, 2026';
-    store.db.prepare("UPDATE content SET value=? WHERE key='meta'").run(JSON.stringify(meta));
-    const covered = store.db.prepare(`SELECT t.amount AS v, t.category, t.description FROM transactions t JOIN accounts a ON a.id=t.account_id
-      WHERE a.kind IN ('checking','credit','card') AND t.date<'2026-03-01' AND t.amount<0`).all()
+    await store.db.prepare("UPDATE content SET value=? WHERE key='meta'").run(JSON.stringify(meta));
+    const covered = (await store.db.prepare(`SELECT t.amount AS v, t.category, t.description FROM transactions t JOIN accounts a ON a.id=t.account_id
+      WHERE a.kind IN ('checking','credit','card') AND t.date<'2026-03-01' AND t.amount<0`).all())
       .filter(r => !['transfer', 'income'].includes(r.category) && classOf(r.category) !== 'taxes' && classOf(r.category) !== 'debt_service'
         ).reduce((s, r) => s - r.v, 0);
-    assert.equal(expectedFigures(store.db, [{ kind: 'annual-spending' }])[0], Math.round(covered * 6 * 100) / 100);
+    assert.equal((await expectedFigures(store.db, [{ kind: 'annual-spending' }]))[0], Math.round(covered * 6 * 100) / 100);
   } finally { await store.close(); }
 });
 

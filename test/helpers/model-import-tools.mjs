@@ -27,8 +27,8 @@ export async function interpretation(text, { negate = false, pasted = false } = 
 
 export async function modelApp(t) {
   const x = await fixture({ engine: 'fake' });
-  createAuthStore(x.platform).setPlatformSetting('instance_model_cap_usd', 50);
-  const inner = createRuntimeEngine({ db: x.db, config: { engine: 'fake', fakeStreamMs: 0 } }), responses = [];
+  await createAuthStore(x.platform).setPlatformSetting('instance_model_cap_usd', 50);
+  const inner = await createRuntimeEngine({ db: x.db, config: { engine: 'fake', fakeStreamMs: 0 } }), responses = [];
   let extracts = 0, chat = [], onExtract = () => {}, onChat = () => {};
   const engine = { ...inner, call(request) {
     if (request.purpose === 'extract') {

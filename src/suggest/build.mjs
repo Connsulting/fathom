@@ -20,6 +20,7 @@ import {
   goalKind, isBusinessAccount, spendingInputs, spendingFigures, holdingsTotal, cushionPlan, independencePlan, taxPlan,
   questionWhy, suggestionFingerprint, horizonOf, horizonLabelOf,
 } from '../calc/targets.mjs';
+import { mapSeries } from '../shared/series.mjs';
 
 export const SUGGEST_SETTING = 'goals.suggestions';
 
@@ -30,8 +31,8 @@ const isoDay = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.sl
 // is the owner's own words, never a model figure.
 const RATE_AFTER = /withdrawal rate\D{0,40}?(\d+(?:\.\d+)?)\s*%/i;
 const RATE_BEFORE = /(\d+(?:\.\d+)?)\s*%[^.%\d]{0,30}?withdrawal rate/i;
-export function rememberedWithdrawalRate(db) {
-  const rows = db.prepare('SELECT text FROM preferences ORDER BY updated_at DESC, created_at DESC, id').all();
+export async function rememberedWithdrawalRate(db) {
+  const rows = await db.prepare('SELECT text FROM preferences ORDER BY updated_at DESC, created_at DESC, id').all();
   for (const { text } of rows) {
     const m = RATE_AFTER.exec(text) || RATE_BEFORE.exec(text);
     const r = m ? Math.round(Number(m[1]) * 100) / 10000 : NaN;
@@ -46,10 +47,10 @@ export const wantsSuggestion = g => g && g.origin === 'owner' && !g.archived && 
 
 // This tax year's usable room figures: kind 'm' or 'e', available, positive, and computed by a
 // planner run whose planning year is the clock year. room.sep counts only without solo 401(k) room.
-function currentRooms(db, clock) {
+async function currentRooms(db, clock) {
   const year = Number(clock.slice(0, 4));
   const keys = ROOM_PARTS.map(p => p.key);
-  const rows = db.prepare(`SELECT key, v, kind, locator, unavailable_reason FROM figures WHERE key IN (${keys.map(() => '?').join(', ')})`).all(...keys);
+  const rows = await db.prepare(`SELECT key, v, kind, locator, unavailable_reason FROM figures WHERE key IN (${keys.map(() => '?').join(', ')})`).all(...keys);
   const usable = ROOM_PARTS.flatMap(p => {
     const r = rows.find(x => x.key === p.key);
     if (!r || !['m', 'e'].includes(r.kind) || r.unavailable_reason || !finite(r.v) || r.v <= 0) return [];
@@ -60,43 +61,42 @@ function currentRooms(db, clock) {
   return usable.some(r => r.part === 'retirement') ? usable.filter(r => r.part !== 'sep') : usable;
 }
 
-function holdings(db, accounts, kinds, clock) {
-  return accounts.filter(a => kinds.includes(a.kind) && !isBusinessAccount(a))
-    .map(a => ({ id: a.id, kind: a.kind, name: a.name, value: accountHistory(db, a.id, clock).at(-1)?.value ?? null }));
+async function holdings(db, accounts, kinds, clock) {
+  return await mapSeries(accounts.filter(a => kinds.includes(a.kind) && !isBusinessAccount(a)), async a => ({ id: a.id, kind: a.kind, name: a.name, value: (await accountHistory(db, a.id, clock)).at(-1)?.value ?? null }));
 }
 
 // Accounts with a business flag: kind business, owner business, or named by the owner's
 // accounts.businessEntity fact with a nonblank entity.
-function loadAccounts(db) {
-  const row = db.prepare("SELECT value FROM facts WHERE key = 'accounts.businessEntity' AND (src IS NULL OR src != 'planner')").get();
+async function loadAccounts(db) {
+  const row = await db.prepare("SELECT value FROM facts WHERE key = 'accounts.businessEntity' AND (src IS NULL OR src != 'planner')").get();
   const named = row ? parse(row.value, undefined) : undefined;
   const byAccount = named && typeof named === 'object' && !Array.isArray(named) ? named : {};
-  const naming = accountNaming(db);
-  return db.prepare('SELECT id, name, kind, owner, inst, mask, display_name FROM accounts ORDER BY sort, id').all().map(a => ({
+  const naming = await accountNaming(db);
+  return (await db.prepare('SELECT id, name, kind, owner, inst, mask, display_name FROM accounts ORDER BY sort, id').all()).map(a => ({
     id: a.id, name: a.name, kind: a.kind, inst: a.inst, mask: a.mask, display_name: a.display_name, ...naming.hint(a.id),
     business: String(a.kind || '').toLowerCase() === 'business' || ownerOf(a.owner) === 'business'
       || (typeof byAccount[a.id] === 'string' && byAccount[a.id].trim() !== ''),
   }));
 }
 
-export function buildSuggestions(db, { clock: override, goals } = {}) {
-  const clock = paceClock(db, override);
-  const list = (goals || loadGoals(db)).filter(wantsSuggestion);
+export async function buildSuggestions(db, { clock: override, goals } = {}) {
+  const clock = await paceClock(db, override);
+  const list = (goals || await loadGoals(db)).filter(wantsSuggestion);
   const out = { clock, suggestions: [], figures: {} };
   if (!list.length) return out;
-  const settings = getSetting(db, SUGGEST_SETTING, null) || {};
-  const accounts = loadAccounts(db);
+  const settings = await getSetting(db, SUGGEST_SETTING, null) || {};
+  const accounts = await loadAccounts(db);
   // Each input is read once, and only when some goal needs it.
   const lazy = fn => { let memo; return () => (memo ??= { v: fn() }).v; };
-  const spending = lazy(() => spendingInputs({
-    ...loadCategoryInputs(db),
+  const spending = lazy(async () => spendingInputs({
+    ...await loadCategoryInputs(db),
     accounts,
     clock,
   }));
-  const cash = lazy(() => holdingsTotal(holdings(db, accounts, CASH_KINDS, clock)));
-  const invested = lazy(() => holdingsTotal(holdings(db, accounts, INVESTMENT_KINDS, clock)));
-  const rooms = lazy(() => currentRooms(db, clock));
-  const withdrawalRate = lazy(() => rememberedWithdrawalRate(db));
+  const cash = lazy(async () => holdingsTotal(await holdings(db, accounts, CASH_KINDS, clock)));
+  const invested = lazy(async () => holdingsTotal(await holdings(db, accounts, INVESTMENT_KINDS, clock)));
+  const rooms = lazy(async () => await currentRooms(db, clock));
+  const withdrawalRate = lazy(async () => await rememberedWithdrawalRate(db));
 
   for (const goal of list) {
     const entry = settings && typeof settings === 'object' ? settings[goal.id] : null;

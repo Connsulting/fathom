@@ -26,7 +26,7 @@ const SESSION = '__Host-fathom-session';
 const EXPIRED = { error: 'link expired or already used' };
 
 async function fixture(t) {
-  const temp = await tempInstance({ mode: 'real', init: db => setSetting(db, 'mode', 'real') });
+  const temp = await tempInstance({ mode: 'real', init: async db => await setSetting(db, 'mode', 'real') });
   let server;
   t.after(async () => {
     if (server?.listening) await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
@@ -131,12 +131,12 @@ async function signIn(app, device, credentialId) {
   return { client, verify };
 }
 
-const tokenRows = (app, userId) => app.platform.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY purpose, hash').all(userId).map(row => ({ ...row }));
-const invitationRows = (app, userId) => app.platform.prepare('SELECT * FROM household_invitations WHERE user_id = ? ORDER BY hash').all(userId).map(row => ({ ...row }));
-const addRows = (app, userId) => tokenRows(app, userId).filter(row => row.purpose === 'add-passkey');
-const otherRows = (app, userId) => tokenRows(app, userId).filter(row => row.purpose !== 'add-passkey');
-const sessionCount = (app, userId) => app.platform.prepare('SELECT count(*) AS n FROM auth_sessions WHERE user_id = ?').get(userId).n;
-const passkeyIds = (app, userId) => app.store.listPasskeys(userId).map(item => item.id);
+const tokenRows = async (app, userId) => (await app.platform.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY purpose, hash').all(userId)).map(row => ({ ...row }));
+const invitationRows = async (app, userId) => (await app.platform.prepare('SELECT * FROM household_invitations WHERE user_id = ? ORDER BY hash').all(userId)).map(row => ({ ...row }));
+const addRows = async (app, userId) => (await tokenRows(app, userId)).filter(row => row.purpose === 'add-passkey');
+const otherRows = async (app, userId) => (await tokenRows(app, userId)).filter(row => row.purpose !== 'add-passkey');
+const sessionCount = async (app, userId) => (await app.platform.prepare('SELECT count(*) AS n FROM auth_sessions WHERE user_id = ?').get(userId)).n;
+const passkeyIds = async (app, userId) => (await app.store.listPasskeys(userId)).map(item => item.id);
 const recipients = mail => [mail.to].flat();
 
 // The single add-passkey mail sent since `mark`; returns its token after checking the link shape.
@@ -190,9 +190,9 @@ test('a signed-in browser with a recent sign-in gets an add-passkey link mailed 
   // Was an invite token plus a recovery token: invite links are household invitations now, so the
   // owner's consumed invitation row stands in for the other link kind.
   app.store.createToken(owner.user.id, 'recovery');
-  const kept = otherRows(app, owner.user.id);
+  const kept = await otherRows(app, owner.user.id);
   assert.equal(kept.length, 1);
-  const invitations = invitationRows(app, owner.user.id);
+  const invitations = await invitationRows(app, owner.user.id);
   assert.equal(invitations.length, 1);
   const mark = app.sent.length;
   const response = await owner.client.post(LINK, { email: other.user.email, userId: other.user.id });
@@ -204,11 +204,11 @@ test('a signed-in browser with a recent sign-in gets an add-passkey link mailed 
   assert.ok(!response.text.includes(token));
   const issued = app.store.token(token);
   assert.deepEqual(issued, { userId: owner.user.id, purpose: 'add-passkey', expiresAt: START + TTL });
-  assert.equal(addRows(app, owner.user.id).length, 1);
-  assert.deepEqual(otherRows(app, owner.user.id), kept, 'the recovery token is untouched');
-  assert.deepEqual(invitationRows(app, owner.user.id), invitations, 'the invitation is untouched');
-  assert.deepEqual(tokenRows(app, other.user.id), [], 'the address in the body gets nothing');
-  assert.equal(app.db.prepare('SELECT count(*) AS n FROM email_sends').get().n, 0, 'auth mail stays out of email_sends');
+  assert.equal((await addRows(app, owner.user.id)).length, 1);
+  assert.deepEqual(await otherRows(app, owner.user.id), kept, 'the recovery token is untouched');
+  assert.deepEqual(await invitationRows(app, owner.user.id), invitations, 'the invitation is untouched');
+  assert.deepEqual(await tokenRows(app, other.user.id), [], 'the address in the body gets nothing');
+  assert.equal((await app.db.prepare('SELECT count(*) AS n FROM email_sends').get()).n, 0, 'auth mail stays out of email_sends');
 });
 
 test('the link needs a live session whose sign-in is under ten minutes old', async t => {
@@ -216,7 +216,7 @@ test('the link needs a live session whose sign-in is under ten minutes old', asy
   const owner = await enrolled(app, 'owner@example.test');
   app.advance(RECENT - 1);
   await requestLink(app, owner.client, owner.user.email);
-  const pending = addRows(app, owner.user.id);
+  const pending = await addRows(app, owner.user.id);
   assert.equal(pending.length, 1, 'a sign-in just under ten minutes old is recent');
   app.advance(1);
   const mark = app.sent.length;
@@ -225,7 +225,7 @@ test('the link needs a live session whose sign-in is under ten minutes old', asy
   const inPlace = await owner.client.post('/api/auth/register/options', {});
   assert.deepEqual(stale.json, inPlace.json, 'the same refusal as adding a passkey in place');
   assert.equal(app.sent.length, mark, 'no mail');
-  assert.deepEqual(addRows(app, owner.user.id), pending, 'no new token and the earlier one is untouched');
+  assert.deepEqual(await addRows(app, owner.user.id), pending, 'no new token and the earlier one is untouched');
   assert.equal((await identityOf(owner.client)).id, owner.user.id, 'the stale session stays signed in');
   const anonymous = await browser(app).post(LINK, { email: owner.user.email });
   assert.equal(anonymous.status, 401);
@@ -246,7 +246,7 @@ test('a missing or foreign Origin is refused before any token or mail', async t 
     assert.match(response.json.error, /cross-origin/i);
   }
   assert.equal(app.sent.length, mark);
-  assert.deepEqual(addRows(app, owner.user.id), []);
+  assert.deepEqual(await addRows(app, owner.user.id), []);
   await requestLink(app, owner.client, owner.user.email);
 });
 
@@ -254,7 +254,7 @@ test('redeeming the link in the requesting browser adds a passkey and keeps that
   const app = await fixture(t);
   const owner = await enrolled(app, 'owner@example.test');
   const original = owner.client.session();
-  const sessionsBefore = sessionCount(app, owner.user.id);
+  const sessionsBefore = await sessionCount(app, owner.user.id);
   const token = await requestLink(app, owner.client, owner.user.email);
   const mark = app.sent.length;
   const phone = createAuthenticator();
@@ -267,8 +267,8 @@ test('redeeming the link in the requesting browser adds a passkey and keeps that
   assert.ok(app.store.session(original), 'the original session row survives');
   assert.equal((await identityOf(browser(app, original))).id, owner.user.id, 'the original session cookie still authenticates');
   assert.equal((await identityOf(owner.client)).id, owner.user.id, 'the browser is still signed in');
-  assert.ok(sessionCount(app, owner.user.id) >= sessionsBefore, 'no session of the user is deleted');
-  assert.deepEqual(app.store.listPasskeys(owner.user.id).map(item => item.name).sort(), ['First synthetic device', 'Synthetic phone']);
+  assert.ok(await sessionCount(app, owner.user.id) >= sessionsBefore, 'no session of the user is deleted');
+  assert.deepEqual((await app.store.listPasskeys(owner.user.id)).map(item => item.name).sort(), ['First synthetic device', 'Synthetic phone']);
   assert.equal(app.store.token(token), null, 'the link is consumed');
   const sentNotices = notices(app, mark);
   assert.equal(sentNotices.length, 1);
@@ -304,7 +304,7 @@ test('a fresh browser consumes the link, adds a second passkey without revoking 
   const elsewhere = await app.sessionFor(owner.user.email);
   const requester = owner.client.session();
   const token = await requestLink(app, owner.client, owner.user.email);
-  const sessionsBefore = sessionCount(app, owner.user.id);
+  const sessionsBefore = await sessionCount(app, owner.user.id);
   const mark = app.sent.length;
   const tablet = createAuthenticator();
   const fresh = browser(app);
@@ -315,14 +315,14 @@ test('a fresh browser consumes the link, adds a second passkey without revoking 
   assert.equal(verify.json.identity.id, owner.user.id);
   assert.ok(fresh.session(), 'the fresh browser gets a session cookie');
   assert.equal((await identityOf(fresh)).id, owner.user.id);
-  const ids = passkeyIds(app, owner.user.id);
+  const ids = await passkeyIds(app, owner.user.id);
   assert.equal(ids.length, 2);
   assert.ok(ids.includes(owner.credentialId), 'the first passkey stays');
   assert.ok(ids.includes(tablet.credentials()[0].id));
   assert.equal(app.store.session(requester)?.id, owner.user.id, 'the requesting session stays');
   assert.equal((await identityOf(owner.client)).id, owner.user.id);
   assert.equal((await identityOf(elsewhere)).id, owner.user.id, 'other sessions stay');
-  assert.equal(sessionCount(app, owner.user.id), sessionsBefore + 1);
+  assert.equal(await sessionCount(app, owner.user.id), sessionsBefore + 1);
   assert.equal(app.store.token(token), null, 'single use');
   const sentNotices = notices(app, mark);
   assert.equal(sentNotices.length, 1, 'one notice, to the user only (no admin copies)');
@@ -357,7 +357,7 @@ test('a used link is refused at options and at verify, including a ceremony star
   assert.equal(late.status, 410);
   assert.deepEqual(late.json, EXPIRED);
   assert.equal(early.session(), null, 'no session for the refused browser');
-  assert.equal(passkeyIds(app, owner.user.id).length, 2);
+  assert.equal((await passkeyIds(app, owner.user.id)).length, 2);
 });
 
 test('the link expires after twenty minutes and works just before', async t => {
@@ -382,8 +382,8 @@ test('the link expires after twenty minutes and works just before', async t => {
   const options = await browser(app).post('/api/auth/register/options', { token: tokenB, name: 'Too late' });
   assert.equal(options.status, 410);
   assert.deepEqual(options.json, EXPIRED);
-  assert.deepEqual(passkeyIds(app, b.user.id), [b.credentialId]);
-  assert.equal(passkeyIds(app, a.user.id).length, 2);
+  assert.deepEqual(await passkeyIds(app, b.user.id), [b.credentialId]);
+  assert.equal((await passkeyIds(app, a.user.id)).length, 2);
 });
 
 test('the link is bound to its user and never reaches another account or a pending user', async t => {
@@ -407,8 +407,8 @@ test('the link is bound to its user and never reaches another account or a pendi
   assert.equal(options.json.options.user.id, app.store.userRow(owner.user.id).user_handle, 'the token decides the account');
   assert.equal(verify.status, 200);
   assert.equal(verify.json.identity.id, owner.user.id);
-  assert.equal(passkeyIds(app, owner.user.id).length, 2);
-  assert.deepEqual(passkeyIds(app, member.user.id), [member.credentialId], 'nothing is added to the browser user');
+  assert.equal((await passkeyIds(app, owner.user.id)).length, 2);
+  assert.deepEqual(await passkeyIds(app, member.user.id), [member.credentialId], 'nothing is added to the browser user');
   assert.equal(app.store.session(memberSession)?.id, member.user.id, "the other user's session is not deleted");
   assert.equal((await identityOf(member.client)).id, owner.user.id, 'the redeeming browser is signed in as the token user');
   assert.ok(app.store.token(memberToken), "the other user's link is unaffected");
@@ -419,9 +419,9 @@ test('the link is bound to its user and never reaches another account or a pendi
   assert.equal(refused.options.status, 410);
   assert.deepEqual(refused.options.json, EXPIRED);
   assert.equal(app.store.getUser(pending.id).enrolledAt, null);
-  assert.deepEqual(passkeyIds(app, pending.id), []);
+  assert.deepEqual(await passkeyIds(app, pending.id), []);
   assert.equal(app.store.membership(pending.id, app.hh), null);
-  assert.equal(app.store.invitation(invite)?.userId, pending.id, 'the invitation stays live');
+  assert.equal((await app.store.invitation(invite))?.userId, pending.id, 'the invitation stays live');
 });
 
 test('add-passkey tokens are independent of invitations and recovery tokens', async t => {
@@ -438,18 +438,18 @@ test('add-passkey tokens are independent of invitations and recovery tokens', as
   assert.equal(app.store.token(first), null, 'reissuing revokes the earlier add-passkey link');
   assert.equal(app.store.token(second)?.purpose, 'add-passkey');
   assert.equal(app.store.token(nextRecovery.token)?.purpose, 'recovery');
-  assert.equal(addRows(app, owner.user.id).length, 1);
+  assert.equal((await addRows(app, owner.user.id)).length, 1);
   const stale = await browser(app).post('/api/auth/register/options', { token: first, name: 'Old link' });
   assert.equal(stale.status, 410);
 
   const invited = app.store.invite(app.hh, 'pending@example.test');
   const pending = invited.user;
   const add = app.store.createToken(pending.id, 'add-passkey');
-  assert.equal(app.store.invitation(invited.token)?.userId, pending.id);
+  assert.equal((await app.store.invitation(invited.token))?.userId, pending.id);
   assert.equal(app.store.token(add.token)?.purpose, 'add-passkey');
   const reissued = app.store.invite(app.hh, 'pending@example.test');
-  assert.equal(app.store.invitation(invited.token), null);
-  assert.ok(app.store.invitation(reissued.token));
+  assert.equal(await app.store.invitation(invited.token), null);
+  assert.ok(await app.store.invitation(reissued.token));
   assert.equal(app.store.token(add.token)?.purpose, 'add-passkey', 'reissuing an invitation keeps add-passkey');
   assert.equal(add.expiresAt, START + TTL);
 });
@@ -481,18 +481,18 @@ test('completing recovery deletes the pending add-passkey link and any ceremony 
   const replacement = createAuthenticator();
   const recovered = await register(app, browser(app), replacement, { token: recoveryToken }, 'Recovered device');
   assert.equal(recovered.verify.status, 200, recovered.verify?.text);
-  assert.deepEqual(passkeyIds(app, owner.user.id), [replacement.credentials()[0].id], 'old passkeys are deleted');
+  assert.deepEqual(await passkeyIds(app, owner.user.id), [replacement.credentials()[0].id], 'old passkeys are deleted');
   assert.equal((await identityOf(owner.client)), null, 'old sessions are deleted');
   assert.equal((await identityOf(elsewhere)), null);
   assert.equal(app.store.token(addToken), null, 'the pending add-passkey link is deleted');
-  assert.deepEqual(addRows(app, owner.user.id), []);
+  assert.deepEqual(await addRows(app, owner.user.id), []);
   const options = await browser(app).post('/api/auth/register/options', { token: addToken, name: 'After recovery' });
   assert.equal(options.status, 410);
   assert.deepEqual(options.json, EXPIRED);
   const response = strandedDevice.createCredential(started.json.options, { origin: app.baseUrl });
   const late = await stranded.post('/api/auth/register/verify', { token: addToken, name: 'Stranded device', response });
   assert.equal(late.status, 410);
-  assert.deepEqual(passkeyIds(app, owner.user.id), [replacement.credentials()[0].id]);
+  assert.deepEqual(await passkeyIds(app, owner.user.id), [replacement.credentials()[0].id]);
 });
 
 test('a failed send answers 503 and revokes the token it issued', async t => {
@@ -505,7 +505,7 @@ test('a failed send answers 503 and revokes the token it issued', async t => {
   assert.equal(failed.status, 503);
   assert.deepEqual(failed.json, { error: 'authentication email unavailable' });
   assert.equal(app.sent.length, mark);
-  assert.deepEqual(addRows(app, owner.user.id), [], 'no add-passkey link survives the failure');
+  assert.deepEqual(await addRows(app, owner.user.id), [], 'no add-passkey link survives the failure');
   assert.equal(app.store.token(earlier), null);
   app.state.fail = false;
   assert.equal((await identityOf(owner.client)).id, owner.user.id, 'the session is unaffected');

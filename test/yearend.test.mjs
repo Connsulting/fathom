@@ -81,58 +81,58 @@ test('matchDocuments: by issuer name, else the only item of that form; ambiguous
   assert.deepEqual(unmatched.map((d) => d.id), [2, 4]);
 });
 
-function realStore() {
-  const db = openDb(':memory:');
-  migrate(db);
-  setSetting(db, 'mode', 'real');
+async function realStore() {
+  const db = await openDb(':memory:');
+  await migrate(db);
+  await setSetting(db, 'mode', 'real');
   return db;
 }
 
-function addDoc(db, { id, name, type, year = 2026, fields = {}, storedPath = null, at = '2027-01-20T10:00:00.000Z' }) {
-  db.prepare("INSERT INTO files (id, name, mime, size, uploaded_at, stored_path, status) VALUES (?, ?, 'application/pdf', 1, ?, ?, 'parsed')").run(id, name, at, storedPath);
-  db.prepare("INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES (?, ?, ?, ?, 'pdf-extract', '{\"document\":\"w2\"}')").run(type, year, JSON.stringify(fields), id);
+async function addDoc(db, { id, name, type, year = 2026, fields = {}, storedPath = null, at = '2027-01-20T10:00:00.000Z' }) {
+  await db.prepare("INSERT INTO files (id, name, mime, size, uploaded_at, stored_path, status) VALUES (?, ?, 'application/pdf', 1, ?, ?, 'parsed')").run(id, name, at, storedPath);
+  await db.prepare("INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES (?, ?, ?, ?, 'pdf-extract', '{\"document\":\"w2\"}')").run(type, year, JSON.stringify(fields), id);
 }
 
-test('yearendChecklist: received links the stored file; missing after the usual date, expected before', () => {
-  const db = realStore();
-  upsertFact(db, { key: 'income.w2', value: true, confirmed: true });
-  upsertFact(db, { key: 'income.partnership', value: true, confirmed: true });
-  addDoc(db, { id: 'f1', name: 'acme-w2.pdf', type: 'w2', fields: { employerName: 'Acme' } });
-  const jan = yearendChecklist(db, { year: 2026, clock: '2027-02-01' });
+test('yearendChecklist: received links the stored file; missing after the usual date, expected before', async () => {
+  const db = await realStore();
+  await upsertFact(db, { key: 'income.w2', value: true, confirmed: true });
+  await upsertFact(db, { key: 'income.partnership', value: true, confirmed: true });
+  await addDoc(db, { id: 'f1', name: 'acme-w2.pdf', type: 'w2', fields: { employerName: 'Acme' } });
+  const jan = await yearendChecklist(db, { year: 2026, clock: '2027-02-01' });
   const w2 = jan.items.find((i) => i.key === 'w2:acme');
   assert.equal(w2.status, 'have');
   assert.deepEqual(w2.files.map((f) => [f.id, f.name, f.date]), [['f1', 'acme-w2.pdf', '2027-01-20']]);
   assert.equal(jan.items.find((i) => i.key === 'k1:partnership').status, 'expected');
-  const apr = yearendChecklist(db, { year: 2026, clock: '2027-04-01' });
+  const apr = await yearendChecklist(db, { year: 2026, clock: '2027-04-01' });
   const k1 = apr.items.find((i) => i.key === 'k1:partnership');
   assert.equal(k1.status, 'missing');
   assert.match(k1.src, /partnership/);
   assert.match(k1.note, /March/);
 });
 
-test('marks: not needed persists with its reason, clears again, and a received document still wins', () => {
-  const db = realStore();
-  upsertFact(db, { key: 'income.selfEmployed', value: true, confirmed: true });
-  setMark(db, { year: 2026, key: '1099-k', reason: 'No card processor this year', now: '2026-12-01T00:00:00.000Z' });
-  let item = yearendChecklist(db, { year: 2026, clock: '2027-03-01' }).items.find((i) => i.key === '1099-k');
+test('marks: not needed persists with its reason, clears again, and a received document still wins', async () => {
+  const db = await realStore();
+  await upsertFact(db, { key: 'income.selfEmployed', value: true, confirmed: true });
+  await setMark(db, { year: 2026, key: '1099-k', reason: 'No card processor this year', now: '2026-12-01T00:00:00.000Z' });
+  let item = (await yearendChecklist(db, { year: 2026, clock: '2027-03-01' })).items.find((i) => i.key === '1099-k');
   assert.equal(item.status, 'skipped');
   assert.deepEqual(item.skip, { reason: 'No card processor this year', at: '2026-12-01T00:00:00.000Z' });
   // Another year is unaffected.
-  assert.equal(yearendChecklist(db, { year: 2027, clock: '2028-03-01' }).items.find((i) => i.key === '1099-k').status, 'missing');
-  setMark(db, { year: 2026, key: '1099-k', reason: null });
-  item = yearendChecklist(db, { year: 2026, clock: '2027-03-01' }).items.find((i) => i.key === '1099-k');
+  assert.equal((await yearendChecklist(db, { year: 2027, clock: '2028-03-01' })).items.find((i) => i.key === '1099-k').status, 'missing');
+  await setMark(db, { year: 2026, key: '1099-k', reason: null });
+  item = (await yearendChecklist(db, { year: 2026, clock: '2027-03-01' })).items.find((i) => i.key === '1099-k');
   assert.equal(item.status, 'missing');
-  setMark(db, { year: 2026, key: '1099-nec', reason: 'none' });
-  addDoc(db, { id: 'n1', name: 'nec.pdf', type: '1099-nec', fields: { payerName: 'Client' } });
-  assert.equal(yearendChecklist(db, { year: 2026, clock: '2027-03-01' }).items.find((i) => i.key === '1099-nec').status, 'have');
+  await setMark(db, { year: 2026, key: '1099-nec', reason: 'none' });
+  await addDoc(db, { id: 'n1', name: 'nec.pdf', type: '1099-nec', fields: { payerName: 'Client' } });
+  assert.equal((await yearendChecklist(db, { year: 2026, clock: '2027-03-01' })).items.find((i) => i.key === '1099-nec').status, 'have');
 });
 
-test('unmatched: received tax documents that fit no expected item are listed; paystubs are not', () => {
-  const db = realStore();
-  addDoc(db, { id: 'o1', name: 'receipt.pdf', type: 'other', fields: { issuer: 'County' } });
-  addDoc(db, { id: 'p1', name: 'stub.pdf', type: 'paystub', fields: { employerName: 'Acme' } });
-  addDoc(db, { id: 'o2', name: 'old.pdf', type: 'other', year: 2025 });
-  const c = yearendChecklist(db, { year: 2026, clock: '2027-03-01' });
+test('unmatched: received tax documents that fit no expected item are listed; paystubs are not', async () => {
+  const db = await realStore();
+  await addDoc(db, { id: 'o1', name: 'receipt.pdf', type: 'other', fields: { issuer: 'County' } });
+  await addDoc(db, { id: 'p1', name: 'stub.pdf', type: 'paystub', fields: { employerName: 'Acme' } });
+  await addDoc(db, { id: 'o2', name: 'old.pdf', type: 'other', year: 2025 });
+  const c = await yearendChecklist(db, { year: 2026, clock: '2027-03-01' });
   assert.deepEqual(c.unmatched.map((u) => u.id), ['o1']);
   assert.equal(c.unmatched[0].t, 'Document from County');
 });
@@ -154,21 +154,21 @@ async function packetStore() {
   const db = inst.db;
   const dataDir = inst.dataDir;
   const tmpRoot = join(inst.root, 'work');
-  upsertFact(db, { key: 'income.w2', value: true, confirmed: true });
-  upsertFact(db, { key: 'income.partnership', value: true, confirmed: true });
-  upsertFact(db, { key: 'household.filingStatus', value: 'mfj', confirmed: true });
+  await upsertFact(db, { key: 'income.w2', value: true, confirmed: true });
+  await upsertFact(db, { key: 'income.partnership', value: true, confirmed: true });
+  await upsertFact(db, { key: 'household.filingStatus', value: 'mfj', confirmed: true });
   const w2 = Buffer.from('%PDF-1.4 synthetic w2');
   const other = Buffer.from('synthetic receipt');
   assert.equal(await storeFile({ vault, id: 'fw2', bytes: w2, purpose: 'upload' }), 'files/fw2.bin');
   assert.equal(await storeFile({ vault, id: 'fot', bytes: other, purpose: 'upload' }), 'files/fot.bin');
-  addDoc(db, { id: 'fw2', name: 'scan 0001.pdf', type: 'w2', fields: { employerName: 'Acme Corp' }, storedPath: 'files/fw2.bin' });
-  addDoc(db, { id: 'fot', name: 'receipt.txt', type: 'other', fields: { issuer: 'County' }, storedPath: 'files/fot.bin' });
-  addDoc(db, { id: 'gone', name: 'lost.pdf', type: '1099-int', fields: { payerName: 'Bank' }, storedPath: 'files/gone.bin' });
-  db.prepare("INSERT INTO files (id, name, uploaded_at, status) VALUES ('wb', 'taxes-2026.xlsx', '2026-10-01T00:00:00Z', 'parsed')").run();
-  db.prepare("INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator) VALUES ('federal', 2026, '2026-04-15', 1234.5, 'estimate', 'wb', 'tax-workbook', 'Sheet 2026!C4')").run();
-  db.prepare("INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator) VALUES ('federal', 2025, '2026-01-15', 999, 'estimate', 'wb', 'tax-workbook', 'Sheet 2025!C9')").run();
-  db.prepare("INSERT INTO sources (id, label, as_of) VALUES ('bank', 'Bank export', 'Oct 31')").run();
-  db.prepare("INSERT INTO figures (key, v, src, kind, label, file_id, parser, locator, updated_at) VALUES ('cash_now', 4321, 'bank', 'a', 'Cash on hand', 'wb', 'tax-workbook', 'Sheet 2026!B2', '2026-10-01')").run();
+  await addDoc(db, { id: 'fw2', name: 'scan 0001.pdf', type: 'w2', fields: { employerName: 'Acme Corp' }, storedPath: 'files/fw2.bin' });
+  await addDoc(db, { id: 'fot', name: 'receipt.txt', type: 'other', fields: { issuer: 'County' }, storedPath: 'files/fot.bin' });
+  await addDoc(db, { id: 'gone', name: 'lost.pdf', type: '1099-int', fields: { payerName: 'Bank' }, storedPath: 'files/gone.bin' });
+  await db.prepare("INSERT INTO files (id, name, uploaded_at, status) VALUES ('wb', 'taxes-2026.xlsx', '2026-10-01T00:00:00Z', 'parsed')").run();
+  await db.prepare("INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator) VALUES ('federal', 2026, '2026-04-15', 1234.5, 'estimate', 'wb', 'tax-workbook', 'Sheet 2026!C4')").run();
+  await db.prepare("INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator) VALUES ('federal', 2025, '2026-01-15', 999, 'estimate', 'wb', 'tax-workbook', 'Sheet 2025!C9')").run();
+  await db.prepare("INSERT INTO sources (id, label, as_of) VALUES ('bank', 'Bank export', 'Oct 31')").run();
+  await db.prepare("INSERT INTO figures (key, v, src, kind, label, file_id, parser, locator, updated_at) VALUES ('cash_now', 4321, 'bank', 'a', 'Cash on hand', 'wb', 'tax-workbook', 'Sheet 2026!B2', '2026-10-01')").run();
   return {
     db, dataDir, tmpRoot, vault, w2, other,
     async cleanup() { await household.close(); inst.close(); await rm(dataDir, { recursive: true, force: true }); },
@@ -200,14 +200,14 @@ test('packet: index plus every received document and nothing else, temp director
     assert.deepEqual(entries[2].data, s.other);
     const html = entries[0].data.toString('utf8');
     assert.match(html, /lost\.pdf: the stored copy could not be read/);
-    const row = s.db.prepare('SELECT * FROM yearend_packets').get();
+    const row = await s.db.prepare('SELECT * FROM yearend_packets').get();
     assert.equal(row.tax_year, 2026);
     assert.equal(row.generated_at, '2027-02-20T09:30:00.000Z');
     const counts = JSON.parse(row.counts);
     assert.equal(counts.files, 2);
     assert.equal(counts.unreadable, 1);
     assert.equal(counts.payments, 1);
-    assert.equal(buildYearend(s.db, { clock: '2027-02-20', recs: [], decisions: [] }).packets[0].counts.files, 2);
+    assert.equal((await buildYearend(s.db, { clock: '2027-02-20', recs: [], decisions: [] })).packets[0].counts.files, 2);
   } finally { await s.cleanup(); }
 });
 
@@ -232,7 +232,7 @@ test('packet index: tax payments, totals and figures carry their provenance; oth
 test('packet: a failure while building removes the temp directory', async () => {
   const s = await packetStore();
   try {
-    s.db.exec('DROP TABLE yearend_packets');
+    await s.db.applySchema('DROP TABLE yearend_packets');
     await assert.rejects(buildPacket(s.db, { year: 2026, clock: '2027-02-20', vault: s.vault }));
     assert.deepEqual(await readdir(s.tmpRoot), []);
   } finally { await s.cleanup(); }
@@ -241,7 +241,7 @@ test('packet: a failure while building removes the temp directory', async () => 
 test('packet: imported text is escaped in the index', async () => {
   const s = await packetStore();
   try {
-    s.db.prepare("UPDATE files SET name = '<img src=x onerror=alert(1)>.pdf' WHERE id = 'fot'").run();
+    await s.db.prepare("UPDATE files SET name = '<img src=x onerror=alert(1)>.pdf' WHERE id = 'fot'").run();
     const res = fakeRes();
     await streamPacket(res, await buildPacket(s.db, { year: 2026, clock: '2027-02-20', vault: s.vault }));
     const html = readZip(res.body())[0].data.toString('utf8');
@@ -255,7 +255,7 @@ async function serve(db, config) {
 
 test('API: marks validate input; the packet streams behind the session gate in a real store', async () => {
   const s = await packetStore();
-  setSetting(s.db, 'clock', '2027-02-20');
+  await setSetting(s.db, 'clock', '2027-02-20');
   const srv = await serve(s.db, { dataDir: s.dataDir });
   const sessionHeaders = srv.headers;
   const post = (body, headers = sessionHeaders) => fetch(`${srv.baseUrl}/api/yearend/marks`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
@@ -329,12 +329,12 @@ test('review fix: payments a pending withholding conflict names, or an unreconci
   const s = await packetStore();
   try {
     const ins = s.db.prepare("INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator, source_slot, payer) VALUES (?, 2026, '2026-12-31', ?, 'withholding', 'wb', 'w2', 'box2', ?, ?)");
-    const a = Number(ins.run('federal', 12000, 'wh:acme:2026:federal:owner', 'w2:acme:2026:1').lastInsertRowid);
-    const b = Number(ins.run('federal', 13000, 'wh:acme:2026:federal:owner', 'w2:acme:2026:2').lastInsertRowid);
-    s.db.prepare("INSERT INTO confirm_items (kind, subject, question, options, context, status, created_at) VALUES ('withholding_conflict', 'x', 'Which?', '[]', ?, 'pending', '2027-02-01')")
+    const a = Number((await ins.run('federal', 12000, 'wh:acme:2026:federal:owner', 'w2:acme:2026:1')).lastInsertRowid);
+    const b = Number((await ins.run('federal', 13000, 'wh:acme:2026:federal:owner', 'w2:acme:2026:2')).lastInsertRowid);
+    await s.db.prepare("INSERT INTO confirm_items (kind, subject, question, options, context, status, created_at) VALUES ('withholding_conflict', 'x', 'Which?', '[]', ?, 'pending', '2027-02-01')")
       .run(JSON.stringify({ first: { id: a }, second: { id: b } }));
-    ins.run('ny', 500, 'wh:north:2026:ny:owner', 'w2:north:2026:1');
-    ins.run('ny', 40, 'wh:north:2026:ny:owner', 'paystub:north:2026-06-30:1');
+    await ins.run('ny', 500, 'wh:north:2026:ny:owner', 'w2:north:2026:1');
+    await ins.run('ny', 40, 'wh:north:2026:ny:owner', 'paystub:north:2026-06-30:1');
     const res = fakeRes();
     await streamPacket(res, await buildPacket(s.db, { year: 2026, clock: '2027-02-20', vault: s.vault }));
     const html = readZip(res.body())[0].data.toString('utf8');
@@ -345,26 +345,26 @@ test('review fix: payments a pending withholding conflict names, or an unreconci
     assert.match(html, /federal payment of 2026-12-31 is not counted yet: two documents disagree/);
     assert.match(html, /ny payment of 2026-12-31 is not counted yet: W-2 and paystubs from one employer not yet reconciled/);
     // Once answered, the conflict no longer holds the federal total back.
-    s.db.prepare("UPDATE confirm_items SET status = 'answered'").run();
-    s.db.prepare('DELETE FROM tax_payments WHERE id = ?').run(a);
+    await s.db.prepare("UPDATE confirm_items SET status = 'answered'").run();
+    await s.db.prepare('DELETE FROM tax_payments WHERE id = ?').run(a);
     const res2 = fakeRes();
     await streamPacket(res2, await buildPacket(s.db, { year: 2026, clock: '2027-02-20', vault: s.vault }));
     assert.match(readZip(res2.body())[0].data.toString('utf8'), /Total federal<\/td><td class="r">\$14,234\.50<\/td><td><small>Sum of 2 payments/);
   } finally { await s.cleanup(); }
 });
 
-function inferenceStore() {
-  const db = realStore();
-  db.prepare("INSERT INTO accounts (id, name, kind) VALUES ('bank', 'Checking', 'checking'), ('hsa', 'HSA', 'hsa')").run();
-  upsertFact(db, { key: 'income.selfEmployed', value: true, confirmed: true });
-  upsertFact(db, { key: 'income.partnership', value: false, confirmed: true });
-  const tx = (account, amount, description, category = '', date = '2026-12-31') => db.prepare('INSERT INTO transactions (account_id, date, amount, description, category, locator) VALUES (?, ?, ?, ?, ?, ?)').run(account, date, amount, description, category, 'synthetic ledger row');
-  tx('bank', 100, 'Client payment', 'income');
-  return { db, tx, item: (key) => yearendChecklist(db, { year: 2026, clock: '2027-03-01' }).items.find(i => i.key === key) };
+async function inferenceStore() {
+  const db = await realStore();
+  await db.prepare("INSERT INTO accounts (id, name, kind) VALUES ('bank', 'Checking', 'checking'), ('hsa', 'HSA', 'hsa')").run();
+  await upsertFact(db, { key: 'income.selfEmployed', value: true, confirmed: true });
+  await upsertFact(db, { key: 'income.partnership', value: false, confirmed: true });
+  const tx = async (account, amount, description, category = '', date = '2026-12-31') => await db.prepare('INSERT INTO transactions (account_id, date, amount, description, category, locator) VALUES (?, ?, ?, ?, ?, ?)').run(account, date, amount, description, category, 'synthetic ledger row');
+  await tx('bank', 100, 'Client payment', 'income');
+  return { db, tx, item: async (key) => (await yearendChecklist(db, { year: 2026, clock: '2027-03-01' })).items.find(i => i.key === key) };
 }
 
-test('inferred 1099-INT: below threshold with evidence, threshold and other years do not qualify', () => {
-  const { db, tx, item } = inferenceStore();
+test('inferred 1099-INT: below threshold with evidence, threshold and other years do not qualify', async () => {
+  const { db, tx, item } = await inferenceStore();
   tx('bank', 9.99, 'Interest paid', 'interest');
   tx('bank', 50, 'Interest paid', 'interest', '2025-12-31');
   let i = item('1099-int:bank');
@@ -375,61 +375,61 @@ test('inferred 1099-INT: below threshold with evidence, threshold and other year
   assert.ok(i.skip.evidence.some(e => e.table === 'transactions' && e.locator === 'synthetic ledger row'));
   tx('bank', 0.01, 'Interest paid', 'interest');
   assert.equal(item('1099-int:bank').status, 'missing');
-  db.close();
+  await db.close();
 });
 
-test('inferred 1099-SA: no HSA distributions with evidence; an HSA withdrawal prevents inference', () => {
-  const { db, tx, item } = inferenceStore();
+test('inferred 1099-SA: no HSA distributions with evidence; an HSA withdrawal prevents inference', async () => {
+  const { db, tx, item } = await inferenceStore();
   tx('hsa', 100, 'Contribution');
   assert.equal(item('hsa:1099-sa').skip.inferred, true);
   assert.match(item('hsa:1099-sa').skip.reason, /No HSA distributions/);
   assert.ok(item('hsa:1099-sa').skip.evidence.length);
   tx('hsa', -20, 'Medical reimbursement');
   assert.equal(item('hsa:1099-sa').status, 'missing');
-  db.close();
+  await db.close();
 });
 
-test('inferred 1099-K: no processor deposits with evidence; a processor deposit prevents inference', () => {
-  const { db, tx, item } = inferenceStore();
+test('inferred 1099-K: no processor deposits with evidence; a processor deposit prevents inference', async () => {
+  const { db, tx, item } = await inferenceStore();
   assert.equal(item('1099-k').skip.inferred, true);
   assert.match(item('1099-k').skip.reason, /No payment-processor deposits/);
   assert.ok(item('1099-k').skip.evidence.some(e => e.table === 'transactions'));
   tx('bank', 50, 'Stripe payout', 'income');
   assert.equal(item('1099-k').status, 'missing');
-  db.close();
+  await db.close();
 });
 
-test('inferred K-1: stored no-partnership fact with evidence; partnership or unknown stays uninferred', () => {
-  const { db, item } = inferenceStore();
+test('inferred K-1: stored no-partnership fact with evidence; partnership or unknown stays uninferred', async () => {
+  const { db, item } = await inferenceStore();
   assert.equal(item('k1:partnership').skip.inferred, true);
   assert.match(item('k1:partnership').skip.reason, /No partnership entity/);
   assert.ok(item('k1:partnership').skip.evidence.some(e => e.table === 'facts' && e.id === 'income.partnership'));
-  upsertFact(db, { key: 'income.partnership', value: true, confirmed: true });
+  await upsertFact(db, { key: 'income.partnership', value: true, confirmed: true });
   assert.equal(item('k1:partnership').status, 'expected');
-  db.prepare("DELETE FROM facts WHERE key = 'income.partnership'").run();
+  await db.prepare("DELETE FROM facts WHERE key = 'income.partnership'").run();
   assert.equal(item('k1:partnership'), undefined);
-  db.close();
+  await db.close();
 });
 
-test('inference: Undo and manual not-needed decisions persist across history changes; received still wins', () => {
-  const { db, tx, item } = inferenceStore();
+test('inference: Undo and manual not-needed decisions persist across history changes; received still wins', async () => {
+  const { db, tx, item } = await inferenceStore();
   assert.equal(item('1099-k').status, 'skipped');
-  setMark(db, { year: 2026, key: '1099-k', reason: null });
+  await setMark(db, { year: 2026, key: '1099-k', reason: null });
   assert.equal(item('1099-k').status, 'missing');
   tx('bank', 100, 'Client payment');
   assert.equal(item('1099-k').status, 'missing');
-  setMark(db, { year: 2026, key: '1099-k', reason: 'Owner decision' });
+  await setMark(db, { year: 2026, key: '1099-k', reason: 'Owner decision' });
   tx('bank', 100, 'Stripe payout');
   assert.deepEqual(item('1099-k').skip.reason, 'Owner decision');
-  addDoc(db, { id: 'processor-form', name: 'processor.pdf', type: '1099-k' });
+  await addDoc(db, { id: 'processor-form', name: 'processor.pdf', type: '1099-k' });
   assert.equal(item('1099-k').status, 'have');
-  db.close();
+  await db.close();
 });
 
-test('inference: no ledger history is unknown, not zero', () => {
-  const { db, item } = inferenceStore();
-  db.prepare('DELETE FROM transactions').run();
+test('inference: no ledger history is unknown, not zero', async () => {
+  const { db, item } = await inferenceStore();
+  await db.prepare('DELETE FROM transactions').run();
   assert.equal(item('1099-k').status, 'missing');
   assert.equal(item('hsa:1099-sa').status, 'missing');
-  db.close();
+  await db.close();
 });

@@ -37,7 +37,7 @@ const FINAL_MESSAGE = {
 const schedulerOf = ctx => ctx.scheduler ?? ctx.household?.scheduler ?? ctx.services?.household?.scheduler;
 
 const nowIso = () => new Date().toISOString();
-const storeMode = db => (getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real');
+const storeMode = async db => (await getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real');
 
 // The household vault, opened before anything is read or stored: a missing or invalid platform key
 // or a missing data key is 409 with the vault's message (naming FATHOM_PLATFORM_KEY_FILE).
@@ -54,7 +54,7 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const safeCode = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && IDENT.test(v)) || 'unknown';
 
 export { triggerPlan, triggerGuesses, triggerFreshness } from '../ingest/pipeline.mjs';
-export const ingestOpts = ctx => ({ ...ctx, household: ctx.household, actorId: ctx.identity?.id ?? ctx.actorId ?? (storeMode(ctx.db) === 'demo' ? 'demo' : null), now: nowIso() });
+export const ingestOpts = async ctx => ({ ...ctx, household: ctx.household, actorId: ctx.identity?.id ?? ctx.actorId ?? (await storeMode(ctx.db) === 'demo' ? 'demo' : null), now: nowIso() });
 
 export async function uploadFiles(ctx) {
   await householdVault(ctx);
@@ -63,7 +63,7 @@ export async function uploadFiles(ctx) {
   const files = parts.map(p => ({ name: p.name, bytes: p.bytes, mime: p.mime }));
   let results;
   try {
-    ({ results } = await ingestFiles(ctx.db, files, ingestOpts(ctx)));
+    ({ results } = await ingestFiles(ctx.db, files, await ingestOpts(ctx)));
   } catch (err) {
     if (err instanceof VaultError) throw new HttpError(409, err.message);
     if (err instanceof ToolError) throw new HttpError(err.code === 'forbidden' ? 403 : 409, err.message);
@@ -71,18 +71,18 @@ export async function uploadFiles(ctx) {
   }
   if (results.some(r => r && r.status === 'imported')) { triggerPlan(ctx); triggerFreshness(ctx); }
   if (results.some(r => r && r.status === 'imported')) triggerGuesses(ctx);
-  const scenario = scenarioOf(ctx);
+  const scenario = await scenarioOf(ctx);
   return { scenario, files: results, pending: scenario.live.ingest.pending };
 }
 
-export const listFiles = ctx => listImportedFiles(ctx.db);
+export const listFiles = async ctx => await listImportedFiles(ctx.db);
 
 export async function retryFile(ctx) {
   const { id } = ctx.params;
   await householdVault(ctx);
   let file;
   try {
-    file = await retryIngest(ctx.db, id, { ...ingestOpts(ctx), mode: ctx.body?.mode ?? 'retry' });
+    file = await retryIngest(ctx.db, id, { ...await ingestOpts(ctx), mode: ctx.body?.mode ?? 'retry' });
   } catch (err) {
     if (err && err.status === 400) throw new HttpError(400, err.message);
     if (err && err.status === 404) throw new HttpError(404, `no file ${id}`);
@@ -92,28 +92,28 @@ export async function retryFile(ctx) {
   }
   if (file && file.status === 'imported') { triggerPlan(ctx); triggerFreshness(ctx); }
   if (file && file.status === 'imported') triggerGuesses(ctx);
-  return { scenario: scenarioOf(ctx), file };
+  return { scenario: await scenarioOf(ctx), file };
 }
 
 // One confirm item by id, pending or answered, so a client can check whether an answer landed.
-export function getConfirm(ctx) {
-  const item = getItem(ctx.db, itemId(ctx.params.id));
+export async function getConfirm(ctx) {
+  const item = await getItem(ctx.db, itemId(ctx.params.id));
   if (!item) throw new HttpError(404, 'no such question');
-  return { item: { ...item, final: finalReason(ctx.db, item) } };
+  return { item: { ...item, final: await finalReason(ctx.db, item) } };
 }
 
-export function listPendingConfirm(ctx) {
-  queueAccountPairs(ctx.db);
-  queueCategoryChecks(ctx.db);
-  return { items: pendingItems(ctx.db) };
+export async function listPendingConfirm(ctx) {
+  await queueAccountPairs(ctx.db);
+  await queueCategoryChecks(ctx.db);
+  return { items: await pendingItems(ctx.db) };
 }
 
-export function listConfirm(ctx) {
-  queueAccountPairs(ctx.db);
-  queueCategoryChecks(ctx.db);
+export async function listConfirm(ctx) {
+  await queueAccountPairs(ctx.db);
+  await queueCategoryChecks(ctx.db);
   const { status = 'pending' } = ctx.body;
   if (!LIST_STATUSES.includes(status)) throw new HttpError(400, `status must be one of ${LIST_STATUSES.join(', ')}`);
-  return { items: listItems(ctx.db, { status }) };
+  return { items: await listItems(ctx.db, { status }) };
 }
 
 const itemId = raw => {
@@ -124,7 +124,7 @@ const itemId = raw => {
 // Run a confirm action, then auto-resolution over what the answer settled, and answer
 // {scenario, item} (or {scenario, items}) with item.final, refreshing pack state when facts
 // changed. ConfirmErrors map to their fixed messages.
-function confirmAction(ctx, fn) {
+async function confirmAction(ctx, fn) {
   let out;
   try {
     out = fn();
@@ -137,23 +137,23 @@ function confirmAction(ctx, fn) {
     }
     throw err;
   }
-  resolveAfterAnswer(ctx);
+  await resolveAfterAnswer(ctx);
   if (out.factsChanged) {
-    try { refreshPackState(ctx.db, { dataDir: ctx.household?.root ?? ctx.services?.household?.root }); } catch (err) { console.error('fathom: pack refresh failed', err && err.name); }
+    try { await refreshPackState(ctx.db, { dataDir: ctx.household?.root ?? ctx.services?.household?.root }); } catch (err) { console.error('fathom: pack refresh failed', err && err.name); }
   }
-  const withFinal = item => {
-    const now = getItem(ctx.db, item.id) || item;
-    return { ...now, final: finalReason(ctx.db, now) };
+  const withFinal = async item => {
+    const now = await getItem(ctx.db, item.id) || item;
+    return { ...now, final: await finalReason(ctx.db, now) };
   };
-  if (Array.isArray(out.items)) return { scenario: scenarioOf(ctx), items: out.items.map(withFinal) };
-  return { scenario: scenarioOf(ctx), item: out.item ? withFinal(out.item) : null };
+  if (Array.isArray(out.items)) return { scenario: await scenarioOf(ctx), items: out.items.map(withFinal) };
+  return { scenario: await scenarioOf(ctx), item: out.item ? await withFinal(out.item) : null };
 }
 
 // Auto-resolution after the confirm transaction committed: a failure logs a code and never fails
 // the request.
-function resolveAfterAnswer(ctx) {
+async function resolveAfterAnswer(ctx) {
   try {
-    autoResolve(ctx.db, { now: nowIso() });
+    await autoResolve(ctx.db, { now: nowIso() });
   } catch (err) {
     console.error('fathom: auto-resolve failed', safeCode(err));
   }
@@ -162,11 +162,11 @@ function resolveAfterAnswer(ctx) {
 // After a confirm answer (or a stale refusal) on a real store, the plan job is scheduled through
 // the scheduler's debounce: one run 30 s after the last answer of a burst, or right away once the
 // pending queue is empty. The run's job_runs trigger is 'confirm'. Never fails the request.
-export function schedulePlan(ctx) {
+export async function schedulePlan(ctx) {
   const scheduler = schedulerOf(ctx);
-  if (!scheduler || typeof scheduler.soon !== 'function' || storeMode(ctx.db) === 'demo') return;
+  if (!scheduler || typeof scheduler.soon !== 'function' || await storeMode(ctx.db) === 'demo') return;
   try {
-    const left = ctx.db.prepare("SELECT count(*) AS n FROM confirm_items WHERE status = 'pending'").get().n;
+    const left = (await ctx.db.prepare("SELECT count(*) AS n FROM confirm_items WHERE status = 'pending'").get()).n;
     scheduler.soon('plan', 'confirm', { immediate: left === 0 });
   } catch (err) {
     console.error('fathom: plan trigger failed', safeCode(err));
@@ -175,32 +175,32 @@ export function schedulePlan(ctx) {
 
 // A confirm action with its follow-ups: auto-resolution, the plan schedule and, for an account
 // question, a freshness run. Shared by the account dialog's owner, kind and merge edits.
-export function afterAnswer(ctx, fn) {
+export async function afterAnswer(ctx, fn) {
   try {
-    const out = confirmAction(ctx, fn);
-    schedulePlan(ctx);
+    const out = await confirmAction(ctx, fn);
+    await schedulePlan(ctx);
     const items = out.item ? [out.item] : (out.items || []);
     if (items.some(i => i && /account_/.test(String(i.kind || '')))) triggerFreshness(ctx);
     return out;
   } catch (err) {
-    if (err instanceof HttpError && err.code === 'stale') schedulePlan(ctx);
+    if (err instanceof HttpError && err.code === 'stale') await schedulePlan(ctx);
     throw err;
   }
 }
 
 // {answer} answers a pending item; {answer, revise: true} revises an answered one.
-export function answerConfirm(ctx) {
+export async function answerConfirm(ctx) {
   const id = itemId(ctx.params.id);
   const optionId = ctx.body.answer;
   if (typeof optionId !== 'string' || !optionId) throw new HttpError(400, 'answer must be an option id');
   const revise = ctx.body.revise === true;
-  const out = saveConfirmAnswers(ctx, [{ id, answer: optionId }], { revise });
+  const out = await saveConfirmAnswers(ctx, [{ id, answer: optionId }], { revise });
   return { scenario: out.scenario, item: out.items[0] };
 }
 
-export function reopenConfirm(ctx) {
+export async function reopenConfirm(ctx) {
   const id = itemId(ctx.params.id);
-  const out = saveConfirmReopen(ctx, [id]);
+  const out = await saveConfirmReopen(ctx, [id]);
   return { scenario: out.scenario, item: out.items[0] };
 }
 
@@ -213,7 +213,7 @@ const bodyId = raw => {
 const MAX_BATCH = 500;
 
 // {answers: [{id, answer}]} answers every listed pending item in one transaction (a group card).
-export function saveConfirmAnswers(ctx, list, { revise = false } = {}) {
+export async function saveConfirmAnswers(ctx, list, { revise = false } = {}) {
   if (!Array.isArray(list) || !list.length || list.length > MAX_BATCH || (revise && list.length !== 1)) throw new HttpError(400, 'answers must be a list of {id, answer}; revise takes one item');
   const answers = list.map(a => {
     const id = bodyId(a && a.id);
@@ -221,22 +221,22 @@ export function saveConfirmAnswers(ctx, list, { revise = false } = {}) {
     if (id === null || typeof option !== 'string' || !option) throw new HttpError(400, 'answers must be a list of {id, answer}');
     return { id, option };
   });
-  const out = afterAnswer(ctx, () => revise
-    ? (() => { const result = reviseItem(ctx.db, answers[0].id, answers[0].option, { now: nowIso() }); return { items: [result.item], factsChanged: result.factsChanged }; })()
-    : answerItems(ctx.db, answers, { now: nowIso() }));
+  const out = await afterAnswer(ctx, async () => revise
+    ? (async () => { const result = await reviseItem(ctx.db, answers[0].id, answers[0].option, { now: nowIso() }); return { items: [result.item], factsChanged: result.factsChanged }; })()
+    : await answerItems(ctx.db, answers, { now: nowIso() }));
   if (out.items.some(i => i.kind === 'account_match' && !i.context?.repair)) triggerJob(ctx, 'simplefin-sync');
   return out;
 }
-export function answerConfirmBatch(ctx) {
-  return saveConfirmAnswers(ctx, ctx.body.answers);
+export async function answerConfirmBatch(ctx) {
+  return await saveConfirmAnswers(ctx, ctx.body.answers);
 }
 
-export function saveConfirmReopen(ctx, raw) {
+export async function saveConfirmReopen(ctx, raw) {
   if (!Array.isArray(raw) || !raw.length || raw.length > MAX_BATCH) throw new HttpError(400, 'ids must be a list of question ids');
   const ids = raw.map(bodyId);
   if (ids.some(id => id === null)) throw new HttpError(400, 'ids must be a list of question ids');
-  return afterAnswer(ctx, () => reopenItems(ctx.db, ids, { now: nowIso() }));
+  return await afterAnswer(ctx, async () => await reopenItems(ctx.db, ids, { now: nowIso() }));
 }
-export function reopenConfirmBatch(ctx) {
-  return saveConfirmReopen(ctx, ctx.body.ids);
+export async function reopenConfirmBatch(ctx) {
+  return await saveConfirmReopen(ctx, ctx.body.ids);
 }

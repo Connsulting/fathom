@@ -52,36 +52,36 @@ const chains = new WeakMap();
 export function runPlanning(db, engine = null, opts = {}) {
   if (!opts || !Number.isInteger(opts.runId)) throw new TypeError('runPlanning needs runId, the id of the job_runs row the scheduler claimed');
   const prior = chains.get(db) || Promise.resolve();
-  const next = prior.catch(() => {}).then(() => run(db, engine, opts));
+  const next = prior.catch(() => {}).then(async () => run(db, engine, opts));
   chains.set(db, next.catch(() => {}));
   return next;
 }
 
-function storedFacts(db) {
+async function storedFacts(db) {
   const out = {};
-  for (const r of db.prepare('SELECT key, value, src, confirmed FROM facts').all()) {
+  for (const r of await db.prepare('SELECT key, value, src, confirmed FROM facts').all()) {
     out[r.key] = { value: parseJson(r.value, null), src: r.src, confirmed: !!r.confirmed };
   }
   return out;
 }
 
 async function run(db, engine, { now, packDirs, runId, household }) {
-  if (getSetting(db, 'mode', null) === 'demo') throw new PlannerError('demo_store', 'planning runs on real stores only');
-  const claim = db.prepare('SELECT job_id, status FROM job_runs WHERE id = ?').get(runId);
+  if (await getSetting(db, 'mode', null) === 'demo') throw new PlannerError('demo_store', 'planning runs on real stores only');
+  const claim = await db.prepare('SELECT job_id, status FROM job_runs WHERE id = ?').get(runId);
   if (claim?.job_id !== PLAN_JOB_ID || claim.status !== 'running') throw new PlannerError('invalid_run', 'runId must identify a running local plan claim');
-  const clock = resolveClock(db, isoDateOf(now));
+  const clock = await resolveClock(db, isoDateOf(now));
   await retryIncompletePaystubs(db, { household, engine, now: clock, taxYear: planningYear(clock) });
   return plan(db, engine, { clock, runId, packDirs: packDirs ?? defaultPackDirs() });
 }
 
 async function plan(db, engine, { clock, runId, packDirs }) {
-  reconcileTransactionPayments(db, { now: clock });
-  autoResolve(db, { now: clock });
-  autoDecideCategories(db,{now:clock});
+  await reconcileTransactionPayments(db, { now: clock });
+  await autoResolve(db, { now: clock });
+  await autoDecideCategories(db,{now:clock});
   const packs = loadPacks(packDirs);
-  const data = loadPlanningData(db, clock);
-  const recFacts = prepareRecFacts(db, data);
-  const stored = storedFacts(db);
+  const data = await loadPlanningData(db, clock);
+  const recFacts = await prepareRecFacts(db, data);
+  const stored = await storedFacts(db);
   for (const key of recFacts.deletes) delete stored[key];
   for (const [key, value] of Object.entries(recFacts.values)) {
     if (!stored[key] || recFacts.writes.some(w => w.key === key)) stored[key] = { value, src: `derived:${clock}`, confirmed: false };
@@ -103,21 +103,21 @@ async function plan(db, engine, { clock, runId, packDirs }) {
 
   const activation = activePacks(packs, merged.values);
   const packStatus = Object.fromEntries(activation.map(a => [a.pack.id, a.status]));
-  const overrides = Object.fromEntries(db.prepare('SELECT id, active FROM packs_state').all().map(r => [r.id, r.active]));
+  const overrides = Object.fromEntries((await db.prepare('SELECT id, active FROM packs_state').all()).map(r => [r.id, r.active]));
   const names = namesOf(merged.values);
   const fig = Object.fromEntries(Object.entries(computed.figures).map(([k, f]) => [k, { v: f.v, kind: f.kind, label: f.label, src: f.src }]));
 
   // The owner's goals and tradeoff curve positions rank recs that tie on their window.
-  const accountRows = withLabelHints(db, db.prepare('SELECT * FROM accounts').all());
+  const accountRows = await withLabelHints(db, await db.prepare('SELECT * FROM accounts').all());
   const prefs = {
-    goals: loadGoals(db, { fig: { ...fig }, accounts: accountRows }),
+    goals: await loadGoals(db, { fig: { ...fig }, accounts: accountRows }),
     accounts: accountRows,
-    curve: Object.fromEntries(loadCurve(db, loadContent(db)).map(c => [c.id, c.value])),
+    curve: Object.fromEntries((await loadCurve(db, await loadContent(db))).map(c => [c.id, c.value])),
   };
   const ctx = {
     clock, year: data.taxYear, facts: merged.values, owner, fig,
     names, model: computed.model, data, packs, packStatus, mortgage: recFacts.mortgage,
-    refreshNeeds: refreshDependencies(db, computed.figures, clock),
+    refreshNeeds: await refreshDependencies(db, computed.figures, clock),
     assumptions: recFacts.assumptions, info: computed.info, freshness: data.freshness, warnings: [...warnings], entities, goals: prefs.goals, curve: prefs.curve,
   };
   const results = evaluateCatalog(ctx);
@@ -128,8 +128,8 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     ...results.filter(r => r.state === 'hit').flatMap(r => r.hit.rec.tasks || []).map(t => t.code).filter(c => typeof c === 'string')])];
 
   // Prose, outside the write transaction (it may call the engine).
-  const recRows = new Map(db.prepare('SELECT id, def FROM recs').all().map(r => [r.id, r]));
-  const prRows = new Map(db.prepare('SELECT rec_id, grounding_hash, prose_src FROM planner_recs').all().map(r => [r.rec_id, r]));
+  const recRows = new Map((await db.prepare('SELECT id, def FROM recs').all()).map(r => [r.id, r]));
+  const prRows = new Map((await db.prepare('SELECT rec_id, grounding_hash, prose_src FROM planner_recs').all()).map(r => [r.rec_id, r]));
   const prose = {};
   const proseCounts = { model: 0, template: 0, kept: 0 };
   let costUsd = 0;
@@ -152,66 +152,66 @@ async function plan(db, engine, { clock, runId, packDirs }) {
   costUsd = Math.round(costUsd * 1e6) / 1e6;
 
   const now = new Date().toISOString();
-  const out = tx(db, () => {
+  const out = await tx(db, async (db) => {
     let factsWritten = recFacts.write();
     for (const w of merged.writes) {
-      const res = upsertFact(db, { key: w.key, value: w.value, src: PLANNER_SRC, asOf: clock, confirmed: false, provenance: factProvenance(w) });
+      const res = await upsertFact(db, { key: w.key, value: w.value, src: PLANNER_SRC, asOf: clock, confirmed: false, provenance: factProvenance(w) });
       if (res.written && res.changed) factsWritten += 1;
     }
     // D9: a payroll document nobody has said is whose gets ingest's own recipient question (an
     // existing or answered question is left as it is).
-    for (const q of computed.info.ask || []) withholdingRecipient(db, { ...q, now });
-    askFactChecks(db, merged.checks, { clock, now });
+    for (const q of computed.info.ask || []) await withholdingRecipient(db, { ...q, now });
+    await askFactChecks(db, merged.checks, { clock, now });
     const delFact = db.prepare('DELETE FROM facts WHERE key = ? AND src = ? AND confirmed = 0');
     for (const key of merged.deletes) {
-      delFact.run(key, PLANNER_SRC);
+      await delFact.run(key, PLANNER_SRC);
       factsWritten += 1;
     }
-    writeSources(db, computed.sources);
-    writeFigures(db, computed.figures, now);
-    const changes = applyRecs(db, results, {
+    await writeSources(db, computed.sources);
+    await writeFigures(db, computed.figures, now);
+    const changes = await applyRecs(db, results, {
       clock, now, runId, prose, packOverride: id => overrides[id] ?? null, warn: code => warnings.add(code), prefs,
-      stepEnv: { facts: merged.values, accounts: accountRows, open: openData, mortgage: recFacts.mortgage, payments: observedPayments(db) },
+      stepEnv: { facts: merged.values, accounts: accountRows, open: openData, mortgage: recFacts.mortgage, payments: await observedPayments(db) },
     });
     for (const r of results.filter(r => r.state === 'hit')) {
       const id = r.trigger.id;
-      const row = db.prepare('SELECT status, waiting_on FROM recs WHERE id = ?').get(id);
+      const row = await db.prepare('SELECT status, waiting_on FROM recs WHERE id = ?').get(id);
       if (!row) continue;
       if (r.hit.rec.advisorQuestions?.length) {
         if (!['proposed', 'doing', 'waiting'].includes(row.status)) continue;
         if (row.status !== 'waiting') {
-          db.prepare("UPDATE recs SET status = 'waiting', waiting_on = 'advisor', updated_at = ? WHERE id = ?").run(now, id);
-          db.prepare("INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, 'advisor_wait', ?, ?, 'waiting', 'planner')")
+          await db.prepare("UPDATE recs SET status = 'waiting', waiting_on = 'advisor', updated_at = ? WHERE id = ?").run(now, id);
+          await db.prepare("INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, 'advisor_wait', ?, ?, 'waiting', 'planner')")
             .run(id, now, row.status, row.status);
         }
-        if (!db.prepare('SELECT id FROM advisor_reviews WHERE rec_id = ? AND closed_at IS NULL').get(id)) sendToAdvisor(db, id, { now });
+        if (!await db.prepare('SELECT id FROM advisor_reviews WHERE rec_id = ? AND closed_at IS NULL').get(id)) await sendToAdvisor(db, id, { now });
       } else if (row.status === 'waiting' && row.waiting_on === 'advisor') {
-        const last = db.prepare('SELECT action, arg, actor FROM rec_events WHERE rec_id = ? AND from_status IS NOT to_status ORDER BY id DESC LIMIT 1').get(id);
+        const last = await db.prepare('SELECT action, arg, actor FROM rec_events WHERE rec_id = ? AND from_status IS NOT to_status ORDER BY id DESC LIMIT 1').get(id);
         if (last?.actor !== 'planner' || last.action !== 'advisor_wait') continue;
         const status = last.arg === 'doing' ? 'doing' : 'proposed';
-        db.prepare('UPDATE recs SET status = ?, waiting_on = NULL, updated_at = ? WHERE id = ?').run(status, now, id);
-        db.prepare("INSERT INTO rec_events (rec_id, ts, action, from_status, to_status, actor) VALUES (?, ?, 'advisor_ready', 'waiting', ?, 'planner')")
+        await db.prepare('UPDATE recs SET status = ?, waiting_on = NULL, updated_at = ? WHERE id = ?').run(status, now, id);
+        await db.prepare("INSERT INTO rec_events (rec_id, ts, action, from_status, to_status, actor) VALUES (?, ?, 'advisor_ready', 'waiting', ?, 'planner')")
           .run(id, now, status);
-        db.prepare("UPDATE advisor_reviews SET closed_at = ?, closed_reason = 'questions answered' WHERE rec_id = ? AND closed_at IS NULL AND verdict IS NULL").run(now, id);
+        await db.prepare("UPDATE advisor_reviews SET closed_at = ?, closed_reason = 'questions answered' WHERE rec_id = ? AND closed_at IS NULL AND verdict IS NULL").run(now, id);
       }
     }
     // What each blocked rec is waiting on (plain reason, the task that clears it, where it is done),
     // read back by the scenario for recs in the waiting status.
-    upsertContent(db, 'rec.openData', openData, now);
-    upsertContent(db, 'rec.blockers', Object.fromEntries(results.filter(r => r.state === 'blocked' && r.blocker).map(r => [r.trigger.id, r.blocker])), now);
+    await upsertContent(db, 'rec.openData', openData, now);
+    await upsertContent(db, 'rec.blockers', Object.fromEntries(results.filter(r => r.state === 'blocked' && r.blocker).map(r => [r.trigger.id, r.blocker])), now);
     // A vetoed rec stays dismissed (applyRecs keeps the owner's status) unless its inputs changed.
-    liftStaleVetoes(db, { now });
-    refreshPackState(db, { packDirs });
-    linkPackRecs(db, now);
+    await liftStaleVetoes(db, { now });
+    await refreshPackState(db, { packDirs });
+    await linkPackRecs(db, now);
     const hits = results.filter(r => r.state === 'hit' && prose[r.trigger.id]).map(r => r.hit);
-    writeBrief(db, { ...ctx, now }, { hits, changes });
-    pruneFigures(db, computed.figures, ctx);
+    await writeBrief(db, { ...ctx, now }, { hits, changes });
+    await pruneFigures(db, computed.figures, ctx);
     return { factsWritten, changes };
   });
 
   // Fathom sets the calculator's target on every goal that has none and has not declined it.
-  adoptSuggestions(db, { now, clock });
-  const active = db.prepare('SELECT count(*) AS n FROM planner_recs WHERE retired_at IS NULL').get().n;
+  await adoptSuggestions(db, { now, clock });
+  const active = (await db.prepare('SELECT count(*) AS n FROM planner_recs WHERE retired_at IS NULL').get()).n;
   const warningList = [...warnings].sort();
   const counts = {
     factsDerived: Object.keys(derived).length,
@@ -233,62 +233,62 @@ async function plan(db, engine, { clock, runId, packDirs }) {
 // asks nothing new. A question for this value that is pending against another notes value (or one
 // asked before stored was recorded), or was closed as superseded, is asked again in place with the
 // current context (the (kind, subject) pair is unique).
-function askFactChecks(db, checks, { clock, now }) {
+async function askFactChecks(db, checks, { clock, now }) {
   const close = db.prepare("UPDATE confirm_items SET status = 'answered', answer = 'superseded', answered_at = ? WHERE id = ?");
   const reask = db.prepare("UPDATE confirm_items SET status = 'pending', answer = NULL, answered_at = NULL, question = ?, context = ?, file_id = ? WHERE id = ?");
   const bySubject = db.prepare("SELECT id, status, answer, context FROM confirm_items WHERE kind = 'fact_check' AND subject = ?");
-  const pending = db.prepare("SELECT id, subject, context FROM confirm_items WHERE kind = 'fact_check' AND status = 'pending'").all()
+  const pending = (await db.prepare("SELECT id, subject, context FROM confirm_items WHERE kind = 'fact_check' AND status = 'pending'").all())
     .map(r => ({ ...r, context: parseJson(r.context, {}) || {} })).filter(r => [PLANNER_SRC, 'ledger-confirm'].includes(r.context.src));
   const keys = new Set(checks.map(c => c.key));
-  for (const p of pending) if (!keys.has(p.context.key)) close.run(now, p.id);
+  for (const p of pending) if (!keys.has(p.context.key)) await close.run(now, p.id);
   for (const c of checks) {
     const json = canonicalJson(c.value);
     const src = c.src || PLANNER_SRC;
     const subject = `${src}|${c.key}|${json}`;
-    for (const p of pending) if (p.context.key === c.key && p.subject !== subject) close.run(now, p.id);
+    for (const p of pending) if (p.context.key === c.key && p.subject !== subject) await close.run(now, p.id);
     const { fileId, parser, locator } = factProvenance(c);
     const question = c.question || `Your data says ${c.key} is ${json}, but your notes say ${canonicalJson(c.stored)}. Is the data right?`;
     const context = { key: c.key, value: c.value, stored: c.stored, src, asOf: clock, fileId, parser, locator, confidence: c.src === 'ledger-confirm' ? null : 1 };
-    const prior = bySubject.get(subject);
+    const prior = await bySubject.get(subject);
     if (prior) {
       const was = parseJson(prior.context, {}) || {};
       const askedAgainst = Object.hasOwn(was, 'stored') ? canonicalJson(was.stored) : null;
       const outdated = prior.status === 'pending' && askedAgainst !== canonicalJson(c.stored);
       if (outdated || (prior.status === 'answered' && prior.answer === 'superseded')) {
-        reask.run(question, JSON.stringify(context), fileId ?? null, prior.id);
+        await reask.run(question, JSON.stringify(context), fileId ?? null, prior.id);
         continue;
       }
     }
-    ask(db, { kind: 'fact_check', subject, question, options: FACT_CHECK_OPTIONS, context, fileId, now });
+    await ask(db, { kind: 'fact_check', subject, question, options: FACT_CHECK_OPTIONS, context, fileId, now });
   }
 }
 
 // Pack defs list their recs (R12): recIds are the recs whose pack_id is the pack, sorted.
 // refreshPackState keeps recIds as stored, so the planner sets them after it writes recs.
-function linkPackRecs(db, now) {
+async function linkPackRecs(db, now) {
   const recIdsOf = db.prepare('SELECT id FROM recs WHERE pack_id = ? ORDER BY id');
   const update = db.prepare('UPDATE packs_state SET def = ?, updated_at = ? WHERE id = ?');
-  for (const row of db.prepare('SELECT id, def FROM packs_state').all()) {
+  for (const row of await db.prepare('SELECT id, def FROM packs_state').all()) {
     const def = parseJson(row.def, null);
     if (!def || typeof def !== 'object') continue;
-    const text = JSON.stringify({ ...def, recIds: recIdsOf.all(row.id).map(r => r.id) });
-    if (text !== row.def) update.run(text, now, row.id);
+    const text = JSON.stringify({ ...def, recIds: (await recIdsOf.all(row.id)).map(r => r.id) });
+    if (text !== row.def) await update.run(text, now, row.id);
   }
 }
 
-function writeSources(db, sources) {
+async function writeSources(db, sources) {
   const get = db.prepare('SELECT label, as_of, kind FROM sources WHERE id = ?');
   const put = db.prepare(`INSERT INTO sources (id, label, as_of, kind, last_ingest_at, note) VALUES (?, ?, ?, ?, NULL, '')
                           ON CONFLICT(id) DO UPDATE SET label = excluded.label, as_of = excluded.as_of, kind = excluded.kind`);
   for (const [id, s] of Object.entries(sources)) {
-    const row = get.get(id);
+    const row = await get.get(id);
     if (row && row.label === s.label && row.as_of === s.asOf && row.kind === s.kind) continue;
-    put.run(id, s.label, s.asOf, s.kind);
+    await put.run(id, s.label, s.asOf, s.kind);
   }
 }
 
 // A produced figure is current: its unavailable_reason is cleared (R2-9).
-function writeFigures(db, figures, now) {
+async function writeFigures(db, figures, now) {
   const get = db.prepare('SELECT v, src, kind, label, file_id, parser, locator, unavailable_reason FROM figures WHERE key = ?');
   const put = db.prepare(`INSERT INTO figures (key, v, src, kind, label, file_id, parser, locator, updated_at, unavailable_reason)
                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
@@ -297,10 +297,10 @@ function writeFigures(db, figures, now) {
                             unavailable_reason = NULL`);
   for (const f of Object.values(figures)) {
     const locator = JSON.stringify(f.locator);
-    const row = get.get(f.key);
+    const row = await get.get(f.key);
     if (row && row.v === f.v && row.src === f.src && row.kind === f.kind && row.label === f.label
       && row.file_id === (f.fileId ?? null) && row.parser === PLANNER_SRC && row.locator === locator && row.unavailable_reason == null) continue;
-    put.run(f.key, f.v, f.src, f.kind, f.label, f.fileId ?? null, PLANNER_SRC, locator, now);
+    await put.run(f.key, f.v, f.src, f.kind, f.label, f.fileId ?? null, PLANNER_SRC, locator, now);
   }
 }
 
@@ -311,22 +311,22 @@ function writeFigures(db, figures, now) {
 // "no longer computed" line. Triggers never read it: they see only this run's figures.
 const fixOrNull = code => { try { return fixForCode(code); } catch { return null; } };
 
-function pruneFigures(db, produced, ctx) {
-  const stale = db.prepare('SELECT key, unavailable_reason, locator FROM figures WHERE parser = ?').all(PLANNER_SRC).filter(r => !produced[r.key]);
+async function pruneFigures(db, produced, ctx) {
+  const stale = (await db.prepare('SELECT key, unavailable_reason, locator FROM figures WHERE parser = ?').all(PLANNER_SRC)).filter(r => !produced[r.key]);
   if (!stale.length) return;
   const refs = new Set();
   const scan = text => { for (const [, , key] of String(text ?? '').matchAll(TOKEN)) refs.add(key); };
-  for (const r of db.prepare('SELECT def FROM recs').all()) {
+  for (const r of await db.prepare('SELECT def FROM recs').all()) {
     scan(r.def);
     const def = parseJson(r.def, {});
     for (const m of Array.isArray(def.mine) ? def.mine : []) if (m && m.fig) refs.add(m.fig);
   }
-  for (const r of db.prepare('SELECT text FROM messages').all()) scan(r.text);
-  for (const r of db.prepare('SELECT note, decided_line FROM decisions').all()) { scan(r.note); scan(r.decided_line); }
+  for (const r of await db.prepare('SELECT text FROM messages').all()) scan(r.text);
+  for (const r of await db.prepare('SELECT note, decided_line FROM decisions').all()) { scan(r.note); scan(r.decided_line); }
   const prefixes = [];
   // H3: a point or option left out of a current game gives its own figures its reason and fix.
   const excluded = [];
-  for (const r of db.prepare('SELECT key, value FROM content').all()) {
+  for (const r of await db.prepare('SELECT key, value FROM content').all()) {
     scan(r.value);
     if (r.key !== 'wargame') continue;
     const wg = parseJson(r.value, {}) || {};
@@ -351,9 +351,9 @@ function pruneFigures(db, produced, ctx) {
       const { unavailableFix, ...loc } = parseJson(locator, {}) || {};
       void unavailableFix;
       const next = JSON.stringify(fix ? { ...loc, unavailableFix: fix } : loc);
-      if (was !== reason || next !== locator) mark.run(reason, next, key, PLANNER_SRC);
+      if (was !== reason || next !== locator) await mark.run(reason, next, key, PLANNER_SRC);
       continue;
     }
-    del.run(key, PLANNER_SRC);
+    await del.run(key, PLANNER_SRC);
   }
 }

@@ -26,20 +26,20 @@ async function fixture() {
   const store = await tempDb();
   const dir = await tempDir();
   const platform = P.openPlatform(join(dir, PLATFORM_FILE));
-  const addUser = (id) => platform.prepare('INSERT INTO users (id, email, user_handle, created_at, enrolled_at) VALUES (?, ?, ?, 1, 1)')
+  const addUser = async (id) => await platform.prepare('INSERT INTO users (id, email, user_handle, created_at, enrolled_at) VALUES (?, ?, ?, 1, 1)')
     .run(id, `${id}@example.test`, `handle-${id}`);
-  addUser('u-owner');
-  addUser('u-spouse');
+  await addUser('u-owner');
+  await addUser('u-spouse');
   const ctxFor = (userId, body = {}) => ({ db: store.db, platform, config: {}, identity: userId ? { id: userId } : null, body, params: {}, query: {} });
-  const pending = (id) => platform.prepare('SELECT tour_pending AS p FROM users WHERE id = ?').get(id).p;
-  return { store, platform, ctxFor, pending, close: () => { platform.close(); store.close(); } };
+  const pending = async (id) => (await platform.prepare('SELECT tour_pending AS p FROM users WHERE id = ?').get(id)).p;
+  return { store, platform, ctxFor, pending, close: async () => { await platform.close(); await store.close(); } };
 }
 
 describe('the tour flag on a new column of users', () => {
   test('the platform migration is additive and every user starts with no tour pending', async () => {
     const f = await fixture();
     try {
-      const cols = f.platform.prepare("SELECT name, \"notnull\" AS nn, dflt_value AS d FROM pragma_table_info('users')").all();
+      const cols = await f.platform.prepare("SELECT name, \"notnull\" AS nn, dflt_value AS d FROM pragma_table_info('users')").all();
       const col = cols.find((c) => c.name === 'tour_pending');
       assert.ok(col, 'users.tour_pending exists');
       assert.equal(col.nn, 1);
@@ -81,7 +81,7 @@ describe('the onboarding-complete transition', () => {
     try {
       const out = H.onboarding(f.ctxFor(null, { step: 6 }));
       assert.equal(out.scenario.live.tourPending, false);
-      assert.equal(f.platform.prepare('SELECT COUNT(*) AS n FROM users WHERE tour_pending = 1').get().n, 0);
+      assert.equal((await f.platform.prepare('SELECT COUNT(*) AS n FROM users WHERE tour_pending = 1').get()).n, 0);
     } finally { f.close(); }
   });
 });
@@ -103,7 +103,7 @@ describe('POST /api/tour/seen', () => {
   test('touches only the caller and refuses a request without a session', async () => {
     const f = await fixture();
     try {
-      f.platform.prepare('UPDATE users SET tour_pending = 1').run();
+      await f.platform.prepare('UPDATE users SET tour_pending = 1').run();
       assert.throws(() => T.tourSeen(f.ctxFor(null)), (e) => e.status === 401);
       assert.equal(f.pending('u-owner'), 1);
       T.tourSeen({ ...f.ctxFor('u-owner'), body: { userId: 'u-spouse' }, params: { id: 'u-spouse' } });

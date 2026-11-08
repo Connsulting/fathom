@@ -382,7 +382,7 @@ describe('bounded parsing on a 128 MB heap', () => {
     }
   }
 
-  test('a 3 MB CSV of single-character cells answers 200 with too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('a 3 MB CSV of single-character cells answers 200 with too_large; the server stays up', T, async () => withSmallHeap(async (s) => {
     const bytes = Buffer.from('a,b,c\n' + 'x,y,z\n'.repeat(500000));
     const r = await upload(s.baseUrl, [{ name: 'single-char-export.csv', bytes, type: 'text/csv' }]);
     assert.equal(r.status, 200, r.text.slice(0, 300));
@@ -390,7 +390,7 @@ describe('bounded parsing on a 128 MB heap', () => {
     assert.deepEqual(r.json.files[0].counts.warningCodes, { limit_exceeded: 1 });
   }));
 
-  test('an xlsx whose single sheet holds more cells than the limit answers 200 with too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('an xlsx whose single sheet holds more cells than the limit answers 200 with too_large; the server stays up', T, async () => withSmallHeap(async (s) => {
     const row = new Array(512).fill({ empty: true });
     const bytes = writeXlsx([{ name: 'Cells', rows: Array.from({ length: 3907 }, () => row) }]);
     const r = await upload(s.baseUrl, [{ name: 'many-cells.xlsx', bytes, type: XLSX }]);
@@ -408,11 +408,11 @@ describe('bounded parsing on a 128 MB heap', () => {
   };
   const oneCell = [{ name: 'Synthetic export', rows: [['Label'], [{ shared: 0 }]] }];
 
-  test('G3: an xlsx with more shared strings than the cell limit answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('G3: an xlsx with more shared strings than the cell limit answers too_large; the server stays up', T, async () => withSmallHeap(async (s) => {
     await tooLarge(s, 'many-strings.xlsx', writeXlsx(oneCell, { sharedStrings: '<si/>'.repeat(2000001), deflate: true }));
   }));
 
-  test('G3: an xlsx whose one shared string holds more rich-text runs than the cell limit answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('G3: an xlsx whose one shared string holds more rich-text runs than the cell limit answers too_large; the server stays up', T, async () => withSmallHeap(async (s) => {
     await tooLarge(s, 'rich-text-runs.xlsx', writeXlsx(oneCell, { sharedStrings: `<si>${'<r><t>x</t></r>'.repeat(2050000)}</si>`, deflate: true }));
   }));
 
@@ -422,19 +422,19 @@ describe('bounded parsing on a 128 MB heap', () => {
   const hugeText = () => '&amp;'.repeat(6 * 1024 * 1024);
   const inlineSheet = (inline) => [{ name: 'Synthetic export', rows: [['Label'], [{ inline }]] }];
 
-  test('C1: an xlsx whose single shared string is far past the cell character limit answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('C1: an xlsx whose single shared string is far past the cell character limit answers too_large; the server stays up', T, async () => withSmallHeap(async (s) => {
     await tooLarge(s, 'huge-shared-string.xlsx', writeXlsx(oneCell, { sharedStrings: `<si><t>${hugeText()}</t></si>`, deflate: true }));
   }));
 
-  test('C1: an xlsx whose inline string is far past the cell character limit answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('C1: an xlsx whose inline string is far past the cell character limit answers too_large; the server stays up', T, async () => withSmallHeap(async (s) => {
     await tooLarge(s, 'huge-inline-string.xlsx', writeXlsx(inlineSheet(`<t>${hugeText()}</t>`), { deflate: true }));
   }));
 
-  test('C1: an xlsx whose inline string holds more rich-text runs than the cell limit answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('C1: an xlsx whose inline string holds more rich-text runs than the cell limit answers too_large; the server stays up', T, async () => withSmallHeap(async (s) => {
     await tooLarge(s, 'inline-rich-text-runs.xlsx', writeXlsx(inlineSheet('<r><t>x</t></r>'.repeat(2050000)), { deflate: true }));
   }));
 
-  test('G3: an unknown-format xlsx with more rows than the row limit answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('G3: an unknown-format xlsx with more rows than the row limit answers too_large; the server stays up', T, async () => withSmallHeap(async (s) => {
     const rows = [['Synthetic column', 'Other column'], ...Array.from({ length: 200001 }, () => [])];
     await tooLarge(s, 'many-rows-export.xlsx', writeXlsx([{ name: 'Synthetic export', rows }], { deflate: true }));
   }));
@@ -451,11 +451,11 @@ describe('bounded parsing on a 128 MB heap', () => {
     return rows;
   };
 
-  test('XLSX_LIMITS: an xlsx with 250001 cells answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('XLSX_LIMITS: an xlsx with 250001 cells answers too_large; the server stays up', T, async () => withSmallHeap(async (s) => {
     await tooLarge(s, 'over-xlsx-cells.xlsx', writeXlsx([{ name: 'Synthetic export', rows: gridRows(250001) }], { deflate: true }));
   }));
 
-  test('XLSX_LIMITS: an xlsx with 249990 cells is accepted; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('XLSX_LIMITS: an xlsx with 249990 cells is accepted; the server stays up', T, async () => withSmallHeap(async (s) => {
     const name = 'near-xlsx-limit.xlsx';
     const bytes = writeXlsx([{ name: 'Synthetic export', rows: gridRows(249990) }], { deflate: true });
     const r = await upload(s.baseUrl, [{ name, bytes, type: XLSX }]);
@@ -467,14 +467,14 @@ describe('bounded parsing on a 128 MB heap', () => {
   // header: a 512-wide header over 199999 one-cell rows would hold about 102M values.
   const wideHeader = Array.from({ length: 512 }, (_, c) => `synthetic column ${c}`);
 
-  test('a sparse xlsx stays sparse and waits for interpretation without widening rows', T, () => withSmallHeap(async (s) => {
+  test('a sparse xlsx stays sparse and waits for interpretation without widening rows', T, async () => withSmallHeap(async (s) => {
     const rows = [wideHeader, ...Array.from({ length: 199999 }, (_, r) => [r + 1])];
     const r = await upload(s.baseUrl, [{ name: 'sparse-wide-export.xlsx', bytes: writeXlsx([{ name: 'Synthetic export', rows }], { deflate: true }), type: XLSX }]);
     assert.equal(r.status, 200);
     assert.equal(r.json.files[0].status, 'waiting_for_engine');
   }));
 
-  test('E1 guard: a sparse CSV with a 512-column header and 199999 one-value rows stays sparse and waits for a mapping; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('E1 guard: a sparse CSV with a 512-column header and 199999 one-value rows stays sparse and waits for a mapping; the server stays up', T, async () => withSmallHeap(async (s) => {
     const name = 'sparse-wide-export.csv';
     const bytes = Buffer.from(`${wideHeader.join(',')}\n${'1\n'.repeat(199999)}`);
     const r = await upload(s.baseUrl, [{ name, bytes, type: 'text/csv' }]);
@@ -499,27 +499,27 @@ describe('bounded parsing on a 128 MB heap', () => {
     return r.json.files[0];
   };
 
-  test('F1: an xlsx with a 512-cell header, 199998 rows with no cells and one data row waits for a mapping; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('F1: an xlsx with a 512-cell header, 199998 rows with no cells and one data row waits for a mapping; the server stays up', T, async () => withSmallHeap(async (s) => {
     await waitsForMapping(s, 'empty-rows-export.xlsx', writeXlsx([{ name: 'Synthetic export', rows: emptyRowsExport(() => NO_CELLS) }], { deflate: true }));
   }));
 
-  test('F1: an xlsx with a 512-cell header, 199998 rows whose one cell holds no value and one data row waits for a mapping; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('F1: an xlsx with a 512-cell header, 199998 rows whose one cell holds no value and one data row waits for a mapping; the server stays up', T, async () => withSmallHeap(async (s) => {
     const rows = emptyRowsExport((r) => VALUELESS[r % VALUELESS.length]);
     await waitsForMapping(s, 'blank-cells-export.xlsx', writeXlsx([{ name: 'Synthetic export', rows }], { deflate: true }));
   }));
 
   // F1: a stored mapping applied on retry reads the same table, so the empty rows stay unwidened there
   // too, and the one data row imports.
-  test('F1: an unapproved stored mapping cannot import a sparse workbook on retry; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('F1: an unapproved stored mapping cannot import a sparse workbook on retry; the server stays up', T, async () => withSmallHeap(async (s) => {
     const rows = emptyRowsExport((r) => (r % 2 ? NO_CELLS : VALUELESS[(r >> 1) % VALUELESS.length]));
     const waiting = await waitsForMapping(s, 'empty-rows-retry.xlsx', writeXlsx([{ name: 'Synthetic export', rows }], { deflate: true }));
     const signature = 'synthetic-unapproved-layout';
     const mapping = { target: 'transaction', date: 'synthetic column 0', amount: 'synthetic column 1', amountSign: 'as_is', dateOrder: 'ymd' };
     const db = await openStore(s.dbFile);
     try {
-      db.prepare("INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES (?, ?, 'test', '2032-03-10T12:00:00.000Z', 0)")
+      await db.prepare("INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES (?, ?, 'test', '2032-03-10T12:00:00.000Z', 0)")
         .run(signature, JSON.stringify(mapping));
-    } finally { db.close(); }
+    } finally { await db.close(); }
     const retry = await postJson(s.baseUrl, `/api/files/${waiting.fileId}/retry`, {});
     assert.equal(retry.status, 200, retry.text.slice(0, 300));
     assert.equal(retry.json.file.fileId, waiting.fileId);
@@ -531,15 +531,15 @@ describe('bounded parsing on a 128 MB heap', () => {
   // checked on the raw bytes, so 900000 empty elements under the worksheet node cap never become a tree.
   const manyEmpty = '<x/>'.repeat(900000);
 
-  test('E2: an xlsx whose workbook.xml carries 900000 empty elements answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('E2: an xlsx whose workbook.xml carries 900000 empty elements answers too_large; the server stays up', T, async () => withSmallHeap(async (s) => {
     await tooLarge(s, 'bloated-workbook.xlsx', writeXlsx(oneCell, { sharedStrings: '<si><t>x</t></si>', workbookExtra: manyEmpty, deflate: true }));
   }));
 
-  test('E2: an xlsx whose workbook rels carry 900000 empty elements answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('E2: an xlsx whose workbook rels carry 900000 empty elements answers too_large; the server stays up', T, async () => withSmallHeap(async (s) => {
     await tooLarge(s, 'bloated-rels.xlsx', writeXlsx(oneCell, { sharedStrings: '<si><t>x</t></si>', relsExtra: manyEmpty, deflate: true }));
   }));
 
-  test('G3: a CSV just under the cell limit maps without error on a 128 MB heap', T, () => withSmallHeap(async (s) => {
+  test('G3: a CSV just under the cell limit maps without error on a 128 MB heap', T, async () => withSmallHeap(async (s) => {
     const cols = Array.from({ length: 10 }, (_, i) => `synthetic column ${i}`);
     const bytes = Buffer.from(`${cols.join(',')}\n${'a,b,c,d,e,f,g,h,i,j\n'.repeat(199998)}`); // 199999 records, 1999990 cells
     const r = await upload(s.baseUrl, [{ name: 'near-limit-export.csv', bytes, type: 'text/csv' }]);
@@ -575,12 +575,12 @@ describe('bounded parsing on a 128 MB heap', () => {
   const escapedCell = (n = CELL) => `"${'ab""\n'.repeat(n / 4)}"`;
   const shortHeader = 'synthetic label,synthetic amount\n';
 
-  test('I1: a short header then one row of 513 cells of 32768 characters answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('I1: a short header then one row of 513 cells of 32768 characters answers too_large; the server stays up', T, async () => withSmallHeap(async (s) => {
     const bytes = Buffer.from(`${shortHeader}${Array.from({ length: 513 }, () => plainCell()).join(',')}\n`);
     await csvTooLarge(s, 'wide-long-cells.csv', bytes);
   }));
 
-  test('I1: a short header then one row of 513 quoted 32768-character cells full of doubled quotes and newlines answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('I1: a short header then one row of 513 quoted 32768-character cells full of doubled quotes and newlines answers too_large; the server stays up', T, async () => withSmallHeap(async (s) => {
     const cell = escapedCell();
     const bytes = Buffer.from(`${shortHeader}${Array.from({ length: 513 }, () => cell).join(',')}\n`);
     await csvTooLarge(s, 'wide-escaped-cells.csv', bytes);
@@ -590,7 +590,7 @@ describe('bounded parsing on a 128 MB heap', () => {
   // about 50.3 MB, under the 50 MiB upload cap (52428800 bytes). That is 2048 cells, far under the
   // cell limit, and every cell is exactly at cellChars, so no parse limit is passed: it is read and
   // waits for a mapping.
-  test('I1: a 512-column header then three rows of 512 cells of 32768 characters waits for a mapping; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('I1: a 512-column header then three rows of 512 cells of 32768 characters waits for a mapping; the server stays up', T, async () => withSmallHeap(async (s) => {
     const name = 'wide-long-rows.csv';
     const row = `${Array.from({ length: 512 }, () => plainCell()).join(',')}\n`;
     const bytes = Buffer.from(`${wideHeader.join(',')}\n${row.repeat(3)}`);
@@ -599,7 +599,7 @@ describe('bounded parsing on a 128 MB heap', () => {
     assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [[name, 'waiting_for_engine']]);
   }));
 
-  test('I1 guard: one cell of 32769 characters answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('I1 guard: one cell of 32769 characters answers too_large; the server stays up', T, async () => withSmallHeap(async (s) => {
     await csvTooLarge(s, 'long-cell.csv', Buffer.from(`${shortHeader}${plainCell(CELL + 1)},1\n`));
   }));
 });
@@ -624,7 +624,7 @@ describe('PDF isolation on a 128 MB heap', () => {
   }
   const PDF = 'application/pdf';
 
-  test('a stream that inflates past the 2 MB text cap is withheld (pdf_withheld); the server stays up', T, () => withPdfServer(async (s) => {
+  test('a stream that inflates past the 2 MB text cap is withheld (pdf_withheld); the server stays up', T, async () => withPdfServer(async (s) => {
     const bytes = await inflateBombPdf({ inflatedBytes: 8 * 1024 * 1024, fill: 'text' });
     const r = await upload(s.baseUrl, [{ name: 'statement-text-bomb.pdf', bytes, type: PDF }]);
     assert.equal(r.status, 200, r.text.slice(0, 300));
@@ -632,14 +632,14 @@ describe('PDF isolation on a 128 MB heap', () => {
     assert.equal(r.json.files[0].status, 'needs_source_text');
   }));
 
-  test('a stream of 300 MB of zeros answers 200 and the server stays up', T, () => withPdfServer(async (s) => {
+  test('a stream of 300 MB of zeros answers 200 and the server stays up', T, async () => withPdfServer(async (s) => {
     const bytes = await inflateBombPdf();
     const r = await upload(s.baseUrl, [{ name: 'statement-zero-bomb.pdf', bytes, type: PDF }]);
     assert.equal(r.status, 200, r.text.slice(0, 300));
     assert.notEqual(r.json.files[0].status, 'failed');
   }));
 
-  test('a font name carrying a marker never reaches the server output', T, () => withPdfServer(async (s) => {
+  test('a font name carrying a marker never reaches the server output', T, async () => withPdfServer(async (s) => {
     const r = await upload(s.baseUrl, [
       { name: 'statement-marker-font.pdf', bytes: markerFontPdf(MARKER, ['Synthetic statement with a marker font']), type: PDF },
       { name: 'statement-marker-name.pdf', bytes: textPdf(['Synthetic statement'], { fontName: MARKER }), type: PDF },

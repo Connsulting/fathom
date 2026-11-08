@@ -21,6 +21,7 @@ import { createToolServer } from '../src/mcp/server.mjs';
 import { aggregatorCsv } from '../test/helpers/ingest.mjs';
 import { openObject } from '../src/platform/household-vault.mjs';
 import { mcp, refreshImportFixture, expectedTransactionFixture, accountCategoryFixtures } from '../test/helpers/tenancy-mcp.mjs';
+import { mapSeries } from '../src/shared/series.mjs';
 
 const seeds = Number(process.env.FATHOM_FUZZ_SEEDS ?? 2);
 const budget = Number(process.env.FATHOM_FUZZ_BUDGET_MS ?? 600000);
@@ -31,8 +32,8 @@ const probe = process.env.FATHOM_ISOLATION_PROBE;
 let activeCase = null;
 const checkTime = () => assert.ok(performance.now() - started < budget, 'elapsed_budget');
 const hash = x => createHash('sha256').update(x).digest('hex');
-const tables = db => db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(r => r.name);
-const logicalDigest = db => hash(JSON.stringify(tables(db).map(t => [t, db.prepare(`SELECT * FROM "${t}"`).all().map(r => JSON.stringify(r)).sort()])));
+const tables = async db => (await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all()).map(r => r.name);
+const logicalDigest = async db => hash(JSON.stringify(await mapSeries((await tables(db)), async t => [t, (await db.prepare(`SELECT * FROM "${t}"`).all()).map(r => JSON.stringify(r)).sort()])));
 function manifest(dir) {
   if (!existsSync(dir)) return '';
   return hash(JSON.stringify(readdirSync(dir, { recursive: true }).sort().filter(p => !/fathom\.sqlite(?:-|$)/.test(p)).map(p => {
@@ -42,12 +43,12 @@ function manifest(dir) {
 }
 const platformTables = ['api_keys', 'household_memberships', 'household_invitations', 'household_data_keys', 'household_outbound',
   'household_model_budgets', 'model_rounds', 'notification_policy', 'notification_subscriptions', 'household_backup_operations'];
-const platformSnapshot = hh => hash(JSON.stringify([
-  hh.platform.prepare('SELECT * FROM households WHERE id=?').get(hh.id),
-  ...platformTables.map(table => [table, hh.platform.prepare(`SELECT * FROM ${table} WHERE household_id=?`).all(hh.id).map(row => JSON.stringify(row)).sort()]),
+const platformSnapshot = async hh => hash(JSON.stringify([
+  await hh.platform.prepare('SELECT * FROM households WHERE id=?').get(hh.id),
+  ...await mapSeries(platformTables, async table => [table, (await hh.platform.prepare(`SELECT * FROM ${table} WHERE household_id=?`).all(hh.id)).map(row => JSON.stringify(row)).sort()]),
 ]));
-const snapshot = hh => [logicalDigest(hh.db), manifest(hh.ctx.root), platformSnapshot(hh)];
-const stable = (hh, before, code) => assert.deepEqual(snapshot(hh), before, code);
+const snapshot = async hh => [await logicalDigest(hh.db), manifest(hh.ctx.root), await platformSnapshot(hh)];
+const stable = async (hh, before, code) => assert.deepEqual(await snapshot(hh), before, code);
 const FAMILY = {
   household: `account_holders accounts action_receipts advisor_checkin advisor_packets advisor_reviews balances category_merchant_rules category_source_rules column_mappings confirm_auto confirm_auto_declined confirm_guesses confirm_items confirm_undo content conversations deadline_alerts deadlines decisions documents email_sends entity_aliases events expected_transactions facts figures files goals held_facts import_batches import_model_spend import_proposals ingest_epoch job_lock job_runs jobs messages packs_state planner_recs pnl_lines positions preferences rec_events recs schema_migrations settings simplefin_accounts simplefin_connection simplefin_snapshots source_changes sources spend_ledger spending_definitions store_identity superseded_rows tax_payments transaction_category_corrections transaction_category_guesses transaction_category_imports transactions yearend_marks yearend_packets`.split(' '),
   platform: `api_keys audit_events auth_challenges auth_rate_limits auth_sessions auth_tokens household_backup_operations household_data_keys household_invitations household_memberships household_model_budgets household_outbound households instance_operators model_rounds notification_policy notification_subscriptions passkeys platform_operations platform_settings schema_migrations users`.split(' '),
@@ -144,7 +145,7 @@ async function adversarialRoutes(f, inventory, specs) {
         for (let kind = 0; kind < 5; kind++) {
           activeCase = { seed, route: keyOf(route), mutation: kind, assertion: 'route_isolation' };
           checkTime();
-          const before = snapshot(other), wireSpec = { ...spec };
+          const before = await snapshot(other), wireSpec = { ...spec };
           const outbound = [f.externalCount(), manifest(join(own.ctx.root, 'outbox')), manifest(join(f.dataDir, 'outbox'))];
           const headers = {};
           let method = route.method, expected;
@@ -170,7 +171,7 @@ async function adversarialRoutes(f, inventory, specs) {
           const r = await wire(f, own.admin, method, wireSpec, headers);
           assert.equal(r.status, expected, `seed=${seed} ${keyOf(route)} mutation=${kind} refusal`);
           assert.ok(!r.text.includes(other.canary), `seed=${seed} ${keyOf(route)} mutation=${kind} disclosure`);
-          stable(other, before, `seed=${seed} ${keyOf(route)} mutation=${kind} foreign_effect`);
+          await stable(other, before, `seed=${seed} ${keyOf(route)} mutation=${kind} foreign_effect`);
           assert.deepEqual([f.externalCount(), manifest(join(own.ctx.root, 'outbox')), manifest(join(f.dataDir, 'outbox'))], outbound, 'unauthorized_outbound_effect');
           count++;
         }
@@ -190,20 +191,20 @@ async function deterministicPolicies(f, inventory, specs) {
       const policy = routePolicy(route);
       const spec = specs.get(other.id)[keyOf(route)] ?? concreteControl(route, other);
       if (!CONTROL.has(keyOf(route)) || policy.admin || policy.backupControl) {
-        const before = snapshot(other);
+        const before = await snapshot(other);
         const r = await wire(f, f.operator, route.method, spec);
         assert.equal(r.status, 403, `nonmember_operator ${keyOf(route)}`);
-        stable(other, before, 'operator_foreign_effect');
+        await stable(other, before, 'operator_foreign_effect');
       }
       if (!policy.public) {
         const r = await wire(f, own.admin, route.method, spec, { cookie: undefined });
         assert.equal(r.status, 401, `anonymous ${keyOf(route)}`);
       }
       if (policy.admin || policy.backupControl) {
-        const before = snapshot(other);
+        const before = await snapshot(other);
         const r = await wire(f, own.member, route.method, spec);
         assert.equal(r.status, 403, `member ${keyOf(route)}`);
-        stable(other, before, 'admin_foreign_effect');
+        await stable(other, before, 'admin_foreign_effect');
       }
     }
     for (const [path, body, expected] of [
@@ -216,35 +217,35 @@ async function deterministicPolicies(f, inventory, specs) {
       const r = await own.admin.client.post(path, body);
       assert.equal(r.status, expected, 'foreign_control');
       assert.equal(f.store.membership(other.member.identity.id, other.id).role, 'member');
-      assert.equal(f.store.listPasskeys(other.member.identity.id).length, 1);
+      assert.equal((await f.store.listPasskeys(other.member.identity.id)).length, 1);
     }
-    const before = snapshot(other);
+    const before = await snapshot(other);
     for (const path of ['/api/not-a-route', '/api/%252f/not-a-route', '/api/%2e%2e/files', '/api/%00']) {
       const r = await wire(f, own.admin, 'GET', { path });
       assert.equal(r.status, 404, 'unknown_or_malformed');
     }
-    stable(other, before, 'unknown_route_foreign_effect');
+    await stable(other, before, 'unknown_route_foreign_effect');
   }
   const memberRoutes = inventory.filter(route => !CONTROL.has(keyOf(route)) && !routePolicy(route).admin && !routePolicy(route).backupControl);
   for (const [own, other] of [[f.A, f.B], [f.B, f.A]]) {
     f.dual.identity = ok(await f.dual.client.post('/api/auth/household', { householdId: own.id })).identity;
     const old = headersOf(f.dual);
-    const before = snapshot(other);
+    const before = await snapshot(other);
     for (const route of memberRoutes) {
       activeCase = { seed: 0, route: keyOf(route), mutation: 'dual-member-foreign-header', assertion: 'dual_context' };
       const r = await wire(f, f.dual, route.method, specs.get(other.id)[keyOf(route)], { 'x-fathom-household': other.id });
       assert.equal(r.status, 409, `dual_foreign_context ${keyOf(route)}`);
       assert.ok(!r.text.includes(other.canary), 'dual_foreign_disclosure');
-      stable(other, before, 'dual_foreign_effect');
+      await stable(other, before, 'dual_foreign_effect');
     }
     f.dual.identity = ok(await f.dual.client.post('/api/auth/household', { householdId: other.id })).identity;
-    const switched = snapshot(other);
+    const switched = await snapshot(other);
     for (const route of memberRoutes) {
       activeCase = { seed: 0, route: keyOf(route), mutation: 'dual-member-stale-tab', assertion: 'stale_context' };
       const r = await wire(f, f.dual, route.method, specs.get(other.id)[keyOf(route)], old);
       assert.equal(r.status, 409, `dual_stale_context ${keyOf(route)}`);
       assert.ok(!r.text.includes(other.canary), 'dual_stale_disclosure');
-      stable(other, switched, 'dual_stale_effect');
+      await stable(other, switched, 'dual_stale_effect');
     }
   }
 }
@@ -259,18 +260,18 @@ async function foreignReferences(f, inventory, specs) {
         if (Object.hasOwn(foreign.body, key)) spec.body[key] = structuredClone(foreign.body[key]);
       }
       spec.body = { ...spec.body, householdId: other.id, nested: { refs: [{ householdId: other.id, id: other.upload, storedPath: '../files/foreign.bin' }] } };
-      const before = snapshot(other);
+      const before = await snapshot(other);
       const r = await wire(f, own.admin, route.method, spec);
       if (route.path === '/api/household/backups') await f.app.backups.idle();
       assert.ok([200, 400, 404, 409, 422].includes(r.status), `foreign_reference ${keyOf(route)}`);
       if (route.method === 'GET') assert.ok(!r.text.includes(other.canary), `foreign_read ${keyOf(route)}`);
-      stable(other, before, `foreign_reference_effect ${keyOf(route)}`);
+      await stable(other, before, `foreign_reference_effect ${keyOf(route)}`);
     }
-    const before = snapshot(other), ownSubscriptions = own.platform.prepare('SELECT * FROM notification_subscriptions WHERE household_id=? ORDER BY user_id').all(own.id);
+    const before = await snapshot(other), ownSubscriptions = await own.platform.prepare('SELECT * FROM notification_subscriptions WHERE household_id=? ORDER BY user_id').all(own.id);
     const invalidSubscription = await own.admin.client.post('/api/email/subscriptions', { subscriptions: [{ userId: other.admin.identity.id, subscribed: true }] });
     assert.equal(invalidSubscription.status, 400, 'foreign_recipient_refused');
-    assert.deepEqual(own.platform.prepare('SELECT * FROM notification_subscriptions WHERE household_id=? ORDER BY user_id').all(own.id), ownSubscriptions, 'foreign_recipient_no_subscription');
-    stable(other, before, 'foreign_recipient_platform_effect');
+    assert.deepEqual(await own.platform.prepare('SELECT * FROM notification_subscriptions WHERE household_id=? ORDER BY user_id').all(own.id), ownSubscriptions, 'foreign_recipient_no_subscription');
+    await stable(other, before, 'foreign_recipient_platform_effect');
   }
 }
 
@@ -281,32 +282,32 @@ async function lifecyclePolicies(f, inventory, specs) {
     const thread = ok(await own.admin.client.post('/api/threads', {})).thread;
     for (const route of financial.filter(r => routePolicy(r).stream)) {
       const spec = { path: route.path, body: { text: own.canary + ' streaming question', ...(route.path === '/api/ask' ? { key: thread.key } : {}) } };
-      const before = snapshot(other);
+      const before = await snapshot(other);
       const r = await wire(f, own.admin, 'POST', spec, { accept: 'text/event-stream' });
       assert.equal(r.status, 200, 'sse_success');
       const events = r.text.split('\n\n').filter(s => s.startsWith('event:')).map(s => ({ name: /^event: (.+)$/m.exec(s)[1], data: JSON.parse(/^data: (.+)$/m.exec(s)[1]) }));
       assert.ok(events.some(e => e.name === 'final'), 'sse_complete');
       for (const e of events) assert.ok(!JSON.stringify(e).includes(other.canary), 'sse_foreign_event');
-      stable(other, before, 'sse_foreign_effect');
+      await stable(other, before, 'sse_foreign_effect');
     }
     const revoked = await f.invite(own, own.canary.toLowerCase() + '-revoked@example.test');
     const expired = await f.invite(own, own.canary.toLowerCase() + '-expired@example.test');
     f.store.revokeSession(revoked.client.session());
-    f.platform.prepare('UPDATE auth_sessions SET expires_at=0 WHERE hash=?').run(hash(expired.client.session()));
+    await f.platform.prepare('UPDATE auth_sessions SET expires_at=0 WHERE hash=?').run(hash(expired.client.session()));
     const removed = own.member;
     const memberKey = ok(await removed.client.post('/api/keys', { name: 'Synthetic removed member', scopes: ['read'] }));
     ok(await own.admin.client.post(`/api/admin/users/${removed.identity.id}/remove`, {}));
     assert.equal((await mcp(f.baseUrl, memberKey.key, 'tools/list')).status, 401, 'removed_creator_key');
     for (const person of [revoked, expired, removed]) {
-      const before = snapshot(other);
+      const before = await snapshot(other);
       for (const route of financial) {
         const spec = specs.get(other.id)[keyOf(route)];
         assert.equal((await wire(f, person, route.method, spec)).status, 401, `revoked_session ${keyOf(route)}`);
       }
-      stable(other, before, 'revoked_foreign_effect');
+      await stable(other, before, 'revoked_foreign_effect');
     }
-    const before = snapshot(other);
-    f.platform.prepare("UPDATE households SET status='suspended' WHERE id=?").run(own.id);
+    const before = await snapshot(other);
+    await f.platform.prepare("UPDATE households SET status='suspended' WHERE id=?").run(own.id);
     try {
       assert.equal((await mcp(f.baseUrl, own.key.key, 'tools/list')).status, 401, 'suspended_key');
       for (const route of financial) {
@@ -314,8 +315,8 @@ async function lifecyclePolicies(f, inventory, specs) {
         const expected = policy.backupControl ? route.method === 'POST' ? 409 : 404 : 403;
         assert.equal((await wire(f, own.admin, route.method, specs.get(other.id)[keyOf(route)])).status, expected, `suspended ${keyOf(route)}`);
       }
-    } finally { f.platform.prepare("UPDATE households SET status='active' WHERE id=?").run(own.id); }
-    stable(other, before, 'suspension_foreign_effect');
+    } finally { await f.platform.prepare("UPDATE households SET status='active' WHERE id=?").run(own.id); }
+    await stable(other, before, 'suspension_foreign_effect');
     assert.equal((await mcp(f.baseUrl, own.key.key, 'tools/list')).status, 200, 'resumed_key_liveness');
   }
 }
@@ -341,7 +342,7 @@ async function toolGate(f) {
       recommendations: { operation: 'list' }, refresh: refreshImportFixture(own),
       retirement: { operation: 'growth', solve: 'balance', years: 0, balance: { ref: { tool: 'accounts', args: { operation: 'detail', id: 'colliding-account' }, path: 'balance' } } },
       sources: { operation: 'archive_account', id: 'colliding-account' }, spending: { operation: 'total' }, tax: { operation: 'estimate' }, transactions: { operation: 'search' },
-      ...accountCategoryFixtures(own), update_goal: { operation: 'create', title: own.canary + ' tool reserve' },
+      ...await accountCategoryFixtures(own), update_goal: { operation: 'create', title: own.canary + ' tool reserve' },
       update_preferences: { operation: 'remember', text: 'Prefer a steady reserve', evidence: 'Prefer a steady reserve', conversationKey: thread.key },
     };
     const invoke = (name, args, headers = {}) => mcp(f.baseUrl, own.key.key, 'tools/call', { name, arguments: args }, headers);
@@ -349,7 +350,7 @@ async function toolGate(f) {
     samples.undo = { operation: 'undo', id: JSON.parse(toolText(action)).receipt.id };
     own.toolSamples = samples;
     assert.deepEqual(Object.keys(samples).sort(), registry.map(t => t.name).sort(), 'unclassified_tool');
-    const before = snapshot(other);
+    const before = await snapshot(other);
     const listed = await mcp(f.baseUrl, own.key.key, 'tools/list');
     assert.deepEqual(listed.json.result.tools.map(t => t.name), registry.map(t => t.name), 'live_tool_inventory');
     for (const method of ['initialize', 'ping']) {
@@ -364,7 +365,7 @@ async function toolGate(f) {
       assert.notEqual(r.json.result?.isError, true, `tool_result ${tool.name}: ${toolText(r)}`);
       if (tool.name === 'retirement') assert.equal(JSON.parse(toolText(r)).figure.value, own.retirementBalance, 'complete_balance');
       assert.ok(!toolText(r).includes(other.canary), `tool_disclosure ${tool.name}`);
-      stable(other, before, `tool_foreign_effect ${tool.name}`);
+      await stable(other, before, `tool_foreign_effect ${tool.name}`);
       for (let seed = 1; seed <= seeds; seed++) for (let kind = 0; kind < 5; kind++) {
         activeCase = { seed, route: `tools/call ${tool.name}`, mutation: kind, assertion: 'tool_isolation' };
         checkTime();
@@ -373,7 +374,7 @@ async function toolGate(f) {
         const attacked = await invoke(tool.name, { ...samples[tool.name], ...extra }, { cookie: headersOf(other.admin).cookie });
         assert.equal(attacked.json?.result?.isError, true, `seed=${seed} tool=${tool.name} mutation=${kind} refusal`);
         assert.ok(!toolText(attacked).includes(other.canary), 'tool_error_disclosure');
-        stable(other, before, `seed=${seed} tool=${tool.name} mutation=${kind} effect`);
+        await stable(other, before, `seed=${seed} tool=${tool.name} mutation=${kind} effect`);
         count++;
       }
     }
@@ -387,7 +388,7 @@ async function toolGate(f) {
         if (kind === 2) { headers.origin = 'https://foreign.example.invalid'; expected = 403; }
         if (kind === 3) { delete headers.authorization; expected = 401; }
         assert.equal((await request(f.baseUrl, { method, path: kind === 4 ? '/mcp?household=' + other.id : '/mcp', headers })).status, expected, 'mcp_transport_method');
-        stable(other, before, 'transport_foreign_effect'); count++;
+        await stable(other, before, 'transport_foreign_effect'); count++;
       }
     }
     for (const method of ['initialize', 'ping', 'tools/list', 'tools/call']) for (let seed = 1; seed <= seeds; seed++) for (let kind = 0; kind < 5; kind++) {
@@ -396,7 +397,7 @@ async function toolGate(f) {
         { authorization: undefined }, { authorization: 'Bearer synthetic-invalid' }, { 'content-type': 'text/plain' }][kind];
       const r = await mcp(f.baseUrl, own.key.key, method, {}, headers);
       assert.equal(r.status, [403, 403, 401, 401, 415][kind], `seed=${seed} rpc=${method} mutation=${kind} refusal`);
-      stable(other, before, 'rpc_foreign_effect'); count++;
+      await stable(other, before, 'rpc_foreign_effect'); count++;
     }
     for (const method of ['notifications/cancelled', 'notifications/initialized', 'notifications/progress']) {
       const params = method === 'notifications/cancelled' ? { requestId: 'synthetic-missing' }
@@ -410,7 +411,7 @@ async function toolGate(f) {
         const headers = [{ host: 'foreign.example.invalid' }, { origin: 'https://foreign.example.invalid' },
           { authorization: undefined }, { authorization: 'Bearer synthetic-invalid' }, { 'content-type': 'text/plain' }][kind];
         assert.equal((await notify(headers)).status, [403, 403, 401, 401, 415][kind], 'notification_refusal');
-        stable(other, before, 'notification_foreign_effect'); count++;
+        await stable(other, before, 'notification_foreign_effect'); count++;
       }
     }
     const readKey = ok(await own.admin.client.post('/api/keys', { name: 'Synthetic read', scopes: ['read'] }));
@@ -453,18 +454,18 @@ async function replayForeignPayloads(f, inventory, specs) {
   for (const [own, other] of [[f.A, f.B], [f.B, f.A]]) {
     for (const route of inventory.filter(r => !CONTROL.has(keyOf(r)))) {
       activeCase = { seed: 0, route: keyOf(route), mutation: 'foreign-payload-replay', assertion: 'replay_isolation' };
-      const before = snapshot(other);
+      const before = await snapshot(other);
       const r = await wire(f, own.admin, route.method, specs.get(other.id)[keyOf(route)]);
       if (route.path === '/api/household/backups') await f.app.backups.idle();
       assert.ok([200, 400, 404, 409, 422].includes(r.status), `foreign_payload ${keyOf(route)}`);
-      stable(other, before, `foreign_payload_effect ${keyOf(route)}`);
+      await stable(other, before, `foreign_payload_effect ${keyOf(route)}`);
     }
     for (const tool of tools.filter(isMcpTool)) {
       activeCase = { seed: 0, route: `tools/call ${tool.name}`, mutation: 'foreign-payload-replay', assertion: 'replay_isolation' };
-      const before = snapshot(other);
+      const before = await snapshot(other);
       const r = await mcp(f.baseUrl, own.key.key, 'tools/call', { name: tool.name, arguments: other.toolSamples[tool.name] }, { cookie: headersOf(other.admin).cookie });
       assert.equal(r.status, 200, `foreign_tool_payload ${tool.name}`);
-      stable(other, before, `foreign_tool_payload_effect ${tool.name}`);
+      await stable(other, before, `foreign_tool_payload_effect ${tool.name}`);
     }
   }
 }
@@ -501,10 +502,10 @@ test('adversarial isolation gate crosses real sessions, dispatch, runtimes, pers
     const inventory = routes.filter(r => r.path.startsWith('/api'));
     classify(probe === 'unclassified-route' ? [...inventory, { method: 'GET', path: '/api/deliberately-unclassified' }] : inventory, specs.get(f.A.id));
     assert.throws(() => classify([...inventory, { method: 'GET', path: '/api/deliberately-unclassified' }], specs.get(f.A.id)), /unclassified_route/, 'unknown_route_probe');
-    assert.deepEqual(tables(f.platform), FAMILY.platform, 'platform_schema_scope');
-    assert.deepEqual(tables(f.A.db), FAMILY.household, 'household_schema_scope');
+    assert.deepEqual(await tables(f.platform), FAMILY.platform, 'platform_schema_scope');
+    assert.deepEqual(await tables(f.A.db), FAMILY.household, 'household_schema_scope');
     f.A.db.exec('CREATE TABLE deliberately_unclassified (id TEXT)');
-    try { assert.throws(() => assert.deepEqual(tables(f.A.db), FAMILY.household), 'unclassified_schema_probe'); }
+    try { assert.throws(async () => assert.deepEqual(await tables(f.A.db), FAMILY.household), 'unclassified_schema_probe'); }
     finally { f.A.db.exec('DROP TABLE deliberately_unclassified'); }
     if (probe === 'foreign-runtime') {
       const foreign = { ...f.A.ctx, db: f.B.db, root: f.B.ctx.root, packs: f.B.ctx.packs, engine: f.B.ctx.engine, answerer: f.B.ctx.answerer };
@@ -521,7 +522,7 @@ test('adversarial isolation gate crosses real sessions, dispatch, runtimes, pers
         checkTime();
         const spec = specs.get(own.id)[keyOf(route)];
         await spec.before?.(); Object.assign(spec, await spec.prepare?.());
-        const before = snapshot(other);
+        const before = await snapshot(other);
         const r = await wire(f, own.admin, route.method, spec);
         if (route.path === '/api/household/backups') await f.app.backups.idle();
         assert.equal(r.status, spec.status ?? 200, `authorized ${keyOf(route)} ${r.status} ${r.json?.error ?? ''}`);
@@ -548,12 +549,12 @@ test('adversarial isolation gate crosses real sessions, dispatch, runtimes, pers
           const scenario = r.json?.scenario ?? (route.path === '/api/scenario' ? r.json : null);
           if (scenario) {
             assert.ok(!JSON.stringify(scenario).includes(other.canary), `scenario_identity ${keyOf(route)}`);
-            const expectedGoals = own.db.prepare('SELECT id FROM goals ORDER BY id').all().map(g => g.id);
+            const expectedGoals = (await own.db.prepare('SELECT id FROM goals ORDER BY id').all()).map(g => g.id);
             assert.deepEqual(scenario.goals.map(g => g.id).sort(), expectedGoals, `complete_goals ${keyOf(route)}`);
           }
         }
         if (spec.own) assert.ok(r.text.includes(own.canary), `complete_result ${keyOf(route)}`);
-        stable(other, before, `authorized_foreign_effect ${keyOf(route)}`);
+        await stable(other, before, `authorized_foreign_effect ${keyOf(route)}`);
         if (route.method === 'GET') {
           const head = await wire(f, own.admin, 'HEAD', spec);
           assert.equal(head.status, spec.headStatus ?? spec.status ?? 200, `authorized_HEAD ${route.path}`);
@@ -618,7 +619,7 @@ if (!probe) test('live-mode model and tool continuations see only the real-sessi
       ok(await hh.admin.client.post('/api/engine/cap', { usd: 30 }));
     }
     for (const [own, other] of [[f.A, f.B], [f.B, f.A]]) {
-      const from = emulator.requests.length, before = snapshot(other);
+      const from = emulator.requests.length, before = await snapshot(other);
       emulator.script([{ toolUse: { name: body => body.tools.find(t => /(?:^|__)household$/.test(t.name)).name, input: { operation: 'summary' } } },
         { text: 'Synthetic household answer.' }]);
       const r = ok(await own.admin.client.post('/api/threads', { text: 'Explain the stored reserve policy.' }));
@@ -627,8 +628,8 @@ if (!probe) test('live-mode model and tool continuations see only the real-sessi
       assert.ok(calls.length >= 2, 'live_tool_continuation');
       assert.ok(calls.some(c => JSON.stringify(c.body).includes(own.canary)), 'own_model_context');
       for (const call of calls) assert.ok(!JSON.stringify(call.body).includes(other.canary), 'foreign_model_context');
-      stable(other, before, 'model_foreign_effect');
-      const rows = f.platform.prepare("SELECT state FROM model_rounds WHERE household_id=? AND kind='round'").all(own.id);
+      await stable(other, before, 'model_foreign_effect');
+      const rows = await f.platform.prepare("SELECT state FROM model_rounds WHERE household_id=? AND kind='round'").all(own.id);
       assert.ok(rows.length >= 2 && rows.every(row => row.state === 'settled'), 'live_reservations_settled');
     }
     let release;

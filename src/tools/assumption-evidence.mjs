@@ -118,7 +118,7 @@ function ownerWords(assumption, path, ctx) {
 // Validate one Assumption passed for parameter `name` in `unit` and return its provenance record
 // { name, value, unit, source, stated, note?, evidence?, factKey?, preferenceId? }.
 // spec: { name, unit, default?, min?, max?, path? }. Every refusal is bad_input naming the path.
-export function checkAssumption(assumption, { name, unit, default: fallback, min, max, path = name }, ctx) {
+export async function checkAssumption(assumption, { name, unit, default: fallback, min, max, path = name }, ctx) {
   if (!UNITS.includes(unit)) throw new ToolError('bad_input', `${path}: unknown unit ${unit}`);
   if (!assumption || typeof assumption !== 'object' || Array.isArray(assumption)) throw new ToolError('bad_input', `${path} must be an assumption object`);
   for (const key of Object.keys(assumption)) if (!KEYS.has(key)) throw new ToolError('bad_input', `${path}.${key} is not a known assumption field`);
@@ -141,7 +141,7 @@ export function checkAssumption(assumption, { name, unit, default: fallback, min
   } else if (source === 'fact') {
     const { factKey } = assumption;
     if (typeof factKey !== 'string' || !factKey) throw new ToolError('bad_input', `${path}: source fact needs factKey`);
-    const row = ctx?.db?.prepare('SELECT value FROM facts WHERE key = ?').get(factKey);
+    const row = await ctx?.db?.prepare('SELECT value FROM facts WHERE key = ?').get(factKey);
     if (!row) throw new ToolError('bad_input', `${path}: no stored fact ${factKey}`);
     // Only a stored number counts: a boolean, list or text fact is never coerced into one.
     const stored = parseJson(row.value, null);
@@ -152,7 +152,7 @@ export function checkAssumption(assumption, { name, unit, default: fallback, min
   } else if (source === 'preference') {
     const { preferenceId } = assumption;
     if (typeof preferenceId !== 'string' || !preferenceId) throw new ToolError('bad_input', `${path}: source preference needs preferenceId`);
-    const row = ctx?.db?.prepare('SELECT text FROM preferences WHERE id = ?').get(preferenceId);
+    const row = await ctx?.db?.prepare('SELECT text FROM preferences WHERE id = ?').get(preferenceId);
     if (!row) throw new ToolError('bad_input', `${path}: no saved preference ${preferenceId}`);
     if (!assumptionStated(value, unit, [row.text])) throw new ToolError('bad_input', `${path}: the saved preference ${preferenceId} does not state ${record.stated}`);
     record.preferenceId = preferenceId;

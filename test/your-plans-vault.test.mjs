@@ -46,7 +46,7 @@ const ABSENT = 'The synthetic hearing plan covers hearing aids.';
 const DROP_WARNING = /did not match the document/;
 const row = (title, body, excerpt, page = 1) => ({ title, body, excerpt, page });
 
-const engineFor = (db, household) => createRuntimeEngine({ db, config: loadConfig({ FATHOM_DATA: household.config.dataDir, FATHOM_ENGINE: 'fake' }) });
+const engineFor = async (db, household) => await createRuntimeEngine({ db, config: loadConfig({ FATHOM_DATA: household.config.dataDir, FATHOM_ENGINE: 'fake' }) });
 
 // The runtime with every extract() request recorded; each call takes the next rows list as its
 // fake response when one is scripted, otherwise it passes through unchanged.
@@ -77,7 +77,7 @@ function sentContent(req) {
   return '';
 }
 
-const spend = db => db.prepare('SELECT id, purpose, cost_usd FROM spend_ledger ORDER BY id').all().map(r => ({ ...r }));
+const spend = async db => (await db.prepare('SELECT id, purpose, cost_usd FROM spend_ledger ORDER BY id').all()).map(r => ({ ...r }));
 
 // A store that went through main's real ingest upload path: real mode, the household vault (data
 // key wrapped under the platform key), the file encrypted by the vault and recorded by ingestFiles
@@ -85,26 +85,26 @@ const spend = db => db.prepare('SELECT id, purpose, cost_usd FROM spend_ledger O
 async function uploadedStore(t, files) {
   const s = await realStore();
   t.after(() => s.close());
-  setSetting(s.db, 'clock', CLOCK);
+  await setSetting(s.db, 'clock', CLOCK);
   const { results } = await ingestFiles(s.db, files, s.opts(await offEngine()));
   return { ...s, results };
 }
 
 const enc = text => new Uint8Array(Buffer.from(text, 'utf8'));
-const storedRow = (db, id) => db.prepare('SELECT stored_path, name FROM files WHERE id = ?').get(id);
+const storedRow = async (db, id) => await db.prepare('SELECT stored_path, name FROM files WHERE id = ?').get(id);
 
 // ---------------------------------------------------------------- 1. encrypted text uploads
 
 test('AC14.1: a text upload stored encrypted by ingest builds Your plans from its plaintext', async t => {
   const s = await uploadedStore(t, [{ name: PLAN_NAME, bytes: enc(PLAN_TEXT), mime: 'text/markdown' }]);
   const fileId = s.results[0].fileId;
-  const stored = storedRow(s.db, fileId);
+  const stored = await storedRow(s.db, fileId);
   assert.equal(stored.stored_path, `files/${fileId}.bin`, 'ingest stored the upload in the vault');
   const onDisk = readFileSync(join(s.root, stored.stored_path));
   assert.ok(!onDisk.includes(Buffer.from(PLAINTEXT_MARK)), 'the stored file is ciphertext');
   assert.ok(!onDisk.toString('latin1').includes('Health plan tiers'));
 
-  const { engine, requests } = recording(engineFor(s.db, s.household));
+  const { engine, requests } = recording(await engineFor(s.db, s.household));
   const result = await buildYourPlans({ db: s.db, engine, household: s.household, fileIds: [fileId], clock: CLOCK });
   assert.equal(requests.length, 1, 'one extract request for the one source');
   assert.equal(requests[0].document.type, 'text');
@@ -119,7 +119,7 @@ test('AC14.1: a text upload stored encrypted by ingest builds Your plans from it
   assert.ok(pack.entries.some(e => e.body.includes(PLAINTEXT_MARK)));
 });
 
-test('AC14.1: POST /api/files then POST /api/your-plans/build builds entries from the encrypted upload', T2, () => withServer({ env: { FATHOM_ENGINE: 'fake' } }, async s => {
+test('AC14.1: POST /api/files then POST /api/your-plans/build builds entries from the encrypted upload', T2, async () => withServer({ env: { FATHOM_ENGINE: 'fake' } }, async s => {
   const fd = new FormData();
   fd.append('files', new Blob([PLAN_TEXT], { type: 'text/markdown' }), PLAN_NAME);
   const res = await fetch(`${s.baseUrl}/api/files`, { method: 'POST', body: fd });
@@ -156,12 +156,12 @@ test('AC14.2: a tampered stored file fails authentication, is skipped with a war
     { name: PLAN_NAME, bytes: enc(PLAN_TEXT), mime: 'text/markdown' },
   ]);
   const [bad, good] = s.results.map(r => r.fileId);
-  const path = join(s.root, storedRow(s.db, bad).stored_path);
+  const path = join(s.root, (await storedRow(s.db, bad)).stored_path);
   const blob = readFileSync(path);
   blob[Math.floor(blob.length / 2)] ^= 0x01;
   writeFileSync(path, blob);
 
-  const { engine, requests } = recording(engineFor(s.db, s.household));
+  const { engine, requests } = recording(await engineFor(s.db, s.household));
   const result = await buildYourPlans({ db: s.db, engine, household: s.household, fileIds: [bad, good], clock: CLOCK });
   assert.equal(requests.length, 1, 'only the authentic file is extracted');
   assert.equal(requests[0].document.text, PLAN_TEXT);
@@ -180,14 +180,14 @@ test('AC14.2: a tampered stored file fails authentication, is skipped with a war
 // A real household of a temp instance with a PDF stored through its vault and registered as a plan
 // document.
 async function pdfStore(t, { id, name, bytes }) {
-  const inst = await tempInstance({ mode: 'real', init: d => setSetting(d, 'clock', CLOCK) });
+  const inst = await tempInstance({ mode: 'real', init: async d => await setSetting(d, 'clock', CLOCK) });
   t.after(() => { inst.close(); rmSync(inst.dataDir, { recursive: true, force: true }); });
   const { db } = inst;
   const household = await inst.household();
   const storedPath = await storeFile({ vault: await household.vault(), id, bytes: Buffer.from(bytes), purpose: 'upload' });
-  db.prepare(`INSERT INTO files (id, name, mime, size, sha256, source_kind, uploaded_at, stored_path, status, note)
+  await db.prepare(`INSERT INTO files (id, name, mime, size, sha256, source_kind, uploaded_at, stored_path, status, note)
               VALUES (?, ?, 'application/pdf', ?, NULL, 'other', '2026-11-01T09:00:00Z', ?, 'parsed', '')`).run(id, name, bytes.length, storedPath);
-  db.prepare("INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES ('plan', 2026, '{}', ?, 'synthetic', 'file')").run(id);
+  await db.prepare("INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES ('plan', 2026, '{}', ?, 'synthetic', 'file')").run(id);
   return { db, household };
 }
 
@@ -195,7 +195,7 @@ test('AC14.3: a two-page text-layer PDF is extracted as text and rows are checke
   const NAME = 'synthetic-plan.pdf';
   const pdf = multiPagePdf(2, n => (n === 1 ? DENTAL : VISION));
   const { db, household } = await pdfStore(t, { id: 'file-synthetic-pdf', name: NAME, bytes: pdf });
-  const { engine, requests } = recording(engineFor(db, household), [[
+  const { engine, requests } = recording(await engineFor(db, household), [[
     row('Dental plan', DENTAL, DENTAL, 1),
     row('Vision plan', VISION, VISION, 2),
     row('Vision on the wrong page', VISION, VISION, 1),
@@ -226,11 +226,11 @@ test('AC14.3: a two-page text-layer PDF is extracted as text and rows are checke
 test('AC14.4: an image-only PDF is skipped with the image-only warning before any model call', async t => {
   const NAME = 'synthetic-scanned-plan.pdf';
   const { db, household } = await pdfStore(t, { id: 'file-synthetic-scan', name: NAME, bytes: imagePdf({ tag: 'synthetic scan' }) });
-  const before = spend(db);
-  const { engine, requests } = recording(engineFor(db, household), [[row('Dental plan', DENTAL, DENTAL, 1)]]);
+  const before = await spend(db);
+  const { engine, requests } = recording(await engineFor(db, household), [[row('Dental plan', DENTAL, DENTAL, 1)]]);
   const result = await buildYourPlans({ db, engine, household, clock: CLOCK });
   assert.equal(requests.length, 0, 'the engine received no extract call for the image-only PDF');
-  assert.deepEqual(spend(db), before, 'spend did not change');
+  assert.deepEqual(await spend(db), before, 'spend did not change');
   assert.equal(result.written, false);
   assert.equal(result.entries, 0);
   const named = result.warnings.filter(w => w.includes(NAME));
@@ -246,7 +246,7 @@ const PREMIUM_BODY = 'The premium is $1.';
 async function unverifiedAfterBuild(db, household, text) {
   const packs = createLivePacks(db, { dataDir: household.root });
   packs.refresh();
-  const runtime = engineFor(db, household);
+  const runtime = await engineFor(db, household);
   const engine = new Proxy(runtime, {
     get(target, key) {
       if (key === 'call') return async request => target.call({ ...request, fake: [{ text }] });
@@ -263,7 +263,7 @@ test('AC14.5: a generated Page N label never serves as a PDF excerpt or grounds 
   const NAME = 'synthetic-numberless-plan.pdf';
   const LINE = 'The synthetic plan lists a premium and a deductible.';
   const { db, household } = await pdfStore(t, { id: 'file-synthetic-numberless', name: NAME, bytes: textPdf([LINE]) });
-  const { engine } = recording(engineFor(db, household), [[
+  const { engine } = recording(await engineFor(db, household), [[
     row('Premium', PREMIUM_BODY, 'Page 1', 1),
     row('Plan summary', LINE, LINE, 1),
   ]]);
@@ -281,7 +281,7 @@ test('AC14.5: a Page 2 marker excerpt, or one spanning a generated label, is dro
   const ONE = 'The synthetic dental plan covers cleanings.';
   const TWO = 'The synthetic vision plan covers frames.';
   const { db, household } = await pdfStore(t, { id: 'file-synthetic-two-page', name: NAME, bytes: multiPagePdf(2, n => (n === 1 ? ONE : TWO)) });
-  const { engine } = recording(engineFor(db, household), [[
+  const { engine } = recording(await engineFor(db, household), [[
     row('Premium', 'The premium is $2.', 'Page 2', 2),
     row('Spanning', 'The plan spans two pages.', `${ONE} Page 2 ${TWO}`, 1),
     row('Dental plan', ONE, ONE, 1),
@@ -302,7 +302,7 @@ test('AC14.5: in a text upload a Page N marker line is not an excerpt or evidenc
   const text = ['Page 1', ONE, 'Page 2', TWO, ''].join('\n');
   const s = await uploadedStore(t, [{ name: NAME, bytes: enc(text), mime: 'text/markdown' }]);
   const fileId = s.results[0].fileId;
-  const { engine } = recording(engineFor(s.db, s.household), [[
+  const { engine } = recording(await engineFor(s.db, s.household), [[
     row('Premium', 'The premium is $2.', 'Page 2', 2),
     row('Vision plan', TWO, TWO, 2),
   ]]);

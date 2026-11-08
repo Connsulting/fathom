@@ -54,7 +54,7 @@ test.describe('AC7: planner on a real store', () => {
       const result = await planRun(db, { now: CLOCK, dataDir: DIR });
       expect(result.status).toBe('ok');
     } finally {
-      db.close();
+      await db.close();
     }
     app = await startEnrolledServer({ dataDir: DIR, clock: CLOCK });
     base = app.url;

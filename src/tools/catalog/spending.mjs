@@ -55,12 +55,12 @@ const totalParams = {
   limit: { type: 'integer', minimum: 1, maximum: 200 },
 };
 const period = { type: 'object', properties: periodParams, additionalProperties: false };
-export function readInput(ctx) {
-  const clock = resolveClock(ctx.db, ctx.clock ?? ctx.household?.clock);
+export async function readInput(ctx) {
+  const clock = await resolveClock(ctx.db, ctx.clock ?? ctx.household?.clock);
   const facts = Object.fromEntries(
-    ctx.db
+    (await ctx.db
       .prepare("SELECT key,value FROM facts WHERE src IS NULL OR src!='planner'")
-      .all()
+      .all())
       .map((r) => {
         let v;
         try {
@@ -71,7 +71,7 @@ export function readInput(ctx) {
         return [r.key, v];
       }),
   );
-  const data = loadPlanningData(ctx.db, clock);
+  const data = await loadPlanningData(ctx.db, clock);
   const input = data.categoryInput;
   const effectiveFacts = withInferredRecFacts(facts);
   return { ...input, clock, facts: effectiveFacts, personalSummaries: personalSummaryInput(data, effectiveFacts, input) };
@@ -116,22 +116,22 @@ export const operations = [
     { ...totalParams, ...periodParams },
     'Total and groups with data gaps.',
     'A total, average or breakdown of spending or income',
-    (args, ctx) => aggregate(readInput(ctx), args, resolveDefinition(ctx.db, args.definition)),
+    async (args, ctx) => aggregate(await readInput(ctx), args, await resolveDefinition(ctx.db, args.definition)),
   ),
   op(
     'compare',
     { ...totalParams, a: period, b: period },
     'Compare two selections.',
     'This period against that one',
-    (args, ctx) => compare(readInput(ctx), args, resolveDefinition(ctx.db, args.definition)),
+    async (args, ctx) => compare(await readInput(ctx), args, await resolveDefinition(ctx.db, args.definition)),
   ),
-  op('definitions', {}, 'Built-in and saved selections.', 'Named spending definitions', (args, ctx) => spendingDefinitions(ctx.db)),
+  op('definitions', {}, 'Built-in and saved selections.', 'Named spending definitions', async (args, ctx) => await spendingDefinitions(ctx.db)),
   op(
     'cash_flow',
     { ...periodParams, scope },
     'Money in, out and business transfers.',
     'Money in and out by month, household against business',
-    (args, ctx) => cashFlow(readInput(ctx), args),
+    async (args, ctx) => cashFlow(await readInput(ctx), args),
   ),
   op(
     'recurring',
@@ -145,7 +145,7 @@ export const operations = [
     },
     'Repeating charges and annual cost.',
     'Subscriptions, repeating bills, what started or stopped',
-    (args, ctx) => recurring(readInput(ctx), args),
+    async (args, ctx) => recurring(await readInput(ctx), args),
   ),
 ];
 export const rules = ['Use spending.total for spending totals and transactions.search for recent purchases; never sum transaction rows. debt_service is all debt payments, never the mortgage payment; use spending.obligations.'];

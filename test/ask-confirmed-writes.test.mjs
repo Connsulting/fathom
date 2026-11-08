@@ -23,13 +23,13 @@ const PROPOSAL_TEXT = 'Create a goal for $4,000 by 2026-12-31? Confirm below, or
 
 async function setup(t) {
   const s = await createEvalStore();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   return s;
 }
 
-function storedGoal(db, text = note) {
+async function storedGoal(db, text = note) {
   const def = { id: 'education-note', title: 'Education savings', note: text, horizon: 'now', target: 8000, track: null };
-  db.prepare("INSERT INTO goals (id, def, sort, origin, created_at) VALUES (?, ?, 100, 'owner', ?)").run(def.id, JSON.stringify(def), now);
+  await db.prepare("INSERT INTO goals (id, def, sort, origin, created_at) VALUES (?, ?, 100, 'owner', ?)").run(def.id, JSON.stringify(def), now);
 }
 
 // A fake engine whose non-title calls take the next script from `turns` (a text-only answer once
@@ -56,11 +56,11 @@ function context(s, engine, extra = {}) {
   return { db: s.db, config: {}, answerer: createLiveAnswerer({ engine, root: s.root, services: { engine, config: { dataDir: s.root } } }), ...extra };
 }
 
-const goalCount = db => db.prepare('SELECT count(*) AS n FROM goals').get().n;
-const receiptCount = db => db.prepare('SELECT count(*) AS n FROM action_receipts').get().n;
-const goalsTitled = (db, title) => db.prepare("SELECT * FROM goals WHERE json_extract(def, '$.title') = ?").all(title);
-const storedProvenance = (db, messageId) => parseJson(db.prepare('SELECT provenance FROM messages WHERE id = ?').get(Number(String(messageId).slice(1))).provenance, null);
-const lastOwnerText = (db, key) => db.prepare("SELECT text FROM messages WHERE conversation_key = ? AND role = 'me' ORDER BY id DESC LIMIT 1").get(key).text;
+const goalCount = async db => (await db.prepare('SELECT count(*) AS n FROM goals').get()).n;
+const receiptCount = async db => (await db.prepare('SELECT count(*) AS n FROM action_receipts').get()).n;
+const goalsTitled = async (db, title) => await db.prepare("SELECT * FROM goals WHERE json_extract(def, '$.title') = ?").all(title);
+const storedProvenance = async (db, messageId) => parseJson((await db.prepare('SELECT provenance FROM messages WHERE id = ?').get(Number(String(messageId).slice(1)))).provenance, null);
+const lastOwnerText = async (db, key) => (await db.prepare("SELECT text FROM messages WHERE conversation_key = ? AND role = 'me' ORDER BY id DESC LIMIT 1").get(key)).text;
 
 const ENTITIES = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&#123;': '{', '&#125;': '}' };
 const plain = html => String(html ?? '').replace(/<[^>]*>/g, ' ').replace(/&(?:amp|lt|gt|quot|#39|#123|#125);/g, m => ENTITIES[m]).replace(/\s+/g, ' ').trim();
@@ -74,10 +74,10 @@ async function decide(ctx, thread, messageId, decision) {
 // A proposal turn in a new thread, with the stored note as the source of $4,000.
 async function proposed(t, { input = args, text, operation, extra } = {}) {
   const s = await setup(t);
-  storedGoal(s.db);
+  await storedGoal(s.db);
   const fake = scriptedEngine([proposeTurn(input, text, operation)]);
   const ctx = context(s, fake.engine, extra);
-  const goals = goalCount(s.db);
+  const goals = await goalCount(s.db);
   const first = await threadCreate({ ...ctx, body: { text: 'Propose the parent contribution goal from its note.' } });
   return { s, db: s.db, fake, ctx, first, goals, key: first.thread.key };
 }
@@ -86,8 +86,8 @@ async function proposed(t, { input = args, text, operation, extra } = {}) {
 
 test('AC1 a propose call stores provenance.pendingAction on the reply and writes nothing', async t => {
   const { db, first, goals } = await proposed(t);
-  assert.equal(goalCount(db), goals, 'no goal written');
-  assert.equal(receiptCount(db), 0, 'no receipt written');
+  assert.equal(await goalCount(db), goals, 'no goal written');
+  assert.equal(await receiptCount(db), 0, 'no receipt written');
   assert.ok(plain(first.message.text).includes('$4,000'));
   const pending = first.message.provenance.pendingAction;
   assert.ok(pending, 'reply carries pendingAction');
@@ -100,7 +100,7 @@ test('AC1 a propose call stores provenance.pendingAction on the reply and writes
   const call = first.message.provenance.tools.find(r => r.name === 'update_goal');
   assert.ok(call && !call.isError, 'the propose call succeeded');
   assert.equal(call.args.propose, true);
-  assert.deepEqual(storedProvenance(db, first.message.id).pendingAction, pending, 'stored with the message');
+  assert.deepEqual((await storedProvenance(db, first.message.id)).pendingAction, pending, 'stored with the message');
 });
 
 // chat.js imports /shared/* the way the browser serves them (src/shared at /shared/).
@@ -163,14 +163,14 @@ test('AC2 a typed "yeah" executes the stored proposal once, with a receipt and n
   const before = fake.calls.length;
   const second = await ask({ ...ctx, body: { key, text: 'yeah' } });
   assert.equal(fake.calls.length, before, 'the engine was not called for the confirming turn');
-  assert.equal(goalCount(db), goals + 1, 'exactly one new goal');
-  const rows = goalsTitled(db, args.title);
+  assert.equal(await goalCount(db), goals + 1, 'exactly one new goal');
+  const rows = await goalsTitled(db, args.title);
   assert.equal(rows.length, 1);
   const def = JSON.parse(rows[0].def);
   assert.deepEqual(Object.fromEntries(Object.keys(args).map(k => [k, def[k] ?? null])), args);
   assert.equal(rows[0].origin, 'owner');
-  assert.equal(receiptCount(db), 1, 'exactly one receipt');
-  const receipt = db.prepare('SELECT * FROM action_receipts').get();
+  assert.equal(await receiptCount(db), 1, 'exactly one receipt');
+  const receipt = await db.prepare('SELECT * FROM action_receipts').get();
   assert.equal(receipt.actor_id, 'demo');
   assert.equal(receipt.entity_id, rows[0].id);
   const p = second.message.provenance;
@@ -185,8 +185,8 @@ test('AC2 a typed "yeah" executes the stored proposal once, with a receipt and n
   assert.equal(call.result.goal.target, 4000);
   assert.equal(call.result.receipt.id, receipt.id);
   assert.match(plain(second.message.text), /\b(?:done|saved|created)\b/i);
-  assert.equal(lastOwnerText(db, key), 'yeah', 'the typed text is the stored owner message');
-  assert.equal(storedProvenance(db, first.message.id).pendingAction.resolved.status, 'confirmed');
+  assert.equal(await lastOwnerText(db, key), 'yeah', 'the typed text is the stored owner message');
+  assert.equal((await storedProvenance(db, first.message.id)).pendingAction.resolved.status, 'confirmed');
 });
 
 test('AC2 the Confirm control executes the stored proposal and stores "Confirmed" as the owner text', async t => {
@@ -195,16 +195,16 @@ test('AC2 the Confirm control executes the stored proposal and stores "Confirmed
   const out = await decide(ctx, first.thread, first.message.id, 'confirm');
   assert.equal(fake.calls.length, before, 'no engine call');
   assert.ok(out.scenario && out.thread && out.message, 'returns { scenario, thread, message }');
-  assert.equal(goalCount(db), goals + 1);
-  assert.equal(goalsTitled(db, args.title).length, 1);
-  assert.equal(receiptCount(db), 1);
+  assert.equal(await goalCount(db), goals + 1);
+  assert.equal((await goalsTitled(db, args.title)).length, 1);
+  assert.equal(await receiptCount(db), 1);
   assert.equal(out.message.provenance.confirmedProposal, first.message.id);
   assert.equal(out.message.provenance.actions[0].actorId, 'demo');
   assert.equal(out.message.provenance.actions[0].undone, false);
-  assert.equal(lastOwnerText(db, key), 'Confirmed');
-  assert.equal(storedProvenance(db, first.message.id).pendingAction.resolved.status, 'confirmed');
+  assert.equal(await lastOwnerText(db, key), 'Confirmed');
+  assert.equal((await storedProvenance(db, first.message.id)).pendingAction.resolved.status, 'confirmed');
   await assert.rejects(decide(ctx, first.thread, first.message.id, 'confirm'), e => e.status === 409, 'a resolved proposal is refused');
-  assert.equal(goalsTitled(db, args.title).length, 1, 'a double click writes once');
+  assert.equal((await goalsTitled(db, args.title)).length, 1, 'a double click writes once');
 });
 
 test('AC2 "yeah" twice writes exactly one goal; the second goes to the engine', async t => {
@@ -214,9 +214,9 @@ test('AC2 "yeah" twice writes exactly one goal; the second goes to the engine', 
   fake.push([{ text: 'Your goal is already saved.' }]);
   const third = await ask({ ...ctx, body: { key, text: 'yeah' } });
   assert.equal(fake.calls.length, before + 1, 'the second yeah is answered by the engine');
-  assert.equal(goalCount(db), goals + 1, 'still exactly one new goal');
-  assert.equal(goalsTitled(db, args.title).length, 1);
-  assert.equal(receiptCount(db), 1);
+  assert.equal(await goalCount(db), goals + 1, 'still exactly one new goal');
+  assert.equal((await goalsTitled(db, args.title)).length, 1);
+  assert.equal(await receiptCount(db), 1);
   assert.equal(third.message.provenance.confirmedProposal, undefined);
 });
 
@@ -227,10 +227,10 @@ test('AC2 "yes but make it $5,000" does not execute the stored proposal and goes
   fake.push([{ text: 'Tell me the date for the changed goal.' }]);
   const reply = await ask({ ...ctx, body: { key, text: 'yes but make it $5,000' } });
   assert.equal(fake.calls.length, before + 1, 'the engine answered');
-  assert.equal(goalCount(db), goals, 'no goal written');
-  assert.equal(receiptCount(db), 0);
+  assert.equal(await goalCount(db), goals, 'no goal written');
+  assert.equal(await receiptCount(db), 0);
   assert.equal(reply.message.provenance.confirmedProposal, undefined);
-  assert.notEqual(storedProvenance(db, first.message.id).pendingAction.resolved?.status, 'confirmed');
+  assert.notEqual((await storedProvenance(db, first.message.id)).pendingAction.resolved?.status, 'confirmed');
 });
 
 test('AC2 Not now declines without an engine call, and a later "yeah" writes nothing', async t => {
@@ -239,23 +239,23 @@ test('AC2 Not now declines without an engine call, and a later "yeah" writes not
   const out = await decide(ctx, first.thread, first.message.id, 'decline');
   assert.equal(fake.calls.length, before, 'no engine call');
   assert.equal(plain(out.message.text), 'Okay, nothing was changed.');
-  assert.equal(lastOwnerText(db, key), 'Not now');
-  assert.equal(goalCount(db), goals);
-  assert.equal(receiptCount(db), 0);
-  assert.equal(storedProvenance(db, first.message.id).pendingAction.resolved.status, 'declined');
+  assert.equal(await lastOwnerText(db, key), 'Not now');
+  assert.equal(await goalCount(db), goals);
+  assert.equal(await receiptCount(db), 0);
+  assert.equal((await storedProvenance(db, first.message.id)).pendingAction.resolved.status, 'declined');
   await assert.rejects(decide(ctx, first.thread, first.message.id, 'confirm'), e => e.status === 409);
   fake.push([{ text: 'Nothing was changed.' }]);
   await ask({ ...ctx, body: { key, text: 'yeah' } });
   assert.equal(fake.calls.length, before + 1, 'a later yeah goes to the engine');
-  assert.equal(goalCount(db), goals, 'nothing written');
-  assert.equal(receiptCount(db), 0);
+  assert.equal(await goalCount(db), goals, 'nothing written');
+  assert.equal(await receiptCount(db), 0);
 });
 
 test('AC2 the decide endpoint rejects a bad decision, an unknown message and a message without a proposal', async t => {
   const { ctx, first } = await proposed(t);
   await assert.rejects(decide(ctx, first.thread, first.message.id, 'maybe'), e => e.status === 400);
   await assert.rejects(decide(ctx, first.thread, 'm999999', 'confirm'), e => e.status === 404);
-  const owner = ctx.db.prepare("SELECT id FROM messages WHERE conversation_key = ? AND role = 'me'").get(first.thread.key).id;
+  const owner = (await ctx.db.prepare("SELECT id FROM messages WHERE conversation_key = ? AND role = 'me'").get(first.thread.key)).id;
   await assert.rejects(decide(ctx, first.thread, 'm' + owner, 'confirm'), e => e.status === 404);
 });
 
@@ -269,10 +269,10 @@ test('AC3 confirming an older proposal message is stale: nothing written, a shor
   fake.push([{ text: 'Let me check the goal again before proposing it.' }]);
   const out = await decide(ctx, first.thread, first.message.id, 'confirm');
   assert.equal(fake.calls.length, before + 1, 'the engine was called once for the stale turn');
-  assert.equal(goalCount(db), goals, 'nothing written');
-  assert.equal(receiptCount(db), 0);
+  assert.equal(await goalCount(db), goals, 'nothing written');
+  assert.equal(await receiptCount(db), 0);
   assert.match(firstParagraph(out.message.text), /out of date/i);
-  assert.equal(storedProvenance(db, first.message.id).pendingAction.resolved.status, 'stale');
+  assert.equal((await storedProvenance(db, first.message.id)).pendingAction.resolved.status, 'stale');
 });
 
 test('AC3 a proposal whose target row changed is stale: the direct change stays and no receipt is written', async t => {
@@ -283,16 +283,16 @@ test('AC3 a proposal whose target row changed is stale: the direct change stays 
   assert.ok(pending, 'the edit proposal is stored');
   assert.equal(pending.operation, 'edit');
   assert.deepEqual(pending.args, edit);
-  db.prepare("UPDATE goals SET def = json_set(def, '$.target', 6000) WHERE id = 'education-note'").run();
+  await db.prepare("UPDATE goals SET def = json_set(def, '$.target', 6000) WHERE id = 'education-note'").run();
   const before = fake.calls.length;
   fake.push([{ text: 'The goal changed since my proposal, so I will check it again.' }]);
   const out = await ask({ ...ctx, body: { key, text: 'yeah' } });
   assert.equal(fake.calls.length, before + 1, 'the engine was called once');
-  assert.equal(JSON.parse(db.prepare("SELECT def FROM goals WHERE id = 'education-note'").get().def).target, 6000, 'the direct change stays');
-  assert.equal(receiptCount(db), 0, 'no receipt from the proposal');
+  assert.equal(JSON.parse((await db.prepare("SELECT def FROM goals WHERE id = 'education-note'").get()).def).target, 6000, 'the direct change stays');
+  assert.equal(await receiptCount(db), 0, 'no receipt from the proposal');
   assert.match(firstParagraph(out.message.text), /out of date/i);
   assert.equal(out.message.provenance.confirmedProposal, undefined);
-  assert.equal(storedProvenance(db, first.message.id).pendingAction.resolved.status, 'stale');
+  assert.equal((await storedProvenance(db, first.message.id)).pendingAction.resolved.status, 'stale');
 });
 
 /* ---------- AC4: scopes and evidence ---------- */
@@ -304,33 +304,33 @@ test('AC4 a propose call outside the allowed scopes fails and stores no pendingA
   assert.equal(call.isError, true, 'the propose call failed');
   assert.doesNotMatch(call.result.error, /not a known argument/, 'refused for its scope, not for an unknown propose argument');
   assert.equal(first.message.provenance.pendingAction, undefined, 'no pendingAction stored');
-  assert.equal(goalCount(db), goals);
-  assert.equal(receiptCount(db), 0);
+  assert.equal(await goalCount(db), goals);
+  assert.equal(await receiptCount(db), 0);
 });
 
 test('AC4 the evidence guard still runs when a stored proposal executes', async t => {
   const s = await setup(t);
   const { db } = s;
   const invented = { title: 'Synthetic invented goal', horizon: 'now', target: 97361 };
-  assert.equal(db.prepare('SELECT count(*) AS n FROM figures WHERE v = 97361').get().n, 0, 'the target is not a stored figure');
+  assert.equal((await db.prepare('SELECT count(*) AS n FROM figures WHERE v = 97361').get()).n, 0, 'the target is not a stored figure');
   const fake = scriptedEngine([[
     { toolCalls: [{ name: 'update_goal', args: { operation: 'create', ...invented, propose: true } }] },
     { text: 'I can create this goal. Confirm below, or reply yes.' },
   ]]);
   const ctx = context(s, fake.engine);
-  const goals = goalCount(db);
+  const goals = await goalCount(db);
   const first = await threadCreate({ ...ctx, body: { text: 'Propose a synthetic invented goal.' } });
   assert.ok(first.message.provenance.pendingAction, 'the proposal is stored');
-  assert.equal(goalCount(db), goals);
+  assert.equal(await goalCount(db), goals);
   const before = fake.calls.length;
   fake.push([{ text: 'I could not save that goal without a stated target.' }]);
   const out = await ask({ ...ctx, body: { key: first.thread.key, text: 'yeah' } });
   assert.equal(fake.calls.length, before + 1, 'the refused execution goes back to the engine');
-  assert.equal(goalCount(db), goals, 'no goal written');
-  assert.equal(goalsTitled(db, invented.title).length, 0);
-  assert.equal(receiptCount(db), 0);
+  assert.equal(await goalCount(db), goals, 'no goal written');
+  assert.equal((await goalsTitled(db, invented.title)).length, 0);
+  assert.equal(await receiptCount(db), 0);
   assert.match(firstParagraph(out.message.text), /target/i, 'the reply gives the tool reason it was not saved');
-  assert.equal(storedProvenance(db, first.message.id).pendingAction.resolved.status, 'stale');
+  assert.equal((await storedProvenance(db, first.message.id)).pendingAction.resolved.status, 'stale');
 });
 
 test('AC4 proposalTools refuses a proposal without onProposal and leaves MCP schemas untouched', async t => {
@@ -342,12 +342,12 @@ test('AC4 proposalTools refuses a proposal without onProposal and leaves MCP sch
   assert.deepEqual(goal.inputSchema.properties.propose, { type: 'boolean' });
   const read = wrapped.find(x => x.name === 'goals');
   assert.equal(read.inputSchema.properties.propose, undefined, 'read tools gain no propose argument');
-  const goals = goalCount(db);
+  const goals = await goalCount(db);
   await assert.rejects(
     goal.handler({ operation: 'create', ...args, propose: true }, { db, now, actorId: 'demo', conversationKey: 'ask:0123456789ab' }),
     e => e.name === 'ToolError');
-  assert.equal(goalCount(db), goals, 'nothing written');
-  assert.equal(receiptCount(db), 0);
+  assert.equal(await goalCount(db), goals, 'nothing written');
+  assert.equal(await receiptCount(db), 0);
   assert.equal(getTool('update_goal').inputSchema.properties.propose, undefined, 'the MCP schema has no propose');
   assert.equal(tools.find(x => x.name === 'update_goal').inputSchema.properties.propose, undefined);
 });
@@ -381,42 +381,42 @@ test('AC2 "yeah, make it $5,000" goes to the engine and never runs the stored $4
   fake.push([{ text: 'Tell me the date for the changed goal.' }]);
   const reply = await ask({ ...ctx, body: { key, text: 'yeah, make it $5,000' } });
   assert.equal(fake.calls.length, before + 1, 'the engine answered');
-  assert.equal(goalCount(db), goals, 'no goal written');
-  assert.equal(receiptCount(db), 0);
+  assert.equal(await goalCount(db), goals, 'no goal written');
+  assert.equal(await receiptCount(db), 0);
   assert.equal(reply.message.provenance.confirmedProposal, undefined);
-  assert.equal(storedProvenance(db, first.message.id).pendingAction.resolved, undefined);
+  assert.equal((await storedProvenance(db, first.message.id)).pendingAction.resolved, undefined);
 });
 
 test('AC4 a proposal never sources its own date: an invented targetDate is refused on confirm', async t => {
   const s = await setup(t);
   const { db } = s;
-  storedGoal(db);
+  await storedGoal(db);
   const invented = { title: 'Synthetic dated goal', horizon: 'now', target: 4000, targetDate: '2028-03-17', track: null };
   const fake = scriptedEngine([proposeTurn(invented, 'Create a goal for $4,000 by 2028-03-17? Confirm below, or reply yes.')]);
   const ctx = context(s, fake.engine);
-  const goals = goalCount(db);
+  const goals = await goalCount(db);
   const first = await threadCreate({ ...ctx, body: { text: 'Propose a dated goal from the note.' } });
   const call = first.message.provenance.tools.find(r => r.name === 'update_goal');
   assert.ok(call && !call.isError);
   assert.ok(!(first.message.provenance.literals ?? []).some(l => l.text.includes('2028')), 'the proposal does not ground its own date');
   fake.push([{ text: 'I could not save that date.' }]);
   await ask({ ...ctx, body: { key: first.thread.key, text: 'yeah' } });
-  assert.equal(goalCount(db), goals, 'no goal written');
-  assert.equal(goalsTitled(db, invented.title).length, 0);
-  assert.equal(receiptCount(db), 0);
+  assert.equal(await goalCount(db), goals, 'no goal written');
+  assert.equal((await goalsTitled(db, invented.title)).length, 0);
+  assert.equal(await receiptCount(db), 0);
 });
 
 test('AC3 a proposal is stale when the goal note it took a value from changes', async t => {
   const { db, fake, ctx, first, key } = await proposed(t, { input: { ...args, title: 'Second synthetic goal' } });
   assert.ok(first.message.provenance.pendingAction);
-  db.prepare("UPDATE goals SET def = json_set(def, '$.note', 'Each parent contributes $5,000 in December, due 2026-12-31.') WHERE id = 'education-note'").run();
-  const goals = goalCount(db);
+  await db.prepare("UPDATE goals SET def = json_set(def, '$.note', 'Each parent contributes $5,000 in December, due 2026-12-31.') WHERE id = 'education-note'").run();
+  const goals = await goalCount(db);
   fake.push([{ text: 'The note changed, so I will check it again.' }]);
   const out = await ask({ ...ctx, body: { key, text: 'yeah' } });
-  assert.equal(goalCount(db), goals, 'nothing written');
-  assert.equal(receiptCount(db), 0);
+  assert.equal(await goalCount(db), goals, 'nothing written');
+  assert.equal(await receiptCount(db), 0);
   assert.match(firstParagraph(out.message.text), /out of date/i);
-  assert.equal(storedProvenance(db, first.message.id).pendingAction.resolved.status, 'stale');
+  assert.equal((await storedProvenance(db, first.message.id)).pendingAction.resolved.status, 'stale');
 });
 
 test('AC1 the card shows no model-supplied amount or date', async () => {
@@ -434,7 +434,7 @@ test('AC1 the card shows no model-supplied amount or date', async () => {
 test('an incomplete recommendation answer proposal preserves the confirmation and refusal note', async t => {
   const s = await setup(t);
   const def = { id: 'synthetic-questions', title: 'Synthetic coverage', question: { keys: ['benefits.hsaCoverage', 'business.cashBasis'], primary: true } };
-  s.db.prepare("INSERT INTO recs (id, def, status, updated_at) VALUES (?, ?, 'waiting', ?)").run(def.id, JSON.stringify(def), now);
+  await s.db.prepare("INSERT INTO recs (id, def, status, updated_at) VALUES (?, ?, 'waiting', ?)").run(def.id, JSON.stringify(def), now);
   const fake = scriptedEngine([[
     { toolCalls: [{ name: 'answer', args: { operation: 'rec_questions', recId: def.id, answers: [{ key: 'benefits.hsaCoverage', value: 'family' }], evidence: 'family', propose: true } }] },
     { text: 'Record family coverage?' },
@@ -443,10 +443,10 @@ test('an incomplete recommendation answer proposal preserves the confirmation an
   const first = await threadCreate({ ...ctx, body: { text: 'We have family coverage.' } });
   assert.equal(first.message.provenance.pendingAction.operation, 'rec_questions');
   const result = await decide(ctx, first.thread, first.message.id, 'confirm');
-  assert.equal(lastOwnerText(s.db, first.thread.key), 'Confirmed');
+  assert.equal(await lastOwnerText(s.db, first.thread.key), 'Confirmed');
   assert.match(plain(result.message.text), /That change was not saved/);
   assert.ok(JSON.stringify(fake.calls.at(-1)).includes('answer each question on this recommendation'));
-  assert.equal(receiptCount(s.db), 0);
+  assert.equal(await receiptCount(s.db), 0);
 });
 
 
@@ -461,7 +461,7 @@ test('INF1 the entity proposal card names each business, tax type, person and fi
       { name: 'Former partnership', type: 'partnership', owner: 'spouse', status: 'final_year', finalYear: 2026 },
     ] },
   };
-  const html = chat.pendingActionHtml({ id: 'm19', role: 'fathom', provenance: { pendingAction: { ...pending, ...describedFields(describeProposal(db, pending)) } } });
+  const html = chat.pendingActionHtml({ id: 'm19', role: 'fathom', provenance: { pendingAction: { ...pending, ...describedFields(await describeProposal(db, pending)) } } });
   assert.match(html, /Example &lt;Studio&gt;/);
   assert.match(html, /S corp/);
   assert.match(html, /single-member LLC.*Schedule C/i);

@@ -23,10 +23,10 @@ async function ok(resPromise) {
 
 async function readDb(file, fn) {
   const db = await openStore(file);
-  try { return await fn(db); } finally { db.close(); }
+  try { return await fn(db); } finally { await db.close(); }
 }
 
-test('cap validation rejects non-numbers, negatives, over 10000 and NaN, and accepts the bounds', T, () => withServer({ env: FAKE }, async s => {
+test('cap validation rejects non-numbers, negatives, over 10000 and NaN, and accepts the bounds', T, async () => withServer({ env: FAKE }, async s => {
   const bad = [{ usd: '5' }, { usd: -1 }, { usd: -0.01 }, { usd: 10000.01 }, { usd: 'NaN' }, { usd: null }, { usd: true }, {}, { usd: [5] }];
   for (const body of bad) {
     const r = await postJson(s.baseUrl, '/api/engine/cap', body);
@@ -52,7 +52,7 @@ test('the cap is rounded to cents, persisted across a restart, and drives the bu
   } finally {
     await s.stop();
   }
-  const setting = await readDb(s.dbFile, db => JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'cap'").get().value));
+  const setting = await readDb(s.dbFile, async db => JSON.parse((await db.prepare("SELECT value FROM settings WHERE key = 'cap'").get()).value));
   assert.deepEqual(setting, { usd: 12.35 });
   await withServer({ dataDir: s.dataDir, env: FAKE }, async s2 => {
     const sc = await getScenario(s2.baseUrl);
@@ -63,15 +63,15 @@ test('the cap is rounded to cents, persisted across a restart, and drives the bu
   });
 });
 
-test('the scenario ledger lists the latest 8 spend rows without prompt or token fields', T, () => withServer({ env: FAKE }, async s => {
+test('the scenario ledger lists the latest 8 spend rows without prompt or token fields', T, async () => withServer({ env: FAKE }, async s => {
   const first = await getScenario(s.baseUrl);
   assert.ok(Array.isArray(first.engine.ledger));
   assert.ok(first.engine.ledger.length > 0, 'the demo seed has spend');
   const month = first.meta.clock.slice(0, 7);
-  await readDb(s.dbFile, db => {
+  await readDb(s.dbFile, async db => {
     const insert = db.prepare("INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens) VALUES (?, ?, 'job', ?, 'fake', ?)");
     for (let i = 0; i < 10; i++) {
-      insert.run(`${first.meta.clock}T00:00:0${i}.000Z`, month, 0.11 + i / 100, JSON.stringify({ input_tokens: 5, prompt: 'SYNTHETIC-PROMPT-TEXT' }));
+      await insert.run(`${first.meta.clock}T00:00:0${i}.000Z`, month, 0.11 + i / 100, JSON.stringify({ input_tokens: 5, prompt: 'SYNTHETIC-PROMPT-TEXT' }));
     }
   });
   await ok(postJson(s.baseUrl, '/api/threads', { text: LEAVE }));
@@ -85,7 +85,7 @@ test('the scenario ledger lists the latest 8 spend rows without prompt or token 
   assert.ok(!JSON.stringify(sc.engine.ledger).includes('tokens'));
 }));
 
-test('each listed ledger row has a provenance figure for its cost', T, () => withServer({ env: FAKE }, async s => {
+test('each listed ledger row has a provenance figure for its cost', T, async () => withServer({ env: FAKE }, async s => {
   await ok(postJson(s.baseUrl, '/api/threads', { text: LEAVE }));
   const sc = await getScenario(s.baseUrl);
   assert.ok(sc.engine.ledger.length > 0);

@@ -11,6 +11,7 @@ import { ageAtYearEnd } from '../../shared/ages.mjs';
 import { householdDataThrough } from '../../ingest/freshness.mjs';
 import { checkAssumption } from '../assumption-evidence.mjs';
 import { makeFigure, uniqueGaps, bounded } from './balances.mjs';
+import { mapSeries } from '../../shared/series.mjs';
 
 const yearParam = { type: 'integer', enum: [2026] };
 const assumption = { type: 'object', properties: { value: { type: 'number' }, source: { type: 'string', enum: ['owner','preference','fact','default'] }, evidence: { type: 'string' }, factKey: { type: 'string' }, preferenceId: { type: 'string' }, note: { type: 'string', maxLength: 200 } }, required: ['value','source'], additionalProperties: false };
@@ -22,21 +23,21 @@ const retirementRef = pack('advanced-retirement','contribution-limits-2026');
 const hsaRef = pack('w2-benefits','hsa-limits');
 const stateRef = pack('virginia-resident','virginia529-deduction');
 
-function storedRows(db) {
-  return new Map(db.prepare('SELECT g.*,s.as_of AS src_as_of FROM figures g LEFT JOIN sources s ON s.id=g.src').all().map(r => [r.key, { ...r, locator: parseJson(r.locator, {}) || {} }]));
+async function storedRows(db) {
+  return new Map((await db.prepare('SELECT g.*,s.as_of AS src_as_of FROM figures g LEFT JOIN sources s ON s.id=g.src').all()).map(r => [r.key, { ...r, locator: parseJson(r.locator, {}) || {} }]));
 }
-function factsOf(db) {
-  return Object.fromEntries(db.prepare('SELECT key,value,src,confirmed FROM facts').all().map(r => [r.key, { ...r, value: parseJson(r.value, null) }]));
+async function factsOf(db) {
+  return Object.fromEntries((await db.prepare('SELECT key,value,src,confirmed FROM facts').all()).map(r => [r.key, { ...r, value: parseJson(r.value, null) }]));
 }
-function compute(db, clock) {
-  const data = loadPlanningData(db, clock), stored = factsOf(db);
+async function compute(db, clock) {
+  const data = await loadPlanningData(db, clock), stored = await factsOf(db);
   const values = Object.fromEntries(Object.entries(stored).map(([k,r]) => [k,r.value]));
   const entities = resolveEntities(data, values);
   const facts = mergeFacts(stored, deriveFacts(data, { entities })).values;
   const out = computeFigures(data, facts, { clock, entities, owner: ownerFactsOf(stored) });
   if (out.tax) {
     const factDates = Object.values(stored).map(r => r.as_of).filter(d => typeof d === 'string' && d <= clock);
-    out.tax.asOf = [householdDataThrough(db,clock), ...factDates].filter(Boolean).sort().at(-1) || null;
+    out.tax.asOf = [await householdDataThrough(db,clock), ...factDates].filter(Boolean).sort().at(-1) || null;
     out.tax.sources = [['pnl_lines',data.pnl.map(r => r.id)],['documents',data.documents.map(r => r.id)],['facts',Object.keys(stored)]].map(([table,ids]) => ({ table, ids: ids.slice(0,50), count: ids.length }));
   }
   return out;
@@ -53,8 +54,8 @@ function collectGaps(value) {
   return Object.values(value).flatMap(collectGaps);
 }
 
-function estimate(args, ctx) {
-  const clock = clockOf(ctx), year = args.year || 2026, rows = storedRows(ctx.db), refArgs = { operation: 'estimate', ...args };
+async function estimate(args, ctx) {
+  const clock = await clockOf(ctx), year = args.year || 2026, rows = await storedRows(ctx.db), refArgs = { operation: 'estimate', ...args };
   const make = (path,value,label,asOf,provenance,gaps = [],unit = 'usd',kind = 'm') => makeFigure('tax', refArgs, path,value,unit,label,asOf,provenance,gaps,kind);
   const stored = (key,path,label) => {
     const row = rows.get(key);
@@ -75,12 +76,12 @@ function estimate(args, ctx) {
     out[part].remaining = combine(`${part}.remaining`,[out[part].projected,out[part].paid,out[part].withheld],'max(projected - paid - withheld, zero)',(a,b,c) => Math.max(0,a-b-c),`${part} tax remaining`);
     out.safeHarbor[part].paid = combine(`safeHarbor.${part}.paid`,[out[part].paid,out[part].withheld],'paid + withheld',(a,b) => a+b,'Safe harbor payments and withholding');
   }
-  const due = ctx.db.prepare("SELECT date FROM deadlines WHERE date>=? AND date<=? AND (rec_id IN ('fed-q4-estimate','va-q4-estimate') OR lower(title) LIKE '%estimated tax%' OR lower(label) LIKE '%estimated tax%') ORDER BY date LIMIT 1").get(clock,`${year+1}-04-15`);
+  const due = await ctx.db.prepare("SELECT date FROM deadlines WHERE date>=? AND date<=? AND (rec_id IN ('fed-q4-estimate','va-q4-estimate') OR lower(title) LIKE '%estimated tax%' OR lower(label) LIKE '%estimated tax%') ORDER BY date LIMIT 1").get(clock,`${year+1}-04-15`);
   out.safeHarbor.nextDueDate = make('safeHarbor.nextDueDate',due?.date || null,'Next estimated tax due date',rows.get('tax.fed.proj')?.locator.computedOn || null,
     { calc: 'taxDeadlines', sources: [{ table: 'deadlines', ids: due ? [due.date] : [], count: due ? 1 : 0 }] },due ? [] : [missing('No next estimated tax deadline is stored.')],'date');
 
   let computed;
-  const taxRun = () => (computed ??= compute(ctx.db,clock));
+  const taxRun = async () => (computed ??= await compute(ctx.db,clock));
   const taxable = rows.get('tax.fed.taxable'), plan = rows.get('tax.fed.proj');
   const filing = plan?.locator.parts?.filingStatus;
   const valid = current(taxable,year,clock) && !taxable.unavailable_reason && Object.hasOwn(TAX_2026.federal.ceilings,filing);
@@ -98,13 +99,13 @@ function estimate(args, ctx) {
   out.marginal.capitalGains = make('marginal.capitalGains',valid ? rate(taxable.v,gainsCeilings[filing],[0,0.15,0.20]) : null,'Long term capital gains marginal rate',valid ? taxable.locator.computedOn : null,
     { calc: 'capitalGainsBracket', formula: 'long term rate at current taxable income; excludes net investment income tax and special gains', inputs: valid ? [{ value: taxable.v, unit: 'usd', label: 'Federal taxable income' }] : [],
       lawRefs: [{ ...LAW_REFS.federal, section: '4.03 maximum capital gains rate' }], packRefs: [pack('account-tax-treatment','basis-and-capital-gains')] },valid ? [] : [missing('Current taxable income and filing status are needed.')],'ratio');
-  if (args.whatIf) out.whatIf = whatIf(args.whatIf,ctx,taxRun(),make);
+  if (args.whatIf) out.whatIf = await whatIf(args.whatIf,ctx,await taxRun(),make);
   out.gaps = uniqueGaps(collectGaps(out));
   return out;
 }
 
-function whatIf(args,ctx,computed,make) {
-  const assumptions = Object.entries(args).filter(([key]) => key !== 'incomeType').map(([name,value]) => checkAssumption(value,{ name, unit: 'usd', min: 0, max: Number.MAX_SAFE_INTEGER / 100, path: `whatIf.${name}` },ctx));
+async function whatIf(args,ctx,computed,make) {
+  const assumptions = await mapSeries(Object.entries(args).filter(([key]) => key !== 'incomeType'), async ([name,value]) => await checkAssumption(value,{ name, unit: 'usd', min: 0, max: Number.MAX_SAFE_INTEGER / 100, path: `whatIf.${name}` },ctx));
   const parts = computed.tax?.parts, before = computed.tax?.result;
   const changed = parts && structuredClone(parts);
   let gap = !before ? missing(`Household tax inputs are unavailable${computed.info.blocked.length ? ': ' + computed.info.blocked.join(', ') : '.'}`) : null;
@@ -168,9 +169,9 @@ function contributionLimit(type,person,facts,row,year) {
   return null;
 }
 
-function room(args, ctx) {
-  const clock = clockOf(ctx), year = args.year || 2026, refArgs = { operation: 'room', ...args }, stored = storedRows(ctx.db);
-  const facts = Object.fromEntries(Object.entries(factsOf(ctx.db)).map(([k,r]) => [k,r.value]));
+async function room(args, ctx) {
+  const clock = await clockOf(ctx), year = args.year || 2026, refArgs = { operation: 'room', ...args }, stored = await storedRows(ctx.db);
+  const facts = Object.fromEntries(Object.entries(await factsOf(ctx.db)).map(([k,r]) => [k,r.value]));
   const people = args.person && args.person !== 'both' ? [args.person] : ['owner','spouse'];
   const rows = [];
   for (const type of args.types || TYPES) for (const person of people) {
@@ -222,7 +223,7 @@ function room(args, ctx) {
 
 export const operations = [
   { tool: 'tax', name: 'estimate', scope: 'read', summary: 'Stored tax and safe harbor projections, marginal rates and sourced income or deduction what-ifs.', route: 'Tax owed, safe harbor, marginal rate, tax what-if', routes: [], referenceable: true, params: { year: yearParam,
-    whatIf: { type: 'object', properties: { extraIncome: assumption, extraDeduction: { ...assumption, description: 'Additional federal itemized deduction; does not reduce AGI or change state itemized deductions.' }, incomeType: { type: 'string', enum: ['business','wages','other'], description: 'business: the single self-employment line, else the sole business. wages: a single wage line. other: ordinary income without QBI or self-employment tax.' } }, additionalProperties: false } }, required: [], handler: (args,ctx) => bounded(estimate(args,ctx)) },
+    whatIf: { type: 'object', properties: { extraIncome: assumption, extraDeduction: { ...assumption, description: 'Additional federal itemized deduction; does not reduce AGI or change state itemized deductions.' }, incomeType: { type: 'string', enum: ['business','wages','other'], description: 'business: the single self-employment line, else the sole business. wages: a single wage line. other: ordinary income without QBI or self-employment tax.' } }, additionalProperties: false } }, required: [], handler: async (args,ctx) => bounded(await estimate(args,ctx)) },
   { tool: 'tax', name: 'room', scope: 'read', summary: 'Contribution limits and recorded remaining room; reports missing payroll or eligibility inputs.', route: 'Contribution room and deadlines', routes: [], referenceable: true,
-    params: { person: { type: 'string', enum: ['owner','spouse','both'] }, types: { type: 'array', items: { type: 'string', enum: TYPES }, maxItems: 9 }, year: yearParam }, required: [], handler: (args,ctx) => bounded(room(args,ctx)) },
+    params: { person: { type: 'string', enum: ['owner','spouse','both'] }, types: { type: 'array', items: { type: 'string', enum: TYPES }, maxItems: 9 }, year: yearParam }, required: [], handler: async (args,ctx) => bounded(await room(args,ctx)) },
 ];

@@ -42,14 +42,14 @@ async function fails(resPromise, status) {
 
 async function readDb(file, fn) {
   const db = await openStore(file);
-  try { return await fn(db); } finally { db.close(); }
+  try { return await fn(db); } finally { await db.close(); }
 }
 
 // A real store with data: facts, a conversation with a message, and the onboarding setting.
 // Recs in a real-store scenario that the planner does not own. The server's startup tick may run
 // the nightly plan job, so a real store can carry planner recs; it never carries seeded ones.
 async function nonPlannerRecs(file, sc) {
-  const planned = await readDb(file, db => db.prepare('SELECT rec_id FROM planner_recs').all().map(r => r.rec_id));
+  const planned = await readDb(file, async db => (await db.prepare('SELECT rec_id FROM planner_recs').all()).map(r => r.rec_id));
   return sc.recs.filter(r => !planned.includes(r.id)).map(r => r.id);
 }
 
@@ -57,15 +57,15 @@ async function populatedRealStore() {
   const dataDir = await tempDir();
   await withAuthenticatedServer({ dataDir, env: { FATHOM_DEMO: '0' } }, async () => {});
   // MT-03: the store is the original household's, under households/<id>/.
-  const file = servedStore(dataDir).file;
-  await readDb(file, db => {
-    db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
+  const file = (await servedStore(dataDir)).file;
+  await readDb(file, async db => {
+    await db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
                 VALUES ('household.dependents', '2', 'you', '2026-11-01', 1, NULL, NULL, NULL, '2026-11-01T09:00:00Z')`).run();
-    db.prepare('INSERT OR IGNORE INTO conversations (key, created_at, last_at) VALUES (?, ?, ?)')
+    await db.prepare('INSERT OR IGNORE INTO conversations (key, created_at, last_at) VALUES (?, ?, ?)')
       .run(STORE_THREAD, '2026-11-01T09:00:00Z', '2026-11-01T09:00:00Z');
-    db.prepare(`INSERT INTO messages (conversation_key, role, text, refs, notice, ts)
+    await db.prepare(`INSERT INTO messages (conversation_key, role, text, refs, notice, ts)
                 VALUES (?, 'me', '<p>Synthetic note for the store test.</p>', '[]', 0, '2026-11-01T09:00:00Z')`).run(STORE_THREAD);
-    setSetting(db, 'onboarding', { done: true, step: 6 });
+    await setSetting(db, 'onboarding', { done: true, step: 6 });
   });
   return { dataDir, file };
 }
@@ -91,8 +91,8 @@ describe('rec actions', () => {
     } finally {
       await s.stop();
     }
-    const events = await readDb(s.dbFile, db =>
-      db.prepare("SELECT action, from_status, to_status, actor FROM rec_events WHERE rec_id = 'deferral' AND actor = 'ui' ORDER BY id").all().map(r => ({ ...r })));
+    const events = await readDb(s.dbFile, async db =>
+      (await db.prepare("SELECT action, from_status, to_status, actor FROM rec_events WHERE rec_id = 'deferral' AND actor = 'ui' ORDER BY id").all()).map(r => ({ ...r })));
     assert.deepEqual(events.map(e => [e.action, e.to_status]), steps.map(([a, , w]) => [a, w]));
     assert.equal(events[0].from_status, 'proposed');
     for (let i = 1; i < events.length; i++) assert.equal(events[i].from_status, events[i - 1].to_status);
@@ -127,7 +127,7 @@ describe('rec actions', () => {
     });
   });
 
-  test('bad action 400, unknown rec 404, hidden rec 404', T, () => withServer({}, async s => {
+  test('bad action 400, unknown rec 404, hidden rec 404', T, async () => withServer({}, async s => {
     await fails(act(s, 'deferral', 'explode'), 400);
     await fails(act(s, 'deferral', 'accept'), 400);
     await fails(s.postJson('/api/recs/deferral/action', {}), 400);
@@ -178,7 +178,7 @@ describe('war game, packs and engine', () => {
     });
   });
 
-  test('pack toggle turns a hidden rec into proposed and back', T, () => withServer({}, async s => {
+  test('pack toggle turns a hidden rec into proposed and back', T, async () => withServer({}, async s => {
     const on = await ok(s.postJson('/api/packs/giving/toggle', {}));
     assert.equal(on.status, 'active');
     assert.equal(on.scenario.live.packs.giving.active, true);
@@ -198,7 +198,7 @@ describe('war game, packs and engine', () => {
     await fails(s.postJson('/api/packs/no-such-pack/toggle', {}), 404);
   }));
 
-  test('what-if marks the pack exploring and appends the live conversation once', T, () => withServer({}, async s => {
+  test('what-if marks the pack exploring and appends the live conversation once', T, async () => withServer({}, async s => {
     const p = demo.packs.find(x => x.id === 'contractor');
     const { scenario } = await ok(s.postJson('/api/packs/contractor/whatif', {}));
     assert.equal(scenario.live.packs.contractor.exploring, true);
@@ -217,7 +217,7 @@ describe('war game, packs and engine', () => {
     await fails(s.postJson('/api/packs/no-such-pack/whatif', {}), 404);
   }));
 
-  test('what-if with the engine off appends a single notice and does not mark done', T, () => withServer({}, async s => {
+  test('what-if with the engine off appends a single notice and does not mark done', T, async () => withServer({}, async s => {
     await ok(s.postJson('/api/engine', { on: false }));
     let { scenario } = await ok(s.postJson('/api/packs/rental/whatif', {}));
     ({ scenario } = await ok(s.postJson('/api/packs/rental/whatif', {})));
@@ -297,7 +297,7 @@ describe('ask', () => {
     });
   });
 
-  test('a rec question by index answers in a new thread asked from the rec', T, () => withServer({}, async s => {
+  test('a rec question by index answers in a new thread asked from the rec', T, async () => withServer({}, async s => {
     const rec = demo.recs.find(x => x.id === 'deferral');
     const r = await ok(newThread(s, { recId: 'deferral', questionId: 0 }));
     assert.equal(r.thread.recId, 'deferral');
@@ -310,7 +310,7 @@ describe('ask', () => {
     assert.ok(conv[0].text.includes(rec.qa[0].q));
   }));
 
-  test('free text matching a question answers with its refs, other free text answers from the summary', T, () => withServer({}, async s => {
+  test('free text matching a question answers with its refs, other free text answers from the summary', T, async () => withServer({}, async s => {
     const q = suggested('screwing');
     const hit = await ok(newThread(s, { text: '  ' + q.q.toLowerCase() + ' ' }));
     const key = hit.thread.key;
@@ -327,7 +327,7 @@ describe('ask', () => {
     assert.ok(conv[2].text.includes('How tall is the office ficus?'));
   }));
 
-  test('ask validates its body', T, () => withServer({}, async s => {
+  test('ask validates its body', T, async () => withServer({}, async s => {
     const { thread } = await ok(newThread(s));
     const key = thread.key;
     await fails(s.postJson('/api/ask', {}), 400);
@@ -350,7 +350,7 @@ describe('ask', () => {
     await ok(s.postJson('/api/ask', { key, text: 'hello' }));
   }));
 
-  test('free text is HTML escaped and cannot inject tokens', T, () => withServer({}, async s => {
+  test('free text is HTML escaped and cannot inject tokens', T, async () => withServer({}, async s => {
     const first = await ok(newThread(s, { text: '<img src=x onerror=1>' }));
     const r = await ok(s.postJson('/api/ask', { key: first.thread.key, text: 'show {f:anything} and {n:spouse}' }));
     const mine = r.scenario.live.conversations[first.thread.key].filter(m => m.role === 'me').map(m => m.text);
@@ -393,7 +393,7 @@ describe('onboarding and demo reset', () => {
     });
   });
 
-  test('demo reset restores the November store', T, () => withServer({}, async s => {
+  test('demo reset restores the November store', T, async () => withServer({}, async s => {
     const initial = await s.getScenario();
     await ok(act(s, 'deferral', 'complete'));
     await ok(s.postJson('/api/engine', { on: false }));
@@ -446,10 +446,10 @@ describe('store modes', () => {
         assert.ok(sc.live.conversations[STORE_THREAD].some(m => m.text.includes('Synthetic note for the store test.')));
       });
     }
-    await readDb(file, db => {
-      assert.equal(db.prepare("SELECT value FROM facts WHERE key = 'household.dependents'").get().value, '2');
-      assert.equal(db.prepare('SELECT count(*) AS n FROM accounts').get().n, 0);
-      assert.equal(db.prepare('SELECT count(*) AS n FROM files').get().n, 0);
+    await readDb(file, async db => {
+      assert.equal((await db.prepare("SELECT value FROM facts WHERE key = 'household.dependents'").get()).value, '2');
+      assert.equal((await db.prepare('SELECT count(*) AS n FROM accounts').get()).n, 0);
+      assert.equal((await db.prepare('SELECT count(*) AS n FROM files').get()).n, 0);
     });
   });
 
@@ -471,7 +471,7 @@ describe('store modes', () => {
       assert.deepEqual(await dumpStore(file), before);
     });
     const before = await dumpStore(file);
-    const seed = await runCommand('npm', ['run', 'seed:demo', '--', '--household', servedStore(dataDir).householdId], { env: { FATHOM_DATA: dataDir } });
+    const seed = await runCommand('npm', ['run', 'seed:demo', '--', '--household', (await servedStore(dataDir)).householdId], { env: { FATHOM_DATA: dataDir } });
     assert.notEqual(seed.code, 0);
     assert.deepEqual(await dumpStore(file), before);
   });
@@ -479,8 +479,8 @@ describe('store modes', () => {
   test('a store file with no mode setting is treated as real', T2, async () => {
     // A migrated instance (store plus platform.sqlite) whose store carries no mode row.
     const t = await tempInstance({ mode: 'real' });
-    t.db.prepare("DELETE FROM settings WHERE key = 'mode'").run();
-    assert.equal(t.db.prepare("SELECT count(*) AS n FROM settings WHERE key = 'mode'").get().n, 0);
+    await t.db.prepare("DELETE FROM settings WHERE key = 'mode'").run();
+    assert.equal((await t.db.prepare("SELECT count(*) AS n FROM settings WHERE key = 'mode'").get()).n, 0);
     t.close();
     await withAuthenticatedServer({ dataDir: t.dataDir }, async s => {
       const sc = await s.getScenario();

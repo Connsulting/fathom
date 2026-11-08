@@ -396,14 +396,14 @@ test('a reset demo store has one goal of each kind (balance, range, floor, contr
   const config = { clock: demo.meta.clock, dataDir: s.dataDir };
   const household = await s.household(config);
   const ctx = body => ({ db: s.db, config, body, params: {}, household, platform: s.platform });
-  goalCreate(ctx({ title: 'An extra goal that reset removes' }));
+  await goalCreate(ctx({ title: 'An extra goal that reset removes' }));
   await demoReset(ctx({}));
 
   assert.ok(Array.isArray(seed.KIND_GOALS), 'demo/seed.mjs exports KIND_GOALS');
   assert.deepEqual(seed.KIND_GOALS.map(g => g.id), KIND_IDS);
   assert.deepEqual(seed.KIND_GOALS.map(g => g.kind), ['range', 'floor', 'contribution']);
 
-  const sc = buildScenario(s.db, { clock: demo.meta.clock });
+  const sc = await buildScenario(s.db, { clock: demo.meta.clock });
   assert.deepEqual(sc.goals.map(g => g.id), [...demo.goals.map(g => g.id), ...KIND_IDS], 'reset restores the seed goals, then the kind goals');
   const ofKind = k => sc.goals.filter(g => g.kind === k);
   assert.ok(ofKind('balance').some(g => typeof g.target === 'number' && g.track), 'a seed goal with a target is the balance example');
@@ -411,8 +411,8 @@ test('a reset demo store has one goal of each kind (balance, range, floor, contr
     assert.deepEqual(ofKind(kind).map(g => g.id), [id], `exactly one ${kind} goal`);
   }
 
-  const accounts = s.db.prepare('SELECT id, kind FROM accounts').all();
-  const figures = loadFigures(s.db);
+  const accounts = await s.db.prepare('SELECT id, kind FROM accounts').all();
+  const figures = await loadFigures(s.db);
   for (const def of seed.KIND_GOALS) {
     const g = sc.goals.find(x => x.id === def.id);
     assert.equal(g.origin, 'seed', `${def.id} came with the demo`);

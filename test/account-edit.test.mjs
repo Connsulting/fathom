@@ -32,15 +32,15 @@ const withStore = async (fn) => {
   try { await fn(s, await mods()); } finally { s.close(); }
 };
 
-const row = (db, id) => db.prepare('SELECT * FROM accounts WHERE id = ?').get(id);
-const itemsOf = (db, kind, subject) => db.prepare('SELECT * FROM confirm_items WHERE kind = ? AND subject = ? ORDER BY id').all(kind, subject);
+const row = async (db, id) => await db.prepare('SELECT * FROM accounts WHERE id = ?').get(id);
+const itemsOf = async (db, kind, subject) => await db.prepare('SELECT * FROM confirm_items WHERE kind = ? AND subject = ? ORDER BY id').all(kind, subject);
 const scenarioAccount = (res, id) => (res.scenario?.accounts || []).find((a) => a.id === id);
 
 // A manual account inserted directly: no mask, no identity, no confirm item.
-function plainAccount(s, id = 'acct-plain', { owner = 'You', kind = 'cash', name = 'Reserve savings', mask = null, identity = null } = {}) {
-  s.db.prepare('INSERT INTO accounts (id, inst, mask, name, owner, kind, mirror, identity) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+async function plainAccount(s, id = 'acct-plain', { owner = 'You', kind = 'cash', name = 'Reserve savings', mask = null, identity = null } = {}) {
+  await s.db.prepare('INSERT INTO accounts (id, inst, mask, name, owner, kind, mirror, identity) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     .run(id, 'Sample Bank', mask, name, owner, kind, 'manual', identity);
-  s.db.prepare('INSERT INTO transactions (account_id, date, amount, description) VALUES (?, ?, ?, ?)').run(id, '2032-02-20', -25, 'Synthetic posting');
+  await s.db.prepare('INSERT INTO transactions (account_id, date, amount, description) VALUES (?, ?, ?, ?)').run(id, '2032-02-20', -25, 'Synthetic posting');
   return id;
 }
 
@@ -50,10 +50,10 @@ async function fileAccount(s, P, name, { balance = null, amount = '25.00' } = {}
     { date: '2032-02-20', amount, type: 'Checking', inst: INST, account: name, number: '', description: `${name} posting` },
   ]), s.opts(null));
   assert.equal(r.status, 'imported');
-  const acct = s.db.prepare("SELECT * FROM accounts WHERE name = ? AND coalesce(identity, '') NOT LIKE 'simplefin:%'").get(name);
+  const acct = await s.db.prepare("SELECT * FROM accounts WHERE name = ? AND coalesce(identity, '') NOT LIKE 'simplefin:%'").get(name);
   assert.ok(acct, `${name} was imported`);
   assert.equal(acct.mask, null, 'precondition: the file account has no mask');
-  if (balance != null) s.db.prepare('INSERT INTO balances (account_id, date, amount, dedupe_key) VALUES (?, ?, ?, ?)').run(acct.id, '2032-02-29', balance, `synthetic:${acct.id}:feb`);
+  if (balance != null) await s.db.prepare('INSERT INTO balances (account_id, date, amount, dedupe_key) VALUES (?, ?, ?, ?)').run(acct.id, '2032-02-29', balance, `synthetic:${acct.id}:feb`);
   return acct.id;
 }
 
@@ -66,9 +66,9 @@ async function connectedAccount(s, { P, SF }, { sfKey = 'synthetic-edit', mask =
     transactions: [{ date: '2032-02-29', amount: -10, description: 'Bridge posting', externalId: `bridge-${sfKey}` }] }] };
   const r = await P.ingestFile(s.db, textFile(`bridge-${sfKey}.json`, JSON.stringify(doc)), s.opts(null, { parser: SF.parser }));
   assert.equal(r.status, 'imported');
-  s.db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at, backfilled) VALUES (?, ?, 'mapped', ?, ?, 1)").run(sfKey, own, name, NOW);
-  s.db.prepare('INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES (?, ?, ?)').run(sfKey, JSON.stringify({ ...account, maskSure: true, balance, balanceDate: '2032-02-29' }), NOW);
-  assert.equal(row(s.db, own).mirror, 'connected');
+  await s.db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at, backfilled) VALUES (?, ?, 'mapped', ?, ?, 1)").run(sfKey, own, name, NOW);
+  await s.db.prepare('INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES (?, ?, ?)').run(sfKey, JSON.stringify({ ...account, maskSure: true, balance, balanceDate: '2032-02-29' }), NOW);
+  assert.equal((await row(s.db, own)).mirror, 'connected');
   return own;
 }
 
@@ -78,35 +78,35 @@ const askKind = (C, db, id) => C.ask(db, { kind: 'account_kind', subject: id, qu
 /* ---------- AC1: last 4 ---------- */
 
 test('AC1: last 4 refuses anything that is not exactly four digits', () => withStore(async (s, { A }) => {
-  const id = plainAccount(s);
+  const id = await plainAccount(s);
   for (const mask of ['123', '12345', '12ab', 'abcd', '12 34', ' 1234x', null, '', 1234, ['1234'], { mask: '1234' }]) {
     assert.equal(await status(() => A.accountMask(ctx(s, id, { mask }))), 400, `mask ${JSON.stringify(mask)} is refused`);
   }
   assert.equal(await status(() => A.accountMask(ctx(s, id, {}))), 400, 'a missing mask is refused');
-  assert.equal(row(s.db, id).mask, null, 'nothing was stored');
+  assert.equal((await row(s.db, id)).mask, null, 'nothing was stored');
 }));
 
 test('AC1: last 4 refuses an account that already has a mask or a SimpleFIN identity, and an unknown account', () => withStore(async (s, { A }) => {
-  const masked = plainAccount(s, 'acct-masked', { mask: '5555' });
-  const linked = plainAccount(s, 'acct-linked', { identity: 'simplefin:synthetic-linked' });
+  const masked = await plainAccount(s, 'acct-masked', { mask: '5555' });
+  const linked = await plainAccount(s, 'acct-linked', { identity: 'simplefin:synthetic-linked' });
   assert.equal(await status(() => A.accountMask(ctx(s, masked, { mask: '1234' }))), 409);
-  assert.equal(row(s.db, masked).mask, '5555');
+  assert.equal((await row(s.db, masked)).mask, '5555');
   assert.equal(await status(() => A.accountMask(ctx(s, linked, { mask: '1234' }))), 409);
-  assert.equal(row(s.db, linked).mask, null);
+  assert.equal((await row(s.db, linked)).mask, null);
   assert.equal(await status(() => A.accountMask(ctx(s, 'nope', { mask: '1234' }))), 404);
   assert.equal(await status(() => A.accountMask(ctx(s, '', { mask: '1234' }))), 400);
 }));
 
 test('AC1: a good last 4 is stored, the label shows it after the name, and the control is offered only while it can be used', () => withStore(async (s, { A, D }) => {
-  const id = plainAccount(s);
-  const masked = plainAccount(s, 'acct-masked', { mask: '5555' });
-  const linked = plainAccount(s, 'acct-linked', { identity: 'simplefin:synthetic-linked' });
+  const id = await plainAccount(s);
+  const masked = await plainAccount(s, 'acct-masked', { mask: '5555' });
+  const linked = await plainAccount(s, 'acct-linked', { identity: 'simplefin:synthetic-linked' });
   assert.equal(D.accountDetail(ctx(s, id)).account.maskEditable, true);
   assert.equal(D.accountDetail(ctx(s, masked)).account.maskEditable, false);
   assert.equal(D.accountDetail(ctx(s, linked)).account.maskEditable, false);
 
   const res = await A.accountMask(ctx(s, id, { mask: '1234' }));
-  assert.equal(row(s.db, id).mask, '1234');
+  assert.equal((await row(s.db, id)).mask, '1234');
   assert.ok(res.scenario && Array.isArray(res.scenario.accounts), 'the write returns the scenario');
   assert.equal(res.account.id, id);
   assert.equal(res.account.name, 'Reserve savings (1234)');
@@ -116,7 +116,7 @@ test('AC1: a good last 4 is stored, the label shows it after the name, and the c
   assert.equal(d.account.mask, '1234', 'the dialog still has the last 4 as its own field');
   assert.equal(d.account.maskEditable, false, 'once set, last 4 is not offered again');
   assert.equal(await status(() => A.accountMask(ctx(s, id, { mask: '9999' }))), 409, 'a second write is refused');
-  assert.equal(row(s.db, id).mask, '1234');
+  assert.equal((await row(s.db, id)).mask, '1234');
 }));
 
 test('AC1: a stored last 4 lets duplicate detection propose a pair it could not see before', () => withStore(async (s, m) => {
@@ -125,23 +125,23 @@ test('AC1: a stored last 4 lets duplicate detection propose a pair it could not 
   const own = await connectedAccount(s, m, { mask: '4321' });
   const subject = `merge:${file}:${own}`;
   assert.deepEqual(M.detectAccountPairs(s.db).filter((p) => p.candidateId === file && p.ownId === own), [], 'precondition: no pair without the mask');
-  assert.equal(itemsOf(s.db, 'account_match', subject).length, 0);
+  assert.equal((await itemsOf(s.db, 'account_match', subject)).length, 0);
 
   await A.accountMask(ctx(s, file, { mask: '4321' }));
   const pairs = M.detectAccountPairs(s.db);
   assert.ok(pairs.some((p) => p.candidateId === file && p.ownId === own), 'the pair is proposed');
-  const items = itemsOf(s.db, 'account_match', subject);
+  const items = await itemsOf(s.db, 'account_match', subject);
   assert.equal(items.length, 1);
   assert.equal(items[0].status, 'pending', 'a Same account? question is waiting');
 }));
 
 test('AC1: Add last 4 returns an undo receipt, and undoing it puts the account back as it was', () => withStore(async (s, { A, D }) => {
-  const id = plainAccount(s);
+  const id = await plainAccount(s);
   const saved = await A.accountMask(ctx(s, id, { mask: '1234' }));
   assert.deepEqual(saved.before, { set: '1234' }, 'the receipt names the last 4 that was stored');
 
   const undone = await A.accountMask(ctx(s, id, { undo: saved.before }));
-  assert.equal(row(s.db, id).mask, null, 'the last 4 is gone');
+  assert.equal((await row(s.db, id)).mask, null, 'the last 4 is gone');
   assert.equal(undone.account.name, 'Reserve savings');
   assert.equal(D.accountDetail(ctx(s, id)).account.maskEditable, true, 'Add last 4 is offered again');
   assert.equal(await status(() => A.accountMask(ctx(s, id, { undo: saved.before }))), 409, 'a second undo is refused');
@@ -153,31 +153,31 @@ test('AC1: undoing a last 4 withdraws the Same account? question it raised', () 
   const own = await connectedAccount(s, m, { mask: '4321' });
   const subject = `merge:${file}:${own}`;
   const saved = await A.accountMask(ctx(s, file, { mask: '4321' }));
-  assert.equal(itemsOf(s.db, 'account_match', subject)[0].status, 'pending');
+  assert.equal((await itemsOf(s.db, 'account_match', subject))[0].status, 'pending');
 
   await A.accountMask(ctx(s, file, { undo: saved.before }));
   assert.deepEqual(M.detectAccountPairs(s.db).filter((p) => p.candidateId === file && p.ownId === own), [], 'no pair without the mask');
-  const [item] = itemsOf(s.db, 'account_match', subject);
+  const [item] = await itemsOf(s.db, 'account_match', subject);
   assert.equal(item.status, 'answered');
   assert.equal(item.answer, 'superseded', 'the question is withdrawn, not left to ask about a pair that is gone');
 }));
 
 test('AC1: a last 4 undo is refused when it is stale, malformed, or later answers build on it', () => withStore(async (s, m) => {
   const { A } = m;
-  const id = plainAccount(s);
+  const id = await plainAccount(s);
   const saved = await A.accountMask(ctx(s, id, { mask: '1234' }));
   for (const bad of [null, {}, { set: '12' }, { set: 1234 }, []]) {
     assert.equal(await status(() => A.accountMask(ctx(s, id, { undo: bad }))), 400, `undo ${JSON.stringify(bad)}`);
   }
   assert.equal(await status(() => A.accountMask(ctx(s, id, { undo: { set: '9999' } }))), 409, 'not the last 4 that was stored');
-  assert.equal(row(s.db, id).mask, '1234', 'a refused undo changes nothing');
+  assert.equal((await row(s.db, id)).mask, '1234', 'a refused undo changes nothing');
 
-  s.db.prepare("INSERT INTO confirm_items (kind, subject, question, options, context, status, answer, created_at) VALUES ('account_match', 'merge:x:y', 'Same account?', '[]', ?, 'answered', 'same', '2032-03-10T12:00:00.000Z')")
+  await s.db.prepare("INSERT INTO confirm_items (kind, subject, question, options, context, status, answer, created_at) VALUES ('account_match', 'merge:x:y', 'Same account?', '[]', ?, 'answered', 'same', '2032-03-10T12:00:00.000Z')")
     .run(JSON.stringify({ candidateId: id, ownId: 'other', repair: true }));
   assert.equal(await status(() => A.accountMask(ctx(s, id, { undo: saved.before }))), 409, 'an answered match for the account makes the last 4 final');
-  assert.equal(row(s.db, id).mask, '1234');
+  assert.equal((await row(s.db, id)).mask, '1234');
 
-  const linked = plainAccount(s, 'acct-linked', { identity: 'simplefin:synthetic-linked', mask: '4444' });
+  const linked = await plainAccount(s, 'acct-linked', { identity: 'simplefin:synthetic-linked', mask: '4444' });
   assert.equal(await status(() => A.accountMask(ctx(s, linked, { undo: { set: '4444' } }))), 409, 'the bridge owns a connected account\'s last 4');
 }));
 
@@ -186,21 +186,21 @@ test('AC1: a last 4 undo is refused when it is stale, malformed, or later answer
 const OWNER_LABEL = { owner: 'You', spouse: 'Your spouse', joint: 'Joint', business: 'Business' };
 
 test('AC2: every owner id is accepted and stored as the confirm label; anything else is refused and changes nothing', () => withStore(async (s, { A, C }) => {
-  const id = plainAccount(s, 'acct-o', { owner: null });
+  const id = await plainAccount(s, 'acct-o', { owner: null });
   askOwner(C, s.db, id);
-  const before = { acct: row(s.db, id), items: itemsOf(s.db, 'account_owner', id) };
+  const before = { acct: await row(s.db, id), items: await itemsOf(s.db, 'account_owner', id) };
   for (const owner of ['nobody', 'You', 'Your spouse', '', null, 1, 'OWNER', 'both']) {
     assert.equal(await status(() => A.accountOwner(ctx(s, id, { owner }))), 400, `owner ${JSON.stringify(owner)} is refused`);
   }
   assert.equal(await status(() => A.accountOwner(ctx(s, id, {}))), 400);
-  assert.deepEqual(row(s.db, id), before.acct, 'a refused write changes no account column');
-  assert.deepEqual(itemsOf(s.db, 'account_owner', id), before.items, 'a refused write changes no confirm item');
+  assert.deepEqual(await row(s.db, id), before.acct, 'a refused write changes no account column');
+  assert.deepEqual(await itemsOf(s.db, 'account_owner', id), before.items, 'a refused write changes no confirm item');
   assert.equal(await status(() => A.accountOwner(ctx(s, 'nope', { owner: 'spouse' }))), 404);
 
   for (const [owner, label] of Object.entries(OWNER_LABEL)) {
     const res = await A.accountOwner(ctx(s, id, { owner }));
-    assert.equal(row(s.db, id).owner, label, `${owner} is stored as ${label}`);
-    const items = itemsOf(s.db, 'account_owner', id);
+    assert.equal((await row(s.db, id)).owner, label, `${owner} is stored as ${label}`);
+    const items = await itemsOf(s.db, 'account_owner', id);
     assert.equal(items.length, 1, 'one confirm item per account');
     assert.equal(items[0].status, 'answered');
     assert.equal(items[0].answer, owner);
@@ -211,20 +211,20 @@ test('AC2: every owner id is accepted and stored as the confirm label; anything 
 }));
 
 test('AC2: every kind id is accepted and stored; anything else is refused and changes nothing', () => withStore(async (s, { A, C }) => {
-  const id = plainAccount(s, 'acct-k', { kind: null });
+  const id = await plainAccount(s, 'acct-k', { kind: null });
   askKind(C, s.db, id);
-  const before = { acct: row(s.db, id), items: itemsOf(s.db, 'account_kind', id) };
+  const before = { acct: await row(s.db, id), items: await itemsOf(s.db, 'account_kind', id) };
   for (const kind of ['crypto', 'manual', 'Checking', 'savings', '', null, 529]) {
     assert.equal(await status(() => A.accountKind(ctx(s, id, { kind }))), 400, `kind ${JSON.stringify(kind)} is refused`);
   }
-  assert.deepEqual(row(s.db, id), before.acct);
-  assert.deepEqual(itemsOf(s.db, 'account_kind', id), before.items);
+  assert.deepEqual(await row(s.db, id), before.acct);
+  assert.deepEqual(await itemsOf(s.db, 'account_kind', id), before.items);
   assert.equal(await status(() => A.accountKind(ctx(s, 'nope', { kind: 'cash' }))), 404);
 
   for (const { id: kind } of C.KIND_OPTIONS) {
     const res = await A.accountKind(ctx(s, id, { kind }));
-    assert.equal(row(s.db, id).kind, kind);
-    const items = itemsOf(s.db, 'account_kind', id);
+    assert.equal((await row(s.db, id)).kind, kind);
+    const items = await itemsOf(s.db, 'account_kind', id);
     assert.equal(items.length, 1);
     assert.equal(items[0].status, 'answered');
     assert.equal(items[0].answer, kind);
@@ -233,22 +233,22 @@ test('AC2: every kind id is accepted and stored; anything else is refused and ch
 }));
 
 test('AC2: an owner edit works from a pending item, an answered item, a final item and no item', () => withStore(async (s, { A, C }) => {
-  const pending = plainAccount(s, 'acct-pending', { owner: null });
+  const pending = await plainAccount(s, 'acct-pending', { owner: null });
   askOwner(C, s.db, pending);
-  const answered = plainAccount(s, 'acct-answered', { owner: null });
+  const answered = await plainAccount(s, 'acct-answered', { owner: null });
   C.answer(s.db, askOwner(C, s.db, answered).id, 'owner', { now: NOW });
-  const final = plainAccount(s, 'acct-final', { owner: null });
+  const final = await plainAccount(s, 'acct-final', { owner: null });
   const finalId = askOwner(C, s.db, final).id;
   C.answer(s.db, finalId, 'owner', { now: NOW });
   askOwner(C, s.db, final);
   assert.equal(C.finalReason(s.db, C.getItem(s.db, finalId)), 'used_since', 'precondition: a later import made the answer final');
-  const none = plainAccount(s, 'acct-none', { owner: 'You' });
-  assert.equal(itemsOf(s.db, 'account_owner', none).length, 0);
+  const none = await plainAccount(s, 'acct-none', { owner: 'You' });
+  assert.equal((await itemsOf(s.db, 'account_owner', none)).length, 0);
 
   for (const id of [pending, answered, final, none]) {
     await A.accountOwner(ctx(s, id, { owner: 'spouse' }));
-    assert.equal(row(s.db, id).owner, 'Your spouse', `${id} took the edit`);
-    const items = itemsOf(s.db, 'account_owner', id);
+    assert.equal((await row(s.db, id)).owner, 'Your spouse', `${id} took the edit`);
+    const items = await itemsOf(s.db, 'account_owner', id);
     assert.equal(items.length, 1, `${id} has one item`);
     assert.equal(items[0].status, 'answered');
     assert.equal(items[0].answer, 'spouse');
@@ -256,7 +256,7 @@ test('AC2: an owner edit works from a pending item, an answered item, a final it
 }));
 
 test('AC2: a later import asking the same question keeps the edited owner and kind', () => withStore(async (s, { A, C }) => {
-  const id = plainAccount(s, 'acct-keep', { owner: null, kind: null });
+  const id = await plainAccount(s, 'acct-keep', { owner: null, kind: null });
   C.answer(s.db, askOwner(C, s.db, id).id, 'owner', { now: NOW });
   C.answer(s.db, askKind(C, s.db, id).id, 'checking', { now: NOW });
   askOwner(C, s.db, id); askKind(C, s.db, id);
@@ -264,115 +264,115 @@ test('AC2: a later import asking the same question keeps the edited owner and ki
   await A.accountKind(ctx(s, id, { kind: 'cash' }));
   askOwner(C, s.db, id);
   askKind(C, s.db, id);
-  assert.equal(row(s.db, id).owner, 'Joint');
-  assert.equal(row(s.db, id).kind, 'cash');
+  assert.equal((await row(s.db, id)).owner, 'Joint');
+  assert.equal((await row(s.db, id)).kind, 'cash');
 
-  const fresh = plainAccount(s, 'acct-fresh', { owner: 'You', kind: 'cash' });
+  const fresh = await plainAccount(s, 'acct-fresh', { owner: 'You', kind: 'cash' });
   await A.accountOwner(ctx(s, fresh, { owner: 'business' }));
   await A.accountKind(ctx(s, fresh, { kind: 'business' }));
   askOwner(C, s.db, fresh);
   askKind(C, s.db, fresh);
-  assert.equal(row(s.db, fresh).owner, 'Business');
-  assert.equal(row(s.db, fresh).kind, 'business');
+  assert.equal((await row(s.db, fresh)).owner, 'Business');
+  assert.equal((await row(s.db, fresh)).kind, 'business');
 }));
 
 test('AC2: restating a final owner reverts the auto answers that rested on it', () => withStore(async (s, { A, C }) => {
-  const a = plainAccount(s, 'acct-dep-a', { owner: null });
-  const b = plainAccount(s, 'acct-dep-b', { owner: null });
+  const a = await plainAccount(s, 'acct-dep-a', { owner: null });
+  const b = await plainAccount(s, 'acct-dep-b', { owner: null });
   const aId = askOwner(C, s.db, a).id;
   C.answer(s.db, aId, 'owner', { now: NOW });
   askOwner(C, s.db, a);
   assert.equal(C.finalReason(s.db, C.getItem(s.db, aId)), 'used_since', 'precondition: the answer is final');
   const bId = askOwner(C, s.db, b).id;
   C.recordAutoAnswer(s.db, bId, 'owner', { rule: 'shared_holder', evidence: { text: 'same holder as the first account', basis: [aId], ancestors: [aId] }, now: NOW });
-  assert.equal(row(s.db, b).owner, 'You', 'precondition: the second account took the inferred owner');
+  assert.equal((await row(s.db, b)).owner, 'You', 'precondition: the second account took the inferred owner');
   await A.accountOwner(ctx(s, a, { owner: 'spouse' }));
-  assert.equal(row(s.db, a).owner, 'Your spouse');
+  assert.equal((await row(s.db, a)).owner, 'Your spouse');
   assert.equal(C.getItem(s.db, bId).status, 'pending', 'the inference that rested on the old answer is undone');
-  assert.equal(row(s.db, b).owner, null);
+  assert.equal((await row(s.db, b)).owner, null);
 }));
 
 test('AC1: a connected account shows its last 4 only when the bridge is sure of it', () => withStore(async (s, m) => {
   const own = await connectedAccount(s, m, { sfKey: 'synthetic-unsure', mask: '5432', name: 'Checking' });
   const { accountNaming } = await src('src/accounts/naming.mjs');
   const { accountLabel } = await src('src/shared/account-label.mjs');
-  const snap = (patch) => s.db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?')
+  const snap = async (patch) => await s.db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?')
     .run(JSON.stringify({ inst: INST, name: 'Checking', mask: '5432', ...patch }), 'synthetic-unsure');
-  snap({ maskSure: false });
+  await snap({ maskSure: false });
   assert.equal(accountLabel(accountNaming(s.db).byId.get(own)), 'Checking');
-  snap({ maskSure: true });
+  await snap({ maskSure: true });
   assert.equal(accountLabel(accountNaming(s.db).byId.get(own)), 'Checking (5432)');
 }));
 
 test('AC2: undo restores an answered owner, including one that was final', () => withStore(async (s, { A, C }) => {
-  const id = plainAccount(s, 'acct-undo-a', { owner: null });
+  const id = await plainAccount(s, 'acct-undo-a', { owner: null });
   const itemId = askOwner(C, s.db, id).id;
   C.answer(s.db, itemId, 'owner', { now: NOW });
   const res = await A.accountOwner(ctx(s, id, { owner: 'spouse' }));
-  assert.equal(row(s.db, id).owner, 'Your spouse');
+  assert.equal((await row(s.db, id)).owner, 'Your spouse');
   const undone = await A.accountOwner(ctx(s, id, { undo: res.before }));
-  assert.equal(row(s.db, id).owner, 'You');
+  assert.equal((await row(s.db, id)).owner, 'You');
   const item = C.getItem(s.db, itemId);
   assert.equal(item.status, 'answered');
   assert.equal(item.answer, 'owner');
   assert.equal(scenarioAccount(undone, id).owner, 'You');
 
-  const final = plainAccount(s, 'acct-undo-f', { owner: null });
+  const final = await plainAccount(s, 'acct-undo-f', { owner: null });
   const finalId = askOwner(C, s.db, final).id;
   C.answer(s.db, finalId, 'owner', { now: NOW });
   askOwner(C, s.db, final);
   const out = await A.accountOwner(ctx(s, final, { owner: 'business' }));
   await A.accountOwner(ctx(s, final, { undo: out.before }));
-  assert.equal(row(s.db, final).owner, 'You');
+  assert.equal((await row(s.db, final)).owner, 'You');
   assert.equal(C.getItem(s.db, finalId).answer, 'owner');
 }));
 
 test('AC2: undo of an edit that answered a pending question puts it back to pending', () => withStore(async (s, { A, C }) => {
-  const id = plainAccount(s, 'acct-undo-p', { owner: null, kind: null, name: 'Synthetic flexible account' });
+  const id = await plainAccount(s, 'acct-undo-p', { owner: null, kind: null, name: 'Synthetic flexible account' });
   const ownerItem = askOwner(C, s.db, id).id;
   const kindItem = askKind(C, s.db, id).id;
   const o = await A.accountOwner(ctx(s, id, { owner: 'joint' }));
   const k = await A.accountKind(ctx(s, id, { kind: 'card' }));
-  assert.equal(row(s.db, id).owner, 'Joint');
-  assert.equal(row(s.db, id).kind, 'card');
+  assert.equal((await row(s.db, id)).owner, 'Joint');
+  assert.equal((await row(s.db, id)).kind, 'card');
   await A.accountOwner(ctx(s, id, { undo: o.before }));
   await A.accountKind(ctx(s, id, { undo: k.before }));
-  assert.equal(row(s.db, id).owner, null);
-  assert.equal(row(s.db, id).kind, null);
+  assert.equal((await row(s.db, id)).owner, null);
+  assert.equal((await row(s.db, id)).kind, null);
   assert.equal(C.getItem(s.db, ownerItem).status, 'pending');
   assert.equal(C.getItem(s.db, ownerItem).answer, null);
   assert.equal(C.getItem(s.db, kindItem).status, 'pending');
 }));
 
 test('AC2: undo of an edit that created the question removes it and restores the column', () => withStore(async (s, { A }) => {
-  const id = plainAccount(s, 'acct-undo-n', { owner: 'You', kind: 'cash' });
+  const id = await plainAccount(s, 'acct-undo-n', { owner: 'You', kind: 'cash' });
   const o = await A.accountOwner(ctx(s, id, { owner: 'business' }));
   const k = await A.accountKind(ctx(s, id, { kind: 'retirement' }));
-  assert.equal(itemsOf(s.db, 'account_owner', id).length, 1);
-  assert.equal(itemsOf(s.db, 'account_kind', id).length, 1);
+  assert.equal((await itemsOf(s.db, 'account_owner', id)).length, 1);
+  assert.equal((await itemsOf(s.db, 'account_kind', id)).length, 1);
   await A.accountOwner(ctx(s, id, { undo: o.before }));
   await A.accountKind(ctx(s, id, { undo: k.before }));
-  assert.equal(row(s.db, id).owner, 'You');
-  assert.equal(row(s.db, id).kind, 'cash');
-  assert.equal(itemsOf(s.db, 'account_owner', id).length, 0, 'the created owner item is gone');
-  assert.equal(itemsOf(s.db, 'account_kind', id).length, 0, 'the created kind item is gone');
+  assert.equal((await row(s.db, id)).owner, 'You');
+  assert.equal((await row(s.db, id)).kind, 'cash');
+  assert.equal((await itemsOf(s.db, 'account_owner', id)).length, 0, 'the created owner item is gone');
+  assert.equal((await itemsOf(s.db, 'account_kind', id)).length, 0, 'the created kind item is gone');
 }));
 
 test('AC2: repeating the same value is a quiet no-op', () => withStore(async (s, { A }) => {
-  const id = plainAccount(s, 'acct-same', { owner: 'You', kind: 'cash' });
+  const id = await plainAccount(s, 'acct-same', { owner: 'You', kind: 'cash' });
   await A.accountOwner(ctx(s, id, { owner: 'spouse' }));
   const again = await A.accountOwner(ctx(s, id, { owner: 'spouse' }));
-  assert.equal(row(s.db, id).owner, 'Your spouse');
+  assert.equal((await row(s.db, id)).owner, 'Your spouse');
   assert.equal(scenarioAccount(again, id).owner, 'Your spouse');
-  assert.equal(itemsOf(s.db, 'account_owner', id).length, 1);
+  assert.equal((await itemsOf(s.db, 'account_owner', id)).length, 1);
   await A.accountKind(ctx(s, id, { kind: 'cash' }));
   await A.accountKind(ctx(s, id, { kind: 'cash' }));
-  assert.equal(row(s.db, id).kind, 'cash');
-  assert.ok(itemsOf(s.db, 'account_kind', id).length <= 1);
+  assert.equal((await row(s.db, id)).kind, 'cash');
+  assert.ok((await itemsOf(s.db, 'account_kind', id)).length <= 1);
 }));
 
 test('AC2: an owner or kind edit schedules a replan and the detail reports the option keys', () => withStore(async (s, { A, D }) => {
-  const id = plainAccount(s, 'acct-plan', { owner: 'You', kind: 'cash' });
+  const id = await plainAccount(s, 'acct-plan', { owner: 'You', kind: 'cash' });
   const calls = [];
   const scheduler = { soon: (job) => { calls.push(job); return true; }, trigger: (job) => { calls.push(job); return Promise.resolve(); } };
   const before = D.accountDetail(ctx(s, id)).account;
@@ -390,16 +390,16 @@ test('AC2: an owner or kind edit schedules a replan and the detail reports the o
 
 /* ---------- AC3: manual merge ---------- */
 
-const snapshot = (db) => ({
-  accounts: db.prepare('SELECT id, inst, mask, name, owner, kind, mirror, identity, display_name FROM accounts ORDER BY id').all(),
-  transactions: db.prepare('SELECT * FROM transactions ORDER BY id').all(),
-  balances: db.prepare('SELECT * FROM balances ORDER BY id').all(),
-  positions: db.prepare('SELECT * FROM positions ORDER BY id').all(),
-  simplefin: db.prepare('SELECT sf_key, account_id, candidate_id, status FROM simplefin_accounts ORDER BY sf_key').all(),
-  goals: db.prepare('SELECT id, def FROM goals ORDER BY id').all(),
+const snapshot = async (db) => ({
+  accounts: await db.prepare('SELECT id, inst, mask, name, owner, kind, mirror, identity, display_name FROM accounts ORDER BY id').all(),
+  transactions: await db.prepare('SELECT * FROM transactions ORDER BY id').all(),
+  balances: await db.prepare('SELECT * FROM balances ORDER BY id').all(),
+  positions: await db.prepare('SELECT * FROM positions ORDER BY id').all(),
+  simplefin: await db.prepare('SELECT sf_key, account_id, candidate_id, status FROM simplefin_accounts ORDER BY sf_key').all(),
+  goals: await db.prepare('SELECT id, def FROM goals ORDER BY id').all(),
 });
 
-const putGoal = (db, accountId) => db.prepare("INSERT INTO goals (id, def, origin, created_at, updated_at) VALUES ('synthetic-goal', ?, 'owner', ?, ?)")
+const putGoal = async (db, accountId) => await db.prepare("INSERT INTO goals (id, def, origin, created_at, updated_at) VALUES ('synthetic-goal', ?, 'owner', ?, ?)")
   .run(JSON.stringify({ id: 'synthetic-goal', title: 'Reserve', target: 5000, targetDate: '2033-01-01', track: { accounts: [accountId] } }), NOW, NOW);
 
 // A file account and a connected account the detector does not pair: no file mask, different names
@@ -414,7 +414,7 @@ async function undetectedPair(s, m) {
 test('AC3: merge candidates list every other account with what a merge would keep and move', () => withStore(async (s, m) => {
   const { file, own } = await undetectedPair(s, m);
   const other = await fileAccount(s, m.P, 'Rainy day fund');
-  const total = s.db.prepare('SELECT count(*) AS n FROM accounts').get().n;
+  const total = (await s.db.prepare('SELECT count(*) AS n FROM accounts').get()).n;
 
   const out = await m.A.accountMergeCandidates(ctx(s, file));
   assert.ok(Array.isArray(out.items));
@@ -425,7 +425,7 @@ test('AC3: merge candidates list every other account with what a merge would kee
     assert.equal(typeof c.label, 'string');
     if (c.refused != null) {
       assert.equal(typeof c.refused, 'string');
-      assert.equal(c.mirror === 'connected', row(s.db, file).mirror === 'connected', 'only a pair of two connected or two imported accounts is refused');
+      assert.equal(c.mirror === 'connected', (await row(s.db, file)).mirror === 'connected', 'only a pair of two connected or two imported accounts is refused');
       continue;
     }
     for (const k of ['keepId', 'keepLabel', 'ownId', 'ownLabel', 'moves']) assert.ok(Object.hasOwn(c.plan, k), `plan has ${k}`);
@@ -439,8 +439,8 @@ test('AC3: merge candidates list every other account with what a merge would kee
   assert.equal(c.plan.ownId, own);
   assert.equal(typeof c.plan.keepLabel, 'string');
   assert.equal(typeof c.plan.ownLabel, 'string');
-  assert.equal(c.plan.moves.transactions, s.db.prepare('SELECT count(*) AS n FROM transactions WHERE account_id = ?').get(own).n);
-  assert.equal(c.plan.moves.balances, s.db.prepare('SELECT count(*) AS n FROM balances WHERE account_id = ?').get(own).n);
+  assert.equal(c.plan.moves.transactions, (await s.db.prepare('SELECT count(*) AS n FROM transactions WHERE account_id = ?').get(own)).n);
+  assert.equal(c.plan.moves.balances, (await s.db.prepare('SELECT count(*) AS n FROM balances WHERE account_id = ?').get(own)).n);
   assert.equal(c.plan.moves.positions, 0);
   const f = out.items.find((x) => x.id === other);
   assert.equal(typeof f.refused, 'string', 'two imported accounts are listed as refused');
@@ -459,28 +459,28 @@ test('AC3: two connected accounts are listed as refused and a merge of them is r
   const c = list.items.find((x) => x.id === second.own);
   assert.equal(typeof c.refused, 'string');
   assert.ok(c.refused.length > 0);
-  const before = snapshot(s.db);
+  const before = await snapshot(s.db);
   assert.equal(await status(() => m.A.accountMerge(ctx(s, first.own, { withId: second.own }))), 409);
-  assert.deepEqual(snapshot(s.db), before);
+  assert.deepEqual(await snapshot(s.db), before);
 }));
 
 test('AC3: a merge with itself, an unknown account or no account is refused', () => withStore(async (s, m) => {
   const { file } = await undetectedPair(s, m);
-  const before = snapshot(s.db);
+  const before = await snapshot(s.db);
   assert.equal(await status(() => m.A.accountMerge(ctx(s, file, { withId: file }))), 400);
   assert.equal(await status(() => m.A.accountMerge(ctx(s, file, {}))), 400);
   assert.equal(await status(() => m.A.accountMerge(ctx(s, file, { withId: 'nope' }))), 404);
   assert.equal(await status(() => m.A.accountMerge(ctx(s, 'nope', { withId: file }))), 404);
-  assert.deepEqual(snapshot(s.db), before);
+  assert.deepEqual(await snapshot(s.db), before);
 }));
 
 for (const from of ['file', 'connected']) {
   test(`AC3: a manual merge of an undetected pair, opened from the ${from} account, keeps the file account and undo restores both`, () => withStore(async (s, m) => {
     const { file, own } = await undetectedPair(s, m);
-    putGoal(s.db, own);
-    const ownTx = s.db.prepare('SELECT id FROM transactions WHERE account_id = ?').all(own).map((r) => r.id);
+    await putGoal(s.db, own);
+    const ownTx = (await s.db.prepare('SELECT id FROM transactions WHERE account_id = ?').all(own)).map((r) => r.id);
     assert.ok(ownTx.length > 0);
-    const before = snapshot(s.db);
+    const before = await snapshot(s.db);
 
     const [open, other] = from === 'file' ? [file, own] : [own, file];
     const res = await m.A.accountMerge(ctx(s, open, { withId: other }));
@@ -488,23 +488,23 @@ for (const from of ['file', 'connected']) {
     assert.ok(Number.isInteger(res.itemId) && res.itemId > 0, 'the merge returns its confirm item');
     assert.ok(res.scenario && Array.isArray(res.scenario.accounts));
     assert.equal(res.scenario.accounts.some((a) => a.id === own), false);
-    assert.equal(row(s.db, own), undefined, 'the connected account row is gone');
-    assert.equal(row(s.db, file).mirror, 'connected', 'the survivor takes the feed');
+    assert.equal(await row(s.db, own), undefined, 'the connected account row is gone');
+    assert.equal((await row(s.db, file)).mirror, 'connected', 'the survivor takes the feed');
     for (const id of ownTx) {
-      const t = s.db.prepare('SELECT account_id FROM transactions WHERE id = ?').get(id);
+      const t = await s.db.prepare('SELECT account_id FROM transactions WHERE id = ?').get(id);
       assert.ok(!t || t.account_id === file, 'connected rows moved to the survivor');
     }
-    assert.equal(s.db.prepare('SELECT count(*) AS n FROM transactions WHERE account_id = ?').get(own).n, 0);
-    assert.equal(s.db.prepare('SELECT count(*) AS n FROM balances WHERE account_id = ?').get(own).n, 0);
-    assert.equal(s.db.prepare('SELECT account_id FROM simplefin_accounts WHERE sf_key = ?').get('synthetic-edit').account_id, file);
-    assert.deepEqual(JSON.parse(s.db.prepare("SELECT def FROM goals WHERE id = 'synthetic-goal'").get().def).track.accounts, [file]);
+    assert.equal((await s.db.prepare('SELECT count(*) AS n FROM transactions WHERE account_id = ?').get(own)).n, 0);
+    assert.equal((await s.db.prepare('SELECT count(*) AS n FROM balances WHERE account_id = ?').get(own)).n, 0);
+    assert.equal((await s.db.prepare('SELECT account_id FROM simplefin_accounts WHERE sf_key = ?').get('synthetic-edit')).account_id, file);
+    assert.deepEqual(JSON.parse((await s.db.prepare("SELECT def FROM goals WHERE id = 'synthetic-goal'").get()).def).track.accounts, [file]);
     const item = m.C.getItem(s.db, res.itemId);
     assert.equal(item.kind, 'account_match');
     assert.equal(item.status, 'answered');
     assert.equal(item.answer, 'same');
 
     m.C.reopenItem(s.db, res.itemId, { now: NOW });
-    assert.deepEqual(snapshot(s.db), before, 'undo restores both accounts and every row');
+    assert.deepEqual(await snapshot(s.db), before, 'undo restores both accounts and every row');
   }));
 }
 
@@ -513,90 +513,90 @@ for (const from of ['file', 'connected']) {
 test('AC3: two imported accounts are refused and nothing changes', () => withStore(async (s, m) => {
   const a = await fileAccount(s, m.P, 'Spending alpha');
   const b = await fileAccount(s, m.P, 'Spending beta', { amount: '40.00' });
-  const before = snapshot(s.db);
+  const before = await snapshot(s.db);
   assert.equal(await status(() => m.A.accountMerge(ctx(s, a, { withId: b }))), 409);
   assert.equal(await status(() => m.A.accountMerge(ctx(s, b, { withId: a }))), 409);
-  assert.deepEqual(snapshot(s.db), before);
+  assert.deepEqual(await snapshot(s.db), before);
 }));
 
 /* ---------- AC3: identity carried over a merge, and the backfill for older merges ---------- */
 
 // A file account with no institution and no last 4 (unless given) and a connected account whose
 // SimpleFIN snapshot carries them. Three equal month-end balances make the pair detectable.
-function bareDuplicate(s, { sfKey = 'synthetic-carry', fileInst = null, fileMask = null, snap = {} } = {}) {
-  setSetting(s.db, 'clock', '2032-09-15');
+async function bareDuplicate(s, { sfKey = 'synthetic-carry', fileInst = null, fileMask = null, snap = {} } = {}) {
+  await setSetting(s.db, 'clock', '2032-09-15');
   const file = 'file-checking';
   const own = `sf-${sfKey}`;
   const snapshotDoc = { inst: INST, name: 'Everyday x1234', mask: '1234', maskSure: true, kind: 'checking', ...snap };
-  s.db.prepare('INSERT INTO accounts (id, identity, name, kind, mirror, inst, mask) VALUES (?, ?, ?, ?, ?, ?, ?)')
+  await s.db.prepare('INSERT INTO accounts (id, identity, name, kind, mirror, inst, mask) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(file, `file:${file}`, 'checking', 'checking', 'manual', fileInst, fileMask);
-  s.db.prepare('INSERT INTO accounts (id, identity, name, kind, mirror, inst, mask) VALUES (?, ?, ?, ?, ?, ?, ?)')
+  await s.db.prepare('INSERT INTO accounts (id, identity, name, kind, mirror, inst, mask) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(own, `simplefin:${sfKey}`, snapshotDoc.name, 'cash', 'connected', INST, snapshotDoc.mask);
-  s.db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at, backfilled) VALUES (?, ?, 'mapped', ?, ?, 1)").run(sfKey, own, snapshotDoc.name, NOW);
-  s.db.prepare('INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES (?, ?, ?)').run(sfKey, JSON.stringify(snapshotDoc), NOW);
+  await s.db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at, backfilled) VALUES (?, ?, 'mapped', ?, ?, 1)").run(sfKey, own, snapshotDoc.name, NOW);
+  await s.db.prepare('INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES (?, ?, ?)').run(sfKey, JSON.stringify(snapshotDoc), NOW);
   const put = s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)');
-  for (const id of [file, own]) for (const [date, amount] of [['2032-06-30', 1000], ['2032-07-31', 1100.5], ['2032-08-31', 900.25]]) put.run(id, date, amount);
+  for (const id of [file, own]) for (const [date, amount] of [['2032-06-30', 1000], ['2032-07-31', 1100.5], ['2032-08-31', 900.25]]) await put.run(id, date, amount);
   return { file, own, sfKey };
 }
 
 // Answer the detected "Same account?" question for a pair, the way the Confirm screen does.
-function mergeDetected(s, m, { file, own }) {
+async function mergeDetected(s, m, { file, own }) {
   m.M.queueAccountPairs(s.db, { now: NOW });
   const q = m.C.pendingItems(s.db).find((i) => i.context.repair && i.subject === `merge:${file}:${own}`);
   assert.ok(q, 'the detector asked about the pair');
   m.C.answer(s.db, q.id, 'same', { now: NOW });
-  assert.equal(row(s.db, own), undefined, 'the connected account row is gone');
+  assert.equal(await row(s.db, own), undefined, 'the connected account row is gone');
   return q.id;
 }
 
 // The survivor keeps its imported identity, so a later import of its file still lands on it;
 // merging it into another imported account would delete an identity that import recreates.
 test('AC3: a merged survivor is still an imported account, so merging it with another imported account is refused', () => withStore(async (s, m) => {
-  const pair = bareDuplicate(s);
-  mergeDetected(s, m, pair);
-  assert.equal(row(s.db, pair.file).mirror, 'connected');
+  const pair = await bareDuplicate(s);
+  await mergeDetected(s, m, pair);
+  assert.equal((await row(s.db, pair.file)).mirror, 'connected');
   const other = await fileAccount(s, m.P, 'Spending gamma');
-  const before = snapshot(s.db);
+  const before = await snapshot(s.db);
   assert.equal(await status(() => m.A.accountMerge(ctx(s, pair.file, { withId: other }))), 409);
   assert.equal(await status(() => m.A.accountMerge(ctx(s, other, { withId: pair.file }))), 409);
-  assert.deepEqual(snapshot(s.db), before);
+  assert.deepEqual(await snapshot(s.db), before);
 }));
 
 test('AC1: a goal tracking a connected account shows the last 4 only when the bridge is sure of it', () => withStore(async (s, m) => {
   const own = await connectedAccount(s, m, { sfKey: 'synthetic-goal', mask: '1234', name: 'Checking' });
-  putGoal(s.db, own);
-  const snap = (patch) => s.db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?')
+  await putGoal(s.db, own);
+  const snap = async (patch) => await s.db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?')
     .run(JSON.stringify({ inst: INST, name: 'Checking', mask: '1234', ...patch }), 'synthetic-goal');
   const trackLabel = async () => (await m.A.accountRename(ctx(s, own, { displayName: null }))).scenario.goals.find((g) => g.id === 'synthetic-goal').trackLabel;
-  snap({ maskSure: false });
+  await snap({ maskSure: false });
   assert.equal(await trackLabel(), 'Checking');
-  snap({ maskSure: true });
+  await snap({ maskSure: true });
   assert.equal(await trackLabel(), 'Checking (1234)');
 }));
 
 test('AC1: the last 4 shown is the stored one, not a later snapshot mask the account never took', () => withStore(async (s, m) => {
   const own = await connectedAccount(s, m, { sfKey: 'synthetic-drift', mask: '1234', name: 'Checking' });
-  s.db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?')
+  await s.db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?')
     .run(JSON.stringify({ inst: INST, name: 'Checking x9876', mask: '9876', maskSure: true }), 'synthetic-drift');
   const { accountNaming } = await src('src/accounts/naming.mjs');
   const { accountLabel } = await src('src/shared/account-label.mjs');
-  assert.equal(row(s.db, own).mask, '1234');
+  assert.equal((await row(s.db, own)).mask, '1234');
   assert.doesNotMatch(accountLabel(accountNaming(s.db).byId.get(own)), /ending/);
 }));
 
-const setSnapshot = (db, sfKey, patch) => {
-  const cur = JSON.parse(db.prepare('SELECT snapshot FROM simplefin_snapshots WHERE sf_key = ?').get(sfKey).snapshot);
-  db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?').run(JSON.stringify({ ...cur, ...patch }), sfKey);
+const setSnapshot = async (db, sfKey, patch) => {
+  const cur = JSON.parse((await db.prepare('SELECT snapshot FROM simplefin_snapshots WHERE sf_key = ?').get(sfKey)).snapshot);
+  await db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?').run(JSON.stringify({ ...cur, ...patch }), sfKey);
 };
 
 test('AC3: a manual merge fills a survivor with no institution or last 4 from the connected account', () => withStore(async (s, m) => {
-  const pair = bareDuplicate(s);
-  const before = row(s.db, pair.file);
+  const pair = await bareDuplicate(s);
+  const before = await row(s.db, pair.file);
   assert.equal(before.inst, null);
   assert.equal(before.mask, null);
   const res = await m.A.accountMerge(ctx(s, pair.file, { withId: pair.own }));
   assert.equal(res.survivorId, pair.file);
-  const after = row(s.db, pair.file);
+  const after = await row(s.db, pair.file);
   assert.equal(after.inst, INST);
   assert.equal(after.mask, '1234');
   assert.equal(after.name, before.name, 'nothing else on the survivor changed');
@@ -606,9 +606,9 @@ test('AC3: a manual merge fills a survivor with no institution or last 4 from th
 }));
 
 test('AC3: a detected merge carries the institution and last 4 over the same way', () => withStore(async (s, m) => {
-  const pair = bareDuplicate(s);
-  mergeDetected(s, m, pair);
-  const after = row(s.db, pair.file);
+  const pair = await bareDuplicate(s);
+  await mergeDetected(s, m, pair);
+  const after = await row(s.db, pair.file);
   assert.equal(after.inst, INST);
   assert.equal(after.mask, '1234');
   assert.match(m.D.accountDetail(ctx(s, pair.file)).account.label, /\(1234\)$/);
@@ -624,10 +624,10 @@ test('AC3: an unreliable last 4 is not carried, but the institution still is', a
   for (const c of cases) {
     for (const path of ['manual', 'detected']) {
       await withStore(async (s, m) => {
-        const pair = bareDuplicate(s, { snap: c.snap });
+        const pair = await bareDuplicate(s, { snap: c.snap });
         if (path === 'manual') await m.A.accountMerge(ctx(s, pair.file, { withId: pair.own }));
-        else mergeDetected(s, m, pair);
-        const after = row(s.db, pair.file);
+        else await mergeDetected(s, m, pair);
+        const after = await row(s.db, pair.file);
         assert.equal(after.inst, INST, `${c.why} (${path}): institution carried`);
         assert.equal(after.mask, c.mask, `${c.why} (${path}): mask ${c.mask === null ? 'not ' : ''}carried`);
       });
@@ -643,9 +643,9 @@ test('AC3: a last 4 or institution the survivor already has is never replaced', 
   ];
   for (const c of cases) {
     await withStore(async (s, m) => {
-      const pair = bareDuplicate(s, { fileInst: c.fileInst, fileMask: c.fileMask });
+      const pair = await bareDuplicate(s, { fileInst: c.fileInst, fileMask: c.fileMask });
       await m.A.accountMerge(ctx(s, pair.file, { withId: pair.own }));
-      const after = row(s.db, pair.file);
+      const after = await row(s.db, pair.file);
       assert.equal(after.inst, c.inst, `inst ${c.fileInst} stays or fills`);
       assert.equal(after.mask, c.mask, `mask ${c.fileMask} stays or fills`);
     });
@@ -655,16 +655,16 @@ test('AC3: a last 4 or institution the survivor already has is never replaced', 
 test('AC3: undo of a merge restores the survivor row exactly as before, on both paths', async () => {
   for (const path of ['manual', 'detected']) {
     await withStore(async (s, m) => {
-      const pair = bareDuplicate(s);
-      const beforeRow = row(s.db, pair.file);
-      const beforeAll = snapshot(s.db);
+      const pair = await bareDuplicate(s);
+      const beforeRow = await row(s.db, pair.file);
+      const beforeAll = await snapshot(s.db);
       let itemId;
       if (path === 'manual') itemId = (await m.A.accountMerge(ctx(s, pair.file, { withId: pair.own }))).itemId;
-      else itemId = mergeDetected(s, m, pair);
-      assert.notDeepEqual(row(s.db, pair.file), beforeRow, `${path}: precondition, the merge changed the survivor`);
+      else itemId = await mergeDetected(s, m, pair);
+      assert.notDeepEqual(await row(s.db, pair.file), beforeRow, `${path}: precondition, the merge changed the survivor`);
       m.C.reopenItem(s.db, itemId, { now: NOW });
-      assert.deepEqual(row(s.db, pair.file), beforeRow, `${path}: survivor row restored`);
-      assert.deepEqual(snapshot(s.db), beforeAll, `${path}: everything restored`);
+      assert.deepEqual(await row(s.db, pair.file), beforeRow, `${path}: survivor row restored`);
+      assert.deepEqual(await snapshot(s.db), beforeAll, `${path}: everything restored`);
     });
   }
 });
@@ -673,59 +673,59 @@ test('AC3: undo of a merge restores the survivor row exactly as before, on both 
 // merge would now have filled.
 async function olderMergeSurvivor(s, m, opts = {}) {
   const pair = await seedDuplicate(s, { sure: true, ...opts });
-  mergeDetected(s, m, { file: pair.keep, own: pair.own });
-  s.db.prepare('UPDATE accounts SET inst = NULL, mask = NULL WHERE id = ?').run(pair.keep);
+  await mergeDetected(s, m, { file: pair.keep, own: pair.own });
+  await s.db.prepare('UPDATE accounts SET inst = NULL, mask = NULL WHERE id = ?').run(pair.keep);
   return { id: pair.keep, sfKey: pair.sfKey };
 }
 
 test('AC3: backfill fills an older merge survivor from its snapshot and is idempotent', () => withStore(async (s, m) => {
   assert.equal(typeof m.M.backfillMergedIdentity, 'function');
   const survivor = await olderMergeSurvivor(s, m);
-  assert.equal(row(s.db, survivor.id).inst, null);
+  assert.equal((await row(s.db, survivor.id)).inst, null);
   assert.equal(m.M.backfillMergedIdentity(s.db), 1);
-  const after = row(s.db, survivor.id);
+  const after = await row(s.db, survivor.id);
   assert.equal(after.inst, 'Example Bank');
   assert.equal(after.mask, '6294');
   assert.equal(m.M.backfillMergedIdentity(s.db), 0, 'a second call changes nothing');
-  assert.deepEqual(row(s.db, survivor.id), after);
+  assert.deepEqual(await row(s.db, survivor.id), after);
 }));
 
 test('AC3: backfill never overwrites an institution or last 4 that is already set', () => withStore(async (s, m) => {
   const survivor = await olderMergeSurvivor(s, m);
-  s.db.prepare("UPDATE accounts SET inst = 'Kept Bank' WHERE id = ?").run(survivor.id);
+  await s.db.prepare("UPDATE accounts SET inst = 'Kept Bank' WHERE id = ?").run(survivor.id);
   assert.equal(m.M.backfillMergedIdentity(s.db), 1);
-  assert.equal(row(s.db, survivor.id).inst, 'Kept Bank');
-  assert.equal(row(s.db, survivor.id).mask, '6294');
+  assert.equal((await row(s.db, survivor.id)).inst, 'Kept Bank');
+  assert.equal((await row(s.db, survivor.id)).mask, '6294');
 
-  s.db.prepare("UPDATE accounts SET inst = NULL, mask = '9999' WHERE id = ?").run(survivor.id);
+  await s.db.prepare("UPDATE accounts SET inst = NULL, mask = '9999' WHERE id = ?").run(survivor.id);
   assert.equal(m.M.backfillMergedIdentity(s.db), 1);
-  assert.equal(row(s.db, survivor.id).inst, 'Example Bank');
-  assert.equal(row(s.db, survivor.id).mask, '9999');
+  assert.equal((await row(s.db, survivor.id)).inst, 'Example Bank');
+  assert.equal((await row(s.db, survivor.id)).mask, '9999');
 
   assert.equal(m.M.backfillMergedIdentity(s.db), 0);
 }));
 
 test('AC3: backfill applies the same reliability rule to the last 4', () => withStore(async (s, m) => {
   const survivor = await olderMergeSurvivor(s, m);
-  setSnapshot(s.db, survivor.sfKey, { maskSure: false, name: 'Synthetic checking' });
+  await setSnapshot(s.db, survivor.sfKey, { maskSure: false, name: 'Synthetic checking' });
   assert.equal(m.M.backfillMergedIdentity(s.db), 1, 'only the institution changed');
-  assert.equal(row(s.db, survivor.id).inst, 'Example Bank');
-  assert.equal(row(s.db, survivor.id).mask, null);
+  assert.equal((await row(s.db, survivor.id)).inst, 'Example Bank');
+  assert.equal((await row(s.db, survivor.id)).mask, null);
   assert.equal(m.M.backfillMergedIdentity(s.db), 0);
 
-  setSnapshot(s.db, survivor.sfKey, { maskSure: false, name: 'Synthetic checking x6294' });
+  await setSnapshot(s.db, survivor.sfKey, { maskSure: false, name: 'Synthetic checking x6294' });
   assert.equal(m.M.backfillMergedIdentity(s.db), 1, 'a name ending in the same four digits is reliable');
-  assert.equal(row(s.db, survivor.id).mask, '6294');
+  assert.equal((await row(s.db, survivor.id)).mask, '6294');
 }));
 
 test('AC3: backfill ignores a survivor with no snapshot and accounts that were never merged', () => withStore(async (s, m) => {
   const survivor = await olderMergeSurvivor(s, m);
-  s.db.prepare('DELETE FROM simplefin_snapshots WHERE sf_key = ?').run(survivor.sfKey);
+  await s.db.prepare('DELETE FROM simplefin_snapshots WHERE sf_key = ?').run(survivor.sfKey);
   const loose = await seedDuplicate(s, { sure: true, mask: '7310', sfKey: 'synthetic-unmerged' });
-  s.db.prepare('UPDATE accounts SET inst = NULL, mask = NULL WHERE id IN (?, ?)').run(loose.keep, loose.own);
-  const before = s.db.prepare('SELECT * FROM accounts ORDER BY id').all();
+  await s.db.prepare('UPDATE accounts SET inst = NULL, mask = NULL WHERE id IN (?, ?)').run(loose.keep, loose.own);
+  const before = await s.db.prepare('SELECT * FROM accounts ORDER BY id').all();
   assert.equal(m.M.backfillMergedIdentity(s.db), 0);
-  assert.deepEqual(s.db.prepare('SELECT * FROM accounts ORDER BY id').all(), before, 'no account changed');
+  assert.deepEqual(await s.db.prepare('SELECT * FROM accounts ORDER BY id').all(), before, 'no account changed');
 }));
 
 /* ---------- AC4: meta line ---------- */
@@ -772,15 +772,15 @@ test('the label is owner prefix, name and last 4 on every surface, and the dialo
   const { accountLabels } = await src('src/pnl/shared.mjs');
   upsertFact(s.db, { key: 'household.names', value: { me: 'Avery Example', spouse: 'Blair Example' }, src: 'you', asOf: '2032-02-01', confirmed: true, now: NOW });
   upsertFact(s.db, { key: 'accounts.businessEntity', value: { 'acct-biz': 'Sample Studio LLC' }, src: 'you', asOf: '2032-02-01', confirmed: true, now: NOW });
-  const mine = plainAccount(s, 'acct-mine', { owner: 'You', name: 'Venture One', mask: '0323' });
-  const hers = plainAccount(s, 'acct-hers', { owner: 'Your spouse', name: 'Venture Two', mask: '1111' });
-  const joint = plainAccount(s, 'acct-joint', { owner: 'Joint', name: 'Venture Three', mask: '2222' });
-  const biz = plainAccount(s, 'acct-biz', { owner: 'Business', name: 'Operating', mask: '3333' });
-  const nobody = plainAccount(s, 'acct-nobody', { owner: null, name: 'Loose account', mask: '4444' });
-  const unsure = plainAccount(s, 'acct-unsure', { owner: 'You', name: 'Bridge checking', mask: '5555' });
-  s.db.prepare("UPDATE accounts SET identity = 'simplefin:synthetic-unsure' WHERE id = ?").run(unsure);
-  s.db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at) VALUES ('synthetic-unsure', ?, 'mapped', 'Bridge checking', ?)").run(unsure, NOW);
-  s.db.prepare('INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES (?, ?, ?)').run('synthetic-unsure', JSON.stringify({ inst: INST, name: 'Bridge checking', mask: '5555', maskSure: false }), NOW);
+  const mine = await plainAccount(s, 'acct-mine', { owner: 'You', name: 'Venture One', mask: '0323' });
+  const hers = await plainAccount(s, 'acct-hers', { owner: 'Your spouse', name: 'Venture Two', mask: '1111' });
+  const joint = await plainAccount(s, 'acct-joint', { owner: 'Joint', name: 'Venture Three', mask: '2222' });
+  const biz = await plainAccount(s, 'acct-biz', { owner: 'Business', name: 'Operating', mask: '3333' });
+  const nobody = await plainAccount(s, 'acct-nobody', { owner: null, name: 'Loose account', mask: '4444' });
+  const unsure = await plainAccount(s, 'acct-unsure', { owner: 'You', name: 'Bridge checking', mask: '5555' });
+  await s.db.prepare("UPDATE accounts SET identity = 'simplefin:synthetic-unsure' WHERE id = ?").run(unsure);
+  await s.db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at) VALUES ('synthetic-unsure', ?, 'mapped', 'Bridge checking', ?)").run(unsure, NOW);
+  await s.db.prepare('INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES (?, ?, ?)').run('synthetic-unsure', JSON.stringify({ inst: INST, name: 'Bridge checking', mask: '5555', maskSure: false }), NOW);
 
   const expected = {
     [mine]: "Avery's Venture One (0323)",
@@ -794,7 +794,7 @@ test('the label is owner prefix, name and last 4 on every surface, and the dialo
   const pnl = accountLabels(s.db);
   const scenario = (await m.A.accountRename(ctx(s, mine, { displayName: 'Venture One' }))).scenario;
   for (const [id, label] of Object.entries(expected)) {
-    assert.equal(naming.label(row(s.db, id)), label, `${id} through the naming hint on a raw row`);
+    assert.equal(naming.label(await row(s.db, id)), label, `${id} through the naming hint on a raw row`);
     assert.equal(naming.label(naming.byId.get(id)), label, `${id} through the household row`);
     assert.equal(pnl.get(id).label, label, `${id} on P&L rows`);
     assert.equal(scenario.accounts.find((a) => a.id === id).name, label, `${id} in the scenario`);
@@ -809,7 +809,7 @@ test('the label is owner prefix, name and last 4 on every surface, and the dialo
 
   // The model's goal tracking text names the accounts the way the screens do.
   const { callTool } = await src('src/tools/index.mjs');
-  s.db.prepare("INSERT INTO goals (id, def, origin, created_at, updated_at) VALUES ('label-goal', ?, 'owner', ?, ?)")
+  await s.db.prepare("INSERT INTO goals (id, def, origin, created_at, updated_at) VALUES ('label-goal', ?, 'owner', ?, ?)")
     .run(JSON.stringify({ id: 'label-goal', title: 'Reserve', target: 5000, targetDate: '2033-01-01', track: { accounts: [mine, unsure] } }), NOW, NOW);
   const goals = await callTool('goals', { operation: 'list' }, { db: s.db, now: NOW });
   assert.equal(goals.find((g) => g.id === 'label-goal').tracking, "Avery's Venture One (0323), Avery's Bridge checking");

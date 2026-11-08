@@ -7,7 +7,7 @@
 
 import { readFileSync } from 'node:fs';
 import { test, expect, resetDemo, gotoRoute, recDialog } from './helpers.mjs';
-import { DatabaseSync } from 'node:sqlite';
+import { openScope } from '../src/storage/index.mjs';
 import { mainDataDir } from './data-dir.mjs';
 import { servedStore } from '../test/helpers/server.mjs';
 import { callTool } from '../src/tools/index.mjs';
@@ -343,7 +343,7 @@ test('@mobile drill rows keep keyboard focus and a reopened stale block can ask 
   const response = await request.post('/api/threads', { data: { text: question } });
   expect(response.status()).toBe(200);
   const body = await response.json();
-  const db = new DatabaseSync(servedStore(mainDataDir()).file);
+  const db = new DatabaseSync((await servedStore(mainDataDir())).file);
   let block;
   try {
     const args = { operation: 'total', groupBy: 'category', from: '2026-01', to: '2026-10' };
@@ -351,8 +351,8 @@ test('@mobile drill rows keep keyboard focus and a reopened stale block can ask 
     const spec = { source: { tool: 'spending', args, path: 'groups' }, columns: ['key', 'figure'] };
     block = { id: 'b1', op: 'table', spec, calls: [{ tool: 'spending', args }],
       snapshot: buildSnapshot('table', spec, [{ name: 'spending', args, result }]), asOf: result.total.asOf, builtAt: '2026-11-05T00:00:00Z', after: 1 };
-    db.prepare('UPDATE messages SET provenance = ? WHERE id = ?').run(JSON.stringify({ ...body.message.provenance, blocks: [block] }), body.message.id.slice(1));
-  } finally { db.close(); }
+    await db.prepare('UPDATE messages SET provenance = ? WHERE id = ?').run(JSON.stringify({ ...body.message.provenance, blocks: [block] }), body.message.id.slice(1));
+  } finally { await db.close(); }
   let statusReads = 0;
   page.on('request', req => { if (req.url().endsWith(`/api/threads/${body.thread.id}/blocks`)) statusReads++; });
   await gotoRoute(page, `ask/${body.thread.id}`);
@@ -374,11 +374,11 @@ test('@mobile drill rows keep keyboard focus and a reopened stale block can ask 
   expect(statusReads).toBe(1);
   await noSidewaysScroll(page);
 
-  const changed = new DatabaseSync(servedStore(mainDataDir()).file);
+  const changed = new DatabaseSync((await servedStore(mainDataDir())).file);
   try {
     const source = block.snapshot.rows[0].cells[1].fig.provenance.sources[0].ids[0];
-    const row = changed.prepare('SELECT * FROM transactions WHERE id = ?').get(source);
-    changed.prepare('INSERT INTO transactions (account_id, date, amount, description) VALUES (?, ?, ?, ?)').run(row.account_id, '2026-10-15', row.amount, row.description);
+    const row = await changed.prepare('SELECT * FROM transactions WHERE id = ?').get(source);
+    await changed.prepare('INSERT INTO transactions (account_id, date, amount, description) VALUES (?, ?, ?, ?)').run(row.account_id, '2026-10-15', row.amount, row.description);
   } finally { changed.close(); }
   await page.reload();
   await expect(table).toContainText('Stale');

@@ -25,6 +25,7 @@ import { autoResolve } from './auto.mjs';
 import { cents } from './format.mjs';
 import { DEFAULT_HOSTS, parseAllowedHosts } from './simplefin-hosts.mjs';
 import { reconcileTransactionPayments } from './transaction-payments.mjs';
+import { filterSeries } from '../shared/series.mjs';
 
 export { DEFAULT_HOSTS, parseAllowedHosts };
 
@@ -227,7 +228,7 @@ export const parser = Object.freeze({
 // ---------------------------------------------------------------- store
 
 const ownIdentity = (sfKey) => `simplefin:${sfKey}`;
-export const connection = (db) => db.prepare('SELECT * FROM simplefin_connection WHERE id = 1').get() ?? null;
+export const connection = async (db) => await db.prepare('SELECT * FROM simplefin_connection WHERE id = 1').get() ?? null;
 
 function householdOf(db, household) {
   if (!household || typeof household.vault !== 'function' || typeof household.outbound?.enabled !== 'function' || typeof household.isCurrent !== 'function') {
@@ -242,14 +243,14 @@ function householdOf(db, household) {
 export async function connectSimplefin(db, token, { household, hosts, fetch: fetchImpl, now } = {}) {
   householdOf(db, household);
   if (!household.outbound.enabled('simplefin') || !household.isCurrent()) throw new SimplefinError('paused');
-  db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
-  if (connection(db)?.status === 'ok') throw new SimplefinError('already_connected');
+  await db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
+  if ((await connection(db))?.status === 'ok') throw new SimplefinError('already_connected');
   const vault = await openVault(household);
   if (!household.outbound.enabled('simplefin') || !household.isCurrent()) throw new SimplefinError('paused');
   const access = await claimToken(token, { hosts, fetch: fetchImpl });
   if (!household.outbound.enabled('simplefin') || !household.isCurrent()) throw new SimplefinError('paused');
   const blob = sealAccess(vault, access);
-  db.prepare(`INSERT INTO simplefin_connection (id, access_blob, connected_at, status) VALUES (1, ?, ?, 'ok')
+  await db.prepare(`INSERT INTO simplefin_connection (id, access_blob, connected_at, status) VALUES (1, ?, ?, 'ok')
               ON CONFLICT(id) DO UPDATE SET access_blob = excluded.access_blob, connected_at = excluded.connected_at,
                 status = 'ok', error_code = NULL, messages = NULL`)
     .run(blob, now || new Date().toISOString());
@@ -257,10 +258,10 @@ export async function connectSimplefin(db, token, { household, hosts, fetch: fet
 }
 
 // Deletes the stored access URL. Accounts and their rows stay; they are no longer mirrored.
-export function disconnectSimplefin(db) {
-  const had = Boolean(connection(db));
-  db.prepare('DELETE FROM simplefin_connection WHERE id = 1').run();
-  db.prepare(`UPDATE accounts SET mirror = 'manual' WHERE mirror = 'connected'
+export async function disconnectSimplefin(db) {
+  const had = Boolean(await connection(db));
+  await db.prepare('DELETE FROM simplefin_connection WHERE id = 1').run();
+  await db.prepare(`UPDATE accounts SET mirror = 'manual' WHERE mirror = 'connected'
               AND id IN (SELECT account_id FROM simplefin_accounts WHERE account_id IS NOT NULL)`).run();
   return { disconnected: had };
 }
@@ -270,25 +271,25 @@ export function disconnectSimplefin(db) {
 // A connected account against existing accounts from files at the same institution: sure when one
 // candidate shares the mask (or, with no mask, the name) and no stored balance on the bridge's
 // balance date contradicts it. Otherwise the closest candidate by recent balance is asked about.
-export function matchAccount(db, acct) {
-  const pool = db.prepare(`SELECT id, inst, mask, name, kind FROM accounts WHERE coalesce(mirror, '') != 'connected'
+export async function matchAccount(db, acct) {
+  const pool = (await db.prepare(`SELECT id, inst, mask, name, kind FROM accounts WHERE coalesce(mirror, '') != 'connected'
                            AND id NOT IN (SELECT account_id FROM simplefin_accounts WHERE account_id IS NOT NULL)
                            AND id NOT IN (SELECT candidate_id FROM simplefin_accounts WHERE status = 'pending_match' AND candidate_id IS NOT NULL)
                            ORDER BY id`)
-    .all().filter(a => compatibleInstitution(a.inst, acct.inst) && compatibleKind(a, acct));
+    .all()).filter(a => compatibleInstitution(a.inst, acct.inst) && compatibleKind(a, acct));
   if (!pool.length) return {};
   const balOn = db.prepare('SELECT amount FROM balances WHERE account_id = ? AND date = ?');
   const latest = db.prepare('SELECT amount FROM balances WHERE account_id = ? ORDER BY date DESC LIMIT 1');
-  const contradicts = (c) => {
+  const contradicts = async (c) => {
     if (acct.balance == null || !acct.balanceDate) return false;
-    const b = balOn.get(c.id, acct.balanceDate);
+    const b = await balOn.get(c.id, acct.balanceDate);
     return b != null && Math.round(b.amount * 100) !== Math.round(acct.balance * 100);
   };
-  const distance = (c) => { const b = latest.get(c.id); return b && acct.balance != null ? Math.abs(b.amount - acct.balance) : Infinity; };
-  const closest = (list) => [...list].sort((a, b) => distance(a) - distance(b))[0].id;
+  const distance = async (c) => { const b = await latest.get(c.id); return b && acct.balance != null ? Math.abs(b.amount - acct.balance) : Infinity; };
+  const closest = (list) => [...list].sort(async (a, b) => await distance(a) - await distance(b))[0].id;
   if (acct.mask) {
     const same = pool.filter((c) => accountMask(c) === acct.mask);
-    if (same.length === 1 && acct.maskSure && /^\d{4}$/.test(same[0].mask ?? '') && sameInstitution(same[0].inst, acct.inst) && accountKind(same[0]) && accountKind(acct) && !contradicts(same[0])) return { sure: same[0].id };
+    if (same.length === 1 && acct.maskSure && /^\d{4}$/.test(same[0].mask ?? '') && sameInstitution(same[0].inst, acct.inst) && accountKind(same[0]) && accountKind(acct) && !await contradicts(same[0])) return { sure: same[0].id };
     if (same.length) return { candidate: closest(same) };
     const unmasked = pool.filter((c) => sameInstitution(c.inst, acct.inst) && !accountMask(c));
     return unmasked.length ? { candidate: closest(unmasked) } : {};
@@ -296,42 +297,42 @@ export function matchAccount(db, acct) {
   const known = pool.filter(c => sameInstitution(c.inst, acct.inst));
   if (!known.length) return {};
   const named = known.filter((c) => normalizeName(c.name) === normalizeName(acct.name));
-  if (named.length === 1 && !named[0].mask && !contradicts(named[0])) return { sure: named[0].id };
+  if (named.length === 1 && !named[0].mask && !await contradicts(named[0])) return { sure: named[0].id };
   if (named.length) return { candidate: closest(named) };
-  const near = known.filter((c) => distance(c) <= Math.max(1, Math.abs(acct.balance ?? 0) * 0.05));
+  const near = await filterSeries(known, async (c) => await distance(c) <= Math.max(1, Math.abs(acct.balance ?? 0) * 0.05));
   return { candidate: closest(near.length ? near : known) };
 }
 
 // The account a bridge account writes into, or null while a match question is pending.
-function resolveAccount(db, acct, { now, counts }) {
+async function resolveAccount(db, acct, { now, counts }) {
   const get = db.prepare('SELECT * FROM simplefin_accounts WHERE sf_key = ?');
-  let m = get.get(acct.key);
+  let m = await get.get(acct.key);
   if (!m) {
-    const match = matchAccount(db, acct);
+    const match = await matchAccount(db, acct);
     const own = accountIdOf(ownIdentity(acct.key));
     if (match.candidate) {
-      db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, candidate_id, status, name, created_at) VALUES (?, NULL, ?, 'pending_match', ?, ?)")
+      await db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, candidate_id, status, name, created_at) VALUES (?, NULL, ?, 'pending_match', ?, ?)")
         .run(acct.key, match.candidate, acct.name, now);
-      const cand = accountNaming(db).byId.get(match.candidate);
-      const out = ask(db, {
+      const cand = (await accountNaming(db)).byId.get(match.candidate);
+      const out = await ask(db, {
         kind: 'account_match', subject: `sf:${acct.key}`,
         question: `Is ${accountLabel(acct)} at ${acct.inst} from SimpleFIN the same account as ${accountLabel(cand)} you imported from a file?`,
         options: ACCOUNT_MATCH_OPTIONS, context: { sfKey: acct.key, candidateId: match.candidate, ownId: own }, now,
       });
       if (out.queued) counts.queued += 1;
     } else {
-      db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, candidate_id, status, name, created_at) VALUES (?, ?, NULL, 'mapped', ?, ?)")
+      await db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, candidate_id, status, name, created_at) VALUES (?, ?, NULL, 'mapped', ?, ?)")
         .run(acct.key, match.sure ?? own, acct.name, now);
       if (match.sure) counts.matched += 1;
     }
-    m = get.get(acct.key);
+    m = await get.get(acct.key);
   }
   if (m.status !== 'mapped' || !m.account_id) { counts.pending += 1; return null; }
   return m.account_id;
 }
 
-function targetOf(db, accountId, acct) {
-  const existing = db.prepare('SELECT id, inst, mask, name, identity FROM accounts WHERE id = ?').get(accountId);
+async function targetOf(db, accountId, acct) {
+  const existing = await db.prepare('SELECT id, inst, mask, name, identity FROM accounts WHERE id = ?').get(accountId);
   if (existing) {
     return {
       accountId, identity: existing.identity ?? ownIdentity(acct.key),
@@ -343,7 +344,7 @@ function targetOf(db, accountId, acct) {
 
 // What this sync saw of a bridge account: institution, name, mask, balance, the span and count of
 // its postings and the three newest. Never its bridge or connection id.
-function writeSnapshot(db, acct, now) {
+async function writeSnapshot(db, acct, now) {
   const dates = acct.transactions.map((t) => t.date).sort();
   const recent = [...acct.transactions].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)).slice(0, 3)
     .map((t) => ({ date: t.date, amount: t.amount, description: t.description }));
@@ -351,22 +352,22 @@ function writeSnapshot(db, acct, now) {
     inst: acct.inst, name: acct.name, mask: acct.mask ?? null, maskSure: Boolean(acct.maskSure), balance: acct.balance ?? null, balanceDate: acct.balanceDate ?? null,
     from: dates[0] ?? null, to: dates.at(-1) ?? null, count: dates.length, recent,
   };
-  db.prepare(`INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES (?, ?, ?)
+  await db.prepare(`INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES (?, ?, ?)
               ON CONFLICT(sf_key) DO UPDATE SET snapshot = excluded.snapshot, at = excluded.at`).run(acct.key, JSON.stringify(snapshot), now);
 }
 
 // The full first window until every known bridge account has imported once under it, so an
 // account held by a match question or first seen on a short window still gets its history.
-function startDate(db, row, clock) {
-  const owed = db.prepare('SELECT count(*) AS n FROM simplefin_accounts WHERE backfilled = 0').get().n;
+async function startDate(db, row, clock) {
+  const owed = (await db.prepare('SELECT count(*) AS n FROM simplefin_accounts WHERE backfilled = 0').get()).n;
   if (!row.last_sync_at || owed) return addDays(clock, -FIRST_DAYS);
   const last = String(row.last_sync_at).slice(0, 10);
   const from = addDays(last < clock ? last : clock, -OVERLAP_DAYS);
   return from < addDays(clock, -FIRST_DAYS) ? addDays(clock, -FIRST_DAYS) : from;
 }
 
-function setStatus(db, status, code, messages) {
-  db.prepare('UPDATE simplefin_connection SET status = ?, error_code = ?, messages = ? WHERE id = 1')
+async function setStatus(db, status, code, messages) {
+  await db.prepare('UPDATE simplefin_connection SET status = ?, error_code = ?, messages = ? WHERE id = 1')
     .run(status, code ?? null, messages?.length ? JSON.stringify(messages) : null);
 }
 
@@ -374,14 +375,14 @@ function setStatus(db, status, code, messages) {
 // Counts only; nothing here logs account data or the access URL.
 export async function syncSimplefin(db, { household, config = {}, hosts, fetch: fetchImpl, now, clock, engine = null, timeoutMs, retryDelayMs } = {}) {
   householdOf(db, household);
-  const row = connection(db);
+  const row = await connection(db);
   const counts = { accounts: 0, transactions: 0, balances: 0, duplicates: 0, matched: 0, pending: 0, queued: 0, skipped: 0 };
   if (!household.outbound.enabled('simplefin') || !household.isCurrent()) return { status: 'skipped', code: 'paused', changed: false, counts };
   if (!row) return { status: 'skipped', changed: false, counts };
   const stamp = now || new Date().toISOString();
   const today = clock || stamp.slice(0, 10);
   const vault = await openVault(household);
-  const start = startDate(db, row, today);
+  const start = await startDate(db, row, today);
   const full = start === addDays(today, -FIRST_DAYS);
   let set;
   try {
@@ -390,23 +391,23 @@ export async function syncSimplefin(db, { household, config = {}, hosts, fetch: 
     set = normalizeAccountSet(await fetchAccounts(access, { hosts, fetch: fetchImpl, startDate: start, timeoutMs, retryDelayMs }));
   } catch (e) {
     const code = e instanceof SimplefinError ? e.code : 'bad_access';
-    setStatus(db, RECONNECT.has(code) ? 'reconnect' : 'error', code, null);
+    await setStatus(db, RECONNECT.has(code) ? 'reconnect' : 'error', code, null);
     return { status: RECONNECT.has(code) ? 'reconnect' : 'error', code, changed: false, counts };
   }
-  if (!household.outbound.enabled('simplefin') || !household.isCurrent() || connection(db)?.access_blob !== row.access_blob) return { status: 'skipped', code: 'paused', changed: false, counts };
+  if (!household.outbound.enabled('simplefin') || !household.isCurrent() || (await connection(db))?.access_blob !== row.access_blob) return { status: 'skipped', code: 'paused', changed: false, counts };
   counts.accounts = set.accounts.length;
   counts.skipped = set.skipped;
   const docAccounts = [];
   for (const acct of set.accounts) {
-    const accountId = resolveAccount(db, acct, { now: stamp, counts });
-    writeSnapshot(db, acct, stamp);
+    const accountId = await resolveAccount(db, acct, { now: stamp, counts });
+    await writeSnapshot(db, acct, stamp);
     if (!accountId) continue;
-    const target = targetOf(db, accountId, acct);
+    const target = await targetOf(db, accountId, acct);
     // A bridge transaction with the same date and amount as a file-imported one on this account is
     // that posting, one for one; every other bridge transaction goes through ingest dedupe (and its
     // near-duplicate questions).
     const fileRows = new Map();
-    for (const r of db.prepare("SELECT date, amount FROM transactions WHERE account_id = ? AND coalesce(parser, '') != 'simplefin'").all(accountId)) {
+    for (const r of await db.prepare("SELECT date, amount FROM transactions WHERE account_id = ? AND coalesce(parser, '') != 'simplefin'").all(accountId)) {
       const slot = `${r.date}|${Math.round(r.amount * 100)}`;
       fileRows.set(slot, (fileRows.get(slot) ?? 0) + 1);
     }
@@ -434,23 +435,23 @@ export async function syncSimplefin(db, { household, config = {}, hosts, fetch: 
     counts.queued += c.queued ?? 0;
     changed = result.status === 'imported' && (counts.transactions + counts.balances + (c.revised ?? 0)) > 0;
     if (result.status === 'imported') {
-      db.prepare(`UPDATE accounts SET mirror = 'connected' WHERE id IN (${docAccounts.map(() => '?').join(', ')})`).run(...docAccounts.map((a) => a.accountId));
+      await db.prepare(`UPDATE accounts SET mirror = 'connected' WHERE id IN (${docAccounts.map(() => '?').join(', ')})`).run(...docAccounts.map((a) => a.accountId));
     }
     if (full && (result.status === 'imported' || result.status === 'duplicate')) {
       const mark = db.prepare('UPDATE simplefin_accounts SET backfilled = 1 WHERE sf_key = ?');
-      for (const a of docAccounts) mark.run(a.sfKey);
+      for (const a of docAccounts) await mark.run(a.sfKey);
     }
   }
   const authError = set.errors.find((e) => /^(gen|con)\.auth/.test(e.code));
-  db.prepare('UPDATE simplefin_connection SET last_sync_at = ?, accounts = ? WHERE id = 1').run(stamp, set.accounts.length);
-  setStatus(db, authError ? 'reconnect' : 'ok', authError ? 'auth' : null, set.errors.map((e) => e.msg).filter(Boolean).slice(0, 5));
+  await db.prepare('UPDATE simplefin_connection SET last_sync_at = ?, accounts = ? WHERE id = 1').run(stamp, set.accounts.length);
+  await setStatus(db, authError ? 'reconnect' : 'ok', authError ? 'auth' : null, set.errors.map((e) => e.msg).filter(Boolean).slice(0, 5));
   try {
-    autoResolve(db, { now: stamp });
+    await autoResolve(db, { now: stamp });
   } catch (e) {
     console.error('fathom: auto-resolve failed', e?.code ?? e?.name ?? 'error');
   }
-  queueAccountPairs(db, { now: stamp });
-  reconcileTransactionPayments(db, { now: stamp });
+  await queueAccountPairs(db, { now: stamp });
+  await reconcileTransactionPayments(db, { now: stamp });
   return { status: authError ? 'reconnect' : 'ok', code: authError ? 'auth' : undefined, changed, counts };
 }
 

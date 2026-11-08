@@ -26,14 +26,14 @@ test.describe('product-managed steps on the missing-data rec', () => {
     if (existsSync(dataDir)) rmSync(dataDir, { recursive: true, force: true });
     mkdirSync(dataDir);
     const db = await buildRealStore(dataDir, { clock, variant });
-    ask(db, { kind: 'fact_check', subject: 'unrelated-synthetic-check', question: 'An unrelated synthetic question',
+    await ask(db, { kind: 'fact_check', subject: 'unrelated-synthetic-check', question: 'An unrelated synthetic question',
       options: FACT_CHECK_OPTIONS, context: { key: 'synthetic.unrelated', value: true }, now: clock });
     await addPayroll(db, paystubDoc({ person: 'owner', employerName: 'Sample Outside Employer',
       payDate: '2026-12-15', ytdGross: 60000, federalWithholding: 6000 }));
     await planRun(db, { now: clock, dataDir });
 
-    db.prepare("UPDATE recs SET status = CASE WHEN id = 'missing-data' THEN 'proposed' ELSE 'dismissed' END").run();
-    db.close();
+    await db.prepare("UPDATE recs SET status = CASE WHEN id = 'missing-data' THEN 'proposed' ELSE 'dismissed' END").run();
+    await db.close();
     const socket = createServer();
     await new Promise(done => socket.listen(Number(process.env.E2E_STEPS_PORT || 0), 'localhost', done));
     const port = socket.address().port;
@@ -43,7 +43,7 @@ test.describe('product-managed steps on the missing-data rec', () => {
     const auth = createAuthStore(app.platform);
     const { user, token } = auth.invite(auth.servedHousehold().id, 'owner@example.test', { role: 'admin' });
     auth.consumeInvitation(token, user.id);
-    auth.markEnrolled(user.id);
+    await auth.markEnrolled(user.id);
     session = auth.createSession(user.id);
   });
   test.afterAll(async () => {

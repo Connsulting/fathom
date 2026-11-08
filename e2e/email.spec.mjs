@@ -26,11 +26,11 @@ import { householdRootDir, localDataDir } from './local-store.mjs';
 const JOB_IDS = ['plan', 'brief-email', 'deadline-alerts', 'freshness', 'trash-purge', 'confirm-guess', 'simplefin-sync'];
 
 // The dev outbox of the main e2e server's household (its root under the E2E_DATA directory).
-const OUTBOX = () => join(householdRootDir(localDataDir()), 'outbox');
+const OUTBOX = async () => join(await householdRootDir(localDataDir()), 'outbox');
 const MASKED = 'o***@e***.invalid';
 
-const outboxFiles = () => (existsSync(OUTBOX()) ? readdirSync(OUTBOX()).filter((f) => f.endsWith('.json')) : []);
-const outboxSubject = (f) => JSON.parse(readFileSync(join(OUTBOX(), f), 'utf8')).subject;
+const outboxFiles = async () => (existsSync(await OUTBOX()) ? readdirSync(await OUTBOX()).filter((f) => f.endsWith('.json')) : []);
+const outboxSubject = async (f) => JSON.parse(readFileSync(join(await OUTBOX(), f), 'utf8')).subject;
 const history = (page) => page.locator('[data-email-history] tbody tr');
 
 test.beforeEach(async ({ request }) => {
@@ -86,14 +86,14 @@ test('the demo shows one jobs list', async ({ page }) => {
 
 test('Send test email adds a Test history row and writes a dev outbox file with that subject', async ({ page }) => {
   test.skip(REMOTE, 'reads the local e2e data directory');
-  const before = new Set(outboxFiles());
+  const before = new Set(await outboxFiles());
   await gotoRoute(page, 'email');
   await page.getByRole('button', { name: 'Send test email', exact: true }).click();
   const first = history(page).first();
   await expect(first).toContainText('Test');
   await expect(first).toContainText('Sent');
-  await expect.poll(() => outboxFiles().filter((f) => !before.has(f)).length).toBeGreaterThan(0);
-  const subjects = outboxFiles().filter((f) => !before.has(f)).map(outboxSubject);
+  await expect.poll(async () => (await outboxFiles()).filter((f) => !before.has(f)).length).toBeGreaterThan(0);
+  const subjects = (await outboxFiles()).filter((f) => !before.has(f)).map(outboxSubject);
   const rowText = await first.innerText();
   expect(subjects.some((s) => s && rowText.includes(s)), `a new outbox file's subject is in the row: ${subjects.join(' | ')}`).toBe(true);
 });

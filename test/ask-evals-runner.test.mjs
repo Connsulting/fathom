@@ -46,9 +46,9 @@ test('filters select exact cases and reject unknown filters or invalid budget', 
 test('arithmetic drafts remain report-only when real Ask delivers a corrected answer', async () => {
   const cases = await loadCases();
   const c = cases.find(c => c.id === 'retirement-hsa-room');
-  const r = await runCases({ cases: [c], scripts: ({ db, attempt }) => {
+  const r = await runCases({ cases: [c], scripts: async ({ db, attempt }) => {
     if (attempt) return [{ text: '{f:hsa_left}', costUsd: 0 }];
-    const values = db.prepare("SELECT v FROM figures WHERE key IN ('hsa_left','hsa_paid')").all();
+    const values = await db.prepare("SELECT v FROM figures WHERE key IN ('hsa_left','hsa_paid')").all();
     return [
       { toolCalls: [{ name: 'household', args: { operation: 'figures',  keys: ['hsa_left', 'hsa_paid'] } }], costUsd: 0 },
       // Two self-computed figures: since AQ1 a lone unchecked figure is neutralized in place, and only
@@ -75,7 +75,7 @@ test('follow-up uses production history and real tools, system prompt and ground
 test('budget ledger excludes demo spend and refuses a later round inside one engine call', async () => {
   const store = await createEvalStore();
   try {
-    const ledger = createEvalLedger({ db: store.db, maxUsd: 1 });
+    const ledger = await createEvalLedger({ db: store.db, maxUsd: 1 });
     assert.equal(ledger.costUsd, 0);
     const request = { purpose: 'chat', system: 'Use tools.', messages: [{ role: 'user', content: 'Read the value.' }], maxTokens: 1024,
       tools: [{ name: 'read', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: 'Read a value.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, handler: () => ({ value: 10 }) }] };
@@ -96,7 +96,7 @@ test('budget ledger excludes demo spend and refuses a later round inside one eng
 test('budget admits valid neighboring rounds and records existing engine accounting', async () => {
   const store = await createEvalStore();
   try {
-    const ledger = createEvalLedger({ db: store.db, maxUsd: 1 });
+    const ledger = await createEvalLedger({ db: store.db, maxUsd: 1 });
     const req = ledger.begin({ purpose: 'chat', system: 'Read.', messages: [{ role: 'user', content: 'Hi.' }], maxTokens: 1024, tools: [] });
     const engine = createEngine({ admitRound: req => ledger.admitRound(req), mode: 'fake', ledger, capUsd: 1, responses: [{ text: 'Hi.', costUsd: 0.01 }] });
     await engine.call(req);
@@ -246,7 +246,7 @@ test('title grading rejects fallback, missing titles and amounts independently o
 test('live reservation uses the actual transcript, output limit and purpose model without synthetic growth', async () => {
   const store = await createEvalStore();
   try {
-    const ledger = createEvalLedger({ db: store.db, maxUsd: 2 });
+    const ledger = await createEvalLedger({ db: store.db, maxUsd: 2 });
     const request = { purpose: 'chat', system: 'Use tools.', systemDynamic: 'Current context.', tools: [],
       maxTokens: 128, messages: [{ role: 'user', content: 'Discuss education savings.' }] };
     ledger.begin(request);

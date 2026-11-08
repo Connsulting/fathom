@@ -16,8 +16,8 @@ const MAX_TOKEN = 4096;
 
 // A demo store always talks to the synthetic fake bridge; a real store to the network, behind the
 // allowlist.
-export function simplefinFetchFor(ctx) {
-  if (getSetting(ctx.db, 'mode', null) === 'demo') return createFakeSimplefin({ today: () => clockNow(ctx.db, ctx.config && ctx.config.clock).slice(0, 10) });
+export async function simplefinFetchFor(ctx) {
+  if (await getSetting(ctx.db, 'mode', null) === 'demo') return createFakeSimplefin({ today: async () => (await clockNow(ctx.db, ctx.config && ctx.config.clock)).slice(0, 10) });
   return globalThis.fetch;
 }
 
@@ -26,7 +26,7 @@ export async function connect(ctx) {
   if (typeof token !== 'string' || !token.trim() || token.length > MAX_TOKEN) throw new HttpError(400, 'paste the SimpleFIN setup token');
   let status;
   try {
-    status = await connectSimplefin(ctx.db, token, { household: ctx.household, hosts: ctx.config.simplefinHosts, fetch: simplefinFetchFor(ctx), now: new Date().toISOString() });
+    status = await connectSimplefin(ctx.db, token, { household: ctx.household, hosts: ctx.config.simplefinHosts, fetch: await simplefinFetchFor(ctx), now: new Date().toISOString() });
   } catch (err) {
     if (err instanceof SimplefinError) throw new HttpError(err.status, err.message);
     if (err instanceof VaultError) throw new HttpError(409, err.message);
@@ -37,10 +37,10 @@ export async function connect(ctx) {
   if (ctx.scheduler) {
     try { run = await ctx.scheduler.runNow('simplefin-sync'); } catch { run = null; }
   }
-  return { scenario: scenarioOf(ctx), connected: status.connected, run };
+  return { scenario: await scenarioOf(ctx), connected: status.connected, run };
 }
 
-export function disconnect(ctx) {
-  const out = disconnectSimplefin(ctx.db);
-  return { scenario: scenarioOf(ctx), disconnected: out.disconnected };
+export async function disconnect(ctx) {
+  const out = await disconnectSimplefin(ctx.db);
+  return { scenario: await scenarioOf(ctx), disconnected: out.disconnected };
 }

@@ -33,13 +33,13 @@ export function lastFour(name, id) {
 }
 export const accountMask = a => /^\d{4}$/.test(a.mask ?? '') ? a.mask : lastFour(a.name);
 
-export function conflictingBalances(db, a, b) {
-  const values = id => {
-    const out = new Map(db.prepare('SELECT date, amount FROM balances WHERE account_id = ?').all(id).map(r => [r.date, Math.round(r.amount * 100)]));
-    for (const r of db.prepare('SELECT as_of, sum(value) amount FROM positions WHERE account_id = ? GROUP BY as_of').all(id))
+export async function conflictingBalances(db, a, b) {
+  const values = async id => {
+    const out = new Map((await db.prepare('SELECT date, amount FROM balances WHERE account_id = ?').all(id)).map(r => [r.date, Math.round(r.amount * 100)]));
+    for (const r of await db.prepare('SELECT as_of, sum(value) amount FROM positions WHERE account_id = ? GROUP BY as_of').all(id))
       if (!out.has(r.as_of)) out.set(r.as_of, Math.round(r.amount * 100));
     return out;
   };
-  const first = values(a), second = values(b);
+  const first = await values(a), second = await values(b);
   return [...first].some(([date, amount]) => second.has(date) && second.get(date) !== amount);
 }

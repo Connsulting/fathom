@@ -23,7 +23,7 @@ const malformedCredential = () => ({
 });
 
 async function fixture(t, { trustedProxies } = {}) {
-  const temp = await tempInstance({ mode: 'real', init: db => setSetting(db, 'mode', 'real') });
+  const temp = await tempInstance({ mode: 'real', init: async db => await setSetting(db, 'mode', 'real') });
   let server;
   t.after(async () => {
     if (server?.listening) await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); });
@@ -83,21 +83,21 @@ test('HTTP reinvites apply both pending role changes and replace only the invita
     const email = `pending-${initial}@example.test`;
     const first = await admin.postJson('/api/admin/users/invite', { email, role: initial });
     assert.equal(first.status, 200);
-    const user = app.store.findUser(email);
-    const before = { ...app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) };
+    const user = await app.store.findUser(email);
+    const before = { ...await app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) };
     const firstMail = app.sent.at(-1);
     const oldToken = new URL(firstMail.text.match(/https?:\/\/\S+/)[0]).hash.slice(1);
     const recovery = app.store.createToken(user.id, 'recovery');
     const again = await admin.postJson('/api/admin/users/invite', { email: email.toUpperCase(), role: replacement });
     assert.equal(again.status, 200);
     assert.deepEqual(again.json, { sent: true });
-    assert.deepEqual({ ...app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) }, before);
+    assert.deepEqual({ ...await app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) }, before);
     const token = new URL(app.sent.at(-1).text.match(/https?:\/\/\S+/)[0]).hash.slice(1);
     assert.notEqual(token, oldToken);
-    assert.equal(app.store.invitation(oldToken), null);
-    assert.equal(app.store.invitation(token).userId, user.id);
-    assert.equal(app.store.invitation(token).role, replacement);
-    assert.equal(app.store.invitation(token).householdId, app.hh);
+    assert.equal(await app.store.invitation(oldToken), null);
+    assert.equal((await app.store.invitation(token)).userId, user.id);
+    assert.equal((await app.store.invitation(token)).role, replacement);
+    assert.equal((await app.store.invitation(token)).householdId, app.hh);
     assert.ok(app.store.token(recovery.token));
     assert.ok(!again.text.includes(token));
   }
@@ -108,24 +108,24 @@ test('a failed invitation replacement rolls back the pending role and the old li
   const admin = await app.client('admin@example.test', 'admin');
   const original = app.store.invite(app.hh, 'pending@example.test', { role: 'admin' });
   const user = original.user;
-  const before = { ...app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) };
-  const invitations = app.platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all();
-  const tokens = app.platform.prepare('SELECT * FROM auth_tokens ORDER BY hash').all();
-  app.platform.exec("CREATE TEMP TRIGGER fail_invitation BEFORE INSERT ON household_invitations BEGIN SELECT RAISE(ABORT, 'synthetic invitation storage failure'); END");
+  const before = { ...await app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) };
+  const invitations = await app.platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all();
+  const tokens = await app.platform.prepare('SELECT * FROM auth_tokens ORDER BY hash').all();
+  await app.platform.applySchema("CREATE TEMP TRIGGER fail_invitation BEFORE INSERT ON household_invitations BEGIN SELECT RAISE(ABORT, 'synthetic invitation storage failure'); END");
   const failed = await admin.postJson('/api/admin/users/invite', { email: user.email, role: 'member' });
   assert.equal(failed.status, 500);
   assert.deepEqual(failed.json, { error: 'internal error' });
-  assert.deepEqual({ ...app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) }, before);
-  assert.deepEqual(app.platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all(), invitations);
-  assert.deepEqual(app.platform.prepare('SELECT * FROM auth_tokens ORDER BY hash').all(), tokens);
-  assert.equal(app.store.invitation(original.token).role, 'admin');
+  assert.deepEqual({ ...await app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) }, before);
+  assert.deepEqual(await app.platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all(), invitations);
+  assert.deepEqual(await app.platform.prepare('SELECT * FROM auth_tokens ORDER BY hash').all(), tokens);
+  assert.equal((await app.store.invitation(original.token)).role, 'admin');
   assert.equal(app.sent.length, 0);
-  app.platform.exec('DROP TRIGGER fail_invitation');
+  await app.platform.applySchema('DROP TRIGGER fail_invitation');
   assert.equal((await admin.postJson('/api/admin/users/invite', { email: user.email, role: 'member' })).status, 200);
   const reissued = new URL(app.sent.at(-1).text.match(/https?:\/\/\S+/)[0]).hash.slice(1);
-  assert.equal(app.store.invitation(reissued).role, 'member');
-  assert.equal(app.store.invitation(reissued).userId, user.id);
-  assert.equal(app.store.invitation(original.token), null);
+  assert.equal((await app.store.invitation(reissued)).role, 'member');
+  assert.equal((await app.store.invitation(reissued)).userId, user.id);
+  assert.equal(await app.store.invitation(original.token), null);
 });
 
 // Was "either token purpose" (invite, recovery): invite links are invitations now, so the two auth
@@ -138,20 +138,20 @@ test('HTTP active-member reinvites direct callers to a role action without mutat
     const user = client.session.user;
     app.store.createToken(user.id, 'add-passkey');
     app.store.createToken(user.id, 'recovery');
-    const before = { ...app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) };
+    const before = { ...await app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) };
     const membership = app.store.membership(user.id, app.hh);
-    const invitations = app.platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all();
-    const tokens = app.platform.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY hash').all(user.id);
+    const invitations = await app.platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all();
+    const tokens = await app.platform.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY hash').all(user.id);
     for (const role of ['admin', 'member']) {
       const response = await admin.postJson('/api/admin/users/invite', { email: user.email.toUpperCase(), role });
       assert.equal(response.status, 409);
       assert.match(response.json.error, /role/i);
       assert.match(response.json.error, /chang|\/role/i);
       assert.match(response.headers['cache-control'], /no-store/);
-      assert.deepEqual({ ...app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) }, before);
+      assert.deepEqual({ ...await app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) }, before);
       assert.deepEqual(app.store.membership(user.id, app.hh), membership);
-      assert.deepEqual(app.platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all(), invitations);
-      assert.deepEqual(app.platform.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY hash').all(user.id), tokens);
+      assert.deepEqual(await app.platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all(), invitations);
+      assert.deepEqual(await app.platform.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY hash').all(user.id), tokens);
       assert.equal((await client.request({ path: '/api/auth/session' })).json.identity.role, initial);
     }
   }
@@ -169,8 +169,8 @@ test('session fixtures reuse enrolled users without reinviting them or changing 
   assert.equal(app.store.session(second.session.token).id, first.session.user.id);
   assert.deepEqual(app.store.getUser(first.session.user.id), first.session.user);
   assert.equal(app.store.membership(first.session.user.id, app.hh).role, 'admin');
-  assert.equal(app.platform.prepare('SELECT count(*) AS n FROM household_memberships WHERE user_id = ?').get(first.session.user.id).n, 1);
-  assert.equal(app.platform.prepare('SELECT count(*) AS n FROM household_invitations WHERE email = ?').get('existing@example.test').n, 1, 'no reinvitation');
+  assert.equal((await app.platform.prepare('SELECT count(*) AS n FROM household_memberships WHERE user_id = ?').get(first.session.user.id)).n, 1);
+  assert.equal((await app.platform.prepare('SELECT count(*) AS n FROM household_invitations WHERE email = ?').get('existing@example.test')).n, 1, 'no reinvitation');
 });
 
 test('add-passkey options and verify require a sign-in strictly less than ten minutes old', async t => {
@@ -195,7 +195,7 @@ test('add-passkey options and verify require a sign-in strictly less than ten mi
   assert.equal(session.json.identity.householdId, app.hh);
   assert.equal(session.json.identity.operator, false);
   assert.deepEqual(session.json.identity.memberships, [{ householdId: app.hh, role: 'member', name: null }]);
-  assert.deepEqual(app.store.listPasskeys(client.session.user.id), []);
+  assert.deepEqual(await app.store.listPasskeys(client.session.user.id), []);
   const next = await app.client('another@example.test');
   app.advance(RECENT + 1);
   assert.deepEqual(recentError(await next.postJson('/api/auth/register/options')), expected, 'the error is fixed across accounts and ages');
@@ -220,7 +220,7 @@ test('fresh malformed registration reaches the real verifier and returns 400 whi
   assert.equal((await client.request({ path: '/api/auth/passkeys' })).status, 200);
   assert.equal((await client.postJson('/api/auth/register/options')).status, 200);
   assert.equal((await request(app.baseUrl, { path: '/healthz' })).status, 200);
-  assert.deepEqual(app.store.listPasskeys(client.session.user.id), []);
+  assert.deepEqual(await app.store.listPasskeys(client.session.user.id), []);
 });
 
 test('invite and recovery registration are independent of an absent or stale browser session', async t => {
@@ -231,7 +231,7 @@ test('invite and recovery registration are independent of an absent or stale bro
   app.advance(RECENT);
   for (const [user, purpose] of [[pending, 'invite'], [client.session.user, 'recovery']]) {
     const issued = purpose === 'invite' ? invited : app.store.createToken(user.id, purpose);
-    const live = () => (purpose === 'invite' ? app.store.invitation(issued.token) : app.store.token(issued.token));
+    const live = async () => (purpose === 'invite' ? await app.store.invitation(issued.token) : app.store.token(issued.token));
     for (const sessionCookie of ['', client.session.cookie]) {
       const options = await app.post('/api/auth/register/options', { token: issued.token }, { cookie: sessionCookie });
       assert.equal(options.status, 200, `${purpose} options do not require recent sign-in`);
@@ -240,7 +240,7 @@ test('invite and recovery registration are independent of an absent or stale bro
       });
       assert.equal(failed.status, 400);
       assert.deepEqual(failed.json, { error: 'passkey verification failed' });
-      assert.ok(live());
+      assert.ok(await live());
     }
   }
   assert.equal(app.store.getUser(pending.id).enrolledAt, null);
@@ -309,9 +309,9 @@ test('trusted proxy configuration defaults empty and accepts only comma-separate
 // included), so the merged invite buckets (60 per socket, 120 global, per 10 minutes) are proven by
 // priming their auth_rate_limits rows just below the limit instead of sending 60 or 120 invites.
 const HOUR = 60 * 60 * 1000;
-const bucket = (app, key) => app.platform.prepare('SELECT window_start, expires_at, attempts FROM auth_rate_limits WHERE key_hash = ?').get(digest(key));
-function prime(app, key, attempts) {
-  app.platform.prepare(`INSERT INTO auth_rate_limits (key_hash, window_start, expires_at, attempts) VALUES (?, ?, ?, ?)
+const bucket = async (app, key) => await app.platform.prepare('SELECT window_start, expires_at, attempts FROM auth_rate_limits WHERE key_hash = ?').get(digest(key));
+async function prime(app, key, attempts) {
+  await app.platform.prepare(`INSERT INTO auth_rate_limits (key_hash, window_start, expires_at, attempts) VALUES (?, ?, ?, ?)
     ON CONFLICT(key_hash) DO UPDATE SET attempts = excluded.attempts`).run(digest(key), app.now(), app.now() + RECENT, attempts);
 }
 
@@ -324,16 +324,16 @@ test('forged forwarded clients share the default recovery quota while invitation
     assert.deepEqual(response.json, { sent: true });
   }
   limited(await app.post('/api/auth/recover', { email: 'overflow@example.test' }, { 'x-forwarded-for': '203.0.113.7' }));
-  for (const suffix of ['global', 'socket:127.0.0.1']) assert.equal(bucket(app, `invite:${suffix}`), undefined, 'exhausting recovery touches no invitation bucket');
+  for (const suffix of ['global', 'socket:127.0.0.1']) assert.equal(await bucket(app, `invite:${suffix}`), undefined, 'exhausting recovery touches no invitation bucket');
   // 59 earlier invitation attempts in both invite buckets: the 60th passes, the 61st is refused.
-  prime(app, 'invite:global', 59);
-  prime(app, 'invite:socket:127.0.0.1', 59);
+  await prime(app, 'invite:global', 59);
+  await prime(app, 'invite:socket:127.0.0.1', 59);
   const accepted = await admin.postJson('/api/admin/users/invite', { email: 'pending@example.test', role: 'member' }, { 'x-forwarded-for': '203.0.113.1' });
   assert.equal(accepted.status, 200, 'exhausting recovery must not consume an invitation attempt');
   limited(await admin.postJson('/api/admin/users/invite', { email: 'pending@example.test', role: 'member' }, { 'x-forwarded-for': '198.51.100.200' }));
   for (const kind of ['recover', 'invite']) {
     for (const suffix of ['global', 'socket:127.0.0.1']) {
-      const row = bucket(app, `${kind}:${suffix}`);
+      const row = await bucket(app, `${kind}:${suffix}`);
       assert.ok(row, `${kind}:${suffix} has an independent bucket`);
       assert.equal(row.window_start, START);
       assert.equal(row.expires_at, START + RECENT);
@@ -347,7 +347,7 @@ test('forged forwarded clients share the default recovery quota while invitation
   assert.equal((await app.post('/api/auth/recover', { email: 'after-reset@example.test' })).status, 200);
   assert.equal((await admin.postJson('/api/admin/users/invite', { email: 'pending@example.test', role: 'member' })).status, 200);
   assert.equal((await admin.request({ path: '/api/auth/passkeys' })).status, 200);
-  assert.equal(app.db.prepare('SELECT count(*) AS n FROM email_sends').get().n, 0);
+  assert.equal((await app.db.prepare('SELECT count(*) AS n FROM email_sends').get()).n, 0);
 });
 
 test('trusted loopback honors forwarded clients while recovery and invitation global limits stay at 120', async t => {
@@ -358,21 +358,21 @@ test('trusted loopback honors forwarded clients while recovery and invitation gl
   limited(await recover(60, '203.0.113.1'));
   for (let i = 61; i < 120; i++) assert.equal((await recover(i, '203.0.113.2')).status, 200, 'a second forwarded client gets its own bucket');
   limited(await recover(120, '203.0.113.3'));
-  assert.equal(bucket(app, 'recover:global').attempts, 121);
+  assert.equal((await bucket(app, 'recover:global')).attempts, 121);
 
   const invite = client => admin.postJson('/api/admin/users/invite', { email: 'pending@example.test', role: 'member' }, { 'x-forwarded-for': `198.51.100.99, ${client}` });
-  prime(app, 'invite:global', 59);
-  prime(app, 'invite:socket:203.0.113.1', 59);
+  await prime(app, 'invite:global', 59);
+  await prime(app, 'invite:socket:203.0.113.1', 59);
   assert.equal((await invite('203.0.113.1')).status, 200, 'the 60th attempt from one forwarded client passes');
   limited(await invite('203.0.113.1'));
-  assert.equal(bucket(app, 'invite:socket:203.0.113.1').attempts, 61);
+  assert.equal((await bucket(app, 'invite:socket:203.0.113.1')).attempts, 61);
   assert.equal((await invite('203.0.113.2')).status, 200, 'a second forwarded client gets its own bucket');
-  assert.equal(bucket(app, 'invite:socket:203.0.113.2').attempts, 1);
-  assert.equal(bucket(app, 'invite:socket:127.0.0.1'), undefined, 'the trusted proxy socket is not the client');
-  prime(app, 'invite:global', 119);
+  assert.equal((await bucket(app, 'invite:socket:203.0.113.2')).attempts, 1);
+  assert.equal(await bucket(app, 'invite:socket:127.0.0.1'), undefined, 'the trusted proxy socket is not the client');
+  await prime(app, 'invite:global', 119);
   assert.equal((await invite('203.0.113.3')).status, 200, 'the 120th attempt overall passes');
   limited(await invite('203.0.113.4'));
-  assert.equal(bucket(app, 'invite:global').attempts, 121);
+  assert.equal((await bucket(app, 'invite:global')).attempts, 121);
 });
 
 // Spec cap: 20 invitation emails per household per hour; every send counts, reissues included.
@@ -391,7 +391,7 @@ test('a household gets 20 invitation emails per hour and the 21st is refused wit
   assert.ok(Number(refused.headers['retry-after']) > 0);
   assert.match(refused.headers['cache-control'], /no-store/);
   assert.equal(app.sent.length, 20, 'no email for the refused invitation');
-  assert.equal(app.store.findUser('cap-21@example.test'), null, 'the refused invitation creates nothing');
+  assert.equal(await app.store.findUser('cap-21@example.test'), null, 'the refused invitation creates nothing');
   assert.equal((await invite('cap-2@example.test')).status, 429, 'a reissue is refused too');
   app.advance(HOUR + 1);
   assert.equal((await invite('cap-21@example.test')).status, 200, 'the cap resets after an hour');

@@ -151,12 +151,12 @@ function classifyRun(r, jobId, ctx) {
   return null;
 }
 
-function jobService(db, job, sched, ctx) {
+async function jobService(db, job, sched, ctx) {
   const { flags } = ctx;
   const base = { key: `job:${job.id}`, label: job.name, go: JOB_GO[job.id] ?? 'engine', lastSuccessAt: null, nextAttemptAt: null, running: false };
-  const rows = db.prepare('SELECT * FROM job_runs WHERE job_id = ? ORDER BY id DESC LIMIT ?').all(job.id, STREAK_ROWS);
+  const rows = await db.prepare('SELECT * FROM job_runs WHERE job_id = ? ORDER BY id DESC LIMIT ?').all(job.id, STREAK_ROWS);
   base.running = rows[0]?.status === 'running';
-  const lastOk = db.prepare("SELECT started_at, finished_at, note FROM job_runs WHERE job_id = ? AND status = 'ok' ORDER BY id DESC LIMIT 1").get(job.id);
+  const lastOk = await db.prepare("SELECT started_at, finished_at, note FROM job_runs WHERE job_id = ? AND status = 'ok' ORDER BY id DESC LIMIT 1").get(job.id);
   base.lastSuccessAt = lastOk ? iso(lastOk.finished_at ?? lastOk.started_at) : null;
   if (job.id === 'plan') {
     const warned = noteOf(lastOk?.note)?.warned;
@@ -201,9 +201,9 @@ function engineService(engine, db, flags) {
   return healthy(base);
 }
 
-function simplefinService(db, flags, syncJob) {
+async function simplefinService(db, flags, syncJob) {
   const base = { key: 'simplefin', label: 'SimpleFIN connection', go: 'money', lastSuccessAt: null, nextAttemptAt: null };
-  const row = db.prepare('SELECT last_sync_at, status, error_code FROM simplefin_connection WHERE id = 1').get();
+  const row = await db.prepare('SELECT last_sync_at, status, error_code FROM simplefin_connection WHERE id = 1').get();
   if (!row) return healthy(base);
   base.lastSuccessAt = iso(row.last_sync_at);
   const since = syncJob && syncJob.state !== 'healthy' ? syncJob.since : null;
@@ -222,12 +222,12 @@ function simplefinService(db, flags, syncJob) {
   return out('needs_you', code, CAUSES.sync_failed, C.syncNow());
 }
 
-function emailService(db, flags, jobs) {
+async function emailService(db, flags, jobs) {
   const base = { key: 'email', label: 'Email', go: 'email', lastSuccessAt: null, nextAttemptAt: null };
-  const sent = db.prepare("SELECT ts FROM email_sends WHERE status = 'sent' ORDER BY id DESC LIMIT 1").get();
+  const sent = await db.prepare("SELECT ts FROM email_sends WHERE status = 'sent' ORDER BY id DESC LIMIT 1").get();
   base.lastSuccessAt = sent ? iso(sent.ts) : null;
   if (!flags.email) return { ...base, state: 'paused', code: 'paused', cause: CAUSES.email_flag_paused, since: null, control: C.resume('email') };
-  const rows = db.prepare('SELECT ts, status, error_code FROM email_sends ORDER BY id DESC LIMIT ?').all(STREAK_ROWS);
+  const rows = await db.prepare('SELECT ts, status, error_code FROM email_sends ORDER BY id DESC LIMIT ?').all(STREAK_ROWS);
   // Email is on here, so a send that failed because email was paused is not current.
   const failed = (r) => r?.status === 'failed' && r.error_code !== 'paused';
   if (!failed(rows[0])) return healthy(base);
@@ -245,11 +245,11 @@ function emailService(db, flags, jobs) {
 
 const files = (n) => `${n} ${n === 1 ? 'file' : 'files'}`;
 
-function importsService(db) {
+async function importsService(db) {
   const base = { key: 'imports', label: 'Imports', go: 'add', lastSuccessAt: null, nextAttemptAt: null, control: null, files: 0 };
-  const last = db.prepare("SELECT max(uploaded_at) AS at FROM files WHERE status = 'imported' AND removed_at IS NULL AND stored_path IS NOT NULL").get();
+  const last = await db.prepare("SELECT max(uploaded_at) AS at FROM files WHERE status = 'imported' AND removed_at IS NULL AND stored_path IS NOT NULL").get();
   base.lastSuccessAt = iso(last?.at);
-  const rows = db.prepare(`SELECT status, note, uploaded_at FROM files WHERE removed_at IS NULL AND stored_path IS NOT NULL
+  const rows = await db.prepare(`SELECT status, note, uploaded_at FROM files WHERE removed_at IS NULL AND stored_path IS NOT NULL
                            AND status IN (${UNRESOLVED.map(() => '?').join(', ')})`).all(...UNRESOLVED);
   if (!rows.length) return healthy(base);
   const fathom = (r) => r.status === 'pending' || (r.status === 'failed' && String(r.note ?? '').startsWith('retry:'))
@@ -269,7 +269,7 @@ function needsAttention(svc, now) {
   return Number.isFinite(since) && now.getTime() - since > DAY;
 }
 
-export function serviceStatus({ db, outbound = {}, engine = null, scheduler = null, now = new Date() } = {}) {
+export async function serviceStatus({ db, outbound = {}, engine = null, scheduler = null, now = new Date() } = {}) {
   const at = new Date(now);
   const flags = Object.fromEntries(['jobs', 'email', 'simplefin', 'engine'].map((k) => [k, outbound?.[k] !== false]));
   // The engine service first: whether an engine stop on a job is still current depends on it.
@@ -278,14 +278,14 @@ export function serviceStatus({ db, outbound = {}, engine = null, scheduler = nu
   const jobs = {};
   if (scheduler && typeof scheduler.schedule === 'function') {
     const byId = new Map(scheduler.schedule().map((x) => [x.id, x]));
-    for (const job of JOBS) if (byId.has(job.id)) jobs[job.id] = jobService(db, job, byId.get(job.id), ctx);
+    for (const job of JOBS) if (byId.has(job.id)) jobs[job.id] = await jobService(db, job, byId.get(job.id), ctx);
   }
   const out = {
     jobs,
-    email: emailService(db, flags, jobs),
+    email: await emailService(db, flags, jobs),
     engine: engineSvc,
-    simplefin: simplefinService(db, flags, jobs['simplefin-sync']),
-    imports: importsService(db),
+    simplefin: await simplefinService(db, flags, jobs['simplefin-sync']),
+    imports: await importsService(db),
   };
   const order = [out.engine, out.simplefin, out.email, out.imports, ...JOBS.map((j) => jobs[j.id])];
   out.attention = order.find((s) => needsAttention(s, at)) ?? null;

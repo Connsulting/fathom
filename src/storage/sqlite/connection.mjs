@@ -1,24 +1,42 @@
-import { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync, backup } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { sqliteError, storageError } from '../errors.mjs';
 import { queryShape } from '../sql.mjs';
 import { row, safeInteger } from '../values.mjs';
+import { migrateDatabase } from './migrations.mjs';
+import { captureBegin, captureEnd, captureDrop } from './capture.mjs';
 
-export async function openConnection({ path }) {
+const ident = name => `"${String(name).replaceAll('"', '""')}"`;
+const JOURNALS = new Set(['wal', 'delete']);
+
+// One physical SQLite connection. Options: readOnly; journal ('wal' default, 'delete', or null to
+// leave the file's mode); busyTimeout (ms, default 5000); foreignKeys (default true); queryOnly;
+// exclusive (take and keep an exclusive lock, failing at once when another connection holds one).
+export async function openConnection({ path, readOnly = false, journal = 'wal', busyTimeout = 5000, foreignKeys = true, queryOnly = false, exclusive = false } = {}) {
+  if (journal !== null && !JOURNALS.has(journal)) throw storageError();
+  if (!Number.isSafeInteger(busyTimeout) || busyTimeout < 0) throw storageError();
   let db;
   try {
-    db = new DatabaseSync(path);
-    db.exec('PRAGMA busy_timeout = 5000');
-    db.exec('PRAGMA journal_mode = WAL');
-    db.exec('PRAGMA foreign_keys = ON');
-  } catch {
-    db?.close();
-    throw storageError('storage_unavailable');
+    db = readOnly ? new DatabaseSync(path, { readOnly: true }) : new DatabaseSync(path);
+    db.exec(`PRAGMA busy_timeout = ${exclusive ? 0 : busyTimeout}`);
+    if (exclusive) {
+      db.exec('PRAGMA locking_mode = EXCLUSIVE');
+      db.exec('BEGIN EXCLUSIVE');
+      db.exec('COMMIT');
+    }
+    if (journal && !readOnly) db.exec(`PRAGMA journal_mode = ${journal.toUpperCase()}`);
+    if (foreignKeys) db.exec('PRAGMA foreign_keys = ON');
+    if (queryOnly) db.exec('PRAGMA query_only = ON');
+  } catch (error) {
+    try { db?.close(); } catch { /* not open */ }
+    throw storageError(exclusive && [5, 6].includes(error?.errcode & 255) ? 'storage_busy' : 'storage_unavailable');
   }
   const cache = new Map();
+  let capture = null;
   function driver(action) {
     try { return action(); } catch (error) { throw sqliteError(error); }
   }
+  const pragmaRows = text => driver(() => db.prepare(text).all()).map(row);
   return {
     async query(text, method, args) {
       const shape = queryShape(text);
@@ -41,12 +59,51 @@ export async function openConnection({ path }) {
       const result = driver(() => statement.run(...args));
       return { changes: shape.kind === 'SELECT' ? 0 : safeInteger(result.changes) };
     },
-    async begin() { driver(() => db.exec('BEGIN IMMEDIATE')); },
+    async begin() { driver(() => db.exec(readOnly ? 'BEGIN' : 'BEGIN IMMEDIATE')); },
     async commit() { driver(() => db.exec('COMMIT')); },
     async rollback() { driver(() => db.exec('ROLLBACK')); },
     async savepoint(name) { driver(() => db.exec(`SAVEPOINT ${name}`)); },
     async release(name) { driver(() => db.exec(`RELEASE SAVEPOINT ${name}`)); },
     async rollbackTo(name) { driver(() => db.exec(`ROLLBACK TO SAVEPOINT ${name}`)); },
+    // Lifecycle and metadata operations; none takes application SQL.
+    async tables() {
+      return pragmaRows("SELECT name FROM main.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY name").map(r => r.name);
+    },
+    async hasTable(name) {
+      return Boolean(driver(() => db.prepare("SELECT 1 AS x FROM main.sqlite_master WHERE type = 'table' AND name = ?").get(name)));
+    },
+    async columns(table) {
+      return pragmaRows(`PRAGMA main.table_info(${ident(table)})`)
+        .map(c => ({ name: c.name, type: c.type, notnull: c.notnull, dflt_value: c.dflt_value, pk: c.pk }));
+    },
+    async integrityCheck() { return pragmaRows('PRAGMA integrity_check').map(r => r.integrity_check); },
+    async foreignKeyCheck(table) { return pragmaRows(table === undefined ? 'PRAGMA foreign_key_check' : `PRAGMA foreign_key_check(${ident(table)})`); },
+    async checkpoint() { driver(() => db.exec('PRAGMA wal_checkpoint(TRUNCATE)')); },
+    async sizeBytes() {
+      const pages = pragmaRows('PRAGMA page_count')[0].page_count;
+      const size = pragmaRows('PRAGMA page_size')[0].page_size;
+      return pages * size;
+    },
+    // Trusted schema DDL from the application's own files (never request input).
+    async applySchema(sql) { driver(() => db.exec(sql)); },
+    async migrate(options) { return migrateDatabase(db, options); },
+    async backupTo(target) {
+      try { await backup(db, target); } catch (error) { throw sqliteError(error); }
+    },
+    async captureBegin() {
+      if (capture) throw storageError();
+      capture = driver(() => captureBegin(db));
+    },
+    async captureEnd() {
+      const active = capture;
+      capture = null;
+      return driver(() => captureEnd(db, active));
+    },
+    async captureDrop() {
+      const active = capture;
+      capture = null;
+      if (active) driver(() => captureDrop(db, active));
+    },
     async close() {
       driver(() => {
         for (const statement of cache.values()) statement.close();

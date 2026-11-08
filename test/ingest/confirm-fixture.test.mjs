@@ -36,17 +36,17 @@ async function withHousehold(fn, { names = false } = {}) {
   } finally { s.close(); }
 }
 
-const acct = (db, mask, inst) => one(db, "SELECT id FROM accounts WHERE mask = ? AND coalesce(inst, '') = ?", mask, inst).id;
+const acct = async (db, mask, inst) => (await one(db, "SELECT id FROM accounts WHERE mask = ? AND coalesce(inst, '') = ?", mask, inst)).id;
 const byKind = (items) => items.reduce((out, i) => ({ ...out, [i.kind]: (out[i.kind] ?? 0) + 1 }), {});
 const textOf = (evidence) => (typeof evidence === 'string' ? evidence : evidence?.text);
 
-test('no names known: 12 pending including three source categories and 5 decided for the owner', () => withHousehold((s) => {
+test('no names known: 12 pending including three source categories and 5 decided for the owner', () => withHousehold(async (s) => {
   const state = FR.ingestState(s.db);
   const pending = C.pendingItems(s.db);
   assert.equal(pending.length, 12);
   assert.deepEqual(byKind(pending), { account_owner: 7, account_kind: 1, near_duplicate: 1, category_mapping: 3 });
   const kindSubjects = pending.filter((i) => i.kind === 'account_kind').map((i) => i.subject).sort();
-  assert.deepEqual(kindSubjects, [acct(s.db, '5566', 'Example Credit Union')], 'Rainy Day');
+  assert.deepEqual(kindSubjects, [await acct(s.db, '5566', 'Example Credit Union')], 'Rainy Day');
 
   assert.equal(state.pending, 12);
   assert.deepEqual(state.items.filter(i=>i.kind==='category_mapping').map(i=>i.context.category).sort(), ['Auto','Dining','Utilities']);
@@ -68,18 +68,18 @@ test('no names known: 12 pending including three source categories and 5 decided
       assert.ok(text.includes('Rewards Card'));
     } else {
       assert.deepEqual([d.kind, d.answer], ['account_kind', 'taxable']);
-      const { mask } = one(s.db, 'SELECT a.mask FROM accounts a JOIN confirm_items ci ON ci.subject = a.id WHERE ci.id = ?', d.id);
+      const { mask } = await one(s.db, 'SELECT a.mask FROM accounts a JOIN confirm_items ci ON ci.subject = a.id WHERE ci.id = ?', d.id);
       assert.ok(text.includes(mask), `names the shared mask ${mask}: ${text}`);
     }
   }
 }));
 
-test('names known before the import: 6 pending including three source categories, the only owner question is Rainy Day', () => withHousehold((s) => {
+test('names known before the import: 6 pending including three source categories, the only owner question is Rainy Day', () => withHousehold(async (s) => {
   const state = FR.ingestState(s.db);
   const pending = C.pendingItems(s.db);
   assert.equal(pending.length, 6);
   assert.deepEqual(byKind(pending), { account_owner: 1, account_kind: 1, near_duplicate: 1, category_mapping: 3 });
   const owner = pending.find((i) => i.kind === 'account_owner');
-  assert.equal(owner.subject, acct(s.db, '5566', 'Example Credit Union'), 'Rainy Day, held by both, stays a question');
+  assert.equal(owner.subject, await acct(s.db, '5566', 'Example Credit Union'), 'Rainy Day, held by both, stays a question');
   assert.equal(state.pending, 6);
 }, { names: true }));

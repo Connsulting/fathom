@@ -140,8 +140,8 @@ const confirmMinutes = (n) => Math.max(1, Math.ceil((n * 5) / 60));
 // Urgency of a needs-you row: soon (window within URGENT_DAYS), later, or info (no window).
 export const urgencyOf = (days) => (days == null ? 'info' : days <= URGENT_DAYS ? 'soon' : 'later');
 
-export function buildBrief(db, { clock, publicUrl = null, householdId = null } = {}) {
-  const sc = buildScenario(db, { clock });
+export async function buildBrief(db, { clock, publicUrl = null, householdId = null } = {}) {
+  const sc = await buildScenario(db, { clock });
   const clk = sc.meta.clock;
   const reg = figureRegistry(sc);
   const needs = needsYou(sc.recs);
@@ -512,7 +512,7 @@ export function renderBrief(model, summary) {
 }
 
 export async function composeBrief(db, { clock, publicUrl = null, engine = null, householdId = null } = {}) {
-  const model = buildBrief(db, { clock, publicUrl, householdId });
+  const model = await buildBrief(db, { clock, publicUrl, householdId });
   const summary = await briefSummary(model, { engine });
   return { ...renderBrief(model, summary), summarySrc: summary.src, costUsd: summary.costUsd, model };
 }

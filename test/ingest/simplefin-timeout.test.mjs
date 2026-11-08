@@ -81,7 +81,7 @@ test('a network error on the first try is retried once and the sync completes', 
   const out = await S.syncSimplefin(s.db, syncOpts(s, flaky, { retryDelayMs: 0 }));
   assert.equal(out.status, 'ok');
   assert.equal(accountsCalls, 2);
-  assert.equal(s.db.prepare('SELECT status, error_code FROM simplefin_connection WHERE id = 1').get().status, 'ok');
+  assert.equal((await s.db.prepare('SELECT status, error_code FROM simplefin_connection WHERE id = 1').get()).status, 'ok');
 }));
 
 test('the retry waits the configured delay before the second request', () => withConnected(async (s, fake) => {
@@ -101,7 +101,7 @@ test('a bridge that always times out ends in the network status after exactly tw
   const out = await S.syncSimplefin(s.db, syncOpts(s, never, { timeoutMs: 120000 / 1000, retryDelayMs: 0 }));
   assert.deepEqual([out.status, out.code], ['error', 'network']);
   assert.equal(log.length, 2);
-  const row = s.db.prepare('SELECT status, error_code FROM simplefin_connection WHERE id = 1').get();
+  const row = await s.db.prepare('SELECT status, error_code FROM simplefin_connection WHERE id = 1').get();
   assert.deepEqual([row.status, row.error_code], ['error', 'network']);
 }));
 
@@ -116,7 +116,7 @@ test('refusals the bridge answers are not retried', () => withConnected(async (s
     const out = await S.syncSimplefin(s.db, syncOpts(s, refuse, { retryDelayMs: 0 }));
     assert.equal(out.code, code);
     assert.equal(calls, 1, `${status} is answered once`);
-    s.db.prepare("UPDATE simplefin_connection SET status = 'ok', error_code = NULL WHERE id = 1").run();
+    await s.db.prepare("UPDATE simplefin_connection SET status = 'ok', error_code = NULL WHERE id = 1").run();
   }
 }));
 

@@ -12,7 +12,7 @@ const spending = { tool: 'spending', args: { operation: 'total', measure: 'spend
 const queryString = query => new URLSearchParams(Object.entries(query).map(([k, v]) => [k, Array.isArray(v) ? v.join(',') : v]));
 
 test('both drill mappings fetch sums equal to every displayed demo category figure', async t => {
-  const s = await tempDb(); seedDemo(s.db); t.after(() => s.close());
+  const s = await tempDb(); await seedDemo(s.db); t.after(() => s.close());
   const server = await serveAppFixture({ db: s.db, config: { clock } });
   t.after(() => server.close());
   const ctx = { db: s.db, clock };

@@ -325,7 +325,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
         if (admitRound) await admitRound({ purpose, system, systemDynamic, messages: transcript, tools, maxTokens });
         const auth = mode === 'live' && port.credentialRequired ? explicitCredential(modelCredentials[purpose] ?? credential) : modelCredentials[purpose];
         const context = callContext ?? toolContext;
-        const registry = createRegistryServer(tools, { purpose, ctx: { ...context, now: context.now ?? ts,
+        const registry = await createRegistryServer(tools, { purpose, ctx: { ...context, now: context.now ?? ts,
           ...(purpose === 'chat' && typeof context.replan === 'function' ? { queueAfterTools: task => afterTools.push(task) } : {}) } });
         const unknownCost = estimateNow;
         let admission = null;

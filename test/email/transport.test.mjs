@@ -510,7 +510,7 @@ describe('sendEmail and listSends', () => {
       assert.equal(bad.status, 'failed');
       assert.equal(bad.errorCode, 'rate_limited');
 
-      const rows = t.db.prepare('SELECT * FROM email_sends ORDER BY id').all().map((r) => ({ ...r }));
+      const rows = (await t.db.prepare('SELECT * FROM email_sends ORDER BY id').all()).map((r) => ({ ...r }));
       assert.equal(rows.length, 2);
       for (const r of rows) {
         for (const [col, v] of Object.entries(r)) {
@@ -525,8 +525,8 @@ describe('sendEmail and listSends', () => {
     const t = await tempDb();
     try {
       const broken = { name: 'broken', async send() { throw new RangeError('synthetic bug'); } };
-      await assert.rejects(() => sendEmail(t.db, { transport: broken, kind: 'test', ...MSG, now: '2032-06-01T11:00:00.000Z' }), RangeError);
-      const row = t.db.prepare('SELECT * FROM email_sends').get();
+      await assert.rejects(async () => sendEmail(t.db, { transport: broken, kind: 'test', ...MSG, now: '2032-06-01T11:00:00.000Z' }), RangeError);
+      const row = await t.db.prepare('SELECT * FROM email_sends').get();
       assert.equal(row.status, 'failed');
       assert.ok(Object.values(row).includes('other'), 'error code other recorded');
     } finally { t.close(); rmSync(t.dataDir, { recursive: true, force: true }); }
@@ -538,9 +538,9 @@ describe('sendEmail and listSends', () => {
       for (let i = 1; i <= 3; i++) {
         await sendEmail(t.db, { transport: okTransport, kind: 'test', ...MSG, subject: `Synthetic ${i}`, now: `2032-06-0${i}T11:00:00.000Z` });
       }
-      assert.deepEqual(listSends(t.db).map((s) => s.subject), ['Synthetic 3', 'Synthetic 2', 'Synthetic 1']);
-      assert.deepEqual(listSends(t.db, { limit: 2 }).map((s) => s.subject), ['Synthetic 3', 'Synthetic 2']);
-      for (const s of listSends(t.db)) for (const k of ['text', 'html', 'body']) assert.ok(!(k in s), `no ${k} in history`);
+      assert.deepEqual((await listSends(t.db)).map((s) => s.subject), ['Synthetic 3', 'Synthetic 2', 'Synthetic 1']);
+      assert.deepEqual((await listSends(t.db, { limit: 2 })).map((s) => s.subject), ['Synthetic 3', 'Synthetic 2']);
+      for (const s of await listSends(t.db)) for (const k of ['text', 'html', 'body']) assert.ok(!(k in s), `no ${k} in history`);
     } finally { t.close(); rmSync(t.dataDir, { recursive: true, force: true }); }
   });
 });

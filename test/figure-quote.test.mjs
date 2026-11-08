@@ -17,7 +17,7 @@ let t;
 let ctx;
 before(async () => {
   t = await tempDb();
-  seedDemo(t.db);
+  await seedDemo(t.db);
   ctx = { db: t.db, dataDir: t.dataDir, now: new Date('2026-11-05T15:00:00Z') };
 });
 after(() => t && t.close());

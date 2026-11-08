@@ -5,8 +5,8 @@ import { HttpError } from './http.mjs';
 import { scenarioOf } from './handlers.mjs';
 import { setTourPending } from '../auth/tour.mjs';
 
-export function tourSeen(ctx) {
+export async function tourSeen(ctx) {
   if (typeof ctx.identity?.id !== 'string' || !ctx.platform) throw new HttpError(401, 'unauthorized');
-  setTourPending(ctx, false);
-  return { scenario: scenarioOf(ctx) };
+  await setTourPending(ctx, false);
+  return { scenario: await scenarioOf(ctx) };
 }

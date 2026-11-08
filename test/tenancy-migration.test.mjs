@@ -33,7 +33,7 @@ import assert from 'node:assert/strict';
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { openScope } from '../src/storage/index.mjs';
 import { src, tempDir, request, createSessionFixture, sessionClient, runCommand } from './helpers/server.mjs';
 import {
   CLOCK, SIMPLEFIN_URL, buildMigrationFixture, copyFixture, recordExpectations, runMigration, migrationEnv, migrateCli,
@@ -42,6 +42,7 @@ import {
 } from './helpers/tenancy-runtime.mjs';
 import { fileHashes, credentialFor, signIn } from './helpers/tenancy.mjs';
 import { createAuthenticator } from './helpers/webauthn.mjs';
+import { findSeries } from '../src/shared/series.mjs';
 
 const T = { timeout: 600_000 };
 const PHASES_PINNED = ['preflight', 'snapshot', 'source-schema', 'stage', 'verify', 'root-published', 'before-manifest', 'manifest', 'retire', 'complete'];
@@ -81,7 +82,7 @@ const comparable = scenario => {
   return c;
 };
 
-const operationOf = fx => withSqlite(join(fx.dataDir, 'platform.sqlite'), p => p.prepare("SELECT id FROM platform_operations WHERE kind = 'tenancy-migration'").all().map(r => r.id));
+const operationOf = async fx => await withSqlite(join(fx.dataDir, 'platform.sqlite'), async p => (await p.prepare("SELECT id FROM platform_operations WHERE kind = 'tenancy-migration'").all()).map(r => r.id));
 
 function noSecrets(text, secrets, label) {
   for (const s of secrets) assert.ok(!String(text).includes(s), `${label} carries no fixture secret`);
@@ -141,18 +142,18 @@ describe('a complete migration preserves the household', T, () => {
 
   after(async () => { await server?.close(); });
 
-  test('it reports complete for the one household, after every phase in order', () => {
+  test('it reports complete for the one household, after every phase in order', async () => {
     assert.deepEqual(seen, PHASES_PINNED);
     assert.equal(result.status, 'complete');
     assert.equal(result.householdId, fx.householdId);
     assert.equal(typeof result.operationId, 'string');
-    assert.deepEqual(operationOf(fx), [result.operationId]);
+    assert.deepEqual(await operationOf(fx), [result.operationId]);
   });
 
-  test('every store table except api_keys keeps its semantic row digest, rowids included', () => {
+  test('every store table except api_keys keeps its semantic row digest, rowids included', async () => {
     const published = join(fx.dataDir, 'households', fx.householdId, 'fathom.sqlite');
     assert.ok(existsSync(published), 'households/<id>/fathom.sqlite');
-    const after = tableDigests(published, digestRules(expected.maxMigration));
+    const after = await tableDigests(published, digestRules(expected.maxMigration));
     const added = ['expected_transactions', 'import_batches', 'import_proposals', 'import_model_spend', 'source_changes', 'spending_definitions'];
     assert.deepEqual(Object.keys(after).sort(), [...expected.tables.filter(t => t !== 'api_keys'), ...added].sort(),
       'only api_keys is removed and the import, source change and definition tables are added');
@@ -164,9 +165,9 @@ describe('a complete migration preserves the household', T, () => {
     assert.ok(expected.digests.accounts.count > 0 && expected.digests.files.count > 0, 'the comparison covers populated tables');
   });
 
-  test('goals carry across with their done state (store migration 026, goals.done_at)', () => {
+  test('goals carry across with their done state (store migration 026, goals.done_at)', async () => {
     const published = join(fx.dataDir, 'households', fx.householdId, 'fathom.sqlite');
-    const goals = withSqlite(published, db => db.prepare('SELECT id, done_at FROM goals ORDER BY id').all().map(r => ({ ...r })));
+    const goals = await withSqlite(published, async db => (await db.prepare('SELECT id, done_at FROM goals ORDER BY id').all()).map(r => ({ ...r })));
     assert.deepEqual(goals, [{ id: 'g000000000001', done_at: null }, { id: 'g000000000002', done_at: DONE_AT }]);
   });
 
@@ -194,9 +195,9 @@ describe('a complete migration preserves the household', T, () => {
     assert.ok(!existsSync(join(fx.dataDir, M.LOCK_FILE)), 'lock removed');
   });
 
-  test('platform rows: keys keep hashes and bind to the single admin, sessions revoked, outbound all paused', () => {
-    withSqlite(join(fx.dataDir, 'platform.sqlite'), p => {
-      const keys = p.prepare('SELECT * FROM api_keys ORDER BY id').all().map(r => ({ ...r }));
+  test('platform rows: keys keep hashes and bind to the single admin, sessions revoked, outbound all paused', async () => {
+    await withSqlite(join(fx.dataDir, 'platform.sqlite'), async p => {
+      const keys = (await p.prepare('SELECT * FROM api_keys ORDER BY id').all()).map(r => ({ ...r }));
       assert.equal(keys.length, expected.apiKeys.length);
       for (const legacyRow of expected.apiKeys) {
         const row = keys.find(k => k.id === legacyRow.id);
@@ -209,24 +210,24 @@ describe('a complete migration preserves the household', T, () => {
         assert.equal(row.user_id, fx.admin.id, 'owned and ownerless keys bind to the single admin');
         assert.equal(row.revoked_at, null);
       }
-      assert.equal(p.prepare('SELECT count(*) AS n FROM auth_sessions').get().n, 0);
-      assert.equal(p.prepare('SELECT count(*) AS n FROM auth_challenges').get().n, 0);
-      assert.equal(p.prepare('SELECT count(*) AS n FROM auth_tokens').get().n, 0);
-      assert.equal(p.prepare('SELECT count(*) AS n FROM household_invitations WHERE consumed_at IS NULL AND revoked_at IS NULL').get().n, 0);
-      const outbound = { ...p.prepare('SELECT jobs, email, simplefin, engine FROM household_outbound WHERE household_id = ?').get(fx.householdId) };
+      assert.equal((await p.prepare('SELECT count(*) AS n FROM auth_sessions').get()).n, 0);
+      assert.equal((await p.prepare('SELECT count(*) AS n FROM auth_challenges').get()).n, 0);
+      assert.equal((await p.prepare('SELECT count(*) AS n FROM auth_tokens').get()).n, 0);
+      assert.equal((await p.prepare('SELECT count(*) AS n FROM household_invitations WHERE consumed_at IS NULL AND revoked_at IS NULL').get()).n, 0);
+      const outbound = { ...await p.prepare('SELECT jobs, email, simplefin, engine FROM household_outbound WHERE household_id = ?').get(fx.householdId) };
       assert.deepEqual(outbound, { jobs: 0, email: 0, simplefin: 0, engine: 0 });
-      const hh = p.prepare('SELECT status, storage_root, generation FROM households WHERE id = ?').get(fx.householdId);
+      const hh = await p.prepare('SELECT status, storage_root, generation FROM households WHERE id = ?').get(fx.householdId);
       assert.deepEqual({ ...hh }, { status: 'active', storage_root: `households/${fx.householdId}`, generation: 1 });
     });
   });
 
-  test('journal and operation records carry no fixture secret', () => {
+  test('journal and operation records carry no fixture secret', async () => {
     assert.ok(journals.length > 0, 'the journal was observed during the run');
     for (const text of journals) noSecrets(text, fx.secrets, 'tenancy-migration.json');
     const final = join(fx.dataDir, M.JOURNAL_FILE);
     if (existsSync(final)) noSecrets(readFileSync(final, 'utf8'), fx.secrets, 'final journal');
-    withSqlite(join(fx.dataDir, 'platform.sqlite'), p => {
-      for (const r of p.prepare('SELECT detail FROM platform_operations').all()) noSecrets(r.detail, fx.secrets, 'platform_operations.detail');
+    await withSqlite(join(fx.dataDir, 'platform.sqlite'), async p => {
+      for (const r of await p.prepare('SELECT detail FROM platform_operations').all()) noSecrets(r.detail, fx.secrets, 'platform_operations.detail');
     });
   });
 
@@ -245,23 +246,23 @@ describe('a complete migration preserves the household', T, () => {
     assert.equal((await mcp(server.baseUrl, 'fathom_' + randomBytes(32).toString('base64url'), 'tools/list')).status, 401);
 
     const store = join(fx.dataDir, 'households', fx.householdId, 'fathom.sqlite');
-    const accountKind = () => withSqlite(store, db => db.prepare('SELECT kind FROM accounts WHERE id = ?').get(fx.artifacts.confirmAccountId).kind);
-    assert.equal(accountKind(), 'checking', 'the answered item applied');
+    const accountKind = async () => await withSqlite(store, async db => (await db.prepare('SELECT kind FROM accounts WHERE id = ?').get(fx.artifacts.confirmAccountId)).kind);
+    assert.equal(await accountKind(), 'checking', 'the answered item applied');
     const reopened = await client.postJson(`/api/confirm/${fx.artifacts.confirmItemId}/reopen`, {});
     assert.equal(reopened.status, 200, reopened.text.slice(0, 300));
-    assert.equal(accountKind(), null, 'reopening restored the prior row through its rowid');
-    assert.equal(withSqlite(store, db => db.prepare('SELECT status FROM confirm_items WHERE id = ?').get(fx.artifacts.confirmItemId).status), 'pending');
+    assert.equal(await accountKind(), null, 'reopening restored the prior row through its rowid');
+    assert.equal(await withSqlite(store, async db => (await db.prepare('SELECT status FROM confirm_items WHERE id = ?').get(fx.artifacts.confirmItemId)).status), 'pending');
   });
 });
 
 test('with two admins the ownerless key is revoked with migration_no_creator and the owned key stays bound', T, async () => {
   const fx = fresh();
-  withSqlite(join(fx.dataDir, 'platform.sqlite'), p => p.prepare("UPDATE household_memberships SET role = 'admin' WHERE user_id = ?").run(fx.member.id));
+  await withSqlite(join(fx.dataDir, 'platform.sqlite'), async p => await p.prepare("UPDATE household_memberships SET role = 'admin' WHERE user_id = ?").run(fx.member.id));
   const r = await runMigration(fx);
   assert.equal(r.status, 'complete');
-  withSqlite(join(fx.dataDir, 'platform.sqlite'), p => {
-    const owned = { ...p.prepare('SELECT * FROM api_keys WHERE id = ?').get(fx.ownedKey.id) };
-    const ownerless = { ...p.prepare('SELECT * FROM api_keys WHERE id = ?').get(fx.ownerlessKey.id) };
+  await withSqlite(join(fx.dataDir, 'platform.sqlite'), async p => {
+    const owned = { ...await p.prepare('SELECT * FROM api_keys WHERE id = ?').get(fx.ownedKey.id) };
+    const ownerless = { ...await p.prepare('SELECT * FROM api_keys WHERE id = ?').get(fx.ownerlessKey.id) };
     assert.equal(owned.user_id, fx.admin.id);
     assert.equal(owned.revoked_at, null);
     assert.equal(owned.household_id, fx.householdId);
@@ -275,14 +276,14 @@ test('with two admins the ownerless key is revoked with migration_no_creator and
 
 test('migration refuses an inactive creator key while binding a new active admin', T, async () => {
   const fx = fresh();
-  withSqlite(join(fx.dataDir, 'platform.sqlite'), p => {
-    p.prepare("UPDATE household_memberships SET role = 'admin' WHERE user_id = ?").run(fx.member.id);
-    p.prepare("UPDATE household_memberships SET status = 'removed', version = version + 1 WHERE user_id = ?").run(fx.admin.id);
+  await withSqlite(join(fx.dataDir, 'platform.sqlite'), async p => {
+    await p.prepare("UPDATE household_memberships SET role = 'admin' WHERE user_id = ?").run(fx.member.id);
+    await p.prepare("UPDATE household_memberships SET status = 'removed', version = version + 1 WHERE user_id = ?").run(fx.admin.id);
   });
   assert.equal((await runMigration(fx)).status, 'complete');
-  withSqlite(join(fx.dataDir, 'platform.sqlite'), p => {
-    const owned = p.prepare('SELECT * FROM api_keys WHERE id = ?').get(fx.ownedKey.id);
-    const ownerless = p.prepare('SELECT * FROM api_keys WHERE id = ?').get(fx.ownerlessKey.id);
+  await withSqlite(join(fx.dataDir, 'platform.sqlite'), async p => {
+    const owned = await p.prepare('SELECT * FROM api_keys WHERE id = ?').get(fx.ownedKey.id);
+    const ownerless = await p.prepare('SELECT * FROM api_keys WHERE id = ?').get(fx.ownerlessKey.id);
     assert.equal(owned.user_id, fx.admin.id);
     assert.equal(owned.revoked_code, 'migration_inactive_creator');
     assert.ok(owned.revoked_at);
@@ -299,24 +300,24 @@ test('the migration snapshot restores the exact pre-migration instance for a rol
   const fx = fresh();
   const tree = dir => fileHashes(dir);
   const before = {
-    store: tableDigests(join(fx.dataDir, 'fathom.sqlite')),
+    store: await tableDigests(join(fx.dataDir, 'fathom.sqlite')),
     secret: readFileSync(join(fx.dataDir, 'api-key-secret'), 'utf8'),
     trees: ['files', 'packs', 'outbox'].map(d => tree(join(fx.dataDir, d))),
   };
   const r = await runMigration(fx);
   assert.equal(r.status, 'complete');
-  const snapshot = join(fx.dataDir, 'snapshots', readdirSync(join(fx.dataDir, 'snapshots')).find(n => n === `tenancy-${operationOf(fx)[0]}.fsnap`));
+  const snapshot = join(fx.dataDir, 'snapshots', await findSeries(readdirSync(join(fx.dataDir, 'snapshots')), async n => n === `tenancy-${(await operationOf(fx))[0]}.fsnap`));
   const out = join(fx.root, 'restored');
   const restored = await runCommand(process.execPath, ['scripts/source-snapshot.mjs', 'restore', '--snapshot', snapshot, '--out', out],
     { env: { FATHOM_BACKUP_KEY_FILE: fx.keys.backupKeyFile } });
   assert.equal(restored.code, 0, restored.stderr);
   noSecrets(restored.stdout + restored.stderr, fx.secrets, 'the restore output');
   assert.deepEqual(readdirSync(out).sort(), ['api-key-secret', 'fathom.sqlite', 'files', 'outbox', 'packs', 'platform.sqlite']);
-  assert.deepEqual(tableDigests(join(out, 'fathom.sqlite')), before.store, 'every store row as before the migration');
+  assert.deepEqual(await tableDigests(join(out, 'fathom.sqlite')), before.store, 'every store row as before the migration');
   assert.equal(readFileSync(join(out, 'api-key-secret'), 'utf8'), before.secret);
   assert.deepEqual(['files', 'packs', 'outbox'].map(d => tree(join(out, d))), before.trees, 'vault objects, pack and outbox byte for byte');
-  withSqlite(join(out, 'platform.sqlite'), p => {
-    assert.equal(p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId).storage_root, null, 'the platform is the pre-migration one');
+  await withSqlite(join(out, 'platform.sqlite'), async p => {
+    assert.equal((await p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId)).storage_root, null, 'the platform is the pre-migration one');
   });
 
   const wrongKey = writePrivate(join(fx.root, 'wrong-backup.key'), randomBytes(32).toString('hex') + '\n');
@@ -333,10 +334,10 @@ test('the migration snapshot restores the exact pre-migration instance for a rol
 
 const PLATFORM = fx => join(fx.dataDir, 'platform.sqlite');
 const hexRow = r => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, v instanceof Uint8Array ? Buffer.from(v).toString('hex') : v]));
-const passkeyRows = file => withSqlite(file, p => p.prepare('SELECT * FROM passkeys ORDER BY id').all().map(hexRow));
-const identityRows = file => withSqlite(file, p => ({
-  users: p.prepare('SELECT * FROM users ORDER BY id').all().map(hexRow),
-  memberships: p.prepare('SELECT user_id, household_id, role, status FROM household_memberships ORDER BY user_id').all().map(hexRow),
+const passkeyRows = async file => await withSqlite(file, async p => (await p.prepare('SELECT * FROM passkeys ORDER BY id').all()).map(hexRow));
+const identityRows = async file => await withSqlite(file, async p => ({
+  users: (await p.prepare('SELECT * FROM users ORDER BY id').all()).map(hexRow),
+  memberships: (await p.prepare('SELECT user_id, household_id, role, status FROM household_memberships ORDER BY user_id').all()).map(hexRow),
 }));
 
 // Several users and passkeys: the fixture's admin and member credentials plus a second real
@@ -344,7 +345,7 @@ const identityRows = file => withSqlite(file, p => ({
 async function addSecondAdminPasskey(fx) {
   const device = createAuthenticator();
   const credential = await credentialFor(device, fx.admin.handle);
-  withSqlite(PLATFORM(fx), p => p.prepare('INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+  await withSqlite(PLATFORM(fx), async p => await p.prepare('INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(credential.id, fx.admin.id, credential.publicKey, credential.counter, '["internal"]', 'Synthetic second device', Date.now()));
   return { device, credentialId: credential.id };
 }
@@ -353,14 +354,14 @@ describe('no passkey is lost', T, () => {
   test('every passkey row survives byte for byte, users and memberships are unchanged, and pre-migration credentials sign in; the rollback snapshot carries the same rows', async () => {
     const fx = fresh();
     const second = await addSecondAdminPasskey(fx);
-    const before = passkeyRows(PLATFORM(fx));
+    const before = await passkeyRows(PLATFORM(fx));
     assert.equal(before.length, 3, 'fixture: three passkeys over two enrolled users');
-    const identityBefore = identityRows(PLATFORM(fx));
+    const identityBefore = await identityRows(PLATFORM(fx));
 
     const r = await runMigration(fx);
     assert.equal(r.status, 'complete');
-    assert.deepEqual(passkeyRows(PLATFORM(fx)), before, 'credential id, user link, public key, sign counter and every other column unchanged');
-    assert.deepEqual(identityRows(PLATFORM(fx)), identityBefore, 'users, enrolled users and memberships unchanged');
+    assert.deepEqual(await passkeyRows(PLATFORM(fx)), before, 'credential id, user link, public key, sign counter and every other column unchanged');
+    assert.deepEqual(await identityRows(PLATFORM(fx)), identityBefore, 'users, enrolled users and memberships unchanged');
 
     const server = await startRuntime({ dataDir: fx.dataDir, keys: fx.keys });
     try {
@@ -377,46 +378,46 @@ describe('no passkey is lost', T, () => {
     }
 
     // Rollback path: the migration snapshot restores the same passkey, user and membership rows.
-    const snapshot = join(fx.dataDir, 'snapshots', `tenancy-${operationOf(fx)[0]}.fsnap`);
+    const snapshot = join(fx.dataDir, 'snapshots', `tenancy-${(await operationOf(fx))[0]}.fsnap`);
     const out = join(fx.root, 'rollback');
     const restored = await runCommand(process.execPath, ['scripts/source-snapshot.mjs', 'restore', '--snapshot', snapshot, '--out', out],
       { env: { FATHOM_BACKUP_KEY_FILE: fx.keys.backupKeyFile } });
     assert.equal(restored.code, 0, restored.stderr);
-    assert.deepEqual(passkeyRows(join(out, 'platform.sqlite')), before, 'the rollback instance holds every passkey byte for byte');
-    assert.deepEqual(identityRows(join(out, 'platform.sqlite')), identityBefore);
+    assert.deepEqual(await passkeyRows(join(out, 'platform.sqlite')), before, 'the rollback instance holds every passkey byte for byte');
+    assert.deepEqual(await identityRows(join(out, 'platform.sqlite')), identityBefore);
   });
 
   // [label, change(platform) -> undo(platform)] applied while the run waits at before-manifest.
   const CHANGES = [
-    ['a passkey deleted', p => {
-      const row = p.prepare('SELECT * FROM passkeys ORDER BY id LIMIT 1').get();
-      p.prepare('DELETE FROM passkeys WHERE id = ?').run(row.id);
-      return q => q.prepare(`INSERT INTO passkeys (${Object.keys(row).join(', ')}) VALUES (${Object.keys(row).map(() => '?').join(', ')})`).run(...Object.values(row));
+    ['a passkey deleted', async p => {
+      const row = await p.prepare('SELECT * FROM passkeys ORDER BY id LIMIT 1').get();
+      await p.prepare('DELETE FROM passkeys WHERE id = ?').run(row.id);
+      return async q => await q.prepare(`INSERT INTO passkeys (${Object.keys(row).join(', ')}) VALUES (${Object.keys(row).map(() => '?').join(', ')})`).run(...Object.values(row));
     }],
-    ['a credential id replaced (same count)', p => {
-      const id = p.prepare('SELECT id FROM passkeys ORDER BY id LIMIT 1').get().id;
-      p.prepare('UPDATE passkeys SET id = ? WHERE id = ?').run('synthetic-replaced-credential', id);
-      return q => q.prepare("UPDATE passkeys SET id = ? WHERE id = 'synthetic-replaced-credential'").run(id);
+    ['a credential id replaced (same count)', async p => {
+      const id = (await p.prepare('SELECT id FROM passkeys ORDER BY id LIMIT 1').get()).id;
+      await p.prepare('UPDATE passkeys SET id = ? WHERE id = ?').run('synthetic-replaced-credential', id);
+      return async q => await q.prepare("UPDATE passkeys SET id = ? WHERE id = 'synthetic-replaced-credential'").run(id);
     }],
-    ['a sign counter changed', p => {
-      const row = p.prepare('SELECT id, counter FROM passkeys ORDER BY id LIMIT 1').get();
-      p.prepare('UPDATE passkeys SET counter = counter + 1 WHERE id = ?').run(row.id);
-      return q => q.prepare('UPDATE passkeys SET counter = ? WHERE id = ?').run(row.counter, row.id);
+    ['a sign counter changed', async p => {
+      const row = await p.prepare('SELECT id, counter FROM passkeys ORDER BY id LIMIT 1').get();
+      await p.prepare('UPDATE passkeys SET counter = counter + 1 WHERE id = ?').run(row.id);
+      return async q => await q.prepare('UPDATE passkeys SET counter = ? WHERE id = ?').run(row.counter, row.id);
     }],
   ];
 
   for (const [label, change] of CHANGES) {
     test(`${label} before publication refuses passkeys_changed, publishes nothing, and the restored rerun completes`, async () => {
       const fx = fresh();
-      const before = passkeyRows(PLATFORM(fx));
+      const before = await passkeyRows(PLATFORM(fx));
       let undo;
       await refuses(runMigration(fx, { onPhase: async name => {
-        if (name === 'before-manifest') undo = withSqlite(PLATFORM(fx), change);
+        if (name === 'before-manifest') undo = await withSqlite(PLATFORM(fx), change);
       } }), 'passkeys_changed', label);
-      withSqlite(PLATFORM(fx), p => {
-        assert.equal(p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId).storage_root ?? null, null, 'nothing published');
-        assert.ok(p.prepare('SELECT count(*) AS n FROM auth_sessions').get().n > 0, 'the manifest transaction never ran');
-        assert.equal(p.prepare("SELECT count(*) AS n FROM platform_operations WHERE kind = 'tenancy-migration'").get().n, 0);
+      await withSqlite(PLATFORM(fx), async p => {
+        assert.equal((await p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId)).storage_root ?? null, null, 'nothing published');
+        assert.ok((await p.prepare('SELECT count(*) AS n FROM auth_sessions').get()).n > 0, 'the manifest transaction never ran');
+        assert.equal((await p.prepare("SELECT count(*) AS n FROM platform_operations WHERE kind = 'tenancy-migration'").get()).n, 0);
       });
       assert.ok(existsSync(join(fx.dataDir, 'fathom.sqlite')), 'the source is not retired');
 
@@ -425,11 +426,11 @@ describe('no passkey is lost', T, () => {
       assert.equal(cli.code, 1);
       assert.equal(cli.stderr.trim(), 'migrate-tenancy: passkeys_changed');
 
-      withSqlite(PLATFORM(fx), undo);
-      assert.deepEqual(passkeyRows(PLATFORM(fx)), before);
+      await withSqlite(PLATFORM(fx), undo);
+      assert.deepEqual(await passkeyRows(PLATFORM(fx)), before);
       const r = await runMigration(fx);
       assert.equal(r.status, 'complete');
-      assert.deepEqual(passkeyRows(PLATFORM(fx)), before);
+      assert.deepEqual(await passkeyRows(PLATFORM(fx)), before);
     });
   }
 });
@@ -466,8 +467,8 @@ describe('risk probe: the process dies mid-migration and restarts', T, () => {
     assert.equal(first.code, 9, first.stderr);
     const refusedA = await startRefusal({ dataDir: fx.dataDir, keys: fx.keys });
     assert.ok(refusedA && startCodes.includes(refusedA.code), `server refuses: ${refusedA?.code}`);
-    withSqlite(join(fx.dataDir, 'platform.sqlite'), p => {
-      const row = p.prepare('SELECT * FROM households WHERE id = ?').get(fx.householdId);
+    await withSqlite(join(fx.dataDir, 'platform.sqlite'), async p => {
+      const row = await p.prepare('SELECT * FROM households WHERE id = ?').get(fx.householdId);
       assert.equal(row.storage_root ?? null, null, 'nothing published before the manifest');
     });
 
@@ -486,14 +487,14 @@ describe('risk probe: the process dies mid-migration and restarts', T, () => {
     const first = await migrateExitingAt(fx, 'before-manifest');
     assert.equal(first.code, 9, first.stderr);
     const store = join(fx.dataDir, 'fathom.sqlite');
-    const original = withSqlite(store, db => db.prepare("SELECT value FROM content WHERE key = 'synthetic.note'").get().value);
-    withSqlite(store, db => db.prepare("UPDATE content SET value = '\"Synthetic later edit\"' WHERE key = 'synthetic.note'").run());
+    const original = await withSqlite(store, async db => (await db.prepare("SELECT value FROM content WHERE key = 'synthetic.note'").get()).value);
+    await withSqlite(store, async db => await db.prepare("UPDATE content SET value = '\"Synthetic later edit\"' WHERE key = 'synthetic.note'").run());
     await refuses(runMigration(fx), 'source_changed', 'a changed source');
-    withSqlite(join(fx.dataDir, 'platform.sqlite'), p => {
-      assert.equal(p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId).storage_root ?? null, null, 'nothing published');
+    await withSqlite(join(fx.dataDir, 'platform.sqlite'), async p => {
+      assert.equal((await p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId)).storage_root ?? null, null, 'nothing published');
     });
     assert.ok(existsSync(store), 'the source is not retired');
-    withSqlite(store, db => db.prepare("UPDATE content SET value = ? WHERE key = 'synthetic.note'").run(original));
+    await withSqlite(store, async db => await db.prepare("UPDATE content SET value = ? WHERE key = 'synthetic.note'").run(original));
     const r = await runMigration(fx);
     assert.equal(r.status, 'complete');
     assert.deepEqual(await endState(fx), await referenceState());
@@ -531,8 +532,8 @@ describe('risk probe: the process dies mid-migration and restarts', T, () => {
       assert.equal(first.code, 9, first.stderr);
       const restore = change(fx);
       await refuses(runMigration(fx), 'source_changed', label);
-      withSqlite(join(fx.dataDir, 'platform.sqlite'), p => {
-        assert.equal(p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId).storage_root ?? null, null, 'nothing published');
+      await withSqlite(join(fx.dataDir, 'platform.sqlite'), async p => {
+        assert.equal((await p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId)).storage_root ?? null, null, 'nothing published');
       });
       assert.ok(existsSync(join(fx.dataDir, 'fathom.sqlite')), 'the source is not retired');
       restore();
@@ -548,9 +549,9 @@ describe('risk probe: the process dies mid-migration and restarts', T, () => {
     assert.equal(first.code, 9, first.stderr);
     const other = writePrivate(join(fx.root, 'other-keys', 'mcp-other.secret'), randomBytes(32).toString('hex') + '\n');
     await refuses(runMigration(fx, { mcpSecretFile: other }), 'mcp_secret_mismatch', 'another MCP secret');
-    withSqlite(join(fx.dataDir, 'platform.sqlite'), p => {
-      assert.equal(p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId).storage_root ?? null, null, 'nothing published');
-      assert.equal(p.prepare('SELECT count(*) AS n FROM api_keys').get().n, 0, 'no key moved');
+    await withSqlite(join(fx.dataDir, 'platform.sqlite'), async p => {
+      assert.equal((await p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId)).storage_root ?? null, null, 'nothing published');
+      assert.equal((await p.prepare('SELECT count(*) AS n FROM api_keys').get()).n, 0, 'no key moved');
     });
     assert.ok(existsSync(join(fx.dataDir, 'api-key-secret')), 'the source secret is not retired');
     const r = await runMigration(fx);
@@ -572,7 +573,7 @@ describe('risk probe: the process dies mid-migration and restarts', T, () => {
     const fx = fresh();
     const died = await migrateExitingAt(fx, 'manifest');
     assert.equal(died.code, 9, died.stderr);
-    const [op] = operationOf(fx);
+    const [op] = await operationOf(fx);
     assert.ok(op, 'the manifest committed its operation row');
     const legacy = join(fx.dataDir, `legacy-${op}`);
     mkdirSync(legacy, { recursive: true, mode: 0o700 });
@@ -590,20 +591,20 @@ describe('risk probe: the process dies mid-migration and restarts', T, () => {
 
 describe('source ambiguity and missing prerequisites refuse before any change', T, () => {
   const now = Date.parse(`${CLOCK}T09:00:00.000Z`);
-  const addHousehold = (fx, id, status = 'active') => withSqlite(join(fx.dataDir, 'platform.sqlite'), p => p.prepare(`INSERT INTO households
+  const addHousehold = async (fx, id, status = 'active') => await withSqlite(join(fx.dataDir, 'platform.sqlite'), async p => await p.prepare(`INSERT INTO households
     (id, status, mode, display_name, serves_store, created_at, updated_at) VALUES (?, ?, 'real', NULL, 0, ?, ?)`).run(id, status, now, now));
   const otherKey = fx => writePrivate(join(fx.root, 'other-keys', `k-${randomBytes(4).toString('hex')}`), randomBytes(32).toString('hex') + '\n');
   const missing = fx => join(fx.root, 'absent', 'missing.key');
 
   // [label, code, setup(fx) -> migrateTenancy overrides]
   const CASES = [
-    ['a second household on the platform', 'ambiguous_household', fx => { addHousehold(fx, 'hh-synthetic-second'); }],
-    ['a store bound to another household', 'household_store_mismatch', fx => {
-      withSqlite(join(fx.dataDir, 'fathom.sqlite'), db => db.prepare("UPDATE store_identity SET household_id = 'hh-synthetic-other'").run());
+    ['a second household on the platform', 'ambiguous_household', async fx => { await addHousehold(fx, 'hh-synthetic-second'); }],
+    ['a store bound to another household', 'household_store_mismatch', async fx => {
+      await withSqlite(join(fx.dataDir, 'fathom.sqlite'), async db => await db.prepare("UPDATE store_identity SET household_id = 'hh-synthetic-other'").run());
     }],
-    ['a membership in another household', 'ambiguous_household', fx => {
-      addHousehold(fx, 'hh-synthetic-other', 'provisioning');
-      withSqlite(join(fx.dataDir, 'platform.sqlite'), p => p.prepare(`INSERT INTO household_memberships
+    ['a membership in another household', 'ambiguous_household', async fx => {
+      await addHousehold(fx, 'hh-synthetic-other', 'provisioning');
+      await withSqlite(join(fx.dataDir, 'platform.sqlite'), async p => await p.prepare(`INSERT INTO household_memberships
         (user_id, household_id, role, status, version, created_at, updated_at) VALUES (?, 'hh-synthetic-other', 'member', 'active', 1, ?, ?)`).run(fx.member.id, now, now));
     }],
     ['a preexisting households/<x> directory', 'target_exists', fx => {
@@ -691,10 +692,10 @@ test('journals written by an interrupted and a resumed run carry no fixture secr
   await runMigration(fx, { onPhase: async () => { capture(); } });
   assert.ok(texts.length > 0);
   for (const text of texts) noSecrets(text, fx.secrets, 'journal');
-  const db = new DatabaseSync(join(fx.dataDir, 'platform.sqlite'));
+  const db = await openScope({ path: join(fx.dataDir, 'platform.sqlite'), journal: null, busyTimeout: 0 });
   try {
-    for (const r of db.prepare('SELECT detail FROM platform_operations').all()) noSecrets(r.detail, fx.secrets, 'operation detail');
-  } finally { db.close(); }
+    for (const r of await db.prepare('SELECT detail FROM platform_operations').all()) noSecrets(r.detail, fx.secrets, 'operation detail');
+  } finally { await db.close(); }
 });
 
 test('an anonymous request to a migrated instance gets no financial data', T, async () => {

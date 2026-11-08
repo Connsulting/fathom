@@ -48,11 +48,11 @@ const LEAVE = demo.ask.suggested.find(q => q.id === 'leave').q;
 async function demoStore(t, env = {}, { prepare } = {}) {
   const s = await tempDb();
   t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
-  seedDemo(s.db);
+  await seedDemo(s.db);
   const root = s.dataDir;
   if (prepare) prepare(root);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', ...env });
-  const runtime = createRuntimeEngine({ db: s.db, config });
+  const runtime = await createRuntimeEngine({ db: s.db, config });
   const packs = createLivePacks(s.db, { dataDir: root });
   packs.refresh();
   return { ...s, root, config, runtime, packs };
@@ -225,7 +225,7 @@ test('a removed citation list item leaves no bare marker', async t => {
   assert.match(joined(reply), /Keep a reserve\./);
 });
 
-const spendCount = db => db.prepare('SELECT count(*) AS n FROM spend_ledger').get().n;
+const spendCount = async db => (await db.prepare('SELECT count(*) AS n FROM spend_ledger').get()).n;
 const joined = reply => reply.paragraphs.join('\n');
 const toolNames = request => (request.tools || []).map(tool => tool.name);
 const sorted = list => [...list].sort();
@@ -309,7 +309,7 @@ test('sdkOptions places the static system before the dynamic boundary and the dy
 
 test('groundAnswer accepts valid tokens of every kind, masks them, and collects figure keys', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   // {f:port_3m} would read as "3m" if it were not masked.
   const text = 'Reserve sits at {f:true_reserve} against {f:port_3m}, {n:spouse} agrees, the {l:deferral} limit holds and {p:phase_in} applies.';
   const r = groundAnswer(text, { scenario, toolResults: [], data: [] });
@@ -320,7 +320,7 @@ test('groundAnswer accepts valid tokens of every kind, masks them, and collects 
 
 test('groundAnswer reports each unknown token of any kind once, at its index', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   const tokens = ['{f:no_such_figure}', '{n:nobody}', '{l:nolaw}', '{p:nopct}'];
   const text = `See ${tokens[0]} with ${tokens[1]} under ${tokens[2]} at ${tokens[3]}.`;
   const r = groundAnswer(text, { scenario, toolResults: [], data: [] });
@@ -333,7 +333,7 @@ test('groundAnswer reports each unknown token of any kind once, at its index', a
 
 test('groundAnswer treats a stored figure written as a literal as a violation unless a tool result supports it', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   const value = scenario.fig.fixed_fee.v;
   const literal = `$${value.toLocaleString('en-US')}`;
   const text = `About ${literal} of delivered work is not invoiced.`;
@@ -350,7 +350,7 @@ test('groundAnswer treats a stored figure written as a literal as a violation un
 
 test('groundAnswer grounds literals in tool results and context data, and flags unsupported numbers and number words', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   const fromTool = groundAnswer('You have 37 open items.', { scenario, data: [],
     toolResults: [{ name: 'household', args: { operation: 'summary', }, result: { needsYouCount: 37 } }] });
   assert.equal(fromTool.ok, true, JSON.stringify(fromTool.violations));
@@ -381,7 +381,7 @@ function expectToolSource(literal, name, context = '') {
 
 test('B3: a tool result value that echoes a call argument does not ground the number', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   const echoes = [
     // A number echoed under an ordinary key.
     { name: 'recommendations', args: { operation: 'detail',  id: 'synthetic', amount: 4821 }, result: { amount: 4821, title: 'Synthetic' } },
@@ -403,7 +403,7 @@ test('B3: a tool result value that echoes a call argument does not ground the nu
 
 test('B3: identifier and citation keys in a tool result do not ground a number', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   const keys = ['id', 'ids', 'key', 'keys', 'recId', 'fileIds', 'source_id', 'url', 'href', 'cites', 'citation', 'citations',
     'source', 'sources', 'file', 'fileName', 'page', 'pages'];
   const values = [4821, '4821', 'plan-4821.md', 'https://example.invalid/doc/4821', [4821], { label: 'plan-4821.md, page 4821' }];
@@ -419,7 +419,7 @@ test('B3: identifier and citation keys in a tool result do not ground a number',
 
 test('B3: a real value field still grounds, also next to an unrelated argument and dropped metadata', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   const result = [{ key: 'synthetic', v: 4821, page: 77, source: { id: 'synthetic-source', name: 'plan 9517' } }];
   const r = groundAnswer(LAUNDERED, { scenario, data: [],
     toolResults: [{ name: 'household', args: { operation: 'figures',  keys: ['synthetic'] }, result }] });
@@ -466,7 +466,7 @@ test('B3: pack entry citation and metadata lines never ground a number; the body
 test('B3: in a pack conversation, metadata lines of context.entries never ground a number', async t => {
   const s = await demoStore(t, {}, { prepare: root => writeSyntheticPack(root, META_PACK) });
   // Turned off, so only the conversation context carries its entries.
-  s.db.prepare("UPDATE packs_state SET active = 0 WHERE id = 'synthetic-metadata'").run();
+  await s.db.prepare("UPDATE packs_state SET active = 0 WHERE id = 'synthetic-metadata'").run();
   const said = 'The guide is 4821 and the limit is $6,175.';
   const { engine, requests } = scripted(s.runtime, [[{ text: said }], [{ text: said }]]);
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: 'pack:synthetic-metadata', text: 'Synthetic follow-up' });
@@ -497,7 +497,7 @@ const DIGIT_PACK = {
 
 test('B3: pack id and labels in the conversation context never ground a number in a What if or a follow-up; entry bodies do', async t => {
   const s = await demoStore(t, {}, { prepare: root => writeSyntheticPack(root, DIGIT_PACK) });
-  assert.ok(s.db.prepare("SELECT id FROM packs_state WHERE id = 'plan4821'").get(), 'the manifest pack has its own packs_state row');
+  assert.ok(await s.db.prepare("SELECT id FROM packs_state WHERE id = 'plan4821'").get(), 'the manifest pack has its own packs_state row');
   for (const e of DIGIT_PACK.entries) {
     for (const n of ['4821', '4,821', '7316', '7,316', '5093', '5,093']) assert.ok(!e.body.includes(n), `entry bodies are free of ${n}`);
   }
@@ -525,15 +525,15 @@ test('B3: pack id and labels in the conversation context never ground a number i
 
 test('B3: a rec id in a rec conversation context never grounds a number; its value data does', async t => {
   const s = await demoStore(t);
-  const base = s.db.prepare("SELECT * FROM recs WHERE id = 'deferral'").get();
+  const base = await s.db.prepare("SELECT * FROM recs WHERE id = 'deferral'").get();
   const recId = 'rec8263';
   const def = { ...JSON.parse(base.def), id: recId, title: 'Synthetic invoicing review',
     value: [{ cls: 'cash', text: 'About $2,750 of synthetic cash arrives early' }] };
-  s.db.prepare(`INSERT INTO recs (id, def, status, waiting_on, wake, tasks_done, window_close, window_label, pack_id, sort, updated_at, file_id, parser, locator)
+  await s.db.prepare(`INSERT INTO recs (id, def, status, waiting_on, wake, tasks_done, window_close, window_label, pack_id, sort, updated_at, file_id, parser, locator)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(recId, JSON.stringify(def), base.status, base.waiting_on, base.wake, base.tasks_done, base.window_close, base.window_label,
       base.pack_id, 999, base.updated_at, base.file_id, base.parser, base.locator);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   assert.ok(scenario.recs.some(r => r.id === recId), 'the synthetic rec is visible');
   // Self-check: without its id, the rec context has no 8263 to ground.
   const { id: _id, ...rest } = await callTool('recommendations', { operation: 'detail',  id: recId }, { db: s.db, now: '2026-11-05' });
@@ -555,7 +555,7 @@ const asAmount = n => `$${Number(n).toLocaleString('en-US', { maximumFractionDig
 
 test('B3: an account mask from the real accounts.list result never grounds a number; that account balance does', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   const now = '2026-11-05';
   const accounts = await callTool('accounts', { operation: 'list', }, { db: s.db, now });
   const masked = accounts.filter(a => typeof a.mask === 'string' && /^\d+$/.test(a.mask) && Number.isFinite(a.balance) && a.balance > 0);
@@ -626,7 +626,7 @@ test('B3 r2: a figure reference in a scripted recommendations.detail result neve
 
 test('B3 r2: an identifier-like string under an unremarkable key never grounds its digits', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   for (const [text, value] of [['8263', 'rec8263'], ['$529', 'plan529'], ['4821', 'acct4821x']]) {
     for (const key of ['ref', 'note', 'fig', 'detail', 'tag']) {
       const result = { title: 'Synthetic', entry: { [key]: value, v: 12 } };
@@ -673,7 +673,7 @@ test('B3 r2: an exact amount query keeps the stored row amounts as grounding, at
 
 test('B3 r2: argument echoes under the same key still do not ground, while other keys with the same value do', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   const echoed = groundAnswer(LAUNDERED, { scenario, data: [],
     toolResults: [{ name: 'transactions', args: { operation: 'search',  minAmount: 4821, maxAmount: 4821 }, result: { minAmount: 4821, maxAmount: 4821, rows: [], total: 0 } }] });
   assert.equal(echoed.ok, false);
@@ -723,7 +723,7 @@ test('a suggested question answers through the fake engine with tools, figures, 
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime);
   const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } });
-  const before = spendCount(s.db);
+  const before = await spendCount(s.db);
   const reply = await answerer.answer({ db: s.db, key: THREAD, text: LEAVE });
   assert.ok(!reply.notice);
   assert.ok(reply.paragraphs.length > 0);
@@ -744,7 +744,7 @@ test('a suggested question answers through the fake engine with tools, figures, 
   assert.deepEqual(sorted(figs.args.keys), figures);
   assert.deepEqual(sorted(p.packIds), ACTIVE_DEMO_PACKS);
   assert.equal(requests.length, 1);
-  assert.ok(spendCount(s.db) > before, 'spend was recorded');
+  assert.ok(await spendCount(s.db) > before, 'spend was recorded');
 });
 
 test('a single unchecked amount gets one correction and is neutralized if it persists', async t => {
@@ -803,7 +803,7 @@ test('an answer still ungrounded after the regeneration is stored with its numbe
 // text, and the spend the engine recorded before it threw stays in the ledger. The first answer has
 // two invented amounts and no other figure, so it is regenerated (AQ1 C.5).
 
-const chatRows = db => db.prepare("SELECT id, purpose, model, cost_usd FROM spend_ledger WHERE purpose = 'chat' ORDER BY id").all().map(r => ({ ...r }));
+const chatRows = async db => (await db.prepare("SELECT id, purpose, model, cost_usd FROM spend_ledger WHERE purpose = 'chat' ORDER BY id").all()).map(r => ({ ...r }));
 // The runtime records spend at the current time (no clock-based now in this fixture).
 const thisMonth = () => new Date().toISOString().slice(0, 7);
 
@@ -812,15 +812,15 @@ test('B1: a corrective retry refused by the engine switch answers with the engin
   const { engine, requests } = scripted(s.runtime, [
     [{ text: TWO_INVENTED }],
     [{ text: 'must not run' }],
-  ], { before: n => { if (n === 1) setSetting(s.db, 'engine', { on: false }); } });
-  const before = chatRows(s.db).length;
+  ], { before: async n => { if (n === 1) await setSetting(s.db, 'engine', { on: false }); } });
+  const before = (await chatRows(s.db)).length;
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
   assert.equal(requests.length, 2, 'the retry was attempted');
   assert.equal(reply.notice, true);
   assert.deepEqual(reply.paragraphs, [NOTICES.engineOff]);
   assert.ok(!joined(reply).includes('987,654'), 'the first ungrounded text is never returned');
   assert.ok(!joined(reply).includes('must not run'));
-  const added = chatRows(s.db).slice(before);
+  const added = (await chatRows(s.db)).slice(before);
   assert.equal(added.length, 1, 'the first call spend row stays; the refused retry recorded none');
   assert.equal(added[0].model, 'fake');
   assert.ok(added[0].cost_usd > 0);
@@ -829,19 +829,19 @@ test('B1: a corrective retry refused by the engine switch answers with the engin
 test('B1: a corrective retry refused over the cap the first call exhausted answers with the over-cap notice', async t => {
   const s = await demoStore(t);
   // The cap sits half a dollar above this month's spend; the first call spends a whole dollar.
-  setSetting(s.db, 'cap', { usd: createSpendLedger(s.db).monthSpendUsd(thisMonth()) + 0.5 });
+  await setSetting(s.db, 'cap', { usd: createSpendLedger(s.db).monthSpendUsd(thisMonth()) + 0.5 });
   const { engine, requests } = scripted(s.runtime, [
     [{ text: TWO_INVENTED, costUsd: 1 }],
     [{ text: 'must not run' }],
   ]);
-  const before = chatRows(s.db).length;
+  const before = (await chatRows(s.db)).length;
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
   assert.equal(requests.length, 2, 'the retry was attempted');
   assert.equal(reply.notice, true, 'a notice, not the first answer marked');
   assert.deepEqual(reply.paragraphs, [NOTICES.overCap]);
   assert.ok(!joined(reply).includes('987,654'), joined(reply));
   assert.ok(!joined(reply).includes('must not run'));
-  const added = chatRows(s.db).slice(before);
+  const added = (await chatRows(s.db)).slice(before);
   assert.equal(added.length, 1, 'the first call spend row stays; the refused retry recorded none');
   assert.equal(added[0].cost_usd, 1);
 });
@@ -852,7 +852,7 @@ test('B1: a corrective retry that fails in the model answers with the model-erro
     [{ text: TWO_INVENTED }],
     [{ text: 'Fabricated $123,456 figure', is_error: true, status: 'error_during_execution' }],
   ]);
-  const before = chatRows(s.db).length;
+  const before = (await chatRows(s.db)).length;
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
   assert.equal(requests.length, 2, 'the retry was attempted');
   assert.equal(reply.notice, true);
@@ -861,7 +861,7 @@ test('B1: a corrective retry that fails in the model answers with the model-erro
   assert.ok(!joined(reply).includes('Fabricated'));
   assert.ok(!joined(reply).includes('123,456'));
   // The fake engine records the failed round before it throws, as the live engine does.
-  assert.equal(chatRows(s.db).slice(before).length, 2, 'the first call row and the failed retry round row');
+  assert.equal((await chatRows(s.db)).slice(before).length, 2, 'the first call row and the failed retry round row');
 });
 
 test('a literal number grounded by a tool result is bound to its source and listed in provenance', async t => {
@@ -882,7 +882,7 @@ test('a literal number grounded by a tool result is bound to its source and list
 
 test('a retry that drops the tool call stays grounded by the first attempt tool results', async t => {
   const s = await demoStore(t);
-  const value = buildScenario(s.db).fig.fixed_fee.v;
+  const value = (await buildScenario(s.db)).fig.fixed_fee.v;
   const amount = `$${value.toLocaleString('en-US')}`;
   const { engine, requests } = scripted(s.runtime, [
     [
@@ -907,13 +907,13 @@ test('a retry that drops the tool call stays grounded by the first attempt tool 
 test('engine off by the switch answers with the engine-off notice and spends nothing; back on answers again', async t => {
   const s = await demoStore(t);
   const answerer = createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root, services: { engine: s.runtime, config: { dataDir: s.root } } });
-  setSetting(s.db, 'engine', { on: false });
-  const before = spendCount(s.db);
+  await setSetting(s.db, 'engine', { on: false });
+  const before = await spendCount(s.db);
   const off = await answerer.answer({ db: s.db, key: THREAD, text: LEAVE });
   assert.equal(off.notice, true);
   assert.ok(joined(off).includes('Engine is off, so answers are paused.'), joined(off));
-  assert.equal(spendCount(s.db), before);
-  setSetting(s.db, 'engine', { on: true });
+  assert.equal(await spendCount(s.db), before);
+  await setSetting(s.db, 'engine', { on: true });
   const on = await answerer.answer({ db: s.db, key: THREAD, text: LEAVE });
   assert.ok(!on.notice);
   assert.ok(on.provenance);
@@ -921,26 +921,26 @@ test('engine off by the switch answers with the engine-off notice and spends not
 
 test('engine off by configuration answers with the configuration notice and spends nothing', async t => {
   const s = await demoStore(t);
-  const off = createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'off' }) });
-  const before = spendCount(s.db);
+  const off = await createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'off' }) });
+  const before = await spendCount(s.db);
   const reply = await createLiveAnswerer({ engine: off, packs: s.packs, root: s.root, services: { engine: off, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: LEAVE });
   assert.equal(reply.notice, true);
   assert.ok(joined(reply).includes('off in this deployment'), joined(reply));
   assert.ok(!joined(reply).includes('{f:yearend_cash}'), 'no answer text');
-  assert.equal(spendCount(s.db), before);
+  assert.equal(await spendCount(s.db), before);
 });
 
 test('over the cap answers with the budget notice and spends nothing; a raised cap answers again', async t => {
   const s = await demoStore(t);
   const answerer = createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root, services: { engine: s.runtime, config: { dataDir: s.root } } });
-  setSetting(s.db, 'cap', { usd: 0 });
-  const before = spendCount(s.db);
+  await setSetting(s.db, 'cap', { usd: 0 });
+  const before = await spendCount(s.db);
   const capped = await answerer.answer({ db: s.db, key: THREAD, text: LEAVE });
   assert.equal(capped.notice, true);
   assert.ok(joined(capped).includes('{f:engine.budget.monthly}'), joined(capped));
   assert.ok(joined(capped).includes('is used up, so answers are paused'), joined(capped));
-  assert.equal(spendCount(s.db), before);
-  setSetting(s.db, 'cap', { usd: 200 });
+  assert.equal(await spendCount(s.db), before);
+  await setSetting(s.db, 'cap', { usd: 200 });
   assert.ok(!(await answerer.answer({ db: s.db, key: THREAD, text: LEAVE })).notice);
 });
 
@@ -976,10 +976,10 @@ test('Ask offers write tools only with trusted identity, while pack and bare rec
   const answerer = createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root, services: { engine: s.runtime, config: { dataDir: s.root } } });
   const text = 'Dismiss dcfsa';
   await answerer.answer({ db: s.db, key: THREAD, text, actorId: 'demo', ownerText: text, turnId: 'synthetic-action' });
-  assert.equal(s.db.prepare('SELECT status FROM recs WHERE id = ?').get('dcfsa').status, 'dismissed');
-  const count = s.db.prepare('SELECT count(*) n FROM action_receipts').get().n;
+  assert.equal((await s.db.prepare('SELECT status FROM recs WHERE id = ?').get('dcfsa')).status, 'dismissed');
+  const count = (await s.db.prepare('SELECT count(*) n FROM action_receipts').get()).n;
   await answerer.answer({ db: s.db, key: THREAD, text: 'Do not dismiss deferral', actorId: 'demo', ownerText: 'Do not dismiss deferral' });
-  assert.equal(s.db.prepare('SELECT count(*) n FROM action_receipts').get().n, count);
+  assert.equal((await s.db.prepare('SELECT count(*) n FROM action_receipts').get()).n, count);
 });
 
 test('a rec conversation answer refs the rec and reads it through recommendations.detail', async t => {
@@ -998,11 +998,11 @@ test('a manual pack override changes the prompt pack context and the provenance 
   const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } });
   const base = await answerer.answer({ db: s.db, key: THREAD, text: 'Synthetic override question' });
   assert.deepEqual(sorted(base.provenance.packIds), ACTIVE_DEMO_PACKS);
-  s.db.prepare("UPDATE packs_state SET active = 1 WHERE id = 'giving'").run();
+  await s.db.prepare("UPDATE packs_state SET active = 1 WHERE id = 'giving'").run();
   const on = await answerer.answer({ db: s.db, key: THREAD, text: 'Synthetic override question' });
   assert.ok(on.provenance.packIds.includes('charitable-giving'));
   assert.notEqual(requests[1].system, requests[0].system, 'pack context follows the override');
-  s.db.prepare("UPDATE packs_state SET active = 0 WHERE id = 'scorp'").run();
+  await s.db.prepare("UPDATE packs_state SET active = 0 WHERE id = 'scorp'").run();
   const off = await answerer.answer({ db: s.db, key: THREAD, text: 'Synthetic override question' });
   assert.ok(!off.provenance.packIds.includes('s-corp-owner'));
   assert.ok(off.provenance.packIds.includes('charitable-giving'));
@@ -1015,7 +1015,7 @@ test('provenance.packEntries lists cited entries of the conversation pack even w
   const scorpTitle = JSON.parse(readFileSync(join(ROOT, 'packs', 's-corp-owner', 'manifest.json'), 'utf8'))
     .entries.find(e => e.file === 'reasonable-compensation.md').title;
   assert.ok(!/\d/.test(givingTitle) && !/\d/.test(scorpTitle), 'titles carry no numbers to ground');
-  assert.equal(buildScenario(s.db).packs.find(p => p.id === 'giving').status, 'suggested', 'giving is not active');
+  assert.equal((await buildScenario(s.db)).packs.find(p => p.id === 'giving').status, 'suggested', 'giving is not active');
   const { engine } = scripted(s.runtime, [
     [{ text: `${givingTitle} is the entry that matters here.` }],
     [{ text: `As a follow-up, ${givingTitle} still applies.` }],
@@ -1039,7 +1039,7 @@ test('provenance.packEntries lists cited entries of the conversation pack even w
 test('a what-if runs a live conversation seeded with the pack prompt and pack metadata', async t => {
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime);
-  const def = buildScenario(s.db, { packs: s.packs, root: s.root }).packs.find(p => p.id === 'giving');
+  const def = (await buildScenario(s.db, { packs: s.packs, root: s.root })).packs.find(p => p.id === 'giving');
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).whatIf({ db: s.db, packId: 'giving' });
   assert.ok(!reply.notice);
   assert.ok(reply.paragraphs.length > 0);
@@ -1136,10 +1136,10 @@ test('R3 A contract: scalar read operations return no sentinel argument outside 
   const names = [...new Set(scalar.map(tool => tool.name))];
   assert.deepEqual(sorted(names), sorted(REGISTRY.filter(x => x.kind === 'read' && !x.askOnly && !structured.includes(x.name)).map(x => x.name)),
     'a context without trusted identity offers read tools only');
-  const recId = s.db.prepare("SELECT id FROM recs WHERE status != 'hidden' ORDER BY id LIMIT 1").get().id;
+  const recId = (await s.db.prepare("SELECT id FROM recs WHERE status != 'hidden' ORDER BY id LIMIT 1").get()).id;
   const realPack = s.packs.loaded().find(p => p.id === 's-corp-owner');
   // The tool context the answerer hands every call: its household's db and root.
-  const ctx = { db: s.db, now: clockNow(s.db), dataDir: s.root };
+  const ctx = { db: s.db, now: await clockNow(s.db), dataDir: s.root };
 
   const calls = [];
   const plan = new Map();
@@ -1151,7 +1151,7 @@ test('R3 A contract: scalar read operations return no sentinel argument outside 
     for (const name of required) {
       const schema = props[name];
       if (schema.enum) base[name] = schema.enum[0];
-      else if (name === 'id') base[name] = tool.name === 'accounts' ? s.db.prepare('SELECT id FROM accounts ORDER BY id LIMIT 1').get().id : recId;
+      else if (name === 'id') base[name] = tool.name === 'accounts' ? (await s.db.prepare('SELECT id FROM accounts ORDER BY id LIMIT 1').get()).id : recId;
       else if (name === 'packId') base[name] = realPack.id;
       else if (name === 'file') base[name] = realPack.entries[0].file;
       else if (name === 'query') base[name] = 'tax';
@@ -1224,9 +1224,9 @@ test('R3 A contract: scalar read operations return no sentinel argument outside 
 
 test('R3 A (F2): transactions.search total equal to the limit argument grounds, attributed to transactions.search', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   // The real match count per account, read from the store; one whose count fits in a single page.
-  const counts = s.db.prepare('SELECT account_id AS id, count(*) AS n FROM transactions GROUP BY account_id ORDER BY n, account_id').all()
+  const counts = (await s.db.prepare('SELECT account_id AS id, count(*) AS n FROM transactions GROUP BY account_id ORDER BY n, account_id').all())
     .filter(c => c.n >= 1 && c.n <= 200);
   let pick = null;
   for (const c of counts) {
@@ -1288,7 +1288,7 @@ const proseSources = prose => [
 
 test('R3 B: bare numbers in prose evidence never ground; marked quantities and JSON numbers do', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   for (const where of proseSources(BARE_PROSE)) {
     for (const text of BARE_NUMBERS) {
       const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
@@ -1332,14 +1332,14 @@ test('R3 B (F1): inline citations (IRS Publication 560) in the active demo packs
   // Self-check: with every pack whose entries mention 560 off, nothing else in the demo store grounds $560.
   const citing = new Set(s.packs.loaded().filter(p => p.entries.some(e => e.body.includes('560'))).map(p => p.id));
   assert.ok(citing.has('advanced-retirement'));
-  const rows = s.db.prepare('SELECT id, def FROM packs_state').all().filter(r => citing.has(JSON.parse(r.def).manifest)).map(r => r.id);
-  const setActive = value => { for (const id of rows) s.db.prepare('UPDATE packs_state SET active = ? WHERE id = ?').run(value, id); };
-  setActive(0);
+  const rows = (await s.db.prepare('SELECT id, def FROM packs_state').all()).filter(r => citing.has(JSON.parse(r.def).manifest)).map(r => r.id);
+  const setActive = async value => { for (const id of rows) await s.db.prepare('UPDATE packs_state SET active = ? WHERE id = ?').run(value, id); };
+  await setActive(0);
   const off = await answerer.answer({ db: s.db, key: THREAD, text: 'Synthetic publication question' });
   assert.ok(!off.provenance.packIds.some(id => citing.has(id)), JSON.stringify(off.provenance.packIds));
   assert.ok(off.provenance.grounding.unverified.includes('$560'), JSON.stringify(off.provenance.grounding));
 
-  setActive(null);
+  await setActive(null);
   const active = await answerer.answer({ db: s.db, key: THREAD, text: 'Synthetic publication question' });
   assert.ok(!active.notice);
   assert.ok(active.provenance.packIds.includes('advanced-retirement'), 'the pack is active');
@@ -1396,12 +1396,12 @@ test('R3 B: in an active pack entry body only marked quantities ground, end to e
   const answerer = createLiveAnswerer({ engine: answerEngine, packs: s.packs, root: s.root, services: { engine: answerEngine, config: { dataDir: s.root } } });
 
   // Self-check: without the pack, none of these values ground.
-  s.db.prepare("UPDATE packs_state SET active = 0 WHERE id = 'synthetic-prose'").run();
+  await s.db.prepare("UPDATE packs_state SET active = 0 WHERE id = 'synthetic-prose'").run();
   const off = await answerer.answer({ db: s.db, key: THREAD, text: 'Synthetic prose question' });
   assert.ok(!off.provenance.packIds.includes('synthetic-prose'));
   assert.deepEqual(sorted(off.provenance.grounding.unverified), sorted(['57', '4383', '$7,013', '6.7%', '3.9 percent', '23k']));
 
-  s.db.prepare("UPDATE packs_state SET active = NULL WHERE id = 'synthetic-prose'").run();
+  await s.db.prepare("UPDATE packs_state SET active = NULL WHERE id = 'synthetic-prose'").run();
   const reply = await answerer.answer({ db: s.db, key: THREAD, text: 'Synthetic prose question' });
   assert.ok(reply.provenance.packIds.includes('synthetic-prose'), 'the synthetic pack is active');
   const { unverified } = reply.provenance.grounding;
@@ -1415,7 +1415,7 @@ test('R3 B: in an active pack entry body only marked quantities ground, end to e
 
 test('R3 D: K-12 and 2026-01 never read as negatives in evidence or in the answer', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   const evidence = [
     { name: 'recommendations', args: { operation: 'list', }, result: [{ status: 'doing', description: 'Private K-12 tuition can qualify.' }] },
     { name: 'recommendations', args: { operation: 'list', }, result: [{ status: 'doing', grade: 'K-12' }] },
@@ -1438,7 +1438,7 @@ const KNOWN_UNVERIFIED = new Set(['ask:salary', 'rec:offcycle:1', 'whatif:scorp'
 
 test('R3 demo regression: every canned demo answer stays grounded except the known pre-existing ones; What if kids is grounded', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   const answerer = createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root, services: { engine: s.runtime, config: { dataDir: s.root } } });
   const outcomes = new Map();
   for (const q of scenario.ask.suggested) {
@@ -1480,7 +1480,7 @@ const URL_INVENTED = ['$4,821,000', '$4,821', '4821%'];
 
 test('R4 F1: digits, k and % inside URLs, link destinations and autolinks never ground in prose evidence', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   for (const prose of URL_PROSE) {
     for (const where of proseSources(prose)) {
       for (const text of URL_INVENTED) {
@@ -1493,7 +1493,7 @@ test('R4 F1: digits, k and % inside URLs, link destinations and autolinks never 
 
 test('R4 F1: a single-token URL string under an unremarkable key never grounds its digits', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   for (const link of ['https://example.invalid/4821k', 'https://example.invalid/$4821', 'https://example.invalid/4821%25', 'https://example.invalid/4821%']) {
     for (const text of URL_INVENTED) {
       for (const where of [
@@ -1509,7 +1509,7 @@ test('R4 F1: a single-token URL string under an unremarkable key never grounds i
 
 test('R4 F1: a marked quantity in link text outside the URL still grounds', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   for (const prose of [
     'See [the $500 limit](https://example.invalid/x) for details.',
     'See [the $500 limit](https://example.invalid/4821k) for details.',
@@ -1531,8 +1531,8 @@ const DATE_INVENTED = ['$11', '11', '-11', '$5', '5', '-5', '$10', '$2,026'];
 
 test('R4 F2: the real business.pnl result over the demo store never grounds its month or year as a number', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
-  const result = await callTool('business', { operation: 'pnl', }, { db: s.db, now: clockNow(s.db) });
+  const scenario = await buildScenario(s.db);
+  const result = await callTool('business', { operation: 'pnl', }, { db: s.db, now: await clockNow(s.db) });
   assert.ok(result.entities.length > 0, 'the demo store has P&L entities');
   const period = result.entities.flatMap(e => e.groups.filter(g => g.revenue.value || g.expenses.value).map(g => g.key)).sort().at(-1);
   assert.match(period, /^\d{4}-\d{2}$/);
@@ -1558,7 +1558,7 @@ test('R4 F2: the real business.pnl result over the demo store never grounds its 
 
 test('R4 F2: a synthetic period next to an unrelated amount grounds the amount and not $11 or 11', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   const toolResults = [{ name: 'business', args: { operation: 'pnl', },
     result: { rows: [{ period: '2026-11', category: 'synthetic', amount: 4321.5 }], totals: { '2026-11': 4321.5 } } }];
   for (const text of ['$11', '11', '$2,026']) {
@@ -1570,7 +1570,7 @@ test('R4 F2: a synthetic period next to an unrelated amount grounds the amount a
 
 test('R4 F2: date-shaped single-token strings under unremarkable keys ground no number', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   for (const value of DATE_TOKENS) {
     for (const key of ['asOf', 'month', 'note', 'when']) {
       const wheres = [
@@ -1592,7 +1592,7 @@ test('R4 F2: date-shaped single-token strings under unremarkable keys ground no 
 // R4 F3: only recognized letter-code vocabulary is masked in the answer.
 test('R4 F3: arbitrary short letter codes in the answer are ungrounded numbers, recognized forms stay masked', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   for (const [text, number] of [['Your benefit is X-873 dollars.', '873'], ['Your benefit is AB-500 dollars.', '500'],
     ['You get Q-12 more.', '12'], ['The credit is ZZ-40 this year.', '40']]) {
     const r = groundAnswer(text, { scenario, toolResults: [], data: [] });
@@ -1608,7 +1608,7 @@ test('R4 F3: arbitrary short letter codes in the answer are ungrounded numbers, 
 
 test('R4 F3: the What if kids canned answer (K-12) stays grounded', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   const kids = scenario.packs.find(p => p.id === 'kids');
   assert.ok(kids && kids.whatIf && kids.whatIf.a.some(a => a.includes('K-12')), 'the kids What if says K-12');
   const reply = await createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root, services: { engine: s.runtime, config: { dataDir: s.root } } }).whatIf({ db: s.db, packId: 'kids' });
@@ -1622,7 +1622,7 @@ test('R4 F3: the What if kids canned answer (K-12) stays grounded', async t => {
 // $1 next to a bare 3.
 test('R4 F4: scientific notation and decimals in prose evidence ground the whole number, never its parts', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   const cases = [
     { prose: 'The allowance is $1e3.', grounds: ['$1,000', '$1e3'], not: ['$1', '1', '3', '$3'] },
     { prose: 'The allowance is $1.5e3 now.', grounds: ['$1,500'], not: ['$1.5', '$1', '5', '3'] },
@@ -1689,7 +1689,7 @@ const EVIDENCE_SOURCES = [
 
 test('R4 adversarial table: no evidence source launders an invented amount through any known form; real quantities still ground', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   const failures = [];
   for (const source of EVIDENCE_SOURCES) {
     const control = groundAnswer(`The figure is ${R4_CONTROL.said}.`, { scenario, ...source.make(R4_CONTROL) });
@@ -1718,7 +1718,7 @@ const SCALED_PROSE = [
 
 test('R5 F1: a scaled quantity in prose evidence grounds its full value, never the bare coefficient', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   const failures = [];
   for (const { prose, grounds, not } of SCALED_PROSE) {
     for (const where of proseSources(prose)) {
@@ -1747,7 +1747,7 @@ const PAREN_PROSE = [
 
 test('R5 F2: link destinations and bare URLs with parentheses never ground their digits', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   const failures = [];
   for (const prose of PAREN_PROSE) {
     for (const where of proseSources(prose)) {
@@ -1762,7 +1762,7 @@ test('R5 F2: link destinations and bare URLs with parentheses never ground their
 
 test('R5 F2: a marked amount in the link text of a parenthesized destination still grounds', async t => {
   const s = await demoStore(t);
-  const scenario = buildScenario(s.db);
+  const scenario = await buildScenario(s.db);
   const failures = [];
   for (const prose of [
     'See [the $500 limit](https://example.invalid/a(b)/$4821) for details.',
@@ -1798,7 +1798,7 @@ test('Ask keeps original tax identifiers locally and scrubs current and prior tu
   assert.equal(payloads.length, 2);
   for (const payload of payloads) assert.ok(!/900-12-3456|90-1234567|900-70-1234/.test(JSON.stringify(payload)), 'outbound Ask history contains no tax identifiers');
   assert.ok(payloads[1].prompt.includes('XXX-XX-XXXX'), 'prior user text is scrubbed too');
-  const stored = s.db.prepare('SELECT text FROM messages WHERE conversation_key = ? AND role = ? ORDER BY id').all(key, 'me');
+  const stored = await s.db.prepare('SELECT text FROM messages WHERE conversation_key = ? AND role = ? ORDER BY id').all(key, 'me');
   assert.equal(stored[0].text, original);
   assert.equal(stored[1].text, 'Synthetic ITIN 900-70-1234 question.');
 });
@@ -1817,7 +1817,7 @@ test('PN1: Ask records a spending ledger from the owner sentence using the adver
   assert.ok(!reply.notice);
   const shapes = await callTool('household', { operation: 'fact_shapes' }, { db: s.db, dataDir: s.root });
   assert.ok(shapes['pnl.ledgers']);
-  const fact = s.db.prepare("SELECT value, confirmed FROM facts WHERE key = 'pnl.ledgers'").get();
+  const fact = await s.db.prepare("SELECT value, confirmed FROM facts WHERE key = 'pnl.ledgers'").get();
   assert.ok(fact, JSON.stringify(reply));
   assert.deepEqual(JSON.parse(fact.value), { "Aster's": { kind: 'spending' } });
   assert.equal(fact.confirmed, 1);

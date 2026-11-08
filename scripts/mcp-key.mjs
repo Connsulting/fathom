@@ -52,7 +52,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     const config = loadConfig(env);
     let mode;
     try {
-      const opened = openInstance(config);
+      const opened = await openInstance(config);
       if (!opened) {
         console.error('mcp-key: household_unavailable');
         return 1;
@@ -63,7 +63,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       console.error(`mcp-key: ${e.code}`);
       return 1;
     }
-    const household = platform.prepare('SELECT status, storage_root FROM households WHERE id = ?').get(householdId);
+    const household = await platform.prepare('SELECT status, storage_root FROM households WHERE id = ?').get(householdId);
     if (!household || household.status !== 'active' || household.storage_root == null) {
       console.error('mcp-key: household_unavailable');
       return 1;
@@ -71,12 +71,12 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     const auth = createAuthStore(platform);
     // A key's creator must be an active member of the key's household.
     const creatorActive = (userId, hh) => auth.membership(userId, hh)?.status === 'active';
-    const user = auth.findUser(email);
+    const user = await auth.findUser(email);
     if (!user || !creatorActive(user.id, householdId)) {
       console.error('mcp-key: unknown owner');
       return 1;
     }
-    const dup = platform.prepare('SELECT id FROM api_keys WHERE household_id = ? AND name = ? AND revoked_at IS NULL').get(householdId, name.trim());
+    const dup = await platform.prepare('SELECT id FROM api_keys WHERE household_id = ? AND name = ? AND revoked_at IS NULL').get(householdId, name.trim());
     if (dup) {
       console.error('mcp-key: active key name already exists');
       return 1;
@@ -99,7 +99,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
     console.error(`mcp-key: ${err instanceof KeyError ? err.message : 'failed'}`);
     return 1;
   } finally {
-    platform?.close();
+    await platform?.close();
   }
 }
 

@@ -41,37 +41,37 @@ const list = names => (names.length < 3 ? names.join(' and ') : `${names.slice(0
 // Stored names, read lazily and once per description.
 function lookups(db) {
   let naming = null;
-  const row = (sql, ...a) => { try { return db.prepare(sql).get(...a) ?? null; } catch { return null; } };
+  const row = async (sql, ...a) => { try { return await db.prepare(sql).get(...a) ?? null; } catch { return null; } };
   const def = r => (r ? parse(r.def, {}) ?? {} : {});
-  const rec = id => def(row('SELECT def FROM recs WHERE id = ?', id));
-  const goal = id => def(row('SELECT def FROM goals WHERE id = ?', id));
+  const rec = async id => def(await row('SELECT def FROM recs WHERE id = ?', id));
+  const goal = async id => def(await row('SELECT def FROM goals WHERE id = ?', id));
   return {
     // 'the recommendation "T"', or a plain phrase when the row is gone.
-    rec: id => (rec(id).title ? `the recommendation ${q(rec(id).title)}` : 'this recommendation'),
-    recTitle: id => (rec(id).title ? q(rec(id).title) : ''),
+    rec: async id => ((await rec(id)).title ? `the recommendation ${q((await rec(id)).title)}` : 'this recommendation'),
+    recTitle: async id => ((await rec(id)).title ? q((await rec(id)).title) : ''),
     recDef: rec,
-    goal: id => (goal(id).title ? `the goal ${q(goal(id).title)}` : 'this goal'),
-    goalTitle: id => (goal(id).title ? q(goal(id).title) : ''),
+    goal: async id => ((await goal(id)).title ? `the goal ${q((await goal(id)).title)}` : 'this goal'),
+    goalTitle: async id => ((await goal(id)).title ? q((await goal(id)).title) : ''),
     goalDef: goal,
-    account: id => {
-      naming ??= accountNaming(db);
+    account: async id => {
+      naming ??= await accountNaming(db);
       const label = naming.byId.get(id)?.labelText;
       return label ? `the account ${q(label)}` : 'this account';
     },
-    decision: id => { const t = row('SELECT title FROM decisions WHERE id = ?', id)?.title; return t ? `the decision ${q(t)}` : 'this decision'; },
-    decisionFor: name => row('SELECT title FROM decisions WHERE wargame = ? ORDER BY sort LIMIT 1', name)?.title ?? null,
-    file: id => { const name = row('SELECT name FROM files WHERE id = ?', id)?.name; return name ? `the imported file ${q(name)}` : 'the imported file'; },
-    confirm: id => row('SELECT question, options FROM confirm_items WHERE id = ?', id),
-    transaction: id => row('SELECT description, date FROM transactions WHERE id = ?', id),
-    merchant: merchant => {
+    decision: async id => { const t = (await row('SELECT title FROM decisions WHERE id = ?', id))?.title; return t ? `the decision ${q(t)}` : 'this decision'; },
+    decisionFor: async name => (await row('SELECT title FROM decisions WHERE wargame = ? ORDER BY sort LIMIT 1', name))?.title ?? null,
+    file: async id => { const name = (await row('SELECT name FROM files WHERE id = ?', id))?.name; return name ? `the imported file ${q(name)}` : 'the imported file'; },
+    confirm: async id => await row('SELECT question, options FROM confirm_items WHERE id = ?', id),
+    transaction: async id => await row('SELECT description, date FROM transactions WHERE id = ?', id),
+    merchant: async merchant => {
       const key = normalizeMerchant(merchant);
-      try { return db.prepare('SELECT description FROM transactions ORDER BY id').all().find(t => normalizeMerchant(t.description) === key)?.description ?? null; } catch { return null; }
+      try { return (await db.prepare('SELECT description FROM transactions ORDER BY id').all()).find(t => normalizeMerchant(t.description) === key)?.description ?? null; } catch { return null; }
     },
-    preference: id => row('SELECT text, definition_id FROM preferences WHERE id = ?', id),
-    definition: id => row('SELECT name FROM spending_definitions WHERE id = ?', id)?.name ?? null,
-    pack: id => { const d = def(row('SELECT def FROM packs_state WHERE id = ?', id)); return d.name || d.title || null; },
-    review: id => row('SELECT title, rec_id FROM advisor_reviews WHERE id = ?', id),
-    receipt: id => row('SELECT kind, entity_id, label FROM action_receipts WHERE id = ?', id),
+    preference: async id => await row('SELECT text, definition_id FROM preferences WHERE id = ?', id),
+    definition: async id => (await row('SELECT name FROM spending_definitions WHERE id = ?', id))?.name ?? null,
+    pack: async id => { const d = def(await row('SELECT def FROM packs_state WHERE id = ?', id)); return d.name || d.title || null; },
+    review: async id => await row('SELECT title, rec_id FROM advisor_reviews WHERE id = ?', id),
+    receipt: async id => await row('SELECT kind, entity_id, label FROM action_receipts WHERE id = ?', id),
   };
 }
 
@@ -126,12 +126,12 @@ function confirmAnswer(L, item) {
 }
 
 // Undo names what the earlier change touched, when its row still exists.
-function undoTarget(L, r) {
+async function undoTarget(L, r) {
   if (!r) return '';
-  if (['status', 'owner', 'step'].includes(r.kind)) return L.recTitle(r.entity_id);
-  if (r.kind === 'goal') return L.goalTitle(r.entity_id);
+  if (['status', 'owner', 'step'].includes(r.kind)) return await L.recTitle(r.entity_id);
+  if (r.kind === 'goal') return await L.goalTitle(r.entity_id);
   if (r.kind === 'fact') { const name = factLabel(r.entity_id); return name ? q(name) : ''; }
-  if (r.kind === 'preference') { const p = L.preference(r.entity_id); return p ? q(p.text) : ''; }
+  if (r.kind === 'preference') { const p = await L.preference(r.entity_id); return p ? q(p.text) : ''; }
   return '';
 }
 
@@ -146,10 +146,10 @@ export const DESCRIBERS = Object.freeze({
     return `Mark ${name} in ${L.rec(a.id)} as ${a.checked ? 'done' : 'not done'}.`;
   },
   'act_on_recommendation.start_over': (a, L) => `Start the conversation about ${L.rec(a.id)} over. Earlier conversations stay in Ask.`,
-  'act_on_recommendation.decide': (a, L) => `Settle ${L.decision(a.decisionId)}${a.point === undefined ? ' with the option picked now' : ' with the option you chose'}.`,
-  'act_on_recommendation.revisit': (a, L) => `Reopen ${L.decision(a.decisionId)} and remove the assumption it set.`,
-  'act_on_recommendation.pick_point': (a, L) => {
-    const title = L.decisionFor(a.name);
+  'act_on_recommendation.decide': async (a, L) => `Settle ${await L.decision(a.decisionId)}${a.point === undefined ? ' with the option picked now' : ' with the option you chose'}.`,
+  'act_on_recommendation.revisit': async (a, L) => `Reopen ${await L.decision(a.decisionId)} and remove the assumption it set.`,
+  'act_on_recommendation.pick_point': async (a, L) => {
+    const title = await L.decisionFor(a.name);
     return `Pick an option for ${title ? q(title) : `the ${a.name === 'salary' ? 'salary' : 'deferral'} choice`} without deciding yet.`;
   },
   'advisor_review.packet': () => 'Prepare a review packet for your advisor with every waiting review. Nothing leaves Fathom.',
@@ -201,8 +201,8 @@ export const DESCRIBERS = Object.freeze({
     const name = t ? `the transaction ${q(t.description)}${date(t.date) ? ` on ${date(t.date)}` : ''}` : 'a transaction';
     return `Categorize ${name} as ${category(a.category)}.`;
   },
-  'categorize.merchant_rule': (a, L) => {
-    const seen = L.merchant(a.merchant);
+  'categorize.merchant_rule': async (a, L) => {
+    const seen = await L.merchant(a.merchant);
     const name = seen ?? (/\d/.test(said(a.merchant)) ? '' : said(a.merchant));
     return `Categorize every transaction from ${name ? q(name) : 'this merchant'} as ${category(a.category)}, now and in future imports.`;
   },
@@ -215,9 +215,9 @@ export const DESCRIBERS = Object.freeze({
     : `Archive ${L.account(a.id)}. Its history is kept.`),
   'sources.merge_accounts': merge,
   'sources.remove_file': (a, L) => `Remove ${L.file(a.id)} and the rows it added.`,
-  'undo.undo': (a, L) => {
-    const r = L.receipt(a.id);
-    const target = undoTarget(L, r);
+  'undo.undo': async (a, L) => {
+    const r = await L.receipt(a.id);
+    const target = await undoTarget(L, r);
     const what = r?.label ? q(said(r.label)) : '';
     return `Undo your earlier change${what ? ` ${what}` : ''}${target ? ` to ${target}` : ''}.`;
   },
@@ -229,31 +229,31 @@ export const DESCRIBERS = Object.freeze({
     const name = said(a.displayName);
     return name ? `Rename ${L.account(a.id)} to ${q(name)}.` : `Clear the custom name on ${L.account(a.id)}.`;
   },
-  'update_goal.archive': (a, L) => `Archive ${L.goal(a.id)}. Its history is kept.`,
+  'update_goal.archive': async (a, L) => `Archive ${await L.goal(a.id)}. Its history is kept.`,
   'update_goal.create': a => {
     const title = said(a.title);
     return { text: title ? `Create the goal ${q(title)}.` : 'Create a new goal.', details: goalDetails({ ...a, title: undefined }) };
   },
-  'update_goal.delete': (a, L) => `Delete ${L.goal(a.id)}. Undo can bring it back.`,
-  'update_goal.edit': (a, L) => {
+  'update_goal.delete': async (a, L) => `Delete ${await L.goal(a.id)}. Undo can bring it back.`,
+  'update_goal.edit': async (a, L) => {
     const before = L.goalDef(a.id);
     const fields = Object.keys(a).filter(k => k !== 'id' && a[k] !== undefined);
     if (fields.length === 1 && a.status) {
-      return a.status === 'done' ? `Mark ${L.goal(a.id)} as done.`
-        : a.status === 'open' ? `Reopen ${L.goal(a.id)}.` : `Archive ${L.goal(a.id)}.`;
+      return a.status === 'done' ? `Mark ${await L.goal(a.id)} as done.`
+        : a.status === 'open' ? `Reopen ${await L.goal(a.id)}.` : `Archive ${await L.goal(a.id)}.`;
     }
     const details = goalDetails(a, before);
     if (a.status) details.push({ label: 'Status', value: GOAL_STATUS[a.status] || 'Changed' });
-    return { text: `Update ${L.goal(a.id)}.`, details };
+    return { text: `Update ${await L.goal(a.id)}.`, details };
   },
-  'update_goal.suggestion': (a, L) => `Undo the target Fathom set on ${L.goal(a.id)} and stop suggesting it.`,
+  'update_goal.suggestion': async (a, L) => `Undo the target Fathom set on ${await L.goal(a.id)} and stop suggesting it.`,
   'update_preferences.curve': () => 'Change where you lean on your tradeoffs.',
-  'update_preferences.delete_definition': (a, L) => { const n = L.definition(a.definitionId); return `Delete the saved spending selection${n ? ` ${q(n)}` : ''} and its linked preference.`; },
-  'update_preferences.forget': (a, L) => { const p = L.preference(a.id); return `Forget the preference ${p ? q(p.text) : 'you chose'}.`; },
-  'update_preferences.pack': (a, L) => { const n = L.pack(a.packId); return `Turn ${a.active ? 'on' : 'off'} the knowledge pack ${n ? q(n) : 'you chose'}.`; },
-  'update_preferences.remember': (a, L) => {
+  'update_preferences.delete_definition': async (a, L) => { const n = await L.definition(a.definitionId); return `Delete the saved spending selection${n ? ` ${q(n)}` : ''} and its linked preference.`; },
+  'update_preferences.forget': async (a, L) => { const p = await L.preference(a.id); return `Forget the preference ${p ? q(p.text) : 'you chose'}.`; },
+  'update_preferences.pack': async (a, L) => { const n = await L.pack(a.packId); return `Turn ${a.active ? 'on' : 'off'} the knowledge pack ${n ? q(n) : 'you chose'}.`; },
+  'update_preferences.remember': async (a, L) => {
     const text = said(a.text);
-    const old = a.id ? L.preference(a.id) : null;
+    const old = a.id ? await L.preference(a.id) : null;
     return old ? `Change the preference ${q(old.text)} to ${q(text)}.` : `Remember the preference ${q(text)}.`;
   },
   'update_preferences.save_definition': a => { const n = said(a.name); return `Save the spending selection ${n ? q(n) : 'you described'} and remember it as a preference.`; },
@@ -268,7 +268,7 @@ export function useRouteLabels(fn) { routeOf = fn; }
 // The description of a proposal: its describer, else the operation's route label and the stored
 // name its target resolves to (an operation with no describer, or one that fails on unexpected
 // stored data). Never an argument line.
-export function describeProposal(db, pending) {
+export async function describeProposal(db, pending) {
   const key = `${pending?.tool}.${pending?.operation}`;
   const args = pending?.args && typeof pending.args === 'object' ? pending.args : {};
   const describer = Object.hasOwn(DESCRIBERS, key) ? DESCRIBERS[key] : null;
@@ -281,7 +281,7 @@ export function describeProposal(db, pending) {
   try {
     const L = lookups(db);
     const id = args.id ?? args.recId;
-    if (typeof id === 'string') name = [L.recTitle(id), L.goalTitle(id)].find(Boolean) ?? '';
+    if (typeof id === 'string') name = [await L.recTitle(id), await L.goalTitle(id)].find(Boolean) ?? '';
   } catch { name = ''; }
   return { text: route ? `${route}${name ? `: ${name}` : ''}.` : `Make the change described above${name ? `: ${name}` : ''}.`, details: [] };
 }
@@ -291,11 +291,11 @@ export const describedFields = ({ text, details }) => ({ description: text, ...(
 
 // Messages as served: a stored proposal from before descriptions existed gets one built from
 // current names, so no card falls back to argument lines. Mutates and returns `messages`.
-export function withDescriptions(db, messages) {
+export async function withDescriptions(db, messages) {
   for (const m of messages) {
     const pending = m?.provenance?.pendingAction;
     if (!pending || typeof pending !== 'object' || typeof pending.description === 'string') continue;
-    m.provenance = { ...m.provenance, pendingAction: { ...pending, ...describedFields(describeProposal(db, pending)) } };
+    m.provenance = { ...m.provenance, pendingAction: { ...pending, ...describedFields(await describeProposal(db, pending)) } };
   }
   return messages;
 }

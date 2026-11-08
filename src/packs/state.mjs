@@ -9,10 +9,11 @@ import { packStatus } from '../shared/rules.mjs';
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getSetting, parseJson, tx } from '../store/db.mjs';
+import { getSetting, parseJson, actionTx } from '../store/db.mjs';
 import { getFacts } from '../store/facts.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
 import { activePacks, loadPacks } from './index.mjs';
+import { mapSeries } from '../shared/series.mjs';
 
 export const REPO_PACKS_DIR = fileURLToPath(new URL('../../packs/', import.meta.url)).replace(/[\\/]$/, '');
 
@@ -48,70 +49,69 @@ function definition(prev, { pack, status, why }) {
   };
 }
 
-export function refreshPackState(db, { packDirs, dataDir, now } = {}) {
-  if (getSetting(db, 'mode', null) === 'demo') return { updated: 0, inserted: 0 };
+export async function refreshPackState(db, { packDirs, dataDir, now } = {}) {
+  if (await getSetting(db, 'mode', null) === 'demo') return { updated: 0, inserted: 0 };
   const packs = loadPacks(packDirs ?? defaultPackDirs(dataDir));
-  const activation = activePacks(packs, getFacts(db));
+  const activation = activePacks(packs, await getFacts(db));
   const stamp = now || new Date().toISOString();
-  const select = db.prepare('SELECT def FROM packs_state WHERE id = ?');
-  const update = db.prepare('UPDATE packs_state SET def = ?, updated_at = ? WHERE id = ?');
-  const insert = db.prepare(`INSERT INTO packs_state (id, def, active, exploring, what_if_asked, what_if_done, unhid, sort, updated_at)
-                             VALUES (?, ?, NULL, 0, 0, 0, '[]', ?, ?)`);
-  const nextSort = db.prepare('SELECT coalesce(max(sort) + 1, 0) AS n FROM packs_state');
   let updated = 0;
   let inserted = 0;
-  const run = () => {
+  const run = async db => {
+    const select = db.prepare('SELECT def FROM packs_state WHERE id = ?');
+    const update = db.prepare('UPDATE packs_state SET def = ?, updated_at = ? WHERE id = ?');
+    const insert = db.prepare(`INSERT INTO packs_state (id, def, active, exploring, what_if_asked, what_if_done, unhid, sort, updated_at)
+                               VALUES (?, ?, NULL, 0, 0, 0, '[]', ?, ?)`);
+    const nextSort = db.prepare('SELECT coalesce(max(sort) + 1, 0) AS n FROM packs_state');
     for (const item of activation) {
-      const row = select.get(item.pack.id);
+      const row = await select.get(item.pack.id);
       if (row) {
         const prev = parseJson(row.def, {});
         const def = JSON.stringify(definition(prev && typeof prev === 'object' ? prev : {}, item));
         if (def === row.def) continue;
-        update.run(def, stamp, item.pack.id);
+        await update.run(def, stamp, item.pack.id);
         updated += 1;
       } else {
-        insert.run(item.pack.id, JSON.stringify(definition({}, item)), nextSort.get().n, stamp);
+        await insert.run(item.pack.id, JSON.stringify(definition({}, item)), (await nextSort.get()).n, stamp);
         inserted += 1;
       }
     }
   };
-  if (db.isTransaction) run();
-  else tx(db, run);
+  await actionTx(db, run);
   return { updated, inserted };
 }
 
 export const packIsActive = row => row.active == null ? parseJson(row.def, {}).status === 'active' : !!row.active;
 
-export function packActivationState(db, id) {
-  const pack = db.prepare('SELECT * FROM packs_state WHERE id = ?').get(id);
+export async function packActivationState(db, id) {
+  const pack = await db.prepare('SELECT * FROM packs_state WHERE id = ?').get(id);
   if (!pack) throw new ToolError('not_found', 'No such pack.');
-  const recs = (parseJson(pack.def, {}).recIds ?? []).map(rid => db.prepare('SELECT id, status, updated_at FROM recs WHERE id = ?').get(rid) ?? null);
+  const recs = await mapSeries((parseJson(pack.def, {}).recIds ?? []), async rid => await db.prepare('SELECT id, status, updated_at FROM recs WHERE id = ?').get(rid) ?? null);
   return { pack: { ...pack }, recs: recs.map(r => r ? { ...r } : null) };
 }
 
-export function setPackActive(db, id, active, { now = new Date().toISOString(), actorId = 'ui' } = {}) {
+export async function setPackActive(db, id, active, { now = new Date().toISOString(), actorId = 'ui' } = {}) {
   if (typeof active !== 'boolean') throw new ToolError('bad_input', 'active must be a boolean.');
-  const run = () => {
-    const before = packActivationState(db, id), row = before.pack, def = parseJson(row.def, {});
+  const run = async db => {
+    const before = await packActivationState(db, id), row = before.pack, def = parseJson(row.def, {});
     const wasActive = packIsActive(row);
     if (active !== wasActive) {
       const unhid = [];
-      const powered = new Set(db.prepare('SELECT * FROM packs_state WHERE id <> ?').all(id).filter(packIsActive)
+      const powered = new Set((await db.prepare('SELECT * FROM packs_state WHERE id <> ?').all(id)).filter(packIsActive)
         .flatMap(p => parseJson(p.def, {}).recIds ?? []));
       for (const rid of active ? def.recIds ?? [] : parseJson(row.unhid, [])) {
-        const rec = db.prepare('SELECT status FROM recs WHERE id = ?').get(rid);
+        const rec = await db.prepare('SELECT status FROM recs WHERE id = ?').get(rid);
         const from = active ? 'hidden' : 'proposed', to = active ? 'proposed' : 'hidden';
         if (rec?.status !== from || (!active && powered.has(rid))) continue;
-        db.prepare('UPDATE recs SET status = ?, updated_at = ? WHERE id = ?').run(to, now, rid);
-        db.prepare('INSERT INTO rec_events(rec_id,ts,action,arg,from_status,to_status,actor) VALUES (?,?,?,?,?,?,?)')
+        await db.prepare('UPDATE recs SET status = ?, updated_at = ? WHERE id = ?').run(to, now, rid);
+        await db.prepare('INSERT INTO rec_events(rec_id,ts,action,arg,from_status,to_status,actor) VALUES (?,?,?,?,?,?,?)')
           .run(rid, now, active ? 'pack_on' : 'pack_off', id, from, to, actorId);
         if (active) unhid.push(rid);
       }
-      db.prepare('UPDATE packs_state SET active = ?, unhid = ?, updated_at = ? WHERE id = ?')
+      await db.prepare('UPDATE packs_state SET active = ?, unhid = ?, updated_at = ? WHERE id = ?')
         .run(active ? 1 : 0, JSON.stringify(unhid), now, id);
     }
-    const after = packActivationState(db, id);
+    const after = await packActivationState(db, id);
     return { pack: { id, status: packStatus(def.status, { active, exploring: !!after.pack.exploring }) }, wasActive, before, after };
   };
-  return db.isTransaction ? run() : tx(db, run);
+  return await actionTx(db, run);
 }

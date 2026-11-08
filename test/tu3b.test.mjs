@@ -21,36 +21,36 @@ const quiet = { log() {}, info() {} };
 async function store(t) {
   const s = await tempDb();
   t.after(() => { s.close(); rmSync(s.dataDir, { recursive: true, force: true }); });
-  setSetting(s.db, 'mode', 'real');
+  await setSetting(s.db, 'mode', 'real');
   return s;
 }
-const context = (data, db) => ({ refreshNeeds: db ? refreshDependencies(db, computeFigures(data, {}, { clock, entities: [] }).figures, clock) : { accounts: [], sourceIds: new Set() }, clock, year: 2026, facts: {}, warnings: [], info: { blocked: [] }, data, freshness: data.freshness });
+const context = async (data, db) => ({ refreshNeeds: db ? await refreshDependencies(db, computeFigures(data, {}, { clock, entities: [] }).figures, clock) : { accounts: [], sourceIds: new Set() }, clock, year: 2026, facts: {}, warnings: [], info: { blocked: [] }, data, freshness: data.freshness });
 
-function seedAccounts(db) {
-  db.prepare("INSERT INTO sources (id, label, kind, as_of) VALUES ('ing:bank', 'Synthetic bank', 'balances', '2026-11-04')").run();
+async function seedAccounts(db) {
+  await db.prepare("INSERT INTO sources (id, label, kind, as_of) VALUES ('ing:bank', 'Synthetic bank', 'balances', '2026-11-04')").run();
   for (const [id, date] of [['fresh-account', '2026-11-04'], ['stale-account', '2026-08-01']]) {
-    db.prepare("INSERT INTO accounts (id, name, kind, source_id) VALUES (?, ?, 'checking', 'ing:bank')").run(id, id);
-    db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, 100)').run(id, date);
-    db.prepare('INSERT INTO transactions (account_id, date, amount) VALUES (?, ?, 1)').run(id, date);
+    await db.prepare("INSERT INTO accounts (id, name, kind, source_id) VALUES (?, ?, 'checking', 'ing:bank')").run(id, id);
+    await db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, 100)').run(id, date);
+    await db.prepare('INSERT INTO transactions (account_id, date, amount) VALUES (?, ?, 1)').run(id, date);
   }
 }
 
 test('Home and missing-data identify the same stale account despite a newer household date', async t => {
   const { db } = await store(t);
-  seedAccounts(db);
-  const sc = buildScenario(db, { clock });
-  const data = loadPlanningData(db, clock);
-  const gaps = missing.items(context(data, db)).filter(i => i.code.startsWith('balances:'));
+  await seedAccounts(db);
+  const sc = await buildScenario(db, { clock });
+  const data = await loadPlanningData(db, clock);
+  const gaps = missing.items(await context(data, db)).filter(i => i.code.startsWith('balances:'));
   assert.equal(healthLine({ accounts: sc.accounts }).staleAccounts, 1);
-  const rec = missing.build(context(data, db), missing.evaluate(context(data, db)));
+  const rec = missing.build(await context(data, db), missing.evaluate(await context(data, db)));
   assert.deepEqual(rec.tasks.filter(t => t.code?.startsWith('balances:')).map(t => t.accountIds), [['stale-account']]);
   assert.deepEqual(gaps.map(i => [i.code, i.accountIds]), [
     ['balances:stale-account', ['stale-account']],
   ]);
-  db.prepare("UPDATE balances SET date = '2026-11-04' WHERE account_id = 'stale-account'").run();
-  const after = loadPlanningData(db, clock);
-  assert.equal(healthLine({ accounts: buildScenario(db, { clock }).accounts }).staleAccounts, 0);
-  assert.equal(missing.items(context(after, db)).filter(i => i.code.startsWith('balances:')).length, 0);
+  await db.prepare("UPDATE balances SET date = '2026-11-04' WHERE account_id = 'stale-account'").run();
+  const after = await loadPlanningData(db, clock);
+  assert.equal(healthLine({ accounts: (await buildScenario(db, { clock })).accounts }).staleAccounts, 0);
+  assert.equal(missing.items(await context(after, db)).filter(i => i.code.startsWith('balances:')).length, 0);
 });
 
 test('missing-data prose has no stored count while Steps renders progress from current task data', () => {
@@ -69,13 +69,13 @@ test('missing-data prose has no stored count while Steps renders progress from c
   assert.equal(missing.template({}, { items: uploads.slice(0, 2) }).summary, stored.summary);
 });
 
-test('an employer gap renders the accepted Ask control', () => {
+test('an employer gap renders the accepted Ask control', async () => {
   const data = { accounts: [], freshness: [], confirm: [
     { id: 4, kind: 'tax_year', status: 'pending' },
     { id: 21, kind: 'employer_relation', status: 'answered' },
     { id: 22, kind: 'employer_relation', status: 'pending' },
   ] };
-  const ctx = context(data);
+  const ctx = await context(data);
   ctx.info.blocked = ['employer_relation_pending'];
   const hit = missing.evaluate(ctx);
   const task = missing.build(ctx, hit).tasks[0];
@@ -110,7 +110,7 @@ test('lock refusal logs once per job and household at info level, then work can 
     handlers: { plan: async () => { n++; }, freshness: async () => {} }, holder: 'this-scheduler',
     log: { info: (...args) => logs.push(args), log: (...args) => errors.push(args) } });
   t.after(() => s.stop());
-  db.prepare("INSERT INTO job_lock (id, holder, expires_at) VALUES (1, 'other-scheduler', '2027-01-01T00:00:00Z')").run();
+  await db.prepare("INSERT INTO job_lock (id, holder, expires_at) VALUES (1, 'other-scheduler', '2027-01-01T00:00:00Z')").run();
   await s.tick(); await s.tick();
   assert.equal(logs.length, 2);
   current = 'household-b';
@@ -119,7 +119,7 @@ test('lock refusal logs once per job and household at info level, then work can 
   assert.equal(errors.length, 0);
   await assert.rejects(s.runNow('plan'), e => e.code === 'locked');
   assert.equal(logs.length, 4);
-  db.prepare('DELETE FROM job_lock').run();
+  await db.prepare('DELETE FROM job_lock').run();
   assert.equal((await s.runNow('plan')).status, 'ok');
   assert.equal(n, 1);
 });
@@ -155,14 +155,14 @@ test('the first planner run classifies a personal summary without creating a led
 
   const { db } = await store(t);
   for (const category of ['Medical', 'Shopping', 'Groceries', 'HSA', 'Dining']) {
-    db.prepare('INSERT INTO pnl_lines (entity, period, category, amount) VALUES (?, ?, ?, ?)').run('Synthetic ledger', '2026-10', category, -100);
+    await db.prepare('INSERT INTO pnl_lines (entity, period, category, amount) VALUES (?, ?, ?, ?)').run('Synthetic ledger', '2026-10', category, -100);
   }
   await planRun(db, { now: clock });
-  const item = db.prepare("SELECT id FROM confirm_items WHERE kind = 'fact_check' AND status = 'pending'").get();
+  const item = await db.prepare("SELECT id FROM confirm_items WHERE kind = 'fact_check' AND status = 'pending'").get();
   assert.equal(item, undefined);
-  const fact = JSON.parse(db.prepare("SELECT value FROM facts WHERE key='business.entities'").get().value);
+  const fact = JSON.parse((await db.prepare("SELECT value FROM facts WHERE key='business.entities'").get()).value);
   assert.equal(fact.find(e => e.name === 'Synthetic ledger').type, 'personal');
-  const sc = buildScenario(db, { clock });
+  const sc = await buildScenario(db, { clock });
   assert.ok(!sc.recs.find(r => r.id === 'missing-data').tasks.some(t => t.kind === 'confirm'));
   assert.ok(sc.recs.some(r => r.assumptions?.some(a => a.key === 'business.entities' && a.path[0] === 'Synthetic ledger')));
 
@@ -171,22 +171,22 @@ test('the first planner run classifies a personal summary without creating a led
 
 test('a connection mapping without newer account data cannot make that account fresh', async t => {
   const { db } = await store(t);
-  seedAccounts(db);
-  db.prepare("INSERT INTO simplefin_connection (id, access_blob, connected_at) VALUES (1, 'synthetic', '2026-11-04')").run();
-  db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at) VALUES ('synthetic-key', 'stale-account', 'mapped', 'Synthetic', '2026-11-04')").run();
-  const sc = buildScenario(db, { clock });
+  await seedAccounts(db);
+  await db.prepare("INSERT INTO simplefin_connection (id, access_blob, connected_at) VALUES (1, 'synthetic', '2026-11-04')").run();
+  await db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at) VALUES ('synthetic-key', 'stale-account', 'mapped', 'Synthetic', '2026-11-04')").run();
+  const sc = await buildScenario(db, { clock });
   assert.equal(sc.accounts.find(a => a.id === 'stale-account').fresh, 'stale');
   assert.equal(healthLine({ accounts: sc.accounts }).staleAccounts, 1);
-  const data = loadPlanningData(db, clock);
-  assert.ok(!missing.items(context(data, db)).some(i => i.accountIds?.includes('stale-account')), 'the feed remains stale, but a connected account needs no upload');
+  const data = await loadPlanningData(db, clock);
+  assert.ok(!missing.items(await context(data, db)).some(i => i.accountIds?.includes('stale-account')), 'the feed remains stale, but a connected account needs no upload');
 });
 
-test('a named payroll blocker selects that employer rather than another question of the same kind', () => {
+test('a named payroll blocker selects that employer rather than another question of the same kind', async () => {
   const data = { accounts: [], freshness: [], confirm: [
     { id: 11, kind: 'employer_relation', status: 'pending', context: { employer: 'Unrelated Employer' } },
     { id: 12, kind: 'employer_relation', status: 'pending', context: { employer: 'Relevant Employer' } },
   ] };
-  const ctx = context(data);
+  const ctx = await context(data);
   ctx.info = { blocked: ['employer_relation_pending'], payrollBlocks: [{ code: 'employer_relation_pending', employer: 'Relevant Employer' }] };
   const task = missing.build(ctx, missing.evaluate(ctx)).tasks[0];
   assert.match(task.fix.prompt, /Relevant Employer/);

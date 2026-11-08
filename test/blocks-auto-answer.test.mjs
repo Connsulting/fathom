@@ -12,6 +12,7 @@ import { loadConfig } from '../src/config.mjs';
 import { createRuntimeEngine } from '../src/engine/runtime.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
+import { forEachSeries } from '../src/shared/series.mjs';
 
 const MONTH = { name: 'spending', args: { operation: 'total', groupBy: 'month', window: 'ytd' } };
 const SINGLE = { name: 'spending', args: { operation: 'total', window: 'ytd' } };
@@ -24,19 +25,19 @@ const ROWS = { name: 'transactions', args: { operation: 'search', limit: 3 } };
 
 // Synthetic stored war-game figures (the planner's figure keys), so the options carry values.
 const WARGAME_FIELDS = { salary: ['salary', 'payroll', 'dist', 'tax', 'x', 'y'], deferral: ['amount', 'net', 'decCash', 'need', 'gap', 'tax2026', 'tax2027'] };
-function plantWargames(db) {
-  const { wargame } = buildScenario(db);
+async function plantWargames(db) {
+  const { wargame } = await buildScenario(db);
   const put = db.prepare(`INSERT OR REPLACE INTO figures (key, v, kind, label, parser, updated_at) VALUES (?, ?, 'm', ?, 'planner', '2026-11-05')`);
-  for (const name of ['salary', 'deferral']) (name === 'salary' ? wargame.salary.points : wargame.deferral.options).forEach((item, i) =>
-    WARGAME_FIELDS[name].forEach((field, j) => put.run(`wg.${name}.${item.id}.${field}`, 1000 * (i + 1) + 10 * j, field)));
-  put.run('wg.deferral.base.income', 5000, 'income');
+  for (const name of ['salary', 'deferral']) await forEachSeries((name === 'salary' ? wargame.salary.points : wargame.deferral.options), async (item, i) =>
+    await forEachSeries(WARGAME_FIELDS[name], async (field, j) => await put.run(`wg.${name}.${item.id}.${field}`, 1000 * (i + 1) + 10 * j, field)));
+  await put.run('wg.deferral.base.income', 5000, 'income');
 }
 
 async function answer(t, scripts, { prepare } = {}) {
-  const s = await tempDb(); seedDemo(s.db);
+  const s = await tempDb(); await seedDemo(s.db);
   t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   prepare?.(s.db);
-  const runtime = createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' }) });
+  const runtime = await createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' }) });
   const results = [];
   const engine = { mode: 'fake', isOn: () => true, async call(request) {
     const result = await runtime.call({ ...request, fake: scripts.shift() }); results.push(result); return result;

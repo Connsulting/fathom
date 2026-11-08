@@ -45,16 +45,16 @@ export async function localPort() {
 
 // The original household's store of the instance in dataDir (households/<id>/fathom.sqlite, read
 // from platform.sqlite). Throws when the instance has none yet.
-export function householdStoreFile(dataDir) {
-  const served = servedStore(dataDir);
+export async function householdStoreFile(dataDir) {
+  const served = await servedStore(dataDir);
   if (!served) throw new Error('No household store in the data directory yet');
   return served.file;
 }
 
 // The original household's root of the instance in dataDir (households/<id>): its outbox/ and
 // packs/your-plans/ live here. Throws when the instance has none yet.
-export function householdRootDir(dataDir) {
-  const served = servedStore(dataDir);
+export async function householdRootDir(dataDir) {
+  const served = await servedStore(dataDir);
   if (!served) throw new Error('No household store in the data directory yet');
   return served.root;
 }
@@ -98,13 +98,13 @@ export async function startEnrolledServer({ dataDir, clock } = {}) {
       householdId = household.id;
       const { user, token } = store.invite(household.id, 'owner@example.test', { role: 'admin' });
       store.consumeInvitation(token, user.id);
-      store.markEnrolled(user.id);
+      await store.markEnrolled(user.id);
       session = store.createSession(user.id);
-    } finally { platform.close(); }
+    } finally { await platform.close(); }
     return {
       ...app,
       url,
-      storeFile: householdStoreFile(dataDir),
+      storeFile: await householdStoreFile(dataDir),
       // The household context assertion the web client sends (a new session is at version 1).
       contextHeaders: { 'X-Fathom-Household': householdId, 'X-Fathom-Context-Version': '1' },
       headers: { Cookie: `__Host-fathom-session=${session.token}`, Origin: url, 'X-Fathom-Household': householdId, 'X-Fathom-Context-Version': '1' },
@@ -132,7 +132,7 @@ export const localDataDir = mainDataDir;
 export async function withLocalHousehold(now, fn, { dataDir = localDataDir() } = {}) {
   refuseSuppliedTarget();
   const [{ loadConfig }, { openCliHousehold }] = await Promise.all([import('../src/config.mjs'), import('../src/platform/cli.mjs')]);
-  const served = servedStore(dataDir);
+  const served = await servedStore(dataDir);
   if (!served) throw new Error('No household store in the data directory yet');
   const config = loadConfig({ FATHOM_DATA: dataDir, FATHOM_DEMO: '1', FATHOM_ENGINE: 'off' });
   const cli = await openCliHousehold(config, ['--household', served.householdId]);

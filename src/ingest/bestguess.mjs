@@ -61,8 +61,8 @@ function nearRule(item, detail) {
 }
 
 // The stored household names {me, spouse}, each a non-empty string, or null.
-function householdNames(db) {
-  const row = db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get();
+async function householdNames(db) {
+  const row = await db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get();
   const v = parseJson(row?.value, null);
   const name = (x) => (typeof x === 'string' && x.trim() ? x.trim() : null);
   return v && name(v.me) && name(v.spouse) ? { me: name(v.me), spouse: name(v.spouse) } : null;
@@ -70,10 +70,10 @@ function householdNames(db) {
 // Every word of the stored name is among the holder's words.
 const namesHolder = (name, holder) => { const have = new Set(words(holder)); const need = words(name); return need.length > 0 && need.every((w) => have.has(w)); };
 
-function jointRule(db, item, detail) {
+async function jointRule(db, item, detail) {
   const holder = detail?.account?.holder;
   if (!holder || !multiHolder(holder)) return null;
-  const names = householdNames(db);
+  const names = await householdNames(db);
   if (!names || !namesHolder(names.me, holder) || !namesHolder(names.spouse, holder)) return null;
   const option = optionOf(item, 'joint');
   if (!option) return null;
@@ -83,11 +83,11 @@ function jointRule(db, item, detail) {
   };
 }
 
-export function deterministicGuess(db, item, detail) {
+export async function deterministicGuess(db, item, detail) {
   switch (item.kind) {
     case 'account_kind': return kindRule(item, detail);
     case 'near_duplicate': return nearRule(item, detail);
-    case 'account_owner': return jointRule(db, item, detail);
+    case 'account_owner': return await jointRule(db, item, detail);
     default: return null;
   }
 }
@@ -122,9 +122,9 @@ function importedText(detail) {
   return subjectText(detail);
 }
 
-function engineEvidence(db, item, detail, basis) {
+async function engineEvidence(db, item, detail, basis) {
   const a = accountOf(detail);
-  const file = fileInfo(db, item.fileId);
+  const file = await fileInfo(db, item.fileId);
   const entryFiles = detail?.type === 'compare' ? [...new Set(detail.entries.map((e) => e.file).filter(Boolean))] : [];
   const fileNames = file ? [file.name] : a ? a.files.map((f) => f.name) : detail?.file ? [detail.file.name] : entryFiles;
   switch (basis) {
@@ -144,7 +144,7 @@ function engineEvidence(db, item, detail, basis) {
     case 'source_file':
       return fileNames.length ? `Source file ${fileNames.join(' and ')}.` : null;
     case 'document_type': {
-      const info = file ?? fileInfo(db, a?.files[0]?.id ?? detail?.file?.id);
+      const info = file ?? await fileInfo(db, a?.files[0]?.id ?? detail?.file?.id);
       const label = parserLabel(info?.parser);
       return label ? `Document type ${quote(label)} (${info.name}).` : null;
     }
@@ -160,8 +160,8 @@ function engineEvidence(db, item, detail, basis) {
   }
 }
 
-function engineGuess(db, item, detail) {
-  const row = db.prepare('SELECT option_id, reason, model FROM confirm_guesses WHERE item_id = ?').get(item.id);
+async function engineGuess(db, item, detail) {
+  const row = await db.prepare('SELECT option_id, reason, model FROM confirm_guesses WHERE item_id = ?').get(item.id);
   const option = row?.option_id != null ? optionOf(item, row.option_id) : null;
   if (!option) return null;
   const proposal=parseJson(row.reason,null);
@@ -171,13 +171,13 @@ function engineGuess(db, item, detail) {
     return {option:option.id,label:option.label,source:'engine',confidence,evidence:jevEvidence(confidence)};
   }
   const basis = BASIS_OF.get(row.reason) ?? 'question';
-  const evidence = engineEvidence(db, item, detail, basis) ?? engineEvidence(db, item, detail, 'question') ?? `The question reads ${quote(item.question)}.`;
+  const evidence = await engineEvidence(db, item, detail, basis) ?? await engineEvidence(db, item, detail, 'question') ?? `The question reads ${quote(item.question)}.`;
   return { option: option.id, label: option.label, evidence, source: 'engine' };
 }
 
-export function bestGuess(db, item, detail) {
+export async function bestGuess(db, item, detail) {
   if (!item || item.status === 'answered') return null;
   if (item.kind === 'transaction_category') return categoryGuess(item);
   if (item.kind === 'category_mapping') return null;
-  return deterministicGuess(db, item, detail) ?? engineGuess(db, item, detail);
+  return await deterministicGuess(db, item, detail) ?? await engineGuess(db, item, detail);
 }

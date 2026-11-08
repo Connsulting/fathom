@@ -7,7 +7,7 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DatabaseSync } from 'node:sqlite';
+import { openScope } from '../src/storage/index.mjs';
 import { listMigrations, migrate } from '../src/store/db.mjs';
 import { loadGoals, loadFigures } from '../src/scenario/build.mjs';
 import { servesGoals } from '../src/shared/goals.mjs';
@@ -28,69 +28,69 @@ const DEFS = Object.freeze({
   s_legacy: { id: 's_legacy', title: 'Plain seed goal', horizon: '3-10y', status: 'watch', kind: 'education', prose: 'Plain words.' },
 });
 
-function storeAt025() {
-  const db = new DatabaseSync(':memory:');
+async function storeAt025() {
+  const db = await openScope({ path: ':memory:', journal: null, busyTimeout: 0 });
   db.exec('PRAGMA foreign_keys = ON');
-  migrate(db, { through: BEFORE });
-  db.prepare("INSERT INTO sources (id, label, as_of) VALUES ('bank', 'Synthetic bank export', '2026-09-30')").run();
-  db.prepare("INSERT INTO accounts (id, inst, name, kind, fig_key, parser) VALUES ('acc', 'Example Bank', 'Savings', 'checking', 'bal.acc', 'test')").run();
+  await migrate(db, { through: BEFORE });
+  await db.prepare("INSERT INTO sources (id, label, as_of) VALUES ('bank', 'Synthetic bank export', '2026-09-30')").run();
+  await db.prepare("INSERT INTO accounts (id, inst, name, kind, fig_key, parser) VALUES ('acc', 'Example Bank', 'Savings', 'checking', 'bal.acc', 'test')").run();
   const fig = db.prepare("INSERT INTO figures (key, v, src, kind, label, updated_at) VALUES (?, ?, 'bank', ?, ?, ?)");
-  fig.run('bal.acc', 12000, 'a', 'Savings', TS);
-  fig.run('cash.total', 30000, 'a', 'All cash', TS);
-  fig.run('seed_target', 50000, 'p', 'Seed target', TS);
+  await fig.run('bal.acc', 12000, 'a', 'Savings', TS);
+  await fig.run('cash.total', 30000, 'a', 'All cash', TS);
+  await fig.run('seed_target', 50000, 'p', 'Seed target', TS);
   const owner = db.prepare("INSERT INTO goals (id, def, sort, origin, archived_at, created_at, updated_at) VALUES (?, ?, ?, 'owner', ?, ?, ?)");
-  owner.run('o_full', JSON.stringify(DEFS.o_full), 7, null, TS, TS);
-  owner.run('o_bare', JSON.stringify(DEFS.o_bare), 8, null, TS, TS);
-  owner.run('o_arch', JSON.stringify(DEFS.o_arch), 9, '2026-10-02T09:00:00.000Z', TS, '2026-10-02T09:00:00.000Z');
+  await owner.run('o_full', JSON.stringify(DEFS.o_full), 7, null, TS, TS);
+  await owner.run('o_bare', JSON.stringify(DEFS.o_bare), 8, null, TS, TS);
+  await owner.run('o_arch', JSON.stringify(DEFS.o_arch), 9, '2026-10-02T09:00:00.000Z', TS, '2026-10-02T09:00:00.000Z');
   const seedGoal = db.prepare('INSERT INTO goals (id, def, sort) VALUES (?, ?, ?)');
-  seedGoal.run('s_track', JSON.stringify(DEFS.s_track), 0);
-  seedGoal.run('s_done', JSON.stringify(DEFS.s_done), 1);
-  seedGoal.run('s_legacy', JSON.stringify(DEFS.s_legacy), 2);
+  await seedGoal.run('s_track', JSON.stringify(DEFS.s_track), 0);
+  await seedGoal.run('s_done', JSON.stringify(DEFS.s_done), 1);
+  await seedGoal.run('s_legacy', JSON.stringify(DEFS.s_legacy), 2);
   return db;
 }
 
 const COLUMNS = 'id, def, sort, origin, archived_at, created_at, updated_at';
-const rows = db => db.prepare(`SELECT ${COLUMNS} FROM goals ORDER BY id`).all().map(r => ({ ...r }));
-const schema = db => Object.fromEntries(db.prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all()
+const rows = async db => (await db.prepare(`SELECT ${COLUMNS} FROM goals ORDER BY id`).all()).map(r => ({ ...r }));
+const schema = async db => Object.fromEntries((await db.prepare("SELECT type, name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY type, name").all())
   .map(r => [`${r.type}:${r.name}`, r.sql]));
-const goalsRead = db => {
-  const accounts = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
-  return loadGoals(db, { fig: loadFigures(db), accounts });
+const goalsRead = async db => {
+  const accounts = await db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
+  return await loadGoals(db, { fig: await loadFigures(db), accounts });
 };
 
-test('the migration under test is 026 and the store before it is at 025', () => {
+test('the migration under test is 026 and the store before it is at 025', async () => {
   const ids = listMigrations().map(m => m.id);
   assert.ok(ids.includes(BEFORE), 'migration 025 exists');
   assert.ok(ids.includes(TARGET), 'migration 026 exists');
   assert.match(listMigrations().find(m => m.id === TARGET).name, /goal/);
-  const db = storeAt025();
-  assert.equal(db.prepare('SELECT max(id) AS id FROM schema_migrations').get().id, BEFORE);
-  assert.equal(db.prepare('PRAGMA table_info(goals)').all().some(c => c.name === 'done_at'), false);
+  const db = await storeAt025();
+  assert.equal((await db.prepare('SELECT max(id) AS id FROM schema_migrations').get()).id, BEFORE);
+  assert.equal((await db.prepare('PRAGMA table_info(goals)').all()).some(c => c.name === 'done_at'), false);
 });
 
-test('migration 026 adds done_at and rewrites no goal row', () => {
-  const db = storeAt025();
-  const before = rows(db);
+test('migration 026 adds done_at and rewrites no goal row', async () => {
+  const db = await storeAt025();
+  const before = await rows(db);
   assert.equal(before.length, Object.keys(DEFS).length);
-  assert.deepEqual(migrate(db, { through: TARGET }).applied, [TARGET]);
-  const after = rows(db);
+  assert.deepEqual((await migrate(db, { through: TARGET })).applied, [TARGET]);
+  const after = await rows(db);
   assert.deepEqual(after, before, 'every column of every goals row is unchanged');
   for (const r of after) assert.equal(r.def, JSON.stringify(DEFS[r.id]), `${r.id} def text is byte for byte the same`);
-  const doneAt = db.prepare('PRAGMA table_info(goals)').all().find(c => c.name === 'done_at');
+  const doneAt = (await db.prepare('PRAGMA table_info(goals)').all()).find(c => c.name === 'done_at');
   assert.ok(doneAt, 'goals has a done_at column');
   assert.equal(doneAt.type, 'TEXT');
   assert.equal(doneAt.notnull, 0, 'done_at is nullable');
   assert.equal(doneAt.dflt_value, null, 'done_at has no default');
-  assert.deepEqual(db.prepare('SELECT id, done_at FROM goals ORDER BY id').all().map(r => ({ ...r })),
+  assert.deepEqual((await db.prepare('SELECT id, done_at FROM goals ORDER BY id').all()).map(r => ({ ...r })),
     before.map(r => ({ id: r.id, done_at: null })), 'done_at is null on every row');
-  assert.deepEqual(migrate(db, { through: TARGET }).applied, [], 'running it again applies nothing');
+  assert.deepEqual((await migrate(db, { through: TARGET })).applied, [], 'running it again applies nothing');
 });
 
-test('migration 026 changes no other table', () => {
-  const db = storeAt025();
-  const before = schema(db);
-  migrate(db, { through: TARGET });
-  const after = schema(db);
+test('migration 026 changes no other table', async () => {
+  const db = await storeAt025();
+  const before = await schema(db);
+  await migrate(db, { through: TARGET });
+  const after = await schema(db);
   assert.deepEqual(Object.keys(after), Object.keys(before), 'no object is added or dropped');
   for (const [key, sql] of Object.entries(before)) {
     if (key === 'table:goals') continue;
@@ -100,11 +100,11 @@ test('migration 026 changes no other table', () => {
   assert.equal(after['table:goals'].replace(/,\s*done_at\s+TEXT(?=\s*\)\s*$)/i, ''), before['table:goals'], 'goals differs only by the added column');
 });
 
-test('loadGoals reads existing goals back identically, plus kind balance, status open, owner and priority unset', () => {
-  const db = storeAt025();
-  const pre = goalsRead(db);
-  migrate(db, { through: TARGET });
-  const post = goalsRead(db);
+test('loadGoals reads existing goals back identically, plus kind balance, status open, owner and priority unset', async () => {
+  const db = await storeAt025();
+  const pre = await goalsRead(db);
+  await migrate(db, { through: TARGET });
+  const post = await goalsRead(db);
   assert.deepEqual(post, pre, 'the read is the same before and after the migration');
   assert.deepEqual(post.map(g => g.id).sort(), Object.keys(DEFS).sort());
 

@@ -607,9 +607,9 @@ test('homeHeadline never says No goals with targets', () => {
 test('homeModel over the seeded demo store matches the server housekeeping count, goal links and suggestions', async () => {
   const t = await tempDb();
   try {
-    seedDemo(t.db);
-    const sc = buildScenario(t.db);
-    const recs = loadLinkedRecs(t.db, sc.live.clock);
+    await seedDemo(t.db);
+    const sc = await buildScenario(t.db);
+    const recs = await loadLinkedRecs(t.db, sc.live.clock);
     assert.ok(recs.length > 0, 'the demo seeds recs');
     for (const r of recs) {
       assert.ok(OWNERS.includes(r.owner), `${r.id} owner ${r.owner}`);

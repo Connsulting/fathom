@@ -20,21 +20,21 @@ test('building and reading a household context writes no pack state; starting th
     temp.close();
     rmSync(temp.dataDir, { recursive: true, force: true });
   });
-  const packRows = () => temp.db.prepare('SELECT count(*) AS n FROM packs_state').get().n;
+  const packRows = async () => (await temp.db.prepare('SELECT count(*) AS n FROM packs_state').get()).n;
 
   const context = runtimes.get(temp.householdId);
   assert.ok(context, 'the household is served');
   assert.equal(context.isCurrent(), true);
-  temp.platform.prepare('UPDATE households SET generation = generation + 1 WHERE id = ?').run(temp.householdId);
+  await temp.platform.prepare('UPDATE households SET generation = generation + 1 WHERE id = ?').run(temp.householdId);
   assert.equal(context.isCurrent(), false, 'a captured generation cannot dispatch after replacement');
-  temp.platform.prepare('UPDATE households SET generation = generation - 1 WHERE id = ?').run(temp.householdId);
-  temp.platform.prepare("UPDATE households SET status = 'suspended' WHERE id = ?").run(temp.householdId);
+  await temp.platform.prepare('UPDATE households SET generation = generation - 1 WHERE id = ?').run(temp.householdId);
+  await temp.platform.prepare("UPDATE households SET status = 'suspended' WHERE id = ?").run(temp.householdId);
   assert.equal(context.isCurrent(), false);
-  temp.platform.prepare("UPDATE households SET status = 'active' WHERE id = ?").run(temp.householdId);
+  await temp.platform.prepare("UPDATE households SET status = 'active' WHERE id = ?").run(temp.householdId);
   assert.equal(context.isCurrent(), true);
   assert.ok(context.packs.loaded().length > 0, 'packs load on read');
-  assert.equal(packRows(), 0, 'building and reading the context wrote no pack state');
+  assert.equal(await packRows(), 0, 'building and reading the context wrote no pack state');
 
-  runtimes.startAll();
-  assert.ok(packRows() > 0, 'starting the household refreshed its pack state');
+  await runtimes.startAll();
+  assert.ok(await packRows() > 0, 'starting the household refreshed its pack state');
 });

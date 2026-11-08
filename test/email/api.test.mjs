@@ -100,7 +100,7 @@ describe('email and jobs routes on a demo server', () => {
   test('POST /api/jobs/:id/run runs a known job and adds a manual job_runs row; an unknown id is 404', T, async () => {
     const count = async () => {
       const d = await openStore(s.dbFile);
-      try { return d.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'freshness'").get().n; } finally { d.close(); }
+      try { return (await d.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'freshness'").get()).n; } finally { await d.close(); }
     };
     const n0 = await count();
     const r = await postJson(s.baseUrl, '/api/jobs/freshness/run', {});
@@ -110,10 +110,10 @@ describe('email and jobs routes on a demo server', () => {
     assert.equal(await count(), n0 + 1);
     const db = await openStore(s.dbFile);
     try {
-      const last = db.prepare("SELECT * FROM job_runs WHERE job_id = 'freshness' ORDER BY id DESC LIMIT 1").get();
+      const last = await db.prepare("SELECT * FROM job_runs WHERE job_id = 'freshness' ORDER BY id DESC LIMIT 1").get();
       assert.equal(last.trigger, 'manual');
       assert.match(last.period_key, /^manual:/);
-    } finally { db.close(); }
+    } finally { await db.close(); }
     const fresh = r.json.jobs.find((j) => j.id === 'freshness');
     assert.ok(fresh.lastRun, 'lastRun after a manual run');
 
@@ -215,7 +215,7 @@ describe('ingest triggers the plan job (in-process router, fake scheduler)', () 
       assert.equal(stillWaiting.json.file.status, 'waiting_for_engine');
       assert.equal(scheduler.calls.length, 3, 'an unsuccessful retry does not trigger');
 
-      st.db.prepare("INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES (?, ?, 'test', '2032-03-10T12:00:00.000Z', 0)")
+      await st.db.prepare("INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES (?, ?, 'test', '2032-03-10T12:00:00.000Z', 0)")
         .run(signature, JSON.stringify(MAPPING));
       const done = await server.postJson(`/api/files/${file.fileId}/retry`, {});
       assert.equal(done.status, 200);

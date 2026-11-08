@@ -26,10 +26,10 @@ function goalModelFields() {
 
 
 export const operations = [
-  { tool: 'update_goal', name: 'create', scope: 'write:goals', summary: 'Create a balance, range, floor or contribution goal with stated amounts and dates.', route: 'Create a household goal', routes: ['POST /api/goals'], params: fields, required: ['title'], handler: (args, ctx) => changeGoal(args, ctx),
-    preflight: (args, ctx) => { checkGoal(ctx.db, args); } },
-  { tool: 'update_goal', name: 'edit', scope: 'write:goals', summary: 'Edit supplied goal fields; status done completes a goal and open reopens it.', route: 'Edit a household goal', routes: ['POST /api/goals/:id'], params: { id, ...fields }, required: ['id'], handler: (args, ctx) => changeGoal(args, ctx, true),
-    preflight: ({ id, ...fields }, ctx) => { checkGoal(ctx.db, fields, id); } },
+  { tool: 'update_goal', name: 'create', scope: 'write:goals', summary: 'Create a balance, range, floor or contribution goal with stated amounts and dates.', route: 'Create a household goal', routes: ['POST /api/goals'], params: fields, required: ['title'], handler: async (args, ctx) => await changeGoal(args, ctx),
+    preflight: async (args, ctx) => { await checkGoal(ctx.db, args); } },
+  { tool: 'update_goal', name: 'edit', scope: 'write:goals', summary: 'Edit supplied goal fields; status done completes a goal and open reopens it.', route: 'Edit a household goal', routes: ['POST /api/goals/:id'], params: { id, ...fields }, required: ['id'], handler: async (args, ctx) => await changeGoal(args, ctx, true),
+    preflight: async ({ id, ...fields }, ctx) => { await checkGoal(ctx.db, fields, id); } },
 ];
 
 export const rules = ['On a failed write, quote the tool reason, then retry with corrected arguments when the reason allows. Never tell the person to try the UI to discover the error.'];

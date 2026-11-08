@@ -44,20 +44,20 @@ async function withStore(fn) {
 async function ingest(s, name) {
   const r = await P.ingestFile(s.db, fixture(name, 'text/csv'), s.opts(await offEngine()));
   assert.equal(r.status, 'imported', `${name} imported`);
-  return one(s.db, 'SELECT * FROM files WHERE name = ?', name);
+  return await one(s.db, 'SELECT * FROM files WHERE name = ?', name);
 }
-const accountOfFile = (s, file) => one(s.db, `SELECT a.* FROM accounts a WHERE a.id IN (
+const accountOfFile = async (s, file) => await one(s.db, `SELECT a.* FROM accounts a WHERE a.id IN (
   SELECT account_id FROM transactions WHERE file_id = ? UNION SELECT account_id FROM balances WHERE file_id = ?
   UNION SELECT account_id FROM positions WHERE file_id = ?)`, file.id, file.id, file.id);
 
 // A live SimpleFIN connection with `accountId` mapped to it, written the way the sync records a
 // mapping and newest balance from a successful sync.
-function connect(db, accountId) {
-  db.prepare("INSERT OR IGNORE INTO simplefin_connection (id, access_blob, connected_at) VALUES (1, 'synthetic', ?)").run(NOW);
-  db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at) VALUES (?, ?, 'mapped', 'Synthetic', ?)").run(`sf-${accountId}`, accountId, NOW);
-  db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, 100)').run(accountId, '2032-08-31');
+async function connect(db, accountId) {
+  await db.prepare("INSERT OR IGNORE INTO simplefin_connection (id, access_blob, connected_at) VALUES (1, 'synthetic', ?)").run(NOW);
+  await db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at) VALUES (?, ?, 'mapped', 'Synthetic', ?)").run(`sf-${accountId}`, accountId, NOW);
+  await db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, 100)').run(accountId, '2032-08-31');
 }
-const disconnect = (db) => db.prepare('DELETE FROM simplefin_connection').run();
+const disconnect = async (db) => await db.prepare('DELETE FROM simplefin_connection').run();
 
 const pick = (m, k) => {
   const v = m instanceof Map ? m.get(k) : m?.[k];
@@ -88,10 +88,10 @@ function callers(db, clock) {
 }
 
 // The one rule: every caller reports the shared helper's answer for every account and source.
-function assertAgree(db, clock) {
+async function assertAgree(db, clock) {
   const rule = shared(db, clock);
   const c = callers(db, clock);
-  for (const { id } of db.prepare('SELECT id FROM accounts').all()) {
+  for (const { id } of await db.prepare('SELECT id FROM accounts').all()) {
     const want = rule.account(id);
     if (want === undefined) continue;
     if (want === 'archived') {
@@ -108,24 +108,24 @@ function assertAgree(db, clock) {
     const want = rule.source(source.id);
     if (want !== undefined) assert.equal(source.state, want, `${source.id}: ingestState.sources agrees with the helper`);
   }
-  const staleAccounts = db.prepare('SELECT id FROM accounts').all().filter(({ id }) => rule.account(id) === 'stale').length;
+  const staleAccounts = (await db.prepare('SELECT id FROM accounts').all()).filter(({ id }) => rule.account(id) === 'stale').length;
   assert.equal(c.cashCard(), staleAccounts, 'the Cash card counts exactly the helper\'s stale accounts');
   return c;
 }
 
 test('a file source whose accounts a live SimpleFIN connection covers is history, not stale, though its file date is old', () => withStore(async (s) => {
   const file = await ingest(s, 'aggregator.csv');
-  const acct = accountOfFile(s, file);
+  const acct = await accountOfFile(s, file);
 
-  let c = assertAgree(s.db, OLD_CLOCK);
+  let c = await assertAgree(s.db, OLD_CLOCK);
   assert.equal(c.source(file.source_id).state, 'stale', 'before the connection the old export is stale');
   assert.equal(c.ingestAccount(acct.id), 'stale');
   assert.ok(c.state.staleNotes.length > 0, 'a stale note before the connection');
   assert.equal(c.cashCard(), 1);
   assert.equal(c.planner('transactions'), 'stale');
 
-  connect(s.db, acct.id);
-  c = assertAgree(s.db, OLD_CLOCK);
+  await connect(s.db, acct.id);
+  c = await assertAgree(s.db, OLD_CLOCK);
   assert.equal(shared(s.db, OLD_CLOCK).source(file.source_id), 'history');
   assert.equal(c.source(file.source_id).state, 'history');
   assert.notEqual(c.ingestAccount(acct.id), 'stale');
@@ -137,8 +137,8 @@ test('a file source whose accounts a live SimpleFIN connection covers is history
   assert.ok(!c.state.sources.some((x) => x.state === 'covered'), 'covered is gone; history replaces it');
 
   // Disconnecting keeps the balance already received; the older export is history.
-  disconnect(s.db);
-  c = assertAgree(s.db, OLD_CLOCK);
+  await disconnect(s.db);
+  c = await assertAgree(s.db, OLD_CLOCK);
   assert.equal(c.source(file.source_id).state, 'history');
   assert.equal(c.ingestAccount(acct.id), 'fresh');
 }));
@@ -146,11 +146,11 @@ test('a file source whose accounts a live SimpleFIN connection covers is history
 test('an account with no newer source and old data is stale in every caller; a covered one beside it is not', () => withStore(async (s) => {
   const agg = await ingest(s, 'aggregator.csv');
   const pos = await ingest(s, 'positions.csv');
-  const cash = accountOfFile(s, agg);
-  const invest = accountOfFile(s, pos);
-  connect(s.db, cash.id);
+  const cash = await accountOfFile(s, agg);
+  const invest = await accountOfFile(s, pos);
+  await connect(s.db, cash.id);
 
-  const c = assertAgree(s.db, OLD_CLOCK);
+  const c = await assertAgree(s.db, OLD_CLOCK);
   assert.equal(shared(s.db, OLD_CLOCK).account(invest.id), 'stale');
   assert.equal(c.ingestAccount(invest.id), 'stale');
   assert.equal(c.dialog(invest.id), 'stale');
@@ -166,15 +166,15 @@ test('an account with no newer source and old data is stale in every caller; a c
 test('an archived account is never stale, and its only source becomes history', () => withStore(async (s) => {
   const agg = await ingest(s, 'aggregator.csv');
   const pos = await ingest(s, 'positions.csv');
-  const cash = accountOfFile(s, agg);
-  const invest = accountOfFile(s, pos);
-  connect(s.db, cash.id);
+  const cash = await accountOfFile(s, agg);
+  const invest = await accountOfFile(s, pos);
+  await connect(s.db, cash.id);
   assert.equal(callers(s.db, OLD_CLOCK).ingestAccount(invest.id), 'stale', 'precondition: the positions account is stale');
 
   const out = await T.callTool('sources', { operation: 'archive_account', id: invest.id }, { db: s.db, now: new Date(NOW), actorId: 'person-a' });
   assert.ok(out.receipt, 'archiving returns a receipt');
 
-  const c = assertAgree(s.db, OLD_CLOCK);
+  const c = await assertAgree(s.db, OLD_CLOCK);
   assert.equal(shared(s.db, OLD_CLOCK).account(invest.id), 'archived');
   assert.notEqual(c.ingestAccount(invest.id), 'stale');
   assert.notEqual(c.dialog(invest.id), 'stale');
@@ -189,16 +189,16 @@ test('an archived account is never stale, and its only source becomes history', 
 test('a file source whose account has newer rows from another file is history; the newer file decides freshness', () => withStore(async (s) => {
   const agg = await ingest(s, 'aggregator.csv');
   const bank = await ingest(s, 'Chase7766_Activity_20320305.csv');
-  const acct = accountOfFile(s, bank);
-  assert.equal(accountOfFile(s, agg).id, acct.id, 'precondition: both files feed one account');
+  const acct = await accountOfFile(s, bank);
+  assert.equal((await accountOfFile(s, agg)).id, acct.id, 'precondition: both files feed one account');
   assert.notEqual(agg.source_id, bank.source_id, 'precondition: two sources');
 
-  let c = assertAgree(s.db, FRESH_CLOCK);
+  let c = await assertAgree(s.db, FRESH_CLOCK);
   assert.equal(c.source(agg.source_id).state, 'history');
   assert.equal(c.source(bank.source_id).state, 'fresh');
   assert.equal(c.ingestAccount(acct.id), 'fresh');
 
-  c = assertAgree(s.db, OLD_CLOCK);
+  c = await assertAgree(s.db, OLD_CLOCK);
   assert.equal(c.source(agg.source_id).state, 'history', 'the older export never turns stale');
   assert.equal(c.source(bank.source_id).state, 'stale', 'the newest export is what went stale');
   assert.equal(c.ingestAccount(acct.id), 'stale');

@@ -17,9 +17,9 @@ test('total shares the exact demo and real card spending window selection', asyn
   const real = await spendingStore(t),
     demo = await tempDb();
   t.after(() => demo.close());
-  seedDemo(demo.db);
+  await seedDemo(demo.db);
   for (const ctx of [real.ctx, { db: demo.db, dataDir: demo.dataDir, clock: '2026-11-05' }]) {
-    const sp = spendingInputs({ ...loadCategoryInputs(ctx.db), clock: ctx.clock });
+    const sp = spendingInputs({ ...await loadCategoryInputs(ctx.db), clock: ctx.clock });
     const r = await callTool('spending', { operation: 'total', measure: 'spending' }, ctx);
     assert.equal(r.total.value, sp.spendTotal);
     assert.deepEqual(r.window, sp.window);
@@ -31,7 +31,7 @@ test('Q01 excludes matched mortgage and tax amounts and essential sums five clas
   const s = await spendingStore(t);
   const args = { ...custom, groupBy: 'class', exclude: { classes: ['debt_service'], buckets: ['tax'] } };
   const r = await s.call('total', args);
-  const input = loadCategoryInputs(s.db),
+  const input = await loadCategoryInputs(s.db),
     resolved = resolveCategories(input);
   const rows = input.transactions.filter((x) => x.date >= '2026-03' && x.date < '2026-06' && x.amount < 0);
   const want = -sum(
@@ -64,21 +64,21 @@ test('uncertain rows, silent cards, unclassified categories and healthcare outsi
   const s = await spendingStore(t);
   const id = s.tx('card', '2026-04-12', -17, null, 'Unknown example');
   const guess = s.tx('card', '2026-04-13', -23, null, 'Guessed example');
-  s.db
+  await s.db
     .prepare(
       "INSERT INTO transaction_category_corrections(transaction_id,category,bucket,updated_at) VALUES (?,'Shopping','household','2026-04-13')",
     )
     .run(guess);
-  s.db
+  await s.db
     .prepare(
       "INSERT INTO confirm_items(kind,subject,question,options,status,created_at) VALUES ('transaction_category',?,'Category?','[]','pending','2026-04-13')",
     )
     .run(String(guess));
-  const item = s.db.prepare('SELECT id FROM confirm_items WHERE subject=?').get(String(guess)).id;
-  s.db
+  const item = (await s.db.prepare('SELECT id FROM confirm_items WHERE subject=?').get(String(guess))).id;
+  await s.db
     .prepare("INSERT INTO confirm_auto(item_id,rule,evidence,created_at) VALUES (?,'jev_category','{}','2026-04-13')")
     .run(item);
-  s.fact('income.w2', true);
+  await s.fact('income.w2', true);
   const r = await s.call('total', custom);
   const gap = (code) => r.gaps.find((g) => g.code === code);
   assert.equal(gap('uncategorized_rows').amount, 17);
@@ -187,7 +187,7 @@ test('available eval scripts call valid operations through the Ask tool boundary
   const { loadCases } = await import('../evals/cases.mjs');
   const { createEvalStore } = await import('../evals/harness.mjs');
   const store = await createEvalStore();
-  t.after(() => store.close());
+  t.after(async () => await store.close());
   const { tools } = await import('../src/tools/index.mjs');
   const { proposalTools } = await import('../src/actions/proposals.mjs');
   for (const c of await loadCases()) {
@@ -197,7 +197,7 @@ test('available eval scripts call valid operations through the Ask tool boundary
     for (const turn of c.turns) {
       const frames = await script({ turn, db: store.db, clock: '2026-11-05' });
       assert.ok(frames[0].toolCalls.length, c.id);
-      const server = createRegistryServer(proposalTools(tools), { purpose: 'chat', ctx: { db: store.db, dataDir: store.root, clock: '2026-11-05', now: '2026-11-05T00:00:00.000Z', actorId: 'demo', channel: 'ask', ownerStatements: () => [turn.question], onProposal() {}, onBlock() {} } });
+      const server = await createRegistryServer(proposalTools(tools), { purpose: 'chat', ctx: { db: store.db, dataDir: store.root, clock: '2026-11-05', now: '2026-11-05T00:00:00.000Z', actorId: 'demo', channel: 'ask', ownerStatements: () => [turn.question], onProposal() {}, onBlock() {} } });
       for (const call of frames[0].toolCalls) {
         const result = await server.invoke(call.name, call.args);
         assert.notEqual(result.isError, true, `${c.id}: ${result.content[0].text}`);
@@ -230,7 +230,7 @@ test('period gaps expose pre-history and missing months without counting investm
   assert.ok(compare.a.total.gaps.some(g=>g.code==='incomplete_month'));
   const all=await s.call('total',{...custom,scope:'all'});
   assert.equal(all.gaps.find(g=>g.code==='account_no_history').count,2);
-  s.db.prepare("DELETE FROM transactions WHERE account_id='card' AND date LIKE '2026-04%'").run();
+  await s.db.prepare("DELETE FROM transactions WHERE account_id='card' AND date LIKE '2026-04%'").run();
   const missing=await s.call('total',custom);
   assert.equal(missing.gaps.find(g=>g.code==='incomplete_month').count,1);
   assert.equal((await s.call('total',{from:'2026-03',to:'2026-03'})).gaps.some(g=>g.code==='incomplete_month'),false);

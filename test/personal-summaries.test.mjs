@@ -16,29 +16,29 @@ const period = { from: '2026-08', to: '2026-10' };
 async function fixture(t, { bank = [], manual = [] } = {}) {
   const s = scratch('summary-');
   const db = await createRealStore(s.dir());
-  t.after(() => { closeRealStore(db); s.cleanup(); });
+  t.after(async () => { await closeRealStore(db); await s.cleanup(); });
   for (const [key, value] of Object.entries({
     'household.names': { owner: 'Aster', spouse: 'Birch' },
     'household.filingStatus': 'mfj', 'household.state': 'VA',
     'household.birthYears': { owner: 1985, spouse: 1986 },
     'income.sCorp': true, 'business.entities': [{ name: 'Example Studio', type: 's_corp', owner: 'owner' }, ...manual],
-  })) addFact(db, key, value);
-  db.prepare("INSERT INTO files(id,name,uploaded_at,status) VALUES ('summary-book','Synthetic household workbook.xlsx',?,'imported')").run(clock);
+  })) await addFact(db, key, value);
+  await db.prepare("INSERT INTO files(id,name,uploaded_at,status) VALUES ('summary-book','Synthetic household workbook.xlsx',?,'imported')").run(clock);
   const insert = db.prepare('INSERT INTO pnl_lines(entity,period,category,amount,file_id,locator) VALUES (?,?,?,?,?,?)');
   for (const month of ['08', '09', '10']) {
     for (const [entity, sheet, categories] of [
       ['Example Studio', 'Example Studio', [['Income', 9000], ['Officer salary', -2000]]],
       ["Aster's Summary", "Aster's Summary", [['Wages', 1000], ['Groceries', -100], ['Medical', -40], ['Shopping', -60]]],
       ['Birch Summary', 'Birch Summary', [['Income', 800], ['Groceries', -70], ['Medical', -30], ['Shopping', -50]]],
-    ]) for (const [category, amount] of categories) insert.run(entity, `2026-${month}`, category, amount, 'summary-book', JSON.stringify({ sheet, row: 2, column: month }));
+    ]) for (const [category, amount] of categories) await insert.run(entity, `2026-${month}`, category, amount, 'summary-book', JSON.stringify({ sheet, row: 2, column: month }));
   }
-  db.prepare("INSERT INTO accounts(id,name,kind,owner,parser) VALUES ('owner-card','Personal card','card','You','aggregator')").run();
+  await db.prepare("INSERT INTO accounts(id,name,kind,owner,parser) VALUES ('owner-card','Personal card','card','You','aggregator')").run();
   for (const [month, category, amount, owner = 'You'] of bank) {
     const id = owner === 'Your spouse' ? 'spouse-card' : owner === 'Joint' ? 'joint-card' : 'owner-card';
-    db.prepare("INSERT OR IGNORE INTO accounts(id,name,kind,owner,parser) VALUES (?,?,'card',?,'aggregator')").run(id, id, owner);
-    db.prepare('INSERT INTO transactions(account_id,date,amount,category,parser) VALUES (?,?,?,?,?)').run(id, `2026-${month}-15`, amount, category, 'aggregator');
+    await db.prepare("INSERT OR IGNORE INTO accounts(id,name,kind,owner,parser) VALUES (?,?,'card',?,'aggregator')").run(id, id, owner);
+    await db.prepare('INSERT INTO transactions(account_id,date,amount,category,parser) VALUES (?,?,?,?,?)').run(id, `2026-${month}-15`, amount, category, 'aggregator');
   }
-  const ctx = { db, clock, now: `${clock}T12:00:00Z`, actorId: 'synthetic-owner', replan: () => planRun(db) };
+  const ctx = { db, clock, now: `${clock}T12:00:00Z`, actorId: 'synthetic-owner', replan: async () => planRun(db) };
   const total = (measure = 'spending', args = {}) => callTool('spending', { operation: 'total', ...period, measure, ...args }, ctx);
   return { db, ctx, total };
 }
@@ -46,7 +46,7 @@ async function fixture(t, { bank = [], manual = [] } = {}) {
 test('AC1/AC2: named mixed summaries infer their people with evidence and Undo, feed tools and household figures', async t => {
   const { db, total } = await fixture(t);
   await planRun(db);
-  const listed = getFacts(db)['business.entities'];
+  const listed = (await getFacts(db))['business.entities'];
   for (const [name, person] of [["Aster's Summary", 'owner'], ['Birch Summary', 'spouse']]) {
     const entry = listed.find(e => e.name === name);
     assert.equal(entry.type, 'personal');
@@ -55,7 +55,7 @@ test('AC1/AC2: named mixed summaries infer their people with evidence and Undo, 
     assert.equal(entry.evidence.lineCount, 12);
     assert.ok(!JSON.stringify(entry.evidence).includes('800'));
   }
-  const scenario = buildScenario(db);
+  const scenario = await buildScenario(db);
   const missing = scenario.recs.find(r => r.id === 'missing-data');
   assert.ok(!missing?.tasks.some(task => ['business_unclassified', 'pnl_people_unknown'].includes(task.code)));
   assert.ok(scenario.recs.some(r => r.assumptions?.some(a => a.key === 'business.entities' && a.path[0] === 'Birch Summary')));
@@ -70,18 +70,18 @@ test('AC1/AC2: named mixed summaries infer their people with evidence and Undo, 
   assert.equal(scenario.fig['inc.ytd.summary-spouse'].v, 2400);
   assert.equal(scenario.fig['inc.ytd.total'].v, 29400);
   assert.equal(scenario.fig['cash.monthlyOut'].v, 350);
-  const view = householdSpending({ db, ...period, clock });
+  const view = await householdSpending({ db, ...period, clock });
   assert.equal(view.figures[view.total].v, spending.total.value);
   assert.equal(view.figures[view.total].src, 'spend:workbook');
-  const detail = householdSpendingRows({ db, ...period, clock, bucket: 'household', category: 'Groceries' });
+  const detail = await householdSpendingRows({ db, ...period, clock, bucket: 'household', category: 'Groceries' });
   assert.equal(detail.total, 6);
   assert.ok(detail.items.every(i => i.kind === 'workbook'));
   const cash = await callTool('spending', { operation: 'cash_flow', ...period }, { db, clock });
   assert.equal(cash.totals.household.outflow.value, spending.total.value);
   assert.equal(cash.totals.household.inflow.value, income.total.value);
-  recordFactAnswers(db, [{ key: 'business.entityInference', value: { 'Birch Summary': { undone: true } } }], { now: clock });
+  await recordFactAnswers(db, [{ key: 'business.entityInference', value: { 'Birch Summary': { undone: true } } }], { now: clock });
   await planRun(db);
-  assert.ok(!getFacts(db)['business.entities'].some(e => e.name === 'Birch Summary'));
+  assert.ok(!(await getFacts(db))['business.entities'].some(e => e.name === 'Birch Summary'));
   assert.equal((await total()).byPerson.find(p => p.person === 'spouse'), undefined);
 });
 
@@ -109,9 +109,9 @@ test('AC3: bank coverage wins only for the covered person, month and category', 
     assert.equal(result.byPerson.find(p => p.person === 'spouse').total.value, spouse);
     const joint = result.byPerson.find(p => p.person === 'joint')?.total.value ?? 0;
     assert.equal(owner + spouse + joint, expected);
-    const view = householdSpending({ db, ...period, clock });
+    const view = await householdSpending({ db, ...period, clock });
     assert.equal(view.figures[view.total].v, expected - (label.startsWith('refund') ? 10 : 0));
-    assert.equal(buildScenario(db).fig['cash.monthlyOut'].v, Math.round(expected / 3 * 100) / 100);
+    assert.equal((await buildScenario(db)).fig['cash.monthlyOut'].v, Math.round(expected / 3 * 100) / 100);
   });
 });
 
@@ -119,7 +119,7 @@ test('AC4: a W-2 replaces the same person summary wages without dropping the spo
   const { db, total } = await fixture(t);
   await addPayroll(db, w2Doc({ person: 'owner', relation: 'outside', employerName: 'Synthetic Employer', wages: 12000, medicareWages: 12000, socialSecurityWages: 12000, box12: [] }));
   await planRun(db);
-  const scenario = buildScenario(db);
+  const scenario = await buildScenario(db);
   assert.ok(!scenario.fig['inc.ytd.summary-owner']);
   assert.equal(scenario.fig['inc.ytd.summary-spouse'].v, 2400);
   assert.equal(scenario.fig['inc.ytd.total'].v, 41400);
@@ -133,10 +133,10 @@ test('AC4: a W-2 replaces the same person summary wages without dropping the spo
 
 test('AC4: paystub YTD covers through its month and the summary fills later months', async t => {
   const { db, total } = await fixture(t);
-  addFact(db, 'business.entities', [{ name: 'Example Studio', type: 'sole_prop', owner: 'owner' }]);
+  await addFact(db, 'business.entities', [{ name: 'Example Studio', type: 'sole_prop', owner: 'owner' }]);
   await addPayroll(db, paystubDoc({ person: 'owner', relation: 'outside', employerName: 'Synthetic Employer', payDate: '2026-08-31', ytdGross: 8000, gross: 1000, periodStart: '2026-08-01', periodEnd: '2026-08-31' }));
   await planRun(db);
-  const scenario = buildScenario(db);
+  const scenario = await buildScenario(db);
   assert.equal(scenario.fig['inc.ytd.summary-owner'].v, 2000);
   assert.equal(scenario.fig['inc.ytd.summary-spouse'].v, 2400);
   const result = await total('income', { from: '2026-01', to: '2026-10' });
@@ -147,7 +147,7 @@ test('AC5: owner classifications win over summary signals across repeated planni
   const { db, total } = await fixture(t, { manual: [{ name: "Aster's Summary", type: 'sole_prop', owner: 'spouse' }] });
   await planRun(db);
   await planRun(db);
-  const entry = getFacts(db)['business.entities'].find(e => e.name === "Aster's Summary");
+  const entry = (await getFacts(db))['business.entities'].find(e => e.name === "Aster's Summary");
   assert.deepEqual(entry, { name: "Aster's Summary", type: 'sole_prop', owner: 'spouse' });
   assert.equal((await total()).total.value, 450);
 });
@@ -185,16 +185,16 @@ test('Ask reads per-person figures and delivers sheet provenance through its reg
 test('sheet and transaction detail figures keep independent row identities', async t => {
   const { db } = await fixture(t, { bank: [['08', 'Groceries', -25]] });
   await planRun(db);
-  const line = db.prepare("SELECT id FROM pnl_lines WHERE entity='Birch Summary' AND category='Groceries' LIMIT 1").get();
-  db.prepare('UPDATE transactions SET id=?').run(line.id);
-  const detail = householdSpendingRows({ db, ...period, clock, bucket: 'household', category: 'Groceries' });
+  const line = await db.prepare("SELECT id FROM pnl_lines WHERE entity='Birch Summary' AND category='Groceries' LIMIT 1").get();
+  await db.prepare('UPDATE transactions SET id=?').run(line.id);
+  const detail = await householdSpendingRows({ db, ...period, clock, bucket: 'household', category: 'Groceries' });
   assert.equal(new Set(detail.items.map(i => i.fig)).size, detail.items.length);
   for (const item of detail.items) assert.equal(detail.figures[item.fig].v, item.value);
 });
 
 test('AC4: prior-year payroll only replaces the matching summary year', async t => {
   const { db, total } = await fixture(t);
-  db.prepare("INSERT INTO pnl_lines(entity,period,category,amount,file_id,locator) SELECT entity,replace(period,'2026','2025'),category,amount,file_id,locator FROM pnl_lines WHERE entity!='Example Studio'").run();
+  await db.prepare("INSERT INTO pnl_lines(entity,period,category,amount,file_id,locator) SELECT entity,replace(period,'2026','2025'),category,amount,file_id,locator FROM pnl_lines WHERE entity!='Example Studio'").run();
   await addPayroll(db, w2Doc({ taxYear: 2025, person: 'owner', relation: 'outside', employerName: 'Synthetic Employer', wages: 15000, medicareWages: 15000, socialSecurityWages: 15000, box12: [] }));
   await planRun(db);
   assert.equal((await total('income')).total.value, 5400);
@@ -204,25 +204,25 @@ test('AC4: prior-year payroll only replaces the matching summary year', async t 
 
 test('income coverage replaces wages while preserving a separate income category', async t => {
   const { db, total } = await fixture(t, { bank: [['08', 'Income', 900]] });
-  db.prepare('INSERT INTO pnl_lines(entity,period,category,amount,file_id,locator) VALUES (?,?,?,?,?,?)')
+  await db.prepare('INSERT INTO pnl_lines(entity,period,category,amount,file_id,locator) VALUES (?,?,?,?,?,?)')
     .run("Aster's Summary", '2026-08', 'Interest Income', 100, 'summary-book', JSON.stringify({ sheet: "Aster's Summary", row: 6 }));
-  db.prepare('INSERT INTO pnl_lines(entity,period,category,amount,file_id,locator) VALUES (?,?,?,?,?,?)')
+  await db.prepare('INSERT INTO pnl_lines(entity,period,category,amount,file_id,locator) VALUES (?,?,?,?,?,?)')
     .run("Aster's Summary", '2026-08', 'Client income', 200, 'summary-book', JSON.stringify({ sheet: "Aster's Summary", row: 7 }));
   await planRun(db);
   assert.equal((await total('income')).total.value, 5600);
   await addPayroll(db, w2Doc({ person: 'owner', relation: 'outside', employerName: 'Synthetic Employer', wages: 12000, medicareWages: 12000, socialSecurityWages: 12000, box12: [] }));
   await planRun(db);
   assert.equal((await total('income', { from: '2026-01', to: '2026-12' })).total.value, 14700);
-  assert.equal(buildScenario(db).fig['inc.ytd.summary-owner'].v, 300);
+  assert.equal((await buildScenario(db)).fig['inc.ytd.summary-owner'].v, 300);
 });
 
 test('AC1: month and summary labels can surround a household name or possessive', async t => {
   const { db, total } = await fixture(t);
   for (const [before, after] of [["Aster's Summary", 'Monthly summary for Aster 2026'], ['Birch Summary', "Birch's 2026 summary"]]) {
-    db.prepare("UPDATE pnl_lines SET entity=?,locator=json_set(locator,'$.sheet',?) WHERE entity=?").run(after, after, before);
+    await db.prepare("UPDATE pnl_lines SET entity=?,locator=json_set(locator,'$.sheet',?) WHERE entity=?").run(after, after, before);
   }
   await planRun(db);
-  const listed = getFacts(db)['business.entities'];
+  const listed = (await getFacts(db))['business.entities'];
   assert.equal(listed.find(e => e.name === 'Monthly summary for Aster 2026').owner, 'owner');
   assert.equal(listed.find(e => e.name === "Birch's 2026 summary").owner, 'spouse');
   assert.equal((await total()).total.value, 1050);
@@ -234,8 +234,8 @@ test('AC5: excluded summary classifications never contribute household amounts',
   assert.equal((await total()).total.value, 600);
   assert.equal((await total()).byPerson.find(p => p.person === 'spouse'), undefined);
   assert.equal((await total('income')).total.value, 3000);
-  assert.equal(buildScenario(db).fig['inc.ytd.summary-spouse'], undefined);
-  const view = householdSpending({ db, ...period, clock });
+  assert.equal((await buildScenario(db)).fig['inc.ytd.summary-spouse'], undefined);
+  const view = await householdSpending({ db, ...period, clock });
   assert.equal(view.figures[view.total].v, 600);
   const cash = await callTool('spending', { operation: 'cash_flow', ...period }, { db, clock });
   assert.equal(cash.totals.household.outflow.value, 600);
@@ -243,24 +243,24 @@ test('AC5: excluded summary classifications never contribute household amounts',
 
 test('AC4: household salary already inside S corp receipts is not added to the income pace again', async t => {
   const { db, total } = await fixture(t);
-  db.prepare("UPDATE pnl_lines SET amount=2000 WHERE entity=? AND category='Wages'").run("Aster's Summary");
+  await db.prepare("UPDATE pnl_lines SET amount=2000 WHERE entity=? AND category='Wages'").run("Aster's Summary");
   await planRun(db);
-  let scenario = buildScenario(db);
+  let scenario = await buildScenario(db);
   assert.equal(scenario.fig['inc.ytd.total'].v, 29400);
   assert.equal(scenario.fig['inc.ytd.summary-owner'], undefined);
   assert.equal((await total('income')).byPerson.find(p => p.person === 'owner').total.value, 6000, 'the person still sees their received pay');
-  db.prepare("DELETE FROM pnl_lines WHERE entity='Example Studio' AND category='Officer salary' AND period='2026-10'").run();
+  await db.prepare("DELETE FROM pnl_lines WHERE entity='Example Studio' AND category='Officer salary' AND period='2026-10'").run();
   await planRun(db);
-  scenario = buildScenario(db);
+  scenario = await buildScenario(db);
   assert.equal(scenario.fig['inc.ytd.summary-owner'].v, 2000, 'only months backed by household salary are covered');
   assert.equal(scenario.fig['inc.ytd.total'].v, 31400);
 });
 
 test('a historical summary does not change the existing bank-window account selection', async t => {
   const { db, ctx } = await fixture(t, { bank: Array.from({ length: 10 }, (_, i) => [String(i + 1).padStart(2, '0'), 'Groceries', -25]) });
-  db.prepare("UPDATE pnl_lines SET period=replace(period,'2026','2025') WHERE entity!='Example Studio'").run();
-  db.prepare("INSERT INTO accounts(id,name,kind,owner,parser) VALUES ('short-card','Short history','card','You','aggregator')").run();
-  db.prepare("INSERT INTO transactions(account_id,date,amount,category,parser) VALUES ('short-card','2026-05-15',-55,'Shopping','aggregator')").run();
+  await db.prepare("UPDATE pnl_lines SET period=replace(period,'2026','2025') WHERE entity!='Example Studio'").run();
+  await db.prepare("INSERT INTO accounts(id,name,kind,owner,parser) VALUES ('short-card','Short history','card','You','aggregator')").run();
+  await db.prepare("INSERT INTO transactions(account_id,date,amount,category,parser) VALUES ('short-card','2026-05-15',-55,'Shopping','aggregator')").run();
   const before = await callTool('spending', { operation: 'total' }, ctx);
   await planRun(db);
   const after = await callTool('spending', { operation: 'total' }, ctx);
@@ -270,7 +270,7 @@ test('a historical summary does not change the existing bank-window account sele
 
 test('cash flow and spending both exclude summary rows after the clock', async t => {
   const { db, ctx, total } = await fixture(t);
-  db.prepare("INSERT INTO pnl_lines(entity,period,category,amount,file_id,locator) VALUES ('Birch Summary','2026-11','Groceries',-500,'summary-book',?)")
+  await db.prepare("INSERT INTO pnl_lines(entity,period,category,amount,file_id,locator) VALUES ('Birch Summary','2026-11','Groceries',-500,'summary-book',?)")
     .run(JSON.stringify({ sheet: 'Birch Summary' }));
   await planRun(db);
   const current = { from: '2026-11', to: '2026-11' };

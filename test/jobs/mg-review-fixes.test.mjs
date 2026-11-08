@@ -22,24 +22,24 @@ import {
 const NOW = '2026-11-05';
 const JAN = '2027-01-10';
 const S = scratch('fathom-review-fixes-');
-after(() => S.cleanup());
+after(async () => await S.cleanup());
 
-const plan = (db, now = NOW, engine = null) => planRun(db, { engine, now });
+const plan = async (db, now = NOW, engine = null) => planRun(db, { engine, now });
 const api = (db, clock = NOW) => ({ db, config: { clock }, params: {}, body: {} });
 const near = (actual, expected, what) =>
   assert.ok(typeof actual === 'number' && Math.abs(actual - expected) <= 0.011, `${what}: expected ${expected}, got ${actual}`);
-const fig = (db, key) => {
-  const row = figureRow(db, key);
+const fig = async (db, key) => {
+  const row = await figureRow(db, key);
   assert.ok(row, `figure ${key} exists`);
   return row;
 };
 const nonEmpty = v => typeof v === 'string' && v.trim().length > 0;
 
 // The planner's own path to computeFigures, for reading `info` off a store (as in tax-rules.test.mjs).
-function computeFor(db, clock = NOW) {
-  const data = loadPlanningData(db, clock);
+async function computeFor(db, clock = NOW) {
+  const data = await loadPlanningData(db, clock);
   const stored = {};
-  for (const r of db.prepare('SELECT key, value, src, confirmed FROM facts').all()) {
+  for (const r of await db.prepare('SELECT key, value, src, confirmed FROM facts').all()) {
     stored[r.key] = { value: parseJson(r.value, null), src: r.src, confirmed: !!r.confirmed };
   }
   const owner = ownerFactsOf(stored);
@@ -52,7 +52,7 @@ function computeFor(db, clock = NOW) {
 async function planned(variant = {}, now = NOW) {
   const db = await S.store({ variant });
   const result = await plan(db, now);
-  return { db, result, info: computeFor(db, now).info };
+  return { db, result, info: (await computeFor(db, now)).info };
 }
 
 // Wren Studio: the owner's only business, a sole proprietorship billing 10,000 a month for ten
@@ -89,17 +89,17 @@ const withFacts = (variant, facts) => ({ ...variant, facts: { ...(variant.facts 
 
 test('MG5: C1 an existing SEP contribution reduces solo 401(k) room', async () => {
   const base = await planned(WREN_HOUSEHOLD);
-  near(fig(base.db, 'room.solo401k.employer').v, 22304.45, 'precondition: employer room with no SEP');
-  near(fig(base.db, 'room.solo401k').v, 46804.45, 'precondition: total room with no SEP');
+  near((await fig(base.db, 'room.solo401k.employer')).v, 22304.45, 'precondition: employer room with no SEP');
+  near((await fig(base.db, 'room.solo401k')).v, 46804.45, 'precondition: total room with no SEP');
 
   const sep = await planned(withFacts(WREN_HOUSEHOLD, { 'retirement.contributions': sepFact(22000) }));
   assert.deepEqual(sep.info.blocked, [], 'a 22,000 SEP is within 22,304.45, so nothing blocks');
   // room.sep sums both spouses: owner 22,304.45 - 22,000 = 304.45 plus spouse Bluebird
   // 20% x (66,000 - 4,662.75) = 12,267.45; total 12,571.90. The SEP side already nets the SEP.
-  near(fig(sep.db, 'room.sep').v, 12571.9, 'household SEP room left');
-  near(fig(sep.db, 'room.solo401k.employee').v, 24500, 'room.solo401k.employee');
-  near(fig(sep.db, 'room.solo401k.employer').v, 304.45, 'room.solo401k.employer after the SEP');
-  near(fig(sep.db, 'room.solo401k').v, 24804.45, 'room.solo401k after the SEP');
+  near((await fig(sep.db, 'room.sep')).v, 12571.9, 'household SEP room left');
+  near((await fig(sep.db, 'room.solo401k.employee')).v, 24500, 'room.solo401k.employee');
+  near((await fig(sep.db, 'room.solo401k.employer')).v, 304.45, 'room.solo401k.employer after the SEP');
+  near((await fig(sep.db, 'room.solo401k')).v, 24804.45, 'room.solo401k after the SEP');
 });
 
 // C1b, the mirror of C1: a solo 401(k) employer contribution already made by the same person's
@@ -121,12 +121,12 @@ test('MG5: C1b an existing solo 401(k) employer contribution reduces SEP room', 
     'retirement.contributions': [{ person: 'owner', plan: 'own-corp-401k', type: 'employer', amount: 10000 }],
   }));
   assert.deepEqual(solo.info.blocked, [], 'a 10,000 employer contribution is within the limit, so nothing blocks');
-  near(fig(solo.db, 'room.sep').v, 24571.9, 'household SEP room after the solo 401(k) employer contribution');
+  near((await fig(solo.db, 'room.sep')).v, 24571.9, 'household SEP room after the solo 401(k) employer contribution');
 });
 
 test('MG5: C1b liveness: with no other plan SEP room is unchanged', async () => {
   const base = await planned(WREN_HOUSEHOLD);
-  near(fig(base.db, 'room.sep').v, 34571.9, 'household SEP room with no other plan');
+  near((await fig(base.db, 'room.sep')).v, 34571.9, 'household SEP room with no other plan');
 });
 
 // ================================================================ C2 (MG12, MG5): deferral game revalidates contributions
@@ -164,20 +164,20 @@ function assertNoOverLimitClaim(scenario, what) {
 test('MG12: C2 a deferral shift that makes the stored SEP exceed its limit is not a current choice', async () => {
   // Single run with the SEP already stored: no current option may claim the tax cut.
   const once = await planned(withFacts(WREN_HOUSEHOLD, { 'retirement.contributions': sepFact(22000) }));
-  assertNoOverLimitClaim(getScenario(api(once.db)), 'single run');
+  assertNoOverLimitClaim(await getScenario(api(once.db)), 'single run');
 
   // A game built before the SEP was recorded must turn visibly unavailable (or mark the options).
   const { db } = await planned(WREN_HOUSEHOLD);
-  const before = contentValue(db, 'wargame').deferral;
+  const before = (await contentValue(db, 'wargame')).deferral;
   assert.ok(before && before.options.length === 3, 'precondition: the game is built without the SEP');
-  addFact(db, 'retirement.contributions', sepFact(22000));
+  await addFact(db, 'retirement.contributions', sepFact(22000));
   await plan(db);
-  const scenario = getScenario(api(db));
+  const scenario = await getScenario(api(db));
   const g = scenario.wargame.deferral;
   assert.ok(g, 'the game stays as history');
   const shape = assertNoOverLimitClaim(scenario, 'after the SEP');
   if (shape === 'unavailable') {
-    assert.ok(nonEmpty(contentValue(db, 'wargame').deferral.unavailable), 'the unavailable game names its reason');
+    assert.ok(nonEmpty((await contentValue(db, 'wargame')).deferral.unavailable), 'the unavailable game names its reason');
   } else {
     for (const id of OVER_OPTIONS) assert.ok(optionReason(g.options.find(x => x.id === id)), `option ${id} names its reason`);
   }
@@ -186,7 +186,7 @@ test('MG12: C2 a deferral shift that makes the stored SEP exceed its limit is no
 test('MG12: C2 liveness: a shift that keeps the SEP valid still builds the deferral game', async () => {
   const { db, info } = await planned(withFacts(WREN_HOUSEHOLD, { 'retirement.contributions': sepFact(20000) }));
   assert.equal((info.wargameInvalid || {}).deferral, undefined, `deferral invalid: ${(info.wargameInvalid || {}).deferral}`);
-  const g = getScenario(api(db)).wargame.deferral;
+  const g = (await getScenario(api(db))).wargame.deferral;
   assert.ok(g, 'the deferral game is served');
   assert.notEqual(g.status, 'unavailable');
   assert.equal(g.options.length, 3);
@@ -215,10 +215,10 @@ const recTexts = def => [
 
 test('MG7: C3 a zero-salary S corp owner with a sole proprietor spouse gets the sole proprietor windows', async () => {
   const { db, info } = await planned(C3_VARIANT);
-  assert.ok(figureRow(db, 'room.solo401k.employee'), 'precondition: the spouse sole proprietorship is sized');
-  assert.equal(fig(db, 'room.solo401k.employee').locator.inputs.kind, 'self-employed', 'precondition: sized as self-employed');
+  assert.ok(await figureRow(db, 'room.solo401k.employee'), 'precondition: the spouse sole proprietorship is sized');
+  assert.equal((await fig(db, 'room.solo401k.employee')).locator.inputs.kind, 'self-employed', 'precondition: sized as self-employed');
   for (const id of C3_RECS) {
-    const r = recRow(db, id);
+    const r = await recRow(db, id);
     assert.ok(r, `${id} is raised`);
     assert.equal(r.window_close, '2027-04-15', `${id} window`);
     assert.equal(r.window_label, 'Apr 15', `${id} label`);
@@ -228,12 +228,12 @@ test('MG7: C3 a zero-salary S corp owner with a sole proprietor spouse gets the 
   // In January the first-year window is still open: neither rec is closed or dismissed.
   await plan(db, JAN);
   for (const id of C3_RECS) {
-    const r = recRow(db, id);
+    const r = await recRow(db, id);
     assert.ok(r, `${id} still exists in January`);
-    assert.equal(plannerRec(db, id).retired_at, null, `${id} is not retired in January (${plannerRec(db, id).retired_reason})`);
+    assert.equal((await plannerRec(db, id)).retired_at, null, `${id} is not retired in January (${(await plannerRec(db, id)).retired_reason})`);
     assert.notEqual(r.status, 'dismissed', `${id} is not dismissed in January`);
     assert.equal(r.window_close, '2027-04-15', `${id} keeps the Apr 15 window in January`);
-    assert.ok(activeRecIds(db).includes(id));
+    assert.ok((await activeRecIds(db)).includes(id));
   }
 });
 
@@ -253,22 +253,22 @@ const VALID_OUTSIDE = { owner: { deferral: 10000, catchUp: 0 } };
 
 test('MG6: C4 an invalid outside-deferral fact withholds solo room and the salary curve with a reason', async () => {
   const { db, info } = await planned({ facts: { 'retirement.otherPlanDeferrals': INVALID_OUTSIDE } });
-  for (const k of SOLO_KEYS) assert.equal(figureRow(db, k), null, `${k} is not published from an invalid fact (got ${figureRow(db, k) && figureRow(db, k).v})`);
+  for (const k of SOLO_KEYS) assert.equal(await figureRow(db, k), null, `${k} is not published from an invalid fact (got ${await figureRow(db, k) && (await figureRow(db, k)).v})`);
   assert.ok(nonEmpty(info.withheld['room.solo401k.employee']), `withheld reason: ${JSON.stringify(info.withheld)}`);
-  assert.equal(db.prepare("SELECT count(*) AS n FROM figures WHERE key LIKE 'wg.salary.%'").get().n, 0, 'no salary war-game figures');
+  assert.equal((await db.prepare("SELECT count(*) AS n FROM figures WHERE key LIKE 'wg.salary.%'").get()).n, 0, 'no salary war-game figures');
   assert.ok(nonEmpty((info.wargameInvalid || {}).salary), `salary game invalid code: ${JSON.stringify(info.wargameInvalid)}`);
-  const ye = recRow(db, 'year-end-retirement');
+  const ye = await recRow(db, 'year-end-retirement');
   if (ye) assert.doesNotMatch(ye.def.summary, /\{f:room\.solo401k/, 'the year-end rec is not sized from the invalid fact');
 
   // Visible: a curve and room built from a valid fact turn unavailable when the fact goes bad.
   const s = await S.store({ variant: { facts: { 'retirement.otherPlanDeferrals': VALID_OUTSIDE } } });
   await plan(s);
-  assert.ok(contentValue(s, 'wargame').salary, 'precondition: the salary game is built');
-  addFact(s, 'retirement.otherPlanDeferrals', INVALID_OUTSIDE);
+  assert.ok((await contentValue(s, 'wargame')).salary, 'precondition: the salary game is built');
+  await addFact(s, 'retirement.otherPlanDeferrals', INVALID_OUTSIDE);
   await plan(s);
-  const scenario = getScenario(api(s));
+  const scenario = await getScenario(api(s));
   assert.equal(scenario.wargame.salary.status, 'unavailable');
-  assert.ok(nonEmpty(contentValue(s, 'wargame').salary.unavailable), 'the salary game names its reason');
+  assert.ok(nonEmpty((await contentValue(s, 'wargame')).salary.unavailable), 'the salary game names its reason');
   const room = scenario.fig['room.solo401k.employee'];
   assert.ok(!room || nonEmpty(room.unavailable), `employee room is absent or marked unavailable: ${JSON.stringify(room)}`);
 });
@@ -276,8 +276,8 @@ test('MG6: C4 an invalid outside-deferral fact withholds solo room and the salar
 test('MG6: C4 liveness: a valid outside-deferral fact sizes room and the curve', async () => {
   for (const other of [VALID_OUTSIDE, { owner: { deferral: 10000 } }]) {
     const { db, info } = await planned({ facts: { 'retirement.otherPlanDeferrals': other } });
-    near(fig(db, 'room.solo401k.employee').v, 14500, `employee room with ${JSON.stringify(other)}`);
-    assert.ok(contentValue(db, 'wargame').salary, 'salary game built');
+    near((await fig(db, 'room.solo401k.employee')).v, 14500, `employee room with ${JSON.stringify(other)}`);
+    assert.ok((await contentValue(db, 'wargame')).salary, 'salary game built');
     assert.equal((info.wargameInvalid || {}).salary, undefined);
   }
 });
@@ -307,20 +307,20 @@ const cedar = (monthlySalary, income, facts = {}) => ({
 test('MG6: C5 unknown prior-year sponsor wages withhold employer room that depends on the catch-up', async () => {
   const { db, info } = await planned(cedar(2500, 10000));
   assert.equal(info.retireCatchUp, 'retirement.priorYearFicaWages', 'the owner is asked for box 3 wages');
-  const employer = figureRow(db, 'room.solo401k.employer');
+  const employer = await figureRow(db, 'room.solo401k.employer');
   assert.equal(employer, null, `employer room is withheld, not published as ${employer && employer.v}`);
   assert.ok(nonEmpty(info.withheld['room.solo401k.employer']), `withheld reason: ${JSON.stringify(info.withheld)}`);
   for (const k of ['room.solo401k', 'room.solo401k.catchUp', 'room.solo401k.rothCatchUp', 'room.solo401k.pretax']) {
-    assert.equal(figureRow(db, k), null, `${k} waits for the wages`);
+    assert.equal(await figureRow(db, k), null, `${k} waits for the wages`);
   }
 
   // Visible: an employer figure published once the wages were known turns unavailable when they go.
   const s = await S.store({ variant: cedar(2500, 10000, { 'retirement.priorYearFicaWages': { owner: 140000 } }) });
   await plan(s);
-  assert.equal(fig(s, 'room.solo401k.employer').v, 0, 'precondition: not affected, employer 0');
-  removeFact(s, 'retirement.priorYearFicaWages');
+  assert.equal((await fig(s, 'room.solo401k.employer')).v, 0, 'precondition: not affected, employer 0');
+  await removeFact(s, 'retirement.priorYearFicaWages');
   await plan(s);
-  const f = getScenario(api(s)).fig['room.solo401k.employer'];
+  const f = (await getScenario(api(s))).fig['room.solo401k.employer'];
   assert.ok(!f || nonEmpty(f.unavailable), `employer room is absent or marked unavailable: ${JSON.stringify(f)}`);
 });
 
@@ -329,8 +329,8 @@ test('MG6: C5 liveness: employer room that does not depend on the catch-up still
   // 11,250 = 144,250) = 45,000 with or without the catch-up.
   const { db, info } = await planned(cedar(15000, 40000));
   assert.equal(info.retireCatchUp, 'retirement.priorYearFicaWages');
-  assert.equal(fig(db, 'room.solo401k.employee').v, 24500);
-  assert.equal(fig(db, 'room.solo401k.employer').v, 45000);
+  assert.equal((await fig(db, 'room.solo401k.employee')).v, 24500);
+  assert.equal((await fig(db, 'room.solo401k.employer')).v, 45000);
 });
 
 // ================================================================ C6 (MG13): words between a number and a money word
@@ -392,22 +392,22 @@ test('MG13: C6 writeProse rejects the model reply and falls back to the template
   const engine = scripted(() => JSON.stringify({ ...VALID, summary: 'Pay in 2026 US dollars.' }));
   await plan(db, NOW, engine);
   assert.ok(engine.calls.length > 0, 'the engine was asked');
-  const src = db.prepare('SELECT rec_id, prose_src FROM planner_recs WHERE retired_at IS NULL').all();
+  const src = await db.prepare('SELECT rec_id, prose_src FROM planner_recs WHERE retired_at IS NULL').all();
   for (const r of src) assert.equal(r.prose_src, 'template', `${r.rec_id} kept model prose`);
-  assert.doesNotMatch(recRow(db, 'fed-q4-estimate').def.summary, /US dollars/);
+  assert.doesNotMatch((await recRow(db, 'fed-q4-estimate')).def.summary, /US dollars/);
 });
 
 test('MG13: C6 stored prose with the phrase is not kept on the next run', async () => {
   const db = await S.store();
   await plan(db);
   const id = 'fed-q4-estimate';
-  const template = recRow(db, id).def;
-  const def = parseJson(db.prepare('SELECT def FROM recs WHERE id = ?').get(id).def, {});
+  const template = (await recRow(db, id)).def;
+  const def = parseJson((await db.prepare('SELECT def FROM recs WHERE id = ?').get(id)).def, {});
   def.summary = 'Pay in 2026 US dollars.';
-  db.prepare('UPDATE recs SET def = ? WHERE id = ?').run(JSON.stringify(def), id);
-  db.prepare("UPDATE planner_recs SET prose_src = 'model' WHERE rec_id = ?").run(id);
+  await db.prepare('UPDATE recs SET def = ? WHERE id = ?').run(JSON.stringify(def), id);
+  await db.prepare("UPDATE planner_recs SET prose_src = 'model' WHERE rec_id = ?").run(id);
   const result = await plan(db);
-  assert.equal(recRow(db, id).def.summary, template.summary, 'the template summary is back');
-  assert.equal(plannerRec(db, id).prose_src, 'template');
+  assert.equal((await recRow(db, id)).def.summary, template.summary, 'the template summary is back');
+  assert.equal((await plannerRec(db, id)).prose_src, 'template');
   assert.ok(result.counts.prose.template >= 1, 'the rec was rewritten, not kept');
 });

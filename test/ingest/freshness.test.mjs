@@ -34,8 +34,8 @@ async function seeded(s) {
   const off = await offEngine();
   await P.ingestFile(s.db, fixture('aggregator.csv', 'text/csv'), s.opts(off));
   await P.ingestFile(s.db, fixture('positions.csv', 'text/csv'), s.opts(off));
-  const cash = one(s.db, "SELECT * FROM accounts WHERE mask = '7766'");
-  const invest = one(s.db, "SELECT * FROM accounts WHERE mask = '5544'");
+  const cash = await one(s.db, "SELECT * FROM accounts WHERE mask = '7766'");
+  const invest = await one(s.db, "SELECT * FROM accounts WHERE mask = '5544'");
   return { cash, invest };
 }
 
@@ -87,14 +87,14 @@ describe('recordSource', () => {
   test('keeps the latest as_of and always updates last_ingest_at', () => withStore(async (s) => {
     const id = 'ing:test-source:all';
     FR.recordSource(s.db, { id, label: 'Synthetic source', kind: 'bank_csv', asOf: '2032-03-01', now: '2032-03-02T00:00:00.000Z' });
-    let row = one(s.db, 'SELECT * FROM sources WHERE id = ?', id);
+    let row = await one(s.db, 'SELECT * FROM sources WHERE id = ?', id);
     assert.deepEqual([row.as_of, row.kind, row.label, row.last_ingest_at], ['2032-03-01', 'bank_csv', 'Synthetic source', '2032-03-02T00:00:00.000Z']);
     FR.recordSource(s.db, { id, label: 'Synthetic source', kind: 'bank_csv', asOf: '2032-02-01', now: '2032-03-05T00:00:00.000Z' });
-    row = one(s.db, 'SELECT * FROM sources WHERE id = ?', id);
+    row = await one(s.db, 'SELECT * FROM sources WHERE id = ?', id);
     assert.equal(row.as_of, '2032-03-01', 'an older export does not move as_of back');
     assert.equal(row.last_ingest_at, '2032-03-05T00:00:00.000Z');
     FR.recordSource(s.db, { id, label: 'Synthetic source', kind: 'bank_csv', asOf: '2032-04-01', now: '2032-04-02T00:00:00.000Z' });
-    assert.equal(one(s.db, 'SELECT as_of FROM sources WHERE id = ?', id).as_of, '2032-04-01');
+    assert.equal((await one(s.db, 'SELECT as_of FROM sources WHERE id = ?', id)).as_of, '2032-04-01');
   }));
 });
 
@@ -175,12 +175,12 @@ describe('ingest state and scenario', () => {
         assert.equal(a.sourceId, null);
       }
       assert.deepEqual(sc.live.ingest.sources, []);
-      const seededPending = store.db.prepare("SELECT count(*) AS n FROM confirm_items WHERE status = 'pending'").get().n;
+      const seededPending = (await store.db.prepare("SELECT count(*) AS n FROM confirm_items WHERE status = 'pending'").get()).n;
       assert.equal(sc.live.ingest.pending, seededPending);
       assert.ok(seededPending > 0, 'the demo seeds pending confirm items');
       assert.deepEqual(sc.domains, B.loadContent(store.db).domains, 'demo domains unchanged');
     } finally {
-      store.close();
+      await store.close();
     }
   });
 });
@@ -199,7 +199,7 @@ describe('stale to fresh', () => {
   test('a stale statement source becomes fresh after a newer statement import', () => withStore(async (s) => {
     const first = await seedHistoricalDocument(s,pdf('march'), (await engineFor('2032-03-31',1500.25)).responses);
     assert.equal(first.status, 'imported');
-    const acct = one(s.db, "SELECT * FROM accounts WHERE mask = '4321'");
+    const acct = await one(s.db, "SELECT * FROM accounts WHERE mask = '4321'");
 
     let sc = B.buildScenario(s.db, { clock: '2032-06-30' });
     let src = sc.live.ingest.sources.filter((x) => x.kind === 'statement');
@@ -230,13 +230,13 @@ describe('stale to fresh', () => {
 // Review finding F4: freshness is per account. One multi-account export whose newest row is
 // fresh must still put a stale account in front of the owner.
 describe('stale account inside a fresh multi-account export', () => {
-  const seedCashDomain = (db) => db.prepare('INSERT INTO content (key, value, src, updated_at) VALUES (?, ?, ?, ?)')
+  const seedCashDomain = async (db) => await db.prepare('INSERT INTO content (key, value, src, updated_at) VALUES (?, ?, ?, ?)')
     .run('domains', JSON.stringify([{ id: 'cash', name: 'Cash and reserves', status: 'covered', watching: '', note: 'Base note.' }]), 'test', NOW);
   const accountA = { account: 'Synthetic reserve', number: '5550003333' };
   const accountB = { account: 'Synthetic daily', number: '5550004444' };
 
   test('A (last row in January) is stale, B (June) is fresh, and the cash note names A', () => withStore(async (s) => {
-    seedCashDomain(s.db);
+    await seedCashDomain(s.db);
     const r = await P.ingestFile(s.db, aggregatorFile('household-export.csv', [
       { ...accountA, date: '2032-01-05', amount: '15.00', description: 'Synthetic reserve fee' },
       { ...accountA, date: '2032-01-20', amount: '25.00', description: 'Synthetic reserve transfer' },
@@ -258,7 +258,7 @@ describe('stale account inside a fresh multi-account export', () => {
   }));
 
   test('counter-case: when every account in the export is fresh, no note is added', () => withStore(async (s) => {
-    seedCashDomain(s.db);
+    await seedCashDomain(s.db);
     await P.ingestFile(s.db, aggregatorFile('household-export-june.csv', [
       { ...accountA, date: '2032-06-05', amount: '15.00', description: 'Synthetic reserve fee' },
       { ...accountB, date: '2032-06-10', amount: '45.00', description: 'Synthetic utility' },
@@ -377,8 +377,8 @@ describe('freshness after import, sync and merge', () => {
 
   test('a newer balance on a file account stays fresh after the file source date is rolled back, and a sync moves data through', () => withStore(async (s) => {
     const { cash } = await seeded(s);
-    s.db.prepare('UPDATE sources SET as_of = ? WHERE id = ?').run('2032-01-05', cash.source_id);
-    s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(cash.id, '2032-06-01', 10);
+    await s.db.prepare('UPDATE sources SET as_of = ? WHERE id = ?').run('2032-01-05', cash.source_id);
+    await s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(cash.id, '2032-06-01', 10);
     const merged = FR.refreshFreshness(s.db, { clock: '2032-06-15' });
     assert.equal(merged.accounts[cash.id].asOf, '2032-06-01');
     assert.equal(merged.accounts[cash.id].fresh, 'fresh');
@@ -392,7 +392,7 @@ describe('freshness after import, sync and merge', () => {
     assert.equal(sync.status, 'ok');
     const after = FR.refreshFreshness(s.db, { clock: day });
     assert.equal(after.dataThrough, day);
-    const connected = s.db.prepare("SELECT id FROM accounts WHERE mirror = 'connected'").all();
+    const connected = await s.db.prepare("SELECT id FROM accounts WHERE mirror = 'connected'").all();
     assert.ok(connected.length > 0);
     for (const a of connected) assert.equal(after.accounts[a.id].fresh, 'fresh', a.id);
     const sc = B.buildScenario(s.db, { clock: day });
@@ -402,14 +402,14 @@ describe('freshness after import, sync and merge', () => {
 
   test('a later tax payment or P&L month moves Home and Money together', () => withStore(async (s) => {
     const { cash } = await seeded(s);
-    s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(cash.id, '2032-06-01', 10);
-    s.db.prepare(`INSERT INTO content (key, value, src, updated_at) VALUES ('meta', ?, 'test', ?)`)
+    await s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(cash.id, '2032-06-01', 10);
+    await s.db.prepare(`INSERT INTO content (key, value, src, updated_at) VALUES ('meta', ?, 'test', ?)`)
       .run(JSON.stringify({ product: 'Fathom', household: '', dataThrough: 'Jun 20, 2032' }), NOW);
-    s.db.prepare(`INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind) VALUES ('US', 2032, '2032-06-20', 100, 'estimated')`).run();
+    await s.db.prepare(`INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind) VALUES ('US', 2032, '2032-06-20', 100, 'estimated')`).run();
     const tax = B.buildScenario(s.db, { clock: '2032-06-30' });
     assert.equal(tax.meta.dataThrough, 'Jun 20, 2032');
     assert.equal(tax.pace.rollup.dataThrough, '2032-06-20');
-    s.db.prepare(`INSERT INTO pnl_lines (entity, period, category, amount) VALUES ('Synthetic Co', '2032-06', 'revenue', 50)`).run();
+    await s.db.prepare(`INSERT INTO pnl_lines (entity, period, category, amount) VALUES ('Synthetic Co', '2032-06', 'revenue', 50)`).run();
     const pnl = B.buildScenario(s.db, { clock: '2032-06-30' });
     assert.equal(pnl.meta.dataThrough, 'Jun 30, 2032');
     assert.equal(pnl.pace.rollup.dataThrough, '2032-06-30');

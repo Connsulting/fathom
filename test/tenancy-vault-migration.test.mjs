@@ -51,8 +51,8 @@ async function refuses(promiseFn, code, label) {
   });
 }
 
-function addHousehold(platform, id) {
-  platform.prepare(`INSERT INTO households (id, status, mode, display_name, serves_store, created_at, updated_at)
+async function addHousehold(platform, id) {
+  await platform.prepare(`INSERT INTO households (id, status, mode, display_name, serves_store, created_at, updated_at)
     VALUES (?, 'active', 'real', NULL, 0, ?, ?)`).run(id, NOW_MS, NOW_MS);
 }
 
@@ -60,10 +60,10 @@ function addHousehold(platform, id) {
 // Returns { dataDir, db, platform, householdId, legacyKey, platformKey, handle, root, uploads, packets }.
 async function legacyInstance(t, { content = true } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'fathom-vault-convert-'));
-  const { db, platform, householdId } = createInstance(dataDir, { mode: 'real', init: d => setSetting(d, 'clock', TODAY) });
-  t.after(() => {
-    try { db.close(); } catch { /* already closed */ }
-    try { platform.close(); } catch { /* already closed */ }
+  const { db, platform, householdId } = await createInstance(dataDir, { mode: 'real', init: async d => await setSetting(d, 'clock', TODAY) });
+  t.after(async () => {
+    try { await db.close(); } catch { /* already closed */ }
+    try { await platform.close(); } catch { /* already closed */ }
     rmSync(dataDir, { recursive: true, force: true });
   });
   const legacyKey = randomBytes(32);
@@ -72,25 +72,25 @@ async function legacyInstance(t, { content = true } = {}) {
     const filesDir = join(dataDir, 'files');
     mkdirSync(filesDir, { recursive: true, mode: 0o700 });
     const seal = (id, bytes) => writeFileSync(join(filesDir, `${id}.bin`), encrypt(legacyKey, bytes, id), { mode: 0o600 });
-    const upload = (id, name, mime, bytes, kind, parser) => {
-      db.prepare(`INSERT INTO files (id, name, mime, size, sha256, source_kind, uploaded_at, stored_path, status, parser, counts)
+    const upload = async (id, name, mime, bytes, kind, parser) => {
+      await db.prepare(`INSERT INTO files (id, name, mime, size, sha256, source_kind, uploaded_at, stored_path, status, parser, counts)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'imported', ?, '{}')`).run(id, name, mime, bytes.length, sha256(bytes), kind, NOW, `files/${id}.bin`, parser);
       seal(id, bytes);
       return id;
     };
     fx.uploads = [
-      upload('f-synthetic-checking-0001', 'synthetic-checking.csv', 'text/csv', CSV_BYTES, 'aggregator_csv', 'aggregator'),
-      upload('f-synthetic-plan-0000001', 'synthetic-plan.md', 'text/markdown', Buffer.from(PLAN_TEXT), 'notes', 'notes'),
+      await upload('f-synthetic-checking-0001', 'synthetic-checking.csv', 'text/csv', CSV_BYTES, 'aggregator_csv', 'aggregator'),
+      await upload('f-synthetic-plan-0000001', 'synthetic-plan.md', 'text/markdown', Buffer.from(PLAN_TEXT), 'notes', 'notes'),
     ];
     const packetId = `advpkt-${randomBytes(8).toString('hex')}`;
     const packet = Buffer.from(PACKET_HTML);
-    db.prepare(`INSERT INTO advisor_packets (id, created_at, clock, rec_ids, stored_path, bytes, sha256) VALUES (?, ?, ?, '[]', ?, ?, ?)`)
+    await db.prepare(`INSERT INTO advisor_packets (id, created_at, clock, rec_ids, stored_path, bytes, sha256) VALUES (?, ?, ?, '[]', ?, ?, ?)`)
       .run(packetId, NOW, TODAY, `files/${packetId}.bin`, packet.length, sha256(packet));
     seal(packetId, packet);
     fx.packets = [packetId];
-    db.prepare("INSERT INTO simplefin_connection (id, access_blob, connected_at, status, accounts) VALUES (1, ?, ?, 'ok', 0)")
+    await db.prepare("INSERT INTO simplefin_connection (id, access_blob, connected_at, status, accounts) VALUES (1, ?, ?, 'ok', 0)")
       .run(encrypt(legacyKey, Buffer.from(ACCESS_URL, 'utf8'), LEGACY_SIMPLEFIN_AAD).toString('base64'), NOW);
-    const stored = db.prepare('SELECT count(*) AS n FROM files WHERE stored_path IS NOT NULL').get().n;
+    const stored = (await db.prepare('SELECT count(*) AS n FROM files WHERE stored_path IS NOT NULL').get()).n;
     assert.equal(stored, 2, 'fixture: two stored uploads');
   }
   fx.platformKey = randomBytes(32);
@@ -107,19 +107,19 @@ const convert = (fx, over = {}) => VC.convertHouseholdVault({
 // Map of `${purpose}:${objectId}` -> Buffer.
 async function legacyPlaintexts(fx) {
   const out = new Map();
-  for (const r of fx.db.prepare('SELECT id, stored_path, sha256, size FROM files WHERE stored_path IS NOT NULL').all()) {
+  for (const r of await fx.db.prepare('SELECT id, stored_path, sha256, size FROM files WHERE stored_path IS NOT NULL').all()) {
     const bytes = decrypt(fx.legacyKey, readFileSync(join(fx.dataDir, r.stored_path)), r.id);
     assert.equal(sha256(bytes), r.sha256, 'fixture: files row hash matches its plaintext');
     assert.equal(bytes.length, r.size);
     out.set(`upload:${r.id}`, bytes);
   }
-  for (const r of fx.db.prepare('SELECT id, stored_path, sha256, bytes FROM advisor_packets').all()) {
+  for (const r of await fx.db.prepare('SELECT id, stored_path, sha256, bytes FROM advisor_packets').all()) {
     const bytes = decrypt(fx.legacyKey, readFileSync(join(fx.dataDir, r.stored_path)), r.id);
     assert.equal(sha256(bytes), r.sha256, 'fixture: packet row hash matches its plaintext');
     assert.equal(bytes.length, r.bytes);
     out.set(`advisor-packet:${r.id}`, bytes);
   }
-  const c = fx.db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get();
+  const c = await fx.db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get();
   if (c) out.set(`simplefin-access:${HV.SIMPLEFIN_OBJECT_ID}`, Buffer.from(decrypt(fx.legacyKey, Buffer.from(c.access_blob, 'base64'), LEGACY_SIMPLEFIN_AAD)));
   return out;
 }
@@ -136,13 +136,13 @@ function legacyFiles(dataDir) {
   return out;
 }
 
-const legacyState = fx => ({ files: legacyFiles(fx.dataDir), digest: logicalDigest(fx.db) });
+const legacyState = async fx => ({ files: legacyFiles(fx.dataDir), digest: await logicalDigest(fx.db) });
 const bundleOf = (root, op = OP) => join(root.path, 'work', `vault-${op}`);
 const partialOf = (root, op = OP) => `${bundleOf(root, op)}.partial`;
 
 // Nothing published: no bundle, no partial, nothing left in the work area, no active files/ under
 // any root, and the legacy files and DB exactly as before.
-function assertUnpublished(fx, before, { roots = [fx.root], op = OP } = {}) {
+async function assertUnpublished(fx, before, { roots = [fx.root], op = OP } = {}) {
   for (const root of roots) {
     assert.ok(!existsSync(bundleOf(root, op)), 'no final bundle dir');
     assert.ok(!existsSync(partialOf(root, op)), 'no partial dir');
@@ -150,7 +150,7 @@ function assertUnpublished(fx, before, { roots = [fx.root], op = OP } = {}) {
     assert.deepEqual(existsSync(work) ? readdirSync(work) : [], [], 'nothing left in the work area');
     assert.ok(!existsSync(join(root.path, 'files')), 'no <root>/files created');
   }
-  assert.deepEqual(legacyState(fx), before, 'legacy files byte-identical and DB digest unchanged');
+  assert.deepEqual(await legacyState(fx), before, 'legacy files byte-identical and DB digest unchanged');
 }
 
 // ---------------------------------------------------------------- 1. successful conversion
@@ -160,7 +160,7 @@ test('a legacy instance converts every vault object to FTHM2 with byte-identical
   const expected = await legacyPlaintexts(fx);
   assert.equal(expected.size, 4, 'fixture: two uploads, one packet, one connection');
   assert.equal(expected.get(`simplefin-access:${HV.SIMPLEFIN_OBJECT_ID}`).toString('utf8'), ACCESS_URL);
-  const before = legacyState(fx);
+  const before = await legacyState(fx);
 
   const seen = [];
   const r = await convert(fx, { onPhase: async name => { seen.push(name); } });
@@ -215,7 +215,7 @@ test('a legacy instance converts every vault object to FTHM2 with byte-identical
     assert.ok(!manifestText.includes(secret), 'manifest holds hashes and counts only');
   }
 
-  assert.deepEqual(legacyState(fx), before, 'legacy files byte-identical and DB digest unchanged');
+  assert.deepEqual(await legacyState(fx), before, 'legacy files byte-identical and DB digest unchanged');
   assert.ok(!existsSync(join(fx.root.path, 'files')), 'the active files/ is not touched');
 });
 
@@ -232,36 +232,36 @@ const legacyBlob = (fx, id) => join(fx.dataDir, 'files', `${id}.bin`);
 const FAILURES = [
   ['a tampered legacy upload blob', 'vault_legacy_auth_failed', fx => { flipFile(legacyBlob(fx, fx.uploads[0])); }],
   ['a tampered legacy advisor packet blob', 'vault_legacy_auth_failed', fx => { flipFile(legacyBlob(fx, fx.packets[0])); }],
-  ['a tampered legacy SimpleFIN secret', 'vault_legacy_auth_failed', fx => {
-    const blob = Buffer.from(fx.db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get().access_blob, 'base64');
+  ['a tampered legacy SimpleFIN secret', 'vault_legacy_auth_failed', async fx => {
+    const blob = Buffer.from((await fx.db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get()).access_blob, 'base64');
     blob[blob.length - 20] ^= 0x01;
-    fx.db.prepare('UPDATE simplefin_connection SET access_blob = ? WHERE id = 1').run(blob.toString('base64'));
+    await fx.db.prepare('UPDATE simplefin_connection SET access_blob = ? WHERE id = 1').run(blob.toString('base64'));
   }],
   ['a missing legacy blob', 'vault_object_missing', fx => { unlinkSync(legacyBlob(fx, fx.uploads[1])); }],
-  ['a files row whose recorded sha256 is wrong', 'vault_plaintext_mismatch', fx => {
-    fx.db.prepare('UPDATE files SET sha256 = ? WHERE id = ?').run('0'.repeat(64), fx.uploads[0]);
+  ['a files row whose recorded sha256 is wrong', 'vault_plaintext_mismatch', async fx => {
+    await fx.db.prepare('UPDATE files SET sha256 = ? WHERE id = ?').run('0'.repeat(64), fx.uploads[0]);
   }],
-  ['a files row whose recorded size is wrong', 'vault_plaintext_mismatch', fx => {
-    fx.db.prepare('UPDATE files SET size = size + 1 WHERE id = ?').run(fx.uploads[1]);
+  ['a files row whose recorded size is wrong', 'vault_plaintext_mismatch', async fx => {
+    await fx.db.prepare('UPDATE files SET size = size + 1 WHERE id = ?').run(fx.uploads[1]);
   }],
-  ['an advisor packet row whose recorded size is wrong', 'vault_plaintext_mismatch', fx => {
-    fx.db.prepare('UPDATE advisor_packets SET bytes = bytes + 1 WHERE id = ?').run(fx.packets[0]);
+  ['an advisor packet row whose recorded size is wrong', 'vault_plaintext_mismatch', async fx => {
+    await fx.db.prepare('UPDATE advisor_packets SET bytes = bytes + 1 WHERE id = ?').run(fx.packets[0]);
   }],
-  ['a stored path that traverses out of files/', 'vault_stored_path_invalid', fx => {
-    fx.db.prepare('UPDATE files SET stored_path = ? WHERE id = ?').run('files/../fathom.sqlite', fx.uploads[0]);
+  ['a stored path that traverses out of files/', 'vault_stored_path_invalid', async fx => {
+    await fx.db.prepare('UPDATE files SET stored_path = ? WHERE id = ?').run('files/../fathom.sqlite', fx.uploads[0]);
   }],
-  ['a stored path naming another object', 'vault_stored_path_invalid', fx => {
-    fx.db.prepare('UPDATE files SET stored_path = ? WHERE id = ?').run(`files/${fx.uploads[1]}.bin`, fx.uploads[0]);
+  ['a stored path naming another object', 'vault_stored_path_invalid', async fx => {
+    await fx.db.prepare('UPDATE files SET stored_path = ? WHERE id = ?').run(`files/${fx.uploads[1]}.bin`, fx.uploads[0]);
   }],
   ['the wrong legacy key', 'vault_legacy_auth_failed', () => ({ legacyKey: randomBytes(32) })],
   ['another household\'s handle with this household\'s root', 'vault_household_mismatch', async fx => {
     const other = 'hh-synthetic-other';
-    addHousehold(fx.platform, other);
+    await addHousehold(fx.platform, other);
     return { handle: await HV.provisionDataKey(fx.platform, { householdId: other, platformKey: fx.platformKey, now: NOW_MS }) };
   }],
   ['another household\'s root with this household\'s handle', 'vault_household_mismatch', async fx => {
     const other = 'hh-synthetic-other';
-    addHousehold(fx.platform, other);
+    await addHousehold(fx.platform, other);
     const root = await HV.householdRoot({ dataRoot: fx.dataDir, householdId: other, relativeRoot: `households/${other}`, create: true });
     return { root, checkRoots: [fx.root, root] };
   }],
@@ -272,34 +272,34 @@ for (const [label, code, setup] of FAILURES) {
     const fx = await legacyInstance(t);
     const over = (await setup(fx)) ?? {};
     const { checkRoots, ...overrides } = over;
-    const before = legacyState(fx);
+    const before = await legacyState(fx);
     await refuses(() => convert(fx, overrides), code, label);
-    assertUnpublished(fx, before, { roots: checkRoots ?? [fx.root] });
+    await assertUnpublished(fx, before, { roots: checkRoots ?? [fx.root] });
   });
 }
 
 test('a throw from onPhase at each phase aborts, removes what the call created and rethrows; a later run still converts', async t => {
   const fx = await legacyInstance(t);
-  const before = legacyState(fx);
+  const before = await legacyState(fx);
   for (const [i, phase] of PHASES.entries()) {
     const op = `op-synthetic-phase-${phase}`;
     const boom = new Error('synthetic phase failure');
     const seen = [];
     await assert.rejects(convert(fx, { operationId: op, onPhase: async name => { seen.push(name); if (name === phase) throw boom; } }), err => err === boom, phase);
     assert.deepEqual(seen, PHASES.slice(0, i + 1), `${phase}: phases up to the failure`);
-    assertUnpublished(fx, before, { op });
+    await assertUnpublished(fx, before, { op });
   }
   const r = await convert(fx, { operationId: 'op-synthetic-after-failures' });
   assert.equal(r.path, 'work/vault-op-synthetic-after-failures', 'liveness: the same instance converts afterwards');
   assert.equal(r.objects.length, 4);
-  assert.deepEqual(legacyState(fx), before);
+  assert.deepEqual(await legacyState(fx), before);
 });
 
 // ---------------------------------------------------------------- 3. preexisting output
 
 test('a preexisting final bundle or partial is refused and left byte-identical', async t => {
   const fx = await legacyInstance(t);
-  const before = legacyState(fx);
+  const before = await legacyState(fx);
   const work = join(fx.root.path, 'work');
   mkdirSync(work, { mode: 0o700 });
   chmodSync(work, 0o700);
@@ -326,7 +326,7 @@ test('a preexisting final bundle or partial is refused and left byte-identical',
 
   assert.deepEqual(readdirSync(work).sort(), [`vault-${taken}`, `vault-${staged}.partial`].sort(), 'only the preexisting entries remain');
   assert.ok(!existsSync(join(fx.root.path, 'files')));
-  assert.deepEqual(legacyState(fx), before);
+  assert.deepEqual(await legacyState(fx), before);
 });
 
 // ---------------------------------------------------------------- 4. unreferenced legacy blobs
@@ -335,7 +335,7 @@ test('a legacy blob no row references is counted as unreferenced and not convert
   const fx = await legacyInstance(t);
   const orphan = 'f-synthetic-orphan-000001';
   writeFileSync(legacyBlob(fx, orphan), encrypt(fx.legacyKey, Buffer.from('synthetic orphan bytes\n'), orphan), { mode: 0o600 });
-  const before = legacyState(fx);
+  const before = await legacyState(fx);
   const r = await convert(fx);
   assert.equal(r.unreferenced, 1);
   assert.equal(r.uploads, 2);
@@ -344,7 +344,7 @@ test('a legacy blob no row references is counted as unreferenced and not convert
   const bundle = bundleOf(fx.root);
   assert.ok(!existsSync(join(bundle, 'files', `${orphan}.bin`)), 'not in the bundle');
   assert.ok(!readFileSync(join(bundle, 'manifest.json'), 'utf8').includes(orphan), 'not in the manifest');
-  assert.deepEqual(legacyState(fx), before, 'the orphan stays where it was');
+  assert.deepEqual(await legacyState(fx), before, 'the orphan stays where it was');
 });
 
 // ---------------------------------------------------------------- 5. no dual reader
@@ -353,7 +353,7 @@ test('no dual reader: the converted SimpleFIN secret fails the legacy decrypt an
   const fx = await legacyInstance(t);
   await convert(fx);
   const converted = readFileSync(join(bundleOf(fx.root), 'simplefin-access.fthm2'), 'utf8').trim();
-  const legacy = fx.db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get().access_blob;
+  const legacy = (await fx.db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get()).access_blob;
   assert.equal(HV.openConnectionSecret(fx.handle, converted), ACCESS_URL, 'liveness: the new codec reads the converted secret');
   assert.equal(decrypt(fx.legacyKey, Buffer.from(legacy, 'base64'), LEGACY_SIMPLEFIN_AAD).toString('utf8'), ACCESS_URL, 'liveness: the legacy reader reads the legacy secret');
 
@@ -369,7 +369,7 @@ test('no dual reader: the converted SimpleFIN secret fails the legacy decrypt an
 
 test('an empty legacy instance converts to a bundle with zero counts', async t => {
   const fx = await legacyInstance(t, { content: false });
-  const before = legacyState(fx);
+  const before = await legacyState(fx);
   const r = await convert(fx);
   assert.deepEqual({ uploads: r.uploads, packets: r.packets, simplefin: r.simplefin, unreferenced: r.unreferenced }, { uploads: 0, packets: 0, simplefin: 0, unreferenced: 0 });
   assert.deepEqual(r.objects, []);
@@ -381,19 +381,19 @@ test('an empty legacy instance converts to a bundle with zero counts', async t =
   const files = join(bundle, 'files');
   assert.ok(!existsSync(files) || readdirSync(files).length === 0, 'no converted objects');
   assert.ok(!existsSync(partialOf(fx.root)));
-  assert.deepEqual(legacyState(fx), before);
+  assert.deepEqual(await legacyState(fx), before);
 });
 
 test('a files row with no stored path is skipped, not refused', async t => {
   const fx = await legacyInstance(t);
   const skipped = 'f-synthetic-no-bytes-0001';
-  fx.db.prepare(`INSERT INTO files (id, name, mime, size, sha256, uploaded_at, stored_path, status)
+  await fx.db.prepare(`INSERT INTO files (id, name, mime, size, sha256, uploaded_at, stored_path, status)
     VALUES (?, 'synthetic-unstored.csv', 'text/csv', NULL, NULL, ?, NULL, 'error')`).run(skipped, NOW);
-  const before = legacyState(fx);
+  const before = await legacyState(fx);
   const r = await convert(fx);
   assert.equal(r.uploads, 2, 'only stored uploads convert');
   assert.equal(r.objects.length, 4);
   assert.ok(!r.objects.some(o => o.objectId === skipped));
   assert.ok(!existsSync(join(bundleOf(fx.root), 'files', `${skipped}.bin`)));
-  assert.deepEqual(legacyState(fx), before);
+  assert.deepEqual(await legacyState(fx), before);
 });

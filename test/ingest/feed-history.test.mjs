@@ -35,17 +35,17 @@ async function withStore(fn) {
 async function ingest(s, name) {
   const r = await P.ingestFile(s.db, fixture(name, 'text/csv'), s.opts(await offEngine()));
   assert.equal(r.status, 'imported', `${name} imported`);
-  return one(s.db, 'SELECT * FROM files WHERE name = ?', name);
+  return await one(s.db, 'SELECT * FROM files WHERE name = ?', name);
 }
-const accountOfFile = (s, file) => one(s.db, `SELECT a.* FROM accounts a WHERE a.id IN (
+const accountOfFile = async (s, file) => await one(s.db, `SELECT a.* FROM accounts a WHERE a.id IN (
   SELECT account_id FROM transactions WHERE file_id = ? UNION SELECT account_id FROM balances WHERE file_id = ?
   UNION SELECT account_id FROM positions WHERE file_id = ?)`, file.id, file.id, file.id);
 
 // A live SimpleFIN connection with `accountId` mapped to it and a fresh balance from the sync.
-function connect(db, accountId) {
-  db.prepare("INSERT OR IGNORE INTO simplefin_connection (id, access_blob, connected_at) VALUES (1, 'synthetic', ?)").run(NOW);
-  db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at) VALUES (?, ?, 'mapped', 'Synthetic', ?)").run(`sf-${accountId}`, accountId, NOW);
-  db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, 100)').run(accountId, '2032-08-31');
+async function connect(db, accountId) {
+  await db.prepare("INSERT OR IGNORE INTO simplefin_connection (id, access_blob, connected_at) VALUES (1, 'synthetic', ?)").run(NOW);
+  await db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at) VALUES (?, ?, 'mapped', 'Synthetic', ?)").run(`sf-${accountId}`, accountId, NOW);
+  await db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, 100)').run(accountId, '2032-08-31');
 }
 
 const detail = (s, id) => A.accountDetail({ db: s.db, config: { ...s.config, clock: OLD_CLOCK }, params: { id }, query: {} });
@@ -62,12 +62,12 @@ function missingData(db) {
 test('a connected fresh account lists its older file sources as history, and nothing asks for a fresh export', () => withStore(async (s) => {
   const agg = await ingest(s, 'aggregator.csv');
   const bank = await ingest(s, 'Chase7766_Activity_20320305.csv');
-  const acct = accountOfFile(s, bank);
-  assert.equal(accountOfFile(s, agg).id, acct.id, 'precondition: both files feed one account');
+  const acct = await accountOfFile(s, bank);
+  assert.equal((await accountOfFile(s, agg)).id, acct.id, 'precondition: both files feed one account');
   assert.notEqual(agg.source_id, bank.source_id, 'precondition: two sources');
   assert.equal(feedOf(detail(s, acct.id), bank.source_id).state, 'stale', 'precondition: before the connection the newest file is stale');
 
-  connect(s.db, acct.id);
+  await connect(s.db, acct.id);
 
   const states = C.sourceStates(s.db, OLD_CLOCK);
   assert.equal(states.sources.get(agg.source_id).state, 'history');
@@ -98,10 +98,10 @@ test('a connected fresh account lists its older file sources as history, and not
 test('an unconnected account with an old file stays stale with How to refresh, beside a connected one', () => withStore(async (s) => {
   const agg = await ingest(s, 'aggregator.csv');
   const pos = await ingest(s, 'positions.csv');
-  const cash = accountOfFile(s, agg);
-  const invest = accountOfFile(s, pos);
+  const cash = await accountOfFile(s, agg);
+  const invest = await accountOfFile(s, pos);
   assert.notEqual(cash.id, invest.id, 'precondition: two accounts');
-  connect(s.db, cash.id);
+  await connect(s.db, cash.id);
 
   const states = C.sourceStates(s.db, OLD_CLOCK);
   assert.equal(states.sources.get(pos.source_id).state, 'stale');

@@ -16,7 +16,7 @@ import { spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
+import { openScope } from '../../src/storage/index.mjs';
 import { verifyRegistrationResponse } from '@simplewebauthn/server';
 import { ROOT, request, postJson, runCommand, childEnv, src } from './server.mjs';
 import { createAuthenticator } from './webauthn.mjs';
@@ -84,30 +84,30 @@ export function writeBackupKey(dir, { mode = 0o600, bytes = 32, name = 'backup.k
 
 // Plain connection with no pragmas: reads change nothing, and closing the last connection removes
 // a WAL database's -wal and -shm files the way a stopped server leaves them.
-export function withDb(file, fn) {
+export async function withDb(file, fn) {
   if (!existsSync(file)) throw new Error(`no database at ${file}`);
-  const db = new DatabaseSync(file);
-  try { return fn(db); } finally { db.close(); }
+  const db = await openScope({ path: file, journal: null, busyTimeout: 0 });
+  try { return fn(db); } finally { await db.close(); }
 }
 
-export function rows(db, table, order = 'rowid') {
-  return db.prepare(`SELECT * FROM "${table}" ORDER BY ${order}`).all().map(plain);
+export async function rows(db, table, order = 'rowid') {
+  return (await db.prepare(`SELECT * FROM "${table}" ORDER BY ${order}`).all()).map(plain);
 }
 
-export function tableNames(file) {
-  return withDb(file, db => listTables(db));
+export async function tableNames(file) {
+  return await withDb(file, async db => await listTables(db));
 }
 
 // Logical dump (sorted JSON rows per table).
-function dumpOf(db, { only = null, except = [] } = {}) {
+async function dumpOf(db, { only = null, except = [] } = {}) {
   const out = {};
-  for (const t of listTables(db)) {
+  for (const t of await listTables(db)) {
     if ((only && !only.includes(t)) || except.includes(t)) continue;
-    out[t] = db.prepare(`SELECT * FROM "${t}"`).all().map(r => JSON.stringify({ ...r })).sort();
+    out[t] = (await db.prepare(`SELECT * FROM "${t}"`).all()).map(r => JSON.stringify({ ...r })).sort();
   }
   return out;
 }
-export const dump = (file, options) => withDb(file, db => dumpOf(db, options));
+export const dump = async (file, options) => await withDb(file, async db => await dumpOf(db, options));
 
 // --------------------------------------------------------------------------- legacy fixture
 
@@ -136,73 +136,73 @@ export async function buildLegacyStore(dataDir, { users = true, files = false } 
   const serverSecret = Buffer.from(secretHex, 'hex');
   const now = Date.now();
   const fx = { dataDir, file, secretHex };
-  const db = openDb(file);
+  const db = await openDb(file);
   try {
-    migrate(db, { through: 20 });
-    setSetting(db, 'mode', 'real');
-    setSetting(db, 'synthetic.marker', { kept: true });
-    db.prepare('INSERT INTO households (id) VALUES (1)').run();
+    await migrate(db, { through: 20 });
+    await setSetting(db, 'mode', 'real');
+    await setSetting(db, 'synthetic.marker', { kept: true });
+    await db.prepare('INSERT INTO households (id) VALUES (1)').run();
     if (users) {
-      const person = (email, role, enrolled) => {
+      const person = async (email, role, enrolled) => {
         const p = { id: `usr-${randomBytes(6).toString('hex')}`, email, role, handle: handle(), createdAt: now - 86_400_000, enrolledAt: enrolled ? now - 3_600_000 : null };
-        db.prepare('INSERT INTO users (id, household_id, email, role, user_handle, created_at, enrolled_at) VALUES (?, 1, ?, ?, ?, ?, ?)')
+        await db.prepare('INSERT INTO users (id, household_id, email, role, user_handle, created_at, enrolled_at) VALUES (?, 1, ?, ?, ?, ?, ?)')
           .run(p.id, p.email, p.role, p.handle, p.createdAt, p.enrolledAt);
         return p;
       };
-      fx.admin = person('legacy-admin@example.test', 'admin', true);
-      fx.member = person('legacy-member@example.test', 'member', true);
-      fx.invitee = person('legacy-invitee@example.test', 'member', false);
+      fx.admin = await person('legacy-admin@example.test', 'admin', true);
+      fx.member = await person('legacy-member@example.test', 'member', true);
+      fx.invitee = await person('legacy-invitee@example.test', 'member', false);
       for (const p of [fx.admin, fx.member]) {
         p.device = createAuthenticator();
         const credential = await credentialFor(p.device, p.handle);
         p.credentialId = credential.id;
-        db.prepare('INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        await db.prepare('INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
           .run(credential.id, p.id, credential.publicKey, credential.counter, '["internal"]', 'Synthetic legacy device', now - 3_600_000);
       }
       fx.invitee.device = createAuthenticator();
-      const token = (userId, purpose) => {
+      const token = async (userId, purpose) => {
         const raw = handle();
-        db.prepare('INSERT INTO auth_tokens (hash, user_id, purpose, expires_at) VALUES (?, ?, ?, ?)')
+        await db.prepare('INSERT INTO auth_tokens (hash, user_id, purpose, expires_at) VALUES (?, ?, ?, ?)')
           .run(digest(raw), userId, purpose, now + 20 * 60_000);
         return raw;
       };
-      fx.inviteToken = token(fx.invitee.id, 'invite');
-      fx.recoveryToken = token(fx.member.id, 'recovery');
-      fx.addPasskeyToken = token(fx.admin.id, 'add-passkey');
-      const session = userId => {
+      fx.inviteToken = await token(fx.invitee.id, 'invite');
+      fx.recoveryToken = await token(fx.member.id, 'recovery');
+      fx.addPasskeyToken = await token(fx.admin.id, 'add-passkey');
+      const session = async userId => {
         const raw = handle();
-        db.prepare('INSERT INTO auth_sessions (hash, user_id, signed_in_at, expires_at) VALUES (?, ?, ?, ?)')
+        await db.prepare('INSERT INTO auth_sessions (hash, user_id, signed_in_at, expires_at) VALUES (?, ?, ?, ?)')
           .run(digest(raw), userId, now - 60_000, now + 7 * 86_400_000);
         return raw;
       };
-      fx.admin.session = session(fx.admin.id);
-      fx.member.session = session(fx.member.id);
-      const challenge = (ceremony, { userId = null, tokenRaw = null } = {}) => {
+      fx.admin.session = await session(fx.admin.id);
+      fx.member.session = await session(fx.member.id);
+      const challenge = async (ceremony, { userId = null, tokenRaw = null } = {}) => {
         const raw = handle();
         const value = randomBytes(32).toString('base64url');
-        db.prepare(`INSERT INTO auth_challenges (hash, ceremony, user_id, token_hash, session_hash, challenge, expires_at)
+        await db.prepare(`INSERT INTO auth_challenges (hash, ceremony, user_id, token_hash, session_hash, challenge, expires_at)
           VALUES (?, ?, ?, ?, NULL, ?, ?)`).run(digest(raw), ceremony, userId, tokenRaw ? digest(tokenRaw) : null, value, now + 5 * 60_000);
         return { cookie: raw, challenge: value };
       };
-      fx.signinChallenge = challenge('signin');
-      fx.registerChallenge = challenge('register', { userId: fx.invitee.id, tokenRaw: fx.inviteToken });
-      db.prepare('INSERT INTO auth_rate_limits (key_hash, window_start, expires_at, attempts) VALUES (?, ?, ?, 1)')
+      fx.signinChallenge = await challenge('signin');
+      fx.registerChallenge = await challenge('register', { userId: fx.invitee.id, tokenRaw: fx.inviteToken });
+      await db.prepare('INSERT INTO auth_rate_limits (key_hash, window_start, expires_at, attempts) VALUES (?, ?, ?, 1)')
         .run(digest('synthetic:legacy-limit'), now, now + 60 * 60_000);
-      const apiKey = (name, userId) => {
+      const apiKey = async (name, userId) => {
         const key = randomKey();
         const id = `key_${randomBytes(6).toString('hex')}`;
-        db.prepare('INSERT INTO api_keys (id, name, key_hash, scopes, created_at, user_id) VALUES (?, ?, ?, ?, ?, ?)')
+        await db.prepare('INSERT INTO api_keys (id, name, key_hash, scopes, created_at, user_id) VALUES (?, ?, ?, ?, ?, ?)')
           .run(id, name, hashKey(key, serverSecret), '["read"]', new Date(now - 7_200_000).toISOString(), userId);
         return { id, key };
       };
-      fx.ownedKey = apiKey('Synthetic owned agent', fx.admin.id);
-      fx.ownerlessKey = apiKey('Synthetic ownerless agent', null);
+      fx.ownedKey = await apiKey('Synthetic owned agent', fx.admin.id);
+      fx.ownerlessKey = await apiKey('Synthetic ownerless agent', null);
     }
     fx.legacy = {};
-    for (const t of [...AUTH_TABLES, 'api_keys']) fx.legacy[t] = rows(db, t);
-    fx.preDump = dumpOf(db);
+    for (const t of [...AUTH_TABLES, 'api_keys']) fx.legacy[t] = await rows(db, t);
+    fx.preDump = await dumpOf(db);
   } finally {
-    db.close();
+    await db.close();
   }
   if (files) {
     const write = (rel, bytes) => {
@@ -228,11 +228,11 @@ export async function buildLegacyStore(dataDir, { users = true, files = false } 
 }
 
 // Every source auth row still present and unchanged in fathom.sqlite.
-export function sourceAuthRows(file) {
-  return withDb(file, db => {
-    const present = new Set(listTables(db));
+export async function sourceAuthRows(file) {
+  return await withDb(file, async db => {
+    const present = new Set(await listTables(db));
     const out = {};
-    for (const t of AUTH_TABLES) out[t] = present.has(t) ? rows(db, t) : null;
+    for (const t of AUTH_TABLES) out[t] = present.has(t) ? await rows(db, t) : null;
     return out;
   });
 }
@@ -276,8 +276,8 @@ export function migrateWithFault(dataDir, keyFile, phase, mode) {
 }
 
 const HOLDER_CHILD = `
-import { DatabaseSync } from 'node:sqlite';
-const db = new DatabaseSync(process.env.HOLD_FILE);
+import { openScope } from '../../src/storage/index.mjs';
+const db = await openScope({ path: process.env.HOLD_FILE, journal: null, busyTimeout: 0 });
 db.exec('PRAGMA journal_mode = WAL');
 db.exec('PRAGMA busy_timeout = 5000');
 db.prepare('SELECT count(*) AS n FROM settings').get();
@@ -394,25 +394,25 @@ export async function freshInstance(dataDir, mode = 'real') {
   const { createInstance } = await src('src/platform/db.mjs');
   mkdirSync(dataDir, { recursive: true });
   const { db, platform, householdId } = createInstance(dataDir, { mode, init() {} });
-  db.close();
-  platform.close();
+  await db.close();
+  await platform.close();
   return { householdId };
 }
 
 // An enrolled user with an active membership and a live session, made through the platform store
 // (invite, consumeInvitation, markEnrolled, createSession). Returns { id, email, token }.
-export function enrollMember(store, householdId, email, role = 'member') {
+export async function enrollMember(store, householdId, email, role = 'member') {
   const { user, token } = store.invite(householdId, email, { role });
   store.consumeInvitation(token, user.id);
-  store.markEnrolled(user.id);
+  await store.markEnrolled(user.id);
   const session = store.createSession(user.id);
   return { id: user.id, email, token: session.token };
 }
 
-export function insertPasskey(platform, userId, id = `pk-${randomBytes(6).toString('hex')}`) {
-  platform.prepare('INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, 0, ?, ?, ?)')
+export async function insertPasskey(platform, userId, id = `pk-${randomBytes(6).toString('hex')}`) {
+  await platform.prepare('INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, 0, ?, ?, ?)')
     .run(id, userId, Buffer.from('synthetic public key bytes'), '["internal"]', 'Synthetic credential', Date.now());
   return id;
 }
 
-export const count = (db, sql, ...args) => db.prepare(sql).get(...args).n;
+export const count = async (db, sql, ...args) => (await db.prepare(sql).get(...args)).n;

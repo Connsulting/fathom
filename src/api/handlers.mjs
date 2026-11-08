@@ -66,19 +66,20 @@ const nowIso = () => new Date().toISOString();
 
 export { scenarioOf } from './scenario.mjs';
 import { scenarioOf } from './scenario.mjs';
+import { txWith } from '../store/db.mjs';
 
 
 // The current "today" for message timestamps: the scenario clock's date at the current time.
-const stamp = ctx => clockNow(ctx.db, ctx.config && ctx.config.clock);
+const stamp = async ctx => await clockNow(ctx.db, ctx.config && ctx.config.clock);
 
-function visibleRec(db, id) {
-  const row = db.prepare('SELECT * FROM recs WHERE id = ?').get(id);
+async function visibleRec(db, id) {
+  const row = await db.prepare('SELECT * FROM recs WHERE id = ?').get(id);
   if (!row || row.status === 'hidden') throw new HttpError(404, `no recommendation ${id}`);
   return row;
 }
 
-function packRow(db, id) {
-  const row = db.prepare('SELECT * FROM packs_state WHERE id = ?').get(id);
+async function packRow(db, id) {
+  const row = await db.prepare('SELECT * FROM packs_state WHERE id = ?').get(id);
   if (!row) throw new HttpError(404, `no pack ${id}`);
   return row;
 }
@@ -89,23 +90,23 @@ function packDef(ctx, row) {
   return ctx.packs ? ctx.packs.view(row.id, def) : def;
 }
 
-function recEvent(db, recId, action, arg, from, to, actor = 'ui') {
-  db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+async function recEvent(db, recId, action, arg, from, to, actor = 'ui') {
+  await db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, ?, ?, ?, ?, ?)`)
     .run(recId, nowIso(), action, arg == null ? null : String(arg), from, to, actor);
 }
 
-function ensureConversation(db, key) {
-  db.prepare('INSERT OR IGNORE INTO conversations (key, created_at) VALUES (?, ?)').run(key, nowIso());
+async function ensureConversation(db, key) {
+  await db.prepare('INSERT OR IGNORE INTO conversations (key, created_at) VALUES (?, ?)').run(key, nowIso());
 }
 
 // Appends a message and moves the conversation's last_at to it.
-function pushMessage(ctx, key, role, text, { refs = [], notice = false, provenance = null } = {}) {
-  ensureConversation(ctx.db, key);
-  const ts = stamp(ctx);
-  const r = ctx.db.prepare('INSERT INTO messages (conversation_key, role, text, refs, notice, ts, provenance) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(key, role, text, JSON.stringify(refs), notice ? 1 : 0, ts, provenance ? JSON.stringify(provenance) : null);
-  ctx.db.prepare('UPDATE conversations SET last_at = ? WHERE key = ?').run(ts, key);
-  return Number(r.lastInsertRowid);
+async function pushMessage(ctx, key, role, text, { refs = [], notice = false, provenance = null } = {}) {
+  await ensureConversation(ctx.db, key);
+  const ts = await stamp(ctx);
+  const r = await ctx.db.prepare('INSERT INTO messages (conversation_key, role, text, refs, notice, ts, provenance) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id')
+    .get(key, role, text, JSON.stringify(refs), notice ? 1 : 0, ts, provenance ? JSON.stringify(provenance) : null);
+  await ctx.db.prepare('UPDATE conversations SET last_at = ? WHERE key = ?').run(ts, key);
+  return Number(r.id);
 }
 
 // The seams the engine-backed handlers need; static-only fixtures construct the router without them.
@@ -115,8 +116,8 @@ function need(ctx, name) {
 }
 
 // An answerer reply as a stored fathom message.
-function pushReply(ctx, key, reply) {
-  return pushMessage(ctx, key, 'fathom', paragraphs(reply.paragraphs), {
+async function pushReply(ctx, key, reply) {
+  return await pushMessage(ctx, key, 'fathom', paragraphs(reply.paragraphs), {
     refs: reply.refs || [], notice: !!reply.notice, provenance: reply.provenance || null,
   });
 }
@@ -126,23 +127,23 @@ function pushReply(ctx, key, reply) {
 // Public: the highest store migration this binary ships and the platform schema version. No
 // household ids, counts or paths.
 const SHIPPED_SCHEMA = listMigrations().at(-1)?.id ?? 0;
-export function healthz(ctx) {
-  return { ok: true, schema: SHIPPED_SCHEMA, platformSchema: schemaVersion(ctx.platform) };
+export async function healthz(ctx) {
+  return { ok: true, schema: SHIPPED_SCHEMA, platformSchema: await schemaVersion(ctx.platform) };
 }
 
 export function getIdentity(ctx) {
   return { identity: ctx.identity || null };
 }
 
-export function getScenario(ctx) {
-  return scenarioOf(ctx);
+export async function getScenario(ctx) {
+  return await scenarioOf(ctx);
 }
 
-export function recAction(ctx) {
+export async function recAction(ctx) {
   const { db } = ctx;
   const { id } = ctx.params;
   const { action, arg } = ctx.body;
-  const row = visibleRec(db, id);
+  const row = await visibleRec(db, id);
   if (typeof action !== 'string') throw new HttpError(400, 'action is required');
   const def = parse(row.def, {});
 
@@ -154,20 +155,20 @@ export function recAction(ctx) {
     const i = Number(arg);
     const done = parse(row.tasks_done, []);
     // The step records who acted: the signed-in member, else the app.
-    try { writeRec(db, id, 'step', { index: i, checked: !done[i] }, { now: nowIso(), actor: ctx.identity?.id || 'ui' }); }
+    try { await writeRec(db, id, 'step', { index: i, checked: !done[i] }, { now: nowIso(), actor: ctx.identity?.id || 'ui' }); }
     catch (e) { if (e instanceof ToolError) throw new HttpError(e.code === 'conflict' ? 409 : 400, e.message); throw e; }
-    return { scenario: scenarioOf(ctx) };
+    return { scenario: await scenarioOf(ctx) };
   }
 
   try {
-    if (action === 'owner') writeRec(db, id, 'owner', arg, { now: nowIso(), actor: 'ui', eventAction: 'owner' });
+    if (action === 'owner') await writeRec(db, id, 'owner', arg, { now: nowIso(), actor: 'ui', eventAction: 'owner' });
     else {
       if (!Object.hasOwn(ACTION_STATUS, action)) throw new ToolError('bad_input', `unknown action ${action}`);
-      writeRec(db, id, 'status', { status: ACTION_STATUS[action], ...(action === 'snooze' ? { wake: arg } : {}) },
+      await writeRec(db, id, 'status', { status: ACTION_STATUS[action], ...(action === 'snooze' ? { wake: arg } : {}) },
         { now: nowIso(), actor: 'ui', eventAction: action });
     }
   } catch (e) { if (e instanceof ToolError) throw new HttpError(400, e.message); throw e; }
-  return { scenario: scenarioOf(ctx) };
+  return { scenario: await scenarioOf(ctx) };
 }
 
 // The rec action path's write (callers hold the transaction): sets the status ACTION_STATUS gives
@@ -180,60 +181,60 @@ function decisionWrite(ctx, fn) {
   catch (err) { if (err instanceof ToolError) throw new HttpError(err.code === 'not_found' ? 404 : err.code === 'conflict' ? 409 : 400, err.message); throw err; }
 }
 
-function scheduleReplan(ctx) {
-  if (!ctx.scheduler || typeof ctx.scheduler.soon !== 'function' || getSetting(ctx.db, 'mode', null) === 'demo') return;
+async function scheduleReplan(ctx) {
+  if (!ctx.scheduler || typeof ctx.scheduler.soon !== 'function' || await getSetting(ctx.db, 'mode', null) === 'demo') return;
   try { ctx.scheduler.soon('plan', 'decide', { immediate: true }); } catch { /* the next scheduled run picks it up */ }
 }
 
-export function wargamePick(ctx) {
-  decisionWrite(ctx, () => pickWargame(ctx.db, ctx.params.name, ctx.body.index));
-  return { scenario: scenarioOf(ctx) };
+export async function wargamePick(ctx) {
+  decisionWrite(ctx, async () => await pickWargame(ctx.db, ctx.params.name, ctx.body.index));
+  return { scenario: await scenarioOf(ctx) };
 }
 
-export function decisionDecide(ctx) {
-  decisionWrite(ctx, () => decide(ctx.db, ctx.params.id, { point: ctx.body.index, clock: ctx.config?.clock }));
-  scheduleReplan(ctx);
-  return { scenario: scenarioOf(ctx) };
+export async function decisionDecide(ctx) {
+  decisionWrite(ctx, async () => await decide(ctx.db, ctx.params.id, { point: ctx.body.index, clock: ctx.config?.clock }));
+  await scheduleReplan(ctx);
+  return { scenario: await scenarioOf(ctx) };
 }
 
-export function decisionRevisit(ctx) {
-  decisionWrite(ctx, () => revisit(ctx.db, ctx.params.id));
-  scheduleReplan(ctx);
-  return { scenario: scenarioOf(ctx) };
+export async function decisionRevisit(ctx) {
+  decisionWrite(ctx, async () => await revisit(ctx.db, ctx.params.id));
+  await scheduleReplan(ctx);
+  return { scenario: await scenarioOf(ctx) };
 }
 
-export function packToggle(ctx) {
-  const row = packRow(ctx.db, ctx.params.id);
-  const { pack } = setPackActive(ctx.db, row.id, !packIsActive(row));
-  return { scenario: scenarioOf(ctx), status: pack.status, note: TOGGLE_NOTE };
+export async function packToggle(ctx) {
+  const row = await packRow(ctx.db, ctx.params.id);
+  const { pack } = await setPackActive(ctx.db, row.id, !packIsActive(row));
+  return { scenario: await scenarioOf(ctx), status: pack.status, note: TOGGLE_NOTE };
 }
 
 export async function packWhatIf(ctx) {
   const { db } = ctx;
-  const first = packRow(db, ctx.params.id);
+  const first = await packRow(db, ctx.params.id);
   const def = packDef(ctx, first);
   if (!def.whatIf) throw new HttpError(400, `pack ${first.id} has no what-if`);
   const key = 'pack:' + first.id;
   const reply = first.what_if_done ? null
     : await need(ctx, 'answerer').whatIf({ db, packId: first.id, clock: ctx.config && ctx.config.clock });
-  tx(db, () => {
-    const row = packRow(db, first.id);
+  await tx(db, async (db) => {
+    const row = await packRow(db, first.id);
     let asked = !!row.what_if_asked;
     let done = !!row.what_if_done;
-    if (!asked) { pushMessage(ctx, key, 'me', whatIfOwnerText(def)); asked = true; }
+    if (!asked) { await pushMessage(ctx, key, 'me', whatIfOwnerText(def)); asked = true; }
     if (!done && reply) {
       if (reply.notice) {
-        const last = db.prepare('SELECT notice FROM messages WHERE conversation_key = ? ORDER BY id DESC LIMIT 1').get(key);
-        if (!(last && last.notice)) pushReply(ctx, key, reply);
+        const last = await db.prepare('SELECT notice FROM messages WHERE conversation_key = ? ORDER BY id DESC LIMIT 1').get(key);
+        if (!(last && last.notice)) await pushReply(ctx, key, reply);
       } else {
-        pushReply(ctx, key, reply);
+        await pushReply(ctx, key, reply);
         done = true;
       }
     }
-    db.prepare('UPDATE packs_state SET exploring = 1, what_if_asked = ?, what_if_done = ?, updated_at = ? WHERE id = ?')
+    await db.prepare('UPDATE packs_state SET exploring = 1, what_if_asked = ?, what_if_done = ?, updated_at = ? WHERE id = ?')
       .run(asked ? 1 : 0, done ? 1 : 0, nowIso(), row.id);
   });
-  return { scenario: scenarioOf(ctx) };
+  return { scenario: await scenarioOf(ctx) };
 }
 
 // GET /api/packs/:id/entries/:entryId: one entry of a manifest-backed pack, from the loaded packs.
@@ -243,19 +244,19 @@ export function packEntry(ctx) {
   return { entry };
 }
 
-export function setEngine(ctx) {
+export async function setEngine(ctx) {
   if (typeof ctx.body.on !== 'boolean') throw new HttpError(400, 'on must be true or false');
-  setSetting(ctx.db, 'engine', { on: ctx.body.on });
-  return { scenario: scenarioOf(ctx) };
+  await setSetting(ctx.db, 'engine', { on: ctx.body.on });
+  return { scenario: await scenarioOf(ctx) };
 }
 
-export function setCap(ctx) {
+export async function setCap(ctx) {
   const { usd } = ctx.body;
   if (typeof usd !== 'number' || !Number.isFinite(usd) || usd < 0 || usd > MAX_CAP_USD) {
     throw new HttpError(400, `usd must be a number from 0 to ${MAX_CAP_USD}`);
   }
-  setSetting(ctx.db, 'cap', { usd: cents(usd) });
-  return { scenario: scenarioOf(ctx) };
+  await setSetting(ctx.db, 'cap', { usd: cents(usd) });
+  return { scenario: await scenarioOf(ctx) };
 }
 
 // POST /api/your-plans/build: extract the owner's plan and benefits documents into the private
@@ -283,9 +284,9 @@ export async function yourPlansBuild(ctx) {
     if (e instanceof BudgetExceededError) throw new HttpError(409, "This month's engine budget is used up, so Your plans cannot be built. Raise the cap first.");
     throw e;
   }
-  if (result.written) refreshLivePacks(ctx.db, { dataDir: ctx.household.root });
+  if (result.written) await refreshLivePacks(ctx.db, { dataDir: ctx.household.root });
   const { written, entries, sources, warnings, dropped, coverage } = result;
-  return { scenario: scenarioOf(ctx), result: { written, entries, sources, warnings, dropped, coverage } };
+  return { scenario: await scenarioOf(ctx), result: { written, entries, sources, warnings, dropped, coverage } };
 }
 
 // The question in an ask body: exactly one of questionId (a string or an integer) and text (a
@@ -304,8 +305,8 @@ function askBody(body) {
 }
 
 // A thread row that can take a new message: 404 unknown, 409 trashed.
-function openThreadRow(db, key) {
-  const row = threadRow(db, key);
+async function openThreadRow(db, key) {
+  const row = await threadRow(db, key);
   if (!row) throw new HttpError(404, 'no such conversation');
   if (row.trashed_at) throw new HttpError(409, 'this conversation is in Trash; restore it to continue');
   return row;
@@ -327,10 +328,10 @@ async function maybeName(ctx, key) {
 function streamStart(ctx, key) {
   if (typeof ctx.onEvent === 'function') ctx.onEvent({ type: 'start', key });
 }
-const streaming = ctx => ({
+const streaming = async ctx => ({
   ...(typeof ctx.onEvent === 'function' ? { onEvent: ctx.onEvent } : {}),
   scopes: Array.isArray(ctx.scopes) ? ctx.scopes : undefined,
-  actorId: ctx.identity?.id || (getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null),
+  actorId: ctx.identity?.id || (await getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null),
   ownerText: typeof ctx.body.text === 'string' && ctx.body.questionId == null ? ctx.body.text.trim() : null,
   turnId: randomUUID(),
   replan: ctx.scheduler ? () => ctx.scheduler.runNow('plan') : null,
@@ -338,15 +339,15 @@ const streaming = ctx => ({
 });
 
 // Stores the owner message and the reply in `key`; `before` runs first inside the transaction.
-function storeTurn(ctx, key, mine, reply, before) {
-  return tx(ctx.db, () => {
-    if (receiptsFor(ctx.db, key).length) ensureActionConversation(ctx.db, key, stamp(ctx), ctx.body.recId);
+async function storeTurn(ctx, key, mine, reply, before) {
+  return await txWith(ctx, async (ctx) => {
+    if ((await receiptsFor(ctx.db, key)).length) await ensureActionConversation(ctx.db, key, await stamp(ctx), ctx.body.recId);
     if (before) before();
-    const actorId = ctx.identity?.id || (getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null);
+    const actorId = ctx.identity?.id || (await getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null);
     const ownerInput = typeof ctx.body.text === 'string' && ctx.body.questionId == null && actorId
       ? { ownerInput: { actorId } } : null;
-    pushMessage(ctx, key, 'me', mine, { provenance: ownerInput });
-    return pushReply(ctx, key, reply);
+    await pushMessage(ctx, key, 'me', mine, { provenance: ownerInput });
+    return await pushReply(ctx, key, reply);
   });
 }
 
@@ -363,17 +364,17 @@ export async function ask(ctx) {
   if (!thread && !key.startsWith('pack:')) {
     throw new HttpError(400, 'key must be an Ask thread or a pack conversation; ask about a recommendation through POST /api/threads with recId');
   }
-  if (thread) openThreadRow(db, key);
-  else packRow(db, key.slice(5));
+  if (thread) await openThreadRow(db, key);
+  else await packRow(db, key.slice(5));
 
   // A typed plain yes (no other content) to the thread's latest, unresolved proposal runs it (no
   // await before the claim); a yes that changes anything goes to the model.
   if (thread && !hasQ && isPlainConfirmation(clean)) {
-    const proposal = latestProposal(db, key);
+    const proposal = await latestProposal(db, key);
     if (proposal) return decideProposal(ctx, key, proposal.id, 'confirm', clean);
   }
 
-  const scenario = scenarioOf(ctx);
+  const scenario = await scenarioOf(ctx);
   let mine;
   if (hasQ) {
     const q = findQuestion(scenario, key, questionId);
@@ -385,15 +386,15 @@ export async function ask(ctx) {
 
   streamStart(ctx, key);
   const reply = await need(ctx, 'answerer').answer({ db, key, questionId: hasQ ? questionId : undefined,
-    text: hasQ ? undefined : clean, clock: ctx.config && ctx.config.clock, refs, ...streaming(ctx) });
+    text: hasQ ? undefined : clean, clock: ctx.config && ctx.config.clock, refs, ...await streaming(ctx) });
   if (!reply) throw new HttpError(404, `no question ${questionId}`);
   // A thread may have been trashed or deleted while the model answered; asking unarchives it.
-  const id = storeTurn(ctx, key, mine, reply, thread ? () => {
-    openThreadRow(db, key);
-    db.prepare('UPDATE conversations SET archived_at = NULL WHERE key = ?').run(key);
+  const id = await storeTurn(ctx, key, mine, reply, thread ? async () => {
+    await openThreadRow(db, key);
+    await db.prepare('UPDATE conversations SET archived_at = NULL WHERE key = ?').run(key);
   } : null);
   await maybeName(ctx, key);
-  const fresh = scenarioOf(ctx);
+  const fresh = await scenarioOf(ctx);
   return { scenario: fresh, message: replyIn(fresh, key, id) };
 }
 
@@ -407,7 +408,7 @@ const STALE_NOTE = 'That proposal is out of date, so nothing was saved.';
 // `ownerText` with the reply. The claim runs synchronously before any await.
 async function decideProposal(ctx, key, id, decision, ownerText) {
   const { db } = ctx;
-  const claim = claimProposal(db, { key, id, decision, scopes: Array.isArray(ctx.scopes) ? ctx.scopes : undefined, at: stamp(ctx) });
+  const claim = await claimProposal(db, { key, id, decision, scopes: Array.isArray(ctx.scopes) ? ctx.scopes : undefined, at: await stamp(ctx) });
   if (claim.status === 'missing') throw new HttpError(404, 'no such proposal');
   if (claim.status === 'resolved') throw new HttpError(409, 'this proposal was already answered');
   const turn = { ...ctx, body: { text: ownerText } };
@@ -416,38 +417,38 @@ async function decideProposal(ctx, key, id, decision, ownerText) {
   let note = claim.status === 'stale' ? STALE_NOTE : null;
   if (claim.status === 'declined') reply = { paragraphs: [DECLINED_TEXT], refs: [] };
   else if (claim.status === 'confirmed') {
-    const run = streaming(turn);
+    const run = await streaming(turn);
     const { pending } = claim;
     // The receipt reads like the card: the description stored with the proposal, or one built now,
     // before the write renames or removes what it names.
-    const description = typeof pending.description === 'string' ? pending.description : describeProposal(db, pending).text;
+    const description = typeof pending.description === 'string' ? pending.description : (await describeProposal(db, pending)).text;
     try {
       const afterTools = [];
-      const toolContext = { queueAfterTools: task => afterTools.push(task), db, now: stamp(ctx), dataDir: ctx.household?.root, actorId: run.actorId,
+      const toolContext = { queueAfterTools: task => afterTools.push(task), db, now: await stamp(ctx), dataDir: ctx.household?.root, actorId: run.actorId,
         ownerText, turnId: run.turnId, replan: run.replan, queuePlan: run.queuePlan, conversationKey: key,
-        recId: db.prepare('SELECT rec_id FROM conversations WHERE key = ?').get(key)?.rec_id ?? null, scopes: run.scopes, evidenceMessageId: id,
+        recId: (await db.prepare('SELECT rec_id FROM conversations WHERE key = ?').get(key))?.rec_id ?? null, scopes: run.scopes, evidenceMessageId: id,
         channel: 'ask', household: ctx.household, services: ctx.household?.services };
-      toolContext.ownerStatements = () => ownerStatements(toolContext);
+      toolContext.ownerStatements = async () => await ownerStatements(toolContext);
       const result = await executeProposal(pending, toolContext);
       for (const task of afterTools) await task();
       reply = { paragraphs: [result?.message ?? (result?.undo?.available === false ? 'The refresh is queued. Its receipt records the outcome.' : CONFIRMED_TEXT)], refs: [], provenance: { actionTurn: run.turnId, confirmedProposal: 'm' + id, description,
         tools: [{ name: pending.tool, args: { operation: pending.operation, ...pending.args }, result: JSON.parse(JSON.stringify(result ?? null)) }] } };
     } catch (e) {
-      markProposal(db, id, 'stale', stamp(ctx));
+      await markProposal(db, id, 'stale', await stamp(ctx));
       if (e?.name !== 'ToolError' && e?.name !== 'FactAnswerError') throw e;
       note = `That change was not saved: ${e.message}`;
     }
   }
   if (note) {
-    reply = await need(ctx, 'answerer').answer({ db, key, text: ownerText, clock: ctx.config && ctx.config.clock, ...streaming(turn), staleNote: note });
+    reply = await need(ctx, 'answerer').answer({ db, key, text: ownerText, clock: ctx.config && ctx.config.clock, ...await streaming(turn), staleNote: note });
     if (!reply) throw new HttpError(404, 'no answer');
   }
-  const replyId = storeTurn(turn, key, escapeUserText(ownerText), reply, () => {
-    openThreadRow(db, key);
-    db.prepare('UPDATE conversations SET archived_at = NULL WHERE key = ?').run(key);
+  const replyId = await storeTurn(turn, key, escapeUserText(ownerText), reply, async () => {
+    await openThreadRow(db, key);
+    await db.prepare('UPDATE conversations SET archived_at = NULL WHERE key = ?').run(key);
   });
   await maybeName(ctx, key);
-  const fresh = scenarioOf(ctx);
+  const fresh = await scenarioOf(ctx);
   return { scenario: fresh, message: replyIn(fresh, key, replyId) };
 }
 
@@ -459,32 +460,32 @@ export async function proposalDecide(ctx) {
   const { db } = ctx;
   const decision = ctx.body?.decision;
   if (decision !== 'confirm' && decision !== 'decline') throw new HttpError(400, 'decision must be confirm or decline');
-  const thread = threadOrThrow(db, ctx.params.id);
-  openThreadRow(db, thread.key);
+  const thread = await threadOrThrow(db, ctx.params.id);
+  await openThreadRow(db, thread.key);
   const m = /^m(\d{1,15})$/.exec(String(ctx.params.messageId ?? ''));
   if (!m) throw new HttpError(404, 'no such proposal');
   const out = await decideProposal(ctx, thread.key, Number(m[1]), decision, decision === 'confirm' ? 'Confirmed' : 'Not now');
-  return { scenario: out.scenario, thread: threadOrThrow(db, thread.id), message: out.message };
+  return { scenario: out.scenario, thread: await threadOrThrow(db, thread.id), message: out.message };
 }
 
 // ---------------------------------------------------------------- Ask threads
 
-const threadOrThrow = (db, id) => {
-  const t = getThread(db, id);
+const threadOrThrow = async (db, id) => {
+  const t = await getThread(db, id);
   if (!t) throw new HttpError(404, 'no such conversation');
   return t;
 };
 
-export function threadList(ctx) {
-  return listThreads(ctx.db);
+export async function threadList(ctx) {
+  return await listThreads(ctx.db);
 }
 
 // GET /api/threads/:id: the thread and its messages (as in scenario.live.conversations).
 export async function threadGet(ctx) {
-  const opened = threadOrThrow(ctx.db, ctx.params.id);
+  const opened = await threadOrThrow(ctx.db, ctx.params.id);
   await maybeName(ctx, opened.key);
-  const thread = threadOrThrow(ctx.db, ctx.params.id);
-  const messages = withDescriptions(ctx.db, receiptMessages(ctx.db, thread.key, ctx.db.prepare('SELECT * FROM messages WHERE conversation_key = ? ORDER BY id').all(thread.key).map(messageOut)));
+  const thread = await threadOrThrow(ctx.db, ctx.params.id);
+  const messages = await withDescriptions(ctx.db, await receiptMessages(ctx.db, thread.key, (await ctx.db.prepare('SELECT * FROM messages WHERE conversation_key = ? ORDER BY id').all(thread.key)).map(messageOut)));
   return { thread, messages };
 }
 
@@ -499,14 +500,14 @@ export async function threadCreate(ctx) {
   const refs = parseRefs(body.context);
   if (body.recId !== undefined && body.recId !== null) return threadCreateFromRec(ctx, empty, refs);
   if (empty) {
-    const thread = tx(db, () => insertThread(db, newThreadKey(db), stamp(ctx)));
-    return { scenario: scenarioOf(ctx), thread };
+    const thread = await tx(db, async (db) => await insertThread(db, await newThreadKey(db), await stamp(ctx)));
+    return { scenario: await scenarioOf(ctx), thread };
   }
   const { hasQ, questionId, clean } = askBody(body);
   let mine;
   let question;
   if (hasQ) {
-    const starter = scenarioOf(ctx).live.askStarters.find(st => st.id === questionId);
+    const starter = (await scenarioOf(ctx)).live.askStarters.find(st => st.id === questionId);
     if (!starter) throw new HttpError(404, `no starter ${questionId}`);
     mine = starter.q;
     question = starter.q;
@@ -514,14 +515,14 @@ export async function threadCreate(ctx) {
     mine = escapeUserText(clean);
     question = clean;
   }
-  const key = newThreadKey(db);
+  const key = await newThreadKey(db);
   streamStart(ctx, key);
-  const reply = await need(ctx, 'answerer').answer({ db, key, text: question, clock: ctx.config && ctx.config.clock, refs, ...streaming(ctx) });
+  const reply = await need(ctx, 'answerer').answer({ db, key, text: question, clock: ctx.config && ctx.config.clock, refs, ...await streaming(ctx) });
   if (!reply) throw new HttpError(404, 'no answer');
-  const id = storeTurn(ctx, key, mine, reply, () => { if (!db.prepare('SELECT 1 FROM conversations WHERE key = ?').get(key)) insertThread(db, key, stamp(ctx)); });
+  const id = await storeTurn(ctx, key, mine, reply, async () => { if (!await db.prepare('SELECT 1 FROM conversations WHERE key = ?').get(key)) await insertThread(db, key, await stamp(ctx)); });
   await maybeName(ctx, key);
-  const fresh = scenarioOf(ctx);
-  return { scenario: fresh, thread: threadOrThrow(db, key.slice(4)), message: replyIn(fresh, key, id) };
+  const fresh = await scenarioOf(ctx);
+  return { scenario: fresh, thread: await threadOrThrow(db, key.slice(4)), message: replyIn(fresh, key, id) };
 }
 
 // POST /api/threads { recId, text | questionId }: a thread asked from a visible rec (404 unknown or
@@ -532,102 +533,102 @@ async function threadCreateFromRec(ctx, empty, refs) {
   const { db } = ctx;
   const { recId } = ctx.body;
   if (typeof recId !== 'string' || !recId) throw new HttpError(400, 'recId must be a recommendation id');
-  visibleRec(db, recId);
+  await visibleRec(db, recId);
   if (empty) throw new HttpError(400, 'send questionId or text to ask about a recommendation');
   const { hasQ, questionId, clean } = askBody(ctx.body);
   let mine;
   if (hasQ) {
-    const q = findQuestion(scenarioOf(ctx), recId, questionId);
+    const q = findQuestion(await scenarioOf(ctx), recId, questionId);
     if (!q) throw new HttpError(404, `no question ${questionId}`);
     mine = q.q;
   } else {
     mine = escapeUserText(clean);
   }
-  const key = newThreadKey(db);
-  tx(db, () => insertThread(db, key, stamp(ctx), { recId }));
+  const key = await newThreadKey(db);
+  await tx(db, async (db) => await insertThread(db, key, await stamp(ctx), { recId }));
   let reply;
   try {
     streamStart(ctx, key);
     reply = await need(ctx, 'answerer').answer({ db, key, questionId: hasQ ? questionId : undefined,
-      text: hasQ ? undefined : clean, clock: ctx.config && ctx.config.clock, refs, ...streaming(ctx) });
+      text: hasQ ? undefined : clean, clock: ctx.config && ctx.config.clock, refs, ...await streaming(ctx) });
     if (!reply) throw new HttpError(404, hasQ ? `no question ${questionId}` : 'no answer');
   } catch (e) {
-    dropIfEmpty(db, key);
+    await dropIfEmpty(db, key);
     throw e;
   }
   // The thread may have been trashed or deleted while the model answered.
-  const id = storeTurn(ctx, key, mine, reply, () => openThreadRow(db, key));
+  const id = await storeTurn(ctx, key, mine, reply, async () => await openThreadRow(db, key));
   await maybeName(ctx, key);
-  const fresh = scenarioOf(ctx);
-  return { scenario: fresh, thread: threadOrThrow(db, key.slice(4)), message: replyIn(fresh, key, id) };
+  const fresh = await scenarioOf(ctx);
+  return { scenario: fresh, thread: await threadOrThrow(db, key.slice(4)), message: replyIn(fresh, key, id) };
 }
 
 // Deletes a thread row that holds no message (a rec thread whose first answer failed).
-function dropIfEmpty(db, key) {
-  db.prepare('DELETE FROM conversations WHERE key = ? AND NOT EXISTS (SELECT 1 FROM messages WHERE conversation_key = ?) AND NOT EXISTS (SELECT 1 FROM action_receipts WHERE conversation_key = ?)').run(key, key, key);
+async function dropIfEmpty(db, key) {
+  await db.prepare('DELETE FROM conversations WHERE key = ? AND NOT EXISTS (SELECT 1 FROM messages WHERE conversation_key = ?) AND NOT EXISTS (SELECT 1 FROM action_receipts WHERE conversation_key = ?)').run(key, key, key);
 }
 
 // POST /api/recs/:id/start-over: detaches every thread asked from a visible rec that its dialog
 // still shows, so the dialog opens a fresh composer. The threads stay in Ask untouched otherwise.
-export function recStartOver(ctx) {
+export async function recStartOver(ctx) {
   const { db } = ctx;
   const { id } = ctx.params;
-  decisionWrite(ctx, () => detachRecThreads(db, id, { now: stamp(ctx) }));
-  return { scenario: scenarioOf(ctx) };
+  decisionWrite(ctx, async () => await detachRecThreads(db, id, { now: await stamp(ctx) }));
+  return { scenario: await scenarioOf(ctx) };
 }
 
-export function threadRename(ctx) {
-  const thread = threadOrThrow(ctx.db, ctx.params.id);
+export async function threadRename(ctx) {
+  const thread = await threadOrThrow(ctx.db, ctx.params.id);
   const title = validateTitle(ctx.body.title);
   if (!title) throw new HttpError(400, 'title must be 1 to 60 characters with no line breaks, control characters or < > { } `');
-  ctx.db.prepare("UPDATE conversations SET title = ?, title_source = 'manual' WHERE key = ?").run(title, thread.key);
-  return { scenario: scenarioOf(ctx), thread: threadOrThrow(ctx.db, thread.id) };
+  await ctx.db.prepare("UPDATE conversations SET title = ?, title_source = 'manual' WHERE key = ?").run(title, thread.key);
+  return { scenario: await scenarioOf(ctx), thread: await threadOrThrow(ctx.db, thread.id) };
 }
 
-export function threadArchive(ctx) {
-  const thread = threadOrThrow(ctx.db, ctx.params.id);
+export async function threadArchive(ctx) {
+  const thread = await threadOrThrow(ctx.db, ctx.params.id);
   if (thread.trashedAt) throw new HttpError(409, 'this conversation is in Trash');
-  ctx.db.prepare('UPDATE conversations SET archived_at = coalesce(archived_at, ?) WHERE key = ?').run(stamp(ctx), thread.key);
-  return { scenario: scenarioOf(ctx), thread: threadOrThrow(ctx.db, thread.id) };
+  await ctx.db.prepare('UPDATE conversations SET archived_at = coalesce(archived_at, ?) WHERE key = ?').run(await stamp(ctx), thread.key);
+  return { scenario: await scenarioOf(ctx), thread: await threadOrThrow(ctx.db, thread.id) };
 }
 
 // Trash keeps archived_at, so restore returns the thread to where it was.
-export function threadTrash(ctx) {
-  const thread = threadOrThrow(ctx.db, ctx.params.id);
-  ctx.db.prepare('UPDATE conversations SET trashed_at = coalesce(trashed_at, ?) WHERE key = ?').run(stamp(ctx), thread.key);
-  return { scenario: scenarioOf(ctx), thread: threadOrThrow(ctx.db, thread.id) };
+export async function threadTrash(ctx) {
+  const thread = await threadOrThrow(ctx.db, ctx.params.id);
+  await ctx.db.prepare('UPDATE conversations SET trashed_at = coalesce(trashed_at, ?) WHERE key = ?').run(await stamp(ctx), thread.key);
+  return { scenario: await scenarioOf(ctx), thread: await threadOrThrow(ctx.db, thread.id) };
 }
 
 // Out of Trash when trashed, else out of the archive.
-export function threadRestore(ctx) {
-  const thread = threadOrThrow(ctx.db, ctx.params.id);
+export async function threadRestore(ctx) {
+  const thread = await threadOrThrow(ctx.db, ctx.params.id);
   const column = thread.trashedAt ? 'trashed_at' : 'archived_at';
-  ctx.db.prepare(`UPDATE conversations SET ${column} = NULL WHERE key = ?`).run(thread.key);
-  return { scenario: scenarioOf(ctx), thread: threadOrThrow(ctx.db, thread.id) };
+  await ctx.db.prepare(`UPDATE conversations SET ${column} = NULL WHERE key = ?`).run(thread.key);
+  return { scenario: await scenarioOf(ctx), thread: await threadOrThrow(ctx.db, thread.id) };
 }
 
-export function threadDelete(ctx) {
-  const thread = threadOrThrow(ctx.db, ctx.params.id);
+export async function threadDelete(ctx) {
+  const thread = await threadOrThrow(ctx.db, ctx.params.id);
   if (!thread.trashedAt) throw new HttpError(409, 'only a conversation in Trash can be deleted forever');
-  deleteThread(ctx.db, thread.key);
-  return { scenario: scenarioOf(ctx) };
+  await deleteThread(ctx.db, thread.key);
+  return { scenario: await scenarioOf(ctx) };
 }
 
-export function onboarding(ctx) {
+export async function onboarding(ctx) {
   const { step } = ctx.body;
   if (!Number.isInteger(step) || step < 0 || step > 6) throw new HttpError(400, 'step must be an integer from 0 to 6');
-  const cur = getSetting(ctx.db, 'onboarding', { done: false, step: 0 }) || { done: false, step: 0 };
-  setSetting(ctx.db, 'onboarding', step === 6 ? { done: true, step: 6 } : { done: !!cur.done, step });
+  const cur = await getSetting(ctx.db, 'onboarding', { done: false, step: 0 }) || { done: false, step: 0 };
+  await setSetting(ctx.db, 'onboarding', step === 6 ? { done: true, step: 6 } : { done: !!cur.done, step });
   // Only the not-done to done transition starts the tour, so users who finished onboarding before
   // the tour existed are never flagged.
-  if (step === 6 && !cur.done) setTourPending(ctx, true);
-  return { scenario: scenarioOf(ctx) };
+  if (step === 6 && !cur.done) await setTourPending(ctx, true);
+  return { scenario: await scenarioOf(ctx) };
 }
 
 // Reseeds the demo household's store and removes its stored objects; nothing outside its own root
 // is touched.
 export async function demoReset(ctx) {
-  if (getSetting(ctx.db, 'mode', null) !== 'demo') throw new HttpError(404, 'not found');
+  if (await getSetting(ctx.db, 'mode', null) !== 'demo') throw new HttpError(404, 'not found');
   let vault;
   try {
     vault = await openVault(ctx.household);
@@ -635,33 +636,33 @@ export async function demoReset(ctx) {
     if (e instanceof VaultError) throw new HttpError(409, e.message);
     throw e;
   }
-  seedDemo(ctx.db);
+  await seedDemo(ctx.db);
   // MCP keys live in the platform api_keys table; a reset leaves none for this household.
-  ctx.platform.prepare('DELETE FROM api_keys WHERE household_id = ?').run(ctx.household.householdId);
+  await ctx.platform.prepare('DELETE FROM api_keys WHERE household_id = ?').run(ctx.household.householdId);
   await clearStoredFiles(vault);
   if (ctx.packs) ctx.packs.refresh();
-  return { scenario: scenarioOf(ctx) };
+  return { scenario: await scenarioOf(ctx) };
 }
 
 export async function actionUndo(ctx) {
-  const actorId = ctx.identity?.id || (getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null);
-  const row = ctx.db.prepare('SELECT scope FROM action_receipts WHERE id = ?').get(ctx.params.id);
+  const actorId = ctx.identity?.id || (await getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null);
+  const row = await ctx.db.prepare('SELECT scope FROM action_receipts WHERE id = ?').get(ctx.params.id);
   if (!row) throw new HttpError(404, 'no such action');
   try {
-    const out = await undoAction({ db: ctx.db, now: stamp(ctx), actorId,
+    const out = await undoAction({ db: ctx.db, now: await stamp(ctx), actorId,
       replan: ctx.scheduler ? () => ctx.scheduler.runNow('plan') : null,
       queuePlan: () => ctx.scheduler?.soon?.('plan', 'ingest') }, ctx.params.id, row.scope);
-    return { ...out, scenario: scenarioOf(ctx) };
+    return { ...out, scenario: await scenarioOf(ctx) };
   } catch (e) { if (e instanceof ToolError) throw new HttpError(409, e.message); throw e; }
 }
 
-export function preferenceSave(ctx) {
+export async function preferenceSave(ctx) {
   try {
-    const out = writePreference({ db: ctx.db, now: stamp(ctx), actorId: ctx.identity?.id },
+    const out = await writePreference({ db: ctx.db, now: await stamp(ctx), actorId: ctx.identity?.id },
       { ...ctx.body, id: ctx.params.id }, { remove: ctx.removePreference === true });
-    adoptSuggestions(ctx.db, { now: stamp(ctx), clock: ctx.config && ctx.config.clock });
-    return { ...out, scenario: scenarioOf(ctx) };
+    await adoptSuggestions(ctx.db, { now: await stamp(ctx), clock: ctx.config && ctx.config.clock });
+    return { ...out, scenario: await scenarioOf(ctx) };
   } catch (e) { if (e instanceof ToolError) throw new HttpError(400, e.message); throw e; }
 }
 
-export const preferenceDelete = ctx => preferenceSave({ ...ctx, removePreference: true });
+export const preferenceDelete = async ctx => await preferenceSave({ ...ctx, removePreference: true });

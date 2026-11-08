@@ -17,7 +17,7 @@ import { scratch, paystubDoc, figureRow } from './helpers/real-store.mjs';
 
 const NOW = '2026-11-05';
 const S = scratch('fathom-rq2-scope-');
-after(() => S.cleanup());
+after(async () => await S.cleanup());
 
 const KNOWN = new Set(['income', 'retirement', 'payments', 'filing', 'va', 'credits', 'hsa', 'ages']);
 // Codes a trigger can block on besides the tax gap rules.
@@ -187,7 +187,7 @@ test('AC2: recs that read a gapped input show it once with its fix; a rec that d
   const cedar = paystubDoc({ employerName: 'Cedar Labs', person: 'spouse', relation: 'outside', payDate: '2026-10-31', net: 1600, state: 'VA', confidence: 0.5 });
   const db = await S.store({ variant: { payroll: [cedar] } });
   await planRun(db, { now: NOW });
-  const scenario = buildScenario(db, { clock: NOW });
+  const scenario = await buildScenario(db, { clock: NOW });
   const code = 'paystub_ytd_missing';
   const affected = inputsOf(code);
   const present = scenario.recs.filter(r => byId(r.id) && r.id !== 'missing-data' && !['hidden', 'dismissed'].includes(r.status));
@@ -228,7 +228,7 @@ test('AC2: recs that read a gapped input show it once with its fix; a rec that d
 
   // R1-2: figures too. HSA room is computed from HSA inputs only: complete, no gap, no partial
   // label. Federal tax reads wages and carries the gap.
-  const hsa = figureRow(db, 'room.hsa');
+  const hsa = await figureRow(db, 'room.hsa');
   assert.ok(hsa, 'room.hsa is produced');
   assert.equal(hsa.locator.completeness, 'complete');
   assert.deepEqual(hsa.locator.gaps, []);
@@ -236,7 +236,7 @@ test('AC2: recs that read a gapped input show it once with its fix; a rec that d
   assert.equal(hsa.locator.rough, false);
   assert.doesNotMatch(hsa.label, /partial/i);
   assert.ok(!(hsa.locator.notes || []).some(n => /Cedar Labs/.test(n)));
-  const fed = figureRow(db, 'tax.fed.proj');
+  const fed = await figureRow(db, 'tax.fed.proj');
   assert.ok(fed.locator.gaps.some(g => g.code.startsWith(code)));
   assert.equal(fed.locator.partial, true);
   assert.match(fed.label, /partial/i);

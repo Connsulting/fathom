@@ -281,7 +281,7 @@ test('a waiting file carries its stored reason as reasonCode', async () => {
     const { setSetting } = await import('../src/store/db.mjs');
     setSetting(x.db, 'engine', { on: false });
     const r = await ingestFile(x.db, { name: 'unknown.csv', bytes: Buffer.from('One,Two\na,b\n') }, x.opts);
-    x.db.prepare("UPDATE files SET status='budget_exhausted', note='file_limit' WHERE id=?").run(r.fileId);
+    await x.db.prepare("UPDATE files SET status='budget_exhausted', note='file_limit' WHERE id=?").run(r.fileId);
     const file = ingestState(x.db).waiting.find((f) => f.id === r.fileId);
     assert.equal(file.reasonCode, 'file_limit');
     assert.equal(proposalControl(proposalStatus(file), { engineOn: true, reasonCode: proposalReason(file) }), 'upload');

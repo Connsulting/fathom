@@ -237,9 +237,9 @@ test('cards carry kind, owner, priority and line, and a done goal has no card', 
 test('over the seeded demo store each kind goal card has a kind line whose figure keys exist in scenario.fig', async () => {
   const t = await tempDb();
   try {
-    seedDemo(t.db);
-    const sc = buildScenario(t.db);
-    const recs = loadLinkedRecs(t.db, sc.live.clock);
+    await seedDemo(t.db);
+    const sc = await buildScenario(t.db);
+    const recs = await loadLinkedRecs(t.db, sc.live.clock);
     const m = H.homeModel({ goals: sc.goals, pace: sc.pace, recs, filter: 'both', suggestions: sc.suggestions, clock: sc.meta.clock });
     assert.deepEqual(ids(m.cards).slice(0, 3), ['biz-floor', 'checking-range', 'ira-fill'], 'high first, then the two medium goals in pace order');
     const ranks = m.cards.map(c => H.priorityRankOf(c.priority));

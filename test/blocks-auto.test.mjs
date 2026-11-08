@@ -16,6 +16,7 @@ import { validateBlock } from '../src/blocks/validate.mjs';
 import { assertSnapshotShape } from '../src/blocks/snapshot-shape.mjs';
 import { dateText } from '../src/blocks/labels.mjs';
 import { autoSpecs, autoBlocks } from '../src/blocks/auto.mjs';
+import { forEachSeries } from '../src/shared/series.mjs';
 
 const NOW = new Date('2026-11-05T15:00:00Z');
 const READS = {
@@ -34,25 +35,25 @@ const READS = {
 
 // Synthetic stored war-game figures (the planner's figure keys), so the options carry values.
 const WARGAME_FIELDS = { salary: ['salary', 'payroll', 'dist', 'tax', 'x', 'y'], deferral: ['amount', 'net', 'decCash', 'need', 'gap', 'tax2026', 'tax2027'] };
-function plantWargames(db) {
-  const { wargame } = buildScenario(db);
+async function plantWargames(db) {
+  const { wargame } = await buildScenario(db);
   const put = db.prepare(`INSERT OR REPLACE INTO figures (key, v, kind, label, parser, updated_at) VALUES (?, ?, 'm', ?, 'planner', '2026-11-05')`);
-  for (const name of ['salary', 'deferral']) (name === 'salary' ? wargame.salary.points : wargame.deferral.options).forEach((item, i) =>
-    WARGAME_FIELDS[name].forEach((field, j) => put.run(`wg.${name}.${item.id}.${field}`, 1000 * (i + 1) + 10 * j, field)));
-  put.run('wg.deferral.base.income', 5000, 'income');
+  for (const name of ['salary', 'deferral']) await forEachSeries((name === 'salary' ? wargame.salary.points : wargame.deferral.options), async (item, i) =>
+    await forEachSeries(WARGAME_FIELDS[name], async (field, j) => await put.run(`wg.${name}.${item.id}.${field}`, 1000 * (i + 1) + 10 * j, field)));
+  await put.run('wg.deferral.base.income', 5000, 'income');
 }
 
 let store, ctx, unplannedDeferral;
 const calls = {};
 before(async () => {
-  store = await tempDb(); seedDemo(store.db);
+  store = await tempDb(); await seedDemo(store.db);
   ctx = { db: store.db, now: NOW, dataDir: store.dataDir, services: {} };
   const [name, args] = READS.deferral;
   unplannedDeferral = { name, args, result: await callTool(name, args, ctx) };
-  plantWargames(store.db);
+  await plantWargames(store.db);
   for (const [key, [tool, args]] of Object.entries(READS)) calls[key] = { name: tool, args, result: await callTool(tool, args, ctx) };
 });
-after(async () => { store?.close(); if (store) await rm(store.dataDir, { recursive: true, force: true }); });
+after(async () => { await store?.close(); if (store) await rm(store.dataDir, { recursive: true, force: true }); });
 
 const ref = (key, path) => ({ tool: calls[key].name, args: calls[key].args, path });
 const values = figures => figures.map(f => f?.value ?? null);

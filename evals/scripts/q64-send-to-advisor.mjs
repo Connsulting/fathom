@@ -1,5 +1,5 @@
-export function script({ db }) {
-  const decision = db.prepare("SELECT rec_id FROM decisions WHERE wargame = 'salary' AND rec_id IS NOT NULL ORDER BY sort LIMIT 1").get();
+export async function script({ db }) {
+  const decision = await db.prepare("SELECT rec_id FROM decisions WHERE wargame = 'salary' AND rec_id IS NOT NULL ORDER BY sort LIMIT 1").get();
   if (!decision) throw new Error('The salary fixture needs a recommendation');
   return [
     { toolCalls: [

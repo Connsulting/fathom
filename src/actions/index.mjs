@@ -34,37 +34,37 @@ function goalEvidence(fields) {
 }
 const at = (obj, path) => path.reduce((o, k) => (o != null && typeof o === 'object' ? o[k] : undefined), obj);
 
-export function recordFact(args, ctx) {
+export async function recordFact(args, ctx) {
   requireScope(ctx, 'write:facts');
-  const actorId = requireActor(ctx);
+  const actorId = await requireActor(ctx);
   const shape = answerShape(args.key);
-  const prior = ctx.db.prepare('SELECT value FROM facts WHERE key = ?').get(args.key);
-  if (args.key === 'business.entities') requireEntityEvidence(ctx, args.value, { evidence: args.evidence, shape });
-  else requireEvidence(ctx, args.value, { evidence: args.evidence, shape, stored: prior ? [parse(prior.value, null)] : [] });
+  const prior = await ctx.db.prepare('SELECT value FROM facts WHERE key = ?').get(args.key);
+  if (args.key === 'business.entities') await requireEntityEvidence(ctx, args.value, { evidence: args.evidence, shape });
+  else await requireEvidence(ctx, args.value, { evidence: args.evidence, shape, stored: prior ? [parse(prior.value, null)] : [] });
   let receipt = null;
-  recordFactAnswers(ctx.db, [{ key: args.key, value: args.value }], { now: new Date(ctx.now ?? Date.now()).toISOString(),
+  await recordFactAnswers(ctx.db, [{ key: args.key, value: args.value }], { now: new Date(ctx.now ?? Date.now()).toISOString(),
     channel: ctx.channel === 'mcp' ? 'mcp' : 'ask', actorId, sourceEvidence: ctx.sourceEvidence,
-    onWrite(before, after) {
-      receipt = saveReceipt(ctx, { scope: 'write:facts', kind: 'fact', id: args.key, label: shape.label ?? args.key,
+    async onWrite(before, after) {
+      receipt = await saveReceipt(ctx, { scope: 'write:facts', kind: 'fact', id: args.key, label: shape.label ?? args.key,
         before: select(before, FACT_FIELDS), after: select(after, FACT_FIELDS),
         from: before ? parse(before.value, null) : null, to: parse(after.value, null) });
     } });
   ctx.onReceipt?.(receipt);
-  return { key: args.key, value: parse(ctx.db.prepare('SELECT value FROM facts WHERE key = ?').get(args.key).value, null), receipt };
+  return { key: args.key, value: parse((await ctx.db.prepare('SELECT value FROM facts WHERE key = ?').get(args.key)).value, null), receipt };
 }
 
-export function changeRec(args, ctx, kind) {
+export async function changeRec(args, ctx, kind) {
   requireScope(ctx, kind === 'step' ? 'write:steps' : 'write:recs');
-  const actor = requireActor(ctx);
+  const actor = await requireActor(ctx);
   let receipt = null;
   const fields = { step: ['tasks_done', 'def'], status: ['status', 'wake'], owner: ['owner', 'owner_override'] }[kind];
   const values = row => kind === 'step' ? !!parse(row.tasks_done, [])[args.index]
     : kind === 'owner' ? row.owner : { status: row.status, wake: row.wake };
-  const row = writeRec(ctx.db, args.id, kind, kind === 'owner' ? args.owner : args, {
+  const row = await writeRec(ctx.db, args.id, kind, kind === 'owner' ? args.owner : args, {
     now: new Date(ctx.now ?? Date.now()).toISOString(), actor,
-    onWrite(before, after) {
+    async onWrite(before, after) {
       if (JSON.stringify(values(before)) === JSON.stringify(values(after)) && kind !== 'owner') return;
-      receipt = saveReceipt(ctx, { scope: kind === 'step' ? 'write:steps' : 'write:recs', kind, id: args.id,
+      receipt = await saveReceipt(ctx, { scope: kind === 'step' ? 'write:steps' : 'write:recs', kind, id: args.id,
         label: kind === 'step' ? `Recommendation step ${args.index + 1}` : `Recommendation ${kind}`,
         before: select(before, fields), after: select(after, fields), from: values(before), to: values(after) });
     },
@@ -73,24 +73,24 @@ export function changeRec(args, ctx, kind) {
   return { row, receipt };
 }
 
-export function changeGoal(args, ctx, editing = false) {
+export async function changeGoal(args, ctx, editing = false) {
   requireScope(ctx, 'write:goals');
-  requireActor(ctx);
+  await requireActor(ctx);
   const { id, ...fields } = args;
-  const current = editing ? ctx.db.prepare('SELECT * FROM goals WHERE id = ?').get(id) : null;
+  const current = editing ? await ctx.db.prepare('SELECT * FROM goals WHERE id = ?').get(id) : null;
   const old = current ? parse(current.def, {}) : {};
   for (const [path, value] of goalEvidence(fields)) {
     const prior = at(old, path);
     const stored = prior !== undefined ? [prior] : [];
-    requireEvidence(ctx, value, { stored, argument: path.join('.'), household: true });
+    await requireEvidence(ctx, value, { stored, argument: path.join('.'), household: true });
   }
   let receipt = null;
   // createGoal and updateGoal set Fathom's target before onWrite, so the receipt's after state has it.
-  const opts = { now: new Date(ctx.now ?? Date.now()).toISOString(), clock: ctx.config?.clock, onWrite(before, after) {
-    receipt = saveReceipt(ctx, { scope: 'write:goals', kind: 'goal', id: after.id, label: 'Goal',
+  const opts = { now: new Date(ctx.now ?? Date.now()).toISOString(), clock: ctx.config?.clock, async onWrite(before, after) {
+    receipt = await saveReceipt(ctx, { scope: 'write:goals', kind: 'goal', id: after.id, label: 'Goal',
       before: select(before, GOAL_FIELDS), after: select(after, GOAL_FIELDS), from: goalValue(before), to: goalValue(after) });
   } };
-  const row = editing ? updateGoal(ctx.db, id, fields, opts) : createGoal(ctx.db, fields, opts);
+  const row = editing ? await updateGoal(ctx.db, id, fields, opts) : await createGoal(ctx.db, fields, opts);
   ctx.onReceipt?.(receipt);
   return { goal: { ...parse(row.def, {}), status: goalStatusOf(row) }, receipt };
 }

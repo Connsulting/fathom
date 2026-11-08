@@ -21,45 +21,45 @@ const other = ['Mortgage', 'Utilities', 'Insurance', 'Education', 'Subscriptions
 async function fixture(t, { manual = [] } = {}) {
   const s = scratch('named-summary-');
   const db = await createRealStore(s.dir());
-  t.after(() => { closeRealStore(db); s.cleanup(); });
+  t.after(async () => { await closeRealStore(db); await s.cleanup(); });
   for (const [key, value] of Object.entries({
     'household.names': { owner: 'Aster', spouse: 'Birch' },
     'household.filingStatus': 'mfj', 'household.state': 'VA',
     'household.birthYears': { owner: 1985, spouse: 1986 },
     'income.sCorp': true, 'business.entities': [{ name: 'Example Studio', type: 's_corp', owner: 'owner' }, ...manual],
-  })) addFact(db, key, value);
+  })) await addFact(db, key, value);
   const insert = db.prepare('INSERT INTO pnl_lines(entity,period,category,amount,locator) VALUES (?,?,?,?,?)');
   for (const [name, , count, spending, lines, months] of tabs) {
     const categories = ['Wages', 'Interest income', ...personal.slice(0, spending), ...other.slice(0, count - spending - 2)];
     for (let i = 0; i < lines; i++) {
       const category = categories[i % categories.length];
       const month = String(11 - months + i % months).padStart(2, '0');
-      insert.run(name, `2026-${month}`, category, i % categories.length < 2 ? 1000 : -30, JSON.stringify({ sheet: name }));
+      await insert.run(name, `2026-${month}`, category, i % categories.length < 2 ? 1000 : -30, JSON.stringify({ sheet: name }));
     }
   }
   for (const [category, amount] of [['Income', 9000], ['Officer salary', -2000]]) {
-    insert.run('Example Studio', '2026-10', category, amount, JSON.stringify({ sheet: 'Example Studio' }));
+    await insert.run('Example Studio', '2026-10', category, amount, JSON.stringify({ sheet: 'Example Studio' }));
   }
   return db;
 }
 
-const questions = db => buildScenario(db).recs.find(r => r.id === 'missing-data')?.tasks.filter(t => t.kind === 'classify') || [];
-const summaries = db => {
-  const data = loadPlanningData(db, clock);
-  return personalSummaryInput(data, getFacts(db), data.categoryInput).lines;
+const questions = async db => (await buildScenario(db)).recs.find(r => r.id === 'missing-data')?.tasks.filter(t => t.kind === 'classify') || [];
+const summaries = async db => {
+  const data = await loadPlanningData(db, clock);
+  return personalSummaryInput(data, await getFacts(db), data.categoryInput).lines;
 };
 
-function productionPattern(db) {
+async function productionPattern(db) {
   const insert = db.prepare('INSERT INTO pnl_lines(entity,period,category,amount,locator) VALUES (?,?,?,?,?)');
   for (const [name, person, count, spending, lines, months] of tabs) {
-    db.prepare('DELETE FROM pnl_lines WHERE entity=?').run(name);
+    await db.prepare('DELETE FROM pnl_lines WHERE entity=?').run(name);
     const rows = person === 'owner'
       ? [['Venmo credits', ['04', '05', '06', '07'], 1000], ['Zelle credits', ['10'], 1000]]
       : [['Wages', ['07', '08', '09', '10'], 1000], ['Glim', ['07', '08', '09'], 100]];
     const expenses = [...personal.slice(0, spending), ...other.slice(0, count - spending - 2)];
     const entries = rows.flatMap(([category, periods, amount]) => periods.map(month => [month, category, amount]));
     for (let i = 0; entries.length < lines; i++) entries.push([String(11 - months + i % months).padStart(2, '0'), expenses[i % expenses.length], -30]);
-    for (const [month, category, amount] of entries) insert.run(name, `2026-${month}`, category, amount, JSON.stringify({ sheet: name }));
+    for (const [month, category, amount] of entries) await insert.run(name, `2026-${month}`, category, amount, JSON.stringify({ sheet: name }));
   }
 }
 
@@ -67,22 +67,22 @@ const income = db => callTool('spending', { operation: 'total', measure: 'income
 
 test('SUM1b amendment: production-shaped transfers are excluded and one unknown income has provenance and inference Undo', async t => {
   const db = await fixture(t);
-  productionPattern(db);
+  await productionPattern(db);
   for (const [name, , count, spending, lines, months] of tabs) {
-    const rows = db.prepare('SELECT * FROM pnl_lines WHERE entity=?').all(name);
+    const rows = await db.prepare('SELECT * FROM pnl_lines WHERE entity=?').all(name);
     assert.equal(rows.length, lines);
     assert.equal(new Set(rows.map(l => l.category)).size, count);
     assert.equal(new Set(rows.map(l => l.period)).size, months);
     assert.equal(new Set(rows.filter(l => personal.includes(l.category)).map(l => l.category)).size, spending);
-    assert.equal(looksLikeSpending({ name, lines: rows }, getFacts(db)), false);
+    assert.equal(looksLikeSpending({ name, lines: rows }, await getFacts(db)), false);
   }
   for (const [category, count] of [['Venmo credits', 4], ['Zelle credits', 1], ['Glim', 3]]) {
-    assert.equal(db.prepare('SELECT count(DISTINCT period) n FROM pnl_lines WHERE category=? AND amount>0').get(category).n, count);
+    assert.equal((await db.prepare('SELECT count(DISTINCT period) n FROM pnl_lines WHERE category=? AND amount>0').get(category)).n, count);
   }
   const result = await planRun(db);
   assert.ok(!result.warnings.includes('entity_unclassified'));
-  assert.equal(questions(db).length, 0);
-  const rows = summaries(db);
+  assert.equal((await questions(db)).length, 0);
+  const rows = await summaries(db);
   assert.equal(rows.length, 130);
   const transfers = rows.filter(l => /Venmo|Zelle/.test(l.category));
   assert.equal(transfers.length, 5);
@@ -99,73 +99,73 @@ test('SUM1b amendment: production-shaped transfers are excluded and one unknown 
   const cash = await callTool('spending', { operation: 'cash_flow', from: '2026-04', to: '2026-10' }, { db, clock });
   assert.equal(cash.totals.household.inflow.value, 4300);
   assert.ok(cash.totals.household.inflow.provenance.assumptions.some(a => a.stated === stated));
-  const scenario = buildScenario(db);
+  const scenario = await buildScenario(db);
   assert.equal(scenario.fig['inc.ytd.summary-owner'], undefined);
   assert.equal(scenario.fig['inc.ytd.summary-spouse'].v, 4300);
   assert.equal(scenario.fig['inc.ytd.total'].v, 13300);
   assert.ok(scenario.fig['inc.ytd.summary-spouse'].notes.includes(stated));
   assert.ok(scenario.fig['inc.ytd.total'].notes.includes(stated));
-  const ownerView = businessPnl({ db, entity: tabs[0][0], from: '2026-04', to: '2026-10', clock });
+  const ownerView = await businessPnl({ db, entity: tabs[0][0], from: '2026-04', to: '2026-10', clock });
   assert.equal(ownerView.income.total, null);
-  const spouseView = businessPnl({ db, entity: tabs[1][0], from: '2026-04', to: '2026-10', clock });
+  const spouseView = await businessPnl({ db, entity: tabs[1][0], from: '2026-04', to: '2026-10', clock });
   assert.equal(spouseView.figures[spouseView.income.total].v, 4300);
   assert.ok(spouseView.figures[spouseView.income.total].notes.includes(stated));
   assert.ok(scenario.recs.flatMap(r => r.assumptions || []).some(a => a.undoKey === assumption.undoKey && a.path[0] === tabs[1][0] && a.evidence.includes(stated)));
-  recordFactAnswers(db, [{ key: assumption.undoKey, value: Object.fromEntries(tabs.map(([name]) => [name, { undone: true }])) }], { now: clock });
+  await recordFactAnswers(db, [{ key: assumption.undoKey, value: Object.fromEntries(tabs.map(([name]) => [name, { undone: true }])) }], { now: clock });
   for (let i = 0; i < 2; i++) {
     await planRun(db);
-    assert.equal(summaries(db).length, 0);
+    assert.equal((await summaries(db)).length, 0);
     assert.equal((await income(db)).total.value, 0);
-    assert.equal(buildScenario(db).fig['inc.ytd.summary-spouse'], undefined);
+    assert.equal((await buildScenario(db)).fig['inc.ytd.summary-spouse'], undefined);
   }
 });
 
 test('SUM1b amendment: two unknown positive categories keep one classification question', async t => {
   const db = await fixture(t);
-  productionPattern(db);
-  db.prepare("UPDATE pnl_lines SET category='Tarn' WHERE entity=? AND category='Wages'").run(tabs[1][0]);
+  await productionPattern(db);
+  await db.prepare("UPDATE pnl_lines SET category='Tarn' WHERE entity=? AND category='Wages'").run(tabs[1][0]);
   const result = await planRun(db);
   assert.ok(result.warnings.includes('entity_unclassified'));
-  assert.ok(!getFacts(db)['business.entities'].some(e => e.name === tabs[1][0]));
-  assert.equal(questions(db).length, 1);
-  assert.ok(!summaries(db).some(l => l.person === 'spouse'));
+  assert.ok(!(await getFacts(db))['business.entities'].some(e => e.name === tabs[1][0]));
+  assert.equal((await questions(db)).length, 1);
+  assert.ok(!(await summaries(db)).some(l => l.person === 'spouse'));
   assert.equal((await income(db)).total.value, 0);
-  db.prepare("UPDATE pnl_lines SET period='2025-01' WHERE entity=?").run(tabs[1][0]);
+  await db.prepare("UPDATE pnl_lines SET period='2025-01' WHERE entity=?").run(tabs[1][0]);
   await planRun(db);
-  assert.ok(!getFacts(db)['business.entities'].some(e => e.name === tabs[1][0]));
-  assert.equal(questions(db).length, 0, 'a classification step clears when the ledger leaves the current business inputs');
+  assert.ok(!(await getFacts(db))['business.entities'].some(e => e.name === tabs[1][0]));
+  assert.equal((await questions(db)).length, 0, 'a classification step clears when the ledger leaves the current business inputs');
 });
 
 test('SUM1b amendment: transfer buckets and transfer-name variants do not consume the unknown-income allowance', async t => {
   const db = await fixture(t);
-  productionPattern(db);
-  const rows = db.prepare('SELECT id FROM pnl_lines WHERE entity=? AND amount>0 ORDER BY id').all(tabs[0][0]);
+  await productionPattern(db);
+  const rows = await db.prepare('SELECT id FROM pnl_lines WHERE entity=? AND amount>0 ORDER BY id').all(tabs[0][0]);
   for (const [i, category] of ['Credit Card Payment', 'PayPal credits', 'Inbound transfer', 'VENMO credits', 'Zelle credits'].entries()) {
-    db.prepare('UPDATE pnl_lines SET category=? WHERE id=?').run(category, rows[i].id);
+    await db.prepare('UPDATE pnl_lines SET category=? WHERE id=?').run(category, rows[i].id);
   }
   await planRun(db);
-  assert.equal(getFacts(db)['business.entities'].find(e => e.name === tabs[0][0])?.type, 'personal');
-  assert.ok(summaries(db).filter(l => l.person === 'owner' && l.amount > 0).every(l => l.bucket === 'transfer' && !l.income));
+  assert.equal((await getFacts(db))['business.entities'].find(e => e.name === tabs[0][0])?.type, 'personal');
+  assert.ok((await summaries(db)).filter(l => l.person === 'owner' && l.amount > 0).every(l => l.bucket === 'transfer' && !l.income));
   assert.equal((await income(db)).total.value, 4300);
 });
 
 test('SUM1b AC1: mixed named tabs infer personal ownership, evidence and Undo and enter summary aggregation', async t => {
   const db = await fixture(t);
-  assert.equal(getFacts(db)['pnl.ledgers'], undefined);
-  assert.equal(getFacts(db)['pnl.ledgersInferred'], undefined);
+  assert.equal((await getFacts(db))['pnl.ledgers'], undefined);
+  assert.equal((await getFacts(db))['pnl.ledgersInferred'], undefined);
   for (const [name, , count, spending, lines, months] of tabs) {
-    const rows = db.prepare('SELECT * FROM pnl_lines WHERE entity=?').all(name);
+    const rows = await db.prepare('SELECT * FROM pnl_lines WHERE entity=?').all(name);
     assert.equal(rows.length, lines);
     assert.equal(new Set(rows.map(l => l.category)).size, count);
     assert.equal(new Set(rows.map(l => l.period)).size, months);
     assert.equal(new Set(rows.filter(l => personal.includes(l.category)).map(l => l.category)).size, spending);
     assert.equal(new Set(rows.filter(l => l.amount > 0).map(l => l.category)).size, 2);
-    if (spending * 2 === count) assert.equal(looksLikeSpending({ name, lines: rows }, getFacts(db)), false);
+    if (spending * 2 === count) assert.equal(looksLikeSpending({ name, lines: rows }, await getFacts(db)), false);
   }
   const result = await planRun(db);
   assert.ok(!result.warnings.includes('entity_unclassified'));
-  assert.equal(questions(db).length, 0);
-  const row = factRow(db, 'business.entities');
+  assert.equal((await questions(db)).length, 0);
+  const row = await factRow(db, 'business.entities');
   assert.match(row.src, /inferred/);
   for (const [name, person, , , lines] of tabs) {
     const entry = row.value.find(e => e.name === name);
@@ -174,36 +174,36 @@ test('SUM1b AC1: mixed named tabs infer personal ownership, evidence and Undo an
     assert.equal(entry.personSource, 'household_names');
     assert.equal(entry.inferred, true);
     assert.equal(entry.evidence.rule, `Per-person summary for ${person === 'owner' ? 'you' : 'your spouse'}: personal income and household spending by month.`);
-    const assumption = buildScenario(db).recs.flatMap(r => r.assumptions || []).find(a => a.key === 'business.entities' && a.path[0] === name);
+    const assumption = (await buildScenario(db)).recs.flatMap(r => r.assumptions || []).find(a => a.key === 'business.entities' && a.path[0] === name);
     assert.equal(assumption?.undoKey, 'business.entityInference');
-    assert.equal(summaries(db).filter(l => l.person === person).length, lines);
+    assert.equal((await summaries(db)).filter(l => l.person === person).length, lines);
   }
 });
 
 test('SUM1b AC2: a named tab with consulting fees stays unclassified with one question', async t => {
   const db = await fixture(t);
-  db.prepare("UPDATE pnl_lines SET category='Consulting fees' WHERE entity=? AND category='Wages'").run(tabs[0][0]);
+  await db.prepare("UPDATE pnl_lines SET category='Consulting fees' WHERE entity=? AND category='Wages'").run(tabs[0][0]);
   const result = await planRun(db);
   assert.ok(result.warnings.includes('entity_unclassified'));
-  assert.ok(!getFacts(db)['business.entities'].some(e => e.name === tabs[0][0]));
-  assert.equal(questions(db).length, 1);
-  assert.match(questions(db)[0].t, /Aster/);
-  assert.ok(!summaries(db).some(l => l.person === 'owner'));
+  assert.ok(!(await getFacts(db))['business.entities'].some(e => e.name === tabs[0][0]));
+  assert.equal((await questions(db)).length, 1);
+  assert.match((await questions(db))[0].t, /Aster/);
+  assert.ok(!(await summaries(db)).some(l => l.person === 'owner'));
 });
 
 test('SUM1b AC3: inference Undo returns the named tab to unclassified through later plans', async t => {
   const db = await fixture(t);
   await planRun(db);
-  assert.equal(getFacts(db)['business.entities'].find(e => e.name === tabs[0][0])?.type, 'personal');
-  const assumption = buildScenario(db).recs.flatMap(r => r.assumptions || []).find(a => a.key === 'business.entities' && a.path[0] === tabs[0][0]);
-  recordFactAnswers(db, [{ key: assumption.undoKey, value: { [tabs[0][0]]: { undone: true } } }], { now: clock });
+  assert.equal((await getFacts(db))['business.entities'].find(e => e.name === tabs[0][0])?.type, 'personal');
+  const assumption = (await buildScenario(db)).recs.flatMap(r => r.assumptions || []).find(a => a.key === 'business.entities' && a.path[0] === tabs[0][0]);
+  await recordFactAnswers(db, [{ key: assumption.undoKey, value: { [tabs[0][0]]: { undone: true } } }], { now: clock });
   for (let i = 0; i < 2; i++) {
     const result = await planRun(db);
     assert.ok(result.warnings.includes('entity_unclassified'));
-    assert.ok(!getFacts(db)['business.entities'].some(e => e.name === tabs[0][0]));
-    assert.equal(questions(db).length, 1);
-    assert.ok(!summaries(db).some(l => l.person === 'owner'));
-    assert.equal(summaries(db).filter(l => l.person === 'spouse').length, 51);
+    assert.ok(!(await getFacts(db))['business.entities'].some(e => e.name === tabs[0][0]));
+    assert.equal((await questions(db)).length, 1);
+    assert.ok(!(await summaries(db)).some(l => l.person === 'owner'));
+    assert.equal((await summaries(db)).filter(l => l.person === 'spouse').length, 51);
   }
 });
 
@@ -211,46 +211,46 @@ test('SUM1b AC4: an owner business classification survives named-summary inferen
   const manual = { name: tabs[0][0], type: 'sole_prop', owner: 'spouse' };
   const db = await fixture(t, { manual: [manual] });
   await planRun(db);
-  assert.deepEqual(getFacts(db)['business.entities'].find(e => e.name === manual.name), manual);
-  assert.ok(!summaries(db).some(l => l.person === 'owner'));
-  assert.equal(summaries(db).filter(l => l.person === 'spouse').length, 51);
+  assert.deepEqual((await getFacts(db))['business.entities'].find(e => e.name === manual.name), manual);
+  assert.ok(!(await summaries(db)).some(l => l.person === 'owner'));
+  assert.equal((await summaries(db)).filter(l => l.person === 'spouse').length, 51);
 });
 
 test('SUM1b: exactly one third household categories qualify before inactive inference', async t => {
   const db = await fixture(t);
   const insert = db.prepare('INSERT INTO pnl_lines(entity,period,category,amount) VALUES (?,\'2025-01\',?,-10)');
-  for (let i = 0; i < 14; i++) insert.run(tabs[0][0], `Other expense ${i}`);
-  db.prepare("UPDATE pnl_lines SET period='2025-01' WHERE entity=?").run(tabs[0][0]);
+  for (let i = 0; i < 14; i++) await insert.run(tabs[0][0], `Other expense ${i}`);
+  await db.prepare("UPDATE pnl_lines SET period='2025-01' WHERE entity=?").run(tabs[0][0]);
   await planRun(db);
-  assert.equal(getFacts(db)['business.entities'].find(e => e.name === tabs[0][0])?.type, 'personal');
-  assert.equal(summaries(db).filter(l => l.person === 'owner').length, 93);
+  assert.equal((await getFacts(db))['business.entities'].find(e => e.name === tabs[0][0])?.type, 'personal');
+  assert.equal((await summaries(db)).filter(l => l.person === 'owner').length, 93);
 });
 
 test('SUM1b: named-summary inference requires household attribution, personal income and enough household categories', async t => {
   for (const [label, change] of [
-    ['unknown person', db => addFact(db, 'household.names', { owner: 'Cedar', spouse: 'Birch' })],
-    ['ambiguous person', db => addFact(db, 'household.names', { owner: 'Aster', spouse: 'Aster' })],
-    ['owner answer only', db => {
-      addFact(db, 'household.names', { owner: 'Cedar', spouse: 'Birch' });
-      addFact(db, 'pnl.people', { [tabs[0][0]]: 'owner' });
+    ['unknown person', async db => await addFact(db, 'household.names', { owner: 'Cedar', spouse: 'Birch' })],
+    ['ambiguous person', async db => await addFact(db, 'household.names', { owner: 'Aster', spouse: 'Aster' })],
+    ['owner answer only', async db => {
+      await addFact(db, 'household.names', { owner: 'Cedar', spouse: 'Birch' });
+      await addFact(db, 'pnl.people', { [tabs[0][0]]: 'owner' });
     }],
-    ['two non-income positive totals', db => db.prepare("UPDATE pnl_lines SET amount=100 WHERE entity=? AND category IN ('Mortgage','Utilities')").run(tabs[0][0])],
-    ['officer expense', db => db.prepare("UPDATE pnl_lines SET category='Officer salary' WHERE entity=? AND category='Mortgage'").run(tabs[0][0])],
-    ['below one third', db => {
+    ['two non-income positive totals', async db => await db.prepare("UPDATE pnl_lines SET amount=100 WHERE entity=? AND category IN ('Mortgage','Utilities')").run(tabs[0][0])],
+    ['officer expense', async db => await db.prepare("UPDATE pnl_lines SET category='Officer salary' WHERE entity=? AND category='Mortgage'").run(tabs[0][0])],
+    ['below one third', async db => {
       const insert = db.prepare('INSERT INTO pnl_lines(entity,period,category,amount) VALUES (?,\'2026-10\',?,-10)');
-      for (let i = 0; i < 15; i++) insert.run(tabs[0][0], `Other expense ${i}`);
+      for (let i = 0; i < 15; i++) await insert.run(tabs[0][0], `Other expense ${i}`);
     }],
-    ['owner ledger classification', db => addFact(db, 'pnl.ledgers', { [tabs[0][0]]: { kind: 'business' } })],
-    ['linked business account', db => {
-      db.prepare("INSERT INTO accounts(id,name,kind,owner,parser) VALUES ('linked','Business checking','business','You','aggregator')").run();
-      addFact(db, 'accounts.businessEntity', { linked: tabs[0][0] });
-      db.prepare("INSERT INTO transactions(account_id,date,amount,category,parser) VALUES ('linked','2026-10-15',-30,'Software','aggregator')").run();
+    ['owner ledger classification', async db => await addFact(db, 'pnl.ledgers', { [tabs[0][0]]: { kind: 'business' } })],
+    ['linked business account', async db => {
+      await db.prepare("INSERT INTO accounts(id,name,kind,owner,parser) VALUES ('linked','Business checking','business','You','aggregator')").run();
+      await addFact(db, 'accounts.businessEntity', { linked: tabs[0][0] });
+      await db.prepare("INSERT INTO transactions(account_id,date,amount,category,parser) VALUES ('linked','2026-10-15',-30,'Software','aggregator')").run();
     }],
   ]) await t.test(label, async t => {
     const db = await fixture(t);
     change(db);
     await planRun(db);
-    assert.ok(!getFacts(db)['business.entities'].some(e => e.name === tabs[0][0] && e.type === 'personal'));
-    assert.equal(questions(db).length, 1);
+    assert.ok(!(await getFacts(db))['business.entities'].some(e => e.name === tabs[0][0] && e.type === 'personal'));
+    assert.equal((await questions(db)).length, 1);
   });
 });

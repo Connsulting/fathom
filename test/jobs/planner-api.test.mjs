@@ -22,9 +22,9 @@ import { planRun, claimPlanRun } from '../helpers/plan.mjs';
 
 const NOW = '2026-11-05';
 const S = scratch();
-after(() => S.cleanup());
+after(async () => await S.cleanup());
 
-const plan = (db, opts = {}) => planRun(db, { engine: opts.engine ?? null, now: opts.now ?? NOW, dataDir: opts.dataDir ?? null });
+const plan = async (db, opts = {}) => planRun(db, { engine: opts.engine ?? null, now: opts.now ?? NOW, dataDir: opts.dataDir ?? null });
 const realConfig = dir => loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: NOW });
 
 // Amounts from the synthetic dataset and its main results; none may leak into counts or notes.
@@ -36,14 +36,14 @@ async function demoStore() {
   const dir = S.dir();
   const { secrets } = await instanceSecretsOf(dir, 'demo');
   const platformKey = secrets.platformKey();
-  const { db, platform } = createInstance(dir, { mode: 'demo', init: seedDemo, platformKey });
+  const { db, platform } = await createInstance(dir, { mode: 'demo', init: seedDemo, platformKey });
   platformKey.fill(0);
   S.track(platform);
   return { dir, db: S.track(db) };
 }
 
-function allTables(db) {
-  return dumpTables(db, listTables(db));
+async function allTables(db) {
+  return await dumpTables(db, await listTables(db));
 }
 
 // The in-process router with the server's scheduler (default handlers, not started), running its
@@ -68,7 +68,7 @@ describe('runPlanning', () => {
     for (const k of ['factsDerived', 'factsWritten', 'figures', 'warnings']) assert.equal(typeof c[k], 'number', `counts.${k}`);
     for (const k of ['active', 'new', 'updated', 'retired', 'unchanged']) assert.equal(typeof c.recs[k], 'number', `counts.recs.${k}`);
     for (const k of ['model', 'template', 'kept']) assert.equal(typeof c.prose[k], 'number', `counts.prose.${k}`);
-    assert.equal(c.recs.active, activeRecIds(db).length);
+    assert.equal(c.recs.active, (await activeRecIds(db)).length);
     assert.equal(c.recs.new, c.recs.active, 'first run: every active rec is new');
     assert.equal(c.prose.template, c.recs.active, 'no engine: template prose for every rec');
     for (const [id, v] of Object.entries(c.byTrigger)) assert.ok(['new', 'updated', 'unchanged', 'retired'].includes(v), `${id}: ${v}`);
@@ -83,12 +83,12 @@ describe('runPlanning', () => {
     const db = await S.store();
     const first = await plan(db);
     const second = await plan(db);
-    const job = db.prepare("SELECT * FROM jobs WHERE id = 'plan'").get();
+    const job = await db.prepare("SELECT * FROM jobs WHERE id = 'plan'").get();
     assert.ok(job, 'jobs row plan');
     const def = JOBS.find(j => j.id === 'plan');
     assert.deepEqual([job.name, job.cadence, job.enabled], [def.name, def.cadence, 1], 'the scheduler writes the plan jobs row');
-    assert.equal(db.prepare("SELECT count(*) AS n FROM jobs WHERE id = 'plan'").get().n, 1);
-    const runs = db.prepare("SELECT * FROM job_runs WHERE job_id = 'plan' ORDER BY id").all();
+    assert.equal((await db.prepare("SELECT count(*) AS n FROM jobs WHERE id = 'plan'").get()).n, 1);
+    const runs = await db.prepare("SELECT * FROM job_runs WHERE job_id = 'plan' ORDER BY id").all();
     assert.equal(runs.length, 2);
     assert.deepEqual(runs.map(r => r.id), [first.runId, second.runId]);
     for (const r of runs) {
@@ -110,8 +110,8 @@ describe('runPlanning', () => {
     const broken = join(root, 'packs', 'your-plans');
     mkdirSync(broken, { recursive: true });
     writeFileSync(join(broken, 'manifest.json'), '{ not json');
-    await assert.rejects(plan(db, { dataDir }));
-    const run = db.prepare("SELECT * FROM job_runs WHERE job_id = 'plan' ORDER BY id DESC").get();
+    await assert.rejects(await plan(db, { dataDir }));
+    const run = await db.prepare("SELECT * FROM job_runs WHERE job_id = 'plan' ORDER BY id DESC").get();
     assert.ok(run, 'the run was recorded');
     assert.equal(run.status, 'error');
     assert.ok(run.finished_at);
@@ -124,11 +124,11 @@ describe('runPlanning', () => {
 
   test('AC1: runPlanning refuses a demo store with PlannerError demo_store and changes nothing', async () => {
     const { db } = await demoStore();
-    const before = allTables(db);
+    const before = await allTables(db);
     // The planner core directly: the refusal comes before any write, and claiming a job_runs row
     // would itself change the store, so the run id here is a placeholder.
     await assert.rejects(runPlanning(db, null, { now: NOW, packDirs: [PACKS_DIR], runId: 1 }), err => err instanceof PlannerError && err.code === 'demo_store');
-    assert.deepEqual(allTables(db), before, 'demo store unchanged');
+    assert.deepEqual(await allTables(db), before, 'demo store unchanged');
     // liveness: a real store is accepted
     assert.equal((await plan(await S.store())).status, 'ok');
   });
@@ -139,18 +139,18 @@ describe('runPlanning', () => {
     await plan(one, { engine: slow });
     const two = await S.store();
     // The planner core directly with two claimed runs: its per-db chain serializes them.
-    const ids = [claimPlanRun(two), claimPlanRun(two)];
+    const ids = [await claimPlanRun(two), await claimPlanRun(two)];
     const core = (runId) => runPlanning(two, slow, { now: NOW, packDirs: [PACKS_DIR], runId });
     const results = await Promise.all([core(ids[0]), core(ids[1])]);
     assert.deepEqual(results.map(r => r.status), ['ok', 'ok']);
     assert.notEqual(results[0].runId, results[1].runId);
     assert.deepEqual(results.map(r => r.runId), ids, 'each run carries the run id it was given');
-    const firstRuns = [...new Set(two.prepare('SELECT first_run FROM planner_recs').all().map(r => r.first_run))];
+    const firstRuns = [...new Set((await two.prepare('SELECT first_run FROM planner_recs').all()).map(r => r.first_run))];
     assert.deepEqual(firstRuns, [ids[0]], 'the first call ran first and created every planner rec');
     const tables = ['facts', 'figures', 'sources', 'recs', 'rec_events', 'planner_recs', 'content', 'deadlines', 'decisions', 'events', 'packs_state', 'conversations', 'messages'];
     // Timestamps, autoincrement ids and run ids differ between stores by construction.
     const omit = ['updated_at', 'ts', 'created_at', 'last_ingest_at', 'id', 'first_run', 'last_run'];
-    assert.deepEqual(dumpTables(two, tables, { omit }), dumpTables(one, tables, { omit }));
+    assert.deepEqual(await dumpTables(two, tables, { omit }), await dumpTables(one, tables, { omit }));
   });
 
   test('AC1: a second run over the same data writes nothing that changes (idempotent)', async () => {
@@ -158,11 +158,11 @@ describe('runPlanning', () => {
     await plan(db);
     const keepStamps = ['recs', 'figures'];
     const others = ['facts', 'sources', 'rec_events', 'planner_recs', 'content', 'deadlines', 'decisions', 'events', 'packs_state'];
-    const snap = () => ({ ...dumpTables(db, keepStamps), ...dumpTables(db, others, { omit: ['updated_at'] }) });
-    const before = snap();
+    const snap = async () => ({ ...await dumpTables(db, keepStamps), ...await dumpTables(db, others, { omit: ['updated_at'] }) });
+    const before = await snap();
     await new Promise(r => setTimeout(r, 15)); // a rewrite would get a new updated_at
     const second = await plan(db);
-    assert.deepEqual(snap(), before);
+    assert.deepEqual(await snap(), before);
     const c = second.counts;
     assert.deepEqual([c.recs.new, c.recs.updated, c.recs.retired], [0, 0, 0]);
     assert.equal(c.recs.unchanged, c.recs.active);
@@ -193,7 +193,7 @@ describe('POST /api/jobs/plan/run', () => {
       for (const id of ['fed-q4-estimate', 'scorp-salary', 'va529']) assert.ok(ids.includes(id), `scenario has ${id}`);
       assert.equal(r.json.scenario.live.mode, 'real');
       assert.ok(r.json.scenario.fig['tax.fed.paid'], 'scenario carries planner figures');
-      assert.equal(db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan' AND status = 'ok'").get().n, 1);
+      assert.equal((await db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan' AND status = 'ok'").get()).n, 1);
     } finally {
       await app.close();
     }
@@ -201,7 +201,7 @@ describe('POST /api/jobs/plan/run', () => {
 
   test('AC1: on a demo store the endpoint answers 409 and changes nothing', async () => {
     const { dir, db } = await demoStore();
-    const before = allTables(db);
+    const before = await allTables(db);
     const app = await serve(db, loadConfig({ FATHOM_DATA: dir, FATHOM_ENGINE: 'off' }));
     try {
       const r = await app.postJson('/api/jobs/plan/run', {});
@@ -210,36 +210,36 @@ describe('POST /api/jobs/plan/run', () => {
     } finally {
       await app.close();
     }
-    assert.deepEqual(allTables(db), before);
+    assert.deepEqual(await allTables(db), before);
   });
 });
 
 describe('npm run plan (src/jobs/plan-cli.mjs)', () => {
   // Since MT-03 the CLI names its household (--household <id>) and reads the instance secrets.
-  const cli = (env, householdId = servedStore(env.FATHOM_DATA)?.householdId) => runCommand(process.execPath, ['src/jobs/plan-cli.mjs', '--household', householdId],
+  const cli = async (env, householdId) => runCommand(process.execPath, ['src/jobs/plan-cli.mjs', '--household', householdId ?? (await servedStore(env.FATHOM_DATA))?.householdId],
     { env: { FATHOM_ENGINE: 'off', FATHOM_CLOCK: NOW, ...secretEnv(secretsFor(env.FATHOM_DATA)), ...env } });
 
   test('AC1: the CLI plans a real store, exits 0 and prints counts without amounts', async () => {
     const dir = S.dir();
-    closeRealStore(await buildRealStore(dir));
+    await closeRealStore(await buildRealStore(dir));
     const out = await cli({ FATHOM_DATA: dir });
     assert.equal(out.code, 0, out.stderr);
     const counts = out.stdout.split('\n').map(l => parseJson(l.trim(), null)).find(x => x && typeof x === 'object' && x.recs);
     assert.ok(counts, `stdout has the counts JSON: ${out.stdout.slice(0, 300)}`);
     assert.ok(counts.recs.active > 0);
     assert.deepEqual(leaks(out.stdout + out.stderr), [], 'no amounts from the dataset');
-    const db = S.track(openDb(storeFileOf(dir)));
-    assert.equal(db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan' AND status = 'ok'").get().n, 1);
+    const db = S.track(await openDb(await storeFileOf(dir)));
+    assert.equal((await db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan' AND status = 'ok'").get()).n, 1);
   });
 
   test('AC1: the CLI exits 2 on a demo store and leaves it unchanged', async () => {
     const { dir, db } = await demoStore();
-    const before = allTables(db);
-    db.close();
+    const before = await allTables(db);
+    await db.close();
     const out = await cli({ FATHOM_DATA: dir });
     assert.equal(out.code, 2);
-    const again = S.track(openDb(storeFileOf(dir)));
-    assert.deepEqual(allTables(again), before);
+    const again = S.track(await openDb(await storeFileOf(dir)));
+    assert.deepEqual(await allTables(again), before);
   });
 
   // MT-03: an empty data directory has no household to open, the fixed code household_unavailable
@@ -258,17 +258,17 @@ describe('npm run plan (src/jobs/plan-cli.mjs)', () => {
     // Another scheduler (as the running server would) takes the lease on its tick.
     const holder = createScheduler({ db, config: { clock: NOW, dataDir: dir }, handlers: {}, tickMs: 3600000, holder: 'server-holder', log: { log() {} } });
     await holder.tick();
-    assert.equal(db.prepare('SELECT holder FROM job_lock').get().holder, 'server-holder');
+    assert.equal((await db.prepare('SELECT holder FROM job_lock').get()).holder, 'server-holder');
     const out = await cli({ FATHOM_DATA: dir });
     assert.equal(out.code, 3, out.stderr);
     assert.match(out.stderr, /Run now/);
     assert.match(out.stderr, /POST \/api\/jobs\/plan\/run/);
-    assert.equal(db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan'").get().n, 0, 'nothing ran');
+    assert.equal((await db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan'").get()).n, 0, 'nothing ran');
     // liveness: once the lease is released the CLI plans
     await holder.stop();
     const again = await cli({ FATHOM_DATA: dir });
     assert.equal(again.code, 0, again.stderr);
-    assert.equal(db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan' AND status = 'ok'").get().n, 1);
+    assert.equal((await db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan' AND status = 'ok'").get()).n, 1);
   });
 });
 
@@ -277,7 +277,7 @@ test('INF1: HTTP planning infers personal ledgers and P&L reads preserve spendin
   const dir = S.dir();
   const db = S.track(await buildRealStore(dir));
   for (const category of ['Medical', 'Groceries', 'Dining & Drinks']) {
-    db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES ('Asters', '2026-10', ?, -120, ?)")
+    await db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES ('Asters', '2026-10', ?, -120, ?)")
       .run(category, JSON.stringify({ sheet: "Aster's Expenses", cells: ['D2'] }));
   }
   const app = await serve(db, realConfig(dir));
@@ -289,7 +289,7 @@ test('INF1: HTTP planning infers personal ledgers and P&L reads preserve spendin
     const pending = await app.request({ path: '/api/confirm' });
     assert.equal(pending.status, 200);
     assert.ok(!pending.json.items.some(i => i.context.key === 'pnl.ledgers'));
-    const inferred = JSON.parse(db.prepare("SELECT value FROM facts WHERE key='business.entities'").get().value).find(e => e.name === 'Asters');
+    const inferred = JSON.parse((await db.prepare("SELECT value FROM facts WHERE key='business.entities'").get()).value).find(e => e.name === 'Asters');
     assert.equal(inferred.type, 'personal');
     assert.equal(inferred.inferred, true);
 
@@ -304,7 +304,7 @@ test('INF1: HTTP planning infers personal ledgers and P&L reads preserve spendin
     assert.ok(rec, 'the inferred classification exposes Undo through a recommendation');
     const undone = await app.postJson(`/api/recs/${rec.id}/answers`, { answers: [{ key: 'business.entityInference', value: { Asters: { undone: true } } }] });
     assert.equal(undone.status, 200, undone.text);
-    assert.ok(!JSON.parse(db.prepare("SELECT value FROM facts WHERE key='business.entities'").get().value).some(e => e.name === 'Asters'));
+    assert.ok(!JSON.parse((await db.prepare("SELECT value FROM facts WHERE key='business.entities'").get()).value).some(e => e.name === 'Asters'));
     assert.ok(undone.json.scenario.recs.find(r => r.id === 'missing-data').tasks.some(t => t.code?.startsWith('entity_unclassified:') && /Aster/.test(t.t)));
   } finally { await app.close(); }
 });

@@ -54,7 +54,7 @@ import {
   chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statfsSync,
 } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { openScope } from '../storage/index.mjs';
 import { DB_FILE, listTables, migrate, openDb } from '../store/db.mjs';
 import {
   LOCK_FILE as PLATFORM_LOCK_FILE, PLATFORM_FILE, codeError, householdRootRel, newOperationId, openPlatform, storeIdentity,
@@ -73,6 +73,7 @@ import {
   PURPOSES, householdRoot, openConnectionSecret, provisionDataKey, readObject, readRegularFile, unwrapDataKey,
 } from './household-vault.mjs';
 import { fsyncDir, fsyncFile } from './fsutil.mjs';
+import { mapSeries } from '../shared/series.mjs';
 
 export const PHASES = Object.freeze(['preflight', 'snapshot', 'source-schema', 'stage', 'verify', 'root-published', 'before-manifest',
   'manifest', 'retire', 'complete']);
@@ -107,13 +108,13 @@ const lstatOrNull = path => lstatSync(path, { throwIfNoEntry: false }) ?? null;
 const stagingName = operationId => `staging-${operationId}`;
 const legacyName = operationId => `legacy-${operationId}`;
 const snapshotRel = operationId => `${SNAPSHOT_DIR}/tenancy-${operationId}${SNAPSHOT_EXT}`;
-const columnsOf = (db, table) => db.prepare(`PRAGMA table_info(${quoteIdent(table)})`).all().map(c => c.name);
+const columnsOf = async (db, table) => (await db.columns(table)).map(c => c.name);
 
 // --------------------------------------------------------------------------- digests
 
-function hasRowid(db, table) {
+async function hasRowid(db, table) {
   try {
-    db.prepare(`SELECT rowid FROM ${quoteIdent(table)} LIMIT 0`).all();
+    await db.prepare(`SELECT rowid FROM ${quoteIdent(table)} LIMIT 0`).all();
     return true;
   } catch {
     return false;
@@ -137,10 +138,10 @@ const TABLE_RULES = Object.freeze({
 });
 
 // { count, sha256 } of a table, every row carrying its rowid (as __rowid) when the table has one.
-function tableDigest(db, table) {
+async function tableDigest(db, table) {
   const { omit = [], where = null } = TABLE_RULES[table] ?? {};
-  const rowid = hasRowid(db, table);
-  const rows = db.prepare(`SELECT ${rowid ? 'rowid AS __rowid, ' : ''}* FROM ${quoteIdent(table)}${where ? ` WHERE ${where}` : ''}`).all()
+  const rowid = await hasRowid(db, table);
+  const rows = (await db.prepare(`SELECT ${rowid ? 'rowid AS __rowid, ' : ''}* FROM ${quoteIdent(table)}${where ? ` WHERE ${where}` : ''}`).all())
     .map(r => {
       const out = { ...r };
       for (const c of omit) delete out[c];
@@ -149,8 +150,8 @@ function tableDigest(db, table) {
   return rowsDigest(rows);
 }
 
-function storeDigests(db, tables) {
-  return Object.fromEntries(tables.map(t => [t, tableDigest(db, t)]));
+async function storeDigests(db, tables) {
+  return Object.fromEntries(await mapSeries(tables, async t => [t, await tableDigest(db, t)]));
 }
 
 const sameDigest = (a, b) => !!a && !!b && a.count === b.count && a.sha256 === b.sha256;
@@ -255,52 +256,52 @@ function sourceSecret(dataDir) {
 
 // --------------------------------------------------------------------------- platform reads
 
-function singleHousehold(platform) {
-  const rows = platform.prepare('SELECT * FROM households').all();
+async function singleHousehold(platform) {
+  const rows = await platform.prepare('SELECT * FROM households').all();
   if (rows.length !== 1) throw refuse('ambiguous_household');
   return rows[0];
 }
 
 // The completed tenancy-migration operation of the household, when the platform and root prove it.
-function completedOperation(platform, dataDir, householdId) {
+async function completedOperation(platform, dataDir, householdId) {
   if (!columnsOf(platform, 'households').includes('storage_root')) return null;
-  const hh = platform.prepare('SELECT storage_root FROM households WHERE id = ?').get(householdId);
-  const ops = platform.prepare("SELECT id FROM platform_operations WHERE kind = ? AND status = 'done'").all(OPERATION_KIND);
+  const hh = await platform.prepare('SELECT storage_root FROM households WHERE id = ?').get(householdId);
+  const ops = await platform.prepare("SELECT id FROM platform_operations WHERE kind = ? AND status = 'done'").all(OPERATION_KIND);
   if (!hh || hh.storage_root !== householdRootRel(householdId) || ops.length !== 1) return null;
   const file = join(dataDir, householdRootRel(householdId), DB_FILE);
   if (!existsSync(file)) return null;
-  const db = new DatabaseSync(file);
+  const db = await openScope({ path: file, journal: null, busyTimeout: 0 });
   try {
-    return storeIdentity(db)?.householdId === householdId ? ops[0].id : null;
+    return (await storeIdentity(db))?.householdId === householdId ? ops[0].id : null;
   } finally {
-    db.close();
+    await db.close();
   }
 }
 
 // The manifest transaction committed for this operation.
-function manifestCommitted(platform, journal) {
+async function manifestCommitted(platform, journal) {
   if (!columnsOf(platform, 'households').includes('storage_root')) return false;
-  const op = platform.prepare('SELECT 1 AS x FROM platform_operations WHERE id = ? AND kind = ?').get(journal.operationId, OPERATION_KIND);
-  const hh = platform.prepare('SELECT storage_root FROM households WHERE id = ?').get(journal.householdId);
+  const op = await platform.prepare('SELECT 1 AS x FROM platform_operations WHERE id = ? AND kind = ?').get(journal.operationId, OPERATION_KIND);
+  const hh = await platform.prepare('SELECT storage_root FROM households WHERE id = ?').get(journal.householdId);
   return !!op && hh?.storage_root === householdRootRel(journal.householdId);
 }
 
 // --------------------------------------------------------------------------- preflight
 
 // Every check a fresh source must pass. Read-only (a rerun removes its own staging dir first).
-function preflight({ dataDir, platform, source, legacyKey, mcpSecret, diskFree }) {
-  if (platform.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'households'").get() == null) throw refuse('platform_invalid');
-  const hh = singleHousehold(platform);
+async function preflight({ dataDir, platform, source, legacyKey, mcpSecret, diskFree }) {
+  if (await platform.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'households'").get() == null) throw refuse('platform_invalid');
+  const hh = await singleHousehold(platform);
   if (hh.mode !== 'real') throw refuse('not_real_store');
   if (hh.status !== 'active' || hh.serves_store !== 1) throw refuse('household_not_active');
   if (hh.storage_root != null) throw refuse('target_exists');
   for (const table of ['household_memberships', 'household_invitations', 'auth_sessions']) {
-    const n = platform.prepare(`SELECT count(*) AS n FROM ${table} WHERE household_id IS NOT NULL AND household_id != ?`).get(hh.id).n;
+    const n = (await platform.prepare(`SELECT count(*) AS n FROM ${table} WHERE household_id IS NOT NULL AND household_id != ?`).get(hh.id)).n;
     if (n > 0) throw refuse('ambiguous_household');
   }
 
-  if (storeMode(source) !== 'real') throw refuse('not_real_store');
-  const identity = storeIdentity(source);
+  if (await storeMode(source) !== 'real') throw refuse('not_real_store');
+  const identity = await storeIdentity(source);
   if (!identity || identity.householdId !== hh.id) throw refuse('household_store_mismatch');
 
   const households = join(dataDir, HOUSEHOLDS);
@@ -308,9 +309,9 @@ function preflight({ dataDir, platform, source, legacyKey, mcpSecret, diskFree }
   if (hst && (!hst.isDirectory() || readdirSync(households).length > 0)) throw refuse('target_exists');
   if (readdirSync(dataDir).some(n => n.startsWith('legacy-'))) throw refuse('target_exists');
 
-  checkLegacyKey(dataDir, source, legacyKey);
+  await checkLegacyKey(dataDir, source, legacyKey);
 
-  checkMcpSecret(dataDir, source, mcpSecret);
+  await checkMcpSecret(dataDir, source, mcpSecret);
 
   const store = treeSize(join(dataDir, DB_FILE)) + treeSize(join(dataDir, `${DB_FILE}-wal`));
   const trees = ['files', ...TREES].reduce((n, t) => n + treeSize(join(dataDir, t)), 0);
@@ -320,8 +321,8 @@ function preflight({ dataDir, platform, source, legacyKey, mcpSecret, diskFree }
 
 // The supplied MCP secret must equal the source's api-key-secret, so moved MCP keys keep verifying.
 // Checked in preflight and again before every manifest attempt (a rerun may supply another file).
-function checkMcpSecret(dataDir, source, mcpSecret) {
-  const keys = hasTable(source, MOVED_TABLE) ? source.prepare(`SELECT count(*) AS n FROM ${MOVED_TABLE}`).get().n : 0;
+async function checkMcpSecret(dataDir, source, mcpSecret) {
+  const keys = await hasTable(source, MOVED_TABLE) ? (await source.prepare(`SELECT count(*) AS n FROM ${MOVED_TABLE}`).get()).n : 0;
   const secret = sourceSecret(dataDir);
   if (secret ? !timingSafeEqual(secret, mcpSecret) : keys > 0) throw refuse('mcp_secret_mismatch');
 }
@@ -339,13 +340,13 @@ function sameSourceTrees(dataDir, recorded) {
 }
 
 // The legacy key must open the first vault object, if there is one.
-function checkLegacyKey(dataDir, db, legacyKey) {
-  const file = db.prepare('SELECT id FROM files WHERE stored_path IS NOT NULL ORDER BY id LIMIT 1').get()
-    ?? db.prepare('SELECT id FROM advisor_packets ORDER BY id LIMIT 1').get();
+async function checkLegacyKey(dataDir, db, legacyKey) {
+  const file = await db.prepare('SELECT id FROM files WHERE stored_path IS NOT NULL ORDER BY id LIMIT 1').get()
+    ?? await db.prepare('SELECT id FROM advisor_packets ORDER BY id LIMIT 1').get();
   try {
     if (file) legacyDecrypt(legacyKey, readRegularFile(join(dataDir, 'files', `${file.id}.bin`)), file.id);
     else {
-      const conn = db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get();
+      const conn = await db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get();
       if (conn) legacyDecrypt(legacyKey, Buffer.from(String(conn.access_blob), 'base64'), LEGACY_SIMPLEFIN_AAD);
     }
   } catch {
@@ -384,16 +385,16 @@ async function snapshot(ctx) {
 // --------------------------------------------------------------------------- stage and verify
 
 async function dataKey(platform, householdId, platformKey) {
-  const row = platform.prepare("SELECT 1 AS x FROM household_data_keys WHERE household_id = ? AND status = 'active'").get(householdId);
+  const row = await platform.prepare("SELECT 1 AS x FROM household_data_keys WHERE household_id = ? AND status = 'active'").get(householdId);
   return row ? unwrapDataKey(platform, { householdId, platformKey }) : provisionDataKey(platform, { householdId, platformKey });
 }
 
-const keyRows = db => db.prepare(`SELECT * FROM ${MOVED_TABLE} ORDER BY id`).all().map(r => ({ ...r }));
+const keyRows = async db => (await db.prepare(`SELECT * FROM ${MOVED_TABLE} ORDER BY id`).all()).map(r => ({ ...r }));
 const keyDigest = rows => rowsDigest(rows);
 
 // The plaintext sha256 of the source's SimpleFIN secret, or null without a connection.
-function legacySecretHash(db, legacyKey) {
-  const conn = db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get();
+async function legacySecretHash(db, legacyKey) {
+  const conn = await db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get();
   if (!conn) return null;
   try {
     return sha256(legacyDecrypt(legacyKey, Buffer.from(String(conn.access_blob), 'base64'), LEGACY_SIMPLEFIN_AAD));
@@ -418,7 +419,7 @@ async function stage(ctx) {
 
   const handle = await dataKey(platform, journal.householdId, platformKey);
   const root = await householdRoot({ dataRoot: dataDir, householdId: journal.householdId, relativeRoot: stagingRel });
-  const staged = openDb(storeFile);
+  const staged = await openDb(storeFile);
   try {
     const bundle = await convertHouseholdVault({ db: staged, sourceDir: dataDir, legacyKey, root, handle, operationId: op });
     const bundleDir = join(staging, bundle.path);
@@ -429,20 +430,20 @@ async function stage(ctx) {
     fsyncFile(filesDir);
     if (bundle.simplefin) {
       const text = readRegularFile(join(bundleDir, SIMPLEFIN_FILE)).toString('latin1');
-      staged.prepare('UPDATE simplefin_connection SET access_blob = ? WHERE id = 1').run(text);
+      await staged.prepare('UPDATE simplefin_connection SET access_blob = ? WHERE id = 1').run(text);
     }
     rmSync(bundleDir, { recursive: true, force: true });
     fsyncFile(join(staging, 'work'));
 
-    const keys = hasTable(staged, MOVED_TABLE) ? keyRows(staged) : [];
+    const keys = await hasTable(staged, MOVED_TABLE) ? await keyRows(staged) : [];
     journal.apiKeys = keyDigest(keys);
     writeJournal(ctx.journalFile, journal);
-    if (hasTable(staged, MOVED_TABLE)) staged.exec(`DELETE FROM ${MOVED_TABLE}`);
-    migrate(staged);
-    if (hasTable(staged, MOVED_TABLE)) throw refuse('staging_invalid');
-    staged.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    if (await hasTable(staged, MOVED_TABLE)) await staged.prepare(`DELETE FROM ${MOVED_TABLE}`).run();
+    await migrate(staged);
+    if (await hasTable(staged, MOVED_TABLE)) throw refuse('staging_invalid');
+    await staged.checkpoint();
   } finally {
-    staged.close();
+    await staged.close();
   }
   fsyncTree(staging);
   return staging;
@@ -455,23 +456,23 @@ async function verifyRoot(ctx, relativeRoot, expected) {
   const rootPath = join(dataDir, relativeRoot);
   // A plain open would create a missing file.
   if (!lstatOrNull(join(rootPath, DB_FILE))?.isFile()) throw refuse('household_root_missing');
-  const db = new DatabaseSync(join(rootPath, DB_FILE));
+  const db = await openScope({ path: join(rootPath, DB_FILE), journal: null, busyTimeout: 0 });
   let found;
   try {
-    const integrity = db.prepare('PRAGMA integrity_check').all();
-    if (integrity.length !== 1 || integrity[0].integrity_check !== 'ok') throw refuse('staging_invalid');
-    if (db.prepare('PRAGMA foreign_key_check').all().length) throw refuse('staging_invalid');
-    if (hasTable(db, MOVED_TABLE)) throw refuse('staging_invalid');
-    if (storeIdentity(db)?.householdId !== journal.householdId) throw refuse('household_store_mismatch');
-    const present = new Set(listTables(db));
+    const integrity = (await db.integrityCheck());
+    if (integrity.length !== 1 || integrity[0] !== 'ok') throw refuse('staging_invalid');
+    if ((await db.foreignKeyCheck()).length) throw refuse('staging_invalid');
+    if (await hasTable(db, MOVED_TABLE)) throw refuse('staging_invalid');
+    if ((await storeIdentity(db))?.householdId !== journal.householdId) throw refuse('household_store_mismatch');
+    const present = new Set(await listTables(db));
     if (!Object.keys(expected.tables).every(t => present.has(t))) throw refuse('staging_invalid');
-    const tables = storeDigests(db, Object.keys(expected.tables));
+    const tables = await storeDigests(db, Object.keys(expected.tables));
 
     const handle = await unwrapDataKey(platform, { householdId: journal.householdId, platformKey });
     const root = await householdRoot({ dataRoot: dataDir, householdId: journal.householdId, relativeRoot });
     const objects = [
-      ...db.prepare('SELECT id, stored_path, sha256 FROM files WHERE stored_path IS NOT NULL ORDER BY id').all().map(r => ({ ...r, purpose: PURPOSES.upload })),
-      ...db.prepare('SELECT id, stored_path, sha256 FROM advisor_packets ORDER BY id').all().map(r => ({ ...r, purpose: PURPOSES.advisorPacket })),
+      ...(await db.prepare('SELECT id, stored_path, sha256 FROM files WHERE stored_path IS NOT NULL ORDER BY id').all()).map(r => ({ ...r, purpose: PURPOSES.upload })),
+      ...(await db.prepare('SELECT id, stored_path, sha256 FROM advisor_packets ORDER BY id').all()).map(r => ({ ...r, purpose: PURPOSES.advisorPacket })),
     ];
     for (const o of objects) {
       let plain;
@@ -484,7 +485,7 @@ async function verifyRoot(ctx, relativeRoot, expected) {
     }
     const blobs = readdirSync(join(rootPath, 'files')).filter(n => n.endsWith('.bin')).sort();
     if (blobs.join('/') !== objects.map(o => `${o.id}.bin`).sort().join('/')) throw refuse('staging_invalid');
-    const conn = db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get();
+    const conn = await db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get();
     let simplefin = null;
     if (conn) {
       try { simplefin = sha256(openConnectionSecret(handle, String(conn.access_blob))); } catch { throw refuse('staging_invalid'); }
@@ -496,7 +497,7 @@ async function verifyRoot(ctx, relativeRoot, expected) {
       trees: Object.fromEntries(TREES.map(t => [t, hashesDigest(treeHashes(join(rootPath, t)))])),
     };
   } finally {
-    db.close();
+    await db.close();
   }
   const same = sameDigestMap(found.tables, expected.tables) && sameDigest(found.objects, expected.objects ?? found.objects)
     && found.simplefin === expected.simplefin && TREES.every(t => sameDigest(found.trees[t], expected.trees[t]));
@@ -505,12 +506,12 @@ async function verifyRoot(ctx, relativeRoot, expected) {
 }
 
 // The source's figures that the staged root must reproduce.
-function sourceFigures(ctx) {
+async function sourceFigures(ctx) {
   const { source, dataDir, legacyKey } = ctx;
-  const tables = listTables(source).filter(t => t !== MOVED_TABLE);
+  const tables = (await listTables(source)).filter(t => t !== MOVED_TABLE);
   return {
-    tables: storeDigests(source, tables),
-    simplefin: legacySecretHash(source, legacyKey),
+    tables: await storeDigests(source, tables),
+    simplefin: await legacySecretHash(source, legacyKey),
     trees: Object.fromEntries(TREES.map(t => [t, hashesDigest(treeHashes(join(dataDir, t)))])),
   };
 }
@@ -519,14 +520,14 @@ function sourceFigures(ctx) {
 
 // The platform api_keys rows for the source rows: user_id kept when that account exists, an
 // ownerless key bound to the only active admin, else kept unbound and revoked.
-function platformKeys(platform, journal, rows) {
-  const admins = platform.prepare(`SELECT m.user_id FROM household_memberships m JOIN users u ON u.id = m.user_id
-    WHERE m.household_id = ? AND m.role = 'admin' AND m.status = 'active'`).all(journal.householdId).map(r => r.user_id);
+async function platformKeys(platform, journal, rows) {
+  const admins = (await platform.prepare(`SELECT m.user_id FROM household_memberships m JOIN users u ON u.id = m.user_id
+    WHERE m.household_id = ? AND m.role = 'admin' AND m.status = 'active'`).all(journal.householdId)).map(r => r.user_id);
   const userExists = platform.prepare('SELECT 1 AS x FROM users WHERE id = ?');
   const revokedAt = new Date(journal.startedAt).toISOString();
-  return rows.map(r => {
-    const owner = r.user_id != null && userExists.get(r.user_id) ? r.user_id : (admins.length === 1 ? admins[0] : null);
-    const member = owner === null ? null : platform.prepare('SELECT version, status FROM household_memberships WHERE household_id = ? AND user_id = ?').get(journal.householdId, owner);
+  return await mapSeries(rows, async r => {
+    const owner = r.user_id != null && await userExists.get(r.user_id) ? r.user_id : (admins.length === 1 ? admins[0] : null);
+    const member = owner === null ? null : await platform.prepare('SELECT version, status FROM household_memberships WHERE household_id = ? AND user_id = ?').get(journal.householdId, owner);
     const unbound = (owner === null || member?.status !== 'active') && r.revoked_at == null;
     return {
       id: r.id, household_id: journal.householdId, user_id: owner, name: r.name, key_hash: r.key_hash, scopes: r.scopes,
@@ -543,60 +544,55 @@ function platformKeys(platform, journal, rows) {
 // key, sign counter, transports, name, times). Publication checks the platform against it before
 // the manifest transaction and again inside it before COMMIT; any difference refuses
 // passkeys_changed with nothing published.
-function passkeyFingerprint(platform) {
-  const rows = platform.prepare('SELECT * FROM passkeys').all();
+async function passkeyFingerprint(platform) {
+  const rows = await platform.prepare('SELECT * FROM passkeys').all();
   return { count: rows.length, ids: sha256(rows.map(r => r.id).sort().join('\n')), rows: rowsDigest(rows).sha256 };
 }
 
-function checkPasskeys(platform, journal) {
+async function checkPasskeys(platform, journal) {
   const was = journal.passkeys;
   if (!was || !Number.isInteger(was.count) || typeof was.ids !== 'string' || typeof was.rows !== 'string') throw refuse('journal_invalid');
-  const now = passkeyFingerprint(platform);
+  const now = await passkeyFingerprint(platform);
   if (now.count !== was.count || now.ids !== was.ids || now.rows !== was.rows) throw refuse('passkeys_changed');
 }
 
 const KEY_COLUMNS = ['id', 'household_id', 'user_id', 'name', 'key_hash', 'scopes', 'created_at', 'last_used_at', 'revoked_at', 'revoked_code', 'household_generation', 'membership_version'];
 
-function publishManifest(ctx) {
+async function publishManifest(ctx) {
   const { platform, source, journal } = ctx;
   // The published root was verified against the journal; a source that changed since the journal
   // recorded it (a write between a crash and this rerun) refuses rather than being retired unseen.
-  if (!journal.sourceDigest || logicalDigest(source) !== journal.sourceDigest) throw refuse('source_changed');
+  if (!journal.sourceDigest || await logicalDigest(source) !== journal.sourceDigest) throw refuse('source_changed');
   if (!sameSourceTrees(ctx.dataDir, journal.sourceTrees)) throw refuse('source_changed');
-  checkMcpSecret(ctx.dataDir, source, ctx.mcpSecret);
-  const rows = hasTable(source, MOVED_TABLE) ? keyRows(source) : [];
+  await checkMcpSecret(ctx.dataDir, source, ctx.mcpSecret);
+  const rows = await hasTable(source, MOVED_TABLE) ? await keyRows(source) : [];
   if (!sameDigest(keyDigest(rows), journal.apiKeys)) throw refuse('source_changed');
-  checkPasskeys(platform, journal);
-  const keys = platformKeys(platform, journal, rows);
+  await checkPasskeys(platform, journal);
+  const keys = await platformKeys(platform, journal, rows);
   const now = Date.now();
   const hh = journal.householdId;
-  platform.exec('BEGIN IMMEDIATE');
-  try {
+  await platform.transaction(async platform => {
     const insert = platform.prepare(`INSERT INTO api_keys (${KEY_COLUMNS.join(', ')}) VALUES (${KEY_COLUMNS.map(() => '?').join(', ')})`);
-    for (const k of keys) insert.run(...KEY_COLUMNS.map(c => k[c]));
-    initOutbound(platform, hh, { enabled: false, now });
-    platform.exec('DELETE FROM auth_challenges');
-    platform.exec('DELETE FROM auth_sessions');
-    platform.exec('DELETE FROM auth_tokens');
-    platform.prepare('UPDATE household_invitations SET revoked_at = ? WHERE consumed_at IS NULL AND revoked_at IS NULL').run(now);
-    const set = platform.prepare('UPDATE households SET storage_root = ?, generation = 1, updated_at = ? WHERE id = ? AND storage_root IS NULL')
+    for (const k of keys) await insert.run(...KEY_COLUMNS.map(c => k[c]));
+    await initOutbound(platform, hh, { enabled: false, now });
+    await platform.prepare('DELETE FROM auth_challenges').run();
+    await platform.prepare('DELETE FROM auth_sessions').run();
+    await platform.prepare('DELETE FROM auth_tokens').run();
+    await platform.prepare('UPDATE household_invitations SET revoked_at = ? WHERE consumed_at IS NULL AND revoked_at IS NULL').run(now);
+    const set = await platform.prepare('UPDATE households SET storage_root = ?, generation = 1, updated_at = ? WHERE id = ? AND storage_root IS NULL')
       .run(householdRootRel(hh), now, hh);
     if (Number(set.changes) !== 1) throw refuse('target_exists');
     const detail = { apiKeys: keys.length, revoked: keys.filter(k => k.revoked_code).length, tables: Object.keys(journal.figures.tables).length };
-    platform.prepare(`INSERT INTO platform_operations (id, kind, phase, status, started_at, updated_at, detail)
+    await platform.prepare(`INSERT INTO platform_operations (id, kind, phase, status, started_at, updated_at, detail)
       VALUES (?, ?, 'manifest', 'running', ?, ?, ?)`).run(journal.operationId, OPERATION_KIND, journal.startedAt, now, JSON.stringify(detail));
 
-    const written = platform.prepare(`SELECT ${KEY_COLUMNS.join(', ')} FROM api_keys WHERE household_id = ? ORDER BY id`).all(hh).map(r => ({ ...r }));
-    const outbound = platform.prepare('SELECT jobs + email + simplefin + engine AS n FROM household_outbound WHERE household_id = ?').get(hh);
-    const live = platform.prepare(`SELECT (SELECT count(*) FROM auth_sessions) + (SELECT count(*) FROM auth_challenges)
+    const written = (await platform.prepare(`SELECT ${KEY_COLUMNS.join(', ')} FROM api_keys WHERE household_id = ? ORDER BY id`).all(hh)).map(r => ({ ...r }));
+    const outbound = await platform.prepare('SELECT jobs + email + simplefin + engine AS n FROM household_outbound WHERE household_id = ?').get(hh);
+    const live = await platform.prepare(`SELECT (SELECT count(*) FROM auth_sessions) + (SELECT count(*) FROM auth_challenges)
       + (SELECT count(*) FROM auth_tokens) + (SELECT count(*) FROM household_invitations WHERE consumed_at IS NULL AND revoked_at IS NULL) AS n`).get();
     if (!sameDigest(rowsDigest(written), rowsDigest(keys)) || outbound?.n !== 0 || live.n !== 0) throw refuse('manifest_invalid');
-    checkPasskeys(platform, journal);
-    platform.exec('COMMIT');
-  } catch (e) {
-    platform.exec('ROLLBACK');
-    throw e;
-  }
+    await checkPasskeys(platform, journal);
+  });
 }
 
 // --------------------------------------------------------------------------- retire
@@ -625,8 +621,8 @@ async function nextPhase(ctx, name) {
   await ctx.onPhase(name);
 }
 
-function finish(ctx) {
-  markOperationDone(ctx.platformFile, ctx.journal.operationId);
+async function finish(ctx) {
+  await markOperationDone(ctx.platformFile, ctx.journal.operationId);
   return { status: 'complete', operationId: ctx.journal.operationId, householdId: ctx.journal.householdId };
 }
 
@@ -651,32 +647,30 @@ export async function migrateTenancy({
   const mcpSecret = loadMcpSecretFile(mcpSecretFile);
 
   const ctx = { dataDir: root, platformFile, journalFile, lockFile, journal, backupKey, platformKey, legacyKey, mcpSecret, onPhase, source: null, platform: null };
-  ctx.platform = new DatabaseSync(platformFile);
+  ctx.platform = await openScope({ path: platformFile, journal: null });
   try {
-    ctx.platform.exec('PRAGMA busy_timeout = 5000');
-    ctx.platform.exec('PRAGMA foreign_keys = ON');
     if (journal) return await resume(ctx, { mcpSecret, diskFree });
 
     // A journal-less run: a completed migration is reconciled; any other trace of one refuses.
-    const hh = singleHousehold(ctx.platform);
-    const done = completedOperation(ctx.platform, root, hh.id);
+    const hh = await singleHousehold(ctx.platform);
+    const done = await completedOperation(ctx.platform, root, hh.id);
     if (done) {
-      markOperationDone(platformFile, done);
+      await markOperationDone(platformFile, done);
       return { status: 'complete', operationId: done, householdId: hh.id };
     }
-    ctx.source = openSourceExclusive(join(root, DB_FILE));
-    preflight({ dataDir: root, platform: ctx.platform, source: ctx.source, legacyKey, mcpSecret, diskFree });
+    ctx.source = await openSourceExclusive(join(root, DB_FILE));
+    await preflight({ dataDir: root, platform: ctx.platform, source: ctx.source, legacyKey, mcpSecret, diskFree });
     ctx.journal = {
       version: 1, operationId: newOperationId(), householdId: hh.id, startedAt: Date.now(), phase: 'preflight',
-      passkeys: passkeyFingerprint(ctx.platform),
+      passkeys: await passkeyFingerprint(ctx.platform),
     };
     writeJournal(journalFile, ctx.journal);
     writeLock(lockFile, ctx.journal.operationId);
     await onPhase('preflight');
     return await fromSnapshot(ctx);
   } finally {
-    try { ctx.source?.close(); } catch { /* already closed */ }
-    try { ctx.platform?.close(); } catch { /* already closed */ }
+    try { await ctx.source?.close(); } catch { /* already closed */ }
+    try { await ctx.platform?.close(); } catch { /* already closed */ }
   }
 }
 
@@ -685,41 +679,41 @@ async function resume(ctx, { mcpSecret, diskFree }) {
   const { dataDir, journal, platform } = ctx;
   writeLock(ctx.lockFile, journal.operationId);
   if (journal.phase === 'complete') {
-    if (!manifestCommitted(platform, journal)) throw refuse('journal_invalid');
-    const r = finish(ctx);
+    if (!await manifestCommitted(platform, journal)) throw refuse('journal_invalid');
+    const r = await finish(ctx);
     removeLock(ctx.lockFile, journal.operationId);
     return r;
   }
   const rootRel = householdRootRel(journal.householdId);
-  if (manifestCommitted(platform, journal)) {
-    reopenPlatform(ctx);
+  if (await manifestCommitted(platform, journal)) {
+    await reopenPlatform(ctx);
     await verifyRoot(ctx, rootRel, journal.figures);
     await ctx.onPhase('manifest');
     return afterManifest(ctx);
   }
   const staging = join(dataDir, HOUSEHOLDS, stagingName(journal.operationId));
-  ctx.source = openSourceExclusive(join(dataDir, DB_FILE));
+  ctx.source = await openSourceExclusive(join(dataDir, DB_FILE));
   if (existsSync(join(dataDir, rootRel))) {
     if (!journal.figures) throw refuse('journal_invalid');
     rmSync(staging, { recursive: true, force: true });
-    reopenPlatform(ctx);
+    await reopenPlatform(ctx);
     await verifyRoot(ctx, rootRel, journal.figures);
     await nextPhase(ctx, 'root-published');
     return publishAndFinish(ctx);
   }
   rmSync(staging, { recursive: true, force: true });
   if (lstatOrNull(join(dataDir, HOUSEHOLDS))) fsyncFile(join(dataDir, HOUSEHOLDS));
-  const hh = preflight({ dataDir, platform, source: ctx.source, legacyKey: ctx.legacyKey, mcpSecret, diskFree });
+  const hh = await preflight({ dataDir, platform, source: ctx.source, legacyKey: ctx.legacyKey, mcpSecret, diskFree });
   if (hh.id !== journal.householdId) throw refuse('household_store_mismatch');
   await ctx.onPhase('preflight');
   return fromSnapshot(ctx);
 }
 
 // The platform on a connection with every platform migration (003 adds the runtime tables).
-function reopenPlatform(ctx) {
-  ctx.platform.close();
+async function reopenPlatform(ctx) {
+  await ctx.platform.close();
   ctx.platform = null;
-  ctx.platform = openPlatform(ctx.platformFile);
+  ctx.platform = await openPlatform(ctx.platformFile);
 }
 
 async function fromSnapshot(ctx) {
@@ -727,19 +721,19 @@ async function fromSnapshot(ctx) {
   await snapshot(ctx);
   await nextPhase(ctx, 'snapshot');
 
-  migrate(ctx.source, { through: PRE_TENANCY_SCHEMA });
-  const digest = logicalDigest(ctx.source);
+  await migrate(ctx.source, { through: PRE_TENANCY_SCHEMA });
+  const digest = await logicalDigest(ctx.source);
   const trees = sourceTrees(ctx.dataDir);
   if (journal.sourceDigest && (journal.sourceDigest !== digest || !sameSourceTrees(ctx.dataDir, journal.sourceTrees))) throw refuse('source_changed');
   journal.sourceDigest = digest;
   journal.sourceTrees = trees;
   await nextPhase(ctx, 'source-schema');
 
-  reopenPlatform(ctx);
+  await reopenPlatform(ctx);
   const staging = await stage(ctx);
   await nextPhase(ctx, 'stage');
 
-  const expected = sourceFigures(ctx);
+  const expected = await sourceFigures(ctx);
   const stagingRel = `${HOUSEHOLDS}/${stagingName(journal.operationId)}`;
   const found = await verifyRoot(ctx, stagingRel, expected);
   journal.figures = { ...expected, objects: found.objects };
@@ -755,18 +749,18 @@ async function fromSnapshot(ctx) {
 
 async function publishAndFinish(ctx) {
   await ctx.onPhase('before-manifest');
-  publishManifest(ctx);
+  await publishManifest(ctx);
   await nextPhase(ctx, 'manifest');
   return afterManifest(ctx);
 }
 
 async function afterManifest(ctx) {
   // The source closes first so its WAL is checkpointed and it moves as one file.
-  try { ctx.source?.close(); } catch { /* already closed */ }
+  try { await ctx.source?.close(); } catch { /* already closed */ }
   ctx.source = null;
   retire(ctx.dataDir, ctx.journal.operationId);
   await nextPhase(ctx, 'retire');
-  const r = finish(ctx);
+  const r = await finish(ctx);
   await nextPhase(ctx, 'complete');
   removeLock(ctx.lockFile, ctx.journal.operationId);
   return r;

@@ -15,12 +15,12 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
   }
   if (!args.has('--bundle') || args.get('--confirm') !== householdId) throw codeError('restore_confirmation_required');
   const config = loadConfig(env);
-  const opened = openInstance(config);
+  const opened = await openInstance(config);
   if (!opened) throw codeError('household_unavailable');
   try {
     const result = await restoreHousehold({ platform: opened.platform, config, householdId, confirmation: args.get('--confirm'), file: args.get('--bundle') });
     console.log(JSON.stringify(result));
-  } finally { opened.platform.close(); }
+  } finally { await opened.platform.close(); }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

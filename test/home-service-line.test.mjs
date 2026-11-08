@@ -9,6 +9,7 @@ import { tempDb } from './helpers/server.mjs';
 import { JOBS } from '../src/jobs/scheduler.mjs';
 import { serviceStatus } from '../src/jobs/service-status.mjs';
 import * as view from '../web/horizon/screens/service-status.js';
+import { forEachSeries } from '../src/shared/series.mjs';
 
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 view.bind({ esc, api: { s: { live: {} } } });
@@ -94,22 +95,22 @@ const iso = (msAgo) => new Date(Date.parse(NOW) - msAgo).toISOString();
 
 async function withStore(t) {
   const s = await tempDb();
-  t.after(() => { try { s.db.close(); } catch { /* closed */ } rmSync(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { try { await s.db.close(); } catch { /* closed */ } rmSync(s.dataDir, { recursive: true, force: true }); });
   const ins = s.db.prepare("INSERT OR IGNORE INTO jobs (id, name, cadence, does, cost, next_label, last_label, enabled, sort) VALUES (?, ?, ?, ?, NULL, '', '', 1, ?)");
-  JOBS.forEach((j, i) => ins.run(j.id, j.name, j.cadence, j.does, 100 + i));
+  await forEachSeries(JOBS, async (j, i) => await ins.run(j.id, j.name, j.cadence, j.does, 100 + i));
   return s;
 }
 
-function failed(db, jobId, errorClass, startedAgo, periodKey) {
-  db.prepare(`INSERT INTO job_runs (job_id, started_at, finished_at, status, period_key, trigger, duration_ms, error_class, cost_usd, note)
+async function failed(db, jobId, errorClass, startedAgo, periodKey) {
+  await db.prepare(`INSERT INTO job_runs (job_id, started_at, finished_at, status, period_key, trigger, duration_ms, error_class, cost_usd, note)
     VALUES (?, ?, ?, 'error', ?, 'scheduled', 1000, ?, 0, NULL)`).run(jobId, iso(startedAgo), iso(startedAgo - 1000), periodKey, errorClass);
 }
 
-const statusAt = (db, engine = fakeEngine()) => serviceStatus({ db, outbound: { ...ALL_ON }, engine, scheduler: fakeScheduler(), now: new Date(NOW) });
+const statusAt = async (db, engine = fakeEngine()) => await serviceStatus({ db, outbound: { ...ALL_ON }, engine, scheduler: fakeScheduler(), now: new Date(NOW) });
 
 test('server: a job retrying for 2 hours needs no attention yet', async (t) => {
   const { db } = await withStore(t);
-  failed(db, 'simplefin-sync', 'simplefin_network', 2 * HOUR, '2026-11-08');
+  await failed(db, 'simplefin-sync', 'simplefin_network', 2 * HOUR, '2026-11-08');
   const out = await statusAt(db);
   assert.equal(out.jobs['simplefin-sync'].state, 'retrying');
   assert.equal(out.attention, null);
@@ -119,8 +120,8 @@ test('server: a job retrying for 2 hours needs no attention yet', async (t) => {
 
 test('server: a job retrying for more than 24 hours becomes the attention line', async (t) => {
   const { db } = await withStore(t);
-  failed(db, 'simplefin-sync', 'simplefin_network', 30 * HOUR, '2026-11-07');
-  failed(db, 'simplefin-sync', 'simplefin_network', 2 * HOUR, '2026-11-08');
+  await failed(db, 'simplefin-sync', 'simplefin_network', 30 * HOUR, '2026-11-07');
+  await failed(db, 'simplefin-sync', 'simplefin_network', 2 * HOUR, '2026-11-08');
   const out = await statusAt(db);
   const job = out.jobs['simplefin-sync'];
   assert.equal(job.state, 'retrying');
@@ -134,7 +135,7 @@ test('server: a job retrying for more than 24 hours becomes the attention line',
 
 test('server: a needs_you job is attention immediately', async (t) => {
   const { db } = await withStore(t);
-  failed(db, 'plan', 'TypeError', 60000, '2026-11-08');
+  await failed(db, 'plan', 'TypeError', 60000, '2026-11-08');
   const out = await statusAt(db);
   assert.equal(out.jobs.plan.state, 'needs_you');
   assert.equal(out.attention?.key, 'job:plan');
@@ -143,8 +144,8 @@ test('server: a needs_you job is attention immediately', async (t) => {
 
 test('server: with several services needing attention the engine comes first and there is one line', async (t) => {
   const { db } = await withStore(t);
-  failed(db, 'plan', 'TypeError', 60000, '2026-11-08');
-  failed(db, 'simplefin-sync', 'simplefin_revoked', 60000, '2026-11-08');
+  await failed(db, 'plan', 'TypeError', 60000, '2026-11-08');
+  await failed(db, 'simplefin-sync', 'simplefin_revoked', 60000, '2026-11-08');
   const out = await statusAt(db, fakeEngine({ mode: 'live', funded: false }));
   assert.equal(out.engine.state, 'needs_you');
   assert.equal(out.attention?.key, 'engine');

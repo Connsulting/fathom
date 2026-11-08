@@ -14,6 +14,7 @@ import { resolveRef } from '../refs.mjs';
 import { checkAssumption } from '../assumption-evidence.mjs';
 import { evaluate } from './calculate.mjs';
 import { ToolError } from '../errors.mjs';
+import { mapSeries } from '../../shared/series.mjs';
 
 const bad = message => { throw new ToolError('bad_input', message); };
 const gap = (message, fact) => ({ code:'missing_fact', message, ...(fact ? { fact } : {}) });
@@ -34,8 +35,8 @@ async function input(value, name, unit, ctx, options = {}) {
     term = await evaluate({operation:'sum',operands:[value]},ctx,name);
     if (term.unit !== unit) bad(`${name} needs ${unit}, got ${term.unit}`);
   } else {
-    const record = checkAssumption(value,{ name,unit,...options },ctx);
-    const fact = record.factKey ? ctx.db.prepare('SELECT as_of,updated_at FROM facts WHERE key=?').get(record.factKey) : null;
+    const record = await checkAssumption(value,{ name,unit,...options },ctx);
+    const fact = record.factKey ? await ctx.db.prepare('SELECT as_of,updated_at FROM facts WHERE key=?').get(record.factKey) : null;
     term = {value:record.value,unit,asOf:fact?.as_of ?? fact?.updated_at ?? null,assumptions:[record],inputs:[],gaps:[],steps:[]};
   }
   if (term.value !== null && ((options.min !== undefined && term.value < options.min) || (options.max !== undefined && term.value > options.max))) bad(`${name} is outside its allowed range`);
@@ -51,7 +52,7 @@ function figure(value, unit, label, asOf, prov, gaps = [], kind = 'm') {
     ...(value === null ? {unavailable:gaps[0]?.code ?? 'missing_fact'} : {}) });
 }
 const termOf = f => ({...f,inputs:[f],assumptions:[]});
-function rateInput(value,name,ctx,defaultValue) {
+async function rateInput(value,name,ctx,defaultValue) {
   return input(value,name,'ratio',ctx,{ ...(defaultValue === undefined ? {} : {default:defaultValue}),
     min:name === 'withdrawalRate' ? 0.02 : name === 'realReturn' ? -0.05 : 0,
     max:name === 'withdrawalRate' ? 0.06 : name === 'realReturn' ? 0.1 : 0.6 });
@@ -62,17 +63,17 @@ function typeOf(a,facts) {
     ?? (Object.hasOwn(ACCOUNT_TREATMENT.byKind,a.kind) ? ACCOUNT_TREATMENT.byKind[a.kind] : a.kind === 'savings' ? ACCOUNT_TREATMENT.byKind.cash : null);
 }
 function isBusiness(a) { return a.business || a.kind === 'business' || ownerOf(a.owner) === 'business'; }
-function accountValue(a,ctx,clock) {
-  const snapshot = accountHistory(ctx.db,a.id,clock).at(-1);
+async function accountValue(a,ctx,clock) {
+  const snapshot = (await accountHistory(ctx.db,a.id,clock)).at(-1);
   const sources = (snapshot?.value?.locator?.sources ?? []).map(s => s.rows);
-  const label = a.parser === 'demo-seed' ? plainDeep(tokenScope(ctx.db),accountLabel(a)) : accountLabel(a);
+  const label = a.parser === 'demo-seed' ? plainDeep(await tokenScope(ctx.db),accountLabel(a)) : accountLabel(a);
   const gaps = snapshot?.value ? [] : [gap(`${label} has no complete stored balance or positions.`)];
   return { account:a,label,value:snapshot?.value?.v ?? null,asOf:snapshot?.date ?? null,sources,gaps };
 }
 
 async function target(args,ctx) {
   if (args.spending !== undefined && args.definition !== undefined) bad('target takes spending or definition, not both');
-  const data = readInput(ctx), clock = data.clock;
+  const data = await readInput(ctx), clock = data.clock;
   const spend = args.spending ? await resolveRef(args.spending,ctx,'spending') : (await (await import('../index.mjs')).callTool('spending',{ operation:'total',definition:args.definition ?? 'household_spending',annualize:true },ctx)).total;
   if (Array.isArray(spend) || spend.unit !== 'usd_per_year') bad('spending must reference one usd_per_year figure');
   const wr = await rateInput(args.withdrawalRate,'withdrawalRate',ctx,TARGET_PARAMETERS.withdrawalRate);
@@ -85,10 +86,10 @@ async function target(args,ctx) {
   } : await input(args.monthlySavings,'monthlySavings','usd_per_month',ctx);
   const selector = args.invested ?? {};
   const ids = selector.accounts;
-  if (ids) selectedAccounts(ctx.db,ids);
+  if (ids) await selectedAccounts(ctx.db,ids);
   const accounts = data.accounts.filter(a => !isBusiness(a) && (ids ? ids.includes(a.id) : (selector.kinds ?? INVESTMENT_KINDS).includes(a.kind))
     && (!selector.kinds || selector.kinds.includes(a.kind)) && (!selector.treatments || selector.treatments.includes(typeOf(a,data.facts)?.id)));
-  const holdings = accounts.map(a => accountValue(a,ctx,clock));
+  const holdings = await mapSeries(accounts, async a => await accountValue(a,ctx,clock));
   const total = holdingsTotal(holdings.map(h => ({...h.account,value:h.value === null ? null : {v:h.value,locator:{sources:h.sources.map(rows => ({rows}))},dataThrough:h.asOf}})));
   const invested = holdings.length === 0 ? 0 : total.total;
   const hgaps = holdings.flatMap(h => h.gaps);
@@ -136,7 +137,7 @@ function personDate(facts,person,age) {
 const monthSpan = (from,to) => Math.max(0,(Number(to.slice(0,4))-Number(from.slice(0,4)))*12 + Number(to.slice(5,7))-Number(from.slice(5,7)) + (to.slice(8,10)>from.slice(8,10) ? 1 : 0));
 
 async function growth(args,ctx) {
-  const {clock,facts} = readInput(ctx);
+  const {clock,facts} = await readInput(ctx);
   const allowed = {balance:['monthlyContribution','years'],months:['monthlyContribution','target'],monthly:['target','byDate','byAge']}[args.solve];
   for (const k of ['monthlyContribution','years','target','byDate','byAge']) if (args[k] !== undefined && !allowed.includes(k)) bad(`${k} does not apply to growth solve ${args.solve}`);
   const b = await input(args.balance,'balance','usd',ctx,{min:0}), rr = await rateInput(args.realReturn,'realReturn',ctx,0.04);
@@ -166,7 +167,7 @@ async function growth(args,ctx) {
       if (n === 0) bad('monthly needs a future date');
       value = n === null || terms.some(t=>t.value===null) ? null : requiredMonthly({target:t.value,balance:b.value,annualRate:rr.value,months:n});
       unit = 'usd_per_month'; formula = 'monthly contribution required for compound balance and annuity to reach target';
-      if (date.keys.length) terms.push({inputs:date.keys.map(key=>({label:key,value:facts[key]})),asOf:latest(date.keys.map(key=>ctx.db.prepare('SELECT as_of FROM facts WHERE key=?').get(key)?.as_of))});
+      if (date.keys.length) terms.push({inputs:date.keys.map(key=>({label:key,value:facts[key]})),asOf:latest(await mapSeries(date.keys, async key=>(await ctx.db.prepare('SELECT as_of FROM facts WHERE key=?').get(key))?.as_of))});
     }
   }
   if (value !== null && (!Number.isFinite(value) || value < 0)) value = null;
@@ -179,16 +180,16 @@ async function growth(args,ctx) {
 async function afterTax(args,ctx) {
   if (args.accounts !== undefined && args.kinds !== undefined) bad('after_tax takes accounts or kinds, not both');
   if (args.hypothetical !== undefined && (args.accounts !== undefined || args.kinds !== undefined)) bad('hypothetical cannot be combined with stored accounts');
-  const data = readInput(ctx),clock=data.clock,facts=data.facts;
-  const rates = await Promise.all(['ordinaryRate','capitalGainsRate','stateRate'].map(k=>rateInput(args[k],k,ctx)));
+  const data = await readInput(ctx),clock=data.clock,facts=data.facts;
+  const rates = await Promise.all(await mapSeries(['ordinaryRate','capitalGainsRate','stateRate'], async k=>await rateInput(args[k],k,ctx)));
   const [ordinary,capital,state] = rates;
-  const selected = args.hypothetical ? [] : selectedAccounts(ctx.db,args.accounts).filter(a=>args.accounts || (args.kinds ? args.kinds.includes(a.kind) : !isBusiness(a) && ['cash','checking','savings',...INVESTMENT_KINDS,'hsa'].includes(a.kind)));
-  const records = args.hypothetical ? await Promise.all(args.hypothetical.map(async (h,i)=>({treatment:h.treatment,
+  const selected = args.hypothetical ? [] : (await selectedAccounts(ctx.db,args.accounts)).filter(a=>args.accounts || (args.kinds ? args.kinds.includes(a.kind) : !isBusiness(a) && ['cash','checking','savings',...INVESTMENT_KINDS,'hsa'].includes(a.kind)));
+  const records = args.hypothetical ? await Promise.all(await mapSeries(args.hypothetical, async (h,i)=>({treatment:h.treatment,
     valueInput:await input(h.value,`hypothetical ${i} value`,'usd',ctx,{min:0}),basisInput:h.basis === undefined ? null : await input(h.basis,`hypothetical ${i} basis`,'usd',ctx,{min:0}),
     contributionsInput:h.contributions === undefined ? null : await input(h.contributions,`hypothetical ${i} contributions`,'usd',ctx,{min:0})})))
-    : selected.map(a=>({...accountValue(a,ctx,clock),treatment:typeOf(a,facts)?.id ?? 'unknown',rule:typeOf(a,facts)}));
+    : await mapSeries(selected, async a=>({...await accountValue(a,ctx,clock),treatment:typeOf(a,facts)?.id ?? 'unknown',rule:typeOf(a,facts)}));
   const totals = { value:0, afterTax:0 };
-  const rows = records.map(r=>{
+  const rows = await mapSeries(records, async r=>{
     const value = r.valueInput?.value ?? r.value;
     const rowGaps = [...(r.gaps ?? []),...rates.flatMap(t=>t.gaps ?? [])];
     const terms = [...rates,...[r.valueInput,r.basisInput,r.contributionsInput].filter(Boolean)];
@@ -212,7 +213,7 @@ async function afterTax(args,ctx) {
       else if (ageDate.date) qualified=latest([ageDate.date,`${first+ACCESS_RULES.fiveYear.years}-01-01`]);
     } else if (taxable) {
       whenTaxed='Capital gains plus state tax on gains when sold; basis returns untaxed. Annual distributions may also be taxed.';
-      const positions = r.account && r.asOf ? ctx.db.prepare('SELECT id,value,quantity,price,cost_basis FROM positions WHERE account_id=? AND as_of=?').all(r.account.id,r.asOf) : [];
+      const positions = r.account && r.asOf ? await ctx.db.prepare('SELECT id,value,quantity,price,cost_basis FROM positions WHERE account_id=? AND as_of=?').all(r.account.id,r.asOf) : [];
       const missing=positions.filter(p=>!Number.isFinite(p.cost_basis));
       if (r.basisInput) basis=r.basisInput.value;
       else if (positions.length && !missing.length) basis=positions.reduce((sum,p)=>sum+p.cost_basis,0);

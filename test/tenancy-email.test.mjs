@@ -31,7 +31,7 @@ test('manual and periodic mail, preview, history, subscriptions and outbox are h
     await subscribe(fx.A, [row(fx.A.admin.user.id)]);
     await subscribe(fx.B, [row(fx.B.admin.user.id)]);
     for (const [hh, marker] of [[fx.A, 'Alpha private milestone'], [fx.B, 'Bravo private milestone']]) {
-      fx.ctx(hh.id).db.prepare(`INSERT INTO recs (id, pack_id, status, waiting_on, updated_at, def) VALUES ('colliding-rec', 'cash', 'proposed', 'owner', '2026-11-01', ?)`)
+      await fx.ctx(hh.id).db.prepare(`INSERT INTO recs (id, pack_id, status, waiting_on, updated_at, def) VALUES ('colliding-rec', 'cash', 'proposed', 'owner', '2026-11-01', ?)`)
         .run(JSON.stringify({ id: 'colliding-rec', title: marker, domain: 'data', summary: marker }));
       const preview = await hh.client.request({ path: '/api/email' });
       assert.equal(preview.status, 200, preview.text);
@@ -47,7 +47,7 @@ test('manual and periodic mail, preview, history, subscriptions and outbox are h
       assert.equal(mail.length, 2);
       assert.ok(mail.every(m => m.to.length === 1 && m.to[0] === hh.admin.user.email));
       assert.ok(mail.every(m => m.text.includes(marker) && m.text.includes(`household=${hh.id}`)));
-      fx.ctx(hh.id).db.prepare("UPDATE recs SET window_close = ? WHERE id = 'colliding-rec'").run(fx.ctx(hh.id).config.clock);
+      await fx.ctx(hh.id).db.prepare("UPDATE recs SET window_close = ? WHERE id = 'colliding-rec'").run(fx.ctx(hh.id).config.clock);
       assert.equal((await fx.ctx(hh.id).scheduler.runNow('deadline-alerts')).status, 'ok');
       const alerts = await messages(fx.rootOf(hh.id));
       assert.equal(alerts.length, 3);

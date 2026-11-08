@@ -29,7 +29,7 @@ test.describe('an answered question rec is done on a synthetic household', () =>
       payroll: [paystubDoc({ employerName: 'Cedar Labs', person: 'spouse', relation: 'outside', payDate: '2026-10-31', net: 1600, state: 'VA', confidence: 0.5 })],
     } });
     await planRun(db, { now: clock, dataDir });
-    db.close();
+    await db.close();
     const socket = createServer();
     await new Promise(done => socket.listen(Number(process.env.RQ2_PORT || 0), 'localhost', done));
     const port = socket.address().port;
@@ -39,7 +39,7 @@ test.describe('an answered question rec is done on a synthetic household', () =>
     const auth = createAuthStore(app.platform);
     const { user, token } = auth.invite(auth.servedHousehold().id, 'owner@example.test', { role: 'admin' });
     auth.consumeInvitation(token, user.id);
-    auth.markEnrolled(user.id);
+    await auth.markEnrolled(user.id);
     session = auth.createSession(user.id);
   });
   test.afterAll(async () => {

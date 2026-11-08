@@ -10,9 +10,9 @@ export const operations = [
     params: {"id":{"type":"string","minLength":1},"status":{"type":"string","enum": SETTABLE_REC_STATUSES},"wake":{"type":"string","maxLength":200}},
     required: ["id","status"],
     scope: 'write:recs',
-    handler(args, ctx) {
-      const { receipt } = changeRec(args, ctx, 'status');
-      return { ...recOutById(ctx.db, clockOf(ctx), args.id), receipt };
+    async handler(args, ctx) {
+      const { receipt } = await changeRec(args, ctx, 'status');
+      return { ...await recOutById(ctx.db, await clockOf(ctx), args.id), receipt };
     },
   },
 {
@@ -21,9 +21,9 @@ export const operations = [
     params: {"id":{"type":"string","minLength":1},"owner":{"type":"string","enum": [...OWNERS]}},
     required: ["id","owner"],
     scope: 'write:recs',
-    handler(args, ctx) {
-      const { receipt } = changeRec(args, ctx, 'owner');
-      return { ...recOutById(ctx.db, clockOf(ctx), args.id), receipt };
+    async handler(args, ctx) {
+      const { receipt } = await changeRec(args, ctx, 'owner');
+      return { ...await recOutById(ctx.db, await clockOf(ctx), args.id), receipt };
     },
   },
 ];
@@ -31,5 +31,5 @@ operations.push({
   tool: 'act_on_recommendation', name: 'step', scope: 'write:steps',
   summary: 'Mark an unobservable rec step done (I did this) or undone by zero-based index; verified steps complete themselves.', route: 'Mark a recommendation step done', routes: ['POST /api/recs/:id/action'],
   params: { id: { type: 'string', minLength: 1 }, index: { type: 'integer', minimum: 0 }, checked: { type: 'boolean' } }, required: ['id', 'index', 'checked'],
-  handler(args, ctx) { const { row, receipt } = changeRec(args, ctx, 'step'); return { id: row.id, tasksDone: JSON.parse(row.tasks_done), receipt }; },
+  async handler(args, ctx) { const { row, receipt } = await changeRec(args, ctx, 'step'); return { id: row.id, tasksDone: JSON.parse(row.tasks_done), receipt }; },
 });

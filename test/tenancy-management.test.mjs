@@ -29,6 +29,7 @@ import { src, tempDir } from './helpers/server.mjs';
 import { startRuntime, writeInstanceKeys } from './helpers/tenancy-runtime.mjs';
 import { browser, register, signIn } from './helpers/tenancy.mjs';
 import { createAuthenticator } from './helpers/webauthn.mjs';
+import { everySeries, flatMapSeries, mapSeries } from '../src/shared/series.mjs';
 
 const T = { timeout: 120_000 };
 const ALPHA = 'ALPHACANARY';
@@ -89,11 +90,11 @@ async function ok(promise, label) {
   return r.json;
 }
 
-const goalTitles = id => f.app.runtimes.get(id).db.prepare('SELECT def FROM goals ORDER BY id').all().map(r => JSON.parse(r.def).title);
-const threadTexts = id => f.app.runtimes.get(id).db.prepare("SELECT text FROM messages WHERE role = 'me'").all().map(r => r.text);
-const tableCounts = id => {
+const goalTitles = async id => (await f.app.runtimes.get(id).db.prepare('SELECT def FROM goals ORDER BY id').all()).map(r => JSON.parse(r.def).title);
+const threadTexts = async id => (await f.app.runtimes.get(id).db.prepare("SELECT text FROM messages WHERE role = 'me'").all()).map(r => r.text);
+const tableCounts = async id => {
   const db = f.app.runtimes.get(id).db;
-  return Object.fromEntries(['goals', 'conversations', 'messages', 'settings', 'facts', 'files'].map(t => [t, db.prepare(`SELECT count(*) AS n FROM ${t}`).get().n]));
+  return Object.fromEntries(await mapSeries(['goals', 'conversations', 'messages', 'settings', 'facts', 'files'], async t => [t, (await db.prepare(`SELECT count(*) AS n FROM ${t}`).get()).n]));
 };
 
 // A POST whose headers go out now and whose body is held until release() (a delayed write).
@@ -169,13 +170,13 @@ before(async () => {
   const { createAuthStore } = await src('src/auth/store.mjs');
   const platform = server.app.platform;
   const store = createAuthStore(platform);
-  const A = platform.prepare('SELECT id FROM households WHERE serves_store = 1').get().id;
+  const A = (await platform.prepare('SELECT id FROM households WHERE serves_store = 1').get()).id;
   f = { root, dataDir, keys, server, app: server.app, baseUrl: server.baseUrl, platform, store, A };
   // Bootstrap: the operator's user-invite command issues the first admin's invitation.
   const boot = store.invite(A, 'alpha-admin@example.test', { role: 'admin' });
   f.alpha = await enrollByLink(boot.token);
   store.grantOperator(f.alpha.identity.id);
-  store.setPlatformSetting('multi_household_enabled', true);
+  await store.setPlatformSetting('multi_household_enabled', true);
   await session(f.alpha);
 });
 
@@ -183,8 +184,8 @@ before(async () => {
 // (src/api/handlers.mjs stores the question with its answer); wait for those turns before closing.
 const STREAMED = ['Synthetic delayed stream question', 'Synthetic stream at sign out', 'Synthetic stream before removal', 'Synthetic stream at removal'];
 async function answersSettled() {
-  const stored = () => [f.A, f.B].filter(Boolean).flatMap(id => threadTexts(id));
-  for (let i = 0; i < 150 && !STREAMED.every(q => stored().includes(q)); i++) await new Promise(r => setTimeout(r, 100));
+  const stored = async () => await flatMapSeries([f.A, f.B].filter(Boolean), async id => await threadTexts(id));
+  for (let i = 0; i < 150 && !await everySeries(STREAMED, async q => (await stored()).includes(q)); i++) await new Promise(r => setTimeout(r, 100));
 }
 
 after(async () => {
@@ -207,7 +208,7 @@ describe('enrollment, invitations and operator provisioning', () => {
     assert.equal(f.bravo.identity.householdId, f.B);
     assert.equal(f.bravo.identity.role, 'admin');
     assert.deepEqual(f.bravo.identity.memberships, [{ householdId: f.B, role: 'admin', name: BRAVO_NAME }]);
-    assert.equal(f.platform.prepare('SELECT status FROM households WHERE id = ?').get(f.B).status, 'active');
+    assert.equal((await f.platform.prepare('SELECT status FROM households WHERE id = ?').get(f.B)).status, 'active');
     await ok(post(f.bravo, '/api/household/outbound', { engine: true }), 'B resumes its engine');
     await ok(post(f.alpha, '/api/goals', { title: `${ALPHA} cushion`, horizon: '1-3y' }), 'A goal');
     await ok(post(f.bravo, '/api/goals', { title: `${BRAVO} cushion`, horizon: '1-3y' }), 'B goal');
@@ -218,8 +219,8 @@ describe('enrollment, invitations and operator provisioning', () => {
     await ok(post(f.alpha, '/api/admin/users/invite', { email: 'both-member@example.test', role: 'member' }), 'A invites');
     f.dual = await enrollByLink(mailedToken(before, 'both-member@example.test'));
     assert.equal(f.dual.identity.householdId, f.A);
-    const bBefore = tableCounts(f.B);
-    const aBefore = tableCounts(f.A);
+    const bBefore = await tableCounts(f.B);
+    const aBefore = await tableCounts(f.A);
     before = outbox();
     await ok(post(f.bravo, '/api/admin/users/invite', { email: 'both-member@example.test', role: 'member' }), 'B invites the existing user');
     const token = mailedToken(before, 'both-member@example.test');
@@ -233,8 +234,8 @@ describe('enrollment, invitations and operator provisioning', () => {
     ]);
     assert.equal(accepted.identity.householdId, f.A, 'accepting keeps the session in its household');
     assert.equal(accepted.identity.contextVersion, 1, 'accepting does not switch');
-    assert.deepEqual(tableCounts(f.B), bBefore, 'nothing was copied into B');
-    assert.deepEqual(tableCounts(f.A), aBefore, 'nothing changed in A');
+    assert.deepEqual(await tableCounts(f.B), bBefore, 'nothing was copied into B');
+    assert.deepEqual(await tableCounts(f.A), aBefore, 'nothing changed in A');
     await session(f.dual);
     const scenario = await get(f.dual, '/api/scenario');
     assert.equal(scenario.status, 200);
@@ -244,19 +245,19 @@ describe('enrollment, invitations and operator provisioning', () => {
   test('a member cannot provision and a second real household stays gated without the platform setting', T, async () => {
     const refused = await f.dual.client.post('/api/operator/households', { displayName: 'Synthetic Charlie Household', adminEmail: 'charlie@example.test' });
     assert.equal(refused.status, 403);
-    f.store.setPlatformSetting('multi_household_enabled', false);
+    await f.store.setPlatformSetting('multi_household_enabled', false);
     try {
       const gated = await f.alpha.client.post('/api/operator/households', { displayName: 'Synthetic Charlie Household', adminEmail: 'charlie@example.test' });
       assert.equal(gated.status, 409);
       assert.equal(gated.json.code, 'multi_household_gated');
-    } finally { f.store.setPlatformSetting('multi_household_enabled', true); }
+    } finally { await f.store.setPlatformSetting('multi_household_enabled', true); }
   });
 });
 
 describe('context assertions', () => {
   test('every household-scoped request needs the exact current assertion before the handler runs', T, async () => {
     const id = await session(f.alpha);
-    const goals = goalTitles(f.A).length;
+    const goals = (await goalTitles(f.A)).length;
     // Liveness: the exact assertion reads and writes.
     const read = await get(f.alpha, '/api/scenario');
     assert.equal(read.status, 200);
@@ -279,7 +280,7 @@ describe('context assertions', () => {
       const head = await f.alpha.client.raw({ method: 'HEAD', path: '/api/scenario', headers });
       assert.equal(head.status, 409, `${label} HEAD`);
     }
-    assert.equal(goalTitles(f.A).length, goals, 'no refused write landed');
+    assert.equal((await goalTitles(f.A)).length, goals, 'no refused write landed');
     // Malformed, partial, duplicate and conflicting assertions: 400.
     for (const [label, path, headers] of [
       ['partial', '/api/scenario', { 'x-fathom-household': f.A }],
@@ -303,12 +304,12 @@ describe('context assertions', () => {
   });
 
   test('an admin route with a stale assertion changes nothing', T, async () => {
-    const before = f.platform.prepare('SELECT count(*) AS n FROM household_invitations').get().n;
+    const before = (await f.platform.prepare('SELECT count(*) AS n FROM household_invitations').get()).n;
     const r = await post(f.alpha, '/api/admin/users/invite', { email: 'stale-invite@example.test', role: 'member' },
       { 'x-fathom-household': f.A, 'x-fathom-context-version': '7' });
     assert.equal(r.status, 409);
     assert.equal(r.json.code, STALE);
-    assert.equal(f.platform.prepare('SELECT count(*) AS n FROM household_invitations').get().n, before);
+    assert.equal((await f.platform.prepare('SELECT count(*) AS n FROM household_invitations').get()).n, before);
   });
 });
 
@@ -357,12 +358,12 @@ describe('switching', () => {
     assert.equal((await f.dual.client.post('/api/auth/household', {})).status, 400);
     assert.equal((await browser(f.baseUrl).post('/api/auth/household', { householdId: f.A })).status, 401);
     // A suspended household cannot be selected.
-    f.platform.prepare("UPDATE households SET status = 'suspended' WHERE id = ?").run(f.B);
+    await f.platform.prepare("UPDATE households SET status = 'suspended' WHERE id = ?").run(f.B);
     try {
       const r = await f.dual.client.post('/api/auth/household', { householdId: f.B });
       assert.equal(r.status, 403);
       assert.deepEqual(r.json, MEMBERSHIP_REQUIRED);
-    } finally { f.platform.prepare("UPDATE households SET status = 'active' WHERE id = ?").run(f.B); }
+    } finally { await f.platform.prepare("UPDATE households SET status = 'active' WHERE id = ?").run(f.B); }
     assert.deepEqual(await session(f.dual), id, 'refused switches changed nothing');
   });
 
@@ -374,11 +375,11 @@ describe('switching', () => {
     await new Promise(r => setTimeout(r, 100));
     fine.release();
     assert.equal((await fine.done).status, 200);
-    assert.ok(goalTitles(f.A).includes(`${ALPHA} delayed ok`));
+    assert.ok((await goalTitles(f.A)).includes(`${ALPHA} delayed ok`));
 
-    const aGoals = goalTitles(f.A);
-    const bGoals = goalTitles(f.B);
-    const bTexts = threadTexts(f.B);
+    const aGoals = await goalTitles(f.A);
+    const bGoals = await goalTitles(f.B);
+    const bTexts = await threadTexts(f.B);
     const write = delayedPost(f.dual, '/api/goals', { title: `${ALPHA} delayed stale`, horizon: '1-3y' }, ctxHeaders(old));
     const stream = askStream(f.dual, { text: 'Synthetic delayed stream question' }, ctxHeaders(old));
     const first = await stream.started;
@@ -396,9 +397,9 @@ describe('switching', () => {
     const error = ended.events.find(e => e.name === 'error');
     assert.ok(error, `the stream ended with an error event: ${names.join(',')}`);
     assert.equal(error.data.status, 409);
-    assert.deepEqual(goalTitles(f.A), aGoals, 'the refused write did not land in A');
-    assert.deepEqual(goalTitles(f.B), bGoals, 'nor in B');
-    assert.deepEqual(threadTexts(f.B), bTexts, 'the old stream wrote nothing into B');
+    assert.deepEqual(await goalTitles(f.A), aGoals, 'the refused write did not land in A');
+    assert.deepEqual(await goalTitles(f.B), bGoals, 'nor in B');
+    assert.deepEqual(await threadTexts(f.B), bTexts, 'the old stream wrote nothing into B');
     f.dual.identity = switched.identity;
   });
 

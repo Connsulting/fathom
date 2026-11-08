@@ -16,9 +16,9 @@ test('knowledge gaps remain beside the pack after reload and rebuilding a replac
   await resetDemo(request, base);
   await withLocalHousehold(new Date().toISOString(), async ({ db, household }) => {
     const stored = await storeFile({ vault: await household.vault(), id: ID, bytes: Buffer.from(BAD), purpose: 'upload' });
-    db.prepare(`INSERT INTO files (id,name,mime,size,source_kind,uploaded_at,stored_path,status,note)
+    await db.prepare(`INSERT INTO files (id,name,mime,size,source_kind,uploaded_at,stored_path,status,note)
       VALUES (?,?,'text/plain',?,'upload',?,?,'parsed','')`).run(ID, NAME, BAD.length, new Date().toISOString(), stored);
-    db.prepare("INSERT INTO documents (doc_type,fields,file_id) VALUES ('plan','{}',?)").run(ID);
+    await db.prepare("INSERT INTO documents (doc_type,fields,file_id) VALUES ('plan','{}',?)").run(ID);
   }, { dataDir });
   await page.goto(new URL('/#/packs', base).href);
   await page.locator('.h-yp [data-yp-build]').click();
@@ -49,15 +49,15 @@ for (const stage of ['source-read', 'extraction', 'pack-load']) {
     await withLocalHousehold(new Date().toISOString(), async ({ db, household }) => {
       const text = stage === 'extraction' ? '' : GOOD;
       const stored = await storeFile({ vault: await household.vault(), id: ID, bytes: Buffer.from(text), purpose: 'upload' });
-      db.prepare(`INSERT INTO files (id,name,mime,size,source_kind,uploaded_at,stored_path,status,note)
+      await db.prepare(`INSERT INTO files (id,name,mime,size,source_kind,uploaded_at,stored_path,status,note)
         VALUES (?,?,'text/plain',?,'upload',?,?,'parsed','')`).run(ID, NAME, text.length, new Date().toISOString(), stored);
-      db.prepare("INSERT INTO documents (doc_type,fields,file_id) VALUES ('plan','{}',?)").run(ID);
+      await db.prepare("INSERT INTO documents (doc_type,fields,file_id) VALUES ('plan','{}',?)").run(ID);
       if (stage === 'source-read') rmSync(join(household.root, stored));
     }, { dataDir });
     await page.goto(new URL('/#/packs', base).href);
     await page.locator('.h-yp [data-yp-build]').click();
     await expect(page.locator('.h-yp-result')).toBeVisible({ timeout: 30_000 });
-    if (stage === 'pack-load') writeFileSync(join(householdRootDir(dataDir), 'packs', 'your-plans', 'manifest.json'), '{invalid');
+    if (stage === 'pack-load') writeFileSync(join(await householdRootDir(dataDir), 'packs', 'your-plans', 'manifest.json'), '{invalid');
     await page.reload();
     const gap = page.locator('.h-yp .h-pack-gap');
     await expect(gap).toContainText(NAME);
@@ -76,8 +76,8 @@ for (const stage of ['source-read', 'extraction', 'pack-load']) {
     if (stage === 'source-read') {
       await expect(page.locator('.h-yp')).toContainText('replacement-benefits.txt');
       await withLocalHousehold(new Date().toISOString(), async ({ db }) => {
-        expect(db.prepare('SELECT removed_at FROM files WHERE id = ?').get(ID).removed_at).toBeTruthy();
-        expect(db.prepare('SELECT count(*) AS n FROM documents WHERE file_id = ?').get(ID).n).toBe(0);
+        expect((await db.prepare('SELECT removed_at FROM files WHERE id = ?').get(ID)).removed_at).toBeTruthy();
+        expect((await db.prepare('SELECT count(*) AS n FROM documents WHERE file_id = ?').get(ID)).n).toBe(0);
       }, { dataDir });
     }
     await page.reload();
@@ -90,7 +90,7 @@ test('an unreadable text-only document has a working Remove from pack control', 
   test.skip(!base || !dataDir, 'requires the local Your plans demo server');
   await resetDemo(request, base);
   await withLocalHousehold(new Date().toISOString(), async ({ db }) => {
-    db.prepare("INSERT INTO documents (doc_type,fields) VALUES ('plan',?)").run(JSON.stringify({ text: '' }));
+    await db.prepare("INSERT INTO documents (doc_type,fields) VALUES ('plan',?)").run(JSON.stringify({ text: '' }));
   }, { dataDir });
   await page.goto(new URL('/#/packs', base).href);
   await page.locator('.h-yp [data-yp-build]').click();

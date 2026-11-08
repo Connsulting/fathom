@@ -42,15 +42,15 @@ const joined = reply => reply.paragraphs.join('\n');
 async function cardStore(t) {
   const dataDir = mkdtempSync(join(tmpdir(), 'fathom-askq-'));
   const db = await createRealStore(dataDir);
-  t.after(() => {
-    try { db.close(); } catch { /* already closed */ }
+  t.after(async () => {
+    try { await db.close(); } catch { /* already closed */ }
     rmSync(dataDir, { recursive: true, force: true });
   });
-  db.prepare(`INSERT INTO accounts (id, inst, mask, name, owner, kind, mirror, display_name, sort)
+  await db.prepare(`INSERT INTO accounts (id, inst, mask, name, owner, kind, mirror, display_name, sort)
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(CARD, 'Example Card Co', '7319', 'Rewards card', null, 'card', 'connected', CARD_NAME, 0);
   const tx = db.prepare('INSERT INTO transactions (account_id, date, amount, description, category) VALUES (?, ?, ?, ?, ?)');
-  for (const r of [ROOF, GROCER]) tx.run(CARD, r.date, r.amount, r.description, r.category);
+  for (const r of [ROOF, GROCER]) await tx.run(CARD, r.date, r.amount, r.description, r.category);
   const root = householdOf(db).root;
   const packs = createLivePacks(db, { dataDir: root });
   packs.refresh();

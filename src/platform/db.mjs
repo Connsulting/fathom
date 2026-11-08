@@ -37,12 +37,12 @@ export function codeError(code, Kind = Error) {
 }
 
 // Open platform.sqlite and apply pending platform migrations; closes it again on failure.
-export function openPlatform(file) {
-  const db = openDb(file);
+export async function openPlatform(file) {
+  const db = await openDb(file);
   try {
-    migrate(db, { dir: PLATFORM_MIGRATIONS_DIR });
+    await migrate(db, { dir: PLATFORM_MIGRATIONS_DIR });
   } catch (e) {
-    db.close();
+    await db.close();
     throw e;
   }
   return db;
@@ -52,45 +52,40 @@ const sideFiles = file => [file, `${file}-wal`, `${file}-shm`, `${file}-journal`
 
 // Build a SQLite file at a temporary name with fn(db), checkpointed and closed, so the caller can
 // rename it into place whole.
-function buildTemp(tmp, fn) {
+async function buildTemp(tmp, fn) {
   for (const f of sideFiles(tmp)) rmSync(f, { force: true });
-  const db = openDb(tmp);
+  const db = await openDb(tmp);
   try {
-    fn(db);
-    db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    await fn(db);
+    await db.checkpoint();
   } finally {
-    db.close();
+    await db.close();
   }
 }
 
-function insertServedHousehold(platform, { id, mode, now, operationId, kind }) {
-  platform.prepare(`INSERT INTO households (id, status, mode, display_name, serves_store, created_at, updated_at)
+async function insertServedHousehold(platform, { id, mode, now, operationId, kind }) {
+  await platform.prepare(`INSERT INTO households (id, status, mode, display_name, serves_store, created_at, updated_at)
     VALUES (?, 'active', ?, NULL, 1, ?, ?)`).run(id, mode, now, now);
-  platform.prepare(`INSERT INTO platform_operations (id, kind, phase, status, started_at, updated_at, detail)
+  await platform.prepare(`INSERT INTO platform_operations (id, kind, phase, status, started_at, updated_at, detail)
     VALUES (?, ?, 'complete', 'done', ?, ?, '{}')`).run(operationId, kind, now, now);
 }
 
 // Create platform.sqlite atomically with one served, active household. Returns the open handle.
-export function createPlatformFile(file, { householdId, mode, operationId = newOperationId(), kind = 'create-instance', now = Date.now() }) {
+export async function createPlatformFile(file, { householdId, mode, operationId = newOperationId(), kind = 'create-instance', now = Date.now() }) {
   const tmp = `${file}.tmp-${process.pid}`;
   try {
-    buildTemp(tmp, db => {
-      migrate(db, { dir: PLATFORM_MIGRATIONS_DIR });
-      db.exec('BEGIN');
-      try {
-        insertServedHousehold(db, { id: householdId, mode, now, operationId, kind });
-        db.exec('COMMIT');
-      } catch (e) {
-        db.exec('ROLLBACK');
-        throw e;
-      }
+    buildTemp(tmp, async db => {
+      await migrate(db, { dir: PLATFORM_MIGRATIONS_DIR });
+      await db.transaction(async db => {
+        await insertServedHousehold(db, { id: householdId, mode, now, operationId, kind });
+      });
     });
     renameSync(tmp, file);
     fsyncDir(file);
   } finally {
     for (const f of sideFiles(tmp)) rmSync(f, { force: true });
   }
-  return openPlatform(file);
+  return await openPlatform(file);
 }
 
 export const HOUSEHOLDS_DIR = 'households';
@@ -110,11 +105,11 @@ function privateDir(path) {
 
 // Wrap a fresh random data key under the platform key and insert it as the household's active
 // version 1 (inside the caller's transaction).
-function insertDataKey(platform, householdId, platformKey, now) {
+async function insertDataKey(platform, householdId, platformKey, now) {
   const key = randomBytes(32);
   try {
     const wrapped = wrapDataKey(platformKey, { householdId, version: 1, key });
-    platform.prepare(`INSERT INTO household_data_keys (household_id, key_version, wrapped_key, status, created_at)
+    await platform.prepare(`INSERT INTO household_data_keys (household_id, key_version, wrapped_key, status, created_at)
       VALUES (?, 1, ?, 'active', ?)`).run(householdId, wrapped, now);
   } finally {
     key.fill(0);
@@ -123,17 +118,17 @@ function insertDataKey(platform, householdId, platformKey, now) {
 
 // Build `<root>/fathom.sqlite` at a temporary name inside the root (migrated, settings.mode,
 // init(db), store_identity naming the household) and rename it into place. The root must exist.
-function buildHouseholdStore(rootPath, { householdId, mode, operationId = null, init = () => {} }) {
+async function buildHouseholdStore(rootPath, { householdId, mode, operationId = null, init = () => {} }) {
   const storeFile = join(rootPath, DB_FILE);
   if (existsSync(storeFile)) throw codeError('instance_exists');
   const tmp = `${storeFile}.tmp-${process.pid}`;
   try {
-    buildTemp(tmp, db => {
-      migrate(db);
-      setSetting(db, 'mode', mode);
+    buildTemp(tmp, async db => {
+      await migrate(db);
+      await setSetting(db, 'mode', mode);
       init(db);
-      db.exec(STORE_IDENTITY_DDL);
-      db.prepare('INSERT INTO store_identity (id, household_id, platform_operation) VALUES (1, ?, ?)').run(householdId, operationId);
+      await db.applySchema(STORE_IDENTITY_DDL);
+      await db.prepare('INSERT INTO store_identity (id, household_id, platform_operation) VALUES (1, ?, ?)').run(householdId, operationId);
     });
     renameSync(tmp, storeFile);
     fsyncDir(storeFile);
@@ -160,7 +155,7 @@ function availableKey(secrets) {
 // renamed into place first and the platform last. Refuses instance_exists when the platform, a
 // root store or any household root already exists. Returns { db, platform, householdId, root }
 // (root: the absolute household root path); the caller closes both handles.
-export function createInstance(dataDir, { mode, init = () => {}, platformKey = null } = {}) {
+export async function createInstance(dataDir, { mode, init = () => {}, platformKey = null } = {}) {
   if (mode !== 'real' && mode !== 'demo') throw new TypeError('createInstance mode must be real or demo');
   mkdirSync(dataDir, { recursive: true });
   const platformFile = join(dataDir, PLATFORM_FILE);
@@ -175,35 +170,30 @@ export function createInstance(dataDir, { mode, init = () => {}, platformKey = n
   const root = join(dataDir, relativeRoot);
   const platformTmp = `${platformFile}.tmp-${process.pid}`;
   try {
-    buildTemp(platformTmp, db => {
-      migrate(db, { dir: PLATFORM_MIGRATIONS_DIR });
-      db.exec('BEGIN');
-      try {
-        insertServedHousehold(db, { id: householdId, mode, now, operationId, kind: 'create-instance' });
-        db.prepare('UPDATE households SET storage_root = ?, generation = 1 WHERE id = ?').run(relativeRoot, householdId);
-        initOutbound(db, householdId, { enabled: true, now });
-        if (platformKey) insertDataKey(db, householdId, platformKey, now);
-        db.exec('COMMIT');
-      } catch (e) {
-        db.exec('ROLLBACK');
-        throw e;
-      }
+    buildTemp(platformTmp, async db => {
+      await migrate(db, { dir: PLATFORM_MIGRATIONS_DIR });
+      await db.transaction(async db => {
+        await insertServedHousehold(db, { id: householdId, mode, now, operationId, kind: 'create-instance' });
+        await db.prepare('UPDATE households SET storage_root = ?, generation = 1 WHERE id = ?').run(relativeRoot, householdId);
+        await initOutbound(db, householdId, { enabled: true, now });
+        if (platformKey) await insertDataKey(db, householdId, platformKey, now);
+      });
     });
     privateDir(householdsDir);
     privateDir(root);
-    buildHouseholdStore(root, { householdId, mode, operationId, init });
+    await buildHouseholdStore(root, { householdId, mode, operationId, init });
     if (existsSync(platformFile)) throw codeError('instance_exists');
     renameSync(platformTmp, platformFile);
     fsyncDir(platformFile);
   } finally {
     for (const f of sideFiles(platformTmp)) rmSync(f, { force: true });
   }
-  const db = openDb(join(root, DB_FILE));
+  const db = await openDb(join(root, DB_FILE));
   let platform;
   try {
-    platform = openPlatform(platformFile);
+    platform = await openPlatform(platformFile);
   } catch (e) {
-    db.close();
+    await db.close();
     throw e;
   }
   return { db, platform, householdId, root };
@@ -216,32 +206,29 @@ export function createInstance(dataDir, { mode, init = () => {}, platformKey = n
 // all-enabled with `enabled`), storage_root and generation 1. The household keeps its status.
 // Refuses household_unavailable for an unknown, deleted or already rooted household and
 // target_exists when the root directory exists. Returns { householdId, root }.
-export function createHouseholdStorage({ platform, dataDir, householdId, mode, secrets = null, enabled = false, now = Date.now() } = {}) {
+export async function createHouseholdStorage({ platform, dataDir, householdId, mode, secrets = null, enabled = false, now = Date.now() } = {}) {
   if (mode !== 'real' && mode !== 'demo') throw new TypeError('createHouseholdStorage mode must be real or demo');
-  const row = typeof householdId === 'string' ? platform.prepare('SELECT status, storage_root FROM households WHERE id = ?').get(householdId) : null;
+  const row = typeof householdId === 'string' ? await platform.prepare('SELECT status, storage_root FROM households WHERE id = ?').get(householdId) : null;
   if (!row || row.status === 'deleted' || row.storage_root != null) throw codeError('household_unavailable');
   const relativeRoot = householdRootRel(householdId);
   const root = join(dataDir, relativeRoot);
   if (existsSync(root)) throw codeError('target_exists');
   privateDir(join(dataDir, HOUSEHOLDS_DIR));
   privateDir(root);
-  buildHouseholdStore(root, { householdId, mode });
+  await buildHouseholdStore(root, { householdId, mode });
   const platformKey = availableKey(secrets);
-  platform.exec('BEGIN IMMEDIATE');
   try {
-    const fresh = platform.prepare('SELECT status, storage_root FROM households WHERE id = ?').get(householdId);
-    if (!fresh || fresh.status === 'deleted' || fresh.storage_root != null) throw codeError('household_unavailable');
-    if (platformKey && !platform.prepare('SELECT 1 AS x FROM household_data_keys WHERE household_id = ?').get(householdId)) {
-      insertDataKey(platform, householdId, platformKey, now);
-    }
-    if (!platform.prepare('SELECT 1 AS x FROM household_outbound WHERE household_id = ?').get(householdId)) {
-      initOutbound(platform, householdId, { enabled, now });
-    }
-    platform.prepare('UPDATE households SET storage_root = ?, generation = 1, updated_at = ? WHERE id = ?').run(relativeRoot, now, householdId);
-    platform.exec('COMMIT');
-  } catch (e) {
-    platform.exec('ROLLBACK');
-    throw e;
+    await platform.transaction(async platform => {
+      const fresh = await platform.prepare('SELECT status, storage_root FROM households WHERE id = ?').get(householdId);
+      if (!fresh || fresh.status === 'deleted' || fresh.storage_root != null) throw codeError('household_unavailable');
+      if (platformKey && !await platform.prepare('SELECT 1 AS x FROM household_data_keys WHERE household_id = ?').get(householdId)) {
+        await insertDataKey(platform, householdId, platformKey, now);
+      }
+      if (!await platform.prepare('SELECT 1 AS x FROM household_outbound WHERE household_id = ?').get(householdId)) {
+        await initOutbound(platform, householdId, { enabled, now });
+      }
+      await platform.prepare('UPDATE households SET storage_root = ?, generation = 1, updated_at = ? WHERE id = ?').run(relativeRoot, now, householdId);
+    });
   } finally {
     platformKey?.fill(0);
   }
@@ -249,15 +236,14 @@ export function createHouseholdStorage({ platform, dataDir, householdId, mode, s
 }
 
 // The household the singleton store serves, or null.
-export function servedHousehold(platform) {
-  const row = platform.prepare('SELECT id, mode, status FROM households WHERE serves_store = 1').get();
+export async function servedHousehold(platform) {
+  const row = await platform.prepare('SELECT id, mode, status FROM households WHERE serves_store = 1').get();
   return row ? { id: row.id, mode: row.mode, status: row.status } : null;
 }
 
 // The store_identity row of an open store, or null when the table or row is absent.
-export function storeIdentity(db) {
-  const has = db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = 'store_identity'").get();
-  if (!has) return null;
-  const row = db.prepare('SELECT household_id, platform_operation FROM store_identity WHERE id = 1').get();
+export async function storeIdentity(db) {
+  if (!await db.hasTable('store_identity')) return null;
+  const row = await db.prepare('SELECT household_id, platform_operation FROM store_identity WHERE id = 1').get();
   return row ? { householdId: row.household_id, operationId: row.platform_operation } : null;
 }

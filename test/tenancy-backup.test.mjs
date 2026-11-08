@@ -38,8 +38,8 @@ test('a consistent encrypted household bundle contains only its own store, vault
     assert.ok(files.has('packs/your-plans/entries/synthetic.md'));
     assert.ok(files.has('outbox/synthetic.json'));
     assert.ok([...files.keys()].every(p => !p.startsWith('work/') && !p.includes('platform')));
-    assert.equal(marker(f.context(f.A.id)), 'alpha');
-    assert.equal(marker(f.context(f.B.id)), 'bravo');
+    assert.equal(await marker(f.context(f.A.id)), 'alpha');
+    assert.equal(await marker(f.context(f.B.id)), 'bravo');
   } finally { await f.close(); }
 });
 
@@ -48,8 +48,8 @@ test('missing keys, mismatched identity, tampering, confirmation and symlink fai
   try {
     await assert.rejects(backup(f, 'missing-household'), { code: 'household_unavailable' });
     const valid = await backup(f);
-    const generation = () => f.platform.prepare('SELECT generation FROM households WHERE id = ?').get(f.A.id).generation;
-    const original = generation();
+    const generation = async () => (await f.platform.prepare('SELECT generation FROM households WHERE id = ?').get(f.A.id)).generation;
+    const original = await generation();
     await assert.rejects(restore(f, valid.file, { confirmation: f.B.id }), { code: 'restore_confirmation_required' });
     await assert.rejects(restore(f, valid.file, { householdId: f.B.id, confirmation: f.B.id }), { code: 'backup_identity_mismatch' });
     const bytes = readFileSync(valid.file); bytes[bytes.length - 20] ^= 1;
@@ -65,9 +65,9 @@ test('missing keys, mismatched identity, tampering, confirmation and symlink fai
     symlinkSync(f.B.root, join(f.A.root, 'packs', 'foreign'));
     await assert.rejects(backup(f), { code: 'snapshot_source_invalid' });
     rmSync(join(f.A.root, 'packs', 'foreign'));
-    assert.equal(generation(), original);
-    assert.equal(marker(f.context(f.A.id)), 'alpha');
-    assert.equal(marker(f.context(f.B.id)), 'bravo');
+    assert.equal(await generation(), original);
+    assert.equal(await marker(f.context(f.A.id)), 'alpha');
+    assert.equal(await marker(f.context(f.B.id)), 'bravo');
     assert.equal((await backup(f)).status, 'done', 'valid input still succeeds after refusals');
   } finally { await f.close(); }
 });
@@ -87,13 +87,13 @@ test('authenticated invalid schema, vault and path bundles and insufficient spac
       rewriteBundle(file, f.keys.backupKey, change);
       await assert.rejects(restore(f, file), { code });
       assert.equal(f.context(f.A.id).generation, 1);
-      assert.equal(marker(f.context(f.A.id)), 'alpha');
+      assert.equal(await marker(f.context(f.A.id)), 'alpha');
     }
     const { backupHousehold } = await import('../src/platform/household-backup.mjs');
     await assert.rejects(backupHousehold({ platform: f.platform, config: f.config, runtimes: f.server.app.runtimes, householdId: f.A.id, space: () => 0 }), { code: 'backup_space_required' });
     await assert.rejects(restore(f, valid.file, { space: () => 0 }), { code: 'backup_space_required' });
     assert.equal(f.context(f.A.id).generation, 1);
     await restore(f, valid.file);
-    assert.equal(marker(f.context(f.A.id)), 'alpha', 'valid bundle still restores after every refusal');
+    assert.equal(await marker(f.context(f.A.id)), 'alpha', 'valid bundle still restores after every refusal');
   } finally { await f.close(); }
 });

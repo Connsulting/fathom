@@ -55,7 +55,7 @@ export async function isolationFixture({ engine = 'fake', extra = {}, engineOpti
       ok(await hh.admin.client.post('/api/admin/users/invite', { email, role }));
       return enroll(mailedToken(before, email));
     };
-    const A = { id: app.platform.prepare('SELECT id FROM households WHERE serves_store = 1').get().id, canary: 'ALPHAFINCH' };
+    const A = { id: (await app.platform.prepare('SELECT id FROM households WHERE serves_store = 1').get()).id, canary: 'ALPHAFINCH' };
     // The first invitation is the OS operator bootstrap. All sessions are verified by HTTP WebAuthn.
     A.admin = await enroll(store.invite(A.id, 'alpha-admin@example.test', { role: 'admin' }).token);
     store.grantOperator(A.admin.identity.id);

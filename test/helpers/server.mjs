@@ -6,7 +6,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { openScope } from '../../src/storage/index.mjs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import net from 'node:net';
 import { randomBytes } from 'node:crypto';
@@ -89,15 +89,15 @@ export async function instanceSecretsOf(dataDir, mode) {
 
 // The original household of the instance in `dataDir` and its store file (read-only platform read):
 // { householdId, mode, root, file }, or null when there is no platform or no rooted household.
-export function servedStore(dataDir) {
+export async function servedStore(dataDir) {
   const platformFile = join(dataDir, PLATFORM_FILE);
   if (!existsSync(platformFile)) return null;
-  const db = new DatabaseSync(platformFile, { readOnly: true });
+  const db = await openScope({ path: platformFile, readOnly: true, journal: null, busyTimeout: 0 });
   let row;
   try {
-    row = db.prepare('SELECT id, mode, storage_root FROM households WHERE serves_store = 1').get();
+    row = await db.prepare('SELECT id, mode, storage_root FROM households WHERE serves_store = 1').get();
   } finally {
-    db.close();
+    await db.close();
   }
   if (!row || !row.storage_root) return null;
   const root = join(dataDir, row.storage_root);
@@ -210,7 +210,7 @@ export async function spawnServer({ dataDir, env = {}, npm = false, timeoutMs = 
       await waitExit(child, 5000);
     }
   };
-  const served = servedStore(dataDir);
+  const served = await servedStore(dataDir);
   return {
     baseUrl, port, dataDir, householdId: served?.householdId ?? null, root: served?.root ?? null, dbFile: served?.file ?? null,
     platformFile: join(dataDir, PLATFORM_FILE), child, output, stop, ...sessionClient(baseUrl),
@@ -308,13 +308,13 @@ export async function getScenario(baseUrl) {
 export async function createSessionFixture(platform, { email = 'admin@example.test', role = 'admin', now = () => Date.now() } = {}) {
   if (typeof platform === 'string') {
     const handle = await openPlatformStore(join(platform, PLATFORM_FILE));
-    try { return await createSessionFixture(handle, { email, role, now }); } finally { handle.close(); }
+    try { return await createSessionFixture(handle, { email, role, now }); } finally { await handle.close(); }
   }
   const { createAuthStore } = await src('src/auth/store.mjs');
   const store = createAuthStore(platform, { now });
   const household = store.servedHousehold();
   if (!household || typeof household.id !== 'string' || !household.id) throw new Error('the platform has no served household');
-  let user = store.findUser(email);
+  let user = await store.findUser(email);
   let membership = user ? store.membership(user.id, household.id) : null;
   if (membership?.status !== 'active') {
     const invited = store.invite(household.id, email, { role });
@@ -322,7 +322,7 @@ export async function createSessionFixture(platform, { email = 'admin@example.te
     user = invited.user;
     membership = store.membership(user.id, household.id);
   }
-  if (store.getUser(user.id).enrolledAt == null) store.markEnrolled(user.id);
+  if (store.getUser(user.id).enrolledAt == null) await store.markEnrolled(user.id);
   user = store.getUser(user.id);
   const { token, expiresAt } = store.createSession(user.id);
   return { user, householdId: household.id, role: membership.role, token, expiresAt, cookie: `__Host-fathom-session=${token}` };
@@ -353,7 +353,7 @@ export async function spawnAuthenticatedServer(options = {}) {
   try {
     const platform = await openPlatformStore(server.platformFile);
     let session;
-    try { session = await createSessionFixture(platform, options.session); } finally { platform.close(); }
+    try { session = await createSessionFixture(platform, options.session); } finally { await platform.close(); }
     const stop = server.stop;
     return {
       ...server, session, ...sessionClient(server.baseUrl, session),
@@ -363,7 +363,7 @@ export async function spawnAuthenticatedServer(options = {}) {
         try {
           const { createAuthStore } = await src('src/auth/store.mjs');
           createAuthStore(platform).revokeSession(session.token);
-        } finally { platform.close(); }
+        } finally { await platform.close(); }
       },
     };
   } catch (err) { await server.stop(); throw err; }
@@ -406,7 +406,7 @@ export async function serveAppFixture({
   const { createTransport } = await src('src/email/transport.mjs');
   const owned = platform ? null : await fixturePlatform(db, config);
   const handle = platform ?? owned.platform;
-  const served = handle.prepare('SELECT id, mode FROM households WHERE serves_store = 1').get();
+  const served = await handle.prepare('SELECT id, mode FROM households WHERE serves_store = 1').get();
   const dataDir = config?.dataDir ?? owned?.dir;
   const fixtureConfig = { ...config, dataDir, port, publicUrl: baseUrl };
   const instance = secrets ?? (await instanceSecretsOf(dataDir, served.mode)).secrets;
@@ -447,18 +447,18 @@ async function fixturePlatform(db, config) {
   if (file && existsSync(file)) {
     const { openPlatform } = await src('src/platform/db.mjs');
     const platform = openPlatform(file);
-    return { platform, dir: config.dataDir, close: () => platform.close() };
+    return { platform, dir: config.dataDir, close: async () => await platform.close() };
   }
   const { getSetting } = await src('src/store/db.mjs');
   const { createInstance } = await src('src/platform/db.mjs');
   const dir = await tempDir('fathom-platform-');
   const instance = createInstance(dir, { mode: getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real', init: () => {} });
-  instance.db.close();
+  await instance.db.close();
   return {
     platform: instance.platform,
     dir,
-    close() {
-      try { instance.platform.close(); } catch { /* already closed */ }
+    async close() {
+      try { await instance.platform.close(); } catch { /* already closed */ }
       rmSync(dir, { recursive: true, force: true });
     },
   };
@@ -493,11 +493,11 @@ export async function tempInstance({ mode = 'real', init = () => {} } = {}) {
       context ??= await make();
       return context;
     },
-    close() {
+    async close() {
       if (closed) return;
       closed = true;
-      try { db.close(); } catch { /* already closed */ }
-      try { platform.close(); } catch { /* already closed */ }
+      try { await db.close(); } catch { /* already closed */ }
+      try { await platform.close(); } catch { /* already closed */ }
     },
   };
 }
@@ -551,7 +551,7 @@ export async function tempDb() {
   const file = join(dataDir, DB_FILE);
   const db = openDb(file);
   migrate(db);
-  return { db, dataDir, file, close: () => db.close() };
+  return { db, dataDir, file, close: async () => await db.close() };
 }
 
 // Open an existing store file without migrating it.
@@ -573,7 +573,7 @@ export async function withPlatform(file, fn) {
   try {
     const { createAuthStore } = await src('src/auth/store.mjs');
     return await fn(platform, createAuthStore(platform));
-  } finally { platform.close(); }
+  } finally { await platform.close(); }
 }
 
 // Logical dump of every user table (rows as sorted JSON strings) to compare "unchanged".
@@ -583,11 +583,11 @@ export async function dumpStore(file) {
   try {
     const out = {};
     for (const t of listTables(db)) {
-      out[t] = db.prepare(`SELECT * FROM "${t}"`).all().map(r => JSON.stringify({ ...r })).sort();
+      out[t] = (await db.prepare(`SELECT * FROM "${t}"`).all()).map(r => JSON.stringify({ ...r })).sort();
     }
     return out;
   } finally {
-    db.close();
+    await db.close();
   }
 }
 

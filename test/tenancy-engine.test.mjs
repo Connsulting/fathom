@@ -39,7 +39,7 @@ const refused = (name, code) => err => {
   return true;
 };
 
-const roundsOf = (platform, id) => platform.prepare("SELECT * FROM model_rounds WHERE household_id = ? AND kind = 'round' ORDER BY reserved_at, rowid").all(id).map(r => ({ ...r }));
+const roundsOf = async (platform, id) => (await platform.prepare("SELECT * FROM model_rounds WHERE household_id = ? AND kind = 'round' ORDER BY reserved_at, rowid").all(id)).map(r => ({ ...r }));
 const month = () => new Date().toISOString().slice(0, 7);
 // The name of an offered tool (the household summary tool when offered).
 const toolNamed = (body, name) => (body.tools ?? []).map(t => t.name).find(n => n === name || n.endsWith(`__${name}`)) ?? body.tools?.[0]?.name;
@@ -63,7 +63,7 @@ async function ask(client, text) {
   return r.json.message;
 }
 
-test('each household\'s model requests carry only its own stored context', T, () => withLive({}, async ({ two, emulator }) => {
+test('each household\'s model requests carry only its own stored context', T, async () => withLive({}, async ({ two, emulator }) => {
   for (const [key, client] of [['A', two.A.client], ['B', two.B.client]]) {
     const saved = await client.postJson('/api/preferences', { text: `Prefer the ${CANARY[key]} wording` });
     assert.equal(saved.status, 200, saved.text.slice(0, 300));
@@ -80,8 +80,8 @@ test('each household\'s model requests carry only its own stored context', T, ()
     for (const r of slices[key]) assert.ok(!JSON.stringify(r.body).includes(CANARY[other]), `${key}'s rounds never carry ${other}'s context`);
   }
   // Each household's rounds are recorded under that household only.
-  assert.equal(roundsOf(two.platform, two.A.id).length, slices.A.length);
-  assert.equal(roundsOf(two.platform, two.B.id).length, slices.B.length);
+  assert.equal((await roundsOf(two.platform, two.A.id)).length, slices.A.length);
+  assert.equal((await roundsOf(two.platform, two.B.id)).length, slices.B.length);
 
   // The engine boundary itself: a direct call of one household never sees the other's data.
   const from = emulator.requests.length;
@@ -90,13 +90,13 @@ test('each household\'s model requests carry only its own stored context', T, ()
   assert.ok(body.includes(CANARY.B) && !body.includes(CANARY.A));
 }));
 
-test('a held household refuses while the other keeps answering and settling on unreserved credit', T, () => withLive({}, async ({ two, emulator, A, B }) => {
+test('a held household refuses while the other keeps answering and settling on unreserved credit', T, async () => withLive({}, async ({ two, emulator, A, B }) => {
   const budget = await src('src/platform/model-budget.mjs');
   emulator.script([{ destroy: true }]);
   const failed = await ask(two.A.client, 'Synthetic alpha question that fails');
   assert.equal(failed.notice, true, 'the failed round answers with a notice');
   assert.equal(emulator.requests.length, 1, 'no further round after the transport failure');
-  const [held] = roundsOf(two.platform, A);
+  const [held] = await roundsOf(two.platform, A);
   assert.equal(held.state, 'held');
   assert.equal(held.hold_code, 'cost_unknown');
 
@@ -110,15 +110,15 @@ test('a held household refuses while the other keeps answering and settling on u
   const answered = await ask(two.B.client, 'Synthetic bravo question');
   assert.ok(!answered.notice, 'B still answers');
   await two.ctx(B).engine.call(CALL);
-  const rowsB = roundsOf(two.platform, B);
+  const rowsB = await roundsOf(two.platform, B);
   assert.ok(rowsB.length >= 2);
   for (const row of rowsB) assert.equal(row.state, 'settled');
-  assert.equal(roundsOf(two.platform, A).length, 1, 'A gained no rounds');
+  assert.equal((await roundsOf(two.platform, A)).length, 1, 'A gained no rounds');
   const instance = await budget.committedUsd(two.platform, { month: month() });
   assert.ok(instance >= held.reserved_usd, 'the held reservation still counts against the instance');
 }));
 
-test('a principal revoked between rounds refuses the next round with authorization_revoked', T, () => withLive({}, async ({ two, emulator, A }) => {
+test('a principal revoked between rounds refuses the next round with authorization_revoked', T, async () => withLive({}, async ({ two, emulator, A }) => {
   const { runWithPrincipal, withoutPrincipal } = await src('src/platform/model-budget.mjs');
   const engine = two.ctx(A).engine;
   let authorized = true;
@@ -126,7 +126,7 @@ test('a principal revoked between rounds refuses the next round with authorizati
   await assert.rejects(runWithPrincipal({ check: () => authorized }, () => engine.call({ purpose: 'chat', messages: QUESTION, maxTokens: 64,
     tools: [PROBE(() => { authorized = false; return { ok: true }; })] })), refused('EngineOffError', 'authorization_revoked'));
   assert.equal(emulator.requests.length, 1, 'the round after revocation dispatched nothing');
-  const rows = roundsOf(two.platform, A);
+  const rows = await roundsOf(two.platform, A);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].state, 'settled');
 
@@ -145,7 +145,7 @@ test('a principal revoked between rounds refuses the next round with authorizati
   assert.equal(emulator.requests.length, 4);
 }));
 
-test('over HTTP, a session deleted or a membership removed mid-Ask stops the next round; an intact one completes', T, () => withLive({}, async ({ two, emulator, A }) => {
+test('over HTTP, a session deleted or a membership removed mid-Ask stops the next round; an intact one completes', T, async () => withLive({}, async ({ two, emulator, A }) => {
   const { createAuthStore } = await src('src/auth/store.mjs');
   const store = createAuthStore(two.platform);
   const toolRound = body => ({ toolUse: { name: toolNamed(body, 'household'), input: { operation: 'summary' } } });
@@ -158,39 +158,39 @@ test('over HTTP, a session deleted or a membership removed mid-Ask stops the nex
 
   // The admin's session is deleted while the first round is at the model.
   let from = emulator.requests.length;
-  let rowsBefore = roundsOf(two.platform, A).length;
+  let rowsBefore = (await roundsOf(two.platform, A)).length;
   emulator.script([body => { store.revokeSession(two.A.admin.token); return toolRound(body); }]);
   let r = await two.A.client.postJson('/api/threads', { text: 'Synthetic alpha question, session revoked' });
   assert.ok(r.status !== 200 || r.json?.message?.notice === true, `no answer after revocation: ${r.status}`);
   assert.equal(emulator.requests.length, from + 1, 'no round after the session was deleted');
-  assert.equal(roundsOf(two.platform, A).length, rowsBefore + 1);
+  assert.equal((await roundsOf(two.platform, A)).length, rowsBefore + 1);
 
   // A member is removed from the household while the first round is at the model.
   const member = await enrollSession(two.platform, A, 'alpha-member@example.test', 'member');
   const client = sessionClient(two.baseUrl, member);
   from = emulator.requests.length;
-  rowsBefore = roundsOf(two.platform, A).length;
+  rowsBefore = (await roundsOf(two.platform, A)).length;
   emulator.script([body => { store.removeMember(A, member.user.id); return toolRound(body); }]);
   r = await client.postJson('/api/threads', { text: 'Synthetic alpha question, member removed' });
   assert.ok(r.status !== 200 || r.json?.message?.notice === true, `no answer after removal: ${r.status}`);
   assert.equal(emulator.requests.length, from + 1, 'no round after the membership was removed');
-  assert.equal(roundsOf(two.platform, A).length, rowsBefore + 1);
+  assert.equal((await roundsOf(two.platform, A)).length, rowsBefore + 1);
 }));
 
-test('a bumped generation or a suspended household refuses before dispatch; restored, it answers', T, () => withLive({}, async ({ two, emulator, A }) => {
+test('a bumped generation or a suspended household refuses before dispatch; restored, it answers', T, async () => withLive({}, async ({ two, emulator, A }) => {
   const ctx = two.ctx(A);
-  const bump = d => two.platform.prepare('UPDATE households SET generation = generation + ? WHERE id = ?').run(d, A);
-  bump(1);
+  const bump = async d => await two.platform.prepare('UPDATE households SET generation = generation + ? WHERE id = ?').run(d, A);
+  await bump(1);
   try {
     await assert.rejects(ctx.engine.call(CALL), refused('EngineOffError', 'household_unavailable'));
   } finally {
-    bump(-1);
+    await bump(-1);
   }
   assert.equal(emulator.requests.length, 0);
   await ctx.engine.call(CALL);
   assert.equal(emulator.requests.length, 1, 'the current generation is admitted');
 
-  two.platform.prepare("UPDATE households SET status = 'suspended' WHERE id = ?").run(A);
+  await two.platform.prepare("UPDATE households SET status = 'suspended' WHERE id = ?").run(A);
   try {
     await assert.rejects(ctx.engine.call(CALL), err => {
       assert.equal(err?.name, 'EngineOffError', err?.stack);
@@ -198,7 +198,7 @@ test('a bumped generation or a suspended household refuses before dispatch; rest
       return true;
     });
   } finally {
-    two.platform.prepare("UPDATE households SET status = 'active' WHERE id = ?").run(A);
+    await two.platform.prepare("UPDATE households SET status = 'active' WHERE id = ?").run(A);
   }
   assert.equal(emulator.requests.length, 1, 'nothing dispatched while suspended');
   await ctx.engine.call(CALL);

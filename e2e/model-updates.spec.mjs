@@ -25,7 +25,7 @@ test.afterEach(async ({ request }) => { await resetDemo(request); });
 // and a proposal of a step check plus an expected payment spanning the whole note.
 async function seed({ anchored = true } = {}) {
   return withLocalHousehold(NOW, async (s) => {
-    s.db.prepare('INSERT INTO recs (id,def,status,updated_at) VALUES (?,?,?,?)')
+    await s.db.prepare('INSERT INTO recs (id,def,status,updated_at) VALUES (?,?,?,?)')
       .run(REC, JSON.stringify({ id: REC, title: 'Synthetic payroll check', tasks: [{ t: 'Synthetic payroll true-up' }] }), 'proposed', NOW);
     const bytes = Buffer.from(NOTE), name = 'synthetic-payroll-note.txt';
     const file = await ingestFile(s.db, { name, bytes, mime: 'text/plain' },
@@ -38,12 +38,12 @@ async function seed({ anchored = true } = {}) {
     } };
     const step = { tool: 'act_on_recommendation', operation: 'step', span, args: { id: REC, index: 0, checked: true } };
     const ctx = { db: s.db, household: s.household, actorId: 'demo', now: NOW, scheduler: { trigger() {} } };
-    const staged = stageUpdate(ctx, { source, actions: [step, expected], ...(anchored ? { capturedAt: '2032-03-02T14:00:00Z' } : {}) });
+    const staged = await stageUpdate(ctx, { source, actions: [step, expected], ...(anchored ? { capturedAt: '2032-03-02T14:00:00Z' } : {}) });
     return { fileId: file.fileId, fileStatus: file.status, ...staged };
   });
 }
 
-const expectedCount = (fileId) => withLocalHousehold(NOW, (s) => s.db.prepare('SELECT count(*) n FROM expected_transactions WHERE file_id=?').get(fileId).n);
+const expectedCount = async (fileId) => withLocalHousehold(NOW, async (s) => (await s.db.prepare('SELECT count(*) n FROM expected_transactions WHERE file_id=?').get(fileId)).n);
 
 test('a note proposes its actions in one sentence, approves in plain words, and Undo reverts it', async ({ page, request }) => {
   const seeded = await seed();

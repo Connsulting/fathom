@@ -3,13 +3,22 @@
 // reaches a seed is asynchronous, and every call of one must be consumed as a Promise. The
 // architecture test uses it to reject un-awaited storage, auth and admission calls.
 
-import { parse } from 'acorn';
+import { Parser } from 'acorn';
+
+// Parses `await` in any function, so a module mid-conversion (an await already written inside a
+// function not yet marked async) still yields a tree; the architecture test checks async-ness itself.
+class AwaitAnywhere extends Parser {
+  get canAwait() { return true; }
+}
+const parse = (src, options) => AwaitAnywhere.parse(src, options);
 import { fullAncestor } from 'acorn-walk';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 const QUERY = new Set(['get', 'all', 'run']);
 const PORT_METHODS = new Set(['transaction', 'savepoint', 'capture']);
+// Storage metadata and lifecycle operations (always Promise valued).
+export const STORAGE_OPS = new Set(['columns', 'tables', 'migrate', 'checkpoint', 'hasTable', 'sizeBytes', 'backupTo', 'applySchema', 'integrityCheck', 'foreignKeyCheck']);
 // Method names too generic to resolve by name alone.
 const GENERIC = new Set([
   'get', 'all', 'run', 'set', 'has', 'add', 'delete', 'clear', 'map', 'filter', 'find', 'forEach',
@@ -58,13 +67,14 @@ export function loadModule(file) {
 }
 
 // Build the analysis. `files` are absolute paths. Returns the graph with `asyncFns`, `calls`.
-export function analyze(files) {
+export function analyze(files, { roots = () => false } = {}) {
   const modules = new Map(files.map(f => [f, loadModule(f)]));
   const fns = [];            // FunctionInfo
   const fnOf = new Map();    // node -> FunctionInfo
   const methods = new Map(); // method name -> [FunctionInfo]
   const calls = [];          // { mod, node, ancestors }
   const refs = [];           // identifier references to functions as values
+  const awaits = [];         // await expressions, whose functions must be async
 
   for (const mod of modules.values()) {
     mod.imports = new Map();
@@ -115,6 +125,8 @@ export function analyze(files) {
         if (method) { if (!methods.has(method)) methods.set(method, []); methods.get(method).push(info); }
       } else if (node.type === 'CallExpression') {
         calls.push({ mod, node, ancestors: ancestors.slice(0, -1) });
+      } else if (node.type === 'AwaitExpression' || (node.type === 'ForOfStatement' && node.await)) {
+        awaits.push({ mod, node, ancestors: ancestors.slice(0, -1) });
       } else if (node.type === 'Identifier') {
         refs.push({ mod, node, ancestors: ancestors.slice(0, -1) });
       }
@@ -218,7 +230,9 @@ export function analyze(files) {
       }
       if (obj.type === 'MemberExpression' && mod.statementProps?.has(propName(obj.property))) return { seed: 'query', targets: [] };
     }
-    if (PORT_METHODS.has(name) && node.arguments.length >= 1 && isFunction(node.arguments[0])) return { seed: 'port', targets: [] };
+    if (PORT_METHODS.has(name) && node.arguments.length >= 1 && (isFunction(node.arguments[0])
+      || (node.arguments[0].type === 'Identifier' && DB_NAME.test(obj.type === 'Identifier' ? obj.name : obj.type === 'MemberExpression' ? propName(obj.property) ?? '' : '')))) return { seed: 'port', targets: [] };
+    if (STORAGE_OPS.has(name)) return { seed: 'op', targets: [] };
     if (name === 'close' && node.arguments.length === 0) {
       const root = obj.type === 'MemberExpression' ? propName(obj.property) : obj.type === 'Identifier' ? obj.name : null;
       if (root && DB_NAME.test(root)) return { seed: 'close', targets: [] };
@@ -296,6 +310,8 @@ export function analyze(files) {
       if (fn) mark(fn);
     }
   };
+  for (const fn of fns) if (roots(fn)) mark(fn);
+  for (const a of awaits) { const fn = enclosing(a.ancestors); if (fn && !fn.wasAsync) mark(fn); }
   drain();
   for (let changed = true; changed;) {
     changed = false;

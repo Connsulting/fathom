@@ -12,10 +12,10 @@ const REAL = { FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_EMAIL_TRANSPORT: '
 // Accounts and (MT-03) the household-bound api_keys live in platform.sqlite.
 async function platformOf(server, fn) {
   const platform = await openPlatformStore(server.platformFile);
-  try { return await fn(platform); } finally { platform.close(); }
+  try { return await fn(platform); } finally { await platform.close(); }
 }
 async function userClient(server, email, role = 'member') {
-  const fixture = await platformOf(server, platform => createSessionFixture(platform, { email, role }));
+  const fixture = await platformOf(server, async platform => createSessionFixture(platform, { email, role }));
   return { ...sessionClient(server.baseUrl, fixture), fixture };
 }
 async function create(client, name, extra = {}) {
@@ -61,9 +61,9 @@ test('members manage their own keys, admins manage all keys, and session ownersh
     const own = await create(alice, 'Member A key', { scopes: ['write:recs'], userId: bob.fixture.user.id, user_id: bob.fixture.user.id });
     const other = await create(bob, 'Member B key');
     const legacy = await create(server, 'Existing household key');
-    await platformOf(server, db => {
-      assert.equal(db.prepare('SELECT user_id FROM api_keys WHERE id = ?').get(own.record.id).user_id, alice.fixture.user.id);
-      assert.throws(() => db.prepare('UPDATE api_keys SET user_id = NULL WHERE id = ?').run(legacy.record.id));
+    await platformOf(server, async db => {
+      assert.equal((await db.prepare('SELECT user_id FROM api_keys WHERE id = ?').get(own.record.id)).user_id, alice.fixture.user.id);
+      assert.throws(async () => await db.prepare('UPDATE api_keys SET user_id = NULL WHERE id = ?').run(legacy.record.id));
     });
     const listed = await alice.request({ path: '/api/keys' });
     assert.equal(listed.status, 200);
@@ -102,7 +102,7 @@ test('removing a user invalidates sessions and their bearer keys immediately, pr
     assert.equal(result.status, 200);
     assert.equal((await removed.request({ path: '/api/scenario' })).status, 401);
     await denied(server, own.key);
-    assert.equal(await platformOf(server, db => db.prepare('SELECT count(*) AS n FROM api_keys WHERE id = ?').get(own.record.id).n), 0);
+    assert.equal(await platformOf(server, async db => (await db.prepare('SELECT count(*) AS n FROM api_keys WHERE id = ?').get(own.record.id)).n), 0);
     await working(server, other.key);
     await working(server, legacy.key);
     assert.equal((await retained.request({ path: '/api/scenario' })).status, 200);
@@ -134,9 +134,9 @@ test('a retained key refuses an inactive creator while another creators key stay
     const legacy = await create(server, 'Admin key');
     await working(server, own.key);
     await working(server, legacy.key);
-    await platformOf(server, platform => platform.prepare("UPDATE household_memberships SET status = 'removed' WHERE user_id = ?").run(member.fixture.user.id));
+    await platformOf(server, async platform => await platform.prepare("UPDATE household_memberships SET status = 'removed' WHERE user_id = ?").run(member.fixture.user.id));
     await denied(server, own.key);
-    assert.equal(await platformOf(server, db => db.prepare('SELECT count(*) AS n FROM api_keys WHERE id = ?').get(own.record.id).n), 1, 'the row is still there; verification fails closed');
+    assert.equal(await platformOf(server, async db => (await db.prepare('SELECT count(*) AS n FROM api_keys WHERE id = ?').get(own.record.id)).n), 1, 'the row is still there; verification fails closed');
     await working(server, legacy.key);
     const all = await server.request({ path: '/api/keys' });
     assert.equal(all.status, 200);

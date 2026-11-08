@@ -16,15 +16,15 @@ const ACCOUNT = 'a_biz';
 
 let store;
 before(async () => {
-  store = await tempDb(); seedDemo(store.db);
+  store = await tempDb(); await seedDemo(store.db);
   const add = store.db.prepare('INSERT INTO transactions (account_id, date, amount, description, dedupe_key) VALUES (?, ?, ?, ?, ?)');
-  add.run(ACCOUNT, '2099-01-02', -1250, ACH, 'ui3-k1');
-  add.run(ACCOUNT, '2099-01-03', -1250, WIRE, 'ui3-k2');
+  await add.run(ACCOUNT, '2099-01-02', -1250, ACH, 'ui3-k1');
+  await add.run(ACCOUNT, '2099-01-03', -1250, WIRE, 'ui3-k2');
 });
-after(() => store?.close());
+after(async () => await store?.close());
 
-test('Confirm account context lists recent rows by readable name, keeping the raw text, date and amount', () => {
-  const detail = cardDetail(store.db, { kind: 'account_owner', subject: ACCOUNT });
+test('Confirm account context lists recent rows by readable name, keeping the raw text, date and amount', async () => {
+  const detail = await cardDetail(store.db, { kind: 'account_owner', subject: ACCOUNT });
   const recent = detail.account?.recent ?? detail.recent;
   assert.ok(Array.isArray(recent) && recent.length >= 2, 'recent rows are listed');
   const [wire, ach] = recent;
@@ -32,8 +32,8 @@ test('Confirm account context lists recent rows by readable name, keeping the ra
   assert.deepEqual([ach.description, ach.name], [ACH, 'Gusto payroll (net)']);
 });
 
-test('Confirm near-duplicate comparisons carry each entry\'s readable name beside its raw description', () => {
-  const detail = cardDetail(store.db, { kind: 'near_duplicate', subject: 'ui3-k1|ui3-k2', context: { keys: ['ui3-k1', 'ui3-k2'] } });
+test('Confirm near-duplicate comparisons carry each entry\'s readable name beside its raw description', async () => {
+  const detail = await cardDetail(store.db, { kind: 'near_duplicate', subject: 'ui3-k1|ui3-k2', context: { keys: ['ui3-k1', 'ui3-k2'] } });
   assert.deepEqual(detail.entries.map((e) => [e.description, e.name]), [[ACH, 'Gusto payroll (net)'], [WIRE, 'Wire to Sample Trading']]);
 });
 
