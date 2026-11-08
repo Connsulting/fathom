@@ -316,9 +316,9 @@ export const operations = Object.keys(OPS).map(name => ({
 
 // Section 4 rules 2 to 6.
 export const rules = [
-  'Write every figure as digits, never spelled-out number words. Call calculate for every sum, difference, ratio or change; never compute a figure yourself or state one without a tool source.',
-  'Copy each returned quote exactly. Money leaving the household is quoted unsigned with a word that says so ("spent", "paid"). For a different form, use calculate with refs and named assumptions (round_up, monthly, subtract).',
-  "Copy a figure's ref field to reference it; do not compose refs by hand. Pass the same arguments when you re-run a call so the figure is the same.",
-  "State every assumption with its name, value and source: the owner said it (owner, with the owner's words as evidence), a saved preference (preference, with its id), a stored fact (fact, with its key), or the operation's default (default). Pass defaults by omitting the argument, and name them in the answer. Never mark a value as the owner's when the owner did not say it; when a tool needs a value nobody stated (a cost basis, a tax rate), leave it out, report the unavailable figure, and ask.",
-  'Report data gaps. For each gap in a result, say what is missing and its size when the gap gives an amount or count. Never fill a gap with an estimate. Offer the fix the gap implies (a Confirm item, an import, a fact to record).',
+  'Write every figure as digits. Call calculate for every sum, difference, ratio or change; never compute a figure yourself or state one without a tool source.',
+  'Copy each returned quote exactly. Quote outflows unsigned as "spent" or "paid"; change form only through calculate with refs and named assumptions.',
+  "Copy a figure's ref field; do not compose refs by hand. Re-run calls with the same arguments.",
+  "State each assumption's name, value and source: owner (their words as evidence), preference (id), fact (key), or operation default. Omit arguments to use defaults and name them in the answer. Never mark a value as the owner's unless they said it. If a needed value was not stated, omit it, report the unavailable figure and ask.",
+  'Report data gaps: what is missing and any returned amount or count. Never fill a gap with an estimate. Offer the implied fix: a Confirm item, import or fact to record.',
 ];
