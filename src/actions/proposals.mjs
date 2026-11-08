@@ -42,6 +42,7 @@ const TABLES = { 'write:goals': ['goals', 'id'], 'write:facts': ['facts', 'key']
   'write:steps': ['recs', 'id'], 'write:preferences': ['preferences', 'id'] };
 
 const DOMAIN_TABLES = {
+  'write:sources': ['accounts','files','transactions','balances','positions','pnl_lines','tax_payments','documents','held_facts','entity_aliases','sources','source_changes','confirm_items','confirm_undo','ingest_epoch','transaction_category_corrections','transaction_category_imports','transaction_category_guesses'],
   'write:accounts': ['accounts','transactions','balances','positions','simplefin_accounts','simplefin_snapshots','confirm_items','confirm_undo','confirm_auto','confirm_auto_declined','ingest_epoch','sources','superseded_rows','transaction_category_corrections','transaction_category_imports','transaction_category_guesses'],
   'write:categories': ['accounts','transactions','transaction_category_corrections','category_merchant_rules','category_source_rules','confirm_items','confirm_undo','confirm_auto'],
   'write:confirm': ['accounts','transactions','balances','positions','documents','tax_payments','pnl_lines','sources','files','confirm_items','confirm_undo','confirm_auto','confirm_auto_declined','ingest_epoch','held_facts','entity_aliases','category_source_rules','category_merchant_rules','transaction_category_corrections','yearend_marks'],

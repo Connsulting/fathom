@@ -225,7 +225,7 @@ describe('GET /api/mcp', () => {
     assert.equal(byName.act_on_recommendation, 'write');
     for (const n of ['household', 'knowledge', 'knowledge', 'knowledge']) assert.equal(byName[n], 'read', n);
     assert.deepEqual(r.json.scopes.map(x => x.id), ['read', 'write:recs', 'write:preferences', 'write:facts', 'write:steps', 'write:goals',
-      'write:accounts', 'write:categories', 'write:confirm', 'write:imports', 'write:jobs', 'write:decisions']);
+      'write:accounts', 'write:categories', 'write:confirm', 'write:imports', 'write:jobs', 'write:decisions', 'write:sources']);
     for (const sc of r.json.scopes) {
       assert.ok(typeof sc.label === 'string' && sc.label.length > 0);
       assert.ok(typeof sc.access === 'string' && sc.access.length > 0);

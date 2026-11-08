@@ -392,13 +392,16 @@ export function undoAccountAnswer(db, kind, accountId, before, { now } = {}) {
 // answers resting on it. An item the owner reopens (owner or auto answer) is always asked again,
 // never auto-answered: it is declined. Returns {item, factsChanged}.
 export function reopenItem(db, id, { now } = {}) {
+  return confirmTransaction(db, () => reopenItemInTx(db, id, { now }));
+}
+
+// reopenItem inside the caller's open transaction (an action receipt's Undo runs in one).
+export function reopenItemInTx(db, id, { now } = {}) {
   const item = answeredItem(db, id);
   const reason = finalReason(db, item);
   if (reason) throw new ConfirmError('final', reason);
-  return confirmTransaction(db, () => {
-    const reverted = reopenOne(db, item, { now });
-    return { item: getItem(db, item.id), factsChanged: touches(reverted, 'facts') };
-  });
+  const reverted = reopenOne(db, item, { now });
+  return { item: getItem(db, item.id), factsChanged: touches(reverted, 'facts') };
 }
 
 // Reopen inside the caller's transaction and decline the item (dependents reverted with it are not

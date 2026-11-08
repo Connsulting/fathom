@@ -115,3 +115,19 @@ test('large Confirm batches keep the result bounded while applying and undoing e
  await undo(s.ctx,result);
  assert.equal(s.db.prepare("SELECT count(*) AS n FROM accounts WHERE id LIKE 'bulk-%' AND owner IS NULL").get().n,items.length);
 });
+
+test('C8 eval scripts select the requested household subjects without unrelated substitutes',async t=>{
+ const {createEvalStore}=await import('../evals/harness.mjs');const s=await createEvalStore();t.after(()=>s.close());
+ const owner=await import('../evals/scripts/q59-change-account-owner.mjs');
+ const ownerCalls=(await owner.script({db:s.db}))[0].toolCalls;
+ const account=s.db.prepare('SELECT owner,kind FROM accounts WHERE id=?').get(ownerCalls[1].args.id);
+ assert.equal(account.owner,'{n:spouse}');assert.equal(account.kind,'taxable');
+ const merchant=await import('../evals/scripts/q60-merchant-rule-groceries.mjs');
+ const merchantCalls=(await merchant.script({db:s.db}))[0].toolCalls;
+ const search=await callTool('transactions',merchantCalls[0].args,{db:s.db});
+ assert.ok(search.rows.length>0);assert.ok(search.rows.some(row=>row.merchant===merchantCalls[1].args.merchant));
+ const yearend=await import('../evals/scripts/q61-mark-1099-not-needed.mjs');
+ const yearendCalls=(await yearend.script({db:s.db,clock:'2026-11-05'}))[0].toolCalls;
+ const health=await callTool('household',yearendCalls[0].args,{db:s.db,clock:'2026-11-05'});
+ assert.match(health.yearend.items.find(item=>item.key===yearendCalls[1].args.itemKey).issuer,/credit union/i);
+});
