@@ -64,6 +64,9 @@ import { signInTarget } from '../auth/return-path.js';
 //    q.context, and api.ask(questionId, key, { context }) and api.askFree(text, key, { context })
 //    take it as an option. context is a list of { kind, id } strings (at most 8) the owner pointed
 //    at; it is sent only when it has at least one entry.
+//  - api.registerFigures(map) keeps Ask block figures ({ 'blk:<messageId>:<blockId>:<n>': { value, unit,
+//    label, kind, asOf, source, gaps, provenance } }) for api.fig and the popover (assumptions as Assumes rows), which writes a unit-tagged value by
+//    its unit (a ratio as a percent, a date as a date) and a null one as Unavailable with its gap messages.
 //  - api.setFigAction(fn | null): while set, the figure popover shows Add to chat; a click calls
 //    fn(key, label) with the figure key and its plain label, then closes the popover.
 //  - api.accountDetail(id) GETs the account dialog's data and resolves it, or null. api.accountTransactions(id,
@@ -893,6 +896,14 @@ function actionUndo(id) {
   return send('/api/actions/' + encodeURIComponent(id) + '/undo', {}, null, null, 'Could not undo that change. ');
 }
 
+// Confirm or decline (decision) the stored proposal on message `messageId` ('m<id>') in Ask thread
+// `threadId`; the fresh scenario carries the thread's new messages. Resolves the reply or null.
+function proposalDecide(threadId, messageId, decision) {
+  if (threadId == null || threadId === '' || !/^m\d+$/.test(String(messageId)) || (decision !== 'confirm' && decision !== 'decline')) return done();
+  return send('/api/threads/' + encodeURIComponent(threadId) + '/proposals/' + encodeURIComponent(messageId), { decision },
+    d => (d.message ? mapMsg(d.message) : null), null, 'Could not save that decision. ');
+}
+
 function goalCreate(fields) {
   if (!fields || typeof fields !== 'object') return done();
   return send('/api/goals', fields, d => d.goal || null, null, 'Could not save that goal. ');
@@ -1023,6 +1034,23 @@ async function accountTransactions(id, opts) {
   if (!page || !Array.isArray(page.items)) return null;
   registerExtra(page);
   return page;
+}
+
+// Ask block figures (web/horizon/screens/ask-blocks.js): { key: { value, unit, label, kind, asOf,
+// source, gaps, provenance, quote? } } kept beside the scenario's under their blk: keys, each with
+// its own source entry, so api.fig and the popover read them like any other figure.
+function registerFigures(map) {
+  if (!map || typeof map !== 'object') return;
+  for (const [k, e] of Object.entries(map)) {
+    if (!e || typeof e !== 'object' || !String(k).startsWith('blk:')) continue;
+    const src = 'blk-src:' + k;
+    const provenance = e.provenance && typeof e.provenance === 'object' && !Array.isArray(e.provenance) ? e.provenance : {};
+    // Assumptions the figure was computed under read as the popover's Assumes rows.
+    const notes = arr(provenance.assumptions).map(a => (a && typeof a.stated === 'string' ? a.stated : '')).filter(Boolean);
+    extraFig.set(k, { v: e.value ?? null, unit: typeof e.unit === 'string' ? e.unit : 'usd', label: e.label || '', kind: e.kind || 'e', src,
+      gaps: arr(e.gaps), provenance, ...(notes.length ? { notes } : {}), ...(e.stale ? { stale: true } : {}) });
+    extraSrc.set(src, { label: e.source || '', asOf: e.asOf || '' });
+  }
 }
 
 // Keep a fetched response's figures and sources for api.fig and the provenance popover.
@@ -1360,6 +1388,7 @@ const api = {
   tourSeen,
   preferenceDelete,
   actionUndo,
+  proposalDecide,
   accountMask,
   accountOwner,
   accountKind,
@@ -1404,6 +1433,7 @@ const api = {
   advisorCheckin,
   advisorPacket,
   lastError: () => lastError,
+  registerFigures,
   figPopover: el => openPopover(el),
   setFigAction: fn => { figAction = typeof fn === 'function' ? fn : null; },
 };
@@ -1412,6 +1442,27 @@ const api = {
 
 let pop = null;   // { el, anchor }
 let figAction = null;   // the design's Add to chat handler, or null
+
+// A figure's value as the popover writes it. A figure without a unit (the scenario's) is money; a
+// unit-tagged one (an Ask block figure) is written by its unit, and a null one reads Unavailable.
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const UNIT_WORD = { months: 'month', years: 'year', days: 'day' };
+const PER_UNIT = { usd_per_month: ' a month', usd_per_year: ' a year' };
+function popValue(f) {
+  if (!f.unit) return moneyCents(f.v);
+  if (f.v === null || f.v === undefined) return 'Unavailable';
+  if (f.unit === 'date') {
+    const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(String(f.v));
+    return m ? (m[3] ? MONTHS[Number(m[2]) - 1] + ' ' + Number(m[3]) + ', ' + m[1] : MONTHS[Number(m[2]) - 1] + ' ' + m[1]) : String(f.v);
+  }
+  const n = Number(f.v);
+  if (f.unit in PER_UNIT || f.unit === 'usd') return moneyCents(n) + (PER_UNIT[f.unit] || '');
+  const sig = x => String(Number(Number(x).toPrecision(6)));
+  if (f.unit === 'ratio') return sig(n * 100) + '%';
+  if (f.unit === 'age') return Number.isInteger(n) ? String(n) : Math.trunc(n) + ' and a half';
+  if (UNIT_WORD[f.unit]) return sig(n) + ' ' + UNIT_WORD[f.unit] + (n === 1 ? '' : 's');
+  return sig(n);
+}
 
 function closePopover() {
   if (pop) { pop.el.remove(); pop = null; }
@@ -1433,10 +1484,14 @@ function openPopover(anchor, fromKey) {
   el.setAttribute('aria-label', 'Figure source');
   el.innerHTML =
     '<div class="fx-pop-label">' + esc(f.label || key) + '</div>' +
-    '<div class="fx-pop-val">' + esc(moneyCents(f.v)) + '</div>' +
+    '<div class="fx-pop-val">' + esc(popValue(f)) + '</div>' +
     '<div class="fx-pop-row"><span class="fx-pop-k">Source</span><span class="fx-pop-v">' + esc(src.label) + '</span></div>' +
     (src.asOf ? '<div class="fx-pop-row"><span class="fx-pop-k">As of</span><span class="fx-pop-v">' + esc(src.asOf) + '</span></div>' : '') +
     '<div class="fx-pop-row"><span class="fx-pop-k">Kind</span><span class="fx-pop-v">' + esc(kind) + '</span></div>' +
+    // An Ask block figure: why it is unavailable or incomplete, and whether its data changed since.
+    (Array.isArray(f.gaps) ? f.gaps.filter(g => g && typeof g.message === 'string' && g.message).map(g =>
+      '<div class="fx-pop-row"><span class="fx-pop-k">' + (f.v == null ? 'Why' : 'Gap') + '</span><span class="fx-pop-v">' + esc(g.message) + '</span></div>').join('') : '') +
+    (f.stale ? '<div class="fx-pop-row"><span class="fx-pop-k">Note</span><span class="fx-pop-v">Changed since this answer</span></div>' : '') +
     // Kept only for reference (R2-9), then readable assumptions (MGN1); both are stored plain text.
     (typeof f.unavailable === 'string' && f.unavailable ? '<div class="fx-pop-row"><span class="fx-pop-k">Not current</span><span class="fx-pop-v">' + esc(f.unavailable) + '</span></div>' : '') +
     (Array.isArray(f.notes) ? f.notes.filter(n => typeof n === 'string').map(n => '<div class="fx-pop-row"><span class="fx-pop-k">Assumes</span><span class="fx-pop-v">' + esc(n) + '</span></div>').join('') : '') +
