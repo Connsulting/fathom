@@ -10,7 +10,7 @@ import { createLivePacks, yourPlansDir } from '../src/packs/live.mjs';
 import { createRuntimeEngine } from '../src/engine/runtime.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
-import { createLiveAnswerer } from '../src/api/answerer.mjs';
+import { createLiveAnswerer, NOTICES } from '../src/api/answerer.mjs';
 import { callTool } from '../src/tools/index.mjs';
 import { ModelCallError } from '../src/engine/errors.mjs';
 
@@ -112,4 +112,33 @@ test('a pack removed from disk is disclosed, and a corrected rebuild clears the 
   assert.ok(buildScenario(db, { packs }).live.yourPlans.coverage.some(issue => issue.stage === 'pack-load'));
   await buildYourPlans({ db, household, engine: runtime, clock: CLOCK });
   assert.deepEqual(buildScenario(db, { packs }).live.yourPlans.coverage, []);
+});
+
+test('missing knowledge cannot turn an empty model response into a successful answer', async t => {
+  const s = await fixture(t);
+  const { db, household, runtime } = s;
+  await buildYourPlans({ db, household, engine: scripted(runtime, 'extraction'), clock: CLOCK });
+  const engine = new Proxy(runtime, { get(target, key) {
+    if (key === 'call') return request => target.call({ ...request, fake: [{ text: '' }] });
+    const value = Reflect.get(target, key, target);
+    return typeof value === 'function' ? value.bind(target) : value;
+  } });
+  const packs = createLivePacks(db, { dataDir: household.root });
+  const reply = await createLiveAnswerer({ engine, packs, root: household.root, services: { engine, household, config: s.config } })
+    .answer({ db, key: 'ask:0123456789ab', text: 'What do our plan documents say?' });
+  assert.equal(reply.notice, true);
+  assert.deepEqual(reply.paragraphs, [NOTICES.modelError]);
+});
+
+test('an unreadable text-only document can be removed from the pack without deleting its stored record', async t => {
+  const s = await fixture(t);
+  const { db, household, runtime } = s;
+  const inserted = db.prepare("INSERT INTO documents (doc_type,fields) VALUES ('plan',?)").run(JSON.stringify({ text: '' }));
+  const documentId = Number(inserted.lastInsertRowid);
+  const result = await buildYourPlans({ db, household, engine: runtime, clock: CLOCK });
+  assert.ok(result.coverage.some(issue => issue.documentId === documentId && issue.action === 'remove'));
+  const repaired = await buildYourPlans({ db, household, engine: runtime, clock: CLOCK, excludeDocumentIds: [documentId] });
+  assert.deepEqual(repaired.coverage, []);
+  assert.ok(db.prepare('SELECT 1 FROM documents WHERE id = ?').get(documentId));
+  assert.deepEqual((await buildYourPlans({ db, household, engine: runtime, clock: CLOCK })).coverage, [], 'the exclusion survives later builds');
 });
