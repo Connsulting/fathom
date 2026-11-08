@@ -134,6 +134,22 @@ test('the real projection includes observed estimates and carries no missing-pay
   assert.ok(!out.info.gaps.some(g => /payment/.test(g.code)));
 }));
 
+test('a single filer sees a payer gap until the connected account owner is known', () => fixture(async (s, opts) => {
+  await syncSimplefin(s.db, opts);
+  const facts = { 'household.filingStatus': 'single', 'household.state': 'VA' };
+  const compute = () => {
+    const data = loadPlanningData(s.db, CLOCK);
+    return computeFigures(data, facts, { clock: CLOCK, entities: resolveEntities(data, facts), owner: facts });
+  };
+  assert.ok(compute().info.gaps.some(g => g.code === 'estimated_payer_unknown'));
+  const transaction = s.db.prepare("SELECT * FROM transactions WHERE external_id='fed-q2'").get();
+  const question = pendingItems(s.db).find(i => i.kind === 'account_owner' && i.subject === transaction.account_id);
+  assert.ok(question);
+  answer(s.db, question.id, 'owner', { now: NOW });
+  assert.equal(compute().figures['tax.fed.paid'].v, 1200);
+  assert.ok(!compute().info.gaps.some(g => g.code === 'estimated_payer_unknown'));
+}, [postings()[0]]));
+
 test('uncertain payees need one answer and a non-estimate never enters the estimate totals', () => fixture(async (s, opts) => {
   await syncSimplefin(s.db, opts);
   const item = pendingItems(s.db).find(i => i.kind === 'transaction_payment');

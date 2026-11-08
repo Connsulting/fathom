@@ -4,7 +4,7 @@
 // classifyPayments(data, {persons, f, isVa}) -> {fed: {paid, withheld}, va: {paid, withheld},
 //   lastPaidDate, lastWithheldDate, warnings}; each figure is {rows, ids, total, blocked}
 
-import { cents } from '../../store/db.mjs';
+import { cents, parseJson } from '../../store/db.mjs';
 
 export function jurisdictionOf(value) {
   const j = String(value ?? '').trim().toLowerCase();
@@ -62,8 +62,15 @@ export function classifyPayments(data, { persons, f, isVa }) {
       // Workbook groups are only federal or state; a state payment is Virginia's for a Virginia household.
       if (!b || (j === 'unknown-state' && !isVa)) continue;
       if (r.tax_year_basis === 'sheet_label') block(b.paid, 'tax_year_unconfirmed');
-      if (!mfj && r.parser === 'transaction-payment' && !persons.includes(r.recipient)) block(b.paid, 'estimated_payer_unknown');
-      add(b.paid, r);
+      let payment = r;
+      if (r.parser === 'transaction-payment') {
+        const accountId = parseJson(r.locator, {}).transaction?.accountId;
+        const holder = data.accounts?.find(a => a.id === accountId)?.owner;
+        const recipient = /^(you|owner)$/i.test(holder ?? '') ? 'owner' : /^(your spouse|spouse)$/i.test(holder ?? '') ? 'spouse' : 'unknown';
+        payment = { ...r, recipient, payer: recipient };
+        if (!mfj && !persons.includes(recipient)) block(b.paid, 'estimated_payer_unknown');
+      }
+      add(b.paid, payment);
       continue;
     }
     if (j === 'other-state') { out.warnings.push('other_state_withholding'); continue; }

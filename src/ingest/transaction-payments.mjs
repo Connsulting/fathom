@@ -29,11 +29,12 @@ function classify(t) {
   const year = Number(t.date.slice(0, 4));
   const taxYear = years.length === 1 ? years[0] : years.length === 0 && !t.date.slice(5).startsWith('01-') ? year : null;
   const quarter = Number(/\bq([1-4])\b/i.exec(text)?.[1]) || null;
-  return { jurisdiction: j, taxYear, quarter, sure: explicit && !!j && j !== 'state' && taxYear !== null };
+  return { jurisdiction: j, taxYear, quarter, years, sure: explicit && !!j && j !== 'state' && taxYear !== null
+    && !/\b(?:extension|balance due|return balance|penalty|amended)\b/i.test(text) };
 }
 
 function choices(c, t) {
-  const years = c.taxYear === null ? [Number(t.date.slice(0, 4)) - 1, Number(t.date.slice(0, 4))] : [c.taxYear];
+  const years = c.taxYear === null ? c.years.length > 1 ? c.years : [Number(t.date.slice(0, 4)) - 1, Number(t.date.slice(0, 4))] : [c.taxYear];
   const jurisdictions = c.jurisdiction ? [c.jurisdiction] : ['federal', 'state'];
   return jurisdictions.flatMap(j => years.map(year => ({
     id: `${j === c.jurisdiction ? 'estimate' : j}${c.taxYear === null ? ':' + year : ''}`,
