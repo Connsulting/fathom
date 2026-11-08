@@ -105,3 +105,37 @@ test('source groups retain financial freshness when an unrelated note is approve
     assert.equal(x.db.prepare("SELECT count(*) n FROM sources WHERE substr(id,1,4)='ing:'").get().n,2);
   } finally { x.close(); }
 });
+
+
+test('typed withholding recipients reach the planner in the filing unit and joint rows stay held for a single filer', async () => {
+  const { importProposedRows } = await import('../helpers/import-proposal-fixture.mjs');
+  const { loadPlanningData } = await import('../../src/jobs/planner/data.mjs');
+  const { classifyPayments } = await import('../../src/jobs/planner/payments.mjs');
+  const x = await setup();
+  try {
+    const rows = ['you','spouse','joint'].map((recipient,i)=>({target:'tax_payment',kind:'withholding',status:'paid',datePrecision:'month',fields:{jurisdiction:'federal',payer:'Synthetic payer '+i,recipient,amount:100,taxYear:2032,taxYearBasis:'confirmed_tax_year',paymentDate:'2032-01-31'}}));
+    const imported = await importProposedRows(x,rows);
+    assert.equal(imported.status,'imported');
+    const data = loadPlanningData(x.db,'2032-03-10');
+    const joint = classifyPayments(data,{persons:['owner','spouse'],f:'mfj',isVa:true});
+    assert.equal(joint.fed.withheld.total,300);
+    assert.equal(joint.fed.withheld.blocked,null);
+    const single = classifyPayments(data,{persons:['owner'],f:'single',isVa:true});
+    assert.equal(single.fed.withheld.blocked,'withholding_recipient_unknown');
+  } finally { x.close(); }
+});
+
+test('a tax source cannot overwrite an estimate with withholding under the same frozen payment identity', async () => {
+  const { importProposedRows } = await import('../helpers/import-proposal-fixture.mjs');
+  const x = await setup();
+  try {
+    const payment = kind => ({target:'tax_payment',kind,status:'paid',datePrecision:'month',fields:{jurisdiction:'federal',payer:'Synthetic payer',recipient:'you',amount:100,taxYear:2032,taxYearBasis:'confirmed_tax_year',paymentDate:'2032-01-31'}});
+    const mixed = await importProposedRows(x,[payment('estimate'),payment('withholding')]);
+    assert.equal(mixed.status,'needs_clarification');
+    assert.equal(x.db.prepare('SELECT count(*) n FROM tax_payments').get().n,0);
+    await importProposedRows(x,[payment('estimate')]);
+    const next = await importProposedRows(x,[payment('withholding')]);
+    assert.equal(next.status,'needs_clarification');
+    assert.equal(x.db.prepare('SELECT kind FROM tax_payments').get().kind,'estimate');
+  } finally { x.close(); }
+});
