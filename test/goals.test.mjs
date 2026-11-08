@@ -170,7 +170,9 @@ test('curve positions persist, validate and feed onboarding priorities on a real
   assert.equal(r.scenario.curve.find(c => c.id === 'tax_cash').value, 0.23);
   assert.equal(r.scenario.onboarding.priorities.find(p => p.id === 'tax_cash').value, 0.23, 'one setting feeds both');
   curveSet(s.ctx({ positions: { effort: 1, human: 0 } }));
-  assert.deepEqual(getSetting(s.db, 'curve.positions', null), { tax_cash: 0.23, effort: 1, human: 0 });
+  assert.equal(getSetting(s.db, 'curve.positions', null), null);
+  const fresh = buildScenario(s.db, { clock: s.config.clock });
+  assert.deepEqual(Object.fromEntries(fresh.curve.filter(a => ['tax_cash', 'effort', 'human'].includes(a.id)).map(a => [a.id, a.value])), { tax_cash: 0.23, effort: 1, human: 0 });
   rejects(() => curveSet(s.ctx({ id: 'nope', value: 0.5 })), 400, /unknown/);
   rejects(() => curveSet(s.ctx({ id: 'effort', value: 1.5 })), 400, /0 to 1/);
   rejects(() => curveSet(s.ctx({ id: 'effort', value: '0.5' })), 400, /0 to 1/);

@@ -8,14 +8,18 @@ test('MCP action scopes deny before validation and permit only matching writes a
     const read = (await createKey(s.baseUrl, 'Read actions')).key;
     const scopes = [
       ['write:facts', 'answer', 'fact'], ['write:steps', 'act_on_recommendation', 'step'], ['write:goals', 'update_goal', 'create'],
-      ...['forget', 'save_definition', 'delete_definition', 'pack'].map(operation => ['write:preferences', 'update_preferences', operation]),
+      ['write:recs', 'act_on_recommendation', 'start_over'],
+      ...['decide', 'revisit', 'pick_point'].map(operation => ['write:decisions', 'act_on_recommendation', operation]),
+      ...['send', 'verdict', 'checkin', 'packet'].map(operation => ['write:recs', 'advisor_review', operation]),
+      ...['archive', 'delete', 'suggestion'].map(operation => ['write:goals', 'update_goal', operation]),
+      ...['curve', 'forget', 'save_definition', 'delete_definition', 'pack'].map(operation => ['write:preferences', 'update_preferences', operation]),
       ...['import_file', 'retry_import', 'build_your_plans'].map(operation => ['write:imports', 'refresh', operation]),
       ['write:jobs', 'refresh', 'run_job'],
     ];
     for (const [scope, tool, operation] of scopes) {
       const denied = rpcResult(await callToolRpc(s.baseUrl, read, tool, { operation, malformed: true }));
       assert.equal(denied.isError, true);
-      assert.match(denied.content[0].text, new RegExp(`^Permission denied: ${tool}\\.${operation} needs`));
+      assert.equal(denied.content[0].text, `Permission denied: ${tool}.${operation} needs the ${scope} scope, which this key does not have.`);
       const key = (await createKey(s.baseUrl, `${scope}:${operation}`, [scope])).key;
       assert.ok((await listToolNames(s.baseUrl, key)).includes(tool));
       assert.ok(!(await listToolNames(s.baseUrl, read)).includes(tool));

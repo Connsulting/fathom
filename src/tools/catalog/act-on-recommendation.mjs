@@ -33,5 +33,3 @@ operations.push({
   params: { id: { type: 'string', minLength: 1 }, index: { type: 'integer', minimum: 0 }, checked: { type: 'boolean' } }, required: ['id', 'index', 'checked'],
   handler(args, ctx) { const { row, receipt } = changeRec(args, ctx, 'step'); return { id: row.id, tasksDone: JSON.parse(row.tasks_done), receipt }; },
 });
-
-export const rules = ['Sending to the advisor and email require the product button; never claim you sent anything.'];

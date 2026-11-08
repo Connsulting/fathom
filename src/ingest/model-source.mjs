@@ -15,7 +15,7 @@ export async function indexSource(file, privacy = {}) {
   if (!(file.bytes instanceof Uint8Array) || !file.fileId) throw new TypeError('Source bytes and file id required');
   if (file.bytes.length > 20 * 1024 * 1024) throw new LimitError();
   const bytes = Buffer.from(file.bytes), sha256 = digest(bytes);
-  const source = { fileId: file.fileId, sha256, bytes, refs: {}, values: {}, regions: [], inventory: {}, sheets: [], epoch: '1900', status: 'indexed' };
+  const source = { fileId: file.fileId, format: file.format, sha256, bytes, refs: {}, values: {}, regions: [], inventory: {}, sheets: [], epoch: '1900', status: 'indexed' };
   const envelope = { sheets: [], regions: [], values: [] };
   source.envelope = envelope;
   let tokenIndex = 0, refIndex = 0;
@@ -135,7 +135,10 @@ export function resolveField(source, field) {
     case 'trim': return String(values[0]).trim();
     case 'currency_decode': if (transform.currency !== 'USD') throw new TypeError('Unsupported currency'); return cents(numeric(values[0]));
     case 'sign': return cents(numeric(values[0]) * (transform.mode === 'negate' ? -1 : 1));
-    case 'sum': return values.reduce((sum, v) => sum + Math.round(cents(numeric(v)) * 100), 0) / 100;
+    case 'sum': {
+      if (transform.signs && transform.signs.length !== values.length) throw new TypeError('Invalid sum signs');
+      return values.reduce((sum, v, i) => sum + Math.round(cents(numeric(v)) * 100) * (transform.signs?.[i] === 'negate' ? -1 : 1), 0) / 100;
+    }
     case 'debit_credit': return (Math.round(cents(numeric(values[1])) * 100) - Math.round(cents(numeric(values[0])) * 100)) / 100;
     case 'date_decode': {
       let v = values[0];
