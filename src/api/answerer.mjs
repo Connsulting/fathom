@@ -152,6 +152,11 @@ const PROPOSAL_SUBJECTS = {
   update_preferences: /\b(?:preferences?|memor(?:y|ies)|remember)\b/i,
   answer: /\b(?:facts?|answers?|dates?|assumptions?)\b/i,
   act_on_recommendation: /\b(?:recommendations?|decisions?|plan items?)\b/i,
+  update_account: /\baccounts?\b/i,
+  categorize: /\b(?:categor(?:y|ies|ize)|merchant|rules?)\b/i,
+  advisor_review: /\b(?:advisor|review)\b/i,
+  refresh: /\b(?:refresh|sync|imports?|jobs?|data)\b/i,
+  undo: /\b(?:undo|revert|changes?)\b/i,
 };
 function proposalStillOffered(text, pending) {
   const plain = plainAnswerText(text);
@@ -159,7 +164,7 @@ function proposalStillOffered(text, pending) {
   const title = pending.args?.title;
   const refers = /\bproposal\b/i.test(plain) || PROPOSAL_SUBJECTS[pending.tool]?.test(plain)
     || (typeof title === 'string' && title.trim() && plain.toLowerCase().includes(title.toLowerCase()));
-  return !!refers && /\b(?:confirm|approve|propose|proposed)\b|\b(?:I can|Would you like me to|Shall I)\b[^.!?\n]*\b(?:create|save|add|edit|update|change|set|remember|mark|start|complete|dismiss|snooze|reopen)\b/i.test(plain);
+  return !!refers && /\b(?:confirm|approve|propose|proposed)\b|\b(?:I can|Would you like me to|Shall I)\b[^.!?\n]*\b(?:create|save|add|edit|update|change|set|remember|mark|start|complete|dismiss|snooze|reopen|rename|categorize|review|send|sync|refresh|undo|revert)\b/i.test(plain);
 }
 
 // ---------------------------------------------------------------- prompt assembly
