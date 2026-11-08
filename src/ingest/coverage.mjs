@@ -32,8 +32,8 @@ export function coveredFileSources(db) {
 }
 
 // The newest row date (on or before `clock`) of the connected accounts when SimpleFIN covers every
-// account that has transactions, else null. A synced account with no recent activity is current,
-// so the household transaction log is not stale because its newest transaction is old.
+// account that has transactions, else null. A recent balance snapshot can cover an older
+// transaction log; sourceStates still checks the newest date of each account separately.
 export function connectedThrough(db, clock) {
   const connected = connectedAccountIds(db);
   if (!connected.size) return null;
@@ -63,9 +63,8 @@ const ROWS = `SELECT r.account_id AS account, coalesce(f.source_id, '') AS sourc
 // The shared rule, at `clock` (an ISO day). Returns {sources, accounts}, Maps keyed by id:
 //   accounts (every account with an ingest source): {state, asOf, ageDays, kind, sourceId,
 //     archived}. state is 'archived' for an archived account (never stale, never counted);
-//     otherwise its newest row's freshness for its source's cadence, where an account mapped to a
-//     live SimpleFIN connection is never 'stale' (a synced account with no recent activity is
-//     current): 'fresh' | 'stale' | 'unknown'.
+//     otherwise its newest row's freshness for its source's cadence:
+//     'fresh' | 'stale' | 'unknown'.
 //   sources (every ingest source): {state, asOf, ageDays, cadence, kind, fed}. A file source is
 //     'history' when every account its live files fed is connected, archived, or has a newer row
 //     from another source; otherwise, and for a source that fed no account, its freshness by date:
@@ -91,7 +90,6 @@ export function sourceStates(db, clock) {
     const f = asOf && kind ? freshnessOf({ kind, asOf }, clock) : null;
     let state = f ? f.state : 'unknown';
     if (archived.has(a.id)) state = 'archived';
-    else if (state === 'stale' && connected.has(a.id)) state = 'fresh';
     accounts.set(a.id, { state, asOf, ageDays: f ? f.ageDays : null, kind: kind ?? null, sourceId: a.source_id, archived: archived.has(a.id) });
   }
 

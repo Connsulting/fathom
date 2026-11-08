@@ -407,7 +407,7 @@ secrets are read there.
 | `FATHOM_EMAIL_SMTP_USER` | unset | SMTP user name for `smtp`. |
 | `FATHOM_EMAIL_SMTP_HOST` | `smtp.gmail.com` | SMTP host for `smtp`. |
 | `FATHOM_EMAIL_SMTP_PORT` | `465` | `465` (TLS) or `587` (STARTTLS, TLS required); anything else is a config error. |
-| `FATHOM_LIVE_EMAIL` | unset | `1` lets `npm run email:test` send a real email (see Email); read only by that script. |
+| `FATHOM_LIVE_EMAIL` | unset | `1` lets `npm run email:test -- --household <id>` send a real email (see Email); read only by that script. |
 | `FATHOM_PUBLIC_URL` | unset | The origin people and MCP clients reach this server at. Required on a real store (startup refuses a missing or invalid one); optional on a demo. `https://` with a DNS host name at the root, or `http://localhost:<port>` for local tests only (no bypass flag); IP literals, paths, credentials, queries and fragments refuse to start. It is the WebAuthn relying party (its host name is the RP ID, its origin the expected origin), the exact `Origin` every real-store mutation must carry, the base of emailed links, and with `/mcp` appended the MCP URL `GET /api/mcp` advertises. Its host is allowed on `/mcp` and every `/api` route. |
 | `FATHOM_ALLOWED_HOSTS` | unset | Comma separated extra `Host` names allowed on `/mcp` and every `/api` route: `host` (any port) or `host:port`. |
 | `FATHOM_TRUSTED_PROXIES` | none (`[]`, no proxies trusted) | Comma separated CIDRs (explicit IPv4 or IPv6 ranges, such as `10.0.0.0/8` or `fd00::/8`) of the reverse proxies whose `X-Forwarded-For` the rate limits may read. Anything that is not a valid CIDR refuses to start with a fixed message. Empty means the socket address is the client. |
@@ -1477,7 +1477,12 @@ serves) and stops it before closing the store.
 4. Lease: `job_lock` holds one row (holder, expires_at), a 5 minute lease renewed each tick. A
    scheduler without the lease runs nothing, and a manual run without it is 409. While any handler
    runs, a timer renews the lease every third of its length, but only while this scheduler still
-   holds it, so a long run never loses the lease to another scheduler.
+   holds it, so a long run never loses the lease to another scheduler. A refused
+   lease logs once per job and household at info level during a scheduler lifetime.
+   Shutdown drops pending triggers and waits at most 30 seconds per scheduler for
+   in-flight or dispatcher-queued work; queued handlers never start after stop.
+   The server process exits within 3 seconds of SIGTERM or SIGINT even if draining
+   is unfinished.
 5. Handlers: `(ctx) -> {costUsd?, note?, status?: 'skipped'}` with ctx `{db, config, engine,
    transport, now, clock, periodKey, trigger, jobRunId}`. Only jobs with a handler are scheduled
    and listed, but every `JOBS` entry has a row in the `jobs` table even before its handler is

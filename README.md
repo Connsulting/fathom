@@ -62,6 +62,9 @@ npm ci && npm start
 # open http://127.0.0.1:8080/
 ```
 
+To test delivery for a configured household, run
+`FATHOM_LIVE_EMAIL=1 npm run email:test -- --household <id>`.
+
 ## Docs
 
 1. [Development](docs/development.md): running, configuring, testing, deploying and operating.
