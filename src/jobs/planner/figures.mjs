@@ -552,6 +552,7 @@ export function computeFigures(data, facts, ctx) {
   // A run blocked before its retirement deduction exists leaves nothing to size from.
   const retireBlocked = !!run && (RETIREMENT_BLOCKS.has(run.blocked) || run.blocked === 'w2_plan_compensation_unknown');
   if (hh) writeTax(data, out, { hh, parts, owner, f, isVa, pay, section125 });
+  out.tax = { parts, result: hh };
   out.info.taxComputed = !!hh;
 
   // Retirement room (R5, R6, S5, S6, MG6, R2-5, R3-3, R3-5, R3-6).
@@ -678,7 +679,7 @@ function soloRoomFigures(out, { data, owner, person, corp, compensation, age, co
   const steps = [...env.steps];
   if (kind === 'self-employed') steps.push({ label: 'No wages from the plan sponsor; the Roth catch-up rule does not apply', formula: 'self-employed participant', value: 0 });
   else if (priorWages != null) steps.push({ label: "Last year's Social Security wages from the plan sponsor", formula: 'prior-year W-2 Social Security wages, or your stated amount', value: priorWages });
-  const loc = extra => ({ calc: 'solo401kRoom', inputs: env.inputs, steps, assumptions: [PLAN_TERMS, ...compCodes, ...extra] });
+  const loc = extra => ({ calc: 'solo401kRoom', person, inputs: env.inputs, steps, assumptions: [PLAN_TERMS, ...compCodes, ...extra] });
   if (mode === 'unknown') {
     // C5: until last year's sponsor wages are known the catch-up may be pre-tax, Roth or (affected,
     // with no Roth feature) not allowed at all, and a disallowed catch-up frees compensation for the
@@ -735,7 +736,7 @@ function incomeTotal(out) {
 }
 
 function finish(out) {
-  return { figures: out.figures, sources: out.sources, model: out.model, warnings: [...out.warnings].sort(), info: out.info };
+  return { tax: out.tax || null, figures: out.figures, sources: out.sources, model: out.model, warnings: [...out.warnings].sort(), info: out.info };
 }
 
 // ---------------------------------------------------------------- pieces
@@ -796,7 +797,7 @@ function writeTax(data, out, { hh, parts, owner, f, isVa, pay, section125 }) {
   const summary = summarizeParts(parts, hh);
   const steps = hh.steps;
   const loc = { calc: 'householdTax', parts: summary, steps, assumptions: fedCodes };
-  const vaLoc = { calc: 'householdTax', parts: summary, steps, assumptions: vaCodes };
+  const vaLoc = { calc: 'householdTax', parts: summary, taxableIncome: hh.vaTaxable, steps, assumptions: vaCodes };
   out.put('agi.est', hh.agi, 'e', 'Estimated adjusted gross income', 'calc:tax', loc);
   out.put('tax.fed.qbi', hh.qbi, 'm', 'Qualified business income deduction', 'calc:tax', loc);
   out.put('tax.fed.taxable', hh.taxable, 'm', 'Federal taxable income', 'calc:tax', loc);
@@ -963,7 +964,7 @@ function hsaRoom(out, { facts, owner, records, hsaPersonal, hsaAccts, ageOf, age
   const env = out.safe('hsaLimit', () => hsaLimit({
     coverage, age: ageOf(holder), eligibleMonths: months, eligibilityConfirmed: true, employerContributions: employer, personalContributions: hsaPersonal,
   }));
-  if (env) out.put('room.hsa', env.value.remaining, 'm', 'HSA room left this year', 'calc:retirement', { calc: 'hsaLimit', inputs: env.inputs, steps: env.steps, assumptions: [PLAN_TERMS] });
+  if (env) out.put('room.hsa', env.value.remaining, 'm', 'HSA room left this year', 'calc:retirement', { calc: 'hsaLimit', person: holder, inputs: env.inputs, steps: env.steps, assumptions: [PLAN_TERMS] });
 }
 
 // MG9: Va. Code 58.1-322.03(7). Capped accounts deduct up to the cap a year; an owner seventy or
