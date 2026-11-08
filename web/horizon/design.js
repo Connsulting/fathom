@@ -609,6 +609,9 @@ function ownerFilterHtml(m) {
   return `<div class="h-ownerf" role="group" aria-label="Whose actions">${b('both', 'Both')}${b('me', 'Me')}${b('spouse', 'Spouse')}</div>`;
 }
 
+// The Money page's data health links.
+const healthLinks = (h) => `${h.pending > 0 ? goA('confirm', 'Confirm') : ''}${goA('add', 'Files')}${goA('accounts', 'Accounts')}`;
+
 // The one data line: the data date, and one link only when something needs the owner.
 function dhealthHtml(h) {
   const need = h.needs
