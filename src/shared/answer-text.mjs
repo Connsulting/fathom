@@ -179,6 +179,11 @@ export const isListBlock = block => /^<(?:ul|ol)[\s>]/.test(block);
 
 export const wrapBlocks = blocks => blocks.map(b => (isListBlock(b) ? b : `<p>${b}</p>`)).join('');
 
+export function plainAnswerText(html) {
+  return String(html ?? '').replace(/<[^>]*>/g, ' ').replace(/&#123;/g, '{').replace(/&#125;/g, '}')
+    .replace(/&amp;/g, '&').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+}
+
 const TOKEN_LIKE = /\{(?:fk|f|l|p|n|b):[^{}]*\}/g;
 // A number, as the grounding check reads one, without its magnitude words (they stay plain text).
 const NUMBER = /-?\$?\d(?:[\d,]*\d)?(?:\.\d+)?%?/g;
