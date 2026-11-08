@@ -50,3 +50,17 @@ test('new populated sheets and reordered columns are structural changes, row amo
   assert.deepEqual(layoutContext(a, layout), layoutContext(b, layout));
   assert.notDeepEqual(layoutContext(a, layout), layoutContext(c, layout));
 });
+
+test('same headers and bytes in a second household cannot reuse another household approval', async () => {
+  const a = await fixture(), b = await fixture();
+  try {
+    const source = await a.source(), staged = stageImport(a.ctx, { source, proposal: applyLayout(source, recipe()), layout: recipe() });
+    await reviewImport(a.ctx, { proposalId: staged.proposalId, version: 1, decision: 'approve', evidence: 'yes' });
+    const foreign = await b.source();
+    const result = await reuseApprovedMapping(b.ctx, { source: foreign, layout: recipe() });
+    assert.equal(result.status, 'needs_clarification');
+    assert.equal(b.db.prepare('SELECT count(*) n FROM column_mappings').get().n, 0);
+    assert.equal(b.db.prepare('SELECT count(*) n FROM transactions').get().n, 0);
+    await assert.rejects(reviewImport(b.ctx, { proposalId: staged.proposalId, version: 1, decision: 'approve', evidence: 'yes' }), e => e.code === 'not_found');
+  } finally { a.close(); b.close(); }
+});

@@ -36,6 +36,7 @@ import * as k from './keys.mjs';
 import { createMcpHandler } from '../mcp/index.mjs';
 import { isAllowedHost } from '../mcp/guard.mjs';
 import * as ih from './ingest-handlers.mjs';
+import { reviewProposal } from './import-review.mjs';
 import * as eh from './email-handlers.mjs';
 import * as sf from './simplefin-handlers.mjs';
 import * as yh from './yearend-handlers.mjs';
@@ -130,6 +131,7 @@ const TABLE = [
   { method: 'POST', path: '/api/files', handler: ih.uploadFiles, upload: true, ingest: true },
   { method: 'GET', path: '/api/files', handler: ih.listFiles, ingest: true },
   { method: 'POST', path: '/api/files/:id/retry', handler: ih.retryFile, ingest: true },
+  { method: 'POST', path: '/api/import-proposals/:proposalId/review', handler: reviewProposal, ingest: true },
   { method: 'GET', path: '/api/confirm', handler: ih.listPendingConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/list', handler: ih.listConfirm, ingest: true },
   { method: 'POST', path: '/api/confirm/answers', handler: ih.answerConfirmBatch, ingest: true },

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture, recipe } from '../helpers/model-import.mjs';
+import { resolveField } from '../../src/ingest/model-source.mjs';
 import { applyLayout } from '../../src/ingest/model-layout.mjs';
 import { validateImport } from '../../src/ingest/model-validation.mjs';
 
@@ -16,6 +17,24 @@ test('validation derives totals and duplicate counts through the actual persiste
     assert.equal(v.counts.rows.transaction, 2);
     assert.equal(x.db.prepare('SELECT count(*) n FROM transactions').get().n, 0);
     assert.equal(x.db.prepare('SELECT count(*) n FROM sources').get().n, 0);
+  } finally { x.close(); }
+});
+
+test('P&L grouping sums signed detail with every operand and its transform retained', async () => {
+  const x = await fixture();
+  try {
+    x.db.prepare("INSERT INTO entity_aliases (alias,entity,created_at) VALUES ('synthetic studio','Synthetic Studio','2032-03-01')").run();
+    const s = await x.source('Entity,Period,Category,Amount,Basis\nSynthetic Studio,2032-03,Software,12.25,cash\nSynthetic Studio,2032-03,Software,2.25,cash\n');
+    const layout = { schemaVersion: 1, currency: 'USD', tables: [{ sheet: null, headerRow: 1, target: 'pnl', attributes: { purpose: 'business' }, roles: [],
+      fields: Object.fromEntries(['entity', 'period', 'category', 'amount', 'basis'].map((key, i) => [key, { columns: [i + 1],
+        transform: key === 'amount' ? { op: 'sign', mode: 'negate' } : { op: 'trim' } }])) }] };
+    const p = applyLayout(s, layout), original = structuredClone(p);
+    const v = validateImport(x.ctx, p, s);
+    assert.equal(v.valid, true, JSON.stringify(v.errors));
+    assert.equal(v.rows.length, 1); assert.equal(v.rows[0].amount, -14.5);
+    assert.equal(resolveField(s, v.rows[0].locator.fields.amount), -14.5);
+    assert.equal(v.rows[0].locator.derivedFrom.length, 10);
+    assert.deepEqual(p, original);
   } finally { x.close(); }
 });
 

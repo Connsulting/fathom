@@ -146,7 +146,7 @@ async function route(db, fileId, file, opts) {
   let out;
   try {
     const plan = await planFile(db, fileId, file, opts);
-    out = tx(db, () => persist(db, fileId, file, plan, opts));
+    out = tx(db, () => persistImport(db, fileId, file, plan, opts));
   } catch (error) {
     if (error instanceof LimitError) return tooLarge(db, fileId, file);
     console.error('fathom: ingest failed', error?.code ?? error?.name ?? 'error');
@@ -223,7 +223,7 @@ async function planFile(db, fileId, file, opts) {
 }
 
 // The sync half, inside one transaction.
-function persist(db, fileId, file, plan, opts) {
+export function persistImport(db, fileId, file, plan, opts) {
   const now = opts.now;
   const counts = emptyCounts();
   if (plan.extractPath) counts.extractPath = plan.extractPath;
