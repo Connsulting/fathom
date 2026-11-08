@@ -264,14 +264,17 @@ export function setCap(ctx) {
 // the household root is inside the repository. Stored uploads are read through the household vault.
 export async function yourPlansBuild(ctx) {
   const engine = need(ctx, 'engine');
-  const { fileIds = [] } = ctx.body;
+  const { fileIds = [], excludeDocumentIds = [] } = ctx.body;
   if (!Array.isArray(fileIds) || fileIds.length > MAX_FILE_IDS || !fileIds.every(id => typeof id === 'string' && id.length > 0 && id.length <= 200)) {
     throw new HttpError(400, `fileIds must be at most ${MAX_FILE_IDS} file id strings`);
+  }
+  if (!Array.isArray(excludeDocumentIds) || excludeDocumentIds.length > MAX_FILE_IDS || !excludeDocumentIds.every(id => Number.isSafeInteger(id) && id > 0)) {
+    throw new HttpError(400, 'excludeDocumentIds must be positive document ids.');
   }
   if (!engine.isOn()) throw new HttpError(409, 'The engine is off, so Your plans cannot be built. Switch it on first.');
   let result;
   try {
-    result = await buildYourPlans({ db: ctx.db, engine, household: ctx.household, fileIds,
+    result = await buildYourPlans({ db: ctx.db, engine, household: ctx.household, fileIds, excludeDocumentIds,
       clock: (ctx.config && ctx.config.clock) || undefined });
   } catch (e) {
     if (e instanceof VaultError) throw new HttpError(409, e.message);
@@ -281,8 +284,8 @@ export async function yourPlansBuild(ctx) {
     throw e;
   }
   if (result.written) refreshLivePacks(ctx.db, { dataDir: ctx.household.root });
-  const { written, entries, sources, warnings, dropped } = result;
-  return { scenario: scenarioOf(ctx), result: { written, entries, sources, warnings, dropped } };
+  const { written, entries, sources, warnings, dropped, coverage } = result;
+  return { scenario: scenarioOf(ctx), result: { written, entries, sources, warnings, dropped, coverage } };
 }
 
 // The question in an ask body: exactly one of questionId (a string or an integer) and text (a

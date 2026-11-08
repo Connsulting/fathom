@@ -1,3 +1,4 @@
+import { planCoverage } from '../packs/coverage.mjs';
 import { listMemories } from '../actions/preferences.mjs';
 import { expectedChildWindow } from '../shared/child-window.mjs';
 import { receiptMessages } from '../actions/receipts.mjs';
@@ -432,13 +433,14 @@ export function loadLedger(db) {
 // the last build (settings.yourPlans) or null.
 const READABLE = "(mime LIKE 'text/%' OR mime = 'application/pdf' OR lower(name) LIKE '%.md' OR lower(name) LIKE '%.txt' OR lower(name) LIKE '%.pdf')";
 export function loadYourPlans(db) {
-  const sources = db.prepare(`SELECT d.id, d.doc_type, d.fields, d.file_id, f.name FROM documents d LEFT JOIN files f ON f.id = d.file_id
+  const excludedDocuments = getSetting(db, 'yourPlans.excludedDocuments', []);
+  const sources = db.prepare(`SELECT d.id, d.doc_type, d.fields, d.file_id, f.name, f.removed_at FROM documents d LEFT JOIN files f ON f.id = d.file_id
                               WHERE d.doc_type IN ('plan', 'benefits') ORDER BY d.id`).all()
-    .filter(r => r.file_id ? r.name != null : typeof parse(r.fields, {})?.text === 'string')
+    .filter(r => !excludedDocuments.includes(r.id) && (r.file_id ? r.name != null && !r.removed_at : typeof parse(r.fields, {})?.text === 'string'))
     .map(r => ({ fileId: r.file_id || null, name: r.file_id ? r.name : `document-${r.id}`, docType: r.doc_type }));
   const files = db.prepare(`SELECT id, name FROM files WHERE ${READABLE} AND removed_at IS NULL ORDER BY uploaded_at, id`).all()
     .map(r => ({ id: r.id, name: r.name }));
-  return { sources, files, built: getSetting(db, 'yourPlans', null) };
+  return { sources, files, built: getSetting(db, 'yourPlans', null), coverage: planCoverage(db) };
 }
 
 // ---------------------------------------------------------------- Decide
@@ -729,6 +731,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
 
   deriveFigures(fig, { wargame, series, engine }, { names, law, pct, fig });
 
+  livePacks?.loaded();
   const packs = loadPacks(db, livePacks);
   const onboarding = getSetting(db, 'onboarding', { done: false, step: 0 }) || { done: false, step: 0 };
   const mode = getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real';

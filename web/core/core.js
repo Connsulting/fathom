@@ -1182,9 +1182,9 @@ function setOutbound(patch) {
   return p;
 }
 
-function buildYourPlans(fileIds) {
+function buildYourPlans({ fileIds = [], excludeDocumentIds = [] } = {}) {
   const ids = arr(fileIds).filter(x => x != null && x !== '').map(String);
-  return send('/api/your-plans/build', { fileIds: ids }, d => (d.result && typeof d.result === 'object' ? d.result : null));
+  return send('/api/your-plans/build', { fileIds: ids, excludeDocumentIds }, d => (d.result && typeof d.result === 'object' ? d.result : null));
 }
 
 // GET a JSON read that never touches the scenario or the error line: the parsed body, or null on
