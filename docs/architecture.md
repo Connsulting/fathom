@@ -1418,7 +1418,9 @@ serves) and stops it before closing the store.
    Answers use `recordAutoAnswer`, including `resolver_fact` Confirm items that use the shared
    fact-answer writer with channel `resolver`. The normal evidence and Undo ledger applies;
    Undo restores pending state and declines the item permanently. Recommendation facts re-plan
-   deterministically after a run, without another model call. Evidence uses fixed plain language,
+   deterministically after a run, without another model call. The resolver queues a separate
+   household-local `plan` claim with trigger `resolve`; that plan disables model prose. The CLI
+   handles both jobs and drains the follow-up before exiting. Evidence uses fixed plain language,
    without categorization provider names, model names or confidence percentages.
 
    Household outbound engine pause, engine off and unavailable instance funding stop external

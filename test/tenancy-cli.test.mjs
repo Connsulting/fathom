@@ -42,7 +42,9 @@ test('operational CLIs require registered household selectors without touching a
     const guessed = await run('src/jobs/guess-cli.mjs', ['--household', fx.A.id], envOf(fx));
     assert.equal(guessed.code, 0, guessed.stderr);
     assert.equal(a.db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan'").get().n, plansBefore + 1);
-    assert.equal(a.db.prepare("SELECT status FROM job_runs WHERE job_id = 'plan' ORDER BY id DESC LIMIT 1").get().status, 'ok');
+    const followUp = a.db.prepare("SELECT status, trigger FROM job_runs WHERE job_id = 'plan' ORDER BY id DESC LIMIT 1").get();
+    assert.equal(followUp.status, 'ok');
+    assert.equal(followUp.trigger, 'resolve');
     assert.ok(a.db.prepare('SELECT count(*) AS n FROM job_runs').get().n > 0);
     assert.equal(b.db.prepare('SELECT count(*) AS n FROM job_runs').get().n, 0);
     const mail = await run('scripts/email-test.mjs', ['--household', fx.A.id], envOf(fx));

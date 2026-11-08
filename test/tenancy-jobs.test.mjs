@@ -196,6 +196,7 @@ test('resolver answers queue a separate local plan claim after releasing the hou
     assert.ok(planned, 'resolver queues a plan through its scheduler');
     assert.equal(planned.status, 'ok', planned.errorClass);
     assert.notEqual(planned.id, resolved.id);
+    assert.equal(planned.trigger, 'resolve');
     assert.equal(b.db.prepare('SELECT status FROM confirm_items WHERE id = ?').get(foreign).status, 'pending');
     assert.equal(b.scheduler.runs().length, 0);
   } finally {
