@@ -194,6 +194,19 @@ test('every former payroll and income block produces federal and state estimates
     k1_unmatched(d, f) { cases.partnership_incomplete(d, f); for (let id = 903; id < 905; id++) d.documents.push({ id, docType: 'k1', taxYear: 2026, fields: { entityKind: 'partnership', ordinaryIncome: 20000, guaranteedPayments: 0, selfEmploymentEarnings: 20000 } }); },
     k1_scorp_unmatched(d) { d.documents.push({ id: 905, docType: 'k1', taxYear: 2026, fields: { entityKind: 's_corp', ordinaryIncome: 20000 } }); },
     retirement_contribution_unattributed(d, f) { f['retirement.contributions'] = [{ person: 'owner', plan: 'own-corp-401k', type: 'deferral', entity: 'Unknown Sponsor', amount: 3000 }]; },
+    retirement_contribution_over_limit(d, f) { f['retirement.contributions'] = [{ person: 'owner', plan: 'own-corp-401k', type: 'employer', entity: 'Juniper Studio', amount: 100000 }]; },
+    va_itemized_missing(d, f) { f['tax.itemizedEstimate'] = 100000; delete f['tax.vaItemizedEstimate']; },
+    va529_answers_missing(d, f) { d.accounts.push({ id: 'college', name: 'College savings', kind: '529', owner: 'owner', inst: '', latest: null }); f['accounts.va529'] = {}; },
+    ctc_refundable_unsupported(d, f) { for (const doc of d.documents.filter(x => ['w2', 'paystub'].includes(x.docType))) Object.assign(doc.fields, { wages: 0, medicareWages: 0, gross: 0, ytdGross: 0 }); f['household.birthYears'].dependents = [2023]; },
+    no_income_inputs(d) { d.documents = []; },
+    filing_status_assumed(d, f) { delete f['household.filingStatus']; },
+    tax_payment_kind_unknown(d) { d.taxPayments.push({ id: 906, jurisdiction: 'federal', kind: 'unknown', amount: 5000, date: '2026-10-31' }); },
+    withholding_state_unknown(d) { d.taxPayments.push({ id: 906, jurisdiction: 'state', kind: 'withholding', recipient: 'owner', amount: 5000, date: '2026-10-31' }); },
+    withholding_recipient_unknown(d, f) { f['household.filingStatus'] = 'single'; d.taxPayments.push({ id: 906, jurisdiction: 'federal', kind: 'withholding', recipient: 'unknown', amount: 5000, date: '2026-10-31' }); },
+    withholding_conflict_pending(d) { d.taxPayments.push({ id: 906, jurisdiction: 'federal', kind: 'withholding', recipient: 'owner', amount: 5000, date: '2026-10-31' }); d.confirm.push({ kind: 'withholding_conflict', status: 'pending', context: { first: { id: 906 }, second: { id: 907 } } }); },
+    tax_year_unconfirmed(d) { d.taxPayments.push({ id: 906, jurisdiction: 'federal', kind: 'paid', tax_year_basis: 'sheet_label', payer: 'owner', amount: 5000, date: '2026-10-31' }); },
+    estimated_payer_unknown(d, f) { f['household.filingStatus'] = 'single'; for (const [id,payer] of [[906,'one'],[907,'two']]) d.taxPayments.push({ id, jurisdiction: 'federal', kind: 'paid', tax_year_basis: 'owner', payer, amount: 5000, date: '2026-10-31' }); },
+
   };
   for (const [code, mutate] of Object.entries(cases)) await t.test(code, () => {
     const data = structuredClone(base), facts = structuredClone(initial);
@@ -205,6 +218,11 @@ test('every former payroll and income block produces federal and state estimates
       assert.ok(Number.isFinite(computed.figures[key]?.v), key);
       assert.ok(computed.figures[key].locator.gaps.some(g => g.code === gap.code), key);
       assert.match(computed.figures[key].locator.completeness, /^estimate with \d+ gaps?$/);
+    }
+    if (['withholding_conflict_pending', 'tax_year_unconfirmed', 'estimated_payer_unknown'].includes(code)) {
+      const payment = code === 'withholding_conflict_pending' ? 'tax.fed.withheld' : 'tax.fed.paid';
+      assert.ok(!computed.figures[payment] || computed.figures[payment].v === 0, 'ambiguous credits are excluded');
+      assert.equal(computed.figures['sh.fed.currentTarget'].locator.inputs.currentYearTax, computed.figures['tax.fed.proj'].v);
     }
     assert.ok(gap.message && gap.action.label);
     assert.ok(['upload', 'ask'].includes(gap.action.screen));

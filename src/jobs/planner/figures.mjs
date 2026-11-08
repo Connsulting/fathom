@@ -270,6 +270,11 @@ export function computeFigures(data, facts, ctx) {
     const code = part.blocked;
     out.info.gaps.push({ code, message: 'Unresolved tax payments or withholding are excluded until their source is clarified.',
       action: { screen: 'upload', kind: code === 'tax_year_unconfirmed' || code === 'tax_payment_kind_unknown' ? 'estimates' : 'taxforms', label: 'Upload the clarified tax record' }, rough: false, impact: null });
+    const conflicted = new Set(data.confirm.filter(i => i.kind === 'withholding_conflict' && i.status === 'pending')
+      .flatMap(i => [i.context?.first?.id, i.context?.second?.id]).filter(id => id != null));
+    part.rows = code === 'estimated_payer_unknown' ? [] : part.rows.filter(r => !conflicted.has(r.id) && r.tax_year_basis !== 'sheet_label');
+    part.ids = part.rows.map(r => r.id);
+    part.total = cents(sum(part.rows.map(r => Number(r.amount))));
     part.blocked = null;
     return false;
   };
@@ -560,6 +565,7 @@ export function computeFigures(data, facts, ctx) {
 
   // The current-year run (K2: it validates the retirement contributions itself; the self-employed
   // plan deduction, MG5, R2-3, R3-2, comes from that validation).
+  const recordedRetirement = parts.retirement;
   let run = null;
   let hh = null;
   if (!blocked.length) {
@@ -666,7 +672,7 @@ export function computeFigures(data, facts, ctx) {
     // war game (no current point).
     const gameCorp = corpInUnit || corps.find(c => inUnit(c.person) && c.P > 0) || null;
     out.model = buildWargames(data, out, {
-      clock, f, parts, hh, corp: gameCorp, corps, entities: pnlEntities, owner, facts, contrib, ageOf, ageKey,
+      clock, f, parts: { ...parts, retirement: recordedRetirement }, hh, corp: gameCorp, corps, entities: pnlEntities, owner, facts, contrib, ageOf, ageKey,
       retireMissing, accounts, householdTax,
       priorWages: gameCorp ? priorFicaWages(data, owner, gameCorp.person, gameCorp.entity.name) : null,
     });
