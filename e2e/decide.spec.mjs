@@ -84,7 +84,7 @@ test('the switcher Decide entry and decision rows land on Plan', async ({ page }
   await gotoRoute(page, 'home');
   await page.keyboard.press('Control+k');
   await page.locator('.h-qs-in').fill('Decide');
-  await page.locator('#h-qs-list [role="option"]', { hasText: 'Decide' }).click();
+  await page.locator('#h-qs-list [data-qs-key="go:decide"]').click();
   await expect(page).toHaveURL(/#\/plan$/);
   await expect(page.getByRole('heading', { name: 'Decisions', exact: true })).toBeVisible();
   await gotoRoute(page, 'home');
