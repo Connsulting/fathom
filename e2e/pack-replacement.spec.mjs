@@ -23,7 +23,7 @@ async function openGap(page, request, info) {
 
 async function setScope(page, scope = SCOPE) {
   await page.waitForFunction(() => !!window.Fathom?.api?.s);
-  await page.evaluate(scope => { window.Fathom.api.storageScope = () => scope; window.Fathom.api.go('packs'); }, scope);
+  await page.evaluate(scope => { window.Fathom.api.storageScope = () => scope; window.Fathom.api.go('home'); window.Fathom.api.go('packs'); }, scope);
 }
 
 async function reload(page) {
@@ -108,12 +108,12 @@ test('incomplete and briefly empty coverage renders preserve the saved cause', a
       window.__savedPlans = api.s.live.yourPlans;
       if (missing) delete api.s.live.yourPlans;
       else api.s.live.yourPlans = { ...window.__savedPlans, coverage: [] };
-      api.go('packs');
+      api.go('home'); api.go('packs');
     }, missing);
     await page.evaluate(() => {
       const api = window.Fathom.api;
       api.s.live.yourPlans = window.__savedPlans;
-      api.go('packs');
+      api.go('home'); api.go('packs');
     });
     await expect(gap.locator('[data-yp-replace-feedback]')).toContainText('upload failed');
   }
@@ -202,4 +202,25 @@ test('a removal retry that finishes after a scope change cannot rebuild the new 
   await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('fathom.planReplacement:synthetic-owner:synthetic-household') || '{}')['replacement-feedback-source'])).toBeUndefined();
   expect(await page.evaluate(() => window.__builds)).toBe(0);
   expect(await page.evaluate(() => localStorage.getItem('fathom.planReplacement:synthetic-owner:other-household'))).toBeNull();
+});
+
+test('an earlier-copy cleanup failure retains both removals for the single retry', async ({ page, request }, info) => {
+  const gap = await openGap(page, request, info);
+  const failNext = () => page.evaluate(() => {
+    const api = window.Fathom.api, remove = api.removeFile;
+    api.removeFile = async () => { api.removeFile = remove; return null; };
+  });
+  await failNext();
+  await replace(page, gap);
+  await expect(gap.locator('[data-yp-replace-feedback]')).toContainText('new copy was saved');
+  await failNext();
+  await replace(page, gap, { name: 'later-plan.txt', mimeType: 'text/plain', buffer: Buffer.from(TEXT.replace('routine', 'preventive')) });
+  await expect(gap.locator('[data-yp-replace-feedback]')).toContainText('earlier replacement could not be removed');
+  await reload(page);
+  await gap.getByRole('button', { name: 'Retry removal', exact: true }).click();
+  await expect(page.locator('.h-pack-gap')).toHaveCount(0, { timeout: 30_000 });
+  await withLocalHousehold(new Date().toISOString(), async ({ db }) => {
+    expect(db.prepare("SELECT removed_at FROM files WHERE name = 'replacement-plan.txt'").get().removed_at).toBeTruthy();
+    expect(db.prepare("SELECT removed_at FROM files WHERE name = 'later-plan.txt'").get().removed_at).toBeNull();
+  }, { dataDir: info.config.metadata.ypDataDir });
 });

@@ -7,6 +7,8 @@ export const REPLACEMENT_MESSAGES = {
   same: 'That is the same document. Choose a different copy.',
   upload_threw: 'The replacement upload could not finish. Try Replace document again.',
   remove_failed: 'The new copy was saved, but the old document could not be removed.',
+  cleanup_failed: 'The new copy was saved, but an earlier replacement could not be removed.',
+  context_changed: 'The new copy was saved. Return to this household to finish removing the old document.',
 };
 
 export function uploadFailure(uploaded, oldId) {
@@ -17,7 +19,12 @@ export function uploadFailure(uploaded, oldId) {
   return file.fileId === oldId ? 'same' : null;
 }
 
+export function replacementRemovalIds(oldId, savedId, pending) {
+  return [...new Set([pending?.savedId, ...(pending?.removeIds || []), oldId])].filter(id => id && id !== savedId);
+}
+
 export function replacementFeedback(storage, key) {
+  if (!key) storage = null;
   let entries = new Map();
   try {
     entries = new Map(Object.entries(JSON.parse(storage?.getItem(key) || '{}')).filter(([id, value]) =>
@@ -30,9 +37,5 @@ export function replacementFeedback(storage, key) {
     get: id => entries.get(id),
     set(id, value) { entries.set(id, value); save(); },
     clear(id) { entries.delete(id); save(); },
-    retain(ids) {
-      const stale = [...entries.keys()].filter(id => !ids.includes(id));
-      if (stale.length) { stale.forEach(id => entries.delete(id)); save(); }
-    },
   };
 }
