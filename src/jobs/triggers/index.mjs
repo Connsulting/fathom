@@ -7,6 +7,7 @@
 // evaluateCatalog(ctx) -> [{trigger, state: 'hit'|'blocked'|'none', hit?, reason?, closed?}]
 // evaluateTriggers(ctx) -> hits only: [{trigger, rec, window, grounding, packId, vars}]
 
+import { ADVISOR_KEYS } from '../../facts/derive.mjs';
 import { evaluate as evaluateRule } from '../../packs/index.mjs';
 import { kbExcerpt } from '../planner/kb.mjs';
 import * as fedQ4 from './fed-q4-estimate.mjs';
@@ -50,9 +51,19 @@ function recOf(ctx, t, hit, window) {
     goalKinds: [...t.goalKinds], owner: typeof t.ownerFor === 'function' ? t.ownerFor(ctx, hit) : t.owner,
   };
   if (b.scenario) rec.scenario = b.scenario;
-  const questions = hit.confirm || hit.questions || (hit.catchUpPending ? [hit.catchUpPending] : []);
+  const allQuestions = hit.confirm || hit.questions || (hit.catchUpPending ? [hit.catchUpPending] : []);
+  const advisorQuestions = allQuestions.filter(key => ADVISOR_KEYS.has(key));
+  const questions = allQuestions.filter(key => !ADVISOR_KEYS.has(key));
+  if (ctx.assumptions?.length) rec.assumptions = ctx.assumptions;
+  if (advisorQuestions.length) {
+    rec.advisorQuestions = advisorQuestions;
+    rec.title = 'Waiting for your advisor';
+    rec.tasks = [];
+    const salary = ctx.fig && Object.keys(ctx.fig).find(k => /^pnl\.[^.]+\.salaryProj$/.test(k));
+    if (salary && advisorQuestions.includes('business.salaryRange')) rec.mine = [{ label: 'Salary of record, assumed for planning', fig: salary }];
+  }
   if (questions.length) {
-    const primary = !!hit.confirm?.length;
+    const primary = !!hit.confirm?.length && !advisorQuestions.length;
     const people = ['year-end-retirement', 'scorp-salary'].includes(t.id) && ctx.info.solo?.person ? [ctx.info.solo.person] : undefined;
     rec.question = { ...questionFor(questions, { accounts: ctx.data?.accounts || [], facts: ctx.facts, names: ctx.names, people }), primary };
     if (primary) {
