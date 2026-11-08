@@ -3,10 +3,10 @@ import { constants } from 'node:fs';
 import { checkGrounding } from './grounding.mjs';
 import { compileSchema } from './schema.mjs';
 import { createRegistryServer } from './tools.mjs';
-import { sdkRound, messagesRound } from './live.mjs';
+import { sdkRound, messagesRound, messagesToolRound } from './live.mjs';
 import { modelFor, estimateUnknownCost } from './pricing.mjs';
-import { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError } from './errors.mjs';
-export { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError } from './errors.mjs';
+import { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError, fundingUnavailable } from './errors.mjs';
+export { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError, fundingUnavailable } from './errors.mjs';
 export { checkGrounding, numberPattern } from './grounding.mjs';
 
 const queues = new WeakMap();
@@ -177,16 +177,41 @@ const pause = ms => (ms > 0 ? new Promise(resolve => setTimeout(resolve, ms)) : 
 // allowed() false (the household's outbound engine flag) throws EngineOffError; in live mode
 // funded() false (no instance funding) throws ModelCallError with code funding_unavailable; then the
 // monthly cap. A refused round dispatches nothing and records no spend.
-export function fundingUnavailable() {
-  const error = new ModelCallError('Model calls are not funded on this instance');
-  error.code = 'funding_unavailable';
-  return error;
+//
+// Live mode with `reservations` ({ reserve({ purpose, model, boundUsd }) -> { roundId, boundUsd },
+// settle(roundId, { costUsd, inputTokens, outputTokens }), hold(roundId, code) }, the platform
+// ledger of src/platform/model-budget.mjs): the household ledger's cap check is skipped and every
+// round, tool continuations and retries included, first reserves its worst-case bound
+// (estimateUnknownCost over the round's system, transcript and tools), which is also the round's
+// maxBudgetUsd. A refused reservation throws its own error and dispatches nothing. A known cost
+// settles; a cost above the bound is held as debt and the engine refuses (ModelAccountingError); an
+// unknown cost or a transport failure holds the full reservation, then takes the conservative path
+// below. The final cost is mirrored into the ledger with its roundId (ledger.record upserts by it).
+// The serial ledger queue orders one engine's rounds; the platform ledger is the authority.
+//
+// testTransport ({ baseURL }, programmatic only, tests): a loopback http origin with a port. Every
+// round then goes to that origin on the Messages API (chat and job as a tool round, no SDK
+// subprocess); without it requests go to https://api.anthropic.com.
+const LOOPBACK = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):([1-9]\d{0,4})$/;
+
+function checkTestTransport(testTransport) {
+  if (testTransport == null) return null;
+  const baseURL = testTransport?.baseURL;
+  const m = typeof baseURL === 'string' ? LOOPBACK.exec(baseURL) : null;
+  if (!m || Number(m[2]) > 65535) throw new TypeError('testTransport must be a loopback http origin with a port');
+  return Object.freeze({ baseURL });
 }
 
 export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger = createMemoryLedger(), capUsd = 200,
   credential, responses = [], now = () => new Date(), toolContext = {}, streamDelayMs = 0,
-  modelOverride, maxRounds = 8, admitRound = null, roundRunner = sdkRound, allowed = () => true, funded = () => true } = {}) {
+  modelOverride, maxRounds = 8, admitRound = null, roundRunner = sdkRound, allowed = () => true, funded = () => true,
+  reservations = null, testTransport = null } = {}) {
   if (!['live', 'fake', 'off'].includes(mode)) throw new TypeError('Invalid engine mode');
+  const transport = checkTestTransport(testTransport);
+  if (reservations != null && !['reserve', 'settle', 'hold'].every(k => typeof reservations[k] === 'function')) {
+    throw new TypeError('Invalid reservations adapter');
+  }
+  const reserving = mode === 'live' && reservations != null;
   if (typeof allowed !== 'function' || typeof funded !== 'function') throw new TypeError('Invalid engine admission');
   if (!Number.isFinite(capUsd) || capUsd < 0) throw new TypeError('Invalid monthly cap');
   if (typeof ledger.monthSpendUsd !== 'function' || typeof ledger.record !== 'function') throw new TypeError('Invalid ledger adapter');
@@ -248,15 +273,28 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
         if (allowed() !== true) { const error = new EngineOffError(); error.toolResults = allResults; throw error; }
         if (mode === 'live' && funded() !== true) { const error = fundingUnavailable(); error.toolResults = allResults; throw error; }
         const ts = new Date(now()).toISOString();
-        const spend = await ledger.monthSpendUsd(monthKey(ts));
-        if (!Number.isFinite(spend) || spend < 0) throw new ModelAccountingError();
-        if (spend >= capUsd) { const error = new BudgetExceededError(); error.toolResults = allResults; throw error; }
+        let maxBudgetUsd;
+        if (!reserving) {
+          const spend = await ledger.monthSpendUsd(monthKey(ts));
+          if (!Number.isFinite(spend) || spend < 0) throw new ModelAccountingError();
+          if (spend >= capUsd) { const error = new BudgetExceededError(); error.toolResults = allResults; throw error; }
+          maxBudgetUsd = capUsd - spend;
+        }
         if (admitRound) await admitRound({ purpose, system, systemDynamic, messages: transcript, tools, maxTokens });
         const auth = mode === 'live' ? explicitCredential(credential) : undefined;
         const context = callContext ?? toolContext;
         const registry = createRegistryServer(tools, { purpose, ctx: { ...context, now: context.now ?? ts,
           ...(purpose === 'chat' && typeof context.replan === 'function' ? { queueAfterTools: task => afterTools.push(task) } : {}) } });
+        const unknownCost = () => estimateUnknownCost({ model, maxTokens,
+          system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools });
+        let admission = null;
         try {
+          if (reserving) {
+            const boundUsd = unknownCost().costUsd;
+            try { admission = await reservations.reserve({ purpose, model, boundUsd }); }
+            catch (error) { error.toolResults = allResults; throw error; }
+            maxBudgetUsd = boundUsd;
+          }
           if (mode === 'fake') {
             if (!queue.length) throw new ModelCallError('Fake engine has no scripted response');
             const script = structuredClone(queue.shift());
@@ -284,11 +322,12 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               status: script.status ?? (script.toolCalls?.length ? 'error_max_turns' : 'success'),
               is_error: script.is_error === true, api_error_status: script.api_error_status ?? null,
               accountingUnknown: script.accountingUnknown ?? false, toolResults: registry.results,
-              content: Array.isArray(script.content) ? script.content : [{ type: 'text', text }], details: { maxBudgetUsd: capUsd - spend } };
+              content: Array.isArray(script.content) ? script.content : [{ type: 'text', text }], details: { maxBudgetUsd } };
           } else {
+            const runner = SINGLE_ROUND.includes(purpose) ? messagesRound : transport ? messagesToolRound : roundRunner;
             try {
-              round = await (SINGLE_ROUND.includes(purpose) ? messagesRound : roundRunner)({ credential: auth, system, systemDynamic,
-                messages: transcript, tools, maxTokens, maxBudgetUsd: capUsd - spend, model, registry, schema, ...(emit ? { onEvent: emit } : {}) });
+              round = await runner({ credential: auth, system, systemDynamic, messages: transcript, tools, maxTokens, maxBudgetUsd, model,
+                registry, schema, ...(transport ? { baseURL: transport.baseURL } : {}), ...(emit ? { onEvent: emit } : {}) });
             } catch {
               round = { text: '', content: [], status: 'transport_error', is_error: true,
                 accountingUnknown: true, model, tokens: {}, toolResults: registry.results, details: {} };
@@ -296,14 +335,22 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
           }
           const knownCost = Number.isFinite(round.costUsd) && round.costUsd >= 0 ? round.costUsd : 0;
           if (round.accountingUnknown || !Number.isFinite(round.costUsd) || round.costUsd < 0) {
-            const estimate = estimateUnknownCost({ model, maxTokens,
-              system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools });
+            const estimate = unknownCost();
             round.costUsd = Math.max(knownCost, estimate.costUsd);
             round.tokens = { ...round.tokens, estimated: true, knownCostUsd: knownCost,
               estimatedInputTokens: estimate.inputTokens, estimatedOutputTokens: estimate.outputTokens };
             round.accountingUnknown = true;
           }
-          if (Number.isFinite(round.costUsd) && round.costUsd >= 0) {
+          if (admission) {
+            const { roundId, boundUsd } = admission;
+            try {
+              if (round.accountingUnknown) await reservations.hold(roundId, 'cost_unknown');
+              else await reservations.settle(roundId, { costUsd: round.costUsd, inputTokens: round.tokens?.input_tokens, outputTokens: round.tokens?.output_tokens });
+            } catch { poisoned = true; throw new ModelAccountingError(); }
+            // The platform round is the authority; a lost mirror is restored from it later.
+            try { await ledger.record({ ts, purpose, costUsd: round.costUsd, model: round.model, tokens: round.tokens, roundId }); } catch { /* restored later */ }
+            if (!round.accountingUnknown && round.costUsd > boundUsd) { poisoned = true; throw new ModelAccountingError(); }
+          } else if (Number.isFinite(round.costUsd) && round.costUsd >= 0) {
             try { await ledger.record({ ts, purpose, costUsd: round.costUsd, model: round.model, tokens: round.tokens }); }
             catch { poisoned = true; throw new ModelAccountingError(); }
           } else { poisoned = true; throw new ModelAccountingError(); }

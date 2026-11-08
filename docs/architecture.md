@@ -336,9 +336,25 @@ purpose's model. Prices live in `src/engine/pricing.mjs` with the date they were
 pricing page; Haiku 5.5 has a base row for prompts up to 100,000 tokens (input plus cache read plus
 cache write) and a long row above that. It checks on/off and month-to-date spend below the cap BEFORE every model
 call (throws `EngineOffError` or `BudgetExceededError`) and records cost to the ledger after.
-Ledger adapter: `{monthSpendUsd(yyyymm), record({ts, purpose, costUsd, model, tokens})}` over the
+Ledger adapter: `{monthSpendUsd(yyyymm), record({ts, purpose, costUsd, model, tokens, roundId?})}` over the
 `spend_ledger` table (`yyyymm` stored as `'YYYY-MM'`). Default cap 200 USD (`settings.cap`).
 `FATHOM_ENGINE=fake` in tests.
+
+Live mode reserves every paid round in the platform ledger (see Model budgets): a household's
+runtime engine (`createRuntimeEngine`, `src/engine/runtime.mjs`) refuses to build in live mode
+without `{platform, householdId, generation}`, and passes `createEngine` a `reservations` adapter.
+Before each round, tool continuations and retries included, the engine reserves the round's
+worst-case bound (`estimateUnknownCost` over its system text, transcript and tools), which is
+also the round's `maxBudgetUsd`; a refused reservation dispatches nothing. A known cost settles;
+a cost above the bound, an unknown cost or a transport failure leaves the household on an
+accounting hold. The settled cost is mirrored into `spend_ledger` with its `round_id`. Live
+`engine.status()` reports `capUsd` as the lower of `settings.cap` and the operator allocation and
+`spentUsd` as the platform's committed spend for the actual UTC month. `createEngine`'s
+`testTransport: {baseURL}` (a loopback http origin with a port, else TypeError) sends every round
+to a local Messages API emulator; it is passed only programmatically, as
+`startServer(config, {engineOptions: {testTransport, fundingNow}})`, and no config or environment
+key sets it. Without it requests go to `https://api.anthropic.com` and the SDK env never carries
+`ANTHROPIC_BASE_URL`.
 
 ### 10. Config
 
@@ -415,9 +431,9 @@ FTHM2 vault (see Encryption at rest) under the household's data key, wrapped by
 
 Each household has outbound pause flags (`jobs`, `email`, `simplefin`, `engine`; 1 enabled, a
 missing row means every kind is paused). A paused kind does no work that can leave the instance:
-no scheduled jobs, no email, no bank sync, no model calls. Live model calls also need the platform
-setting `instance_model_cap_usd`, set by a later operator command (MT-05), so live calls stay off
-on a migrated instance until then.
+no scheduled jobs, no email, no bank sync, no model calls. Live model calls also need instance
+funding (`instance_model_cap_usd`) and a household allocation, both set by the operator (see Model
+budgets).
 
 An instance that predates households is converted offline by `node scripts/migrate-tenancy.mjs`,
 which reads the old `fathom.sqlite`, `files/` and (as an input only) `FATHOM_DATA_KEY_FILE`, and
@@ -462,7 +478,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `deadline_alerts` | `key`, `threshold` (14, 7 or 1), `deadline_date`, `sent_at`, `send_id`; PK (`key`, `threshold`) |
 | `api_keys` | `id` PK, `name`, `key_hash`, `scopes` JSON, `created_at`, `last_used_at`, `revoked_at`, `user_id` (the creator's platform user id, no foreign key; NULL for keys made before accounts). A key whose creator is not an active member of the served household fails closed (`creatorActive` in `src/mcp/keys.mjs`). `/mcp` keys stay in the financial store until a later package. |
 | `store_identity` | `id` PK (always 1), `household_id` (the platform household this store serves), `platform_operation` (the operation that bound it, NULL for a synthetic demo binding). Migration 022 and the offline migration create it with identical DDL. |
-| `spend_ledger` | `id` PK, `ts`, `yyyymm` `'YYYY-MM'`, `purpose`, `cost_usd` (full precision), `model`, `tokens` JSON (usage counts only, never prompt text) |
+| `spend_ledger` | `id` PK, `ts`, `yyyymm` `'YYYY-MM'`, `purpose`, `cost_usd` (full precision), `model`, `tokens` JSON (usage counts only, never prompt text), `round_id` (migration 030: the platform `model_rounds.id` a live row mirrors, unique when set; NULL for earlier and fake-mode rows) |
 | `superseded_rows` | `id` PK, `table_name`, `dedupe_key`, `row` JSON (the archived row), `file_id`, `superseded_by` (references `files.id`), `reason` (`revised`, `removed`, `older_snapshot`, `alias_merged`, `duplicate_confirmed`, `duplicate_cross_format`, `duplicate`, `summarized`), `at`, `survivor_key` (for `duplicate_confirmed`, the dedupe key of the row it was confirmed against) |
 | `confirm_items` | `id` PK, `kind`, `subject`, `question`, `options` JSON `[{id, label}]`, `context` JSON, `status` in pending, answered, `answer`, `file_id`, `created_at`, `answered_at`; unique (`kind`, `subject`) |
 | `confirm_undo` | `item_id` PK (references `confirm_items.id`, cascade delete), `ingest_epoch` (the epoch when the answer was recorded), `changes` JSON `[{table, op, rowid, before, after}]` (the answer's change log, row images as JSON text), `created_at`, `used_at` (set when a later import or planning run re-applied the answer). One row per revisable answer (migration 009). |
@@ -1029,6 +1045,34 @@ CLIs.
 | `audit_events` | `id` PK, `at`, `actor_user_id`, `household_id`, `target_user_id`, fixed `action` and `outcome` codes. No payloads, emails or tokens. |
 | `platform_operations` | `id` PK, `kind`, `phase`, `status` in running, done, `started_at`, `updated_at`, `detail` JSON (counts and hashes only) |
 | `household_data_keys` | (`household_id`, `key_version`) PK, `wrapped_key` BLOB (the household data key wrapped under the platform key, never raw), `status` in active, retired (a unique partial index allows one active key per household), `created_at`. Written only by `provisionDataKey` (`src/platform/household-vault.mjs`); the server does not read it before MT-03. |
+| `household_model_budgets` | `household_id` PK, `allocation_usd` (0 to 10000, cents), `updated_at`. No row is a zero allocation. Platform migration 005 seeds every non-deleted household from the hand-set `instance_model_cap_usd` (else 0). |
+| `model_rounds` | `id` PK, `household_id`, `month` (actual UTC `'YYYY-MM'`), `kind` in round, carry, `purpose`, `model`, `state` in reserved, settled, held, `hold_code` in cost_unknown, interrupted, reservation_bound_exceeded, `reserved_usd`, `cost_usd`, `input_tokens`, `output_tokens`, `receipt_ref`, `reserved_at`, `expires_at`, `settled_at`. One `carry` row per household and month holds its pre-MT-05 spend. No prompts, results or credential bytes. |
+
+Model budgets (`src/platform/model-budget.mjs`, platform migration 005).
+
+1. Every paid live round reserves in `model_rounds` in one `BEGIN IMMEDIATE` platform transaction,
+   across the server and CLI processes. Committed spend is a settled row's cost, or a reserved or
+   held row's larger of reservation and recorded cost. Admission refuses, before dispatch: a
+   household that is not active or whose generation changed (`EngineOffError` code
+   `household_unavailable`); a request principal no longer authorized (`authorization_revoked`;
+   the router re-resolves the session's identity, membership and household per round, and jobs
+   run with no principal); any held round of the household (`ModelAccountingError` code
+   `accounting_hold`); a zero instance cap (`funding_unavailable`); and a bound over the remaining
+   household budget (lower of `settings.cap` and the allocation) or instance cap
+   (`BudgetExceededError`). The funding month is the actual UTC month, never `FATHOM_CLOCK`.
+2. A reserved round older than 10 minutes becomes held `interrupted` at the household's next
+   reserve or reconcile. A held round keeps its full reservation, survives restarts and blocks only
+   its own household until an operator reconciles it; other households keep their unreserved credit.
+3. `node scripts/model-budget.mjs --instance-cap-usd <n>` and `--household <id> --allocation-usd <n>`
+   set the instance cap and a household's allocation (dollars 0 to 10000, cents). Changes are
+   audited (`model.instance_cap`, `model.allocation`); repeats print `unchanged`. Refusals:
+   `bad_usd`, `no_such_household`, `allocation_above_cap`, `below_committed`.
+4. `node scripts/reconcile-spend.mjs --household <id> --round <id> --cost-usd <amount> --receipt-ref <id>`
+   settles a held round at the receipt's cost (audited `model.reconcile`; the receipt reference is
+   kept on the round, never in audit rows). A cost above the reservation records the debt and keeps
+   the hold as `reservation_bound_exceeded`. Refusals: `bad_receipt_ref`, `bad_cost`,
+   `no_such_round`, `foreign_round`, `round_in_flight`, `already_settled`,
+   `reservation_bound_exceeded`. Neither command changes pause flags.
 
 Memberships and invitations.
 

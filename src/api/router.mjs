@@ -19,6 +19,10 @@
 // demo household. The handler ctx then carries that one context and its db, engine, packs,
 // answerer, scheduler and transport; the context is held (acquire) until the response is done.
 // Public, auth, session and operator routes get no household; they use ctx.platform.
+// Model admission: a gated financial handler runs under a principal (runWithPrincipal) whose
+// check() re-resolves the request's identity and holds only while it still names the same user and
+// household with an active membership, so a revoked session or membership stops the next model
+// round of a request already in flight. Demo (ungated) requests carry no principal.
 
 import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
@@ -46,6 +50,7 @@ import * as obh from './outbound-handlers.mjs';
 import { identityOf, sendUnauthorized } from './identity.mjs';
 import * as authHandlers from '../auth/handlers.mjs';
 import { demoRouteBehavior, DEMO_OFF_MESSAGE } from '../public-demo/control.mjs';
+import { runWithPrincipal } from '../platform/model-budget.mjs';
 
 const TABLE = [
   { method: 'GET', path: '/healthz', handler: h.healthz, public: true },
@@ -293,14 +298,20 @@ export function createHandler({ platform, config, runtimes, auth, keys, mcp = nu
         const seeded = household && !gated && !config.publicDemo && r.method === 'POST' && path !== '/api/demo/reset' ? household.db : null;
         const changesBefore = seeded ? seeded.prepare('SELECT total_changes() AS n').get().n : 0;
         const events = r.stream && wantsEventStream(req) ? createEventStream(req, res) : null;
+        const caller = identity;
+        const principal = gated && household ? { check() {
+          const now = identityOf(req, auth);
+          return Boolean(now) && now.id === caller.id && now.householdId === caller.householdId && auth.servedMember(now);
+        } } : null;
+        const run = fn => (principal ? runWithPrincipal(principal, fn) : fn());
         let out;
         try {
-          out = await r.handler({
+          out = await run(() => r.handler({
             household, db: household?.db, engine: household?.engine, packs: household?.packs, answerer: household?.answerer,
             scheduler: household?.scheduler, transport: household?.transport, platform, config, identity, auth,
             get keys() { if (config.publicDemo) throw demoOff(); return keys; },
             params, query: queryOf(url, q), body, readUpload, req, res, ...(events ? { onEvent: events.send } : {}),
-          });
+          }));
         } catch (err) {
           // Once the event stream has started, an error is its last event.
           if (!events || !events.started) throw err;
