@@ -290,7 +290,9 @@ test('charts and the timeline register every value under a blk: key and draw it'
       assert.ok([...registered.values()].some((r) => r.value === f.value && r.unit === f.unit && r.label === f.label
         && r.source === f.source && r.asOf === f.asOf && JSON.stringify(r.provenance) === JSON.stringify(f.provenance)), `${name}: ${f.label} ${f.value}`);
     }
-    const drawn = new Set(dataFigs(name === 'timeline' ? html : svgOf(html)));
+    // A scatter mark carries its y figure (data-fig, Enter opens it) and its x figure (data-fig2,
+    // in the readout when the point is active).
+    const drawn = new Set([...(name === 'timeline' ? html : svgOf(html)).matchAll(/data-fig2?="([^"]+)"/g)].map((x) => x[1]));
     for (const k of keys) assert.ok(drawn.has(k), `${name}: ${k} is drawn`);
   }
 });
