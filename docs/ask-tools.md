@@ -1299,8 +1299,7 @@ Household facts the tools need:
 
 | Key | Type | Exists today | Collectable by `answer.fact` |
 |---|---|---|---|
-| `household.ownerAge` | age | yes, `ANSWER_SHAPES` | yes |
-| `household.spouseAge` | age | yes, `ANSWER_SHAPES` | yes |
+| `household.birthYears` | object `{ owner, spouse?, dependents? }` of birth years | yes, `ANSWER_SHAPES` | yes |
 | `household.expectedDate` | date | yes, `ANSWER_SHAPES` | yes |
 | `household.dependentAges` | int list | frozen key, no answer shape | after C7 adds the shape |
 | `household.dependentBirthDates` | date list (new `dates` shape type, 1..10) | no | after C7 |

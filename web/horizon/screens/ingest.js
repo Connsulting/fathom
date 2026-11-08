@@ -198,6 +198,7 @@ export function ingestScreens(h) {
   function chip(state) {
     if (state === 'fresh') return '<span class="h-fresh fresh">Fresh</span>';
     if (state === 'stale') return '<span class="h-fresh stale">Stale</span>';
+    if (state === 'covered') return '<span class="h-fresh fresh">Connected</span>';
     return '';
   }
 

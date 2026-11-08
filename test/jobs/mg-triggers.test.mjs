@@ -696,8 +696,8 @@ test('MG12: a built salary game becomes unavailable when outside deferrals becom
   pickRefused(db, 'salary');
 });
 
-const vaAnswersMissing = db => addFact(db, 'accounts.va529', { [accountIdByMask(db, MASKS.college)]: { virginiaPlan: true, ownerAge70Plus: false } });
-const vaAnswersComplete = db => addFact(db, 'accounts.va529', { [accountIdByMask(db, MASKS.college)]: { virginiaPlan: true, ownerAge70Plus: false, carryforward: 0 } });
+const vaAnswersMissing = db => addFact(db, 'accounts.va529', { [accountIdByMask(db, MASKS.college)]: { virginiaPlan: true } });
+const vaAnswersComplete = db => addFact(db, 'accounts.va529', { [accountIdByMask(db, MASKS.college)]: { virginiaPlan: true, carryforward: 0 } });
 const JAN = '2027-01-10';
 
 // Source: Va. Code 58.1-322.03(7) (the carryforward is needed to know the Virginia deduction).

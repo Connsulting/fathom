@@ -21,6 +21,7 @@ export const FACT_TYPES = Object.freeze({
   'household.dependents': 'int',
   'household.expectingChild': 'bool',
   'household.dependentAges': 'intList',
+  'household.birthYears': 'birthYears',
   'income.w2': 'bool',
   'income.sCorp': 'bool',
   'income.selfEmployed': 'bool',
@@ -157,6 +158,18 @@ function parseFactValue(key, raw) {
     case 'intList': {
       const parts = s.replace(/^\[|\]$/g, '').split(/[,\s]+/).filter(Boolean).map(Number);
       return parts.length && parts.every((n) => Number.isInteger(n) && n >= 0) ? parts : undefined;
+    }
+    case 'birthYears': {
+      // "owner 1981, spouse 1983, dependents 2018 2021" or the JSON object; years only, never a date.
+      const out = {};
+      const dependents = /dependents?\D*((?:\b\d{4}\b[\s,]*)+)/i.exec(s);
+      if (dependents) out.dependents = dependents[1].match(/\d{4}/g).map(Number);
+      for (const who of ['owner', 'spouse']) {
+        const m = new RegExp(`"?${who}"?\\D{0,12}(\\d{4})\\b`, 'i').exec(s);
+        if (m) out[who] = Number(m[1]);
+      }
+      const ok = Number.isInteger(out.owner) && [out.owner, out.spouse, ...(out.dependents || [])].every(y => y === undefined || (y >= 1900 && y <= 2200));
+      return ok ? out : undefined;
     }
     case 'state': return /^[A-Za-z]{2}$/.test(s) ? s.toUpperCase() : undefined;
     case 'filingStatus': return FILING_STATUSES.includes(s.toLowerCase()) ? s.toLowerCase() : undefined;

@@ -22,7 +22,7 @@ import * as backdoorRoth from './backdoor-roth.mjs';
 import * as dependentCareFsa from './dependent-care-fsa.mjs';
 import * as newChild from './new-child.mjs';
 import * as missingData from './missing-data.mjs';
-import { questionFor, dataText } from './common.mjs';
+import { questionFor, dataText, LISTED_RECS } from './common.mjs';
 
 export const triggers = Object.freeze([
   fedQ4, vaQ4, yearEndRetirement, solo401kSetup, scorpSalary, invoiceDeferral, hsaRoom, va529,
@@ -56,7 +56,7 @@ function recOf(ctx, t, hit, window) {
     const people = ['year-end-retirement', 'scorp-salary'].includes(t.id) && ctx.info.solo?.person ? [ctx.info.solo.person] : undefined;
     rec.question = { ...questionFor(questions, { accounts: ctx.data?.accounts || [], facts: ctx.facts, names: ctx.names, people }), primary };
     if (primary) {
-      rec.title = dataText(rec.question.title);
+      if (!LISTED_RECS.has(t.id)) rec.title = dataText(rec.question.title);
       rec.tasks = [];
     }
   }
@@ -78,13 +78,13 @@ export function evaluateCatalog(ctx) {
     // A calculator that threw is missing data, not a closed condition (R14, S12).
     if (!out && t.calcs.some(c => failed.has(c))) {
       ctx.blockedReasons.push({ id: t.id, reason: 'calc_failed' });
-      results.push({ trigger: t, state: 'blocked', reason: 'calc_failed' });
+      results.push({ trigger: t, state: 'blocked', reason: 'calc_failed', blocker: missingData.blockerOf(ctx, 'calc_failed') });
       continue;
     }
     if (!out) { results.push({ trigger: t, state: 'none' }); continue; }
     if (out.blocked) {
       ctx.blockedReasons.push({ id: t.id, reason: out.blocked });
-      results.push({ trigger: t, state: 'blocked', reason: out.blocked });
+      results.push({ trigger: t, state: 'blocked', reason: out.blocked, blocker: missingData.blockerOf(ctx, out.blocked) });
       continue;
     }
     const { grounding = [], ...vars } = out;
