@@ -16,6 +16,10 @@ COPY evals ./evals
 
 RUN mkdir -p /data /app/evals/out && chown node:node /data /app/evals/out
 
+# The git SHA of the build, reported as the MCP server version. Placed last so a new SHA reuses every layer above.
+ARG FATHOM_BUILD_SHA=
+ENV FATHOM_BUILD_SHA=$FATHOM_BUILD_SHA
+
 ENV FATHOM_DATA=/data \
     FATHOM_PORT=8080 \
     FATHOM_HOST=0.0.0.0

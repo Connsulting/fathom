@@ -460,3 +460,26 @@ test('the accounts migration preserves existing MCP bearers as ownerless and is 
   assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'api_keys'").get().n, 0, 'an emptied store drops its api_keys');
   assert.deepEqual(migrate(db).applied, []);
 });
+
+// The tour flag (users.tour_pending) is set when a user finishes onboarding. The first person to join a
+// household founds it and onboards; everyone who joins after another member never does, so accepting
+// the invitation starts their tour.
+test('accepting an invitation into a household that already has a member sets the tour flag; the founder\'s comes from onboarding', async t => {
+  const f = await fixture(t);
+  const pending = userId => f.platform.prepare('SELECT tour_pending AS p FROM users WHERE id = ?').get(userId).p;
+  assert.equal(f.platform.prepare("SELECT count(*) AS n FROM household_memberships WHERE household_id = ? AND status = 'active'").get(f.hh).n, 0, 'precondition: nobody has joined yet');
+
+  const admin = f.invite('first-admin@example.test', 'admin');
+  f.store.consumeInvitation(admin.token, admin.user.id);
+  assert.equal(pending(admin.user.id), 0, 'the founder is flagged by finishing onboarding, not by joining');
+
+  const member = f.invite('invited-member@example.test', 'member');
+  assert.equal(pending(member.user.id), 0, 'an invitation alone flags nobody');
+  f.store.consumeInvitation(member.token, member.user.id);
+  assert.equal(pending(member.user.id), 1, 'the member joined a household that already had one, so the tour starts');
+
+  const second = f.invite('second-admin@example.test', 'admin');
+  f.store.consumeInvitation(second.token, second.user.id);
+  assert.equal(pending(second.user.id), 1, 'any role that joins after another member gets the tour');
+  assert.equal(pending(admin.user.id), 0, 'nobody else is touched');
+});

@@ -82,6 +82,8 @@ jobs:
         with:
           context: .
           platforms: linux/amd64
+          build-args: |
+            FATHOM_BUILD_SHA=${{ github.sha }}
           load: true
           push: false
           tags: fathom:ci

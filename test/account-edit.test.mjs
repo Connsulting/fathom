@@ -135,6 +135,52 @@ test('AC1: a stored last 4 lets duplicate detection propose a pair it could not 
   assert.equal(items[0].status, 'pending', 'a Same account? question is waiting');
 }));
 
+test('AC1: Add last 4 returns an undo receipt, and undoing it puts the account back as it was', () => withStore(async (s, { A, D }) => {
+  const id = plainAccount(s);
+  const saved = await A.accountMask(ctx(s, id, { mask: '1234' }));
+  assert.deepEqual(saved.before, { set: '1234' }, 'the receipt names the last 4 that was stored');
+
+  const undone = await A.accountMask(ctx(s, id, { undo: saved.before }));
+  assert.equal(row(s.db, id).mask, null, 'the last 4 is gone');
+  assert.equal(undone.account.name, 'Reserve savings');
+  assert.equal(D.accountDetail(ctx(s, id)).account.maskEditable, true, 'Add last 4 is offered again');
+  assert.equal(await status(() => A.accountMask(ctx(s, id, { undo: saved.before }))), 409, 'a second undo is refused');
+}));
+
+test('AC1: undoing a last 4 withdraws the Same account? question it raised', () => withStore(async (s, m) => {
+  const { A, M } = m;
+  const file = await fileAccount(s, m.P, 'Household spending');
+  const own = await connectedAccount(s, m, { mask: '4321' });
+  const subject = `merge:${file}:${own}`;
+  const saved = await A.accountMask(ctx(s, file, { mask: '4321' }));
+  assert.equal(itemsOf(s.db, 'account_match', subject)[0].status, 'pending');
+
+  await A.accountMask(ctx(s, file, { undo: saved.before }));
+  assert.deepEqual(M.detectAccountPairs(s.db).filter((p) => p.candidateId === file && p.ownId === own), [], 'no pair without the mask');
+  const [item] = itemsOf(s.db, 'account_match', subject);
+  assert.equal(item.status, 'answered');
+  assert.equal(item.answer, 'superseded', 'the question is withdrawn, not left to ask about a pair that is gone');
+}));
+
+test('AC1: a last 4 undo is refused when it is stale, malformed, or later answers build on it', () => withStore(async (s, m) => {
+  const { A } = m;
+  const id = plainAccount(s);
+  const saved = await A.accountMask(ctx(s, id, { mask: '1234' }));
+  for (const bad of [null, {}, { set: '12' }, { set: 1234 }, []]) {
+    assert.equal(await status(() => A.accountMask(ctx(s, id, { undo: bad }))), 400, `undo ${JSON.stringify(bad)}`);
+  }
+  assert.equal(await status(() => A.accountMask(ctx(s, id, { undo: { set: '9999' } }))), 409, 'not the last 4 that was stored');
+  assert.equal(row(s.db, id).mask, '1234', 'a refused undo changes nothing');
+
+  s.db.prepare("INSERT INTO confirm_items (kind, subject, question, options, context, status, answer, created_at) VALUES ('account_match', 'merge:x:y', 'Same account?', '[]', ?, 'answered', 'same', '2032-03-10T12:00:00.000Z')")
+    .run(JSON.stringify({ candidateId: id, ownId: 'other', repair: true }));
+  assert.equal(await status(() => A.accountMask(ctx(s, id, { undo: saved.before }))), 409, 'an answered match for the account makes the last 4 final');
+  assert.equal(row(s.db, id).mask, '1234');
+
+  const linked = plainAccount(s, 'acct-linked', { identity: 'simplefin:synthetic-linked', mask: '4444' });
+  assert.equal(await status(() => A.accountMask(ctx(s, linked, { undo: { set: '4444' } }))), 409, 'the bridge owns a connected account\'s last 4');
+}));
+
 /* ---------- AC2: owner and kind ---------- */
 
 const OWNER_LABEL = { owner: 'You', spouse: 'Your spouse', joint: 'Joint', business: 'Business' };

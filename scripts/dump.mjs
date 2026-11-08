@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-// Push exports to a running Fathom: node scripts/dump.mjs <baseUrl> <files or dirs...>
+// Push exports: node scripts/dump.mjs --household <id> <baseUrl> <files or dirs...>
+// FATHOM_SESSION_FILE names a private JSON file with cookie, householdId and contextVersion.
+// Each batch verifies the session household and carries its context assertions and Origin.
 //
 // Walks the arguments (directories recursively, dotfiles skipped), uploads the files to
 // <baseUrl>/api/files in multipart batches under the 200 MB request cap, skips and reports files
@@ -8,6 +10,7 @@
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { householdArg } from '../src/platform/cli.mjs';
 
 const FILE_LIMIT = 50 * 1024 * 1024;
 const REQUEST_LIMIT = 200 * 1024 * 1024;
@@ -66,12 +69,23 @@ function summary(result) {
   return `${result.status} ${rows.length ? rows.join(' ') : 'rows=0'} dup=${dup} warn=${warn}`;
 }
 
-async function send(baseUrl, batch) {
+async function send(baseUrl, batch, session) {
+  const headers = {
+    cookie: session.cookie, origin: new URL(baseUrl).origin,
+    'X-Fathom-Household': session.householdId,
+    'X-Fathom-Context-Version': String(session.contextVersion),
+  };
+  let identity;
+  try {
+    const res = await fetch(`${baseUrl}/api/identity`, { headers, redirect: 'error' });
+    identity = res.ok ? (await res.json()).identity : null;
+  } catch { return { ok: false, reason: 'session_unavailable' }; }
+  if (identity?.householdId !== session.householdId || !identity?.role) return { ok: false, reason: 'household_context_mismatch' };
   const fd = new FormData();
   for (const f of batch) fd.append('files', new Blob([readFileSync(f.path)]), basename(f.path));
   let res;
   try {
-    res = await fetch(`${baseUrl}/api/files`, { method: 'POST', body: fd });
+    res = await fetch(`${baseUrl}/api/files`, { method: 'POST', headers, body: fd, redirect: 'error' });
   } catch (err) {
     return { ok: false, reason: `request failed (${(err && err.cause && err.cause.code) || 'network error'})` };
   }
@@ -85,12 +99,24 @@ async function send(baseUrl, batch) {
 }
 
 async function main(argv) {
-  const [rawBase, ...paths] = argv;
+  let selected;
+  try { selected = householdArg(argv); } catch (e) { console.error(`dump: ${e.code}`); return 1; }
+  const [rawBase, ...paths] = selected.rest;
   if (!rawBase || !paths.length) {
-    console.error('usage: node scripts/dump.mjs <baseUrl> <files or dirs...>');
+    console.error('usage: node scripts/dump.mjs --household <id> <baseUrl> <files or dirs...>');
     return 2;
   }
-  const baseUrl = rawBase.replace(/\/+$/, '');
+  let baseUrl;
+  let session;
+  try {
+    const url = new URL(rawBase);
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error();
+    baseUrl = rawBase.replace(/\/+$/, '');
+    if (!process.env.FATHOM_SESSION_FILE) throw new Error();
+    session = JSON.parse(readFileSync(process.env.FATHOM_SESSION_FILE, 'utf8'));
+    if (session.householdId !== selected.householdId || !Number.isSafeInteger(session.contextVersion) || session.contextVersion < 1
+      || typeof session.cookie !== 'string' || !/^__Host-fathom-session=[A-Za-z0-9_-]+$/.test(session.cookie)) throw new Error();
+  } catch { console.error('dump: session_required'); return 1; }
   const found = { files: [], missing: 0 };
   for (const p of paths) walk(p, found, true);
   if (!found.files.length) {
@@ -99,7 +125,7 @@ async function main(argv) {
   }
   let failed = false;
   for (const batch of batches(found.files)) {
-    const r = await send(baseUrl, batch);
+    const r = await send(baseUrl, batch, session);
     if (!r.ok) {
       failed = true;
       console.error(`${r.reason}; not uploaded: ${batch.length} file(s)`);
