@@ -1859,7 +1859,9 @@ function pOnboarding(step) {
   }
   const who = api.identity?.();
   const exit = api.demo() !== 'fresh' ? goA('home', 'Back to the app', {}, 'h-ob-x') : (who ? `<span class="h-ob-id">Signed in as ${esc(who.name || who.login)}</span>` : '');
-  return `<div class="h-ob"><div class="h-ob-top"><span class="h-mark">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></span>${exit}</div>${rail}<div class="h-ob-card">${body}</div></div>`;
+  // With several households, onboarding names and switches the household it sets up.
+  const picker = householdPicker();
+  return `<div class="h-ob"><div class="h-ob-top">${picker ? `<span class="h-ob-hh">${picker}</span>` : ''}<span class="h-mark">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></span>${exit}</div>${rail}<div class="h-ob-card">${body}</div></div>`;
 }
 
 // The Goals step on a Home with no open goals (where 'home', primary Save goals). Onboarding no

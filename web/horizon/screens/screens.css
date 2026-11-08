@@ -157,9 +157,11 @@
   font: inherit; font-size: 13px; font-weight: 500; text-overflow: ellipsis; cursor: pointer; outline: none;
 }
 .d-horizon .h-hh select option { background: var(--s1); color: var(--tx); }
+.d-horizon .h-ob-hh { position: absolute; left: 0; top: 50%; transform: translateY(-50%); }
 @media (max-width: 720px) {
   .d-horizon .h-hh { height: 44px; max-width: 46vw; border-color: transparent; padding: 0 4px 0 8px; }
   .d-horizon .h-hh select { font-size: 14px; }
+  .d-horizon .h-ob-hh { position: static; transform: none; }
 }
 
 /* ---------- keys: header search button ---------- */

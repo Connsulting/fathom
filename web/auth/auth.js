@@ -530,7 +530,7 @@ function signinView() {
 function deadLinkView() {
   root.innerHTML = narrow(`<h1>This link no longer works</h1>
     <p class="au-lede">It has expired or was already used. Invitation, recovery and add-a-device links work once, for 20 minutes.</p>
-    ${note('info', 'New to this household: ask a household admin to send a new invitation. Already have an account: request a recovery link from the sign-in page. Add-a-device link: request a new one from Account on a signed-in device.')}
+    ${note('info', 'New to this household: ask a household admin to send a new invitation. Invited to another household with an account you already have: sign in first, then open the link again. Lost your passkey: request a recovery link from the sign-in page. Add-a-device link: request a new one from Account on a signed-in device.')}
     <div class="au-form"><a class="au-btn pri wide" href="/signin">Go to sign in</a></div>`);
 }
 
@@ -555,7 +555,37 @@ function enrollView() {
       </div>
       <button type="submit" class="au-btn pri wide">${icon('key')}Create passkey</button>
       <p class="au-msg" data-msg="enroll" role="status" aria-live="polite"></p>
-    </form>`, 'The link works once, within 20 minutes of being sent. Keep this tab open until the passkey is saved.');
+    </form>
+    <div data-slot="join"></div>`, 'The link works once, within 20 minutes of being sent. Keep this tab open until the passkey is saved.');
+  // A signed-in browser can accept an invitation to another household for its own account,
+  // without a new passkey (POST /api/auth/invitations/accept). Nothing about the invitation is shown.
+  loadSession().then((s) => {
+    if (leaving || !s.identity) return;
+    const slot = root.querySelector('[data-slot="join"]');
+    if (!slot) return;
+    slot.innerHTML = `<div class="au-form">${note('info', `You are signed in as <b>${esc(s.identity.email)}</b>. If this invitation is for that account, join the household with the passkey you already have.`)}
+      <button type="button" class="au-btn wide" data-act="join">Join the household</button>
+      <p class="au-msg" data-msg="join" role="status" aria-live="polite"></p></div>`;
+  }).catch(() => { /* creating a passkey still works */ });
+}
+
+async function joinHousehold(btn) {
+  if (busy || !enrollToken) return;
+  busy = 'join';
+  setBusy(btn, true);
+  say('join', '', 'Joining.');
+  try {
+    await call('POST', '/api/auth/invitations/accept', { token: enrollToken });
+    enrollToken = null;
+    say('join', 'ok', 'Joined. Opening Fathom.');
+    leave('/');
+  } catch (err) {
+    if (err && err.status === 410) { enrollToken = null; deadLinkView(); return; }
+    say('join', 'err', err && err.status === 403 ? 'This invitation is for another account. Sign in with that account, or ask the admin to invite this address.' : explain(err, 'join'));
+  } finally {
+    busy = '';
+    if (!leaving) setBusy(btn, false);
+  }
 }
 
 async function enroll(form) {
@@ -1021,6 +1051,7 @@ root.addEventListener('click', (e) => {
   if (act === 'recover') recover(el);
   else if (act === 'reload') window.location.reload();
   else if (act === 'revoke') revokeOwn(el);
+  else if (act === 'join') joinHousehold(el);
   else if (act === 'signout') signOut(el);
   else if (act === 'device-link') requestDeviceLink(el);
   else if (act === 'resend') resend(el);
