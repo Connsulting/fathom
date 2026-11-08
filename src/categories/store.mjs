@@ -26,8 +26,10 @@ export function loadCategoryInputs(db) {
   return { accounts,transactions,
     corrections:db.prepare(`SELECT c.*, a.evidence AS auto_evidence FROM transaction_category_corrections c
       LEFT JOIN confirm_items i ON i.kind='transaction_category' AND i.subject=cast(c.transaction_id AS TEXT)
-      LEFT JOIN confirm_auto a ON a.item_id=i.id AND a.rule='jev_category'`).all().map(r=>({...r,auto:parseJson(r.auto_evidence,null)})),
-    merchantRules:db.prepare('SELECT * FROM category_merchant_rules').all(), sourceRules:db.prepare('SELECT * FROM category_source_rules').all(),
+      LEFT JOIN confirm_auto a ON a.item_id=i.id`).all().map(r=>({...r,auto:parseJson(r.auto_evidence,null)})),
+    merchantRules:db.prepare('SELECT * FROM category_merchant_rules').all(), sourceRules:db.prepare(`SELECT r.*, a.evidence AS auto_evidence FROM category_source_rules r
+      LEFT JOIN confirm_items i ON i.kind='category_mapping' AND i.subject=json_array(r.parser,r.category)
+      LEFT JOIN confirm_auto a ON a.item_id=i.id`).all().map(r=>({...r,auto:parseJson(r.auto_evidence,null)})),
     guesses:db.prepare('SELECT * FROM transaction_category_guesses').all().map(r=>{
       const p=parseJson(r.category,null);
       return {...r,category:p?.category??null,confidence:p?.confidence,probabilities:p?.probabilities};
@@ -138,7 +140,7 @@ export function moveCategoryRows(db,dropId,keepId) {
     const drop=db.prepare(`SELECT * FROM ${table} WHERE transaction_id=?`).get(dropId);
     if(!drop) continue;
     if(table==='transaction_category_corrections' && db.prepare(`SELECT 1 FROM confirm_items i JOIN confirm_auto a ON a.item_id=i.id
-      WHERE i.kind='transaction_category' AND i.subject=? AND a.rule='jev_category'`).get(String(dropId))) {
+      WHERE i.kind='transaction_category' AND i.subject=?`).get(String(dropId))) {
       db.prepare('DELETE FROM transaction_category_corrections WHERE transaction_id=?').run(dropId);
       continue;
     }

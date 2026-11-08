@@ -1,0 +1,23 @@
+{
+  "blocks": [
+    {
+      "id": "b4",
+      "op": "sparkline",
+      "after": 0,
+      "spec": {},
+      "calls": [],
+      "snapshot": {
+        "title": "Not drawable"
+      },
+      "asOf": null,
+      "builtAt": "2026-11-01T12:00:00.000Z"
+    }
+  ],
+  "blockNotes": [
+    {
+      "op": "chart",
+      "reason": "not_in_answer",
+      "text": "A chart was left out because its data did not check out."
+    }
+  ]
+}
