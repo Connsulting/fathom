@@ -71,6 +71,8 @@ function mutate(f, reason) {
   else if (reason === 'membership removal') {
     f.platform.prepare("UPDATE household_memberships SET status = 'removed' WHERE user_id = ? AND household_id = ?").run(f.session.user.id, f.householdId);
   } else if (reason === 'suspension') f.platform.prepare("UPDATE households SET status = 'suspended' WHERE id = ?").run(f.householdId);
+  else if (reason === 'membership version') f.platform.prepare('UPDATE household_memberships SET version = version + 1 WHERE user_id = ? AND household_id = ?').run(f.session.user.id, f.householdId);
+  else if (reason === 'restore generation') f.platform.prepare('UPDATE households SET generation = generation + 1 WHERE id = ?').run(f.householdId);
   else if (reason === 'household change') {
     const at = Date.now();
     f.platform.prepare("INSERT INTO households (id, status, mode, created_at, updated_at) VALUES ('synthetic-other-household', 'active', 'real', ?, ?)").run(at, at);
@@ -79,7 +81,7 @@ function mutate(f, reason) {
   }
 }
 
-for (const reason of ['revocation', 'membership removal', 'suspension']) {
+for (const reason of ['revocation', 'membership removal', 'suspension', 'membership version', 'restore generation']) {
   for (const [operation, payload] of [['read', READ], ['write', WRITE]]) {
     test(`MCP refuses a delayed ${operation} after ${reason}`, { timeout: SERVER_TIMEOUT * 3 }, async t => {
       const f = await fixture(t);

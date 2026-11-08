@@ -271,6 +271,26 @@ test('with two admins the ownerless key is revoked with migration_no_creator and
   });
 });
 
+test('migration refuses an inactive creator key while binding a new active admin', T, async () => {
+  const fx = fresh();
+  withSqlite(join(fx.dataDir, 'platform.sqlite'), p => {
+    p.prepare("UPDATE household_memberships SET role = 'admin' WHERE user_id = ?").run(fx.member.id);
+    p.prepare("UPDATE household_memberships SET status = 'removed', version = version + 1 WHERE user_id = ?").run(fx.admin.id);
+  });
+  assert.equal((await runMigration(fx)).status, 'complete');
+  withSqlite(join(fx.dataDir, 'platform.sqlite'), p => {
+    const owned = p.prepare('SELECT * FROM api_keys WHERE id = ?').get(fx.ownedKey.id);
+    const ownerless = p.prepare('SELECT * FROM api_keys WHERE id = ?').get(fx.ownerlessKey.id);
+    assert.equal(owned.user_id, fx.admin.id);
+    assert.equal(owned.revoked_code, 'migration_inactive_creator');
+    assert.ok(owned.revoked_at);
+    assert.equal(ownerless.user_id, fx.member.id);
+    assert.equal(ownerless.revoked_at, null);
+    assert.equal(ownerless.household_generation, 1);
+    assert.equal(ownerless.membership_version, 1);
+  });
+});
+
 // The operator rollback: `scripts/source-snapshot.mjs restore` on the migration's own snapshot,
 // with the backup key, rebuilds the exact pre-migration instance in a new directory.
 test('the migration snapshot restores the exact pre-migration instance for a rollback', T, async () => {
