@@ -68,18 +68,21 @@ test('migration 034 preserves populated proposal, mapping and financial rows', (
     const oldProposal = db.prepare('SELECT * FROM import_proposals').get();
     const oldMapping = db.prepare('SELECT * FROM column_mappings').get();
     const before = snapshot(db);
-    assert.deepEqual(migrate(db).applied, [34]);
+    assert.deepEqual(migrate(db, { through: 34 }).applied, [34]);
     assert.equal(schemaVersion(db), 34);
     const proposal = db.prepare('SELECT * FROM import_proposals').get(), mapping = db.prepare('SELECT * FROM column_mappings').get();
     for (const [key, value] of Object.entries(oldProposal)) assert.deepEqual(proposal[key], value);
     for (const [key, value] of Object.entries(oldMapping)) assert.deepEqual(mapping[key], value);
     assert.equal(proposal.review_state, null); assert.equal(mapping.header_signature, null);
     assert.deepEqual(snapshot(db), before);
+    assert.deepEqual(migrate(db, { through: 34 }).applied, []);
+    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
   } finally { db.close(); }
 });
 
 test('store migrations have unique numbers and import review follows spending definitions', () => {
   const migrations = listMigrations();
   assert.equal(new Set(migrations.map(m => m.id)).size, migrations.length);
+  assert.equal(migrations.find(m => m.id === 33).name, 'spending-definitions');
   assert.equal(migrations.find(m => m.id === 34).name, 'import-review');
 });

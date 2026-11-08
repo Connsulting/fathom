@@ -124,7 +124,8 @@ function hasRowid(db, table) {
 // before the cutover, the SimpleFIN secret changes envelope (its plaintext is checked apart), store
 // migration 028 adds two nullable columns to preferences and store migration 031 adds the nullable
 // spend_ledger.round_id; migration 032 adds accounts.archived_at and files.removed_at,
-// and migration 033 adds preferences.definition_id. The schema-26 source lacks these columns.
+// migration 033 adds preferences.definition_id, and migration 034 adds the column-mapping header
+// signature and proposal review state. The schema-26 source lacks these columns.
 const TABLE_RULES = Object.freeze({
   schema_migrations: { where: `id <= ${PRE_TENANCY_SCHEMA}` },
   simplefin_connection: { omit: ['access_blob'] },
