@@ -1,3 +1,4 @@
+import { currentHandle } from '../storage/index.mjs';
 // Goals and the tradeoff curve: owner-editable household data. Every route sits behind the owner
 // gate (the router gates all of /api on a real store) and answers with the fresh scenario.
 //

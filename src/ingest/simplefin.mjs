@@ -1,3 +1,4 @@
+import { mapSeries } from '../shared/series.mjs';
 import { sameStore } from '../storage/index.mjs';
 import { accountNaming } from '../accounts/naming.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
@@ -287,21 +288,24 @@ export async function matchAccount(db, acct) {
     return b != null && Math.round(b.amount * 100) !== Math.round(acct.balance * 100);
   };
   const distance = async (c) => { const b = await latest.get(c.id); return b && acct.balance != null ? Math.abs(b.amount - acct.balance) : Infinity; };
-  const closest = (list) => [...list].sort(async (a, b) => await distance(a) - await distance(b))[0].id;
+  const closest = async (list) => {
+    const scored = await mapSeries(list, async c => ({ c, d: await distance(c) }));
+    return scored.sort((a, b) => a.d - b.d)[0].c.id;
+  };
   if (acct.mask) {
     const same = pool.filter((c) => accountMask(c) === acct.mask);
     if (same.length === 1 && acct.maskSure && /^\d{4}$/.test(same[0].mask ?? '') && sameInstitution(same[0].inst, acct.inst) && accountKind(same[0]) && accountKind(acct) && !await contradicts(same[0])) return { sure: same[0].id };
-    if (same.length) return { candidate: closest(same) };
+    if (same.length) return { candidate: await closest(same) };
     const unmasked = pool.filter((c) => sameInstitution(c.inst, acct.inst) && !accountMask(c));
-    return unmasked.length ? { candidate: closest(unmasked) } : {};
+    return unmasked.length ? { candidate: await closest(unmasked) } : {};
   }
   const known = pool.filter(c => sameInstitution(c.inst, acct.inst));
   if (!known.length) return {};
   const named = known.filter((c) => normalizeName(c.name) === normalizeName(acct.name));
   if (named.length === 1 && !named[0].mask && !await contradicts(named[0])) return { sure: named[0].id };
-  if (named.length) return { candidate: closest(named) };
+  if (named.length) return { candidate: await closest(named) };
   const near = await filterSeries(known, async (c) => await distance(c) <= Math.max(1, Math.abs(acct.balance ?? 0) * 0.05));
-  return { candidate: closest(near.length ? near : known) };
+  return { candidate: await closest(near.length ? near : known) };
 }
 
 // The account a bridge account writes into, or null while a match question is pending.

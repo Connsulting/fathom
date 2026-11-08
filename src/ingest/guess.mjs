@@ -98,11 +98,11 @@ const codeOf = (error) => (error && typeof error.name === 'string' && error.name
 // One row per item sent; an item removed meanwhile is skipped.
 async function storeBatch(db, items, accepted, { model, ts }) {
   const byItem = new Map(accepted.map((g) => [g.item, g]));
-  const put = db.prepare(`INSERT INTO confirm_guesses (item_id, option_id, reason, model, ts)
+  await tx(db, async (db) => {
+    const put = db.prepare(`INSERT INTO confirm_guesses (item_id, option_id, reason, model, ts)
                           SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM confirm_items WHERE id = ?)
                           ON CONFLICT(item_id) DO UPDATE SET option_id = excluded.option_id, reason = excluded.reason,
                             model = excluded.model, ts = excluded.ts`);
-  await tx(db, async (db) => {
     for (const item of items) {
       const g = byItem.get(item.id);
       await put.run(item.id, g ? g.option : null, g ? g.reason : null, String(model ?? 'unknown'), ts, item.id);

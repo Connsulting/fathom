@@ -1,3 +1,4 @@
+import { currentHandle } from '../storage/index.mjs';
 // Advisor workflow handlers (item 24; src/advisor). Writes answer with the fresh scenario. The
 // packet download is the one non-JSON response: the router sends a `download: true` route's
 // { filename, type, bytes } as an attachment.

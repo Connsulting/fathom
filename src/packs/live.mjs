@@ -1,3 +1,4 @@
+import { currentHandle } from '../storage/index.mjs';
 // Live packs over main's pack state (src/packs/state.mjs): the loaded manifests, the manifest
 // backing each packs_state row, and the manifest fields the Packs screen and the answerer read.
 //
@@ -97,7 +98,7 @@ export function createLivePacks(db, { dataDir } = {}) {
   let seen = null;
 
   const fingerprint = async () => {
-    const generation = await getSetting(db, 'packs.generation', 0);
+    const generation = await getSetting(currentHandle(db), 'packs.generation', 0);
     let plans = 'none';
     try {
       const st = statSync(dir);
