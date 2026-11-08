@@ -64,7 +64,9 @@ const entityCodes = info => [...info.blocked, ...(info.heldReasons || []), ...in
 const signature = entities => entities.map(e => [e.name, e.type, e.classified, !!e.payrollEmployer]);
 
 for (const [state, setup, expected] of [
-  ['classified', db => {}, 0],
+  ['classified', db => addFact(db, 'business.entities', [
+    ...getFacts(db)['business.entities'], ...tabs.map(([name, owner]) => ({ name, owner, type: 'personal' })),
+  ]), 0],
   ['inferred personal summary', db => productionPattern(db), 0],
   ['unclassified payroll employer', async db => {
     addFact(db, 'income.sCorp', false);
@@ -80,7 +82,10 @@ for (const [state, setup, expected] of [
   await planRun(db, { now: clock });
   const data = loadPlanningData(db, clock), facts = getFacts(db);
   const prepared = prepareRecFacts(db, data);
-  assert.deepEqual(signature(resolveEntities(data, prepared.values)), signature(resolveEntities(data, facts)));
+  const entities = resolveEntities(data, facts);
+  assert.deepEqual(signature(resolveEntities(data, prepared.values)), signature(entities));
+  assert.equal(entities.filter(e => !e.classified).length, expected);
+  if (state === 'unclassified payroll employer') assert.ok(entities.some(e => e.name === 'Pending Payroll' && e.payrollEmployer));
   assert.equal(classifySteps(db).length, expected);
   const out = computeFigures(data, facts, { clock, entities: resolveEntities(data, facts), owner: facts });
   if (!expected) assert.deepEqual(entityCodes(out.info), []);
@@ -98,6 +103,9 @@ test('SUM1c: a populated plan drops old classification steps after personal infe
   // Reproduce a persisted pre-dedupe recommendation with optional and required slug steps.
   old.tasks.push({ ...step, code: 'entity_unclassified:birch-summary', optional: false });
   db.prepare("UPDATE recs SET def=? WHERE id='missing-data'").run(JSON.stringify(old));
+  addFact(db, 'business.entityInference', { [tabs[1][0]]: { undone: true } });
+  await planRun(db, { now: clock });
+  assert.equal(classifySteps(db).length, 1, 'one remaining business cannot retain a second slug step');
   addFact(db, 'business.entityInference', {});
   await planRun(db, { now: clock });
   const data = loadPlanningData(db, clock), facts = getFacts(db);
