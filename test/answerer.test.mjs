@@ -21,7 +21,7 @@ import { loadConfig } from '../src/config.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import { buildScenario, clockNow } from '../src/scenario/build.mjs';
 import { callTool, tools as REGISTRY, instructions } from '../src/tools/index.mjs';
-import { sdkOptions } from '../src/engine/live.mjs';
+import { sdkOptions, encodeTranscript } from '../src/engine/live.mjs';
 import { createRuntimeEngine, createSpendLedger } from '../src/engine/runtime.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
 import { PRODUCT_RULES, NOTICES, buildChatPrompt, groundAnswer, renderAnswer, createLiveAnswerer } from '../src/api/answerer.mjs';
@@ -93,7 +93,7 @@ test('a tool preamble is interim: it streams, moves out with an interim event, a
     { text: 'Let me check your figures.', toolCalls: [{ name: 'household', args: { operation: 'summary', } }] },
     { text: 'Keep a reserve.' },
   ]]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({
     db: s.db, key: THREAD, text: 'What should I keep?', onEvent: e => seen.push(e),
   });
   const interim = seen.map(e => e.type).lastIndexOf('interim');
@@ -125,7 +125,7 @@ test('superseded SDK frames leave the stream equal to storage', async t => {
     },
   });
   const seen = [];
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({
     db: s.db, key: THREAD, text: 'What should I keep?', onEvent: e => seen.push(e),
   });
   const last = seen.map(e => e.type).lastIndexOf('reset');
@@ -146,7 +146,7 @@ test('text before a tool round is interim and stays out of the answer, even when
     ], toolCalls: [{ name: 'household', args: { operation: 'summary', } }] },
     { text: tail },
   ]]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'What am I missing?' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'What am I missing?' });
   const body = joined(reply);
   assert.doesNotMatch(body, /Give appreciated assets instead of cash/);
   assert.match(body, /Quarterly tax payments/);
@@ -165,7 +165,7 @@ async function twoRounds(s, first, second, { fallback = false } = {}) {
   const run = scripted(s.runtime, [fallback
     ? [{ text: first, toolCalls: [tool] }, { text: second, toolCalls: [tool] }, {}]
     : [{ text: first, toolCalls: [tool] }, { text: second }]]);
-  const reply = await createLiveAnswerer({ engine: run.engine, packs: s.packs, root: s.root }).answer({
+  const reply = await createLiveAnswerer({ engine: run.engine, packs: s.packs, root: s.root, services: { engine: run.engine, config: { dataDir: s.root } } }).answer({
     db: s.db, key: THREAD, text: 'What should I keep?', onEvent: e => seen.push(e),
   });
   const interim = seen.map(e => e.type).lastIndexOf('interim');
@@ -216,7 +216,7 @@ test('a removed citation list item leaves no bare marker', async t => {
   const { engine } = scripted(s.runtime, [[
     { text: 'Do these:\n\n1. Pay the estimate.\n2. Sources: "Quarterly taxes"\n3. Keep a reserve.' },
   ]]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'What should I do?' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'What should I do?' });
   assert.equal(reply.provenance.grounding.ok, true, JSON.stringify(reply.provenance.grounding));
   assert.equal(reply.provenance.grounding.retried, false);
   assert.deepEqual(reply.provenance.grounding.unverified, []);
@@ -463,7 +463,7 @@ test('B3: pack entry citation and metadata lines never ground a number; the body
   const s = await demoStore(t, {}, { prepare: root => writeSyntheticPack(root, META_PACK) });
   const said = 'The guide is 4821, page 4377, appendix 9517, reviewer 3141, and the limit is $6,175.';
   const { engine, requests } = scripted(s.runtime, [[{ text: said }], [{ text: said }]]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic metadata question' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic metadata question' });
   assert.ok(reply.provenance.packIds.includes('synthetic-metadata'), 'the synthetic pack is active');
   assert.ok(requests[0].system.includes('synthetic_guide_4821.md, page 4377'), 'the model still sees the full entry text');
   assert.deepEqual(sorted(reply.provenance.grounding.unverified), sorted(['4821', '4377', '9517', '3141']));
@@ -478,7 +478,7 @@ test('B3: in a pack conversation, metadata lines of context.entries never ground
   s.db.prepare("UPDATE packs_state SET active = 0 WHERE id = 'synthetic-metadata'").run();
   const said = 'The guide is 4821 and the limit is $6,175.';
   const { engine, requests } = scripted(s.runtime, [[{ text: said }], [{ text: said }]]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: 'pack:synthetic-metadata', text: 'Synthetic follow-up' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: 'pack:synthetic-metadata', text: 'Synthetic follow-up' });
   assert.ok(!reply.provenance.packIds.includes('synthetic-metadata'), 'not active');
   assert.ok(requests[0].systemDynamic.includes('synthetic_guide_4821.md'), 'the model still sees the full entry text');
   assert.deepEqual(reply.provenance.grounding.unverified, ['4821']);
@@ -512,7 +512,7 @@ test('B3: pack id and labels in the conversation context never ground a number i
   }
   const said = 'Plan 7316 by curator 5093 is worth $4,821, and the allowance is $6,175.';
   const { engine, requests } = always(s.runtime, said);
-  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root });
+  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } });
 
   const whatIf = await answerer.whatIf({ db: s.db, packId: 'plan4821' });
   assert.ok(!whatIf.notice);
@@ -550,7 +550,7 @@ test('B3: a rec id in a rec conversation context never grounds a number; its val
 
   const said = 'This one is worth $8,263, and about $2,750 arrives early.';
   const { engine, requests } = always(s.runtime, said);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: recId, text: 'Synthetic rec question' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: recId, text: 'Synthetic rec question' });
   assert.ok(!reply.notice);
   assert.ok(requests[0].systemDynamic.includes(recId), 'the model still sees the rec id');
   const { unverified } = reply.provenance.grounding;
@@ -576,7 +576,8 @@ test('B3: an account mask from the real accounts.list result never grounds a num
 
   // Masks nothing else grounds: a baseline answer with no tool call states them all.
   const baselineText = `Synthetic amounts: ${masked.map(a => asAmount(a.mask)).join(', ')}.`;
-  const baseline = await createLiveAnswerer({ engine: always(s.runtime, baselineText).engine, packs: s.packs, root: s.root })
+  const answerEngine = always(s.runtime, baselineText).engine;
+  const baseline = await createLiveAnswerer({ engine: answerEngine, packs: s.packs, root: s.root, services: { engine: answerEngine, config: { dataDir: s.root } } })
     .answer({ db: s.db, key: THREAD, text: 'Synthetic baseline' });
   const free = new Set(baseline.provenance.grounding.unverified);
   // ...and that no other field of the tool result states.
@@ -592,7 +593,7 @@ test('B3: an account mask from the real accounts.list result never grounds a num
     [{ toolCalls: [{ name: 'accounts', args: { operation: 'list', } }] }, { text: said }],
     [{ text: said }],
   ]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic accounts question' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic accounts question' });
   assert.ok(!reply.notice);
   const listed = responses[0].toolResults.find(r => r.name === 'accounts');
   assert.ok(listed && !listed.isError, JSON.stringify(responses[0].toolResults));
@@ -608,7 +609,7 @@ test('B3 r2: a figure reference (mine[].fig = plan529) in the va529 rec context 
   const s = await demoStore(t);
   const said = 'The 529 holds $529 today, and the cap is $4,000.';
   const { engine } = always(s.runtime, said);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: 'va529', text: 'Synthetic rec question' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: 'va529', text: 'Synthetic rec question' });
   assert.ok(!reply.notice);
   const { unverified } = reply.provenance.grounding;
   assert.ok(unverified.includes('$529'), `the fig reference must not ground $529: ${JSON.stringify(reply.provenance.grounding)}`);
@@ -622,7 +623,7 @@ test('B3 r2: a figure reference in a scripted recommendations.detail result neve
     [{ toolCalls: [{ name: 'recommendations', args: { operation: 'detail',  id: 'va529' } }] }, { text: said }],
     [{ text: said }],
   ]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic ask' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic ask' });
   assert.ok(!reply.notice);
   const got = responses[0].toolResults.find(r => r.name === 'recommendations');
   assert.ok(got && !got.isError && got.result.mine[0].fig === 'plan529', 'the real reader returns the fig reference');
@@ -657,7 +658,8 @@ test('B3 r2: an exact amount query keeps the stored row amounts as grounding, at
   const amount = pick.amount;
   const text = asAmount(Math.abs(amount));
   const said = `The matching transaction is ${text}.`;
-  const baseline = await createLiveAnswerer({ engine: always(s.runtime, said).engine, packs: s.packs, root: s.root })
+  const answerEngine = always(s.runtime, said).engine;
+  const baseline = await createLiveAnswerer({ engine: answerEngine, packs: s.packs, root: s.root, services: { engine: answerEngine, config: { dataDir: s.root } } })
     .answer({ db: s.db, key: THREAD, text: 'Synthetic baseline' });
   assert.ok(baseline.provenance.grounding.unverified.includes(text), 'nothing else grounds the amount');
 
@@ -665,7 +667,7 @@ test('B3 r2: an exact amount query keeps the stored row amounts as grounding, at
     [{ toolCalls: [{ name: 'transactions', args: { operation: 'search',  minAmount: amount, maxAmount: amount } }] }, { text: said }],
     [{ text: said }],
   ]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic exact amount' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic exact amount' });
   assert.ok(!reply.notice);
   const got = responses[0].toolResults.find(r => r.name === 'transactions');
   assert.ok(got && !got.isError && got.result.rows.some(r => r.amount === amount), 'the real tool returns the row');
@@ -729,7 +731,7 @@ test('renderAnswer wraps each violation in a neutral fx-unchecked span and neutr
 test('a suggested question answers through the fake engine with tools, figures, refs, packs and cost in provenance', async t => {
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime);
-  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root });
+  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } });
   const before = spendCount(s.db);
   const reply = await answerer.answer({ db: s.db, key: THREAD, text: LEAVE });
   assert.ok(!reply.notice);
@@ -760,7 +762,7 @@ test('a single unchecked amount is neutralized in place, with no regeneration', 
     [{ text: `You could save ${INVENTED} this year.` }],
     [{ text: 'must not run' }],
   ]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
   assert.equal(requests.length, 1, 'one model call');
   assert.ok(!reply.notice);
   assert.deepEqual(reply.provenance.grounding, { ok: false, retried: false, unverified: [INVENTED] });
@@ -774,7 +776,7 @@ test('an answer whose figures are mostly unchecked is regenerated once and the g
     [{ text: TWO_INVENTED }],
     [{ text: 'Your plan already covers the leave months.' }],
   ]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
   assert.equal(requests.length, 2, 'two model calls');
   assert.ok(!reply.notice);
   assert.deepEqual(reply.provenance.grounding, { ok: true, retried: true, unverified: [], revised: 2 });
@@ -793,7 +795,7 @@ test('an answer still ungrounded after the regeneration is stored with its numbe
     [{ text: `You could still save ${INVENTED} this year and ${INVENTED_2} next year.` }],
     [{ text: 'must not run' }],
   ]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
   assert.equal(requests.length, 2);
   assert.ok(!reply.notice);
   assert.ok(joined(reply).includes(`${UNCHECKED}${INVENTED}</span>`), joined(reply));
@@ -821,7 +823,7 @@ test('B1: a corrective retry refused by the engine switch answers with the engin
     [{ text: 'must not run' }],
   ], { before: n => { if (n === 1) setSetting(s.db, 'engine', { on: false }); } });
   const before = chatRows(s.db).length;
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
   assert.equal(requests.length, 2, 'the retry was attempted');
   assert.equal(reply.notice, true);
   assert.deepEqual(reply.paragraphs, [NOTICES.engineOff]);
@@ -842,7 +844,7 @@ test('B1: a corrective retry refused over the cap the first call exhausted answe
     [{ text: 'must not run' }],
   ]);
   const before = chatRows(s.db).length;
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
   assert.equal(requests.length, 2, 'the retry was attempted');
   assert.equal(reply.notice, true, 'a notice, not the first answer marked');
   assert.deepEqual(reply.paragraphs, [NOTICES.overCap]);
@@ -860,7 +862,7 @@ test('B1: a corrective retry that fails in the model answers with the model-erro
     [{ text: 'Fabricated $123,456 figure', is_error: true, status: 'error_during_execution' }],
   ]);
   const before = chatRows(s.db).length;
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
   assert.equal(requests.length, 2, 'the retry was attempted');
   assert.equal(reply.notice, true);
   assert.deepEqual(reply.paragraphs, [NOTICES.modelError]);
@@ -878,7 +880,7 @@ test('a literal number grounded by a tool result is bound to its source and list
     { toolCalls: [{ name: 'household', args: { operation: 'summary', } }] },
     { text: `From your household summary, ${n} items need you right now.` },
   ]]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'How many items need me?' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'How many items need me?' });
   assert.ok(!reply.notice);
   assert.equal(reply.provenance.grounding.ok, true);
   assert.match(joined(reply), new RegExp(`<span class="fx-src" data-src="[^"]*" title="From [^"]+">${n}</span>`));
@@ -898,7 +900,7 @@ test('a retry that drops the tool call stays grounded by the first attempt tool 
     ],
     [{ text: `About ${amount} of delivered work is not invoiced.` }],
   ]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic invoice question' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic invoice question' });
   assert.equal(requests.length, 2);
   assert.ok(!reply.notice);
   const html = joined(reply);
@@ -913,7 +915,7 @@ test('a retry that drops the tool call stays grounded by the first attempt tool 
 
 test('engine off by the switch answers with the engine-off notice and spends nothing; back on answers again', async t => {
   const s = await demoStore(t);
-  const answerer = createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root });
+  const answerer = createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root, services: { engine: s.runtime, config: { dataDir: s.root } } });
   setSetting(s.db, 'engine', { on: false });
   const before = spendCount(s.db);
   const off = await answerer.answer({ db: s.db, key: THREAD, text: LEAVE });
@@ -930,7 +932,7 @@ test('engine off by configuration answers with the configuration notice and spen
   const s = await demoStore(t);
   const off = createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'off' }) });
   const before = spendCount(s.db);
-  const reply = await createLiveAnswerer({ engine: off, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: LEAVE });
+  const reply = await createLiveAnswerer({ engine: off, packs: s.packs, root: s.root, services: { engine: off, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: LEAVE });
   assert.equal(reply.notice, true);
   assert.ok(joined(reply).includes('off in this deployment'), joined(reply));
   assert.ok(!joined(reply).includes('{f:yearend_cash}'), 'no answer text');
@@ -939,7 +941,7 @@ test('engine off by configuration answers with the configuration notice and spen
 
 test('over the cap answers with the budget notice and spends nothing; a raised cap answers again', async t => {
   const s = await demoStore(t);
-  const answerer = createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root });
+  const answerer = createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root, services: { engine: s.runtime, config: { dataDir: s.root } } });
   setSetting(s.db, 'cap', { usd: 0 });
   const before = spendCount(s.db);
   const capped = await answerer.answer({ db: s.db, key: THREAD, text: LEAVE });
@@ -954,7 +956,7 @@ test('over the cap answers with the budget notice and spends nothing; a raised c
 test('a model error answers with the model-error notice and never stores the failed text', async t => {
   const s = await demoStore(t);
   const { engine } = scripted(s.runtime, [[{ text: 'Fabricated $123,456 figure', is_error: true, status: 'error_during_execution' }]]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic question' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic question' });
   assert.equal(reply.notice, true);
   assert.ok(joined(reply).includes('could not answer just now, so nothing was made up'), joined(reply));
   assert.ok(!joined(reply).includes('Fabricated'));
@@ -966,7 +968,7 @@ test('a model error answers with the model-error notice and never stores the fai
 test('Ask offers write tools only with trusted identity, while pack and bare rec contexts remain read-only', async t => {
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime);
-  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root });
+  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } });
   await answerer.answer({ db: s.db, key: THREAD, text: 'Update my goal', actorId: 'demo', ownerText: 'Update my goal' });
   await answerer.answer({ db: s.db, key: THREAD, text: 'Update my goal' });
   await answerer.answer({ db: s.db, key: 'pack:giving', text: 'Update my goal', actorId: 'demo' });
@@ -974,13 +976,13 @@ test('Ask offers write tools only with trusted identity, while pack and bare rec
   assert.ok(toolNames(requests[0]).includes('act_on_recommendation'));
   assert.ok(toolNames(requests[0]).includes('answer'));
   assert.ok(toolNames(requests[0]).includes('update_goal'));
-  assert.ok(!toolNames(requests[0]).includes('undo'));
+  assert.ok(toolNames(requests[0]).includes('undo'));
   for (const r of requests.slice(1)) assert.ok(r.tools.every(t2 => t2.kind === 'read'));
 });
 
  test('fake actions execute explicit recommendation commands and refuse negations', async t => {
   const s = await demoStore(t);
-  const answerer = createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root });
+  const answerer = createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root, services: { engine: s.runtime, config: { dataDir: s.root } } });
   const text = 'Dismiss dcfsa';
   await answerer.answer({ db: s.db, key: THREAD, text, actorId: 'demo', ownerText: text, turnId: 'synthetic-action' });
   assert.equal(s.db.prepare('SELECT status FROM recs WHERE id = ?').get('dcfsa').status, 'dismissed');
@@ -991,7 +993,7 @@ test('Ask offers write tools only with trusted identity, while pack and bare rec
 
 test('a rec conversation answer refs the rec and reads it through recommendations.detail', async t => {
   const s = await demoStore(t);
-  const reply = await createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root }).answer({ db: s.db, key: 'deferral', questionId: 0 });
+  const reply = await createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root, services: { engine: s.runtime, config: { dataDir: s.root } } }).answer({ db: s.db, key: 'deferral', questionId: 0 });
   assert.ok(!reply.notice);
   assert.ok(reply.refs.includes('deferral'));
   const rec = reply.provenance.tools.find(x => x.name === 'recommendations');
@@ -1002,7 +1004,7 @@ test('a rec conversation answer refs the rec and reads it through recommendation
 test('a manual pack override changes the prompt pack context and the provenance pack ids', async t => {
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime);
-  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root });
+  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } });
   const base = await answerer.answer({ db: s.db, key: THREAD, text: 'Synthetic override question' });
   assert.deepEqual(sorted(base.provenance.packIds), ACTIVE_DEMO_PACKS);
   s.db.prepare("UPDATE packs_state SET active = 1 WHERE id = 'giving'").run();
@@ -1028,7 +1030,7 @@ test('provenance.packEntries lists cited entries of the conversation pack even w
     [{ text: `As a follow-up, ${givingTitle} still applies.` }],
     [{ text: `${scorpTitle} is the entry that matters here.` }],
   ]);
-  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root });
+  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } });
 
   const whatIf = await answerer.whatIf({ db: s.db, packId: 'giving' });
   assert.ok(!whatIf.notice);
@@ -1047,7 +1049,7 @@ test('a what-if runs a live conversation seeded with the pack prompt and pack me
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime);
   const def = buildScenario(s.db, { packs: s.packs, root: s.root }).packs.find(p => p.id === 'giving');
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).whatIf({ db: s.db, packId: 'giving' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).whatIf({ db: s.db, packId: 'giving' });
   assert.ok(!reply.notice);
   assert.ok(reply.paragraphs.length > 0);
   assert.equal(reply.provenance.engine, 'fake');
@@ -1085,7 +1087,7 @@ const sentinelOperand = { assumption: { name: 'synthetic', value: SENTINEL_AMOUN
 // Every tool the answerer offers in an ask and a rec conversation, read from its own requests.
 async function offeredTools(s) {
   const { engine, requests } = scripted(s.runtime);
-  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root });
+  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } });
   await answerer.answer({ db: s.db, key: THREAD, text: 'Synthetic contract question' });
   await answerer.answer({ db: s.db, key: 'deferral', text: 'Synthetic contract question' });
   const byName = new Map();
@@ -1197,7 +1199,7 @@ test('R3 A contract: scalar read operations return no sentinel argument outside 
   }
 
   const { engine, responses } = scripted(s.runtime, [[{ toolCalls: calls }, { text: 'Synthetic contract answer.' }]]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic contract run' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic contract run' });
   assert.ok(!reply.notice, JSON.stringify(reply));
   const results = responses[0].toolResults;
   assert.equal(results.length, calls.length, 'every scripted call ran');
@@ -1237,7 +1239,8 @@ test('R3 A (F2): transactions.search total equal to the limit argument grounds, 
   let pick = null;
   for (const c of counts) {
     const said = `There are ${c.n} matching transactions.`;
-    const baseline = await createLiveAnswerer({ engine: always(s.runtime, said).engine, packs: s.packs, root: s.root })
+    const answerEngine = always(s.runtime, said).engine;
+    const baseline = await createLiveAnswerer({ engine: answerEngine, packs: s.packs, root: s.root, services: { engine: answerEngine, config: { dataDir: s.root } } })
       .answer({ db: s.db, key: THREAD, text: 'Synthetic baseline' });
     if (!baseline.provenance.grounding.unverified.includes(String(c.n))) continue;
     const page = await callTool('transactions', { operation: 'search',  accountId: c.id, limit: c.n }, { db: s.db, now: '2026-11-05' });
@@ -1253,7 +1256,7 @@ test('R3 A (F2): transactions.search total equal to the limit argument grounds, 
     [{ toolCalls: [{ name: 'transactions', args: { operation: 'search',  accountId: pick.id, limit: n } }] }, { text: said }],
     [{ text: said }],
   ]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic count question' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic count question' });
   assert.ok(!reply.notice);
   const got = responses[0].toolResults.find(r => r.name === 'transactions');
   assert.ok(got && !got.isError, JSON.stringify(responses[0].toolResults));
@@ -1332,7 +1335,7 @@ test('R3 B (F1): inline citations (IRS Publication 560) in the active demo packs
   assert.ok(body.includes('IRS Publication 560'), 'the pack entry cites Publication 560 inline');
   const said = 'The synthetic limit is $560, and the deferral limit is $24,500.';
   const { engine, requests } = always(s.runtime, said);
-  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root });
+  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } });
 
   // Self-check: with every pack whose entries mention 560 off, nothing else in the demo store grounds $560.
   const citing = new Set(s.packs.loaded().filter(p => p.entries.some(e => e.body.includes('560'))).map(p => p.id));
@@ -1358,7 +1361,8 @@ test('a magnitude word followed by percent never grounds on the $1,000 in the se
   const s = await demoStore(t);
   const body = readFileSync(join(ROOT, 'packs', 'self-employed-partnership', 'estimated-tax.md'), 'utf8');
   assert.ok(body.includes('$1,000'), 'the pack entry carries $1,000');
-  const answerer = createLiveAnswerer({ engine: always(s.runtime, 'The change is 1 thousand percent.').engine, packs: s.packs, root: s.root });
+  const answerEngine = always(s.runtime, 'The change is 1 thousand percent.').engine;
+  const answerer = createLiveAnswerer({ engine: answerEngine, packs: s.packs, root: s.root, services: { engine: answerEngine, config: { dataDir: s.root } } });
   const reply = await answerer.answer({ db: s.db, key: THREAD, text: 'Synthetic percent question' });
   assert.ok(!reply.notice);
   assert.ok(reply.provenance.packIds.includes('self-employed-partnership'), 'the pack is active');
@@ -1370,7 +1374,8 @@ test('a spelled number followed by a percent sign never grounds on the $1,000 in
   const s = await demoStore(t);
   const body = readFileSync(join(ROOT, 'packs', 'self-employed-partnership', 'estimated-tax.md'), 'utf8');
   assert.ok(body.includes('$1,000'), 'the pack entry carries $1,000');
-  const answerer = createLiveAnswerer({ engine: always(s.runtime, 'The change is one thousand %.').engine, packs: s.packs, root: s.root });
+  const answerEngine = always(s.runtime, 'The change is one thousand %.').engine;
+  const answerer = createLiveAnswerer({ engine: answerEngine, packs: s.packs, root: s.root, services: { engine: answerEngine, config: { dataDir: s.root } } });
   const reply = await answerer.answer({ db: s.db, key: THREAD, text: 'Synthetic percent question' });
   assert.ok(!reply.notice);
   assert.ok(reply.provenance.packIds.includes('self-employed-partnership'), 'the pack is active');
@@ -1395,7 +1400,8 @@ const PROSE_PACK = {
 test('R3 B: in an active pack entry body only marked quantities ground, end to end', async t => {
   const s = await demoStore(t, {}, { prepare: root => writeSyntheticPack(root, PROSE_PACK) });
   const said = 'At 57, under 4383, the cap is $7,013, the rate is 6.7%, growth is 3.9 percent and 23k qualifies.';
-  const answerer = createLiveAnswerer({ engine: always(s.runtime, said).engine, packs: s.packs, root: s.root });
+  const answerEngine = always(s.runtime, said).engine;
+  const answerer = createLiveAnswerer({ engine: answerEngine, packs: s.packs, root: s.root, services: { engine: answerEngine, config: { dataDir: s.root } } });
 
   // Self-check: without the pack, none of these values ground.
   s.db.prepare("UPDATE packs_state SET active = 0 WHERE id = 'synthetic-prose'").run();
@@ -1441,7 +1447,7 @@ const KNOWN_UNVERIFIED = new Set(['ask:salary', 'rec:offcycle:1', 'whatif:scorp'
 test('R3 demo regression: every canned demo answer stays grounded except the known pre-existing ones; What if kids is grounded', async t => {
   const s = await demoStore(t);
   const scenario = buildScenario(s.db);
-  const answerer = createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root });
+  const answerer = createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root, services: { engine: s.runtime, config: { dataDir: s.root } } });
   const outcomes = new Map();
   for (const q of scenario.ask.suggested) {
     outcomes.set(`ask:${q.id}`, (await answerer.answer({ db: s.db, key: THREAD, text: q.q })).provenance.grounding);
@@ -1613,7 +1619,7 @@ test('R4 F3: the What if kids canned answer (K-12) stays grounded', async t => {
   const scenario = buildScenario(s.db);
   const kids = scenario.packs.find(p => p.id === 'kids');
   assert.ok(kids && kids.whatIf && kids.whatIf.a.some(a => a.includes('K-12')), 'the kids What if says K-12');
-  const reply = await createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root }).whatIf({ db: s.db, packId: 'kids' });
+  const reply = await createLiveAnswerer({ engine: s.runtime, packs: s.packs, root: s.root, services: { engine: s.runtime, config: { dataDir: s.root } } }).whatIf({ db: s.db, packId: 'kids' });
   assert.ok(joined(reply).includes('K-12'), joined(reply));
   assert.equal(reply.provenance.grounding.ok, true, JSON.stringify(reply.provenance.grounding));
   assert.deepEqual(reply.provenance.grounding.unverified, []);
@@ -1781,6 +1787,31 @@ test('R5 F2: a marked amount in the link text of a parenthesized destination sti
 });
 
 
+test('Ask keeps original tax identifiers locally and scrubs current and prior turns at the SDK boundary', async t => {
+  const s = await demoStore(t);
+  const { createEngine } = await import('../src/engine/index.mjs');
+  const payloads = [];
+  const live = createEngine({ mode: 'live', credential: 'synthetic-key', roundRunner: async request => {
+    payloads.push({ prompt: encodeTranscript(request.messages), system: sdkOptions({ ...request, configDir: '/synthetic' }).systemPrompt });
+    return { text: 'Keep a reserve.', content: [{ type: 'text', text: 'Keep a reserve.' }], costUsd: 0.001, model: 'synthetic', status: 'success', toolResults: [] };
+  } });
+  const engine = { mode: 'live', isOn: () => true, call: live.call };
+  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } });
+  const original = 'Synthetic SSN 900-12-3456 and EIN 90-1234567.';
+  const { threadCreate, ask } = await import('../src/api/handlers.mjs');
+  const ctx = { db: s.db, config: s.config, packs: s.packs, answerer };
+  const first = await threadCreate({ ...ctx, body: { text: original } });
+  const key = first.thread.key;
+  await ask({ ...ctx, body: { key, text: 'Synthetic ITIN 900-70-1234 question.' } });
+  assert.equal(payloads.length, 2);
+  for (const payload of payloads) assert.ok(!/900-12-3456|90-1234567|900-70-1234/.test(JSON.stringify(payload)), 'outbound Ask history contains no tax identifiers');
+  assert.ok(payloads[1].prompt.includes('XXX-XX-XXXX'), 'prior user text is scrubbed too');
+  const stored = s.db.prepare('SELECT text FROM messages WHERE conversation_key = ? AND role = ? ORDER BY id').all(key, 'me');
+  assert.equal(stored[0].text, original);
+  assert.equal(stored[1].text, 'Synthetic ITIN 900-70-1234 question.');
+});
+
+
 test('PN1: Ask records a spending ledger from the owner sentence using the advertised answer shape', async t => {
   const s = await demoStore(t);
   const text = "Aster's is my card spending, not a business.";
@@ -1790,7 +1821,7 @@ test('PN1: Ask records a spending ledger from the owner sentence using the adver
     { toolCalls: [{ name: 'answer', args: { operation: 'fact', key: 'pnl.ledgers', value: { "Birch's": { kind: 'spending' } }, evidence: text } }] },
     { text: 'Saved the named spending ledger classification.' },
   ]]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text, ownerText: text, actorId: 'demo', turnId: 'synthetic-ledger' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text, ownerText: text, actorId: 'demo', turnId: 'synthetic-ledger' });
   assert.ok(!reply.notice);
   const shapes = await callTool('household', { operation: 'fact_shapes' }, { db: s.db, dataDir: s.root });
   assert.ok(shapes['pnl.ledgers']);

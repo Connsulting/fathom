@@ -252,7 +252,7 @@ test('answer({ refs }) puts resolved references with kind, id and use in the con
   ];
   const kept = refs.slice(0, 3);
   const { engine, requests } = always(s.runtime, 'Keep a reserve.');
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic question about these', refs });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic question about these', refs });
   assert.ok(reply && !reply.notice, JSON.stringify(reply).slice(0, 300));
   assert.ok(requests.length >= 1);
   assert.ok(requests[0].system.includes(PRODUCT_RULES), 'the static system carries the product rules');
@@ -269,11 +269,12 @@ test('answer({ refs }) puts resolved references with kind, id and use in the con
 test('answer without refs has no references in the context or provenance', async t => {
   const s = await demoStore(t);
   const { engine, requests } = always(s.runtime, 'Keep a reserve.');
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic plain question' });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic plain question' });
   assert.ok(!reply.notice);
   assert.ok(!String(requests[0].systemDynamic).includes('"references"'));
   assert.ok(!('references' in reply.provenance), JSON.stringify(reply.provenance).slice(0, 300));
-  const none = await createLiveAnswerer({ engine: always(s.runtime, 'Keep a reserve.').engine, packs: s.packs, root: s.root })
+  const answerEngine = always(s.runtime, 'Keep a reserve.').engine;
+  const none = await createLiveAnswerer({ engine: answerEngine, packs: s.packs, root: s.root, services: { engine: answerEngine, config: { dataDir: s.root } } })
     .answer({ db: s.db, key: THREAD, text: 'Synthetic plain question', refs: [{ kind: 'account', id: 'a_no_such' }] });
   assert.ok(!('references' in none.provenance), 'nothing resolved, nothing recorded');
 });
@@ -291,7 +292,8 @@ test('the scripted model calls the hinted tools for an account and a transaction
   for (const cand of old.filter(c => c.amount > 0)) {
     const refs = [{ kind: 'account', id: cand.account_id }, { kind: 'transaction', id: String(cand.id) }];
     const said = `That transaction was ${asAmount(Math.abs(cand.amount))}.`;
-    const base = await createLiveAnswerer({ engine: always(s.runtime, said).engine, packs: s.packs, root: s.root })
+    const answerEngine = always(s.runtime, said).engine;
+    const base = await createLiveAnswerer({ engine: answerEngine, packs: s.packs, root: s.root, services: { engine: answerEngine, config: { dataDir: s.root } } })
       .answer({ db: s.db, key: THREAD, text: 'Synthetic baseline', refs });
     if (base.provenance.grounding.unverified.includes(asAmount(Math.abs(cand.amount)))) { pick = cand; break; }
   }
@@ -306,7 +308,7 @@ test('the scripted model calls the hinted tools for an account and a transaction
     ] }, { text: said }],
     [{ text: said }],
   ]);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'What was that charge?', refs });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'What was that charge?', refs });
   assert.ok(!reply.notice, JSON.stringify(reply).slice(0, 300));
   const context = contextOf(requests[0].systemDynamic);
   const txnRef = context.references.find(r => r.kind === 'transaction');
@@ -341,7 +343,7 @@ test('a number that appears only in a reference id or its hint is marked unverif
 
   const said = 'This one is worth $8,263, or 8263 in round terms.';
   const { engine, requests } = always(s.runtime, said);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text: 'Synthetic referenced question', refs });
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic referenced question', refs });
   assert.ok(!reply.notice);
   assert.ok(requests[0].systemDynamic.includes(recId), 'the model sees the reference id');
   const { unverified } = reply.provenance.grounding;

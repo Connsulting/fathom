@@ -80,7 +80,7 @@ export function createMcpHandler({ keys, runtimes, config }) {
         && household.isCurrent();
     } };
     const scheduler = household.scheduler;
-    const ctx = { db: household.db, now: new Date(), dataDir: household.root, clock: config.clock, household,
+    const ctx = { db: household.db, now: new Date(), dataDir: household.root, clock: config.clock, household, services: household.services,
       config: household.config, packs: household.packs, engine: household.engine, answerer: household.answerer,
       packDirs: packDirsFor(household.root),
       channel: 'mcp', actorId: record.userId || `key:${record.id}`, scopes: record.scopes,

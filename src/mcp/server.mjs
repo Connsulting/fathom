@@ -1,12 +1,18 @@
 // MCP tool server for one authenticated request: the low-level SDK Server offering the registry
 // tools a key's scopes allow. Arguments and results are never logged.
 
+import { readFileSync } from 'node:fs';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { getTool, callTool, ToolError, operationScopes, instructions } from '../tools/index.mjs';
 import { toolsForScopes } from './keys.mjs';
 
-const SERVER_INFO = { name: 'fathom', version: '1.0.0' };
+const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
+
+// The version a client sees: the git SHA of the build (FATHOM_BUILD_SHA, passed in when the image is
+// built), else the package version.
+export const serverVersion = (env = process.env) => String(env.FATHOM_BUILD_SHA ?? '').trim() || PACKAGE_VERSION;
+export const serverInfo = (env = process.env) => ({ name: 'fathom', version: serverVersion(env) });
 
 const errorResult = text => ({ isError: true, content: [{ type: 'text', text }] });
 
@@ -14,7 +20,7 @@ const errorResult = text => ({ isError: true, content: [{ type: 'text', text }] 
 export function createToolServer({ scopes, ctx, authorize }) {
   if (typeof authorize !== 'function') throw new TypeError('createToolServer needs authorization');
   const offered = toolsForScopes(scopes);
-  const server = new Server(SERVER_INFO, { capabilities: { tools: {} }, instructions });
+  const server = new Server(serverInfo(), { capabilities: { tools: {} }, instructions });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     if (!authorize()) throw new ToolError('forbidden', 'Key authorization is no longer available');

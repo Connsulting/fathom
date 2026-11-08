@@ -145,7 +145,7 @@ test('B4: the What if question for a manifest pack is the raw prompt, and its st
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
-  const answerer = createLiveAnswerer({ engine, packs, root: s.dataDir });
+  const answerer = createLiveAnswerer({ engine, packs, root: s.dataDir, services: { engine, config: { dataDir: s.dataDir } } });
   const figure = money(buildScenario(s.db).fig.true_reserve.v);
 
   const first = await answerer.whatIf({ db: s.db, packId: HOSTILE_ID });
