@@ -188,26 +188,28 @@ test('answering the Virginia questions while the projection is blocked leaves a 
 
 // ---------------------------------------------------------------- missing-data title, summary and links
 
-test('missing data names its items in the title and summary, and each task links to where it is done', async () => {
+test('missing data names its work without prose counts, and each task links to where it is done', async () => {
   const ctx = baseCtx({
     warnings: ['filing_status_assumed'],
+    data: { accounts: [], confirm: [{ id: 17, kind: 'tax_year', status: 'pending' }] },
     info: { blocked: ['paystub_ytd_missing', 'tax_year_unconfirmed'], confirm: {}, payrollBlocks: [{ code: 'paystub_ytd_missing', employer: 'Example Employer Inc' }] },
     questionKeys: new Set(),
   });
   const hit = evaluateTriggers(ctx).find(h => h.rec.id === 'missing-data');
-  assert.equal(hit.rec.title, 'Answer 2 tax questions and upload a paystub');
+  assert.equal(hit.rec.title, 'Answer tax questions and upload a paystub');
   const prose = await writeProse(hit, ctx);
-  assert.match(prose.fields.summary, /Answer 2 tax questions and upload a paystub/);
+  assert.match(prose.fields.summary, /^Update the missing data/);
+  assert.doesNotMatch(prose.fields.summary, /\d/);
   const linked = hit.rec.tasks.filter(t => t.link);
   assert.ok(linked.some(t => t.link === 'upload' && /paystub/i.test(t.t)));
-  assert.ok(linked.some(t => t.link === 'confirm' && t.kind === 'confirm' && t.code === 'tax_year_unconfirmed'), 'a Confirm question links to Confirm');
+  assert.ok(linked.some(t => t.link === 'confirm' && t.kind === 'confirm' && t.code === 'tax_year_unconfirmed' && t.confirmId === 17), 'a Confirm question links to its pending item');
   assert.ok(hit.rec.tasks.some(t => t.kind === 'answer' && t.fact === 'household.filingStatus'), 'the form question is a step that clears when answered');
 });
 
 test('missing data that is only uploads is titled as uploads', () => {
   const ctx = baseCtx({ freshness: [{ id: 'balances', label: 'Account balances', state: 'stale' }, { id: 'transactions', label: 'Account transactions', state: 'missing' }] });
   const hit = evaluateTriggers(ctx).find(h => h.rec.id === 'missing-data');
-  assert.equal(hit.rec.title, 'Upload 2 files');
+  assert.equal(hit.rec.title, 'Upload the latest files');
   assert.ok(hit.rec.tasks.filter(t => t.link === 'upload').length >= 2);
 });
 
@@ -271,12 +273,12 @@ test('parsed notes can supply birth years, and nothing else is read as one', asy
   assert.equal(fact('owner 1650'), undefined, 'a year before 1900 is not a birth year');
 });
 
-test('missing data that is only questions keeps its listed title and summary', async () => {
+test('missing data that is only questions keeps its title and count-free summary', async () => {
   const ctx = baseCtx({ warnings: ['filing_status_assumed'] });
   const hit = evaluateTriggers(ctx).find(h => h.rec.id === 'missing-data');
   assert.equal(hit.rec.question.primary, true);
   assert.equal(hit.rec.title, 'Answer a tax question');
-  assert.match((await writeProse(hit, ctx)).fields.summary, /^Answer a tax question/);
+  assert.match((await writeProse(hit, ctx)).fields.summary, /^Update the missing data/);
 });
 
 test('saved dependent birth years set the child count, and the planner reads one source for ages', async () => {

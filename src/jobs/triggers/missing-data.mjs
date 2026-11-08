@@ -188,11 +188,10 @@ export function evaluate(ctx) {
   return { grounding: [], items: list, ...answers };
 }
 
-// The count of a kind of item as words for a title: one reads "a", more read the number.
-const count = (n, one, many) => (n === 1 ? `a ${one}` : `${n} ${many}`);
+// Titles name the work; the Steps view renders progress counts from task data.
+const phraseFor = (n, one, many) => (n === 1 ? `a ${one}` : many);
 
-// What the owner has to do to clear the list, for the title and summary: "Answer 2 tax questions
-// and upload a paystub". Questions come first, then uploads, then checks.
+// What clears the list. Questions come first, then uploads, then checks.
 export function listTitle(list) {
   const of = kind => list.filter(i => i.kind === kind);
   const asks = of('question');
@@ -201,13 +200,13 @@ export function listTitle(list) {
   const parts = [];
   if (asks.length) {
     const tax = asks.every(i => i.tax);
-    parts.push(`answer ${count(asks.length, tax ? 'tax question' : 'question', tax ? 'tax questions' : 'questions')}`);
+    parts.push(`answer ${phraseFor(asks.length, tax ? 'tax question' : 'question', tax ? 'tax questions' : 'questions')}`);
   }
   if (ups.length) {
     const nouns = [...new Set(ups.map(i => i.noun))];
-    parts.push(ups.length === 1 || nouns.length === 1 ? `upload ${nouns[0]}` : `upload ${ups.length} files`);
+    parts.push(ups.length === 1 || nouns.length === 1 ? `upload ${nouns[0]}` : 'upload the latest files');
   }
-  if (checks.length) parts.push(`check ${count(checks.length, 'item', 'items')}`);
+  if (checks.length) parts.push(`check ${phraseFor(checks.length, 'item', 'items')}`);
   const text = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0] || 'update your data';
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
