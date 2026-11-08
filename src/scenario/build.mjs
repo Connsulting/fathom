@@ -28,6 +28,7 @@ import { questionFor, dataText, LISTED_RECS } from '../jobs/triggers/common.mjs'
 import { getFacts } from '../store/facts.mjs';
 import { inferMortgage } from '../calc/mortgage-inference.mjs';
 import { deriveSteps } from '../shared/rec-steps.mjs';
+import { observedPayments } from '../ingest/transaction-payments.mjs';
 
 const DAY = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -198,7 +199,7 @@ export function stepEnvOf(db) {
   }
   const open = parse(db.prepare("SELECT value FROM content WHERE key = 'rec.openData'").get()?.value, null);
   const confirm = db.prepare("SELECT id, kind, context, status FROM confirm_items WHERE status = 'pending' ORDER BY id").all().map(item => ({ ...item, context: parse(item.context, {}) }));
-  return { facts: getFacts(db), accounts: db.prepare('SELECT * FROM accounts').all(), confirm, open: Array.isArray(open) ? open : null, marks };
+  return { facts: getFacts(db), accounts: db.prepare('SELECT * FROM accounts').all(), confirm, open: Array.isArray(open) ? open : null, marks, payments: observedPayments(db) };
 }
 
 export function recFromRow(row, clock, env = {}) {

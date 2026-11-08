@@ -19,6 +19,7 @@ import { storeFile, readStoredFile, openVault } from './vault.mjs';
 import { recordSource } from './freshness.mjs';
 import { autoResolve } from './auto.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
+import { reconcileTransactionPayments } from './transaction-payments.mjs';
 
 export const WAITING = Object.freeze(['waiting_for_engine', 'budget_exhausted', 'needs_confirmation', 'needs_clarification', 'needs_source_text']);
 export const STATUSES = Object.freeze(['imported', 'duplicate', ...WAITING, 'unsupported', 'too_large', 'failed']);
@@ -344,7 +345,9 @@ export function persistImport(db, fileId, file, plan, opts) {
     }));
   }
   refreshFigures(ctx, accountIds);
-  return finish(plan.status);
+  const result = finish(plan.status);
+  reconcileTransactionPayments(db, { now });
+  return result;
 }
 
 // A file row for an account first seen through SimpleFIN: when the row's own identity has no
@@ -554,7 +557,16 @@ function putTransaction(ctx, row, parser, locator) {
   let collided = null;
   let seen = observations(db, key);
   if (seen.some((o) => o.stored && o.file_id === fileId)) { counts.duplicates += 1; return; }
-  if (row.externalAuthoritative && seen.length) { counts.duplicates += 1; return; }
+  if (row.externalAuthoritative && seen.length) {
+    const stored = db.prepare('SELECT * FROM transactions WHERE dedupe_key=? AND parser=?').get(key, parser);
+    if (stored && (stored.description !== values.description || stored.date !== values.date || !moneyEq(stored.amount, values.amount))) {
+      archive(db, 'transactions', { ...stored }, { by: fileId, reason: 'revised', now });
+      db.prepare('UPDATE transactions SET description=?,date=?,amount=?,file_id=?,locator=? WHERE id=?')
+        .run(values.description, values.date, values.amount, fileId, locator, stored.id);
+      counts.revised++;
+    } else counts.duplicates++;
+    return;
+  }
   if (seen.length) {
     const found = samePosting(seen, row.description, parser);
     if (found) return duplicate(found, key);

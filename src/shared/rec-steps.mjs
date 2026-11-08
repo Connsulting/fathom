@@ -32,10 +32,21 @@ export function confirmItemFor(code = '', items = []) {
   return pending.find(item => CONFIRM_KINDS[code]?.includes(item.kind));
 }
 
-export const isVerifiable = t => !!t && (typeof t.fact === 'string' || typeof t.code === 'string');
-export const stepKey = t => (typeof t.fact === 'string' ? `fact:${t.fact}` : typeof t.code === 'string' ? `code:${t.code}` : `t:${t.t}`);
+export const isVerifiable = t => !!t && (typeof t.fact === 'string' || typeof t.code === 'string' || !!t.payment);
+export const stepKey = t => (t.payment ? `payment:${t.t}:${JSON.stringify(t.payment)}` : typeof t.fact === 'string' ? `fact:${t.fact}` : typeof t.code === 'string' ? `code:${t.code}` : `t:${t.t}`);
 
-export function checkCleared(t, { facts = {}, accounts = [], open = null } = {}) {
+function paymentEvidence(t, env) {
+  if (!t.payment || !Number.isFinite(t.payment.amount) || t.payment.amount <= 0) return null;
+  const j = value => /^(va|virginia|state)$/i.test(value) ? 'state' : value;
+  const matches = (env.payments ?? []).filter(p => j(p.jurisdiction) === j(t.payment.jurisdiction)
+    && p.taxYear === t.payment.taxYear && p.quarter === t.payment.quarter
+    && Math.round(p.amount * 100) === Math.round(t.payment.amount * 100));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+export function checkCleared(t, env = {}) {
+  const { facts = {}, accounts = [], open = null } = env;
+  if (t.payment) return !!paymentEvidence(t, env);
   if (typeof t.fact === 'string') {
     try { return !!questionFor([t.fact], { accounts, facts }).answered; } catch { return false; }
   }
@@ -45,6 +56,14 @@ export function checkCleared(t, { facts = {}, accounts = [], open = null } = {})
 
 export function deriveSteps(tasks, done, env = {}) {
   return (Array.isArray(tasks) ? tasks : []).map((t, i) => {
+    const observed = paymentEvidence(t, env);
+    if (observed) return { ...t, auto: true, done: true, doneAt: observed.date, evidence: observed.evidence };
+    if (t.payment) {
+      const { evidence: _evidence, doneAt: _doneAt, doneBy: _doneBy, ...rest } = t;
+      const on = !!(Array.isArray(done) && done[i]);
+      const mark = on ? env.marks?.get(t.t) : null;
+      return { ...rest, auto: false, done: on, ...(mark?.action === 'step_did' ? { doneAt: mark.ts, doneBy: mark.actor } : {}) };
+    }
     if (isVerifiable(t)) {
       if (t.kind === 'confirm') {
         const { confirmId: _stored, ...rest } = t;

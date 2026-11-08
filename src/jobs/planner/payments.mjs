@@ -62,6 +62,7 @@ export function classifyPayments(data, { persons, f, isVa }) {
       // Workbook groups are only federal or state; a state payment is Virginia's for a Virginia household.
       if (!b || (j === 'unknown-state' && !isVa)) continue;
       if (r.tax_year_basis === 'sheet_label') block(b.paid, 'tax_year_unconfirmed');
+      if (!mfj && r.parser === 'transaction-payment' && !persons.includes(r.recipient)) block(b.paid, 'estimated_payer_unknown');
       add(b.paid, r);
       continue;
     }

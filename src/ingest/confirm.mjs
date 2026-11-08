@@ -13,6 +13,7 @@ import { dedupeKey } from './dedupe.mjs';
 import { cents } from './format.mjs';
 import { captureChanges, revertChanges, touches } from './undo.mjs';
 import { accountNaming } from '../accounts/naming.mjs';
+import { applyTransactionPayment } from './transaction-payments.mjs';
 
 function confirmTransaction(db, fn) {
   if (!db.isTransaction) return tx(db, fn);
@@ -30,7 +31,7 @@ function confirmTransaction(db, fn) {
 
 export const KINDS = Object.freeze([
   'account_owner', 'account_kind', 'entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 'employer_relation', 'employer_recipient', 'document_recipient',
-  'withholding_conflict', 'account_match', 'transaction_category', 'category_mapping', 'resolver_fact',
+  'withholding_conflict', 'account_match', 'transaction_category', 'category_mapping', 'resolver_fact', 'transaction_payment',
 ]);
 
 export const OWNER_OPTIONS = Object.freeze([
@@ -242,7 +243,7 @@ export function finalReason(db, item) {
   const undo = db.prepare('SELECT ingest_epoch, used_at FROM confirm_undo WHERE item_id = ?').get(item.id);
   if (!undo) return 'no_undo';
   if (undo.used_at != null) return 'used_since';
-  if (undo.ingest_epoch !== ingestEpoch(db) && !((IMPORT_EXEMPT.includes(item.kind) && hasAuto(db, item.id)) || (item.kind==='transaction_category' && hasAuto(db,item.id)))) return 'imported_since';
+  if (undo.ingest_epoch !== ingestEpoch(db) && !(item.kind === 'transaction_payment' || (IMPORT_EXEMPT.includes(item.kind) && hasAuto(db, item.id)) || (item.kind==='transaction_category' && hasAuto(db,item.id)))) return 'imported_since';
   return null;
 }
 
@@ -458,6 +459,7 @@ function factIsStale(db, item) {
 // Apply an answer by kind. Returns {factsChanged}.
 export function applyAnswer(db, item, optionId, { now, channel = null } = {}) {
   switch (item.kind) {
+    case 'transaction_payment': return applyTransactionPayment(db, item, optionId);
     case 'resolver_fact': {
       const { key, values } = item.context;
       if (!Object.hasOwn(values, optionId)) throw new ConfirmError('bad_option');

@@ -10,6 +10,8 @@ import { stepEnvOf, recFromRow } from '../../src/scenario/build.mjs';
 import { loadPlanningData, resolveEntities } from '../../src/jobs/planner/data.mjs';
 import { computeFigures } from '../../src/jobs/planner/figures.mjs';
 import { deriveSteps } from '../../src/shared/rec-steps.mjs';
+import { build as buildFederal } from '../../src/jobs/triggers/fed-q4-estimate.mjs';
+import { applyRecs } from '../../src/jobs/planner/recs.mjs';
 
 const NOW = '2026-09-20T12:00:00.000Z';
 const CLOCK = NOW.slice(0, 10);
@@ -39,10 +41,10 @@ async function fixture(fn, rows = postings()) {
   } finally { s.close(); }
 }
 
-async function uploadLog(s, date = '2026-06-12', amount = 1200) {
+async function uploadLog(s, date = '2026-06-12', amount = 1200, payer = 'owner') {
   const parser = { id: 'synthetic-payment-log', sourceKind: 'tax_payments', label: 'Payment log',
     parse: () => ({ rows: [{ kind: 'tax_payment', jurisdiction: 'federal', taxYear: 2026, date, amount,
-      paymentKind: 'estimate', payer: 'owner', recipient: 'owner', datePrecision: 'day', taxYearBasis: 'confirmed_tax_year',
+      paymentKind: 'estimate', payer, recipient: payer, datePrecision: 'day', taxYearBasis: 'confirmed_tax_year',
       locator: { row: 2 } }], period: { from: date, to: date }, warnings: [] }) };
   return ingestFile(s.db, textFile(`payments-${date}.csv`, `Date,Amount\n${date},${amount}\n`), s.opts(null, { parser, now: NOW }));
 }
@@ -100,7 +102,7 @@ test('Undo removes a detected payment and its rec evidence, survives resync, and
   assert.equal(deriveSteps([taxTask()], [], stepEnvOf(s.db))[0].done, true);
   reopenItem(s.db, id, { now: NOW });
   assert.equal(payments(s.db).some(r => r.amount === 1800), false);
-  assert.equal(deriveSteps([taxTask()], [true], stepEnvOf(s.db))[0].done, false);
+  assert.equal(deriveSteps([taxTask()], [], stepEnvOf(s.db))[0].done, false);
   await syncSimplefin(s.db, opts);
   assert.equal(payments(s.db).some(r => r.amount === 1800), false, 'respect an undone inference');
   answer(s.db, id, 'estimate', { now: NOW });
@@ -127,8 +129,8 @@ test('the real projection includes observed estimates and carries no missing-pay
   const data = loadPlanningData(s.db, CLOCK);
   const entities = resolveEntities(data, facts);
   const out = computeFigures(data, facts, { clock: CLOCK, entities, owner: facts });
-  assert.equal(out.fig['tax.fed.paid'].v, 3000);
-  assert.equal(out.fig['tax.va.paid'].v, 650);
+  assert.equal(out.figures['tax.fed.paid'].v, 3000);
+  assert.equal(out.figures['tax.va.paid'].v, 650);
   assert.ok(!out.info.gaps.some(g => /payment/.test(g.code)));
 }));
 
@@ -153,3 +155,68 @@ test('January without a tax year asks before writing; refunds and payroll taxes 
 }, [posting('january', '2026-01-15', -125, 'IRS ESTIMATED TAX'),
   posting('refund', '2026-09-01', 125, 'IRS TAX REFUND'),
   posting('payroll', '2026-09-02', -125, 'IRS EFTPS FORM 941 PAYROLL TAX')]));
+
+test('a changed connected posting invalidates the old inference and its pending answer', () => fixture(async (s, opts, body) => {
+  await syncSimplefin(s.db, opts);
+  const pending = pendingItems(s.db).find(i => i.kind === 'transaction_payment');
+  body.accounts[0].transactions.find(t => t.id === 'fed-q3').description = 'IRS RETURN BALANCE 2025';
+  body.accounts[0].transactions.find(t => t.id === 'unclear').description = 'IRS RETURN BALANCE 2025';
+  await syncSimplefin(s.db, opts);
+  assert.equal(payments(s.db).some(r => r.amount === 1800), false);
+  assert.equal(deriveSteps([taxTask()], [], stepEnvOf(s.db))[0].done, false);
+  assert.throws(() => answer(s.db, pending.id, 'estimate', { now: NOW }), e => ['stale','answered'].includes(e.code));
+}));
+
+test('a four-day separation and a different jurisdiction do not suppress real estimates', () => fixture(async (s, opts) => {
+  await uploadLog(s, '2026-06-11');
+  await syncSimplefin(s.db, opts);
+  assert.equal(payments(s.db).length, 4);
+  assert.equal(payments(s.db).filter(r => r.amount === 1200).length, 2);
+}));
+
+test('multiple log candidates ask one plain question and write nothing until answered', () => fixture(async (s, opts) => {
+  await uploadLog(s, '2026-06-12');
+  await uploadLog(s, '2026-06-14', 1200, 'spouse');
+  await syncSimplefin(s.db, opts);
+  const pending = pendingItems(s.db).filter(i => i.kind === 'transaction_payment');
+  assert.equal(pending.length, 1);
+  assert.equal(payments(s.db).length, 2);
+  const option = pending[0].options.find(o => o.id.startsWith('logged:'));
+  assert.ok(option);
+  answer(s.db, pending[0].id, option.id, { now: NOW });
+  assert.equal(payments(s.db).length, 2);
+}, [postings()[0]]));
+
+test('confirming a separate payment preserves it beside log candidates on resync', () => fixture(async (s, opts) => {
+  await uploadLog(s, '2026-06-12');
+  await uploadLog(s, '2026-06-14', 1200, 'spouse');
+  await syncSimplefin(s.db, opts);
+  const item = pendingItems(s.db).find(i => i.kind === 'transaction_payment');
+  answer(s.db, item.id, 'separate', { now: NOW });
+  assert.equal(payments(s.db).length, 3);
+  await syncSimplefin(s.db, opts);
+  assert.equal(payments(s.db).length, 3);
+  assert.equal(finalReason(s.db, getItem(s.db, item.id)), null);
+  reopenItem(s.db, item.id, { now: NOW });
+  assert.equal(payments(s.db).length, 2);
+}, [postings()[0]]));
+
+test('the existing federal trigger emits payment metadata and retains its completed target across planning updates', () => fixture(async (s, opts) => {
+  const task = buildFederal({ year: 2026, facts: {}, fig: { 'sh.fed.remaining': { v: 1800 } } }, { basis: 'current', grounding: [] }).tasks[1];
+  assert.deepEqual(task.payment, { jurisdiction: 'federal', taxYear: 2026, quarter: 4, amount: 1800 });
+  await syncSimplefin(s.db, opts);
+  s.db.prepare("INSERT INTO jobs(id,name) VALUES ('plan','Plan')").run();
+  const run = Number(s.db.prepare("INSERT INTO job_runs(job_id,started_at,status) VALUES ('plan',?,'running')").run(NOW).lastInsertRowid);
+  const hit = amount => ({ state: 'hit', trigger: { id: 'test-q3', domain: 'tax' }, hit: { packId: null, rec: {
+    id: 'test-q3', title: 'Pay the federal estimate', domain: 'tax', owner: 'you', goalKinds: ['tax'],
+    tasks: [taxTask({ payment: { jurisdiction: 'federal', taxYear: 2026, quarter: 3, amount } })], mine: [], cross: [], kb: [], value: [] } } });
+  const ctx = { clock: CLOCK, now: NOW, runId: run, prose: { 'test-q3': { fields: { summary: 'Pay the estimate', why: [], qa: [] }, hash: 'synthetic', src: 'template' } },
+    packOverride: () => null, warn() {}, prefs: {}, stepEnv: stepEnvOf(s.db) };
+  applyRecs(s.db, [hit(1800)], ctx);
+  applyRecs(s.db, [hit(600)], ctx);
+  const row = s.db.prepare("SELECT * FROM recs WHERE id='test-q3'").get();
+  const rec = recFromRow(row, CLOCK, stepEnvOf(s.db));
+  assert.equal(rec.tasks.length, 1);
+  assert.equal(rec.tasks[0].payment.amount, 1800);
+  assert.equal(rec.tasks[0].done, true);
+}));

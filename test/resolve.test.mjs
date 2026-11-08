@@ -51,6 +51,16 @@ test('a scripted household engine answers an account kind with grounded evidence
   assert.equal(db.prepare('SELECT kind FROM accounts').get().kind, null);
 }));
 
+test('ambiguous bank tax payments stay in Confirm even when a grounded model would answer them', () => store(async db => {
+  const id = ask(db, { kind: 'transaction_payment', subject: 'synthetic-payment', question: 'Is this an estimated tax payment?',
+    options: [{ id: 'estimate', label: 'Estimated payment' }, { id: 'not_estimate', label: 'Not an estimate' }],
+    context: {}, now: NOW }).id;
+  const engine = model(db, [{ item: id, option: 'estimate', basis: 'stored_fact', refs: ['accounts:synthetic-a'] }]);
+  await resolvePending(db, engine, options);
+  assert.equal(getItem(db, id).status, 'pending');
+  assert.equal(engine.calls.length, 0);
+}));
+
 test('missing, absent and unrelated refs are rejected while the item stays pending', () => store(async db => {
   const id = account(db);
   for (const refs of [['accounts:missing'], [], ['packs:missing']]) {
