@@ -82,6 +82,7 @@ export async function isolationFixture({ engine = 'fake', extra = {}, engineOpti
       Object.defineProperties(hh, {
         ctx: { get: () => app.runtimes.get(hh.id) },
         db: { get: () => hh.ctx.db },
+        platform: { value: app.platform },
       });
     }
     return { root, dataDir, keys, app, baseUrl, store, platform: app.platform, server, A, B, dual, operator,

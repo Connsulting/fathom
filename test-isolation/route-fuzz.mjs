@@ -40,7 +40,13 @@ function manifest(dir) {
     return [p, st.isFile() ? hash(readFileSync(file)) : 'directory'];
   })));
 }
-const snapshot = hh => [logicalDigest(hh.db), manifest(hh.ctx.root)];
+const platformTables = ['api_keys', 'household_memberships', 'household_invitations', 'household_data_keys', 'household_outbound',
+  'household_model_budgets', 'model_rounds', 'notification_policy', 'notification_subscriptions', 'household_backup_operations'];
+const platformSnapshot = hh => hash(JSON.stringify([
+  hh.platform.prepare('SELECT * FROM households WHERE id=?').get(hh.id),
+  ...platformTables.map(table => [table, hh.platform.prepare(`SELECT * FROM ${table} WHERE household_id=?`).all(hh.id).map(row => JSON.stringify(row)).sort()]),
+]));
+const snapshot = hh => [logicalDigest(hh.db), manifest(hh.ctx.root), platformSnapshot(hh)];
 const stable = (hh, before, code) => assert.deepEqual(snapshot(hh), before, code);
 const FAMILY = {
   household: `account_holders accounts action_receipts advisor_checkin advisor_packets advisor_reviews balances category_merchant_rules category_source_rules column_mappings confirm_auto confirm_auto_declined confirm_guesses confirm_items confirm_undo content conversations deadline_alerts deadlines decisions documents email_sends entity_aliases events expected_transactions facts figures files goals held_facts import_batches import_model_spend import_proposals ingest_epoch job_lock job_runs jobs messages packs_state planner_recs pnl_lines positions preferences rec_events recs schema_migrations settings simplefin_accounts simplefin_connection simplefin_snapshots source_changes sources spend_ledger spending_definitions store_identity superseded_rows tax_payments transaction_category_corrections transaction_category_guesses transaction_category_imports transactions yearend_marks yearend_packets`.split(' '),
@@ -180,8 +186,15 @@ const structuredCloneRequest = spec => ({ path: spec.path, body: structuredClone
 async function deterministicPolicies(f, inventory, specs) {
   for (const [own, other] of [[f.A, f.B], [f.B, f.A]]) {
     for (const route of inventory) {
+      activeCase = { seed: 0, route: keyOf(route), mutation: 'authorization-class', assertion: 'deterministic_policy' };
       const policy = routePolicy(route);
       const spec = specs.get(other.id)[keyOf(route)] ?? concreteControl(route, other);
+      if (!CONTROL.has(keyOf(route)) || policy.admin || policy.backupControl) {
+        const before = snapshot(other);
+        const r = await wire(f, f.operator, route.method, spec);
+        assert.equal(r.status, 403, `nonmember_operator ${keyOf(route)}`);
+        stable(other, before, 'operator_foreign_effect');
+      }
       if (!policy.public) {
         const r = await wire(f, own.admin, route.method, spec, { cookie: undefined });
         assert.equal(r.status, 401, `anonymous ${keyOf(route)}`);
@@ -212,16 +225,40 @@ async function deterministicPolicies(f, inventory, specs) {
     }
     stable(other, before, 'unknown_route_foreign_effect');
   }
+  const memberRoutes = inventory.filter(route => !CONTROL.has(keyOf(route)) && !routePolicy(route).admin && !routePolicy(route).backupControl);
+  for (const [own, other] of [[f.A, f.B], [f.B, f.A]]) {
+    f.dual.identity = ok(await f.dual.client.post('/api/auth/household', { householdId: own.id })).identity;
+    const old = headersOf(f.dual);
+    const before = snapshot(other);
+    for (const route of memberRoutes) {
+      activeCase = { seed: 0, route: keyOf(route), mutation: 'dual-member-foreign-header', assertion: 'dual_context' };
+      const r = await wire(f, f.dual, route.method, specs.get(other.id)[keyOf(route)], { 'x-fathom-household': other.id });
+      assert.equal(r.status, 409, `dual_foreign_context ${keyOf(route)}`);
+      assert.ok(!r.text.includes(other.canary), 'dual_foreign_disclosure');
+      stable(other, before, 'dual_foreign_effect');
+    }
+    f.dual.identity = ok(await f.dual.client.post('/api/auth/household', { householdId: other.id })).identity;
+    const switched = snapshot(other);
+    for (const route of memberRoutes) {
+      activeCase = { seed: 0, route: keyOf(route), mutation: 'dual-member-stale-tab', assertion: 'stale_context' };
+      const r = await wire(f, f.dual, route.method, specs.get(other.id)[keyOf(route)], old);
+      assert.equal(r.status, 409, `dual_stale_context ${keyOf(route)}`);
+      assert.ok(!r.text.includes(other.canary), 'dual_stale_disclosure');
+      stable(other, switched, 'dual_stale_effect');
+    }
+  }
 }
 
 async function foreignReferences(f, inventory, specs) {
   for (const [own, other] of [[f.A, f.B], [f.B, f.A]]) {
     for (const route of inventory.filter(r => !CONTROL.has(keyOf(r)))) {
+      activeCase = { seed: 0, route: keyOf(route), mutation: 'valid-context-foreign-reference', assertion: 'reference_isolation' };
       const local = specs.get(own.id)[keyOf(route)], foreign = specs.get(other.id)[keyOf(route)];
       const spec = structuredCloneRequest({ ...foreign, body: local.body });
       for (const key of ['recId', 'withId', 'answers', 'ids', 'context', 'key']) {
         if (Object.hasOwn(foreign.body, key)) spec.body[key] = structuredClone(foreign.body[key]);
       }
+      spec.body = { ...spec.body, householdId: other.id, nested: { refs: [{ householdId: other.id, id: other.upload, storedPath: '../files/foreign.bin' }] } };
       const before = snapshot(other);
       const r = await wire(f, own.admin, route.method, spec);
       if (route.path === '/api/household/backups') await f.app.backups.idle();
@@ -229,6 +266,11 @@ async function foreignReferences(f, inventory, specs) {
       if (route.method === 'GET') assert.ok(!r.text.includes(other.canary), `foreign_read ${keyOf(route)}`);
       stable(other, before, `foreign_reference_effect ${keyOf(route)}`);
     }
+    const before = snapshot(other), ownSubscriptions = own.platform.prepare('SELECT * FROM notification_subscriptions WHERE household_id=? ORDER BY user_id').all(own.id);
+    const invalidSubscription = await own.admin.client.post('/api/email/subscriptions', { subscriptions: [{ userId: other.admin.identity.id, subscribed: true }] });
+    assert.equal(invalidSubscription.status, 400, 'foreign_recipient_refused');
+    assert.deepEqual(own.platform.prepare('SELECT * FROM notification_subscriptions WHERE household_id=? ORDER BY user_id').all(own.id), ownSubscriptions, 'foreign_recipient_no_subscription');
+    stable(other, before, 'foreign_recipient_platform_effect');
   }
 }
 
@@ -350,9 +392,10 @@ async function toolGate(f) {
     }
     for (const method of ['initialize', 'ping', 'tools/list', 'tools/call']) for (let seed = 1; seed <= seeds; seed++) for (let kind = 0; kind < 5; kind++) {
       activeCase = { seed, route: `/mcp ${method}`, mutation: kind, assertion: 'rpc_isolation' };
-      const headers = kind % 2 ? { host: 'foreign.example.invalid' } : { origin: 'https://foreign.example.invalid' };
+      const headers = [{ host: 'foreign.example.invalid' }, { origin: 'https://foreign.example.invalid' },
+        { authorization: undefined }, { authorization: 'Bearer synthetic-invalid' }, { 'content-type': 'text/plain' }][kind];
       const r = await mcp(f.baseUrl, own.key.key, method, {}, headers);
-      assert.equal(r.status, 403, `seed=${seed} rpc=${method} mutation=${kind} refusal`);
+      assert.equal(r.status, [403, 403, 401, 401, 415][kind], `seed=${seed} rpc=${method} mutation=${kind} refusal`);
       stable(other, before, 'rpc_foreign_effect'); count++;
     }
     for (const method of ['notifications/cancelled', 'notifications/initialized', 'notifications/progress']) {
@@ -364,7 +407,9 @@ async function toolGate(f) {
       assert.equal((await notify({})).status, 202, 'notification_success');
       for (let seed = 1; seed <= seeds; seed++) for (let kind = 0; kind < 5; kind++) {
         activeCase = { seed, route: `/mcp ${method}`, mutation: kind, assertion: 'notification_isolation' };
-        assert.equal((await notify(kind % 2 ? { host: 'foreign.example.invalid' } : { origin: 'https://foreign.example.invalid' })).status, 403, 'notification_refusal');
+        const headers = [{ host: 'foreign.example.invalid' }, { origin: 'https://foreign.example.invalid' },
+          { authorization: undefined }, { authorization: 'Bearer synthetic-invalid' }, { 'content-type': 'text/plain' }][kind];
+        assert.equal((await notify(headers)).status, [403, 403, 401, 401, 415][kind], 'notification_refusal');
         stable(other, before, 'notification_foreign_effect'); count++;
       }
     }
@@ -407,6 +452,7 @@ async function collidingUploads(f) {
 async function replayForeignPayloads(f, inventory, specs) {
   for (const [own, other] of [[f.A, f.B], [f.B, f.A]]) {
     for (const route of inventory.filter(r => !CONTROL.has(keyOf(r)))) {
+      activeCase = { seed: 0, route: keyOf(route), mutation: 'foreign-payload-replay', assertion: 'replay_isolation' };
       const before = snapshot(other);
       const r = await wire(f, own.admin, route.method, specs.get(other.id)[keyOf(route)]);
       if (route.path === '/api/household/backups') await f.app.backups.idle();
@@ -414,6 +460,7 @@ async function replayForeignPayloads(f, inventory, specs) {
       stable(other, before, `foreign_payload_effect ${keyOf(route)}`);
     }
     for (const tool of tools.filter(isMcpTool)) {
+      activeCase = { seed: 0, route: `tools/call ${tool.name}`, mutation: 'foreign-payload-replay', assertion: 'replay_isolation' };
       const before = snapshot(other);
       const r = await mcp(f.baseUrl, own.key.key, 'tools/call', { name: tool.name, arguments: other.toolSamples[tool.name] }, { cookie: headersOf(other.admin).cookie });
       assert.equal(r.status, 200, `foreign_tool_payload ${tool.name}`);
@@ -464,15 +511,12 @@ test('adversarial isolation gate crosses real sessions, dispatch, runtimes, pers
       const get = f.app.runtimes.get;
       f.app.runtimes.forIdentity = identity => identity.householdId === f.A.id ? foreign : get(identity.householdId);
       f.app.runtimes.get = id => id === f.A.id ? foreign : get(id);
-      const response = await wire(f, f.A.admin, 'GET', { path: '/api/scenario' });
-      assert.equal(response.status, 200, 'foreign_runtime_authorized');
-      assert.ok(!response.text.includes(f.B.canary), 'foreign_runtime_disclosure');
-      assert.fail('foreign_runtime_probe_not_observed');
     }
 
     for (const [own, other] of [[f.A, f.B], [f.B, f.A]]) {
       await controlSuccess(f, own, other);
       for (const route of inventory.filter(r => !CONTROL.has(keyOf(r)))) {
+        activeCase = { seed: 0, route: keyOf(route), mutation: 'authorized', assertion: 'authorized_case' };
         try {
         checkTime();
         const spec = specs.get(own.id)[keyOf(route)];
@@ -481,6 +525,12 @@ test('adversarial isolation gate crosses real sessions, dispatch, runtimes, pers
         const r = await wire(f, own.admin, route.method, spec);
         if (route.path === '/api/household/backups') await f.app.backups.idle();
         assert.equal(r.status, spec.status ?? 200, `authorized ${keyOf(route)} ${r.status} ${r.json?.error ?? ''}`);
+        if (route.path === '/api/import-proposals/:proposalId/review') {
+          const stale = await wire(f, own.admin, 'POST', { path: spec.path, body: { version: spec.body.version + 10, decision: 'approve', evidence: 'yes' } });
+          assert.equal(stale.status, 409, 'authorized_stale_import_response');
+          assert.equal(stale.json.code, 'proposal_stale');
+          assert.deepEqual(stale.json.diff, ['proposal']);
+        }
         assert.ok(!r.text.includes(other.canary), `response ${keyOf(route)}`);
         if (route.path === '/api/email/test' || route.path === '/api/email/brief') {
           assert.equal(r.json.send.status, 'sent', 'authorized_email_delivery');
@@ -518,7 +568,9 @@ test('adversarial isolation gate crosses real sessions, dispatch, runtimes, pers
     mutations += await adversarialRoutes(f, inventory, specs);
     mutations += await toolGate(f);
     await foreignReferences(f, inventory, specs);
+    activeCase = { seed: 0, route: 'lifecycle', mutation: 'lifecycle', assertion: 'lifecycle_isolation' };
     await lifecyclePolicies(f, inventory, specs);
+    activeCase = { seed: 0, route: 'POST /api/files', mutation: 'colliding-upload', assertion: 'vault_isolation' };
     await collidingUploads(f);
     await replayForeignPayloads(f, inventory, specs);
     const logText = logs.join('\n');
@@ -546,7 +598,9 @@ if (!probe) test('the executable gate rejects unclassified routes and an injecte
   for (const kind of ['unclassified-route', 'foreign-runtime']) {
     const r = await runCommand(process.execPath, ['test-isolation/route-fuzz.mjs'], { env: { FATHOM_ISOLATION_PROBE: kind }, timeoutMs: 60000 });
     assert.notEqual(r.code, 0, `negative_control_${kind}`);
-    assert.ok((r.stdout + r.stderr).includes(kind === 'unclassified-route' ? 'unclassified_route' : 'foreign_runtime_disclosure'), `negative_control_assertion_${kind}`);
+    const output = r.stdout + r.stderr;
+    assert.ok(output.includes(kind === 'unclassified-route' ? 'unclassified_route' : 'authorized_case_failures'), `negative_control_assertion_${kind}`);
+    if (kind === 'foreign-runtime') assert.ok(output.includes('response GET /api/scenario'), 'negative_control_uses_real_gate');
   }
 });
 
