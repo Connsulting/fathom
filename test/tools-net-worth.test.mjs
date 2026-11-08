@@ -86,3 +86,20 @@ test('account detail preserves the API result and adds a referenceable balance e
   assert.equal(silent.balance.value, null);
   await assert.rejects(callTool('accounts', { operation: 'detail', id: 'absent' }, ctx), e => e.code === 'not_found');
 });
+
+test('monthly positions fill missing balances and respect the clock and balance precedence', async t => {
+  const { db, ctx } = await fixture(t);
+  db.prepare("INSERT INTO accounts (id,name,kind) VALUES ('positions','Synthetic positions','brokerage')").run();
+  for (const [date,value] of [['2026-09-30',123.45],['2026-10-31',234.56],['2026-12-31',999]]) {
+    db.prepare("INSERT INTO positions (account_id,symbol,value,as_of) VALUES ('positions','SYN',?,?)").run(value,date);
+  }
+  const result = await callTool('accounts', { operation: 'net_worth', accounts: ['positions'], series: true }, ctx);
+  assert.equal(result.total.value, 234.56);
+  assert.equal(result.series.length, 2);
+  assert.equal(result.total.provenance.sources[0].table, 'positions');
+  const detail = await callTool('accounts', { operation: 'detail', id: 'positions' }, ctx);
+  assert.equal(detail.balance.value, 999, 'detail uses the same latest reading as the API');
+  await assertRefsResolve(result, ctx);
+  db.prepare("INSERT INTO balances (account_id,date,amount) VALUES ('positions','2026-10-01',12.34)").run();
+  assert.equal((await callTool('accounts', { operation: 'net_worth', accounts: ['positions'] }, ctx)).total.value, 12.34);
+});
