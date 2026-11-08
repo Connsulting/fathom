@@ -905,7 +905,7 @@ test('a retry that drops the tool call stays grounded by the first attempt tool 
   assert.ok(!html.includes('987,654') && !html.includes('876,543'), html);
   assert.ok(new RegExp(`<span class="fx-src"[^>]*>${amount.replace('$', '\\$')}</span>`).test(html), html);
   assert.deepEqual(reply.provenance.grounding, { ok: true, retried: true, unverified: [], revised: 2 });
-  const call = reply.provenance.tools.find(x => x.name === 'household');
+  const call = reply.provenance.tools.find(x => x.name === 'household' && x.args.operation === 'figures');
   assert.ok(call, JSON.stringify(reply.provenance.tools));
   assert.deepEqual(call.args, { operation: 'figures', keys: ['fixed_fee'] });
 });
