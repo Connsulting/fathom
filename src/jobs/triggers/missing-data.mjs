@@ -4,7 +4,7 @@
 import { ADVISOR_KEYS } from '../../facts/derive.mjs';
 import { looksLikeSpending, spendingStatement } from '../../pnl/ledgers.mjs';
 import { addDays } from '../planner/data.mjs';
-import { padTasks, dataText, confirmTask, ANSWER_SHAPES, questionFor } from './common.mjs';
+import { dataText, confirmTask, ANSWER_SHAPES, questionFor } from './common.mjs';
 
 export const id = 'missing-data';
 export const domain = 'data';
@@ -203,8 +203,16 @@ export function listTitle(list) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-// The tasks beside the question form: every item that is not a form field, each with where it is done.
-const taskOf = i => ({ t: i.task, link: i.link });
+// Every item as a step the product verifies: an answer step names the fact the form above saves,
+// every other step the item code, which clears when the planner no longer finds the item. Each
+// carries where it is done: an upload, the exact Confirm question, or Ask with this rec attached.
+export function stepOf(i) {
+  if (i.answerKey) return { t: i.task, kind: 'answer', fact: i.answerKey };
+  if (i.kind === 'upload') return { t: i.task, kind: 'upload', code: i.code, noun: i.noun, link: 'upload' };
+  if (/\bin Confirm$/.test(i.task)) return { t: i.task, kind: 'confirm', code: i.code, link: 'confirm' };
+  if (i.code.startsWith('entity_unclassified:')) return { t: i.task, kind: 'classify', code: i.code, link: 'ask' };
+  return { t: i.task, kind: i.kind === 'question' ? 'answer' : 'review', code: i.code, link: 'ask' };
+}
 
 export function build(ctx, hit) {
   return {
@@ -213,7 +221,7 @@ export function build(ctx, hit) {
     value: [{ cls: 'risk', text: 'Keeps every figure on your plan current' }],
     mine: [],
     cross: [],
-    tasks: padTasks(hit.items.filter(i => !i.answerKey).map(taskOf)),
+    tasks: hit.items.map(stepOf),
   };
 }
 

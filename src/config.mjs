@@ -2,6 +2,7 @@
 // need them, from the files named here, never from this module or from tracked files.
 
 import { resolve } from 'node:path';
+import { loadModelConfig } from './models/config.mjs';
 import { isIP } from 'node:net';
 import { parseAllowedHosts } from './ingest/simplefin-hosts.mjs';
 import { publicDemoConfig } from './public-demo/config.mjs';
@@ -131,6 +132,7 @@ export function loadConfig(env = process.env) {
     host: blank(env.FATHOM_HOST) ? '127.0.0.1' : env.FATHOM_HOST,
     demo: publicMode.publicDemo ? true : demo,
     engine,
+    modelPorts: loadModelConfig(env),
     fakeStreamMs,
     clock,
     claudeCredentialFile: blank(env.FATHOM_CLAUDE_CREDENTIAL_FILE) ? null : env.FATHOM_CLAUDE_CREDENTIAL_FILE,

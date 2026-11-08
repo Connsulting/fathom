@@ -200,7 +200,8 @@ test('missing data names its items in the title and summary, and each task links
   assert.match(prose.fields.summary, /Answer 2 tax questions and upload a paystub/);
   const linked = hit.rec.tasks.filter(t => t.link);
   assert.ok(linked.some(t => t.link === 'upload' && /paystub/i.test(t.t)));
-  assert.ok(linked.some(t => t.link === 'ask'), 'a question with no form opens Ask with the rec attached');
+  assert.ok(linked.some(t => t.link === 'confirm' && t.kind === 'confirm' && t.code === 'tax_year_unconfirmed'), 'a Confirm question links to Confirm');
+  assert.ok(hit.rec.tasks.some(t => t.kind === 'answer' && t.fact === 'household.filingStatus'), 'the form question is a step that clears when answered');
 });
 
 test('missing data that is only uploads is titled as uploads', () => {
