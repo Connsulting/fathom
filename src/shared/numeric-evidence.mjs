@@ -10,7 +10,7 @@ const IDENTIFIERS = [
   /\b(?:W[- ]?[24]|1099(?:-[a-z0-9]+)?|K-12|K-1|I-9)\b/gi,
   /\b(?:Form|Schedule|Sections?|Sec\.?|IRC)\s+\d+[a-z]?(?:-[a-z0-9]+)?(?:\([a-z0-9]+\))*/gi,
   /§{1,2}\s*\d+[a-z]?(?:\([a-z0-9]+\))*/gi,
-  /\b\d+(?:[-/:]\d+){1,}\b/g,
+  /\b\d+(?:[-/:]\d+){2,}\b/g,
 ];
 const NUMBER = /(?<![\p{L}\p{N}_.,$+\-/:])(?:(minus\s+|[+\-]\s*)\$?\s*|\$\s*([+\-]\s*)?)?(\d+(?:,\d{3})*(?:\.\d+)?|\.\d+)(?:\s*(k|m|thousand|million)\b)?(?:\s*(%|percent\b|per\s*cent\b|pct\b|dollars?\b|USD\b|years?\b|months?\b|days?\b))?(?![\p{L}\p{N}_]|[.,]\d)/giu;
 const SCALE = { k: 1e3, thousand: 1e3, m: 1e6, million: 1e6 };
@@ -24,6 +24,8 @@ function masked(text) {
     if (/^529$/i.test(match) && (/\$\s*$/.test(out.slice(0, index)) || /^\s*(?:dollars?\b|USD\b)/i.test(out.slice(index + match.length)))) return match;
     return ' '.repeat(match.length);
   });
+  out = out.replace(/(\d(?:\s*(?:k|m|thousand|million|dollars?|USD))?\s*)-(?=\s*\$?\d)/gi,
+    (match, before) => before + ' ');
   return out;
 }
 
