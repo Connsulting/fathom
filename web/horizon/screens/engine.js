@@ -19,12 +19,12 @@ function capForm(b) {
     </form>`;
 }
 
-// The model each purpose runs on, from the engine's own configuration (scenario engine.models).
+// Purpose labels are independent of provider configuration.
 const PURPOSE_LABELS = { chat: 'Chat answers', job: 'Briefs and jobs', extract: 'Reading files', title: 'Thread names', confirm: 'Confirm guesses' };
 
 function modelsHtml(en) {
   const { arr, esc } = H;
-  const rows = arr(en.models).map((m) => `<li data-purpose="${esc(m.purpose)}"><span>${esc(PURPOSE_LABELS[m.purpose] || m.purpose)}</span><b class="mono">${esc(m.model)}</b></li>`).join('');
+  const rows = arr(en.models).map((m) => `<li data-purpose="${esc(m.purpose)}"><span>${esc(PURPOSE_LABELS[m.purpose] || m.purpose)}</span><b class="mono">Configured</b></li>`).join('');
   return rows ? `<ul class="h-eng-models" aria-label="Model per purpose">${rows}</ul>` : '<b class="h-eng-v">Not configured</b>';
 }
 
@@ -36,7 +36,7 @@ function ledgerHtml(en) {
       + rows.map((r) => `<div class="h-ledger-r" role="row">
         <div class="h-ledger-c mono" role="cell" data-l="Time">${esc(r.ts)}</div>
         <div class="h-ledger-c" role="cell" data-l="Purpose">${esc(r.purpose)}</div>
-        <div class="h-ledger-c" role="cell" data-l="Model">${esc(r.model)}</div>
+        <div class="h-ledger-c" role="cell" data-l="Model">Model service</div>
         <div class="h-ledger-c r mono" role="cell" data-l="Cost">${figHtml(`engine.ledger.${r.id}.cost`, { cents: true })}</div>
       </div>`).join('')
     : '<p class="h-ledger-e h-mute">No model calls yet this month.</p>';

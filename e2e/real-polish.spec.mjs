@@ -97,14 +97,15 @@ test.describe('real-mode polish', () => {
     }
   });
 
-  test('@mobile Engine lists the model for every purpose', async ({ page }) => {
+  test('@mobile Engine lists a neutral service label for every purpose', async ({ page }) => {
     const sc = await fetchScenario();
     await go(page, 'engine');
     const list = page.locator('ul.h-eng-models');
     await expect(list).toBeVisible();
     await expect(list.locator('li')).toHaveCount(5);
     for (const { purpose, model } of sc.engine.models) {
-      await expect(list.locator(`li[data-purpose="${purpose}"] b`)).toHaveText(model);
+      await expect(list.locator(`li[data-purpose="${purpose}"] b`)).toHaveText('Configured');
+      await expect(list).not.toContainText(model);
     }
   });
 

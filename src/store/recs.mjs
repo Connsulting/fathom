@@ -3,6 +3,7 @@ import { ACTION_STATUS } from '../shared/rules.mjs';
 import { tx, parseJson as parse } from './db.mjs';
 import { OWNERS } from '../shared/rec-links.mjs';
 import { ToolError } from '../tools/errors.mjs';
+import { isVerifiable } from '../shared/rec-steps.mjs';
 
 export const SETTABLE_REC_STATUSES = Object.freeze(['doing', 'done', 'dismissed', 'snoozed', 'proposed']);
 
@@ -33,6 +34,7 @@ export function writeRec(db, id, kind, value, { now, actor = 'ui', onWrite, even
       if (!Number.isInteger(value.index) || value.index < 0 || value.index >= tasks.length || typeof value.checked !== 'boolean') {
         throw new ToolError('bad_input', `task index must be 0 to ${tasks.length - 1} and checked must be true or false`);
       }
+      if (isVerifiable(tasks[value.index])) throw new ToolError('conflict', 'this step completes itself once the product sees it done');
       const done = parse(row.tasks_done, []);
       const next = tasks.map((_, k) => !!done[k]);
       next[value.index] = value.checked;
@@ -48,8 +50,10 @@ export function writeRec(db, id, kind, value, { now, actor = 'ui', onWrite, even
       db.prepare('UPDATE recs SET status = ?, wake = ?, updated_at = ? WHERE id = ?').run(value.status, wake, now, id);
     } else throw new ToolError('bad_input', 'unknown recommendation change');
     const after = visibleRecRow(db, id);
+    // An "I did this" step records its time and actor by the step text, so a reordered list keeps it.
+    const step = kind === 'step' ? def.tasks[value.index] : null;
     if (kind !== 'owner') db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, now, eventAction || (kind === 'step' ? 'task' : 'set_status'), kind === 'step' ? String(value.index) : value.wake ?? null, row.status, after.status, actor);
+      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, now, step ? (value.checked ? 'step_did' : 'step_undo') : eventAction || 'set_status', step ? step.t : value.wake ?? null, row.status, after.status, actor);
     onWrite?.(row, after);
     return after;
   });

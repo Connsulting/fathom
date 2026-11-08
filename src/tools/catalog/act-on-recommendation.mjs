@@ -29,7 +29,7 @@ export const operations = [
 ];
 operations.push({
   tool: 'act_on_recommendation', name: 'step', scope: 'write:steps',
-  summary: 'Check or uncheck a recommendation step by zero-based index.', route: 'Check a recommendation step', routes: ['POST /api/recs/:id/action'],
+  summary: 'Mark an unobservable rec step done (I did this) or undone by zero-based index; verified steps complete themselves.', route: 'Mark a recommendation step done', routes: ['POST /api/recs/:id/action'],
   params: { id: { type: 'string', minLength: 1 }, index: { type: 'integer', minimum: 0 }, checked: { type: 'boolean' } }, required: ['id', 'index', 'checked'],
   handler(args, ctx) { const { row, receipt } = changeRec(args, ctx, 'step'); return { id: row.id, tasksDone: JSON.parse(row.tasks_done), receipt }; },
 });
