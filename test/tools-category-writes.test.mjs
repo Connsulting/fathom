@@ -44,7 +44,7 @@ test('invalid category, missing transaction and stale receipt refuse without wri
 });
 
 test('category scopes and proposal basis cover rules and transaction changes',async t=>{
- const s=await setup(t), server=createToolServer({scopes:['read'],ctx:s.ctx});
+ const s=await setup(t), server=createToolServer({scopes:['read'],authorize:()=>true,ctx:s.ctx});
  for(const operation of ['transaction','merchant_rule']){const r=await server._requestHandlers.get('tools/call')({method:'tools/call',params:{name:'categorize',arguments:{operation}}},{});assert.match(r.content[0].text,/Permission denied.*write:categories/);}
  let pending;await proposalTools(tools).find(t=>t.name==='categorize').handler({operation:'merchant_rule',merchant:'warehouse club',category:'Groceries',propose:true},{...s.ctx,onProposal:v=>{pending=v;}});
  assert.equal(s.db.prepare('SELECT count(*) AS n FROM category_merchant_rules').get().n,0);
