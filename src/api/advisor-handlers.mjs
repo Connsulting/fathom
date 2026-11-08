@@ -12,7 +12,7 @@ import { scenarioOf, applyStatusAction } from './handlers.mjs';
 import { txWith } from '../store/db.mjs';
 
 const nowIso = () => new Date().toISOString();
-const stamp = async ctx => await clockNow(ctx.db, ctx.config && ctx.config.clock);
+const stamp = async ctx => await clockNow(currentHandle(ctx.db), ctx.config && ctx.config.clock);
 
 async function guard(fn) {
   try {

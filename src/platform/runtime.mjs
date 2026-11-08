@@ -1,3 +1,4 @@
+import { currentHandle } from '../storage/index.mjs';
 // Household runtimes: one immutable context per household generation, holding that household's
 // financial store, root, vault, packs, engine, answerer, scheduler and transport. Nothing financial
 // is process-global: the server, the MCP endpoint and the CLIs resolve a context through the
@@ -225,7 +226,7 @@ export async function createHouseholdContext({
     householdId, generation, mode, db, root, config, inFlight: new Set(), vault, packs: livePacks, engine: householdEngine,
     answerer: householdAnswerer, scheduler: householdScheduler, transport: householdTransport, emailRecipients, outbound, services,
     funded: async () => await instanceFunded(platform),
-    isCurrent: async () => { const row = await platform.prepare('SELECT status, generation FROM households WHERE id = ?').get(householdId); return row?.status === 'active' && Number(row.generation) === generation; },
+    isCurrent: async () => { const row = await currentHandle(platform).prepare('SELECT status, generation FROM households WHERE id = ?').get(householdId); return row?.status === 'active' && Number(row.generation) === generation; },
     close() {
       closing ??= (async () => {
         try { await householdScheduler?.stop(); } catch { /* stop never rejects; close anyway */ }

@@ -140,8 +140,10 @@ export async function runDeadlineAlerts(db, { clock, transport, publicUrl = null
   const at = now == null ? new Date().toISOString() : new Date(now).toISOString();
   const send = await sendEmail(db, { transport, kind: 'alert', ...mail, now: at, jobRunId });
   if (send.status === 'sent') {
-    const mark = db.prepare('INSERT OR IGNORE INTO deadline_alerts (key, threshold, deadline_date, sent_at, send_id) VALUES (?, ?, ?, ?, ?)');
-    await tx(db, async (db) => { for (const a of alerts) await mark.run(a.key, a.threshold, a.date, at, send.id); });
+    await tx(db, async (db) => {
+      const mark = db.prepare('INSERT OR IGNORE INTO deadline_alerts (key, threshold, deadline_date, sent_at, send_id) VALUES (?, ?, ?, ?, ?)');
+      for (const a of alerts) await mark.run(a.key, a.threshold, a.date, at, send.id);
+    });
   }
   return { alerts: alerts.length, send };
 }

@@ -26,7 +26,7 @@ import { buildSuggestions } from '../suggest/build.mjs';
 import { setGoalSuggestion } from '../suggest/write.mjs';
 import { setCurvePositions } from '../goals/curve.mjs';
 
-const stamp = async ctx => await clockNow(ctx.db, ctx.config && ctx.config.clock);
+const stamp = async ctx => await clockNow(currentHandle(ctx.db), ctx.config && ctx.config.clock);
 const toolHttp = e => new HttpError(e.code === 'not_found' ? 404 : e.code === 'conflict' ? 409 : 400, e.message);
 
 async function write(fn) {
