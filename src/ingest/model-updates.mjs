@@ -7,7 +7,7 @@ import { recordFact, changeGoal, changeRec } from '../actions/index.mjs';
 import { expectedTransaction } from '../actions/expected-transaction.mjs';
 import { requireActor, requireScope, groupReceipts, replanAction } from '../actions/receipts.mjs';
 import { sourceStatement, requireEvidence } from '../actions/evidence.mjs';
-import { ownerTimezone } from '../jobs/scheduler.mjs';
+import { ownerTimezone } from '../shared/timezone.mjs';
 import { answerShape } from '../jobs/triggers/common.mjs';
 import { indexSource } from './model-source.mjs';
 import { openVault, readStoredFile } from './vault.mjs';

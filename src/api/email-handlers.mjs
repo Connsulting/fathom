@@ -1,3 +1,4 @@
+import { ownerTimezone } from '../shared/timezone.mjs';
 // Email and jobs API handlers: transport status, the brief preview and send history, a test send,
 // a brief send, the job list and manual job runs (POST /api/jobs/plan/run is the manual plan run:
 // planning runs only through the scheduler). Each takes the router ctx ({household, db, config,
@@ -10,7 +11,7 @@
 import { sendEmail, listSends } from '../email/send.mjs';
 import { composeBrief } from '../email/brief.mjs';
 import { simpleDarkEmail } from '../email/palette.mjs';
-import { SchedulerError, ownerTimezone, runManualJob, SCHEDULER_STATUS, SCHEDULER_MESSAGE } from '../jobs/scheduler.mjs';
+import { SchedulerError, runManualJob, SCHEDULER_STATUS, SCHEDULER_MESSAGE } from '../jobs/scheduler.mjs';
 import { scenarioOf } from './handlers.mjs';
 import { HttpError } from './http.mjs';
 
