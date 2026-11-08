@@ -1,7 +1,7 @@
 // AC2 and AC3: the live answerer. Prompt assembly keeps the cacheable system prompt free of
 // household data (D1), groundAnswer validates every token and refuses stored figures written as
 // literals (R9, R14, R15), renderAnswer escapes untrusted model text (D6) and neutralizes an
-// unchecked figure in place, one regeneration only when most figures are unchecked (D5, AQ1 C.5),
+// unchecked figure in place, one regeneration for any answer-discipline violation,
 // notices instead of fabricated text (D13, R7), write-tool gating (D12) and provenance.
 //
 // The answerer runs over a real runtime engine in fake mode on a temp demo store. Where a test
@@ -33,8 +33,7 @@ import { writeSyntheticPack, ALWAYS } from './helpers/packs.mjs';
 const ACTIVE_DEMO_PACKS = ['account-tax-treatment', 'advanced-retirement', 'kids-dependents', 's-corp-owner', 'self-employed-partnership', 'spending-and-obligations', 'virginia-resident', 'w2-benefits'];
 const UNCHECKED = '<span class="fx-checking fx-unchecked" title="Not checked against your data">';
 const INVENTED = '$987,654';
-// A second invented amount: a regeneration needs two or more unchecked figures that are more than
-// half of the answer's figures (AQ1 C.5).
+// A second invented amount exercises a correction with multiple unsupported figures.
 const INVENTED_2 = '$876,543';
 const TWO_INVENTED = `You could save ${INVENTED} this year and ${INVENTED_2} next year.`;
 const REVISED_2 = 'Revised to remove 2 unchecked figures';
@@ -756,16 +755,16 @@ test('a suggested question answers through the fake engine with tools, figures, 
   assert.ok(spendCount(s.db) > before, 'spend was recorded');
 });
 
-test('a single unchecked amount is neutralized in place, with no regeneration', async t => {
+test('a single unchecked amount gets one correction and is neutralized if it persists', async t => {
   const s = await demoStore(t);
   const { engine, requests } = scripted(s.runtime, [
     [{ text: `You could save ${INVENTED} this year.` }],
-    [{ text: 'must not run' }],
+    [{ text: `You could save ${INVENTED} this year.` }],
   ]);
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'Synthetic retry question' });
-  assert.equal(requests.length, 1, 'one model call');
+  assert.equal(requests.length, 2, 'one corrective call');
   assert.ok(!reply.notice);
-  assert.deepEqual(reply.provenance.grounding, { ok: false, retried: false, unverified: [INVENTED] });
+  assert.deepEqual(reply.provenance.grounding, { ok: false, retried: true, unverified: [INVENTED], revised: 1 });
   assert.ok(joined(reply).includes(`${UNCHECKED}${INVENTED}</span>`), joined(reply));
   assert.ok(!joined(reply).includes('must not run'));
 });
@@ -908,7 +907,7 @@ test('a retry that drops the tool call stays grounded by the first attempt tool 
   assert.ok(!html.includes('987,654') && !html.includes('876,543'), html);
   assert.ok(new RegExp(`<span class="fx-src"[^>]*>${amount.replace('$', '\\$')}</span>`).test(html), html);
   assert.deepEqual(reply.provenance.grounding, { ok: true, retried: true, unverified: [], revised: 2 });
-  const call = reply.provenance.tools.find(x => x.name === 'household');
+  const call = reply.provenance.tools.find(x => x.name === 'household' && x.args.operation === 'figures');
   assert.ok(call, JSON.stringify(reply.provenance.tools));
   assert.deepEqual(call.args, { operation: 'figures', keys: ['fixed_fee'] });
 });
