@@ -152,7 +152,7 @@ export function window(ctx) {
 export function evaluate(ctx) {
   const factFor = { va529_answers_missing: 'accounts.va529', retirement_other_deferrals_missing: 'retirement.otherPlanDeferrals', deferral_split_unknown: 'retirement.otherPlanDeferrals', va_itemized_missing: 'tax.vaItemizedEstimate', filing_status_assumed: 'household.filingStatus' };
   const list = items(ctx).map(i => {
-    const answerKey = factFor[i.code] || (Object.hasOwn(ANSWER_SHAPES, i.code) ? i.code : null);
+    const answerKey = i.optional ? null : factFor[i.code] || (Object.hasOwn(ANSWER_SHAPES, i.code) ? i.code : null);
     const employers = (ctx.info.payrollBlocks ?? []).filter(b => b.code === i.code).map(b => normalizeName(b.employer)).filter(Boolean);
     const files = (ctx.data?.documents ?? []).filter(doc => employers.includes(normalizeName(doc.fields?.employerName))).map(doc => doc.fileId).filter(Boolean);
     const candidates = (ctx.data?.confirm ?? []).filter(item => !employers.length || employers.includes(normalizeName(item.context?.employer)) || files.includes(item.fileId));

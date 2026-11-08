@@ -28,7 +28,7 @@ test('mixed missing data keeps upload steps and its summary beside the answer fo
   assert.equal(hit.rec.question.primary, false);
   assert.deepEqual(hit.rec.question.keys, ['household.filingStatus']);
   const prose = await writeProse(hit, ctx);
-  assert.match(prose.fields.summary, /^Update the missing data/);
+  assert.match(prose.fields.summary, /^Your estimates use the information on file/);
   assert.doesNotMatch(prose.fields.summary, /\d/);
 });
 
@@ -40,7 +40,7 @@ test('missing data leaves the Virginia answers on their existing recommendation'
   assert.equal(missing.question, undefined);
   assert.ok(missing.tasks.some(t => /Upload/.test(t.t)));
   ctx.freshness = [];
-  assert.equal(evaluateTriggers(ctx).find(h => h.rec.id === 'missing-data'), undefined);
+  assert.ok(evaluateTriggers(ctx).find(h => h.rec.id === 'missing-data').rec.tasks.some(t => t.fix?.key === 'accounts.va529'));
 });
 
 test('a secondary catch-up answer keeps the figured action and asks only its participant', () => {

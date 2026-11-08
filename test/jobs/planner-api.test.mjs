@@ -284,7 +284,7 @@ test('PN1: HTTP planning, ledger confirmation and P&L reads resume tax projectio
   try {
     const before = await app.postJson('/api/jobs/plan/run');
     assert.equal(before.status, 200);
-    assert.equal(before.json.scenario.fig['agi.est'], undefined);
+    assert.ok(before.json.scenario.fig['agi.est'].gaps.some(g => g.code.startsWith('entity_unclassified:')));
     const pending = await app.request({ path: '/api/confirm' });
     assert.equal(pending.status, 200);
     const check = pending.json.items.find(i => i.context.key === 'pnl.ledgers');
@@ -296,7 +296,8 @@ test('PN1: HTTP planning, ledger confirmation and P&L reads resume tax projectio
     const replanned = await app.postJson('/api/jobs/plan/run');
     assert.equal(replanned.status, 200, replanned.text);
     const after = await app.getScenario();
-    assert.ok(after.fig['agi.est'], 'tax projections resume without a business classification form');
+    assert.ok(after.fig['agi.est'], 'tax projections stay visible');
+    assert.ok(!after.fig['agi.est'].gaps.some(g => g.code.startsWith('entity_unclassified:')), 'answer removes the ledger gap');
     const pnl = await app.request({ path: '/api/pnl?entity=entity:asters' });
     assert.equal(pnl.status, 200, pnl.text);
     assert.equal(pnl.json.pnl.entity.kind, 'spending');

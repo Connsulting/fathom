@@ -23,6 +23,7 @@ import {
 } from './household.mjs';
 import { sameEmployer, docRecipient } from './payroll.mjs';
 import { classifyPayments } from './payments.mjs';
+import { looksLikeSpending } from '../../pnl/ledgers.mjs';
 import { notesFor } from './assumptions.mjs';
 import { trailingCharitable } from './facts.mjs';
 import { buildWargames } from './wargame.mjs';
@@ -540,8 +541,13 @@ export function computeFigures(data, facts, ctx) {
   if (out.warnings.has('filing_status_assumed')) out.info.gaps.push(taxGap('filing_status_assumed'));
   for (const code of blocked.filter(code => code !== 'mfs_unsupported')) {
     const entity = entities.find(e => e.slug === code.split(':')[1]);
-    out.info.gaps.push(taxGap(code, { employer: entity?.displayName || entity?.name || out.info.partnershipsMissing?.join(', ') || undefined,
-      impact: entity?.sums ? Math.abs(entity.proj(entity.sums.net)) : null }));
+    const gap = taxGap(code, { employer: entity?.displayName || entity?.name || out.info.partnershipsMissing?.join(', ') || undefined,
+      impact: entity?.sums ? Math.abs(entity.proj(entity.sums.net)) : null });
+    if (entity && looksLikeSpending(entity, facts)) gap.action = {
+      screen: 'ask', key: 'pnl.ledgers', label: 'Describe the ledger',
+      prompt: `Record whether ${entity.displayName || entity.name} is spending or a business. Ask me which it tracks.`,
+    };
+    out.info.gaps.push(gap);
   }
   blocked.splice(0, blocked.length, ...blocked.filter(code => code === 'mfs_unsupported'));
 

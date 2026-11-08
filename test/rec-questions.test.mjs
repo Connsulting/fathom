@@ -202,7 +202,7 @@ test('missing data names its work without prose counts, and each task links to w
   assert.doesNotMatch(prose.fields.summary, /\d/);
   const linked = hit.rec.tasks.filter(t => t.link);
   assert.ok(linked.some(t => t.link === 'ask' && t.fix?.key === 'income.payrollYtd'));
-  assert.ok(linked.some(t => t.link === 'confirm' && t.kind === 'confirm' && t.code === 'tax_year_unconfirmed' && t.confirmId === 17), 'a Confirm question links to its pending item');
+  assert.ok(linked.some(t => t.link === 'upload' && t.code === 'tax_year_unconfirmed' && t.fix?.kind === 'estimates'), 'the gap opens the payment-log upload');
   assert.ok(hit.rec.tasks.some(t => t.kind === 'answer' && t.fact === 'household.filingStatus'), 'the form question is a step that clears when answered');
 });
 

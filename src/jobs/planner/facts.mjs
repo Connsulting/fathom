@@ -90,7 +90,7 @@ export function deriveFacts(data, { entities }) {
 export function deriveFigureFacts(figs, facts) {
   const out = {};
   const agi = figs['agi.est'];
-  if (!agi) return out;
+  if (!agi || agi.locator?.gaps?.some(g => g.code === 'no_income_inputs')) return out;
   const rows = [ev('figures', 'agi.est')];
   out['income.agiEstimate'] = fact(agi.v, 'figure agi.est', rows);
   const f = facts['household.filingStatus'] || 'single';

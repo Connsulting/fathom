@@ -10,10 +10,7 @@ import { loadConfig } from '../src/config.mjs';
 import { ask, FACT_CHECK_OPTIONS } from '../src/ingest/confirm.mjs';
 import { createAuthStore } from '../src/auth/store.mjs';
 
-// The missing-data rec on a synthetic single filer late in the year: its filing status is unset
-// and its sources are stale, so the rec lists one answer step and its upload steps. Every step is
-// product-managed: inline controls, no checkboxes, and the answer step completes itself.
-let app, session, origin, dataDir, confirmId;
+let app, session, origin, dataDir;
 const supplied = !!(process.env.BASE_URL || process.env.FATHOM_SMOKE_BASE_URL);
 const clock = '2026-12-28';
 const variant = { facts: { 'household.filingStatus': undefined, 'household.birthYears': { owner: 1984 }, 'household.names': undefined } };
@@ -34,7 +31,8 @@ test.describe('product-managed steps on the missing-data rec', () => {
       db.prepare('INSERT INTO pnl_lines (entity, period, category, amount) VALUES (?, ?, ?, ?)').run('Synthetic spending ledger', '2026-10', category, -100);
     }
     await planRun(db, { now: clock, dataDir });
-    confirmId = db.prepare("SELECT id FROM confirm_items WHERE kind = 'fact_check' AND context LIKE '%ledger-confirm%' AND status = 'pending'").get().id;
+    const pendingLedger = db.prepare("SELECT id FROM confirm_items WHERE kind = 'fact_check' AND context LIKE '%ledger-confirm%' AND status = 'pending'").get();
+    expect(pendingLedger).toBeTruthy();
     db.prepare("UPDATE recs SET status = CASE WHEN id = 'missing-data' THEN 'proposed' ELSE 'dismissed' END").run();
     db.close();
     const socket = createServer();
@@ -58,74 +56,33 @@ test.describe('product-managed steps on the missing-data rec', () => {
     await context.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, body: '' }));
   });
 
-  test('@mobile @st1 the missing-data rec shows inline controls and a step completes itself after an answer', async ({ page }) => {
+  test('@mobile @st1 missing-data improvements have working upload and Ask controls', async ({ page }) => {
     const errors = [];
     page.on('pageerror', e => errors.push(e.message));
     await page.goto(`${origin}/#/rec/missing-data`);
     const dlg = page.locator('.h-dlg');
     const steps = dlg.locator('.h-steps');
     await expect(steps).toBeVisible();
-    const answer = steps.locator('li.h-step[data-kind="answer"]');
-    const uploads = steps.locator('li.h-step[data-kind="upload"]');
-    await expect(answer).toHaveCount(1);
-    expect(await uploads.count()).toBeGreaterThan(0);
-    const total = await steps.locator('li.h-step').count();
-    // No free checkboxes and no "I did this" on steps the product verifies.
-    await expect(dlg.locator('.h-steps input[type=checkbox], .h-steps [aria-pressed], .h-steps [role=checkbox]')).toHaveCount(0);
-    await expect(steps.locator('[data-act="task"]')).toHaveCount(0);
-    await expect(uploads.first().getByRole('button', { name: /^Upload/ })).toBeVisible();
-    await expect(uploads.first().locator('input[type=file][data-upload]')).toHaveCount(1);
-    await expect(answer).toContainText('Tell us your filing status');
-    await expect(answer).toContainText('Checks off when you answer');
-    await expect(dlg.locator('.h-prog span')).toHaveText(`0 of ${total}`);
-    if (process.env.ST1_RENDER_DIR) await shot(page, 'before');
-
-    // The answer step's control is the answer form on the same rec.
-    await answer.getByRole('button', { name: 'Answer', exact: true }).click();
-    const form = dlg.locator('[data-rec-answers="missing-data"]');
-    await expect(form).toBeVisible();
-    await form.getByRole('combobox', { name: 'What is your filing status?' }).selectOption('single');
-    const saved = page.waitForResponse(r => r.url().endsWith('/api/recs/missing-data/answers') && r.request().method() === 'POST');
-    await form.getByRole('button', { name: /^Save/ }).click();
-    expect((await saved).status()).toBe(200);
-
-    const done = dlg.locator('.h-steps li.h-step[data-kind="answer"]');
-    await expect(done).toHaveClass(/\bdone\b/);
-    await expect(done).toContainText('Done automatically');
-    await expect(done.getByRole('button', { name: 'Answer', exact: true })).toHaveCount(0);
-    await expect(done.locator('[data-act="task"]')).toHaveCount(0);
-    await expect(dlg.locator('.h-prog span')).toHaveText(`1 of ${total}`);
-    await expect(dlg.locator('.h-steps li.h-step[data-kind="upload"]').first()).not.toHaveClass(/\bdone\b/);
-    if (process.env.ST1_RENDER_DIR) await shot(page, 'after');
-    await page.reload();
-    await expect(page.locator('.h-dlg .h-steps li.h-step[data-kind="answer"]')).toHaveClass(/\bdone\b/);
+    await expect(steps.locator('input[type=checkbox], [aria-pressed], [role=checkbox], [data-act="task"]')).toHaveCount(0);
+    const upload = steps.locator('li.h-step[data-kind="upload"]').first();
+    const chooser = page.waitForEvent('filechooser');
+    await upload.getByRole('button', { name: /^Upload/ }).click();
+    expect(await (await chooser).element().getAttribute('accept')).toBeTruthy();
+    await expect(page).toHaveURL(/#\/add$/);
+    await page.goto(`${origin}/#/rec/missing-data`);
+    await page.locator('.h-dlg').getByRole('button', { name: 'Enter filing status', exact: true }).click();
+    await expect(page).toHaveURL(/#\/ask$/);
+    await expect(page.locator('textarea[name="q"]')).toHaveValue(/filing status/);
     expect(errors).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });
 
-  test('@mobile @st1 a Confirm step opens its own question instead of the first item', async ({ page }) => {
+  test('@mobile @st1 a ledger gap prefills Ask with its own ledger', async ({ page }) => {
     await page.goto(`${origin}/#/rec/missing-data`);
-    const link = page.locator(`.h-dlg .h-steps [data-go="confirm"][data-id="${confirmId}"]`).first();
-    await expect(link).toBeVisible();
-    await expect(link).toHaveAttribute('href', `#/confirm/${confirmId}`);
-    await link.click();
-    await expect(page).toHaveURL(`${origin}/#/confirm/${confirmId}`);
-    const card = page.locator('.h-deck-card.cur');
-    await expect(card).toHaveAttribute('data-item', String(confirmId));
-    await expect(card).toContainText('Confirm these are spending ledgers.');
-    await page.reload();
-    await expect(page.locator('.h-deck-card.cur')).toHaveAttribute('data-item', String(confirmId));
-    await page.goto(`${origin}/#/confirm/999999`);
-    await expect(page.locator('.h-deck-card.cur')).toBeVisible();
-    await expect(page.locator('.h-deck-card.cur')).not.toHaveAttribute('data-item', '999999');
+    await page.locator('.h-dlg').getByRole('button', { name: 'Describe the ledger', exact: true }).click();
+    await expect(page).toHaveURL(/#\/ask$/);
+    const draft = page.locator('textarea[name="q"]');
+    await expect(draft).toHaveValue(/Synthetic spending ledger/);
+    await expect(draft).not.toHaveValue(/unrelated synthetic/);
   });
 });
-
-async function shot(page, name) {
-  mkdirSync(process.env.ST1_RENDER_DIR, { recursive: true });
-  await page.evaluate(() => {
-    document.activeElement?.blur();
-    document.querySelector('.h-steps')?.scrollIntoView({ block: 'start' });
-  });
-  await page.screenshot({ path: resolve(process.env.ST1_RENDER_DIR, `${test.info().project.name}-${name}.png`) });
-}

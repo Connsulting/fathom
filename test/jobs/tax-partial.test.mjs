@@ -1,6 +1,6 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { scratch, addPayroll, addFact, w2Doc, paystubDoc, figureRow, factRow, householdOf, answerPending } from '../helpers/real-store.mjs';
+import { scratch, addPayroll, addFact, removeFact, w2Doc, paystubDoc, figureRow, factRow, householdOf, answerPending } from '../helpers/real-store.mjs';
 import { planRun, claimPlanRun } from '../helpers/plan.mjs';
 import { runPlanning } from '../../src/jobs/planner.mjs';
 import { loadPlanningData, resolveEntities } from '../../src/jobs/planner/data.mjs';
@@ -327,4 +327,13 @@ test('a sole business receives its owner contribution with an explicit sponsor a
   const stated = projection(db);
   assert.equal(stated.v, assumed.v, 'assumed sponsor uses the same recorded contribution');
   assert.ok(!stated.locator.gaps.some(g => g.code === 'retirement_sponsor_assumed'));
+});
+
+
+test('no-income estimates remain visible without asserting absent income as a household fact', async () => {
+  const db = await s.store({ variant: { files: false, entities: [] } });
+  removeFact(db, 'income.agiEstimate');
+  await planRun(db);
+  assert.ok(projection(db).locator.gaps.some(g => g.code === 'no_income_inputs'));
+  assert.equal(getFacts(db)['income.agiEstimate'], undefined);
 });
