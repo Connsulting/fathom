@@ -5,6 +5,7 @@
 
 import { escapeUserText } from '/shared/tokens.mjs';
 import { packLine, activePacks } from './memories-model.js';
+import { REPLACEMENT_MESSAGES, uploadFailure, replacementFeedback, replacementRemovalIds } from './pack-replacement.js';
 
 let H = null;
 
@@ -192,10 +193,27 @@ function metaHtml(p) {
   return `<div class="h-meta">${parts.join('')}</div>`;
 }
 
+let feedbackScope = null;
+let feedback = null;
+function feedbackForScope(scope = H.api.storageScope()) {
+  const key = scope ? `fathom.planReplacement:${scope}` : null;
+  if (!feedback || feedbackScope !== key) {
+    let storage;
+    try { storage = window.localStorage; } catch { /* feedback remains visible for this visit */ }
+    feedback = replacementFeedback(storage, key);
+    feedbackScope = key;
+  }
+  return feedback;
+}
+
 function coverageHtml(issues) {
   const yp = H.api.s.live?.yourPlans || {};
   return H.arr(issues).map((issue) => {
     const disabled = S.yp.building ? ' disabled' : '';
+    const failure = feedbackForScope().get(issue.fileId);
+    const message = failure ? [failure.savedId && !['remove_failed', 'cleanup_failed', 'context_changed'].includes(failure.code) ? REPLACEMENT_MESSAGES.remove_failed : '', REPLACEMENT_MESSAGES[failure.code]].filter(Boolean).join(' ') : '';
+    const retry = failure?.savedId && !failure.retried
+      ? `<button type="button" class="h-btn" data-yp-retry-removal="${H.esc(issue.fileId)}"${disabled}>Retry removal</button>` : '';
     const control = issue.action === 'replace' && issue.fileId
       ? `<button type="button" class="h-btn" data-yp-replace-open${disabled}>Replace document</button><input type="file" data-yp-replace-for="${H.esc(issue.fileId)}" hidden tabindex="-1">`
       : issue.action === 'remove' && issue.documentId
@@ -203,7 +221,7 @@ function coverageHtml(issues) {
         : ypCandidates(yp).length
           ? `<button type="button" class="h-btn" data-yp-rebuild${disabled}>Rebuild pack</button>`
           : H.goA('add', 'Add plan documents', {}, 'h-btn');
-    return `<div class="h-pack-gap" role="status"><p>${lit(issue.explanation)}</p><div class="h-acts">${control}</div></div>`;
+    return `<div class="h-pack-gap" role="status"><p>${lit(issue.explanation)}</p>${message ? `<p data-yp-replace-feedback>${lit(message)}</p>` : ''}<div class="h-acts">${control}${retry}</div></div>`;
   }).join('');
 }
 
@@ -366,6 +384,7 @@ export function render(id) {
 function build(retry = false, excludeDocumentIds = []) {
   const { api } = H;
   if (S.yp.building || typeof api.buildYourPlans !== 'function') return;
+  const operation = replacementOperation();
   const list = ypCandidates(api.s.live?.yourPlans || {});
   const yp = api.s.live?.yourPlans || {};
   const retryIds = [...H.arr(yp.built?.fileIds), ...H.arr(yp.coverage).map(issue => issue.fileId)].filter(Boolean);
@@ -374,10 +393,39 @@ function build(retry = false, excludeDocumentIds = []) {
   S.yp.result = null;
   H.draw();
   Promise.resolve(api.buildYourPlans({ fileIds: ids, excludeDocumentIds })).catch(() => null).then((res) => {
-    S.yp.building = false;
-    if (res) { S.yp.result = res; S.entries.clear(); }
-    if (H.api) H.draw();
+    operation.yp.building = false;
+    if (!operation.current()) return;
+    if (res) {
+      S.yp.result = res; S.entries.clear();
+      if (Array.isArray(res.coverage)) H.arr(yp.coverage).forEach(issue => {
+        if (!res.coverage.some(gap => gap.fileId === issue.fileId)) operation.state.clear(issue.fileId);
+      });
+    }
+    H.draw();
   });
+}
+
+function replacementOperation() {
+  const api = H.api, scope = api.storageScope(), yp = S.yp;
+  return { api, yp, state: feedbackForScope(scope), current: () => H.api === api && api.storageScope() === scope && S.yp === yp };
+}
+
+async function removeReplacedFile(operation, oldId, savedId, retried = false) {
+  const { state, api, yp } = operation;
+  const removeIds = replacementRemovalIds(oldId, savedId, state.get(oldId));
+  for (let index = 0; index < removeIds.length; index++) {
+    const pending = { savedId, retried, removeIds: removeIds.slice(index) };
+    if (!operation.current()) { state.set(oldId, { ...pending, code: 'context_changed' }); return false; }
+    let removed = false;
+    try { removed = !!await api.removeFile(removeIds[index]); } catch { /* the saved copy and removal retry stay visible */ }
+    if (!removed) {
+      state.set(oldId, { ...pending, code: removeIds[index] === oldId ? 'remove_failed' : 'cleanup_failed' });
+      return false;
+    }
+  }
+  state.clear(oldId);
+  if (operation.current()) yp.on.add(savedId);
+  return true;
 }
 
 async function replaceDocument(input) {
@@ -385,29 +433,47 @@ async function replaceDocument(input) {
   const oldId = input.getAttribute('data-yp-replace-for');
   input.value = '';
   if (!file || S.yp.building) return;
-  S.yp.building = true;
+  const operation = replacementOperation();
+  const { state, api, yp } = operation;
+  yp.building = true;
   H.draw();
   let ready = false;
   try {
-    const uploaded = await H.api.upload([file]);
-    const replacement = uploaded?.files?.[0];
-    if (!replacement?.fileId || replacement.fileId === oldId || ['failed', 'unsupported', 'too_large'].includes(replacement.status)) return;
-    const removed = await H.api.removeFile(oldId);
-    if (!removed) return;
-    S.yp.on.add(replacement.fileId);
-    ready = true;
+    const uploaded = await api.upload([file]);
+    const cause = uploadFailure(uploaded, oldId);
+    if (cause) { state.set(oldId, { ...state.get(oldId), code: cause }); return; }
+    ready = await removeReplacedFile(operation, oldId, uploaded.files[0].fileId);
+  } catch {
+    state.set(oldId, { ...state.get(oldId), code: 'upload_threw' });
   } finally {
-    S.yp.building = false;
-    H.draw();
+    yp.building = false;
+    if (operation.current()) H.draw();
   }
-  if (ready) build(true);
+  if (ready && operation.current()) build(true);
+}
+
+async function retryRemoval(oldId) {
+  const operation = replacementOperation();
+  const { yp, state } = operation;
+  const pending = state.get(oldId);
+  if (!pending?.savedId || pending.retried || yp.building) return;
+  yp.building = true;
+  H.draw();
+  const ready = await removeReplacedFile(operation, oldId, pending.savedId, true);
+  yp.building = false;
+  if (!operation.current()) return;
+  if (ready) build(true); else H.draw();
 }
 
 // Returns true when the click was handled here.
 export function onClick(e) {
-  const t = e.target.closest && e.target.closest('[data-entry][data-pack],[data-yp-build],[data-yp-rebuild],[data-yp-replace-open],[data-yp-remove]');
+  const t = e.target.closest && e.target.closest('[data-entry][data-pack],[data-yp-build],[data-yp-rebuild],[data-yp-replace-open],[data-yp-remove],[data-yp-retry-removal]');
   if (!t || !H.root || !H.root.contains(t)) return false;
   e.preventDefault();
+  if (t.hasAttribute('data-yp-retry-removal')) {
+    if (!t.disabled) retryRemoval(t.getAttribute('data-yp-retry-removal'));
+    return true;
+  }
   if (t.hasAttribute('data-yp-replace-open')) {
     if (!t.disabled) t.parentElement.querySelector('input[data-yp-replace-for]')?.click();
     return true;
@@ -447,6 +513,8 @@ export function onChange(e) {
 
 // A demo reset or a new design mount starts the screen fresh.
 export function reset() {
+  feedback = null;
+  feedbackScope = null;
   S.open = null;
   S.entries.clear();
   S.yp = { off: new Set(), on: new Set(), building: false, result: null };
