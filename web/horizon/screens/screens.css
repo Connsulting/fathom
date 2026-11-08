@@ -266,7 +266,7 @@
 .d-horizon .h-mem-none, .d-horizon .h-mem-empty { margin-top: 24px; font-size: 14px; }
 .d-horizon .h-action-receipt .h-mem-all { margin-left: 6px; white-space: nowrap; }
 .d-horizon .h-mem .h-sec { margin-top: 34px; }
-.d-horizon .h-know-l { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.d-horizon .h-know-l { list-style: none; margin: 0; padding: 0; }
 .d-horizon .h-know-p { padding: 14px 2px; border-bottom: 1px solid var(--line); }
 .d-horizon .h-know-p > a { display: inline-flex; align-items: center; gap: 6px; color: var(--tx); text-decoration: none; }
 .d-horizon .h-know-p > a:hover { color: var(--ac); }
