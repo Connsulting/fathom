@@ -51,6 +51,8 @@ test('logical descriptors are frozen, lazy, async and return normalized plain va
     { n: Number.MAX_SAFE_INTEGER, text: 'é_%\\' });
   for (let i = 0; i < 260; i++) assert.deepEqual(await scope.prepare(`SELECT ${i} AS n`).get(), { n: i });
   assert.deepEqual(await insert.get('second', null, new Uint8Array()), { id: 2 });
+  assert.deepEqual(await scope.prepare('WITH selected AS (SELECT id FROM items) SELECT * FROM selected').run(), { changes: 0 });
+  assert.deepEqual(await scope.prepare("WITH selected AS (SELECT 'third' AS label) INSERT INTO items (label) SELECT label FROM selected").run(), { changes: 1 });
 });
 
 test('bindings and result normalization refuse unsupported values without poisoning the connection', async t => {
@@ -219,10 +221,22 @@ test('configured scopes keep independent connections and require exact household
   assert.equal(a, await storage.household({ householdId: 'synthetic-a', generation: 1 }));
   await assert.rejects(storage.household({ householdId: 'synthetic-a', generation: 2 }), invalid);
   await assert.rejects(storage.household({ householdId: 'missing', generation: 1 }), invalid);
+  await assert.rejects(storage.household(null), invalid);
   await scope.transaction(async () => {
     assert.deepEqual(await a.prepare('SELECT 1 AS n').get(), { n: 1 });
     assert.deepEqual(await b.prepare('SELECT 2 AS n').get(), { n: 2 });
   });
+});
+
+test('invalid configuration fails with a fixed code before opening connections', async () => {
+  for (const config of [undefined, null, {}, { platform: { path: '' } }, { platform: { path: ':memory:' }, households: null },
+    { platform: { path: ':memory:' }, households: [{ path: ':memory:', householdId: 'a', generation: 0 }] },
+    { platform: { path: ':memory:' }, households: [
+      { path: ':memory:', householdId: 'a', generation: 1 }, { path: ':memory:', householdId: 'a', generation: 2 },
+    ] }]) await assert.rejects(openStorage(config), invalid);
+  const storage = await openStorage({ platform: { path: ':memory:' } });
+  assert.deepEqual(await (await storage.platform()).prepare('SELECT 1 AS n').get(), { n: 1 });
+  await storage.close();
 });
 
 test('production modules and existing helpers never import the unused kernel', () => {
