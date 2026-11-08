@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
-import { tempDb } from './helpers/server.mjs';
+import { tempDb, tempInstance } from './helpers/server.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import { ask, KIND_OPTIONS, getItem, autoInfo, reopenItem } from '../src/ingest/confirm.mjs';
 import { questionFor } from '../src/jobs/triggers/common.mjs';
@@ -269,21 +269,35 @@ test('source category mappings retain automatic provenance and do not train hous
   assert.equal(db.prepare('SELECT count(*) AS n FROM category_source_rules').get().n, 0);
 }));
 
-test('the scheduled resolver answers HSA eligibility and runs the actual planner', () => store(async db => {
-  rec(db, ['benefits.hsaEligible']);
-  db.prepare("INSERT INTO facts (key,value,confirmed,updated_at) VALUES ('synthetic.planDescription',?,0,?)").run(JSON.stringify('HSA eligible health plan'), NOW);
-  const engine = model(db, ({ items }) => items.map(i => ({ item: i.id, option: 'true', basis: 'stored_fact', refs: ['facts:synthetic.planDescription'] })));
-  const { createScheduler, defaultHandlers } = await import('../src/jobs/scheduler.mjs');
-  const handlers = defaultHandlers();
-  const scheduler = createScheduler({ db, config: { clock: '2032-03-10' }, engine, handlers: { 'confirm-guess': handlers['confirm-guess'] },
-    household: () => ({ outbound: { enabled: () => true }, funded: () => true }), now: () => new Date(NOW), log: { log() {} } });
+test('the scheduled resolver answers HSA eligibility and runs the actual planner', async () => {
+  const instance = await tempInstance();
+  const { db } = instance;
+  let scheduler;
   try {
+    rec(db, ['benefits.hsaEligible']);
+    db.prepare("INSERT INTO facts (key,value,confirmed,updated_at) VALUES ('synthetic.planDescription',?,0,?)").run(JSON.stringify('HSA eligible health plan'), NOW);
+    instance.platform.prepare('INSERT OR REPLACE INTO platform_settings (key,value,updated_at) VALUES (?,?,?)')
+      .run('instance_model_cap_usd', '1', Date.now());
+    const engine = model(db, ({ items }) => items.map(i => ({ item: i.id, option: 'true', basis: 'stored_fact', refs: ['facts:synthetic.planDescription'] })));
+    const household = await instance.household({ clock: '2032-03-10', engine: 'fake' }, { engine });
+    scheduler = household.scheduler;
     const run = await scheduler.runNow('confirm-guess');
     assert.equal(run.status, 'ok');
     assert.equal(db.prepare("SELECT value FROM facts WHERE key='benefits.hsaEligible'").get().value, 'true');
-    assert.ok(db.prepare('SELECT 1 FROM planner_recs WHERE last_run=?').get(run.id), 'the actual planner persisted recommendations for the resolver run');
-  } finally { await scheduler.stop(); }
-}));
+    await scheduler.stop();
+    const plan = db.prepare("SELECT id,status,trigger FROM job_runs WHERE job_id='plan' ORDER BY id DESC LIMIT 1").get();
+    assert.ok(plan, 'the resolver queued a plan through its household scheduler');
+    assert.notEqual(plan.id, run.id, 'planning has its own local claim');
+    assert.equal(plan.trigger, 'resolve');
+    assert.equal(plan.status, 'ok');
+    assert.ok(db.prepare('SELECT 1 FROM planner_recs WHERE last_run=?').get(plan.id), 'the actual planner persisted recommendations for the queued plan run');
+    assert.equal(engine.calls.length, 1, 'follow-up planning makes no additional model call');
+  } finally {
+    await scheduler?.stop();
+    instance.close();
+    rmSync(instance.dataDir, { recursive: true, force: true });
+  }
+});
 
 test('unchanged unresolved inputs are paid for once, while changed evidence permits another attempt', () => store(async db => {
   account(db);
