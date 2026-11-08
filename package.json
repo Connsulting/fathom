@@ -10,6 +10,7 @@
     "start": "node src/server.mjs",
     "test": "node --test \"test/**/*.test.mjs\" \"src/packs/test/*.test.mjs\" \"src/engine/test/*.test.mjs\" \"src/calc/test/*.test.mjs\" \"src/mcp/test/*.test.mjs\"",
     "seed:demo": "node demo/seed.mjs",
+    "demo:gif": "node scripts/demo-gif.mjs",
     "e2e": "playwright test",
     "e2e:smoke": "playwright test --grep @smoke",
     "smoke:live": "node --test src/engine/test/live.test.mjs",
@@ -33,6 +34,7 @@
     "proxy-addr": "2.0.8"
   },
   "devDependencies": {
+    "@ffmpeg-installer/ffmpeg": "1.1.0",
     "@playwright/test": "1.64.1",
     "acorn": "8.19.0",
     "acorn-walk": "8.3.5"
