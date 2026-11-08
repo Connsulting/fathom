@@ -59,7 +59,7 @@ export const DEFAULT_TIMEZONE = 'America/New_York';
 const DAY = 86400000;
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const TRIGGERS = new Set(['manual', 'ingest', 'confirm', 'decide']);
+const TRIGGERS = new Set(['manual', 'ingest', 'confirm', 'decide', 'resolve']);
 
 export const JOBS = Object.freeze([
   { id: 'plan', name: 'Nightly plan refresh', cadence: 'Daily, 2:00 AM', does: 'Re-plan recommendations and deadlines from the latest data.', schedule: Object.freeze({ every: 'day', hour: 2 }) },
@@ -352,7 +352,7 @@ export function createScheduler({
     let cost = null;
     let note = null;
     try {
-      const ctx = { db, config, engine, transport, household: captured, now: t.toISOString(), clock: clockFor(t, zone), periodKey: key, trigger, jobRunId: id, triggerJob: (jobId) => triggerJob(jobId, 'ingest') };
+      const ctx = { db, config, engine, transport, household: captured, now: t.toISOString(), clock: clockFor(t, zone), periodKey: key, trigger, jobRunId: id, triggerJob: (jobId, reason = 'ingest') => triggerJob(jobId, reason) };
       const out = (await handlers[job.id](ctx)) || {};
       if (out.status === 'skipped') status = 'skipped';
       if (Number.isFinite(out.costUsd) && out.costUsd >= 0) cost = out.costUsd;
@@ -523,7 +523,7 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
     },
     async plan(ctx) {
       if (getSetting(ctx.db, 'mode', null) === 'demo') return { status: 'skipped' };
-      const planning = await runPlanning(ctx.db, ctx.engine || null, {
+      const planning = await runPlanning(ctx.db, ctx.trigger === 'resolve' ? null : (ctx.engine || null), {
         now: ctx.clock, packDirs: defaultPackDirs(ctx.household.root), runId: ctx.jobRunId,
       });
       ctx.db.prepare('UPDATE action_receipts SET planning_pending = 0 WHERE planning_pending = 1').run();
@@ -573,7 +573,7 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
           const closed = categories.stopped ? { guessed: 0 } : await guessClosedOptions(ctx.db, categorizer, { now: ctx.now });
           return { applied: categories.applied, stopped: categories.stopped ?? closed.stopped };
         },
-        replan: () => { ctx.triggerJob('plan'); },
+        replan: () => { ctx.triggerJob('plan', 'resolve'); },
       });
       if (!out.answered && !out.batches && !out.costUsd) return { status: 'skipped', note: { pending: out.pending } };
       return { costUsd: out.costUsd,
