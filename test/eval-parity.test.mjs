@@ -51,10 +51,13 @@ test('AC3: catalog defaults match the prompt and tighter limits require a reason
 });
 
 test('AC4: missing operations explain dependent expectations but never mask independent violations', async () => {
-  const c = structuredClone((await loadCases()).find(c => c.id === 'spending-annual-exclusions'));
-  const r = await runCases({ cases: [c] });
+  // A synthetic operation that never ships keeps this independent of which reads exist.
+  const c = { ...one('missing-operation', { required: [{ name: 'spending', operation: 'not_built', predicates: [] }] }),
+    expectedFail: { missingOperations: ['spending.not_built'] } };
+  const r = await runCases({ cases: [c], scripts: () => [{ text: "Fathom doesn't have that.", costUsd: 0 }] });
   assert.equal(r.cases[0].status, 'xfail');
-  assert.ok(r.cases[0].missingOperations.includes('spending.total'));
+  assert.deepEqual(r.cases[0].missingOperations, ['spending.not_built']);
+  assert.deepEqual(r.cases[0].turns[0].blockedBy, ['spending.not_built']);
   const bad = await runCases({ cases: [c], scripts: () => [{ text: '$987654321', costUsd: 0 }] });
   assert.equal(bad.cases[0].status, 'fail');
   assert.ok(bad.cases[0].failingChecks.includes('figures.unsourced'));

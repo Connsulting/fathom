@@ -51,6 +51,7 @@ import { purgeTrash } from '../api/threads.mjs';
 import { resolvePending } from '../resolve/index.mjs';
 import { defaultPackDirs } from '../packs/state.mjs';
 import { syncSimplefin, createFakeSimplefin } from '../ingest/simplefin.mjs';
+import { withoutPrincipal } from '../platform/model-budget.mjs';
 
 export const DEFAULT_TIMEZONE = 'America/New_York';
 const DAY = 86400000;
@@ -335,7 +336,8 @@ export function createScheduler({
     let note = null;
     try {
       const ctx = { db, config, engine, transport, household: household(), now: t.toISOString(), clock: clockFor(t, zone), periodKey: key, trigger, jobRunId: id, triggerJob: (jobId) => triggerJob(jobId, 'ingest') };
-      const out = (await handlers[job.id](ctx)) || {};
+      // A job is system-initiated even when a request triggered it: no request principal.
+      const out = (await withoutPrincipal(() => handlers[job.id](ctx))) || {};
       if (out.status === 'skipped') status = 'skipped';
       if (Number.isFinite(out.costUsd) && out.costUsd >= 0) cost = out.costUsd;
       note = countsNote(out.note);

@@ -99,12 +99,17 @@ export function buildRegistry(modules, toolHeaders = headers) {
     const description = [header.purpose, ...operations.map(o => `${o.name} (${Object.keys(o.params).map(k => k + (o.required.includes(k) ? '' : '?')).join(', ')}): ${o.summary}`)].join('\n');
     if (description.length > 900) throw new TypeError(`Description too long: ${header.name}`);
     const inputSchema = { type: 'object', properties, required: ['operation'], additionalProperties: false };
-    return { ...header, operations, description, inputSchema, async handler(args, ctx) {
+    // validateArgs(args) -> the operation: registry validation of { operation, ...params }.
+    function validateArgs(args) {
       const op = operations.find(o => o.name === args?.operation);
       const pair = `${header.name}.${args?.operation ?? '(missing operation)'}`;
       if (!op) throw new ToolError('bad_input', `${pair}: operation must be one of ${operations.map(o => o.name).join(', ')}`);
       try { validate({ type: 'object', properties: { operation: properties.operation, ...op.params }, required: ['operation', ...op.required], additionalProperties: false }, args); }
       catch (e) { if (e instanceof ToolError) throw new ToolError('bad_input', `${pair}: ${e.message}`); throw e; }
+      return op;
+    }
+    return { ...header, operations, description, inputSchema, validateArgs, async handler(args, ctx) {
+      const op = validateArgs(args);
       const { operation, ...params } = args;
       const result = await op.handler(params, ctx);
       if (header.kind === 'write' && result?.receipt) {
