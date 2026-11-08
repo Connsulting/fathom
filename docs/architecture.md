@@ -494,6 +494,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `goals` | `id` PK, `def` JSON, `sort`, `origin` (`seed` or `owner`), `archived_at`, `created_at`, `updated_at` (migration 012), `done_at` (migration 026: app clock ISO time a goal was marked done); see "Goals and the tradeoff curve" |
 | `deadlines` | `id` PK, `date`, `label`, `title`, `rec_id`, `hard` |
 | `events` | `id` PK, `date` (label as in the scenario), `kind`, `title`, `body`, `sort` |
+| `spending_definitions` | `id` PK (slug), `name`, `def` JSON selectors, `updated_at`; migration 033 links exactly one preference through nullable unique `preferences.definition_id`. Save, delete, forget and Undo update both rows atomically. |
 | `packs_state` | `id` PK, `def` JSON (the pack with its base status, plus an optional `manifest` tag naming the repo pack manifest the row stands for, and on demo rows a `label` keeping the demo name; migration 005 tags the demo rows with `manifest`, migration 006 adds `label`, real rows link by their own id), `active` (NULL means no override), `exploring`, `what_if_asked`, `what_if_done`, `unhid` JSON, `sort`, `updated_at` |
 | `decisions` | `id` PK, `title`, `status` in open, decided, upcoming, `wargame`, `rec_id`, `opens_on`, `when_label`, `note`, `decided_line`, `sort` |
 | `jobs` | `id` PK, `name`, `cadence`, `does`, `cost`, `next_label`, `last_label`, `enabled`, `sort` |
@@ -969,7 +970,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/keys/:id/revoke` | `{}` | `{record, keys}`. Sets `revokedAt` once (a second revoke keeps it); 404 unknown id. A member may revoke only keys they created (403 otherwise); an admin may revoke any. |
 | `GET /api/mcp` | | `{url, publicUrlSet, tools: [{name, description, scope}], scopes: [{id, label, access}]}`. `url` is the `FATHOM_PUBLIC_URL` origin with `/mcp` appended. |
 | `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`, `unsupported`, `too_large` (past a parse limit, see Ingest) or `failed`. 400 no files or malformed body, 409 a real household without `FATHOM_PLATFORM_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
-| `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first; a removed file is left out. |
+| `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first; removed files are omitted and a list over 256 KB is shortened with `truncated: true`. |
 | `POST /api/files/:id/retry` | `{}` | `{scenario, file: result}`. Routes a `needs_mapping` or `needs_extraction` file again under the same id; 404 unknown file, 409 a file that is not waiting. |
 | `POST /api/files/:id/remove` | `{}` | `{scenario, receipt}`. Deletes an uploaded file's transactions (with their category rows), balances, positions, P&L lines, tax payments, facts, held facts and documents and its pending questions, drops figures read from it and recomputes each fed account's balance figure, archives an account left with no rows that no live bank connection feeds, and sets `files.removed_at`. The captured change log is stored in `source_changes` under the receipt id; `POST /api/actions/:id/undo` replays it and refuses (409) when a touched row changed since. 404 unknown, 409 already removed, 400 for a file with no stored bytes. Same code as `sources.remove_file`; off on the public demo. |
 | `GET /api/confirm` | | `{items: [pending confirm items]}`. |
@@ -2982,12 +2983,14 @@ Migration 025 adds durable `action_receipts` and `preferences`. Each receipt com
 transaction as its write and records actor, conversation, changed fields and prior values. Receipts
 hydrate beside the answer's work block, including notice or missing replies, and keep their conversation
 reachable. Undo restores the prior value and provenance, refuses another actor or a later conflicting
-edit, and replans facts. The MCP-only undo operation checks the loaded receipt scope against the key scopes. Ask gets the Undo button through
+edit, and replans facts. The undo operation checks the loaded receipt scope against the key scopes. Ask gets the Undo button through
 `POST /api/actions/:id/undo`. A busy planner preserves the fact and receipt, reports planning pending,
 and queues planning again. Ask queues replanning until the paid model round releases its engine lock, then drains that work before continuing; planner prose may safely call the same engine. Demo baby dates use the same deterministic new-child window calculation.
 
-`update_preferences.remember` stores a short verbatim preference or definition. The Memories page (`#/memories`, linked from Settings) lists it with its source (`origin` and `conversation_key`, migration 028) and allows adding, editing or deletion through the same validation. Preferences enter the dynamic Ask prompt as household
+`update_preferences.remember` stores a short verbatim preference. `update_preferences.save_definition` stores a named selector and exactly one linked preference atomically (migration 033). Linked preferences expose `definitionId` to Ask, refuse ordinary edits, and are removed together with their saved definition by forget or delete; Undo restores both rows. Built-in selections cannot be overwritten. The Memories page (`#/memories`, linked from Settings) lists it with its source (`origin` and `conversation_key`, migration 028) and allows adding, editing or deletion through the same validation. Preferences enter the dynamic Ask prompt as household
 data; they never override product boundaries, evidence requirements or permissions.
+
+`refresh` imports files, retries extraction, rebuilds Your plans and runs the four allowed jobs through the same household pipeline and scheduler as the API. Engine-using refreshes in Ask wait in the round-end queue until the model ledger is released; MCP awaits completion inline. A refresh receipt records its eventual result, including the file id or failure status. These receipts expose `undo.available: false` and the chat receipt omits Undo. Imported facts are changed through Confirm.
 
 
 ## Transaction categories
