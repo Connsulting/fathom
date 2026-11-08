@@ -89,7 +89,7 @@ test('HTTP connect, sync, matching, watermark, dedupe and disconnect isolate col
 test('direct sync respects household outbound pause before network dispatch', T, async () => {
   const fx = await twoHouseholds();
   try {
-    const hh = fx.ctx(fx.B.id); await hh.scheduler.tick();
+    const hh = await fx.ctx(fx.B.id); await hh.scheduler.tick();
     let calls = 0;
     const r = await syncSimplefin(hh.db, { household: hh, fetch: async () => { calls++; throw new Error('unexpected network'); } });
     assert.equal(r.status, 'skipped'); assert.equal(r.code, 'paused'); assert.equal(calls, 0);

@@ -5,6 +5,7 @@ import { tempInstance } from './helpers/server.mjs';
 import { createHouseholdStorage } from '../src/platform/db.mjs';
 import { createRuntimeRegistry, createHouseholdContext, openHouseholdDb } from '../src/platform/runtime.mjs';
 import { runPlanning } from '../src/jobs/planner.mjs';
+import { mapSeries } from '../src/shared/series.mjs';
 
 const quiet = { log() {} };
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
@@ -28,7 +29,7 @@ async function fixture(t, handler, count = 3) {
   });
   let registry = makeRegistry();
   t.after(async () => { await registry.close(); await instance.close(); rmSync(instance.dataDir, { recursive: true, force: true }); });
-  return { ...instance, ids, get registry() { return registry; }, contexts: () => ids.map(id => registry.get(id)),
+  return { ...instance, ids, get registry() { return registry; }, contexts: async () => await mapSeries(ids, async id => (await registry.get(id))),
     async restart() { await registry.close(); registry = makeRegistry(); } };
 }
 
@@ -50,7 +51,7 @@ test('one handler per household, two instance-wide, with round-robin admission',
     active--; perHousehold.set(id, perHousehold.get(id) - 1);
     return { note: { local: ctx.db === ctx.household.db } };
   });
-  const [a, b, c] = fx.contexts();
+  const [a, b, c] = await fx.contexts();
   const runs = [a.scheduler.runNow('plan'), a.scheduler.runNow('freshness'), b.scheduler.runNow('plan'), c.scheduler.runNow('plan')];
   await turn();
   assert.deepEqual(started, [a.householdId, b.householdId]);
@@ -71,7 +72,7 @@ test('scheduled periods, failures and restart remain independent', { timeout: 15
     if (ctx.household.householdId === failId) throw Object.assign(new Error('private diagnostic'), { code: 'synthetic_failure' });
     return { note: { completed: true } };
   }, 2);
-  const [a, b] = fx.contexts(); failId = a.householdId;
+  const [a, b] = await fx.contexts(); failId = a.householdId;
   await Promise.all([await a.scheduler.tick(), await b.scheduler.tick()]);
   const ar = a.scheduler.runs({ limit: 20 }); const br = b.scheduler.runs({ limit: 20 });
   assert.equal(ar.length, 3); assert.equal(br.length, 3);
@@ -80,7 +81,7 @@ test('scheduled periods, failures and restart remain independent', { timeout: 15
   assert.equal(ar.find(r => r.jobId === 'plan').id, br.find(r => r.jobId === 'plan').id);
   assert.equal(ar.find(r => r.jobId === 'plan').periodKey, br.find(r => r.jobId === 'plan').periodKey);
   await fx.restart();
-  const [aa, bb] = fx.contexts();
+  const [aa, bb] = await fx.contexts();
   await Promise.all([await aa.scheduler.tick(), await bb.scheduler.tick()]);
   assert.equal(seen.length, 6, 'restart does not replay claimed periods');
   for (const reason of ['ingest', 'confirm', 'decide']) await bb.scheduler.trigger('plan', reason);
@@ -93,7 +94,7 @@ test('scheduled periods, failures and restart remain independent', { timeout: 15
 test('queued work rechecks pause and generation before claiming, and valid work resumes', { timeout: 15000 }, async t => {
   const gates = [deferred(), deferred()]; let n = 0;
   const fx = await fixture(t, async () => { const index = n++; if (index < 2) await gates[index].promise; });
-  const [a, b, c] = fx.contexts();
+  const [a, b, c] = await fx.contexts();
   const first = a.scheduler.runNow('plan'); const second = b.scheduler.runNow('plan');
   const refused = assert.rejects(c.scheduler.runNow('plan'), e => e.code === 'paused');
   await turn();
@@ -109,7 +110,7 @@ test('queued work rechecks pause and generation before claiming, and valid work 
 
 test('planner refuses integers that do not identify a running local plan claim', async t => {
   const fx = await fixture(t, async () => ({}), 2);
-  const [a, b] = fx.contexts();
+  const [a, b] = await fx.contexts();
   const run = await a.scheduler.runNow('plan');
   await assert.rejects(runPlanning(b.db, null, { now: '2026-11-05', runId: run.id }), /claimed|claim|runId/);
   await assert.rejects(runPlanning(a.db, null, { now: '2026-11-05', runId: run.id }), /claimed|claim|runId/);
@@ -122,7 +123,7 @@ test('manual HTTP, successful upload and Confirm dispatch only to the initiating
   const fx = await twoHouseholds({ engine: 'off' });
   try {
     await fx.B.client.postJson('/api/household/outbound', { jobs: true });
-    const a = fx.ctx(fx.A.id); const b = fx.ctx(fx.B.id);
+    const a = await fx.ctx(fx.A.id); const b = await fx.ctx(fx.B.id);
     await b.scheduler.tick();
     const before = b.scheduler.runs({ limit: 200 });
     assert.equal((await fx.A.client.postJson('/api/jobs/freshness/run', {})).status, 200);

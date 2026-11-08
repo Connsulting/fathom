@@ -365,7 +365,7 @@ describe('there is no default household', T, () => {
       assert.equal(r.status, 403, path);
       assert.deepEqual(r.json, MEMBERSHIP_REQUIRED);
     }
-    assert.equal(h.app.runtimes.get(id), null);
+    assert.equal((await h.app.runtimes.get(id)), null);
     assert.ok(!existsSync(join(h.dataDir, 'households', id)), 'no root was created for it');
   });
 });
@@ -380,8 +380,8 @@ test('each household context is frozen and holds its own DB, root, vault and run
     const row = await h.platform.prepare('SELECT status, storage_root FROM households WHERE id = ?').get(id);
     assert.deepEqual({ ...row }, { status: 'active', storage_root: `households/${id}` }, 'B activated on its first admin enrollment');
   }
-  const a = h.app.runtimes.get(h.A.id);
-  const b = h.app.runtimes.get(h.B.id);
+  const a = (await h.app.runtimes.get(h.A.id));
+  const b = (await h.app.runtimes.get(h.B.id));
   for (const [ctx, id, canary] of [[a, h.A.id, A_CANARY], [b, h.B.id, B_CANARY]]) {
     assert.ok(ctx, `a context for ${id}`);
     assert.ok(Object.isFrozen(ctx), 'frozen');
@@ -395,7 +395,7 @@ test('each household context is frozen and holds its own DB, root, vault and run
     assert.equal(vault.root.householdId, id, 'vault root');
     assert.ok(ctx.inFlight instanceof Set);
     assert.equal((await ctx.packs.entry('your-plans', PLAN_ENTRY)).title, `${canary} plan`, 'packs read its own root');
-    assert.equal(h.app.runtimes.get(id), ctx, 'the same generation resolves to the same context');
+    assert.equal((await h.app.runtimes.get(id)), ctx, 'the same generation resolves to the same context');
   }
   assert.notEqual(a.inFlight, b.inFlight);
   for (const k of ['db', 'engine', 'packs', 'answerer', 'scheduler', 'transport', 'outbound']) {

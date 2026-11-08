@@ -38,8 +38,8 @@ test('a consistent encrypted household bundle contains only its own store, vault
     assert.ok(files.has('packs/your-plans/entries/synthetic.md'));
     assert.ok(files.has('outbox/synthetic.json'));
     assert.ok([...files.keys()].every(p => !p.startsWith('work/') && !p.includes('platform')));
-    assert.equal(await marker(f.context(f.A.id)), 'alpha');
-    assert.equal(await marker(f.context(f.B.id)), 'bravo');
+    assert.equal(await marker(await f.context(f.A.id)), 'alpha');
+    assert.equal(await marker(await f.context(f.B.id)), 'bravo');
   } finally { await f.close(); }
 });
 
@@ -66,8 +66,8 @@ test('missing keys, mismatched identity, tampering, confirmation and symlink fai
     await assert.rejects(backup(f), { code: 'snapshot_source_invalid' });
     rmSync(join(f.A.root, 'packs', 'foreign'));
     assert.equal(await generation(), original);
-    assert.equal(await marker(f.context(f.A.id)), 'alpha');
-    assert.equal(await marker(f.context(f.B.id)), 'bravo');
+    assert.equal(await marker(await f.context(f.A.id)), 'alpha');
+    assert.equal(await marker(await f.context(f.B.id)), 'bravo');
     assert.equal((await backup(f)).status, 'done', 'valid input still succeeds after refusals');
   } finally { await f.close(); }
 });
@@ -86,14 +86,14 @@ test('authenticated invalid schema, vault and path bundles and insufficient spac
       const file = join(f.destination, `${name}.fsnap`); writeFileSync(file, source, { mode: 0o600 });
       rewriteBundle(file, f.keys.backupKey, change);
       await assert.rejects(restore(f, file), { code });
-      assert.equal(f.context(f.A.id).generation, 1);
-      assert.equal(await marker(f.context(f.A.id)), 'alpha');
+      assert.equal((await f.context(f.A.id)).generation, 1);
+      assert.equal(await marker(await f.context(f.A.id)), 'alpha');
     }
     const { backupHousehold } = await import('../src/platform/household-backup.mjs');
     await assert.rejects(backupHousehold({ platform: f.platform, config: f.config, runtimes: f.server.app.runtimes, householdId: f.A.id, space: () => 0 }), { code: 'backup_space_required' });
     await assert.rejects(restore(f, valid.file, { space: () => 0 }), { code: 'backup_space_required' });
-    assert.equal(f.context(f.A.id).generation, 1);
+    assert.equal((await f.context(f.A.id)).generation, 1);
     await restore(f, valid.file);
-    assert.equal(await marker(f.context(f.A.id)), 'alpha', 'valid bundle still restores after every refusal');
+    assert.equal(await marker(await f.context(f.A.id)), 'alpha', 'valid bundle still restores after every refusal');
   } finally { await f.close(); }
 });

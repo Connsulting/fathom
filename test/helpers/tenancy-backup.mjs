@@ -41,7 +41,7 @@ export async function backupFixture({ engine = 'off', engineOptions = null } = {
     const B = { id: made.json.household.id };
     B.admin = await enroll(B.id, 'bravo@example.test');
     for (const [hh, marker] of [[A, 'alpha'], [B, 'bravo']]) {
-      const ctx = server.app.runtimes.get(hh.id);
+      const ctx = (await server.app.runtimes.get(hh.id));
       hh.root = ctx.root;
       await ctx.db.prepare("INSERT INTO facts (key, value, updated_at) VALUES ('backup.marker', ?, '2026-11-01')").run(JSON.stringify(marker));
       const { root: vaultRoot, handle } = await ctx.vault();
@@ -63,7 +63,7 @@ export async function backupFixture({ engine = 'off', engineOptions = null } = {
     }
     return { root, dataDir, keys, destination, server, platform, store, A, B, enroll,
       config: loadConfig(server.env),
-      context: id => server.app.runtimes.get(id),
+      context: async id => (await server.app.runtimes.get(id)),
       async close() { await server.close(); rmSync(root, { recursive: true, force: true }); },
     };
   } catch (err) { await server.close(); rmSync(root, { recursive: true, force: true }); throw err; }

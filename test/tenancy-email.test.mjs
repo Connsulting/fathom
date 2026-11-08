@@ -27,12 +27,12 @@ async function enable(hh) {
 test('manual and periodic mail, preview, history, subscriptions and outbox are household local', options, async () => {
   const fx = await twoHouseholds();
   try {
-    for (const hh of [fx.A, fx.B]) await fx.ctx(hh.id).scheduler.tick();
+    for (const hh of [fx.A, fx.B]) await (await fx.ctx(hh.id)).scheduler.tick();
     await enable(fx.A); await enable(fx.B);
     await subscribe(fx.A, [row(fx.A.admin.user.id)]);
     await subscribe(fx.B, [row(fx.B.admin.user.id)]);
     for (const [hh, marker] of [[fx.A, 'Alpha private milestone'], [fx.B, 'Bravo private milestone']]) {
-      await fx.ctx(hh.id).db.prepare(`INSERT INTO recs (id, pack_id, status, waiting_on, updated_at, def) VALUES ('colliding-rec', 'cash', 'proposed', 'owner', '2026-11-01', ?)`)
+      await (await fx.ctx(hh.id)).db.prepare(`INSERT INTO recs (id, pack_id, status, waiting_on, updated_at, def) VALUES ('colliding-rec', 'cash', 'proposed', 'owner', '2026-11-01', ?)`)
         .run(JSON.stringify({ id: 'colliding-rec', title: marker, domain: 'data', summary: marker }));
       const preview = await hh.client.request({ path: '/api/email' });
       assert.equal(preview.status, 200, preview.text);
@@ -42,18 +42,18 @@ test('manual and periodic mail, preview, history, subscriptions and outbox are h
       const manual = await hh.client.postJson('/api/email/brief', {});
       assert.equal(manual.json.send.status, 'sent', manual.text);
       await hh.client.postJson('/api/household/outbound', { jobs: true });
-      const periodic = await fx.ctx(hh.id).scheduler.runNow('brief-email');
+      const periodic = await (await fx.ctx(hh.id)).scheduler.runNow('brief-email');
       assert.equal(periodic.status, 'ok', JSON.stringify(periodic));
       const mail = await messages(fx.rootOf(hh.id));
       assert.equal(mail.length, 2);
       assert.ok(mail.every(m => m.to.length === 1 && m.to[0] === hh.admin.user.email));
       assert.ok(mail.every(m => m.text.includes(marker) && m.text.includes(`household=${hh.id}`)));
-      await fx.ctx(hh.id).db.prepare("UPDATE recs SET window_close = ? WHERE id = 'colliding-rec'").run(fx.ctx(hh.id).config.clock);
-      assert.equal((await fx.ctx(hh.id).scheduler.runNow('deadline-alerts')).status, 'ok');
+      await (await fx.ctx(hh.id)).db.prepare("UPDATE recs SET window_close = ? WHERE id = 'colliding-rec'").run((await fx.ctx(hh.id)).config.clock);
+      assert.equal((await (await fx.ctx(hh.id)).scheduler.runNow('deadline-alerts')).status, 'ok');
       const alerts = await messages(fx.rootOf(hh.id));
       assert.equal(alerts.length, 3);
       assert.ok(alerts[2].text.includes(marker) && alerts[2].text.includes(`household=${hh.id}`));
-      assert.equal((await fx.ctx(hh.id).scheduler.runNow('deadline-alerts')).status, 'ok');
+      assert.equal((await (await fx.ctx(hh.id)).scheduler.runNow('deadline-alerts')).status, 'ok');
       assert.equal((await messages(fx.rootOf(hh.id))).length, 3, 'local alert dedupe');
       const history = await hh.client.request({ path: '/api/email' });
       assert.equal(history.json.history.filter(r => r.status === 'sent').length, 3);
@@ -90,7 +90,7 @@ test('manual and periodic mail, preview, history, subscriptions and outbox are h
 test('original verified recipients and cadence survive migration, global routing stops after enrollment', options, async () => {
   const fx = await twoHouseholds();
   try {
-    await fx.ctx(fx.A.id).scheduler.tick();
+    await (await fx.ctx(fx.A.id)).scheduler.tick();
     await enable(fx.A);
     const first = await fx.A.client.postJson('/api/email/test', {});
     assert.equal(first.json.send.status, 'sent', first.text);
@@ -121,7 +121,7 @@ test('removal during credential loading is blocked at the real HTTP mail transpo
   });
   await new Promise(resolve => sink.listen(0, '127.0.0.1', resolve));
   try {
-    const hh = fx.ctx(fx.A.id); await hh.scheduler.tick(); await enable(fx.A);
+    const hh = await fx.ctx(fx.A.id); await hh.scheduler.tick(); await enable(fx.A);
     const member = await enrollSession(fx.platform, fx.A.id, 'recipient@example.test');
     await subscribe(fx.A, [row(member.user.id)]);
     const credential = writePrivate(join(fx.root, 'mail-key'), 'synthetic-mail-key');
@@ -157,7 +157,7 @@ test('removal during credential loading is blocked at the real HTTP mail transpo
 test('unverified legacy recipients pause delivery with an admin-visible code, then explicit subscriptions recover', options, async () => {
   const fx = await twoHouseholds({ extra: { FATHOM_EMAIL_TO: 'outsider@example.test' } });
   try {
-    await fx.ctx(fx.A.id).scheduler.tick();
+    await (await fx.ctx(fx.A.id)).scheduler.tick();
     await enable(fx.A);
     const status = await fx.A.client.request({ path: '/api/household/outbound' });
     assert.equal(status.json.outbound.email.reason, 'recipient_unverified');
@@ -177,7 +177,7 @@ test('legacy import subscribes matching members, reports skipped recipients and 
   const fx = await twoHouseholds({ extra: { FATHOM_EMAIL_TO: 'alpha-admin@example.test,outsider@example.test' } });
   let reopened;
   try {
-    await fx.ctx(fx.A.id).scheduler.tick();
+    await (await fx.ctx(fx.A.id)).scheduler.tick();
     await enable(fx.A);
     const before = (await messages(fx.rootOf(fx.A.id))).length;
     const sent = await fx.A.client.postJson('/api/email/brief', {});

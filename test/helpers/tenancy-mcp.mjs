@@ -75,7 +75,7 @@ export async function mcpHouseholds() {
       return response.json;
     };
     for (const hh of [A, B]) {
-      hh.ctx = app.runtimes.get(hh.id);
+      hh.ctx = (await app.runtimes.get(hh.id));
       hh.db = hh.ctx.db;
       await hh.db.prepare('INSERT INTO facts (key, value, updated_at) VALUES (?, ?, ?)').run('synthetic.canary', JSON.stringify(hh.canary), '2026-11-05');
       await hh.db.prepare('INSERT INTO recs (id, def, status, updated_at) VALUES (?, ?, ?, ?)')

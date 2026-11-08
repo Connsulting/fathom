@@ -42,7 +42,7 @@ export function createMcpHandler({ keys, runtimes, config }) {
     if (!isAllowedHost(host, config)) return refuse(req, res, 403, { error: 'forbidden host' });
     if (!isAllowedOrigin(req.headers.origin, host)) return refuse(req, res, 403, { error: 'forbidden origin' });
     let record = authenticate(req, keys);
-    const household = record ? runtimes.get(record.householdId) : null;
+    const household = record ? (await runtimes.get(record.householdId)) : null;
     if (!household) return refuse(req, res, 401, { error: 'unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
     if (req.method !== 'POST') return refuse(req, res, 405, { error: 'method not allowed' }, { Allow: 'POST' });
     runtimes.acquire(household);

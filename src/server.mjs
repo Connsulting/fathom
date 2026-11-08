@@ -107,7 +107,7 @@ const codeOf = err => [err && err.code, err && err.name].find(v => typeof v === 
 async function backfillMerged(runtimes) {
   for (const id of await runtimes.list()) {
     try {
-      const household = runtimes.get(id);
+      const household = (await runtimes.get(id));
       if (household) await backfillMergedIdentity(household.db);
     } catch (err) {
       console.error('fathom: merged account backfill failed', codeOf(err));

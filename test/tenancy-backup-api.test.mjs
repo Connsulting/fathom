@@ -102,7 +102,7 @@ test('an admin can inspect a draining backup, and unavailable configuration refu
     assert.equal(refused.status, 409);
     assert.equal((await f.platform.prepare('SELECT count(*) AS n FROM household_backup_operations').get()).n, 0);
     writeFileSync(f.keys.backupKeyFile, keyBytes, { mode: 0o600 });
-    held = f.context(f.A.id); f.server.app.runtimes.acquire(held);
+    held = await f.context(f.A.id); f.server.app.runtimes.acquire(held);
     const queued = await f.A.admin.client.post('/api/household/backups');
     assert.equal(queued.status, 200, queued.text);
     await new Promise(resolve => setImmediate(resolve));
@@ -141,7 +141,7 @@ test('the OS commands use the same configured destination and exact household co
     const restored = spawnSync(process.execPath, ['scripts/restore-household.mjs', '--household', f.A.id, '--confirm', f.A.id, '--bundle', op.bundle_file], options);
     assert.equal(restored.status, 0, restored.stderr); assert.equal(JSON.parse(restored.stdout).status, 'done');
     server = await startRuntime({ dataDir: f.dataDir, keys: f.keys, engine: 'off' });
-    assert.equal(await marker(server.app.runtimes.get(f.A.id)), 'alpha');
-    assert.equal(await marker(server.app.runtimes.get(f.B.id)), 'bravo');
+    assert.equal(await marker((await server.app.runtimes.get(f.A.id))), 'alpha');
+    assert.equal(await marker((await server.app.runtimes.get(f.B.id))), 'bravo');
   } finally { await server?.close(); await f.close(); }
 });

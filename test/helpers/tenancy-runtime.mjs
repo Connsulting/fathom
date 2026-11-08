@@ -232,7 +232,7 @@ export async function twoHouseholds({ engine = 'fake', extra = {}, engineOptions
     return {
       root, dataDir, keys, server, app, baseUrl, platform, store, A, B, dual,
       rootOf: id => join(dataDir, 'households', id),
-      ctx: id => app.runtimes.get(id),
+      ctx: async id => (await app.runtimes.get(id)),
       async close() {
         await server.close();
         rmSync(root, { recursive: true, force: true });

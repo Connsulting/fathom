@@ -901,7 +901,7 @@ test('migration 005 seeds existing households from the hand-set instance cap; a 
     outbound.setOutbound(platform, C, { engine: true });
     assert.equal(await budget.allocationUsd(platform, C), 0);
     assert.equal((await platform.prepare('SELECT count(*) AS n FROM household_model_budgets WHERE household_id = ?').get(C)).n, 0);
-    const ctx = server.app.runtimes.get(C);
+    const ctx = (await server.app.runtimes.get(C));
     const sent = emulator.requests.length;
     await assert.rejects(ctx.engine.call({ purpose: 'chat', messages: QUESTION, maxTokens: 64 }), err => err instanceof E.BudgetExceededError);
     assert.equal(emulator.requests.length, sent, 'nothing dispatched for the unfunded household');

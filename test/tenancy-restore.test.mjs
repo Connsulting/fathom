@@ -15,11 +15,11 @@ const currentRows = async f => Object.fromEntries(await mapSeries(['household_me
 test('restore replaces only A, retains current authorization and spend, revokes A credentials and leaves outbound paused', async () => {
   const f = await backupFixture();
   try {
-    await f.context(f.A.id).db.prepare("INSERT INTO job_runs (job_id, started_at, status) VALUES ('freshness', '2026-11-01', 'running')").run();
+    await (await f.context(f.A.id)).db.prepare("INSERT INTO job_runs (job_id, started_at, status) VALUES ('freshness', '2026-11-01', 'running')").run();
     const snap = await backup(f);
     assert.equal((await mcpList(f.server.baseUrl, f.A.key.key)).status, 200);
-    const old = f.context(f.A.id);
-    await changeMarker(old, 'alpha-current'); await changeMarker(f.context(f.B.id), 'bravo-current');
+    const old = await f.context(f.A.id);
+    await changeMarker(old, 'alpha-current'); await changeMarker(await f.context(f.B.id), 'bravo-current');
     await f.store.removeMember(f.A.id, f.A.member.userId, { actorId: f.A.admin.userId });
     await f.platform.prepare(`INSERT INTO model_rounds (id, household_id, month, kind, purpose, state, reserved_usd, cost_usd, reserved_at, expires_at, settled_at)
       VALUES ('synthetic-current-round', ?, '2026-11', 'round', 'chat', 'settled', 3, 2, ?, ?, ?)`).run(f.A.id, Date.now(), Date.now(), Date.now());
@@ -33,11 +33,11 @@ test('restore replaces only A, retains current authorization and spend, revokes 
     const passkeys = await f.platform.prepare('SELECT * FROM passkeys ORDER BY id').all();
     const users = await f.platform.prepare('SELECT * FROM users ORDER BY id').all();
     const bFile = readFileSync(join(f.B.root, 'files', 'synthetic-file.bin'));
-    const bDigest = await logicalDigest(f.context(f.B.id).db);
+    const bDigest = await logicalDigest((await f.context(f.B.id)).db);
     const result = await restore(f, snap.file);
     assert.equal(result.status, 'done'); assert.ok(result.membershipDrift > 0);
-    const restored = f.context(f.A.id);
-    assert.equal(await marker(restored), 'alpha'); assert.equal(await marker(f.context(f.B.id)), 'bravo-current');
+    const restored = await f.context(f.A.id);
+    assert.equal(await marker(restored), 'alpha'); assert.equal(await marker(await f.context(f.B.id)), 'bravo-current');
     assert.equal(restored.generation, old.generation + 1); assert.equal(old.isCurrent(), false);
     assert.deepEqual(await currentRows(f), current);
     assert.deepEqual(await platformRows(f.platform, 'api_keys', f.B.id), bKeys);
@@ -45,7 +45,7 @@ test('restore replaces only A, retains current authorization and spend, revokes 
     assert.deepEqual(await f.platform.prepare('SELECT * FROM passkeys ORDER BY id').all(), passkeys);
     assert.deepEqual(await f.platform.prepare('SELECT * FROM users ORDER BY id').all(), users);
     assert.deepEqual(readFileSync(join(f.B.root, 'files', 'synthetic-file.bin')), bFile);
-    assert.equal(await logicalDigest(f.context(f.B.id).db), bDigest);
+    assert.equal(await logicalDigest((await f.context(f.B.id)).db), bDigest);
     assert.equal((await f.platform.prepare('SELECT count(*) AS n FROM auth_sessions WHERE household_id = ?').get(f.A.id)).n, 0);
     assert.ok((await platformRows(f.platform, 'api_keys', f.A.id)).every(k => k.revoked_at && k.revoked_code === 'household_restored'));
     assert.deepEqual(['jobs', 'email', 'simplefin', 'engine'].map(k => restored.outbound.enabled(k)), [false, false, false, false]);
@@ -69,7 +69,7 @@ for (const phase of ['validated', 'suspended', 'switched', 'finalized']) {
     let restarted;
     try {
       const snap = await backup(f);
-      await changeMarker(f.context(f.A.id), 'alpha-current'); await changeMarker(f.context(f.B.id), 'bravo-current');
+      await changeMarker(await f.context(f.A.id), 'alpha-current'); await changeMarker(await f.context(f.B.id), 'bravo-current');
       const bCookie = f.B.admin.client.session();
       await f.server.close();
       const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
@@ -84,8 +84,8 @@ for (const phase of ['validated', 'suspended', 'switched', 'finalized']) {
       assert.equal(child.status, 71, child.stderr);
       const extra = { FATHOM_BACKUP_KEY_FILE: f.keys.backupKeyFile, FATHOM_BACKUP_DESTINATION: f.destination };
       restarted = await startRuntime({ dataDir: f.dataDir, keys: f.keys, engine: 'off', extra });
-      const a = restarted.app.runtimes.get(f.A.id);
-      assert.equal(await marker(a), 'alpha'); assert.equal(await marker(restarted.app.runtimes.get(f.B.id)), 'bravo-current');
+      const a = (await restarted.app.runtimes.get(f.A.id));
+      assert.equal(await marker(a), 'alpha'); assert.equal(await marker((await restarted.app.runtimes.get(f.B.id))), 'bravo-current');
       assert.equal(a.generation, 2); assert.equal(a.outbound.enabled('engine'), false);
       assert.equal((await restarted.app.platform.prepare("SELECT count(*) AS n FROM household_backup_operations WHERE kind = 'restore' AND status = 'done'").get()).n, 1);
       assert.equal((await browser(restarted.baseUrl, { '__Host-fathom-session': bCookie }).get('/api/scenario')).status, 200);
@@ -94,7 +94,7 @@ for (const phase of ['validated', 'suspended', 'switched', 'finalized']) {
       assert.equal((await login.client.get('/api/scenario')).status, 200);
       await restarted.close();
       restarted = await startRuntime({ dataDir: f.dataDir, keys: f.keys, engine: 'off', extra });
-      assert.equal(restarted.app.runtimes.get(f.A.id).generation, 2, 'second restart cannot repeat the switch');
+      assert.equal((await restarted.app.runtimes.get(f.A.id)).generation, 2, 'second restart cannot repeat the switch');
     } finally { await restarted?.close(); await f.close(); }
   });
 }
@@ -102,7 +102,7 @@ for (const phase of ['validated', 'suspended', 'switched', 'finalized']) {
 test('backup drains an acquired request while B continues serving', async () => {
   const f = await backupFixture();
   try {
-    const ctx = f.context(f.A.id);
+    const ctx = await f.context(f.A.id);
     f.server.app.runtimes.acquire(ctx);
     let finished = false;
     const pending = backup(f).then(r => { finished = true; return r; });
@@ -113,7 +113,7 @@ test('backup drains an acquired request while B continues serving', async () => 
     f.server.app.runtimes.release(ctx);
     const snap = await pending;
     await restore(f, snap.file);
-    assert.equal(await marker(f.context(f.A.id)), 'alpha-drained');
+    assert.equal(await marker(await f.context(f.A.id)), 'alpha-drained');
   } finally { await f.close(); }
 });
 
@@ -124,10 +124,10 @@ test('a verified bundle repairs a damaged live vault while preserving the readab
     const path = join(f.A.root, 'files', 'synthetic-file.bin');
     const bytes = readFileSync(path); bytes[bytes.length - 1] ^= 1;
     writeFileSync(path, bytes);
-    await changeMarker(f.context(f.A.id), 'alpha-damaged-vault');
+    await changeMarker(await f.context(f.A.id), 'alpha-damaged-vault');
     await restore(f, snap.file);
-    assert.equal(await marker(f.context(f.A.id)), 'alpha');
-    const { root, handle } = await f.context(f.A.id).vault();
+    assert.equal(await marker(await f.context(f.A.id)), 'alpha');
+    const { root, handle } = await (await f.context(f.A.id)).vault();
     const { readObject, PURPOSES } = await import('../src/platform/household-vault.mjs');
     assert.equal((await readObject({ root, handle, purpose: PURPOSES.upload, objectId: 'synthetic-file', storedPath: 'files/synthetic-file.bin' })).toString(), 'Synthetic alpha upload');
   } finally { await f.close(); }

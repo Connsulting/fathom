@@ -185,17 +185,17 @@ describe('node scripts/reconcile-spend.mjs', T, () => {
   }));
 
   test('the serving runtime refuses while the hold lasts and answers again once the round is reconciled', T, async () => withLive({}, async ({ two, emulator, A }) => {
-    const serving = two.server.app.runtimes.get(A).engine;
+    const serving = (await two.server.app.runtimes.get(A)).engine;
     const flags = await outboundRows(two.platform);
     const held = await heldRound(two, emulator, A);
-    assert.equal(two.server.app.runtimes.get(A).engine, serving, 'the same serving engine');
+    assert.equal((await two.server.app.runtimes.get(A)).engine, serving, 'the same serving engine');
     const sent = emulator.requests.length;
     await assert.rejects(serving.call(CALL), refused('ModelAccountingError'));
     assert.equal(serving.isOn(), false, 'off while the platform hold lasts');
     assert.equal(emulator.requests.length, sent, 'nothing dispatched while held');
 
     ok(await reconcile(two, { household: A, round: held.id, cost: '0.01', receipt: RECEIPT }), 'settled');
-    assert.equal(two.server.app.runtimes.get(A).engine, serving, 'still the same serving engine');
+    assert.equal((await two.server.app.runtimes.get(A)).engine, serving, 'still the same serving engine');
     assert.equal(serving.isOn(), true, 'on again once the hold is settled');
     const res = await serving.call(CALL);
     assert.equal(res.text, 'Synthetic answer with no figures.');
@@ -206,7 +206,7 @@ describe('node scripts/reconcile-spend.mjs', T, () => {
   }));
 
   test('the serving runtime stays refused after an over-bound reconcile', T, async () => withLive({}, async ({ two, emulator, A }) => {
-    const serving = two.server.app.runtimes.get(A).engine;
+    const serving = (await two.server.app.runtimes.get(A)).engine;
     const held = await heldRound(two, emulator, A);
     no(await reconcile(two, { household: A, round: held.id, cost: '5', receipt: RECEIPT }), 'reservation_bound_exceeded');
     const sent = emulator.requests.length;

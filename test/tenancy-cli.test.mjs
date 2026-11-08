@@ -29,7 +29,7 @@ test('operational CLIs require registered household selectors without touching a
         assert.match(r.stdout + r.stderr, /household_(required|invalid|unavailable)/, entry);
       }
     }
-    const a = fx.ctx(fx.A.id); const b = fx.ctx(fx.B.id);
+    const a = await fx.ctx(fx.A.id); const b = await fx.ctx(fx.B.id);
     await a.scheduler.stop(); await b.scheduler.stop();
     for (const entry of ['src/jobs/plan-cli.mjs', 'src/jobs/guess-cli.mjs', 'scripts/build-your-plans.mjs']) {
       const r = await run(entry, ['--household', fx.A.id], envOf(fx));
@@ -84,8 +84,8 @@ test('dump uses a session with context assertions and refuses foreign, expired o
     }
     const r = await run('scripts/dump.mjs', ['--household', fx.A.id, fx.baseUrl, input], env);
     assert.equal(r.code, 0, r.stderr);
-    assert.equal((await fx.ctx(fx.A.id).db.prepare('SELECT count(*) AS n FROM files').get()).n, 1);
-    assert.equal((await fx.ctx(fx.B.id).db.prepare('SELECT count(*) AS n FROM files').get()).n, 0);
+    assert.equal((await (await fx.ctx(fx.A.id)).db.prepare('SELECT count(*) AS n FROM files').get()).n, 1);
+    assert.equal((await (await fx.ctx(fx.B.id)).db.prepare('SELECT count(*) AS n FROM files').get()).n, 0);
     await fx.store.revokeSession(fx.A.admin.token);
     const expired = await run('scripts/dump.mjs', ['--household', fx.A.id, fx.baseUrl, input], env);
     assert.notEqual(expired.code, 0);

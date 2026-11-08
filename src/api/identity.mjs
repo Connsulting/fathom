@@ -12,7 +12,7 @@ export async function revalidateRequest({ authenticate, checkAccess, assertion =
   if (!identity) throw new HttpError(401, 'unauthorized');
   await checkAccess?.(identity);
   if (assertion) checkAssertion(assertion, identity);
-  if (household && (identity.householdId !== household.householdId || runtimes.get(household.householdId) !== household)) {
+  if (household && (identity.householdId !== household.householdId || (await runtimes.get(household.householdId)) !== household)) {
     throw new HttpError(403, 'household membership required');
   }
   return identity;
