@@ -226,7 +226,7 @@ function bindRoot(root) {
     const context = conversationFor(live.messageId);
     if (!context?.question) return;
     button.disabled = true;
-    await K.getApi().askFree(context.question, context.key);
+    await K.askAgain(context.question, context.key);
     if (button.isConnected) button.disabled = false;
   });
   r.bind(root, live.block.snapshot, { ...ctxFor(live.messageId, live.block),
