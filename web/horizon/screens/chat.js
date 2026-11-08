@@ -893,6 +893,16 @@ function leaveField() {
 }
 
 // Opens #/ask with the text sent as the first question of a new conversation.
+export function prefillAsk(text) {
+  if (!H || !text) return;
+  H.ui.draft[NEW_DRAFT] = String(text);
+  A.side = false;
+  A.renaming = null;
+  H.api.go('ask', {});
+  H.draw();
+  focusInput();
+}
+
 export function askNew(text) {
   const q = String(text || '').trim();
   if (!H || !H.api || !q) return;

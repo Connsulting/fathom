@@ -11,6 +11,7 @@ import { buildScenario } from '../../src/scenario/build.mjs';
 import { createEngine } from '../../src/engine/index.mjs';
 import { createLiveAnswerer } from '../../src/api/answerer.mjs';
 import { threadCreate } from '../../src/api/handlers.mjs';
+import { nameKey } from '../../src/ingest/extract.mjs';
 import { callTool } from '../../src/tools/index.mjs';
 
 const s = scratch('fathom-tax-partial-');
@@ -72,6 +73,8 @@ test('AC2: one stated business is preserved and two candidates keep one specific
   await planRun(db);
   assert.deepEqual(getFacts(db)['business.entities'], entities);
   assert.equal(payroll(db).blocks.length, 0);
+  assert.deepEqual(factRow(db, 'business.employerEntity').value, { 'Juniper Studio': 'Juniper Holdings' });
+  assert.ok(buildScenario(db).recs.some(r => r.assumptions?.some(a => a.undoKey === 'business.employerEntityDefault')));
   addFact(db, 'business.entities', [...entities, { name: 'Aspen Studio', type: 's_corp', owner: 'owner' }]);
   await planRun(db);
   assert.equal(payroll(db).blocks.filter(b => b.code === 'household_employer_unmatched').length, 1);
@@ -160,4 +163,74 @@ test('an unsuccessful extraction is attempted only once and retains other usable
   await plan();
   assert.equal(calls, 1);
   assert.equal(projection(db).locator.partial, true);
+});
+
+test('every former payroll and income block produces federal and state estimates with an actionable gap', async t => {
+  const db = await store({ missing: false });
+  await planRun(db);
+  const base = loadPlanningData(db, now), initial = getFacts(db);
+  const { computeFigures } = await import('../../src/jobs/planner/figures.mjs');
+  const { docPayer } = await import('../../src/jobs/planner/payroll.mjs');
+  const cases = {
+    paystub_ytd_missing(d) { delete d.documents.find(x => x.docType === 'paystub').fields.ytdGross; delete d.documents.find(x => x.docType === 'paystub').fields.gross; },
+    paystub_deferrals_unknown(d) { d.documents.find(x => x.docType === 'paystub').fields.retirementDeferral = 200; },
+    deferral_split_unknown(d, f) {
+      const w = d.documents.find(x => x.docType === 'w2'); w.fields.box12 = [{ code: 'D', amount: 30000 }];
+      const copy = structuredClone(w); copy.id = 901; copy.fileId = 'synthetic-outside'; copy.fields.employerName = 'Second Plan'; copy.fields.box12 = [{ code: 'D', amount: 5000 }];
+      d.documents.push(copy); d.confirm.push({ kind: 'employer_recipient', subject: nameKey('Second Plan'), status: 'answered', answer: 'owner' }); delete f['retirement.otherPlanDeferrals'];
+    },
+    w2_box12_unreadable(d) { delete d.documents.find(x => x.docType === 'w2').fields.box12; },
+    w2_wages_missing(d) { delete d.documents.find(x => x.docType === 'w2').fields.wages; },
+    w2_medicare_wages_missing(d) { delete d.documents.find(x => x.docType === 'w2').fields.medicareWages; },
+    w2_recipient_unknown(d) { const w = d.documents.find(x => x.docType === 'w2'); d.withholding = d.withholding.filter(x => x.file_id !== w.fileId); d.confirm = d.confirm.filter(x => !['employer_recipient', 'document_recipient'].includes(x.kind)); },
+    payroll_recipient_conflict(d) { const w = d.documents.find(x => x.docType === 'w2'); d.withholding.push({ file_id: w.fileId, payer: docPayer(w), recipient: 'spouse' }); },
+    w2_duplicate_unresolved(d) { const copy = structuredClone(d.documents.find(x => x.docType === 'w2')); copy.id = 901; copy.fileId = 'synthetic-newer'; copy.fields.wages = 80000; d.documents.push(copy); },
+    w2_correction_pending(d) { cases.w2_duplicate_unresolved(d); const w = d.documents.filter(x => x.docType === 'w2'); d.confirm.push({ kind: 'withholding_conflict', status: 'pending', context: { first: { fileId: w[0].fileId }, second: { fileId: w[1].fileId } } }); },
+    w2_correction_conflicting(d) { cases.w2_duplicate_unresolved(d); const [a,b] = d.documents.filter(x => x.docType === 'w2'); d.conflictArchive = [{ fileId: a.fileId, supersededBy: b.fileId, row: { payer: docPayer(a) } }, { fileId: b.fileId, supersededBy: a.fileId, row: { payer: docPayer(b) } }]; },
+    household_employer_unmatched(d, f) { f['business.entities'] = [{ name: 'First Candidate', type: 's_corp', owner: 'owner' }, { name: 'Second Candidate', type: 's_corp', owner: 'owner' }]; },
+    employer_relation_pending(d) { d.confirm.find(x => x.kind === 'employer_relation' && x.subject === nameKey('Maple Works')).status = 'pending'; },
+    entity_unclassified(d) { d.pnl.push({ id: 902, file_id: null, entity: 'Unclassified Studio', period: '2026-10', category: 'Income', amount: 30000 }); },
+    partnership_incomplete(d, f) { f['business.entities'].push({ name: 'Partnership Studio', type: 'partnership', owner: 'owner' }); },
+    k1_unmatched(d, f) { cases.partnership_incomplete(d, f); for (let id = 903; id < 905; id++) d.documents.push({ id, docType: 'k1', taxYear: 2026, fields: { entityKind: 'partnership', ordinaryIncome: 20000, guaranteedPayments: 0, selfEmploymentEarnings: 20000 } }); },
+    k1_scorp_unmatched(d) { d.documents.push({ id: 905, docType: 'k1', taxYear: 2026, fields: { entityKind: 's_corp', ordinaryIncome: 20000 } }); },
+    retirement_contribution_unattributed(d, f) { f['retirement.contributions'] = [{ person: 'owner', plan: 'own-corp-401k', type: 'deferral', entity: 'Unknown Sponsor', amount: 3000 }]; },
+  };
+  for (const [code, mutate] of Object.entries(cases)) await t.test(code, () => {
+    const data = structuredClone(base), facts = structuredClone(initial);
+    mutate(data, facts);
+    const computed = computeFigures(data, facts, { clock: now, entities: resolveEntities(data, facts), owner: facts });
+    const gap = computed.info.gaps.find(g => g.code.split(':')[0] === code);
+    assert.ok(gap, `${code} scenario actually triggered`);
+    for (const key of ['tax.fed.proj', 'tax.va.proj']) {
+      assert.ok(Number.isFinite(computed.figures[key]?.v), key);
+      assert.ok(computed.figures[key].locator.gaps.some(g => g.code === gap.code), key);
+      assert.match(computed.figures[key].locator.completeness, /^estimate with \d+ gaps$/);
+    }
+    assert.ok(gap.message && gap.action.label);
+    assert.ok(['upload', 'ask'].includes(gap.action.screen));
+  });
+});
+
+test('every missing-data task code targets an existing upload kind or an accepted answer shape', async () => {
+  const { MISSING_TASK_CODES, fixForCode } = await import('../../src/jobs/triggers/missing-data.mjs');
+  const { HOWTO } = await import('../../src/ingest/howto.mjs');
+  const { answerShape } = await import('../../src/jobs/triggers/common.mjs');
+  for (const code of MISSING_TASK_CODES) {
+    const fix = fixForCode(code);
+    assert.ok(fix.label, code);
+    if (fix.screen === 'upload') assert.ok(Object.hasOwn(HOWTO, fix.kind), `${code}: upload kind exists`);
+    else { assert.equal(fix.screen, 'ask', code); assert.ok(answerShape(fix.key), code); assert.ok(fix.prompt, code); }
+  }
+  assert.throws(() => fixForCode('unknown_missing_task'), /No missing-data fix/);
+});
+
+test('retrying missing gross keeps a document recipient when both people share the employer', async () => {
+  const db = await store({ missing: false });
+  await addPayroll(db, paystubDoc({ ...poor, person: 'both', document: 'owner', relation: 'outside' }));
+  const engine = { isOn: () => true, async extract() { return [{ ...poor, gross: 3000, ytdGross: 30000, confidence: 0.95 }]; } };
+  await runPlanning(db, engine, { now, runId: claimPlanRun(db), household: householdOf(db) });
+  const r = payroll(db).records.find(r => r.employer === 'Cedar Labs');
+  assert.equal(r.person, 'owner');
+  assert.equal(r.wages, 36000);
+  assert.ok(!payroll(db).blocks.some(b => b.code === 'w2_recipient_unknown'));
 });

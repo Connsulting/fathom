@@ -22,6 +22,7 @@ export function buildDef(hit, fields) {
     effort: r.effort, advisor: null, value: r.value, why: fields.why, mine: r.mine, kb: r.kb, cross: r.cross,
     tasks: r.tasks, qa: fields.qa,
   };
+  if (r.gaps) def.gaps = r.gaps;
   if (r.assumptions) def.assumptions = r.assumptions;
   if (r.advisorQuestions) def.advisorQuestions = r.advisorQuestions;
   if (r.scenario) def.scenario = r.scenario;

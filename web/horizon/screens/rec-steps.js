@@ -1,3 +1,4 @@
+import { gapControl } from '../../core/gap-control.js';
 // A rec's Steps: product-managed, never free checkboxes. A step the product verifies (an upload, an
 // answer, a classification, a Confirm question) carries its inline control and completes itself
 // when the scenario reports its condition cleared. Any other step is one "I did this" control that
@@ -30,6 +31,7 @@ function control(r, t, i) {
       : `${t.link ? goLink(r, t.link) : ''}<button type="button" class="h-btn sm" data-act="task" data-rec="${rid}" data-arg="${i}">I did this</button>`;
   }
   if (t.done) return '';
+  if (t.fix) return gapControl(t.fix, esc);
   if (t.kind === 'upload') {
     return `<span class="h-ing-ctl"><button type="button" class="h-btn sm" data-upload-open="1" aria-label="${esc(`Upload ${t.noun || 'a file'}`)}">Upload</button><input type="file" multiple data-upload="1" hidden tabindex="-1"></span>`;
   }

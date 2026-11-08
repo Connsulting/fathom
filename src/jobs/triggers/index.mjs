@@ -54,6 +54,7 @@ function recOf(ctx, t, hit, window) {
   const allQuestions = hit.confirm || hit.questions || (hit.catchUpPending ? [hit.catchUpPending] : []);
   const advisorQuestions = allQuestions.filter(key => ADVISOR_KEYS.has(key));
   const questions = allQuestions.filter(key => !ADVISOR_KEYS.has(key));
+  if (t.id !== 'missing-data' && (['tax', 'giving', 'retirement', 'business'].includes(t.domain) || t.id === 'va529') && ctx.info.gaps?.length) rec.gaps = ctx.info.gaps;
   if (ctx.assumptions?.length) rec.assumptions = ctx.assumptions;
   if (advisorQuestions.length) {
     rec.advisorQuestions = advisorQuestions;

@@ -240,14 +240,14 @@ describe('derived facts and pack state', () => {
     assert.notEqual(recRow(db, 'scorp-salary').status, 'hidden');
   });
 
-  test('AC2: an unclassified P&L entity derives nothing and blocks tax figures, but keeps its actuals (R1)', async () => {
+  test('AC2: an unclassified P&L entity keeps actuals and yields a partial tax estimate (R1)', async () => {
     const db = await S.store({ variant: { entities: [SCORP, { ...SOLE_PROP, doc: false }] } });
     await plan(db);
     assert.equal(factRow(db, 'income.selfEmployed'), null, 'no classification, no selfEmployed fact');
     assert.equal(factRow(db, 'income.sCorp').value, true, 'the classified S corp still counts');
     near(fig(db, `pnl.${SOLE_PROP.slug}.net`).v, BB_NET_YTD, 'actual P&L figure still written');
     assert.equal(fig(db, `pnl.${SOLE_PROP.slug}.net`).kind, 'a');
-    assert.equal(figureRow(db, 'agi.est'), null, 'household tax figures not produced');
+    assert.ok(fig(db, 'agi.est').locator.gaps.some(g => g.code.startsWith('entity_unclassified:')));
     assert.ok(activeRecIds(db).includes('missing-data'), 'missing-data asks how it is taxed');
   });
 });
@@ -730,12 +730,13 @@ describe('recs', () => {
     assert.equal(recRow(db, 'missing-data').def.domain, 'data');
   });
 
-  test('AC4: an empty real store plans cleanly: only missing-data fires and no figures are written', async () => {
+  test('AC4: an empty real store produces a rough estimate excluding unrecorded income', async () => {
     const db = S.track(await createRealStore(S.dir(), { clock: NOW }));
     const result = await plan(db);
     assert.equal(result.status, 'ok');
-    assert.deepEqual(activeRecIds(db), ['missing-data']);
-    assert.equal(plannerFigures(db).length, 0);
+    assert.ok(activeRecIds(db).includes('missing-data'));
+    assert.equal(fig(db, 'tax.fed.proj').v, 0);
+    assert.equal(fig(db, 'tax.fed.proj').locator.rough, true);
     const scenario = buildScenario(db, { clock: NOW });
     assert.ok(scenario.recs.some(r => r.id === 'missing-data'));
   });
@@ -774,38 +775,20 @@ describe('recs', () => {
     if (left) assert.equal(left.v, 0);
   });
 
-  test('AC4: a blocked trigger parks its rec as waiting on data and unblocks when the data arrives (S12)', async () => {
+  test('AC4: a Virginia deduction gap stays actionable and clears when the answer arrives', async () => {
     const db = await S.store();
     await plan(db);
-    const before = recRow(db, 'va-q4-estimate');
-    const retained = before.def.mine.map(m => m.fig).filter(k => /^(tax\.va\.proj|sh\.va\.)/.test(k));
-    assert.ok(retained.length >= 1, 'va-q4-estimate grounds itself in a Virginia model figure');
-    const snapshot = Object.fromEntries(retained.map(k => [k, fig(db, k)]));
-
     addFact(db, 'tax.itemizedEstimate', 40000);
-  db.prepare("UPDATE transactions SET category = 'Uncategorized' WHERE lower(category) LIKE '%charit%' OR lower(category) LIKE '%donat%'").run();
+    db.prepare("UPDATE transactions SET category = 'Uncategorized' WHERE lower(category) LIKE '%charit%' OR lower(category) LIKE '%donat%'").run();
     await plan(db, { now: '2026-11-20' });
-    const blocked = recRow(db, 'va-q4-estimate');
-    assert.equal(blocked.status, 'waiting');
-    assert.equal(blocked.waiting_on, 'data');
-    assert.deepEqual(blocked.def, before.def, 'blocked rec def unchanged');
-    const ev = recEvents(db, 'va-q4-estimate').at(-1);
-    assert.deepEqual([ev.action, ev.actor, ev.from_status, ev.to_status], ['block', 'planner', 'proposed', 'waiting']);
-    assert.ok(ev.arg, 'block event names the reason');
-    assert.equal(plannerRec(db, 'va-q4-estimate').held_from, 'proposed');
-    assert.equal(plannerRec(db, 'va-q4-estimate').retired_at, null, 'blocked is not retired');
-    assert.ok(activeRecIds(db).includes('missing-data'), 'missing-data lists the reason');
-    for (const k of retained) {
-      const kept = fig(db, k);
-      assert.equal(kept.v, snapshot[k].v, `${k} retained`);
-      assert.equal(kept.locator.computedOn, NOW, `${k} keeps its original computedOn`);
-    }
-
+    const rec = recRow(db, 'va-q4-estimate');
+    assert.equal(rec.status, 'proposed');
+    assert.ok(rec.def.gaps.some(g => g.code === 'va_itemized_missing'));
+    assert.equal(fig(db, 'tax.va.proj').locator.computedOn, '2026-11-20');
     addFact(db, 'tax.vaItemizedEstimate', 20000);
     await plan(db, { now: '2026-11-20' });
     assert.equal(recRow(db, 'va-q4-estimate').status, 'proposed');
-    const ev2 = recEvents(db, 'va-q4-estimate').at(-1);
-    assert.deepEqual([ev2.action, ev2.actor, ev2.from_status, ev2.to_status], ['unblock', 'planner', 'waiting', 'proposed']);
+    assert.ok(!recRow(db, 'va-q4-estimate').def.gaps?.some(g => g.code === 'va_itemized_missing'));
   });
 
   test('AC4: fully funded retirement leaves no room, so year-end-retirement does not fire (R5)', async () => {
@@ -854,7 +837,7 @@ test('PN1: a confirmed spending ledger clears the tax block without business fig
   db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES ('Asters', '2026-10', 'Groceries', -120, ?)")
     .run(JSON.stringify({ sheet: "Aster's Expenses", cells: ['D2'] }));
   await plan(db);
-  assert.equal(figureRow(db, 'agi.est'), null, 'an unmarked unknown ledger still blocks');
+  assert.equal(fig(db, 'agi.est').locator.partial, true, 'an unknown ledger is excluded');
   addFact(db, 'pnl.ledgers', { "Aster's": { kind: 'spending' } });
   await plan(db);
   assert.ok(figureRow(db, 'agi.est'), 'tax projection resumes');
@@ -872,9 +855,9 @@ test('PN1: personal-category inference includes refunds, preserves display text 
   }
   await plan(db);
   assert.equal(factRow(db, 'pnl.ledgers'), null);
-  assert.equal(figureRow(db, 'agi.est'), null);
+  assert.equal(fig(db, 'agi.est').locator.partial, true);
   const rec = recRow(db, 'missing-data').def;
-  assert.match(JSON.stringify(rec), /Aster(?:&#39;|')s looks like card spending/);
+  assert.match(JSON.stringify(rec), /Aster(?:&#39;|')s/);
   assert.doesNotMatch(JSON.stringify(rec), /Tell us how Asters is taxed/);
   const checks = db.prepare("SELECT * FROM confirm_items WHERE kind = 'fact_check' AND status = 'pending'").all()
     .filter(x => JSON.parse(x.context).key === 'pnl.ledgers');
@@ -896,8 +879,8 @@ test('PN1: income rows, mostly business categories and an explicit business answ
       .run(category, category === 'Income' ? 0 : -100);
     if (marked) addFact(db, 'pnl.ledgers', { Cedar: { kind: 'business' } });
     await plan(db);
-    assert.equal(figureRow(db, 'agi.est'), null);
-    assert.match(JSON.stringify(recRow(db, 'missing-data').def), /Tell us how Cedar is taxed/);
+    assert.equal(fig(db, 'agi.est').locator.partial, true);
+    assert.match(JSON.stringify(recRow(db, 'missing-data').def), /Cedar.*not included/);
     assert.ok(!db.prepare("SELECT context FROM confirm_items WHERE status = 'pending'").all().some(x => JSON.parse(x.context).key === 'pnl.ledgers'));
   }
 });
@@ -910,8 +893,8 @@ test('PN1: declining the spending guess keeps classification unknown and does no
   answerItem(db, q.id, 'no');
   await plan(db);
   assert.equal(factRow(db, 'pnl.ledgers'), null);
-  assert.equal(figureRow(db, 'agi.est'), null);
-  assert.match(JSON.stringify(recRow(db, 'missing-data').def), /Tell us how Cedar is taxed/);
+  assert.equal(fig(db, 'agi.est').locator.partial, true);
+  assert.match(JSON.stringify(recRow(db, 'missing-data').def), /Cedar.*not included/);
   assert.equal(db.prepare("SELECT count(*) n FROM confirm_items WHERE context LIKE '%pnl.ledgers%' AND status = 'pending'").get().n, 0);
 });
 

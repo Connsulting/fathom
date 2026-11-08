@@ -11,6 +11,7 @@ export const DEFAULT_UNDO = Object.freeze({
   'household.filingStatusDefault': 'household.filingStatus',
   'business.cashBasisDefault': 'business.cashBasis',
   'business.entitiesDefault': 'business.entities',
+  'business.employerEntityDefault': 'business.employerEntity',
   'accounts.va529CarryforwardDefault': 'accounts.va529',
 });
 const amount = v => typeof v === 'number' && Number.isFinite(v) && v >= 0;
@@ -102,12 +103,12 @@ export function prepareRecFacts(db, data) {
   }
   let entities = resolveEntities(data, values);
   const employer = inferHouseholdEmployer(data, values, entities);
-  if (employer) { values['business.entities'] = employer.value; entities = resolveEntities(data, values); }
+  if (employer) { values[employer.key] = employer.value; entities = resolveEntities(data, values); }
   const candidates = deriveRecFacts(data, values, { entities });
   const defaults = [];
   if (employer) {
-    candidates['business.entities'] = sourceFact(data, employer.value, employer.evidence, employer.rows, true);
-    defaults.push({ key: 'business.entities', path: [], value: employer.value, undoKey: 'business.entitiesDefault', evidence: employer.evidence });
+    candidates[employer.key] = sourceFact(data, employer.value, employer.evidence, employer.rows, true);
+    defaults.push({ key: employer.key, path: [], value: employer.value, undoKey: employer.undoKey, evidence: employer.evidence });
   }
   const addDefault = (key, value, undoKey, evidence, path = []) => {
     const flag = values[undoKey];

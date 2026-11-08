@@ -1,4 +1,4 @@
-import { taxGap, rankGaps, TAX_GAP_RULES } from '../../shared/tax-gaps.mjs';
+import { taxGap, rankGaps } from '../../shared/tax-gaps.mjs';
 // Figures: every amount the planner shows, computed by deterministic code from the data and the
 // merged facts, each with a kind (a actual, p projected, e estimate, m model output), a source and
 // a locator (data rows, or the calculator inputs and steps). Labels carry no digits.
@@ -293,7 +293,13 @@ export function computeFigures(data, facts, ctx) {
   out.info.payrollBlocks = payroll.blocks.map(b => ({ code: b.code, employer: b.employer }));
   out.info.payroll = records.map(r => ({ employer: r.employer, person: r.person, docIds: r.docIds, wages: r.wages, ytdWages: r.ytdWages, ...r.payrollProvenance }));
   out.info.ask = payroll.ask;
-  for (const b of payroll.blocks) if (!b.person || inUnit(b.person)) out.info.gaps.push(taxGap(b.code, b));
+  for (const b of payroll.blocks) if (!b.person || inUnit(b.person)) {
+    const docs = data.documents.filter(d => sameEmployer(data, d.fields.employerName, b.employer));
+    const amounts = docs.flatMap(d => d.docType === 'w2' ? [d.fields.wages, d.fields.medicareWages]
+      : [typeof d.fields.ytdGross === 'number' ? d.fields.ytdGross * 12 / Number(d.fields.payDate.slice(5, 7)) : null]);
+    const observed = amounts.filter(v => typeof v === 'number' && Number.isFinite(v) && v >= 0);
+    out.info.gaps.push(taxGap(b.code, { ...b, impact: observed.length ? Math.max(...observed) : null }));
+  }
   // inc.ytd.w2 (F8): outside-employer pay received in the tax year: W-2 box 1, or the latest
   // paystub's year-to-date gross. Held while any payroll document is unresolved.
   const outsideYtd = records.filter(r => !r.household);
@@ -770,7 +776,7 @@ function finish(out) {
     const applicable = dependent ? gaps : [];
     f.locator = { ...f.locator, completeness: applicable.length ? `estimate with ${applicable.length} gaps` : 'complete',
       partial: applicable.length > 0, rough: dependent && out.info.rough, gaps: applicable,
-      payroll: dependent ? out.info.payroll : [], notes: [...applicable.map(g => g.message), ...(f.locator.notes || [])] };
+      payroll: dependent ? out.info.payroll : [], notes: [...applicable.map(g => g.message), ...(f.locator.notes || [])].slice(0, 5) };
     if (applicable.length) f.label += out.info.rough ? ' (rough partial estimate)' : ' (partial estimate)';
   }
   return { tax: out.tax || null, figures: out.figures, sources: out.sources, model: out.model, warnings: [...out.warnings].sort(), info: out.info };

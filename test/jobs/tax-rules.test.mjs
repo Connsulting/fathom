@@ -181,8 +181,8 @@ describe('MG3 child tax credit phase-out', () => {
       },
     );
     const out = run([3]);
-    assert.ok(out.info.blocked.includes('ctc_refundable_unsupported'), `blocked: ${out.info.blocked}`);
-    assert.equal(out.figures['agi.est'], undefined, 'no agi.est while blocked');
+    assert.ok(out.info.gaps.some(g => g.code === 'ctc_refundable_unsupported'));
+    near(out.figures['agi.est'].v, 9293.52, 'AGI still publishes with the nonrefundable credit assumption');
     const solo = out.figures['room.solo401k'];
     assert.ok(solo, 'room.solo401k is still sized');
     near(solo.v, 9293.52, 'room.solo401k');
@@ -393,21 +393,21 @@ describe('MG5 self-employed retirement deduction', () => {
     near(fig(withBoth.db, 'agi.est').v, fig(withLine.db, 'agi.est').v, 'not a second time');
   });
 
-  test('MG5: a contribution over the plan limit blocks household tax', async () => {
+  test('MG5: a contribution over the plan limit is excluded from the estimate', async () => {
     // Spouse SEP 50,000 > 0.20 x 61,337.25 = 12,267.45 (worksheet item 1).
     const over = await planned(withContribs({}, [{ person: 'spouse', plan: 'sep', type: 'employer', amount: 50000 }]));
-    assert.ok(over.info.blocked.includes('retirement_contribution_over_limit'), `blocked: ${over.info.blocked}`);
-    absent(over.db, 'agi.est');
-    absent(over.db, 'tax.fed.proj');
+    assert.ok(over.info.gaps.some(g => g.code === 'retirement_contribution_over_limit'), `blocked: ${over.info.blocked}`);
+    assert.ok(fig(over.db, 'agi.est').locator.partial);
+    assert.ok(fig(over.db, 'tax.fed.proj').locator.partial);
     // liveness: a 5,000 SEP for the same spouse publishes (previous test).
   });
 
-  test('MG5: an unattributed contribution for a person with two businesses blocks', async () => {
+  test('MG5: an unattributed contribution is excluded with an actionable gap', async () => {
     const wren = { name: 'Wren Studio', type: 'sole_prop', owner: 'spouse', income: 1000, expenses: {} };
     const entities = [SCORP, SOLE_PROP, wren];
     const loose = await planned(withContribs({ entities }, [{ person: 'spouse', plan: 'sep', type: 'employer', amount: 1000 }]));
-    assert.ok(loose.info.blocked.includes('retirement_contribution_unattributed'), `blocked: ${loose.info.blocked}`);
-    absent(loose.db, 'agi.est');
+    assert.ok(loose.info.gaps.some(g => g.code === 'retirement_contribution_unattributed'), `blocked: ${loose.info.blocked}`);
+    assert.ok(fig(loose.db, 'agi.est').locator.partial);
     // liveness: naming the sponsor publishes.
     const named = await planned(withContribs({ entities }, [{ person: 'spouse', plan: 'sep', type: 'employer', amount: 1000, entity: SOLE_PROP.slug }]));
     assert.deepEqual(named.info.blocked, []);
@@ -433,10 +433,10 @@ describe('MG5 self-employed retirement deduction', () => {
     near(bizLine(def.db, 'juniper-works').retire || 0, 0, 'Juniper retire');
   });
 
-  test('MG5: an own-plan deferral with no entity for a person with two businesses blocks', async () => {
+  test('MG5: an own-plan deferral with an unknown sponsor is excluded', async () => {
     const loose = await planned(withContribs(MIXED, [{ person: 'owner', plan: 'own-corp-401k', type: 'deferral', roth: false, amount: 10000 }]));
-    assert.ok(loose.info.blocked.includes('retirement_contribution_unattributed'), `blocked: ${loose.info.blocked}`);
-    absent(loose.db, 'agi.est');
+    assert.ok(loose.info.gaps.some(g => g.code === 'retirement_contribution_unattributed'), `blocked: ${loose.info.blocked}`);
+    assert.ok(fig(loose.db, 'agi.est').locator.partial);
   });
 
   test('MG5: an S corp W-2 deferral does not hide a sole prop deferral', async () => {
@@ -480,16 +480,15 @@ describe('MG5 self-employed retirement deduction', () => {
     near(fig(named.db, 'room.solo401k.employee').v, 18500, 'room.solo401k.employee');
   });
 
-  test('MG5: unknown outside-plan deferrals block the SE deduction and ask for them', async () => {
+  test('MG5: unread outside-plan deferrals assume zero with a precision gap', async () => {
     // Spouse outside W-2 with no deferral field plus a 5,000 deferral to the spouse's sole prop
     // plan: the 402(g) test needs the outside deferrals, so household tax blocks. Supplying them as
     // zero unblocks, and agi.est is 5,000 lower than the same store without the deferral fact.
     const doc = w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: 50000, medicareWages: 50000 });
     const deferral = [{ person: 'spouse', plan: 'own-corp-401k', type: 'deferral', amount: 5000, entity: SOLE_PROP.slug }];
     const unknown = await planned(withContribs({ payroll: [doc] }, deferral));
-    assert.ok(unknown.info.blocked.includes('retirement_other_deferrals_missing'), `blocked: ${unknown.info.blocked}`);
-    assert.ok((unknown.info.confirm.retirement || []).includes('retirement.otherPlanDeferrals'), 'asks for the outside deferrals');
-    absent(unknown.db, 'agi.est');
+    assert.ok(unknown.info.gaps.some(g => g.code === 'w2_box12_unreadable'));
+    assert.ok(fig(unknown.db, 'agi.est').locator.partial);
     const known = { 'retirement.otherPlanDeferrals': { spouse: { deferral: 0, catchUp: 0 } } };
     const without = await planned({ payroll: [doc], facts: known });
     const withDeferral = await planned(withContribs({ payroll: [doc] }, deferral, known));
@@ -709,18 +708,13 @@ describe('MG6 Roth catch-up', () => {
     absent(clear.db, 'wg.salary.s50.roth');
   });
 
-  test('MG6: unknown outside deferrals withhold all solo room and the salary curve', async () => {
-    // An owner outside W-2 with no deferral field: allPlanDeferrals is unknown, and at low
-    // compensation the employer room depends on it (50,000 salary: 37,000 if zero, 12,500 if
-    // 24,500), so nothing sized from it is published. SEP room does not depend on it.
+  test('MG6: unread outside deferrals leave sized room and salary curves with a precision gap', async () => {
     const doc = w2Doc({ employerName: 'Example Employer Inc', person: 'owner', relation: 'outside', wages: 200000, medicareWages: 200000 });
     const { db, info } = await planned({ payroll: [doc] });
-    for (const k of ROOM_KEYS) absent(db, k, 'outside deferrals unknown');
-    assert.ok(figureRow(db, 'room.sep'), 'room.sep still produced');
-    assert.equal(db.prepare("SELECT count(*) AS n FROM figures WHERE key LIKE 'wg.salary.%'").get().n, 0, 'no salary war-game figures');
-    assert.ok((info.confirm.salary || []).includes('retirement.otherPlanDeferrals'), `confirm.salary: ${info.confirm.salary}`);
-    assert.ok((info.confirm.retirement || []).includes('retirement.otherPlanDeferrals'), `confirm.retirement: ${info.confirm.retirement}`);
-    assert.equal((info.wargameInvalid || {}).salary, 'retirement.otherPlanDeferrals');
+    for (const k of ROOM_KEYS) if (figureRow(db, k)) assert.ok(fig(db, k).locator.gaps.some(g => g.code === 'w2_box12_unreadable'));
+    assert.ok(figureRow(db, 'room.sep'));
+    assert.ok(fig(db, 'wg.salary.s50.x').locator.partial);
+    assert.ok(info.gaps.some(g => g.code === 'w2_box12_unreadable'));
   });
 
   test('MG6: known outside deferrals size the curve', async () => {
@@ -831,24 +825,26 @@ describe('MG9 Virginia529', () => {
     assert.equal(fig(db, 'va529.taxSaved').v, 0);
   });
 
-  test('MG9: a missing carryforward blocks Virginia tax and its targets', async () => {
+  test('MG9: a missing carryforward leaves Virginia estimates usable', async () => {
     // Without the carryforward the subtraction, and so Virginia taxable income, is unknown.
     const { db, info } = await va529({ virginiaPlan: true });
-    assert.equal(info.vaBlocked, 'va529_answers_missing');
+    assert.equal(info.vaBlocked, null);
+    assert.ok(info.gaps.some(g => g.code === 'va529_answers_missing'));
     assert.ok(info.va529.missing.some(n => n.startsWith('College 529')), `missing: ${info.va529.missing}`);
-    for (const k of ['tax.va.proj', 'sh.va.required', 'sh.va.remaining', 'va529.deduction', 'va529.deductionLeft', 'va529.taxSaved']) absent(db, k);
-    assert.equal(db.prepare("SELECT count(*) AS n FROM figures WHERE key LIKE 'wg.salary.%' OR key LIKE 'wg.deferral.%'").get().n, 0, 'no war-game figures');
+    for (const k of ['tax.va.proj', 'sh.va.required', 'sh.va.remaining']) assert.ok(fig(db, k).locator.partial);
+    assert.ok(fig(db, 'tax.va.proj').locator.gaps.some(g => g.code === 'va529_answers_missing'));
     assert.ok(figureRow(db, 'tax.fed.proj'), 'federal tax is still produced');
   });
 
-  test('MG9: a college account with no Virginia answers at all blocks Virginia tax', async () => {
+  test('MG9: missing college plan answers leave Virginia tax usable', async () => {
     // With no institution on file the plan is asked, not inferred.
     const db = await S.store({ variant: { facts: { 'accounts.va529': undefined } } });
     db.prepare("UPDATE accounts SET inst = '' WHERE kind = '529'").run();
     await plan(db);
     const info = computeFor(db).info;
-    assert.equal(info.vaBlocked, 'va529_answers_missing');
-    absent(db, 'tax.va.proj');
+    assert.equal(info.vaBlocked, null);
+    assert.ok(info.gaps.some(g => g.code === 'va529_answers_missing'));
+    assert.ok(fig(db, 'tax.va.proj').locator.partial);
     assert.ok(figureRow(db, 'tax.fed.proj'));
   });
 

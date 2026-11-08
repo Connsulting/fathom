@@ -96,6 +96,7 @@ export const ANSWER_SHAPES = Object.freeze({
   'accounts.separationDate': { scope: 'account', accountEligibility: 'employer', type: 'date', label: 'Separation date for {account}' },
 
   'household.filingStatusDefault': { scope: 'household', ...yesNo('Undo the joint filing assumption?') },
+  'business.employerEntityDefault': { scope: 'household', ...yesNo('Undo the inferred employer match?') },
   'business.entitiesDefault': { scope: 'household', ...yesNo('Undo the inferred household business?') },
   'business.employerEntity': { scope: 'household', type: 'map', label: 'Household business by employer name', values: { type: 'string', label: 'Business name' } },
   'business.entityTypes': { scope: 'household', type: 'map', label: 'Business tax types', values: { type: 'choice', ownerInterpreted: true, label: 'Tax type', choices: ['s_corp', 'sole_prop', 'llc_single', 'partnership', 'c_corp'].map(value => ({ value, label: value })) } },

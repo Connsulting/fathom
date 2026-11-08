@@ -2280,6 +2280,8 @@ function onClick(e) {
     form?.querySelector('input:not([type=hidden]),select,button')?.focus({ preventScroll: true });
     return;
   }
+  const gapFix = e.target.closest('[data-tax-gap-fix]');
+  if (gapFix && root.contains(gapFix)) { e.preventDefault(); fixTaxGap(JSON.parse(gapFix.dataset.taxGapFix)); return; }
   const an = e.target.closest('[data-ask-next]');
   if (an && root.contains(an)) { e.preventDefault(); askNext(an.dataset.askNext, an); return; }
   const sel = '[data-go],[data-act],[data-askrec],[data-recstart],[data-wg],[data-onboard],[data-savenote],[data-modal],[data-whatif],[data-packtoggle],[data-decide],[data-revisit],[data-dlg]';
@@ -2548,8 +2550,21 @@ const KIT = {
 };
 SCREENS.forEach((s) => s.bind(KIT));
 
+function fixTaxGap(action) {
+  if (!action) return;
+  closeRec();
+  if (action.screen === 'ask') chatScreen.prefillAsk(action.prompt);
+  else if (action.screen === 'upload') {
+    api.go('add', { kind: action.kind });
+    draw();
+    ingest.openUpload(action.kind);
+  }
+}
+
 function mount(r, a) {
-  api = a; root = r; ui = freshUi(); lastKey = ''; lastRoute = null; connectOn = false;
+  api = a;
+  api.setGapAction?.(fixTaxGap);
+  root = r; ui = freshUi(); lastKey = ''; lastRoute = null; connectOn = false;
   SCREENS.forEach((s) => s.reset?.());
   ingest = ingestScreens({ api, shell, section, pageHead, btn, icon, esc, T, X, draw, goA, addBtn, getUi: () => ui,
     openAccountMerge: (id, trigger) => { accountScreen.requestMerge(id); openAccount(id, trigger); } });

@@ -7,7 +7,7 @@
 // payrollRecords(data, entities, owner) -> {records, blocks, ask}
 //   records: [{docId, docIds, fileId, person, employer, key, kind, wages, ytdWages, medicare, comp,
 //     deferral, catchUp, roth, pretax, hsa, deferral457, elective402g, deferralKnown, corp, household, projected}]
-//   blocks:  [{code, employer, person}] each blocks household tax (and the dependent wage figures)
+//   blocks:  [{code, employer, person}] precision gaps and the assumptions or exclusions they need
 //   ask:     [{employerKey, employer, payer, fileId}] recipient questions to raise through ingest (D9)
 // employerKeyOf(name) -> ingest's employer key
 // sameEmployer(data, a, b) -> normalized names equal, after mapping entity aliases
@@ -55,15 +55,14 @@ const pendingItem = (data, kind, subject) => (data.confirm || []).find(i => i.ki
 
 // R6-1 item 2.2: the active withholding rows of the document decide; else the answers; else unknown.
 export function docRecipient(data, doc) {
-  const identity = docPayer(doc);
-  const rows = (data.withholding || []).filter(r => r.file_id === doc.fileId && startsPayer(r.payer, identity));
+  const rows = (data.withholding || []).filter(r => r.file_id === doc.fileId && String(r.payer).startsWith(`${doc.docType}:${nameKey(doc.fields.employerName)}:`));
   const known = [...new Set(rows.map(r => r.recipient).filter(r => r === 'owner' || r === 'spouse'))];
   if (known.length > 1) return { blocked: 'payroll_recipient_conflict' };
   if (known.length === 1) return { person: known[0] };
   const byEmployer = answered(data, 'employer_recipient', nameKey(doc.fields.employerName));
   if (byEmployer && (byEmployer.answer === 'owner' || byEmployer.answer === 'spouse')) return { person: byEmployer.answer };
   if (byEmployer && byEmployer.answer === 'both') {
-    const byDoc = answered(data, 'document_recipient', `${identity}:doc:${doc.fileId}`);
+    const byDoc = (data.confirm || []).find(i => i.kind === 'document_recipient' && i.status === 'answered' && String(i.subject).endsWith(`:doc:${doc.fileId}`));
     if (byDoc && (byDoc.answer === 'owner' || byDoc.answer === 'spouse')) return { person: byDoc.answer };
   }
   return { unknown: true };
@@ -78,7 +77,7 @@ function docKind(data, entities, doc, owner) {
   const stated = Object.entries(owner['income.employerRelation'] || {}).find(([name]) => sameEmployer(data, name, doc.fields.employerName))?.[1];
   const relation = stated ? { status: 'answered', answer: stated } : (data.confirm || []).find(i => i.kind === 'employer_relation' && i.subject === nameKey(doc.fields.employerName));
   if (relation && relation.status === 'answered' && relation.answer === 'household') {
-    if (entities.length === 1 && entities[0].classified && owner['business.entitiesDefault'] !== true) return { household: true, entity: entities[0] };
+    if (entities.length === 1 && entities[0].classified && owner['business.entitiesDefault'] !== true && owner['business.employerEntityDefault'] !== true) return { household: true, entity: entities[0] };
     return { blocked: 'household_employer_unmatched' };
   }
   if (relation && relation.status === 'answered' && relation.answer === 'outside') return { household: false };
@@ -177,6 +176,7 @@ export function payrollRecords(data, entities, owner = {}) {
     let w2s = g.docs.filter(d => d.docType === 'w2');
     let r;
     if (w2s.length) {
+      if (fix.blocks.some(b => b.docs?.some(id => w2s.some(d => d.id === id)))) w2s = [w2s.reduce((a, b) => a.id > b.id ? a : b)];
       // R6-5 item 5: two W-2s of one employer, year and person that no answer reconciled.
       const pair = w2s.find((a, i) => w2s.slice(i + 1).some(b => !fix.settled(a, b)));
       if (pair) {
@@ -192,7 +192,7 @@ export function payrollRecords(data, entities, owner = {}) {
         return { d, box, wages: d.fields.wages };
       });
       if (parts.some(p => !isAmount(p.wages))) { blocks.push({ code: 'w2_wages_missing', employer: g.employer, person: g.person }); continue; }
-      // E4: box 5 (Medicare wages, Form 8959 line 1) has no stand-in; unread, it blocks.
+      // An unread Medicare base uses taxable wages as a labeled estimate.
       if (parts.some(p => !isAmount(p.d.fields.medicareWages))) blocks.push({ code: 'w2_medicare_wages_missing', employer: g.employer, person: g.person });
       const total = k => cents(sum(parts.map(p => p.box[k])));
       const wages = cents(sum(parts.map(p => p.wages)));
@@ -207,7 +207,7 @@ export function payrollRecords(data, entities, owner = {}) {
         deferralKnown: !parts.some(p => p.box.unread), projected: false,
       };
     } else {
-      // R6-1 item 2.7: paystub-only, the latest pay date carries the year-to-date gross.
+      // Prefer the latest readable YTD for this person and employer, then project per-period gross.
       const stubs = [...g.docs].sort((a, b) => String(a.fields.payDate).localeCompare(String(b.fields.payDate)) || a.id - b.id);
       const input = paystubIncome(data, g, stubs, owner);
       if (!input) { blocks.push({ code: 'paystub_ytd_missing', employer: g.employer, person: g.person }); continue; }
@@ -310,16 +310,27 @@ function paystubIncome(data, group, stubs, owner) {
 }
 
 export function inferHouseholdEmployer(data, facts, entities) {
-  if (facts['business.entitiesDefault'] === true || entities.length || facts['income.sCorp'] !== true) return null;
+  if (facts['business.entitiesDefault'] === true || facts['business.employerEntityDefault'] === true || entities.length > 1) return null;
   const docs = data.documents.filter(d => (d.docType === 'w2' && Number(d.taxYear) === data.taxYear)
     || (d.docType === 'paystub' && yearOf(d.fields.payDate) === data.taxYear && d.fields.payDate <= data.clock));
   const household = docs.filter(d => answered(data, 'employer_relation', nameKey(d.fields.employerName))?.answer === 'household');
+  if (entities.length === 1) {
+    const entity = entities[0];
+    const unmatched = household.filter(d => !matchEntity(data, entities, d.fields.employerName));
+    if (!entity.classified || !unmatched.length || facts['business.employerEntity'] !== undefined) return null;
+    return { key: 'business.employerEntity', undoKey: 'business.employerEntityDefault',
+      value: Object.fromEntries(unmatched.map(d => [d.fields.employerName.trim(), entity.name])),
+      evidence: `Inferred the household employer names as ${entity.name}, the only household business on file.`,
+      rows: unmatched.map(d => ({ table: 'documents', id: d.id, fileId: d.fileId })),
+    };
+  }
+  if (facts['income.sCorp'] !== true) return null;
   const names = [...new Set(household.map(d => nameKey(d.fields.employerName)))];
   if (names.length !== 1) return null;
   const people = [...new Set(household.map(d => docRecipient(data, d).person))];
   if (people.length !== 1 || !people[0]) return null;
   const doc = household[0];
-  return { value: [{ name: doc.fields.employerName.trim(), type: 's_corp', owner: people[0] }],
+  return { key: 'business.entities', undoKey: 'business.entitiesDefault', value: [{ name: doc.fields.employerName.trim(), type: 's_corp', owner: people[0] }],
     evidence: `Inferred ${doc.fields.employerName} as the household S corporation from your employer answer and S corporation fact.`,
     rows: household.map(d => ({ table: 'documents', id: d.id, fileId: d.fileId })),
   };

@@ -76,16 +76,19 @@ async function replan(db) {
 
 // A code matches itself or a code carrying a subject after a colon (as entity_unclassified does).
 const hasCode = (list, code) => (list || []).some(c => typeof c === 'string' && (c === code || c.startsWith(`${code}:`)));
-const codesOf = info => [...(info.blocked || []), ...Object.values(info.withheld || {})];
+const codesOf = info => [...(info.blocked || []), ...Object.values(info.withheld || {}), ...(info.gaps || []).map(g => g.code)];
 const GENERIC = reasonText({ info: {}, entities: [] }, 'not_a_reason_code');
 
 // Blocked with a visible reason: the code is reported, it has its own reason text (not the generic
 // fallback), and the missing-data rec is active.
-function assertBlocked(db, info, code, keys = []) {
+function assertGap(db, info, code, keys = []) {
   assert.ok(hasCode(codesOf(info), code), `${code} reported; got blocked ${JSON.stringify(info.blocked)}, withheld ${JSON.stringify(info.withheld)}`);
   assert.notEqual(reasonText({ info, entities: [] }, code), GENERIC, `${code} has its own reason text`);
   assert.ok(activeRecIds(db).includes('missing-data'), 'missing-data lists the reason');
-  for (const k of keys) assert.equal(figureRow(db, k), null, `${k} is not published while ${code} holds`);
+  for (const k of keys) {
+    const row = figureRow(db, k);
+    if (/^(agi\.|tax\.fed\.proj|sh\.)/.test(k)) assert.ok(row && row.locator.gaps.some(g => g.code === code), `${k} carries the precision gap`);
+  }
 }
 function assertNotBlocked(info, code) {
   assert.ok(!hasCode(codesOf(info), code), `${code} lifted; got blocked ${JSON.stringify(info.blocked)}, withheld ${JSON.stringify(info.withheld)}`);
@@ -177,7 +180,7 @@ test('MGI1: an unsplittable catch-up blocks', async () => {
     W2(SCORP.name, { wages: 50000, medicareWages: 60000, federalWithheld: 6000, box12: [{ code: 'D', amount: 10000 }] }, { recipient: 'owner' }),
   ];
   const blocked = await planned({ facts: AGE52, payroll });
-  assertBlocked(blocked.db, blocked.info, 'deferral_split_unknown', ['agi.est', 'tax.fed.proj', 'room.solo401k.employee', 'room.solo401k.catchUp']);
+  assertGap(blocked.db, blocked.info, 'deferral_split_unknown', ['agi.est', 'tax.fed.proj', 'room.solo401k.employee', 'room.solo401k.catchUp']);
 
   const split = await planned({ facts: { ...AGE52, 'retirement.otherPlanDeferrals': { owner: { deferral: 20000, catchUp: 0 } } }, payroll });
   assertNotBlocked(split.info, 'deferral_split_unknown');
@@ -209,7 +212,7 @@ test('MGI1: paystub-only wages project ytdGross', async () => {
 test('MGI1: paystub deferrals without a year-to-date total block', async () => {
   const stub = STUB(OUT_A, { ...JUNE_STUB, retirementDeferral: 500 }, OUTSIDE_OWNER);
   const blocked = await planned({ payroll: [stub] });
-  assertBlocked(blocked.db, blocked.info, 'paystub_deferrals_unknown', ['agi.est']);
+  assertGap(blocked.db, blocked.info, 'paystub_deferrals_unknown', ['agi.est']);
 
   const known = await planned({ payroll: [stub], facts: { 'retirement.contributions': [{ person: 'owner', plan: 'outside-401k', type: 'deferral', amount: 6000 }] } });
   assertNotBlocked(known.info, 'paystub_deferrals_unknown');
@@ -228,7 +231,7 @@ test('MGI1: recipients come from the answers', async () => {
       W2(OUT_B, { wages: 45000, medicareWages: 45000, federalWithheld: 5000 }),
     ],
   });
-  assertBlocked(db, info, 'w2_recipient_unknown', ['agi.est', 'inc.ytd.w2']);
+  assertGap(db, info, 'w2_recipient_unknown', ['agi.est', 'inc.ytd.w2']);
   assert.ok(JSON.stringify(recRow(db, 'missing-data').def).includes(OUT_B), 'the reason names the employer');
 
   assert.equal(answerPending(db, 'document_recipient', 'owner').length, 1, 'W-2 2 is asked about by document');
@@ -245,7 +248,7 @@ test('MGI1: recipients come from the answers', async () => {
 test('MGI1: a W-2 with no withholding rows asks its recipient through ingest', async () => {
   const employer = 'Example Robotics Inc';
   const { db, info } = await planned({ payroll: [W2(employer, { wages: 20000, medicareWages: 20000 }, { relation: 'outside' })] });
-  assertBlocked(db, info, 'w2_recipient_unknown', ['agi.est']);
+  assertGap(db, info, 'w2_recipient_unknown', ['agi.est']);
   const asked = db.prepare("SELECT * FROM confirm_items WHERE kind = 'employer_recipient' AND subject = ?").get(nameKey(employer));
   assert.ok(asked, 'an employer_recipient question is queued for the employer key');
   assert.equal(asked.status, 'pending');
@@ -266,7 +269,7 @@ const nwLlcW2 = () => W2(NW_LLC, { wages: 60000, medicareWages: 60000, federalWi
 
 test('MGI1: a household employer is matched by name or alias', async () => {
   const unmatched = await planned({ payroll: [nwLlcW2()] });
-  assertBlocked(unmatched.db, unmatched.info, 'household_employer_unmatched', ['agi.est']);
+  assertGap(unmatched.db, unmatched.info, 'household_employer_unmatched', ['agi.est']);
 
   const db = await S.store({ variant: { payroll: [nwLlcW2()] } });
   await addFile(db, pnlWorkbook([{ name: NW_LLC, income: 0, expenses: { Software: 10 } }], [], { months: 1 }));
@@ -312,7 +315,7 @@ test('MGI1: K-1 fields and person', async () => {
   near(parts[0].seInput, 30000, 'SE input = selfEmploymentEarnings');
 
   const two = await planned({ entities: [SCORP, SOLE_PROP, ALDER, BIRCH], payroll: [ALDER_K1] });
-  assertBlocked(two.db, two.info, 'k1_unmatched', ['agi.est']);
+  assertGap(two.db, two.info, 'k1_unmatched', ['agi.est']);
 });
 
 test('MGI1: an S corp K-1 alongside the S corp P&L adds nothing', async () => {
@@ -324,7 +327,7 @@ test('MGI1: an S corp K-1 alongside the S corp P&L adds nothing', async () => {
   // With no classified S corp holding P&L lines, the S corp K-1's income has nowhere to go: block
   // k1_scorp_unmatched (R6-1 item 4.1), never count it as a partnership.
   const orphan = await planned({ entities: [SOLE_PROP], payroll: [K1({ entityKind: 's_corp', ordinaryIncome: 50000, distributions: 10000 })] });
-  assertBlocked(orphan.db, orphan.info, 'k1_scorp_unmatched', ['agi.est']);
+  assertGap(orphan.db, orphan.info, 'k1_scorp_unmatched', ['agi.est']);
 });
 
 // The HSA and the rollover IRA answered 'spouse' (ingest stores the label "Your spouse"). The spouse
@@ -452,7 +455,7 @@ const SINGLE_WAGES = Object.freeze({
   files: false, priorReturn: false, entities: [],
   facts: { 'household.filingStatus': 'single', 'household.dependents': 0, 'household.dependentAges': [], 'household.expectingChild': false },
 });
-const errorsOf = info => [...(info.blocked || []), ...Object.values(info.withheld || {})].filter(c => typeof c === 'string');
+const errorsOf = info => codesOf(info).filter(c => typeof c === 'string');
 const missingDataText = db => JSON.stringify((recRow(db, 'missing-data') || {}).def || {});
 
 // E1. Box 1 190,000, box 5 214,500, box 12 not read (the field is absent). Box 1 already excludes
@@ -478,19 +481,13 @@ test('MGI1: E1 an unread box 12 still publishes AGI and federal tax from boxes 1
   near(fig(db, 'tax.fed.proj').v, 34464.5, 'federal tax with 130.50 of Additional Medicare Tax on box 5');
 });
 
-test('MGI1: E1 an unread box 12 blocks only the deferral-dependent retirement room', async () => {
+test('MGI1: E1 unread box twelve assumes no deferrals and labels retirement room', async () => {
   const { db, info } = await planned({ payroll: [E1_W2(null)] });
-  fig(db, 'agi.est');
-  fig(db, 'tax.fed.proj');
-  for (const k of ['room.solo401k', 'room.solo401k.employee']) assert.equal(figureRow(db, k), null, `${k} is not published on assumed-zero deferrals`);
-  const code = (info.withheld || {})['room.solo401k.employee'];
-  assert.ok(typeof code === 'string' && code, `room.solo401k.employee withheld with a code: ${JSON.stringify(info.withheld)}`);
-  assert.notEqual(reasonText({ info, entities: [] }, code), GENERIC, `${code} has its own reason text`);
-  // An owner-answerable gap is shown on the retirement rec as the question to answer.
-  const rec = recRow(db, 'year-end-retirement');
-  assert.ok(rec.def.question.fields.some(f => f.key === code), `the retirement rec asks through typed fields: ${code}`);
+  for (const k of ['agi.est', 'tax.fed.proj', 'room.solo401k', 'room.solo401k.employee']) {
+    assert.ok(fig(db, k).locator.gaps.some(g => g.code === 'w2_box12_unreadable'));
+  }
+  assert.ok(info.gaps.some(g => g.code === 'w2_box12_unreadable'));
 });
-
 // Liveness, box 12 read. Form 8959 Part I: Additional Medicare Tax is 0.9% of Medicare wages (box 5)
 // above the 200,000 single threshold.
 //   Matching inputs, box 12 D 24,500 (401(k) deferrals are in box 5, not box 1):
@@ -532,7 +529,7 @@ const deferralAnswer = (employer, amount) => ({ person: 'owner', plan: 'outside-
 test('MGI1: E2 a deferral answer applies only to its own employer', async () => {
   const facts = { ...SINGLE_WAGES.facts, 'retirement.contributions': [deferralAnswer(ALPHA, 6000)] };
   const { db, info } = await planned({ ...SINGLE_WAGES, facts, payroll: [E2_STUB(ALPHA), E2_STUB(BETA)] });
-  assertBlocked(db, info, 'paystub_deferrals_unknown', ['agi.est', 'tax.fed.proj']);
+  assertGap(db, info, 'paystub_deferrals_unknown', ['agi.est', 'tax.fed.proj']);
   const md = missingDataText(db);
   assert.ok(md.includes(BETA), 'the reason names the unresolved employer');
   assert.ok(!md.includes(ALPHA), 'the answered employer is not listed as unresolved');
@@ -575,10 +572,10 @@ test('MGI1: E3 a W-2 from the own S corp sets taxable wages from box 1, not the 
 // visible reason; no fallback to box 1). Single filer, box 1 190,000, boxes 5 and 12 unread: the
 // fallback published 34,334 with a note, omitting 130.50 of Additional Medicare Tax (Form 8959
 // line 1 is box 5). Liveness: box 5 214,500 publishes 34,464.50 (hand calculation under E1).
-test('MGI1: E4 an unread box 5 blocks federal tax with a visible reason', async () => {
+test('MGI1: E4 unread box five uses taxable wages with a visible gap', async () => {
   const noBox5 = W2(OUT_A, { wages: 190000, socialSecurityWages: 184500, federalWithheld: 38000 }, OUTSIDE_OWNER);
   const { db, info } = await planned({ ...SINGLE_WAGES, payroll: [noBox5] });
-  for (const k of ['tax.fed.proj', 'sh.fed.currentTarget', 'sh.fed.required', 'sh.fed.remaining']) assert.equal(figureRow(db, k), null, `${k} is not published without box 5`);
+  for (const k of ['tax.fed.proj', 'sh.fed.currentTarget', 'sh.fed.required', 'sh.fed.remaining']) assert.ok(fig(db, k).locator.gaps.some(g => g.code === 'w2_medicare_wages_missing'));
   const codes = errorsOf(info).filter(c => !c.includes('.'));
   assert.ok(codes.length, `a block is reported: blocked ${JSON.stringify(info.blocked)}, withheld ${JSON.stringify(info.withheld)}`);
   for (const c of codes) assert.notEqual(reasonText({ info, entities: [] }, c), GENERIC, `${c} has its own reason text`);
@@ -635,9 +632,9 @@ async function aspenStore(box12) {
   return { db, info: computeFor(db).info };
 }
 
-test('MGI1: E6 an unread box 12 blocks plan compensation and the QBI wage limit with a visible reason', async () => {
+test('MGI1: E6 unread box twelve uses taxable plan compensation with a visible gap', async () => {
   const { db, info } = await aspenStore(null);
-  for (const k of ['room.solo401k', 'room.solo401k.employer', 'tax.fed.qbi', 'tax.fed.proj']) assert.equal(figureRow(db, k), null, `${k} is not published on zero assumed deferrals`);
+  for (const k of ['room.solo401k', 'room.solo401k.employer', 'tax.fed.qbi', 'tax.fed.proj']) assert.ok(fig(db, k).locator.gaps.some(g => g.code === 'w2_box12_unreadable'));
   const codes = errorsOf(info).filter(c => !c.includes('.'));
   assert.ok(codes.length, `a block is reported: blocked ${JSON.stringify(info.blocked)}, withheld ${JSON.stringify(info.withheld)}`);
   for (const c of codes) assert.notEqual(reasonText({ info, entities: [] }, c), GENERIC, `${c} has its own reason text`);
@@ -843,7 +840,7 @@ test('MGI2: paystub withholding summarized by the W-2 counts once', async () => 
 // Withholding is held with withholding_recipient_unknown; answering owner gives 9,000.
 test('MGI2: unknown recipients mixing paystub and W-2 rows block', async () => {
   const { db, info } = await planned({ payroll: STUBS_THEN_W2({ relation: 'outside' }) });
-  assertBlocked(db, info, 'withholding_recipient_unknown', ['tax.fed.withheld']);
+  assertGap(db, info, 'withholding_recipient_unknown', ['tax.fed.withheld']);
   answerPending(db, 'employer_recipient', 'owner', i => i.subject === nameKey(OUT_A));
   await replan(db);
   near(fig(db, 'tax.fed.withheld').v, 9000, 'summarized once the recipient is known');
@@ -864,7 +861,7 @@ test('MGI2: jurisdictions normalize', async () => {
 test('MGI2: unknown and other-state withholding stays out of Virginia', async () => {
   const unknown = await planned({ payroll: [W2(OUT_A, { wages: 60000, medicareWages: 60000, federalWithheld: 9000, state: '', stateWithheld: 2000 }, OUTSIDE_OWNER)] });
   assert.equal(unknown.db.prepare("SELECT count(*) AS n FROM tax_payments WHERE kind = 'withholding' AND jurisdiction = 'state'").get().n, 1, 'ingest stores jurisdiction state');
-  assertBlocked(unknown.db, unknown.info, 'withholding_state_unknown', ['tax.va.withheld', 'sh.va.remaining']);
+  assertGap(unknown.db, unknown.info, 'withholding_state_unknown', ['tax.va.withheld', 'sh.va.remaining']);
   near(fig(unknown.db, 'tax.fed.withheld').v, 9000, 'federal withholding is unaffected');
 
   const md = await planned({
@@ -884,7 +881,7 @@ const JAN_APR = Object.freeze({ fed: 6000, state: null, months: [1, 4] });
 
 test('MGI2: an unconfirmed sheet year blocks estimates', async () => {
   const { db, info } = await planned({ taxPayments: JAN_APR, taxYear: null });
-  assertBlocked(db, info, 'tax_year_unconfirmed', ['tax.fed.paid']);
+  assertGap(db, info, 'tax_year_unconfirmed', ['tax.fed.paid']);
   answerPending(db, 'tax_year', 'payment_year');
   await replan(db);
   near(fig(db, 'tax.fed.paid').v, 6000, 'January counts toward 2025');
@@ -927,7 +924,7 @@ const noFigureIs = (db, v) => {
 test('MGI5: a pending correction blocks wages and withholding', async () => {
   const { db, info } = await planned({ payroll: [ORIGINAL(), CORRECTED()] });
   assert.equal(db.prepare("SELECT count(*) AS n FROM confirm_items WHERE kind = 'withholding_conflict' AND status = 'pending'").get().n, 2, 'ingest asked federal and VA');
-  assertBlocked(db, info, 'w2_correction_pending', ['inc.ytd.w2', 'agi.est', 'tax.fed.withheld', 'tax.va.withheld', 'room.solo401k.employee']);
+  assertGap(db, info, 'w2_correction_pending', ['inc.ytd.w2', 'agi.est', 'tax.fed.withheld', 'tax.va.withheld', 'room.solo401k.employee']);
   noFigureIs(db, 125000);
 });
 
@@ -951,11 +948,11 @@ test('MGI5: both forms count when the owner says both', async () => {
   near(fig(db, 'tax.va.withheld').v, 5625, 'both Virginia rows');
 });
 
-test('MGI5: answers that keep different forms block', async () => {
+test('MGI5: conflicting correction answers use the newest form with a gap', async () => {
   const { db, info } = await planned({ payroll: [ORIGINAL(), CORRECTED({ federal: 'second', VA: 'first' })] });
   assert.equal(db.prepare("SELECT count(*) AS n FROM confirm_items WHERE kind = 'withholding_conflict' AND status = 'pending'").get().n, 0, 'both questions answered');
-  assertBlocked(db, info, 'w2_correction_conflicting', ['inc.ytd.w2', 'agi.est']);
-  noFigureIs(db, 125000);
+  assertGap(db, info, 'w2_correction_conflicting', ['inc.ytd.w2', 'agi.est']);
+  near(fig(db, 'inc.ytd.w2').v, 65000, 'only the newer corrected wages count');
 });
 
 // Same wages, new withholding: the same payer identity, so ingest asks one federal conflict
@@ -992,6 +989,6 @@ test('MGI5: an unreconciled pair blocks', async () => {
   });
   assert.equal(db.prepare("SELECT count(*) AS n FROM documents WHERE doc_type = 'w2'").get().n, 2, 'two documents stored');
   assert.equal(db.prepare("SELECT count(*) AS n FROM confirm_items WHERE kind = 'withholding_conflict'").get().n, 0, 'ingest had nothing to ask');
-  assertBlocked(db, info, 'w2_duplicate_unresolved', ['inc.ytd.w2', 'agi.est']);
+  assertGap(db, info, 'w2_duplicate_unresolved', ['inc.ytd.w2', 'agi.est']);
   noFigureIs(db, 120000);
 });

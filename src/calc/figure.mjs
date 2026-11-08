@@ -100,6 +100,7 @@ export function fromStored(row, { ref }) {
     ...(typeof row.key === 'string' && row.key ? { token: `{f:${row.key}}` } : {}),
     asOf: locator?.computedOn || row.src_as_of || null, window: locator?.window, ref,
     provenance: { ...provenanceOf(locator, row.src), stored: { src: row.src, locator } },
+    ...(!unavailable && locator?.gaps ? { gaps: locator.gaps.map(g => ({ ...g, taxCode: g.code, code: 'missing_fact' })) } : {}),
     ...(unavailable ? { unavailable, gaps: [{ code: GAP_CODES.includes(unavailable) ? unavailable : 'missing_fact',
       message: `The stored figure is unavailable: ${unavailable}` }] } : {}) });
 }

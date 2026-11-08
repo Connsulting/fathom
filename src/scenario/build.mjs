@@ -171,6 +171,7 @@ export function loadFigures(db) {
       f.partial = loc.partial;
       f.rough = loc.rough;
       f.gaps = loc.gaps || [];
+      f.notes = (f.notes || []).filter(n => !f.gaps.some(g => g.message === n));
       f.detail = [{ k: 'Completeness', v: `${loc.rough ? 'Rough ' : ''}${loc.completeness}` }];
     }
     if (typeof r.unavailable_reason === 'string' && r.unavailable_reason) f.unavailable = r.unavailable_reason;

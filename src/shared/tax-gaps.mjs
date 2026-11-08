@@ -41,5 +41,5 @@ export function taxGap(code, { employer = 'this business', person = null, messag
 }
 
 export function rankGaps(gaps) {
-  return [...gaps].sort((a, b) => Number(b.rough) - Number(a.rough) || (b.impact ?? 0) - (a.impact ?? 0) || a.code.localeCompare(b.code));
+  return [...gaps].sort((a, b) => Number(b.rough) - Number(a.rough) || (b.impact ?? (b.rough ? Infinity : 0)) - (a.impact ?? (a.rough ? Infinity : 0)) || a.code.localeCompare(b.code));
 }
