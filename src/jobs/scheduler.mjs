@@ -48,7 +48,7 @@ import { sendEmail } from '../email/send.mjs';
 import { runDeadlineAlerts } from './alerts.mjs';
 import { runPlanning } from './planner.mjs';
 import { purgeTrash } from '../api/threads.mjs';
-import { guessPending } from '../ingest/guess.mjs';
+import { resolvePending } from '../resolve/index.mjs';
 import { defaultPackDirs } from '../packs/state.mjs';
 import { syncSimplefin, createFakeSimplefin } from '../ingest/simplefin.mjs';
 
@@ -64,7 +64,7 @@ export const JOBS = Object.freeze([
   { id: 'deadline-alerts', name: 'Deadline alerts', cadence: 'Daily, 7:00 AM', does: 'Email one alert when a deadline or window is 14, 7 or 1 days away.', schedule: Object.freeze({ every: 'day', hour: 7 }) },
   { id: 'freshness', name: 'Data freshness check', cadence: 'Weekly, Monday 6:00 AM', does: 'Count stale and waiting uploads.', schedule: Object.freeze({ every: 'week', weekday: 1, hour: 6 }) },
   { id: 'trash-purge', name: 'Ask trash cleanup', cadence: 'Daily, 3:00 AM', does: 'Delete conversations that have been in Trash for 30 days.', schedule: Object.freeze({ every: 'day', hour: 3 }) },
-  { id: 'confirm-guess', name: 'Confirm best guesses', cadence: 'Daily, 3:00 AM', does: 'Suggest an answer for each pending confirm question.', schedule: Object.freeze({ every: 'day', hour: 3 }) },
+  { id: 'confirm-guess', name: 'Resolve open questions', cadence: 'Daily, 3:00 AM', does: 'Answer supported choices from stored evidence, with Undo.', schedule: Object.freeze({ every: 'day', hour: 3 }) },
   { id: 'simplefin-sync', name: 'Bank and brokerage sync', cadence: 'Daily, 5:00 AM', does: 'Read balances and transactions from SimpleFIN Bridge, read-only.', schedule: Object.freeze({ every: 'day', hour: 5 }) },
 ].map(Object.freeze));
 const JOB_SORT = 100;
@@ -490,8 +490,8 @@ export function createScheduler({
 // with this run's id and the run's clock, and returns the planner's counts as the note plus the
 // whole planner result as `planning` (the scheduler ignores it; npm run plan prints its warning
 // codes). On a demo store it plans nothing and the run is recorded skipped. `confirm-guess` runs
-// guessPending until nothing is left: skipped with the pending count when it skips (engine off,
-// not live, nothing pending), else ok with the run's confirm ledger spend, also when an engine error stopped it.
+// the in-product resolver: local rules first, then categorization and grounded fixed-choice answers.
+// The job id stays stable for stored runs, API, CLI and Engine screen callers.
 // `simplefin-sync` is skipped with note { paused: true } while the household's outbound SimpleFIN
 // flag is off; otherwise it reads the SimpleFIN connection (skipped when there is none); a demo store uses
 // the synthetic fake bridge, a real one `simplefinFetch` (default global fetch). It returns counts
@@ -549,28 +549,26 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
       };
     },
     async 'confirm-guess'(ctx) {
-      // Jev is a model call outside the engine, so it takes the engine's admission: the household's
-      // outbound engine flag and instance funding, checked at start and again before every dispatch.
-      const admit=()=>ctx.household?.outbound?.enabled('engine')!==true ? 'engine_paused'
-        : ctx.household?.funded?.()!==true ? 'funding_unavailable' : null;
-      const enabled=getSetting(ctx.db,'mode',null)==='real' && ctx.config?.engine!=='off' && getSetting(ctx.db,'engine',{on:true})?.on!==false
-        && admit()===null;
-      const cap=getSetting(ctx.db,'cap',{usd:200})?.usd;
-      const jev=await createJev({keyFile:enabled ? ctx.config?.typesafeKeyFile : null,ledger:createSpendLedger(ctx.db),
-        monthlyCapUsd:Number.isFinite(cap)&&cap>=0?cap:0,admit});
-      const categories = await guessCategories(ctx.db, jev, { now: ctx.now });
-      const closed = await guessClosedOptions(ctx.db, jev, { now: ctx.now });
-      const out = await guessPending(ctx.db, ctx.engine, { now: ctx.now });
-      out.costUsd = (out.costUsd ?? 0) + jev.stats().costUsd;
-      if (out.skipped && !categories.guessed && !closed.guessed && !jev.stats().costUsd && !categories.stopped && !closed.stopped) {
-        const pending = ctx.db.prepare("SELECT count(*) AS n FROM confirm_items WHERE status = 'pending'").get().n;
-        return { status: 'skipped', note: { pending } };
-      }
-      const sum = (key) => (out.batches ?? []).reduce((n, b) => n + (Number(b[key]) || 0), 0);
-      return {
-        costUsd: out.costUsd,
-        note: { batches: (out.batches ?? []).length, items: sum('items'), guessed: sum('guessed') + (categories.guessed ?? 0) + closed.guessed, stopped: Boolean(out.stopped || categories.stopped || closed.stopped) },
-      };
+      if (getSetting(ctx.db, 'mode', null) === 'demo') return { status: 'skipped' };
+      const packDirs = defaultPackDirs(ctx.household?.root);
+      const allowed = () => ctx.household?.outbound?.enabled('engine') === true;
+      const funded = () => ctx.household?.funded?.() === true;
+      const out = await resolvePending(ctx.db, ctx.engine, {
+        now: ctx.now, packDirs, allowed, funded,
+        async categorize({ maxCostUsd, admit }) {
+          const cap = getSetting(ctx.db, 'cap', { usd: 200 })?.usd;
+          const categorizer = await createJev({ keyFile: ctx.config?.engine === 'off' ? null : ctx.config?.typesafeKeyFile,
+            ledger: createSpendLedger(ctx.db), maxCostUsd: Math.min(.05, maxCostUsd),
+            monthlyCapUsd: Number.isFinite(cap) && cap >= 0 ? cap : 0, admit });
+          const categories = await guessCategories(ctx.db, categorizer, { now: ctx.now });
+          const closed = categories.stopped ? { guessed: 0 } : await guessClosedOptions(ctx.db, categorizer, { now: ctx.now });
+          return { applied: categories.applied, stopped: categories.stopped ?? closed.stopped };
+        },
+        replan: () => runPlanning(ctx.db, null, { now: ctx.clock, packDirs, runId: ctx.jobRunId }),
+      });
+      if (!out.answered && !out.batches && !out.costUsd) return { status: 'skipped', note: { pending: out.pending } };
+      return { costUsd: out.costUsd,
+        note: { batches: out.batches, items: out.items, guessed: out.answered, stopped: Boolean(out.stopped) } };
     },
   };
 }
