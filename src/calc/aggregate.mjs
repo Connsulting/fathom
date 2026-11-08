@@ -250,7 +250,7 @@ export function aggregate(input, args = {}, definition = null) {
   }
   const included = base.filter((t) => Object.entries(selectors.include).every(([f, vs]) => matches(t, f, vs)));
   const removed = (t) => Object.entries(selectors.exclude).some(([f, vs]) => matches(t, f, vs));
-  const counted = included.filter((t) => !removed(t));
+  const counted = included.filter((t) => !removed(t) && (!input.transactionIds || input.transactionIds.has(t.id)));
   const value = (t) => (['spending', 'outflow'].includes(measure) ? -t.amount : t.amount);
   const raw = sumRows(counted, value),
     scale = args.annualize && window ? 12 / window.months : 1;
@@ -342,7 +342,7 @@ export function aggregate(input, args = {}, definition = null) {
   const allGroups = [...map]
     .map(([key, rs]) => ({
       key,
-      label: groupBy === 'account' ? byId.get(key).name : key,
+      label: groupBy === 'account' ? byId.get(key).name : groupBy === 'class' && key === 'debt_service' ? 'All debt payments' : key,
       figure: f(sumRows(rs, value) * scale, 'Selected group', rs, { unit: total.unit }),
     }))
     .sort((a, b) => Math.abs(b.figure.value) - Math.abs(a.figure.value) || String(a.key).localeCompare(String(b.key)));

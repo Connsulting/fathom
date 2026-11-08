@@ -48,6 +48,7 @@ function loan(db, { months = 12, matched = true, escrow = 0 } = {}) {
   const rate = 0.048, payment = 900;
   const snapshot = db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)');
   const tx = db.prepare('INSERT INTO transactions(account_id,date,amount,category,description) VALUES (?,?,?,?,?)');
+  const classify = id => db.prepare("INSERT INTO transaction_category_corrections(transaction_id,category,bucket,updated_at) VALUES (?,'Mortgage','household',?)").run(id, now);
   snapshot.run('loan', '2025-10-31', -balance);
   for (let m = 0; m < months; m++) {
     const end = new Date(Date.UTC(2025, 11 + m, 0)).toISOString().slice(0, 10);
@@ -55,10 +56,10 @@ function loan(db, { months = 12, matched = true, escrow = 0 } = {}) {
     snapshot.run('loan', end, -balance);
     const date = `${end.slice(0, 7)}-15`;
     if (matched) {
-      tx.run('cash', date, -payment - escrow, 'Mortgage', 'Example home mortgage payment');
+      classify(tx.run('cash', date, -payment - escrow, 'Mortgage', 'Example home mortgage payment').lastInsertRowid);
       tx.run('loan', date, payment, 'Internal Transfers', 'Loan payment');
     }
-    tx.run('cash', date, -2100, 'Mortgage', 'Credit card payment');
+    classify(tx.run('cash', date, -2100, 'Mortgage', 'Credit card payment').lastInsertRowid);
     tx.run('card', date, 2100, 'Credit Card Payment', 'Card payment');
   }
   return { balance, payment, rate };
@@ -110,14 +111,13 @@ test('owner classifications and corrections win while other entities can still b
 for (const count of [0, 2]) test(`AC5: ${count} S corp candidates produce one classification question without guessing an S corp`, async t => {
   const { db } = await store(t);
   entities(db, count);
-  if (!count) db.prepare("INSERT INTO pnl_lines(entity,period,category,amount) VALUES ('Unknown venture','2026-10','Rent',-10)").run();
   await planRun(db);
   assert.ok(!getFacts(db)['business.entities'].some(e => e.type === 's_corp'));
   const scenario = buildScenario(db);
   const task = scenario.recs.find(r => r.id === 'missing-data').tasks.filter(t => t.kind === 'classify');
   assert.equal(task.length, 1);
   for (const text of ['S corp', 'sole proprietorship', 'partnership', 'personal spending', 'not mine']) assert.ok(task[0].t.includes(text), text);
-  assert.ok(task[0].t.includes(count ? 'Example Studio' : 'Unknown venture'));
+  assert.ok(task[0].t.includes(count ? 'Example Studio' : 'Family card'));
   if (count) assert.ok(task[0].t.includes('Second Studio'));
 });
 
@@ -183,6 +183,7 @@ test('projection removes only the mortgage portion, preserves other debts, and h
   const base = await callTool('spending', { operation: 'total', annualize: true }, ctx);
   const projection = await callTool('spending', { operation: 'projection', years: 3, obligations: ['mortgage'] }, ctx);
   assert.equal(projection.years[2].spending.value, base.total.value - 12 * fixture.payment);
+  assert.ok(base.total.value > 12 * fixture.payment, 'the fixture includes other debt spending');
   const selected = await callTool('spending', { operation: 'total', annualize: true, include: { merchants: ['Credit card payment'] } }, ctx);
   const excluding = await callTool('spending', { operation: 'projection', base: selected.total.ref, years: 3, obligations: ['mortgage'] }, ctx);
   assert.equal(excluding.years[2].spending.value, selected.total.value);

@@ -47,7 +47,7 @@ const GAME_NAME = Object.freeze({ salary: 'Salary war game', deferral: 'Invoice 
 const NEEDS = Object.freeze({
   salary: {
     inputs_changed: ['needs an S corp with profit on file.', 'files'],
-    'business.salaryRange': ['needs the salary range you would consider paying yourself.', 'answers'],
+    'business.salaryRange': ["needs your advisor's reasonable salary range.", 'answers'],
     'retirement.otherPlanDeferrals': ['needs your deferrals to other workplace plans this year.', 'answers'],
     'retirement.priorYearFicaWages': ["needs last year's Social Security wages from your business.", 'files'],
     w2_plan_compensation_unknown: ['needs a W-2 from your business that shows box twelve.', 'files'],
@@ -58,7 +58,11 @@ const NEEDS = Object.freeze({
   },
 });
 
-export function notBuiltReason(name, code) {
+export function notBuiltReason(name, code, entities = []) {
+  if (String(code).startsWith('entity_unclassified:')) {
+    const entity = entities.find(e => e.slug === code.slice('entity_unclassified:'.length));
+    return { code, text: `${GAME_NAME[name]} needs you to classify ${entity?.displayName || entity?.name || 'the imported business'} as an S corp, sole proprietorship, partnership, personal spending, or not yours.`, unlock: 'answers' };
+  }
   const known = (NEEDS[name] || {})[code];
   const [needs, unlock] = known
     || (String(code).includes('.') ? ['needs a household answer it does not have yet.', 'answers']

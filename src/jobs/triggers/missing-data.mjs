@@ -2,8 +2,8 @@
 // tax inputs (R1, R14, R19, T9.5). Evaluated last so it sees every other trigger's block.
 
 import { normalizeName } from '../../ingest/confirm.mjs';
+import { ledgerDisplayName } from '../../pnl/ledgers.mjs';
 import { ADVISOR_KEYS } from '../../facts/derive.mjs';
-import { looksLikeSpending, spendingStatement } from '../../pnl/ledgers.mjs';
 import { addDays } from '../planner/data.mjs';
 import { confirmItemFor } from '../../shared/rec-steps.mjs';
 import { staleAccountIds } from '../../../web/core/account-freshness.js';
@@ -106,9 +106,12 @@ function rawReasonItem(ctx, reason, name) {
   if (reason.startsWith('entity_unclassified:')) {
     const slug = reason.slice('entity_unclassified:'.length);
     const e = (ctx.entities || []).find(x => x.slug === slug);
-    if (e && !ctx.declinedLedgerGuess && looksLikeSpending(e, ctx.facts)) return { code: reason, tax: true, text: name(spendingStatement(e)), task: 'Confirm the spending ledger classification in Confirm' };
-    const who = e ? name(e.displayName || e.name) : 'a business in your profit and loss';
-    return { code: reason, tax: true, text: `We do not know how ${who} is taxed.`, task: `Tell us how ${who} is taxed` };
+    const unclassified = (ctx.entities || []).filter(x => !x.classified);
+    const names = unclassified.length ? unclassified.map(x => name(x.displayName || x.name))
+      : [...new Set((ctx.data?.pnl || []).map(ledgerDisplayName))].map(name);
+    const who = names.length ? names.join(', ') : e ? name(e.displayName || e.name) : 'a business in your profit and loss';
+    const task = `Tell Fathom how to classify ${who}: S corp, sole proprietorship, partnership, personal spending, or not mine?`;
+    return { code: reason, tax: true, text: task, task };
   }
   if (reason === 'partnership_incomplete') {
     const names = ((ctx.info && ctx.info.partnershipsMissing) || []).map(name);
@@ -157,7 +160,19 @@ export function items(ctx) {
     out.push({ code: 'filing_status_assumed', tax: true, text: 'Your filing status is not set, so we assumed single.', task: 'Tell us your filing status', kind: 'question', link: 'ask' });
   }
   const reasons = [...(ctx.info.blocked || []), ...(ctx.info.heldReasons || []), ...(ctx.blockedReasons || []).map(b => b.reason)];
-  for (const r of reasons) if (!ADVISOR_KEYS.has(r)) out.push(reasonItem(ctx, r));
+  let entityQuestion = false;
+  for (const r of reasons) if (!ADVISOR_KEYS.has(r)) {
+    if (r.startsWith('entity_unclassified:')) {
+      if (entityQuestion) continue;
+      entityQuestion = true;
+    }
+    out.push(reasonItem(ctx, r));
+  }
+  if (!entityQuestion && ctx.facts['income.sCorp'] === true && ctx.data?.pnl?.length && !ctx.entities?.some(e => e.type === 's_corp')) {
+    out.push(reasonItem(ctx, 'entity_unclassified:scorp'));
+  }
+  if (ctx.mortgage?.present && ctx.mortgage.missing.length) out.push({ code: 'obligations.mortgage', tax: false,
+    text: `Mortgage: tell Fathom only the missing ${ctx.mortgage.missing.join(', ')}.`, task: 'Tell Fathom the missing mortgage terms', kind: 'question', link: 'ask' });
   const seen = new Set();
   return out.filter(i => (seen.has(i.code) ? false : (seen.add(i.code), true)));
 }

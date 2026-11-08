@@ -11,11 +11,17 @@ const object = v => !!v && typeof v === 'object' && !Array.isArray(v);
 const fail = () => { throw new FactAnswerError('Check the answer type, required fields and units.'); };
 
 function validate(value, shape, year) {
-  if (shape.type === 'map') {
+  if (shape.type === 'array') {
+    if (!Array.isArray(value) || value.length < shape.minItems || value.length > shape.maxItems) fail();
+    for (const entry of value) validate(entry, shape.items, year);
+    if (new Set(value.map(e => normalizeName(e.name))).size !== value.length) fail();
+  } else if (shape.type === 'string') {
+    if (typeof value !== 'string' || !normalizeName(value) || value.length > shape.maxLength) fail();
+  } else if (shape.type === 'map') {
     if (!object(value) || !Object.keys(value).length || Object.keys(value).some(k => !normalizeName(k)) || new Set(Object.keys(value).map(normalizeName)).size !== Object.keys(value).length) fail();
     for (const entry of Object.values(value)) validate(entry, shape.values, year);
   } else if (shape.type === 'object') {
-    if (!object(value) || Object.keys(value).some(k => !Object.hasOwn(shape.fields, k))) fail();
+    if (!object(value) || !Object.keys(value).length || Object.keys(value).some(k => !Object.hasOwn(shape.fields, k))) fail();
     for (const [key, field] of Object.entries(shape.fields)) {
       const needed = !field.optional && (!field.when || Object.entries(field.when).every(([k, v]) => value[k] === v));
       if (needed || Object.hasOwn(value, key)) validate(value[key], field, year);
@@ -66,11 +72,16 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
       value = { ...(object(prior) ? prior : {}), ...value };
     } else {
       // Birth years are told a person at a time: a later answer keeps the years it does not name.
-      if (a.key === 'household.birthYears' && object(value)) {
+      if (['household.birthYears', 'obligations.mortgage'].includes(a.key) && object(value)) {
         const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
         value = { ...(object(prior) ? prior : {}), ...value };
       }
       validate(value, shape, year);
+      if (a.key === 'business.entities') {
+        const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, []);
+        const names = new Set(value.map(e => normalizeName(e.name)));
+        value = [...(Array.isArray(prior) ? prior : []).filter(e => !names.has(normalizeName(e?.name))), ...value];
+      }
       if (shape.type === 'map') {
         const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
         const changed = new Set(Object.keys(value).map(normalizeName));

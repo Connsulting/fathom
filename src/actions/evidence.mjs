@@ -32,6 +32,7 @@ function dates(text) {
 
 function stated(value, text, shape, evidence) {
   if (typeof value === 'number') return statedAmounts(text, { unit: shape?.unit, evidence }).includes(value);
+  if (shape?.type === 'array' && Array.isArray(value)) return value.every(v => stated(v, text, shape.items, evidence));
   if (shape?.type === 'map' && value && typeof value === 'object') return Object.entries(value).every(([k, v]) =>
     (evidence || text).toLowerCase().includes(k.toLowerCase()) && stated(v, text, shape.values, evidence));
   if (value && typeof value === 'object') return Object.entries(value).every(([k, v]) => stated(v, text, shape?.fields?.[k], evidence));

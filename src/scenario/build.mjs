@@ -25,6 +25,7 @@ import { buildSuggestions } from '../suggest/build.mjs';
 import { buildTrend, groupOfKind, TREND_SRC } from '../accounts/trend.mjs';
 import { questionFor, dataText, LISTED_RECS } from '../jobs/triggers/common.mjs';
 import { getFacts } from '../store/facts.mjs';
+import { inferMortgage } from '../calc/mortgage-inference.mjs';
 import { deriveSteps } from '../shared/rec-steps.mjs';
 
 const DAY = 86400000;
@@ -212,6 +213,8 @@ export function recFromRow(row, clock, env = {}) {
 // Each rec's `advisor` field comes from the advisor tables (src/advisor), never from its def.
 export function loadRecs(db, clock) {
   const facts = getFacts(db);
+  const mortgage = inferMortgage(db, clock, facts['obligations.mortgage']);
+  if (mortgage.present) facts['obligations.mortgage'] = mortgage.values;
   const accounts = withLabelHints(db, db.prepare('SELECT * FROM accounts').all());
   const env = stepEnvOf(db);
   const recs = db.prepare('SELECT * FROM recs ORDER BY sort, id').all().map(r => recFromRow(r, clock, env));

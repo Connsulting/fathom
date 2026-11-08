@@ -55,7 +55,7 @@ function loadBusiness(db, clock) {
   const stated = statedFact && typeof statedFact === 'object' && !Array.isArray(statedFact) ? statedFact : {};
   for (const v of Object.values(stated)) addName(v);
 
-  const ledgerFacts = { 'pnl.ledgers': ownerFact(db, 'pnl.ledgers') };
+  const ledgerFacts = { 'pnl.ledgers': ownerFact(db, 'pnl.ledgers'), 'business.entities': listed };
   const businessNames = [...names.keys()].filter(n => ledgerKind(ledgerFacts, names.get(n), lines.filter(l => canon(l.entity).norm === n)) !== 'spending');
   const only = businessNames.length === 1 ? businessNames[0] : null;
   const owner = new Map();

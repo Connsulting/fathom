@@ -13,7 +13,7 @@ import { parseJson, cents } from '../../store/db.mjs';
 import { accountNaming } from '../../accounts/naming.mjs';
 import { addDays, daysBetween } from '../../scenario/build.mjs';
 import { monthEnd } from '../../ingest/format.mjs';
-import { ledgerDisplayName, ledgerKind } from '../../pnl/ledgers.mjs';
+import { ledgerDisplayName, ledgerKind, looksLikeSpending, spendingStatement } from '../../pnl/ledgers.mjs';
 import { staleAccountIds } from '../../../web/core/account-freshness.js';
 import { connectedThrough, sourceStates } from '../../ingest/coverage.mjs';
 import { OWNER_OPTIONS, normalizeName } from '../../ingest/confirm.mjs';
@@ -102,7 +102,7 @@ export function loadPlanningData(db, clock) {
   const named = ownerFact(db, 'accounts.businessEntity');
   const byAccount = named && typeof named === 'object' && !Array.isArray(named) ? named : {};
   const listed = ownerFact(db, 'business.entities');
-  const ledgerFacts = { 'pnl.ledgers': ownerFact(db, 'pnl.ledgers') };
+  const ledgerFacts = { 'pnl.ledgers': ownerFact(db, 'pnl.ledgers'), 'business.entities': listed };
   const businessNames = [...new Map([...(Array.isArray(listed) ? listed.map(e => e && e.name) : []), ...pnl.map(l => l.entity)]
     .filter(n => typeof n === 'string' && normalizeName(n) && ledgerKind(ledgerFacts, n, pnl.filter(l => sameName(l.entity, n))) !== 'spending').map(n => [normalizeName(n), n.trim()])).values()];
   const householdNames = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {};
@@ -218,6 +218,32 @@ export function resolveEntities(data, facts) {
     e.months = e.lines.length ? Math.max(...e.lines.map(l => monthOf(l.period))) : 0;
   }
   return out.filter(e => ledgerKind(facts, e.name, e.lines) !== 'spending');
+}
+
+export function inferEntities(data, facts) {
+  const listed = Array.isArray(facts['business.entities']) ? facts['business.entities'] : [];
+  const value = structuredClone(listed.filter(e => {
+    if (!e || typeof e.name !== 'string') return true;
+    const kind = ledgerKind({ 'pnl.ledgers': facts['pnl.ledgers'] }, e.name, data.pnl.filter(l => sameName(l.entity, e.name)));
+    return !e.inferred || !kind || (kind === 'spending') === (e.type === 'personal');
+  }));
+  const entities = resolveEntities(data, { ...facts, 'business.entities': value });
+  const undone = name => Object.entries(facts['business.entityInference'] || {}).some(([key, flag]) => sameName(key, name) && flag?.undone);
+  const add = (entity, type, rule) => {
+    const entry = { name: entity.name, type, inferred: true, evidence: {
+      rule, lineCount: entity.lines.length, kinds: [...new Set(entity.lines.map(l => l.category))].sort(),
+    } };
+    const i = value.findIndex(e => sameName(e?.name, entity.name));
+    if (i < 0) value.push(entry); else value[i] = { ...value[i], ...entry };
+  };
+  const spending = entities.filter(e => looksLikeSpending(e, facts) && !undone(e.name));
+  for (const entity of spending) add(entity, 'personal', spendingStatement(entity));
+  const remaining = entities.filter(e => !spending.includes(e));
+  const candidates = remaining.filter(e => e.lines.some(l => /^income$|revenue|sales|client fees|consulting fees|payroll|officer|salary|wages/i.test(l.category)));
+  if (facts['income.sCorp'] === true && !remaining.some(e => e.type === 's_corp') && candidates.length === 1 && !candidates[0].classified && !undone(candidates[0].name)) {
+    add(candidates[0], 's_corp', 'S corp income stated and the only remaining ledger with revenue or payroll');
+  }
+  return { value, changed: JSON.stringify(value) !== JSON.stringify(listed), rows: entities.flatMap(e => e.lines.map(l => ({ table: 'pnl_lines', id: l.id, fileId: l.file_id }))) };
 }
 
 // P&L sums for one entity (amounts: income positive, expenses negative).

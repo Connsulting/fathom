@@ -9,13 +9,15 @@ export function ledgerDisplayName(line) {
 
 export function ledgerKind(facts, name, lines = []) {
   const map = facts['pnl.ledgers'];
-  if (!map || typeof map !== 'object' || Array.isArray(map)) return null;
   const names = new Set([name, ...lines.map(ledgerDisplayName)].map(normalizeName));
-  const entry = Object.entries(map).find(([key]) => names.has(normalizeName(key)))?.[1];
-  return ['spending', 'business'].includes(entry?.kind) ? entry.kind : null;
+  const entry = map && !Array.isArray(map) ? Object.entries(map).find(([key]) => names.has(normalizeName(key)))?.[1] : null;
+  if (['spending', 'business'].includes(entry?.kind)) return entry.kind;
+  const entity = Array.isArray(facts['business.entities']) ? facts['business.entities'].find(e => names.has(normalizeName(e?.name))) : null;
+  if (['personal', 'not_mine'].includes(entity?.type)) return 'spending';
+  return null;
 }
 
-// Personal categories used only to propose a ledger classification, never to accept it.
+// A majority of personal categories and no revenue identify a spending statement.
 const PERSONAL_CATEGORIES = new Set([
   'medical', 'healthcare', 'shopping', 'groceries', 'hsa', 'dining', 'restaurants',
   'food', 'entertainment', 'clothing', 'personal care', 'childcare', 'pets', 'household',

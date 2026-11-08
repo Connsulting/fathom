@@ -86,7 +86,7 @@ export function writeBrief(db, ctx, { hits }) {
   // data would unlock it (recomputed every run).
   delete wargame.notBuilt;
   const notBuilt = {};
-  for (const name of ['salary', 'deferral']) if (!wargame[name] && invalid[name]) notBuilt[name] = notBuiltReason(name, invalid[name]);
+  for (const name of ['salary', 'deferral']) if (!wargame[name] && invalid[name]) notBuilt[name] = notBuiltReason(name, invalid[name], ctx.entities);
   if (Object.keys(notBuilt).length) wargame.notBuilt = notBuilt;
   upsertContent(db, 'wargame', wargame, now);
 

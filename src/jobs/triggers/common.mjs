@@ -74,15 +74,25 @@ const dollars = label => ({ type: 'number', unit: 'USD', min: 0, label });
 const birthYear = label => ({ type: 'number', unit: 'year', min: MIN_BIRTH_YEAR, max: 2200, integer: true, label });
 
 export const ANSWER_SHAPES = Object.freeze({
+  'business.entities': { scope: 'household', type: 'array', minItems: 1, maxItems: 100, label: 'Business entity classifications', items: { type: 'object', fields: {
+    name: { type: 'string', label: 'Entity name', maxLength: 200 },
+    type: { type: 'choice', label: 'Entity classification', choices: [
+      ['s_corp', 'S corp'], ['sole_prop', 'sole proprietorship'], ['llc_single', 'single member LLC'], ['partnership', 'partnership'],
+      ['c_corp', 'C corp'], ['personal', 'personal spending'], ['not_mine', 'not mine'],
+    ].map(([value, label]) => ({ value, label })) },
+    owner: { type: 'choice', optional: true, label: 'Business owner', choices: [{ value: 'owner', label: 'you' }, { value: 'spouse', label: 'your spouse' }] },
+    sstb: { ...yesNo('Specified service trade or business'), optional: true },
+  } } },
+  'business.entityInference': { scope: 'household', type: 'map', label: 'Undo an inferred entity classification', values: { type: 'object', fields: { undone: yesNo('Undo this inferred classification?') } } },
   'household.dependentAges': { scope: 'household', type: 'years', min: 0, max: 120, maxItems: 10, label: 'Dependent ages' },
   'household.dependentBirthDates': { scope: 'household', type: 'dates', maxItems: 10, label: 'Dependent birth dates' },
   'household.ownerBirthDate': { scope: 'household', type: 'date', label: 'Your birth date' },
   'household.spouseBirthDate': { scope: 'household', type: 'date', label: 'Your spouse birth date' },
   'household.retireAge': { scope: 'person', type: 'number', min: 18, max: 100, half: true, unit: 'age', label: 'Retirement age for {person}' },
   'obligations.mortgage': { scope: 'household', type: 'object', fields: {
-    balance: dollars('Mortgage balance'), rate: { type: 'number', min: 0, max: 1, unit: 'ratio', label: 'Annual mortgage rate' },
-    monthlyPayment: { ...dollars('Monthly mortgage payment including escrow'), exclusiveMin: 0 },
-    escrowMonthly: dollars('Monthly escrow continuing after payoff'), payoffDate: { type: 'date', optional: true, label: 'Mortgage payoff date' },
+    balance: { ...dollars('Mortgage balance'), optional: true }, rate: { type: 'number', min: 0, max: 1, unit: 'ratio', optional: true, label: 'Annual mortgage rate' },
+    monthlyPayment: { ...dollars('Monthly mortgage payment including escrow'), exclusiveMin: 0, optional: true },
+    escrowMonthly: { ...dollars('Monthly escrow continuing after payoff'), optional: true }, payoffDate: { type: 'date', optional: true, ask: false, label: 'Mortgage payoff date' },
   } },
   'obligations.childcare': { scope: 'household', type: 'object', fields: {
     schoolAgeMonthly: { ...dollars('Monthly care at school age'), optional: true },
