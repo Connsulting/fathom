@@ -739,7 +739,7 @@ function putTax(ctx, row, parser, locator) {
     counts.duplicates += 1;
   } else if (!newerOrEqual(db, group?.authority ?? periodTo(db, fileId), stored.file_id, group)) {
     counts.incomplete += 1;
-  } else if (summarizes) {
+  } else if (summarizes || row.paymentKind === 'withholding') {
     // K1: a document's withholding of a known recipient with another amount is a conflict, never a
     // revision: a pair already asked about is a repeat; otherwise both stay and the owner is asked.
     if (conflictAsked(db, key, stored.amount, amount)) counts.duplicates += 1;
@@ -784,7 +784,7 @@ function supersede(ctx, coverage) {
       ? db.prepare('SELECT * FROM pnl_lines WHERE lower(entity)=? AND period=?').all(group.entity.toLowerCase(), group.period)
       : db.prepare('SELECT * FROM tax_payments WHERE source_slot=? AND substr(date,1,7)=?').all(group.slot, group.period);
     for (const row of rows) {
-      if (ctx.keys.has(row.dedupe_key) || !newerOrEqual(db, group.authority, row.file_id, group)) continue;
+      if (row.file_id === fileId || ctx.keys.has(row.dedupe_key) || !newerOrEqual(db, group.authority, row.file_id, group)) continue;
       archive(db, group.table, { ...row }, { by: fileId, reason: 'removed', now });
       db.prepare(`DELETE FROM ${group.table} WHERE id=?`).run(row.id); counts.superseded++;
     }
