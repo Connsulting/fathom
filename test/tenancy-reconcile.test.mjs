@@ -124,7 +124,7 @@ describe('node scripts/reconcile-spend.mjs', T, () => {
     assert.equal(rows[0].household_id, A);
     assert.equal(rows[0].outcome, 'ok');
     assert.deepEqual(await outboundRows(two.platform), flags, 'flags unchanged');
-    assert.equal(outbound.readOutbound(two.platform, A).engine, false, 'reconciling never resumes a paused engine');
+    assert.equal((await outbound.readOutbound(two.platform, A)).engine, false, 'reconciling never resumes a paused engine');
 
     ok(await reconcile(two, { household: A, round: held.id, cost: '0.01', receipt: RECEIPT }), 'unchanged');
     assert.deepEqual(await roundById(two.platform, held.id), settled);

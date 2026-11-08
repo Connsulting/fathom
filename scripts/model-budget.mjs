@@ -33,7 +33,7 @@ async function main(argv, env = process.env) {
   try {
     const now = Date.now();
     await carryAllHouseholds(platform, { dataDir: resolve(env.FATHOM_DATA == null || env.FATHOM_DATA === '' ? 'data' : env.FATHOM_DATA), now });
-    return apply(platform, now).changed ? 'set' : 'unchanged';
+    return (await apply(platform, now)).changed ? "set" : "unchanged";
   } finally {
     await platform.close();
   }

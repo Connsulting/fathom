@@ -14,7 +14,7 @@ const nowOf = ctx => new Date(ctx.now ?? Date.now()).toISOString();
 const conflict = () => { throw new ToolError('conflict', 'This item changed since that action.'); };
 const itemState = async (db, id) => { const row=await db.prepare('SELECT * FROM confirm_items WHERE id=?').get(id); return row ? {...row} : null; };
 const answerState = async (db, id, kind) => ({ value: (await accountOf(db,id))[kind === 'account_owner' ? 'owner' : 'kind'],
-  item: (async () => { const row=await db.prepare('SELECT * FROM confirm_items WHERE kind=? AND subject=?').get(kind,id); return row ? {...row} : null; })() });
+  item: await (async () => { const row=await db.prepare('SELECT * FROM confirm_items WHERE kind=? AND subject=?').get(kind,id); return row ? {...row} : null; })() });
 async function domain(fn) {
   try { return await fn(); } catch (err) {
     if (err instanceof HttpError || err.name === 'ConfirmError') throw new ToolError(err.reason || (err.status === 404 ? 'not_found' : err.status === 409 ? 'conflict' : 'bad_input'), err.reason || err.message);

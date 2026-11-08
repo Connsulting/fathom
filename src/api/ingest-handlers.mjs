@@ -1,3 +1,4 @@
+import { mapSeries } from '../shared/series.mjs';
 import { queueCategoryChecks } from '../categories/store.mjs';
 import { queueAccountPairs } from '../ingest/account-merge.mjs';
 // Ingest API handlers: file uploads, the file list, retries and the confirm queue. Each takes the
@@ -145,7 +146,7 @@ async function confirmAction(ctx, fn) {
     const now = await getItem(ctx.db, item.id) || item;
     return { ...now, final: await finalReason(ctx.db, now) };
   };
-  if (Array.isArray(out.items)) return { scenario: await scenarioOf(ctx), items: out.items.map(withFinal) };
+  if (Array.isArray(out.items)) return { scenario: await scenarioOf(ctx), items: await mapSeries(out.items, withFinal) };
   return { scenario: await scenarioOf(ctx), item: out.item ? await withFinal(out.item) : null };
 }
 

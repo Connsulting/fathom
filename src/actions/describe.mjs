@@ -176,12 +176,12 @@ export const DESCRIBERS = Object.freeze({
     const subject = /\d/.test(said(a.subject)) ? '' : said(a.subject);
     return `Note an expected ${a.direction === 'inflow' ? 'incoming' : 'outgoing'} payment${subject ? ` for ${q(subject)}` : ''}. Nothing is recorded as paid.`;
   },
-  'answer.fact': (a, L) => {
+  'answer.fact': async (a, L) => {
     if (a.key === 'business.entities' && Array.isArray(a.value)) {
       const tax = { s_corp: 'S corp', llc_single: 'single-member LLC taxed on Schedule C', sole_prop: 'sole proprietorship', partnership: 'partnership', c_corp: 'C corp', personal: 'personal summary', income_history: 'income history', inactive: 'inactive', not_mine: 'not mine' };
-      return { text: 'Record household businesses.', details: a.value.slice(0, 4).map(async e => ({ label: said(e.name),
+      return { text: 'Record household businesses.', details: await Promise.all(a.value.slice(0, 4).map(async e => ({ label: said(e.name),
         value: `${tax[e.type] || 'tax type pending'}, ${e.owner === 'spouse' ? 'your spouse' : 'you'}${e.status === 'final_year' ? '; final year, final K-1 expected' : '; active'}${e.accountId ? `; linked business account: ${await L.account(e.accountId)}` : ''}`,
-      })) };
+      }))) };
     }
     const name = factLabel(a.key);
     const value = factValue(a.key, a.value);
