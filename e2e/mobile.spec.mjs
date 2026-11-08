@@ -41,14 +41,12 @@ const TABS = [['home', 'Home'], ['plan', 'Plan'], ['ask', 'Ask'], ['money', 'Mon
 const OTHER = [
   ['yearend', 'plan', ['plan', 'Plan views', 'Year end']],
   ['advisor', 'plan', ['plan', 'Plan views', 'Advisor']],
-  ['wargame', 'ask', ['ask', 'Ask views', 'What-if']],
-  ['packs', 'ask', ['ask', 'Ask views', 'Packs']],
-  ['accounts', 'money', ['money', 'Money views', 'Accounts']],
   ['pnl', 'money', ['money', 'Money views', 'P&L']],
   ['add', 'money', ['money', 'Money views', 'Files']],
   ['connect', 'settings', ['settings', 'Connect']],
   ['engine', 'settings', ['settings', 'Engine']],
-  ['email', 'settings', ['settings', 'Email']]
+  ['email', 'settings', ['settings', 'Email']],
+  ['memories', 'settings', ['settings', 'What Fathom knows']]
 ];
 
 test.describe('phone shell', TAGS, () => {

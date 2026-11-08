@@ -12,7 +12,7 @@ test.describe('account display names', { tag: '@an-acN' }, () => {
     const scenario = await (await request.get('/api/scenario')).json();
     const item = scenario.live.ingest.items.find((i) => i.kind === 'account_owner' && i.subject);
     expect(item, 'demo has an account question').toBeTruthy();
-    await gotoRoute(page, 'accounts');
+    await gotoRoute(page, 'money');
     const first = page.locator(`[data-account="${item.subject}"] .h-acc-name`);
     await expect(first).toBeVisible();
     await first.click();
@@ -41,7 +41,7 @@ test.describe('account display names on a phone', { tag: ['@mobile', '@mobile-on
   });
 
   test('rename on Accounts at phone width', async ({ page }) => {
-    await gotoRoute(page, 'accounts');
+    await gotoRoute(page, 'money');
     const first = page.locator('.h-acc-name').first();
     await first.click();
     const input = page.locator('[data-acc-name]');

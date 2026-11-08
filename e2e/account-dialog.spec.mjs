@@ -31,7 +31,7 @@ async function firstTransactions(request) {
 }
 
 async function openFromAccounts(page) {
-  await gotoRoute(page, 'accounts');
+  await gotoRoute(page, 'money');
   await page.locator(`[data-account="${ID}"] .h-acc-m`).click();
   await expect(recDialog(page)).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`#/account/${ID}$`));
@@ -124,7 +124,7 @@ test.describe('account dialog', { tag: '@ad-acN' }, () => {
   });
 
   test('deep link survives a reload, Escape closes, and Back does not reopen it', async ({ page }) => {
-    await gotoRoute(page, 'accounts');
+    await gotoRoute(page, 'money');
     await page.goto(`/#/account/${ID}`);
     await page.reload();
     const dlg = recDialog(page);
