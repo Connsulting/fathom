@@ -153,7 +153,9 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
         .run(goalId, JSON.stringify({ ...c.storedGoal, id: goalId, horizon: 'now', target: null, targetDate: null, track: null }), clock + 'T00:00:00.000Z');
       missing = c.expectedFail?.missingOperations ?? [];
       scriptMissing = Boolean(c.expectedFail?.missingScript);
-      caseScript = c.requires?.script && !scriptMissing && !live ? (await import(new URL(`./scripts/${c.id}.mjs`, import.meta.url))).script : null;
+      const scriptModule = c.requires?.script && !scriptMissing ? await import(new URL(`./scripts/${c.id}.mjs`, import.meta.url)) : null;
+      await scriptModule?.setup?.({ db, clock });
+      caseScript = !live ? scriptModule?.script ?? null : null;
       if (caseScript !== null && typeof caseScript !== 'function') throw new TypeError(`Invalid eval script ${c.id}`);
       const missingCapabilities = (c.expectedFail?.missingCapabilities ?? []).filter(name => !CAPABILITIES.includes(name));
       capabilitiesMissing = missingCapabilities.length > 0;
