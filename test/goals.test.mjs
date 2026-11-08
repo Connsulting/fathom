@@ -49,7 +49,7 @@ async function seedAccounts(db) {
   await fig.run('cash.total', 15000, 'Cash', NOW);
 }
 
-const rejects = (fn, status, re) => assert.throws(fn, e => e instanceof HttpError && e.status === status && (!re || re.test(e.message)));
+const rejects = (fn, status, re) => assert.rejects(fn, e => e instanceof HttpError && e.status === status && (!re || re.test(e.message)));
 
 test('create, edit, archive, restore and delete an owner goal', async t => {
   const s = await store(t);
@@ -74,28 +74,28 @@ test('create, edit, archive, restore and delete an owner goal', async t => {
   const d = await goalDelete(s.ctx({}, { id: g.id }));
   assert.equal(d.scenario.goals.length, 0);
   assert.equal((await s.db.prepare('SELECT count(*) AS n FROM goals').get()).n, 0);
-  rejects(async () => await goalDelete(s.ctx({}, { id: g.id })), 404);
+  await rejects(async () => await goalDelete(s.ctx({}, { id: g.id })), 404);
 });
 
 test('goal input validation: required title, length caps, horizons, non-negative targets, real dates, known sources', async t => {
   const s = await store(t);
   await seedAccounts(s.db);
-  rejects(async () => await goalCreate(s.ctx({})), 400, /title is required/);
-  rejects(async () => await goalCreate(s.ctx({ title: '   ' })), 400, /title is required/);
-  rejects(async () => await goalCreate(s.ctx({ title: 'x'.repeat(121) })), 400, /over 120/);
-  rejects(async () => await goalCreate(s.ctx({ title: 'two\nlines' })), 400, /not allowed/);
-  rejects(async () => await goalCreate(s.ctx({ title: 'ok', note: 'n'.repeat(501) })), 400, /over 500/);
-  rejects(async () => await goalCreate(s.ctx({ title: 'ok', horizon: 'someday' })), 400, /horizon/);
-  rejects(async () => await goalCreate(s.ctx({ title: 'ok', target: -1 })), 400, /negative/);
-  rejects(async () => await goalCreate(s.ctx({ title: 'ok', target: '500' })), 400, /number/);
-  rejects(async () => await goalCreate(s.ctx({ title: 'ok', target: Infinity })), 400);
-  rejects(async () => await goalCreate(s.ctx({ title: 'ok', targetDate: '2032-02-30' })), 400, /date/);
-  rejects(async () => await goalCreate(s.ctx({ title: 'ok', targetDate: 'soon' })), 400, /date/);
-  rejects(async () => await goalCreate(s.ctx({ title: 'ok', track: { accounts: ['nope'] } })), 400, /unknown account/);
-  rejects(async () => await goalCreate(s.ctx({ title: 'ok', track: { figure: 'bal.a1' } })), 400, /unknown figure/, 'only known figures');
-  rejects(async () => await goalCreate(s.ctx({ title: 'ok', track: { figure: 'cash.personal' } })), 400, /unknown figure/, 'a known figure the store lacks');
-  rejects(async () => await goalCreate(s.ctx({ title: 'ok', track: 'a1' })), 400, /track/);
-  rejects(async () => await goalUpdate(s.ctx({ title: 'x' }, { id: '../etc' })), 404);
+  await rejects(async () => await goalCreate(s.ctx({})), 400, /title is required/);
+  await rejects(async () => await goalCreate(s.ctx({ title: '   ' })), 400, /title is required/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'x'.repeat(121) })), 400, /over 120/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'two\nlines' })), 400, /not allowed/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'ok', note: 'n'.repeat(501) })), 400, /over 500/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'ok', horizon: 'someday' })), 400, /horizon/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'ok', target: -1 })), 400, /negative/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'ok', target: '500' })), 400, /number/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'ok', target: Infinity })), 400);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'ok', targetDate: '2032-02-30' })), 400, /date/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'ok', targetDate: 'soon' })), 400, /date/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'ok', track: { accounts: ['nope'] } })), 400, /unknown account/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'ok', track: { figure: 'bal.a1' } })), 400, /unknown figure/, 'only known figures');
+  await rejects(async () => await goalCreate(s.ctx({ title: 'ok', track: { figure: 'cash.personal' } })), 400, /unknown figure/, 'a known figure the store lacks');
+  await rejects(async () => await goalCreate(s.ctx({ title: 'ok', track: 'a1' })), 400, /track/);
+  await rejects(async () => await goalUpdate(s.ctx({ title: 'x' }, { id: '../etc' })), 404);
   assert.equal((await s.db.prepare('SELECT count(*) AS n FROM goals').get()).n, 0, 'nothing written');
   // Zero is a valid target; markup is stored as typed.
   const g = (await goalCreate(s.ctx({ title: '<b>{f:x}</b>', target: 0 }))).goal;
@@ -143,7 +143,7 @@ test('progress comes from tracked stored data with its provenance, never a parti
 test('seed goals can be archived and deleted but not edited; demo reset restores them', async t => {
   const s = await store(t, { demo: true });
   const before = (await buildScenario(s.db, { clock: s.config.clock })).goals.map(g => g.id);
-  rejects(async () => await goalUpdate(s.ctx({ title: 'x' }, { id: 'reserve' })), 409, /demo/);
+  await rejects(async () => await goalUpdate(s.ctx({ title: 'x' }, { id: 'reserve' })), 409, /demo/);
   await goalArchive(s.ctx({}, { id: 'reserve' }));
   await goalCreate(s.ctx({ title: 'A boat' }));
   await curveSet(s.ctx({ id: 'ret_life', value: 0.9 }));
@@ -173,10 +173,10 @@ test('curve positions persist, validate and feed onboarding priorities on a real
   assert.equal(await getSetting(s.db, 'curve.positions', null), null);
   const fresh = await buildScenario(s.db, { clock: s.config.clock });
   assert.deepEqual(Object.fromEntries(fresh.curve.filter(a => ['tax_cash', 'effort', 'human'].includes(a.id)).map(a => [a.id, a.value])), { tax_cash: 0.23, effort: 1, human: 0 });
-  rejects(async () => await curveSet(s.ctx({ id: 'nope', value: 0.5 })), 400, /unknown/);
-  rejects(async () => await curveSet(s.ctx({ id: 'effort', value: 1.5 })), 400, /0 to 1/);
-  rejects(async () => await curveSet(s.ctx({ id: 'effort', value: '0.5' })), 400, /0 to 1/);
-  rejects(async () => await curveSet(s.ctx({ positions: [] })), 400);
+  await rejects(async () => await curveSet(s.ctx({ id: 'nope', value: 0.5 })), 400, /unknown/);
+  await rejects(async () => await curveSet(s.ctx({ id: 'effort', value: 1.5 })), 400, /0 to 1/);
+  await rejects(async () => await curveSet(s.ctx({ id: 'effort', value: '0.5' })), 400, /0 to 1/);
+  await rejects(async () => await curveSet(s.ctx({ positions: [] })), 400);
 });
 
 test('recs link to the goals they serve, by topic, and archived goals do not link', async t => {

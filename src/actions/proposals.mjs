@@ -29,7 +29,7 @@ import { describedFields, describeProposal, useRouteLabels } from './describe.mj
 // The reply rule lives in evidence.mjs (confirmedProposal uses it); the tool catalog imports
 // evidence.mjs, so it cannot import this module without a cycle through the registry.
 import { isExplicitYes } from './evidence.mjs';
-import { flatMapSeries, mapSeries, someSeries } from '../shared/series.mjs';
+import { filterSeries, flatMapSeries, mapSeries, someSeries } from '../shared/series.mjs';
 export { isExplicitYes };
 
 // A typed reply that only confirms: an explicit yes followed by nothing but courtesy words. Any
@@ -68,7 +68,7 @@ async function localProposalRows(db, tool, args) {
     return selected;
   };
   const filtered = async (table, predicate) => {
-    const selected = (await db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()).filter(predicate);
+    const selected = await filterSeries(await db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all(), predicate);
     parts.push([table, selected]);
     return selected;
   };

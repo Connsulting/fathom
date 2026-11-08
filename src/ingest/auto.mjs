@@ -195,7 +195,7 @@ async function holderMatch(db, item) {
   };
   const text = [`The source names the holder "${holder}".`,
     ...fromFact.map((m) => `Your household names list ${m.name} as ${m.option === 'owner' ? 'you' : 'your spouse'}.`),
-    ...learned.map(said)].join(' ');
+    ...await mapSeries(learned, said)].join(' ');
   return {
     option, rule: 'holder_match',
     evidence: await evidence(db, text, learned.map((r) => r.id), {

@@ -28,7 +28,7 @@ const act = async (db, id, action, arg) => await recAction(ctxOf(db, { id }, arg
 const ownerOf = async (db, id) => ({ ...await db.prepare('SELECT owner, owner_override FROM recs WHERE id = ?').get(id) });
 const eventCount = async (db, id) => (await db.prepare('SELECT count(*) AS n FROM rec_events WHERE rec_id = ?').get(id)).n;
 const lastEvent = async (db, id) => ({ ...await db.prepare('SELECT action, arg, from_status, to_status, actor FROM rec_events WHERE rec_id = ? ORDER BY id DESC LIMIT 1').get(id) });
-const rejects = (fn, status) => assert.throws(fn, e => e instanceof HttpError && e.status === status, `HTTP ${status}`);
+const rejects = (fn, status) => assert.rejects(fn, e => e instanceof HttpError && e.status === status, `HTTP ${status}`);
 const isCode = code => err => err instanceof ToolError && err.code === code;
 const OPEN = s => !['hidden', 'done', 'dismissed'].includes(s);
 
@@ -122,8 +122,8 @@ describe('owner action through recAction (AC2)', () => {
   test('an unknown owner is a 400 and writes nothing', async () => {
     const before = await ownerOf(s.db, 'dcfsa');
     const events = await eventCount(s.db, 'dcfsa');
-    for (const bad of ['nobody', 'Spouse', 'YOU', '', null, 3, ['you']]) rejects(async () => await act(s.db, 'dcfsa', 'owner', bad), 400);
-    rejects(async () => await act(s.db, 'dcfsa', 'owner'), 400);
+    for (const bad of ['nobody', 'Spouse', 'YOU', '', null, 3, ['you']]) await rejects(async () => await act(s.db, 'dcfsa', 'owner', bad), 400);
+    await rejects(async () => await act(s.db, 'dcfsa', 'owner'), 400);
     assert.deepEqual(await ownerOf(s.db, 'dcfsa'), before);
     assert.equal(await eventCount(s.db, 'dcfsa'), events);
     // liveness: a valid owner on the same rec is accepted
@@ -134,8 +134,8 @@ describe('owner action through recAction (AC2)', () => {
   test('a hidden or missing rec is a 404 and writes nothing', async () => {
     assert.equal((await s.db.prepare("SELECT status FROM recs WHERE id = 'daf'").get()).status, 'hidden');
     const before = await ownerOf(s.db, 'daf');
-    rejects(async () => await act(s.db, 'daf', 'owner', 'spouse'), 404);
-    rejects(async () => await act(s.db, 'no-such-rec', 'owner', 'spouse'), 404);
+    await rejects(async () => await act(s.db, 'daf', 'owner', 'spouse'), 404);
+    await rejects(async () => await act(s.db, 'no-such-rec', 'owner', 'spouse'), 404);
     assert.deepEqual(await ownerOf(s.db, 'daf'), before);
     assert.equal(await eventCount(s.db, 'daf'), 0);
   });

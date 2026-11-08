@@ -7,7 +7,7 @@ import { txWith } from '../store/db.mjs';
 import { mapSeries } from '../shared/series.mjs';
 
 export async function requireActor(ctx) {
-  const actor = ctx.actorId || (await getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null);
+  const actor = ctx.actorId || (await getSetting(currentHandle(ctx.db), 'mode', null) === 'demo' ? 'demo' : null);
   if (!actor) throw new ToolError('forbidden', 'A signed-in person is required to make this change.');
   return actor;
 }

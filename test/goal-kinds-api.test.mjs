@@ -55,7 +55,7 @@ async function seedAccounts(db) {
 const txn = async (db, account, date, amount, description = 'Deposit') =>
   Number((await db.prepare('INSERT INTO transactions (account_id, date, amount, description) VALUES (?, ?, ?, ?) RETURNING id').get(account, date, amount, description)).id);
 
-const rejects = (fn, status, re) => assert.throws(fn, e => e instanceof HttpError && e.status === status && (!re || re.test(e.message)),
+const rejects = (fn, status, re) => assert.rejects(fn, e => e instanceof HttpError && e.status === status && (!re || re.test(e.message)),
   `expected ${status}${re ? ` matching ${re}` : ''}`);
 const defOf = async (db, id) => JSON.parse((await db.prepare('SELECT def FROM goals WHERE id = ?').get(id)).def);
 const rowOf = async (db, id) => await db.prepare('SELECT * FROM goals WHERE id = ?').get(id);
@@ -170,25 +170,25 @@ test('POST /api/goals/:id switches kind and drops the old kind\'s fields', async
 test('bad kind fields answer 400 with the validation message', async t => {
   const s = await store(t);
   await seedAccounts(s.db);
-  rejects(async () => await goalCreate(s.ctx({ ...RANGE, targetLow: 9000 })), 400, /^the low end must not be above the high end$/);
-  rejects(async () => await goalCreate(s.ctx({ ...RANGE, targetHigh: undefined })), 400, /^a range needs a low end and a high end$/);
-  rejects(async () => await goalCreate(s.ctx({ ...FLOOR, track: null })), 400, /^a floor needs something to track$/);
-  rejects(async () => await goalCreate(s.ctx({ ...FLOOR, floor: null })), 400, /^a floor needs an amount$/);
-  rejects(async () => await goalCreate(s.ctx({ ...FLOOR, targetDate: '2026-12-31' })), 400, /^targetDate does not apply to a floor goal$/);
-  rejects(async () => await goalCreate(s.ctx({ ...CONTRIB, taxYear: undefined })), 400, /^a contribution needs a tax year$/);
-  rejects(async () => await goalCreate(s.ctx({ ...CONTRIB, targetDate: '2026-01-01' })), 400, /^the deadline must be after January 1 of the tax year$/);
-  rejects(async () => await goalCreate(s.ctx({ ...CONTRIB, target: 15000 })), 400, /^the split must add up to the amount$/);
-  rejects(async () => await goalCreate(s.ctx({ ...CONTRIB, accounts: ['r1', 'nope'] })), 400, /account/);
-  rejects(async () => await goalCreate(s.ctx({ title: 'Plain', floor: 100 })), 400, /^floor does not apply to a balance goal$/);
-  rejects(async () => await goalCreate(s.ctx({ title: 'Plain', owner: 'you' })), 400, /^owner must be owner, spouse, joint or a dependent key such as kid$/);
-  rejects(async () => await goalCreate(s.ctx({ title: 'Plain', priority: 'urgent' })), 400, /priority/);
-  rejects(async () => await goalCreate(s.ctx({ title: 'Plain', kind: 'savings' })), 400, /^kind must be one of balance, range, floor, contribution$/);
-  rejects(async () => await goalCreate(s.ctx({ title: 'Plain', status: 'closed' })), 400, /status/);
+  await rejects(async () => await goalCreate(s.ctx({ ...RANGE, targetLow: 9000 })), 400, /^the low end must not be above the high end$/);
+  await rejects(async () => await goalCreate(s.ctx({ ...RANGE, targetHigh: undefined })), 400, /^a range needs a low end and a high end$/);
+  await rejects(async () => await goalCreate(s.ctx({ ...FLOOR, track: null })), 400, /^a floor needs something to track$/);
+  await rejects(async () => await goalCreate(s.ctx({ ...FLOOR, floor: null })), 400, /^a floor needs an amount$/);
+  await rejects(async () => await goalCreate(s.ctx({ ...FLOOR, targetDate: '2026-12-31' })), 400, /^targetDate does not apply to a floor goal$/);
+  await rejects(async () => await goalCreate(s.ctx({ ...CONTRIB, taxYear: undefined })), 400, /^a contribution needs a tax year$/);
+  await rejects(async () => await goalCreate(s.ctx({ ...CONTRIB, targetDate: '2026-01-01' })), 400, /^the deadline must be after January 1 of the tax year$/);
+  await rejects(async () => await goalCreate(s.ctx({ ...CONTRIB, target: 15000 })), 400, /^the split must add up to the amount$/);
+  await rejects(async () => await goalCreate(s.ctx({ ...CONTRIB, accounts: ['r1', 'nope'] })), 400, /account/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'Plain', floor: 100 })), 400, /^floor does not apply to a balance goal$/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'Plain', owner: 'you' })), 400, /^owner must be owner, spouse, joint or a dependent key such as kid$/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'Plain', priority: 'urgent' })), 400, /priority/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'Plain', kind: 'savings' })), 400, /^kind must be one of balance, range, floor, contribution$/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'Plain', status: 'closed' })), 400, /status/);
   assert.equal((await s.db.prepare('SELECT count(*) n FROM goals').get()).n, 0, 'nothing written');
 
   const r = (await goalCreate(s.ctx({ ...RANGE }))).goal;
-  rejects(async () => await goalUpdate(s.ctx({ targetHigh: 3000 }, { id: r.id })), 400, /^the low end must not be above the high end$/);
-  rejects(async () => await goalUpdate(s.ctx({ floor: 5 }, { id: r.id })), 400, /^floor does not apply to a range goal$/);
+  await rejects(async () => await goalUpdate(s.ctx({ targetHigh: 3000 }, { id: r.id })), 400, /^the low end must not be above the high end$/);
+  await rejects(async () => await goalUpdate(s.ctx({ floor: 5 }, { id: r.id })), 400, /^floor does not apply to a range goal$/);
   assert.equal((await defOf(s.db, r.id)).targetHigh, 8000, 'a refused edit changes nothing');
   assert.equal((await goalUpdate(s.ctx({ targetHigh: 9000 }, { id: r.id }))).goal.targetHigh, 9000, 'a valid edit saves');
   // Liveness: the valid shapes of every kind save.
@@ -243,8 +243,8 @@ test('status done and open mark a goal done and reopen it', async t => {
   assert.equal((await goalArchive(s.ctx({ archived: false }, { id: g.id }))).goal.status, 'open', 'restoring it reopens it');
 
   // Seed goals stay non-editable, status included.
-  rejects(async () => await goalUpdate(s.ctx({ status: 'done' }, { id: 'reserve' })), 409, /demo/);
-  rejects(async () => await goalUpdate(s.ctx({ status: 'done' }, { id: 'ira-fill' })), 409, /demo/);
+  await rejects(async () => await goalUpdate(s.ctx({ status: 'done' }, { id: 'reserve' })), 409, /demo/);
+  await rejects(async () => await goalUpdate(s.ctx({ status: 'done' }, { id: 'ira-fill' })), 409, /demo/);
   assert.equal((await rowOf(s.db, 'reserve')).done_at, null);
   const seedDone = (await buildScenario(s.db, { clock: CLOCK })).goals.find(x => x.id === 'mortgage');
   assert.equal(seedDone.status, 'done', 'a finished seed goal reads done');

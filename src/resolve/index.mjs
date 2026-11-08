@@ -260,7 +260,7 @@ export async function resolvePending(db, engine, { now = new Date().toISOString(
     const remember = async () => await setSetting(db, 'resolver.sent', { ...await getSetting(db, 'resolver.sent', {}),
       ...Object.fromEntries(batch.map(item => [item.id, fingerprints.get(item.id)])), ...(asking ? { proposals: proposalPrint } : {}) });
     const request = { purpose: 'job', system: SYSTEM, schema: RESOLVE_SCHEMA, maxTokens: MAX_TOKENS, tools: [],
-      messages: [{ role: 'user', content: JSON.stringify({ items: batch.map(payloadItem), rows: payloadRows, ...(asking ? { openKeys: openList } : {}) }) }] };
+      messages: [{ role: 'user', content: JSON.stringify({ items: await mapSeries(batch, payloadItem), rows: payloadRows, ...(asking ? { openKeys: openList } : {}) }) }] };
     const spent = Math.max(await cost(), returnedCost);
     const cap = (await getSetting(db, 'cap', { usd: 200 }))?.usd;
     const monthlyRemaining = Number.isFinite(cap) && cap >= 0 ? cap - await ledger.monthSpendUsd(now.slice(0, 7)) : 0;

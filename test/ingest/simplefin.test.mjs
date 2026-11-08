@@ -227,7 +227,7 @@ test('requests never put credentials in the URL and refuse redirects', async () 
 test('Disconnect deletes the stored access URL and stops mirroring', async () => withStore(async (s) => {
   await S.connectSimplefin(s.db, S.fakeToken(), opts(s));
   await S.syncSimplefin(s.db, opts(s));
-  assert.deepEqual(S.disconnectSimplefin(s.db), { disconnected: true });
+  assert.deepEqual(await S.disconnectSimplefin(s.db), { disconnected: true });
   assert.equal((await s.db.prepare('SELECT count(*) AS n FROM simplefin_connection').get()).n, 0);
   assert.equal((await s.db.prepare("SELECT count(*) AS n FROM accounts WHERE mirror = 'connected'").get()).n, 0);
   assert.ok((await s.db.prepare('SELECT count(*) AS n FROM transactions').get()).n > 0, 'rows stay');

@@ -269,7 +269,7 @@ export async function buildPace(db, { clock: override } = {}) {
     if (kind === 'floor' || kind === 'contribution') return { series: null, reason: 'kind_not_charted', dataEnd: null };
     return monthlyPace({ goal: kind === 'range' ? rangeGoal(goal) : goal, observations: await reader.observations(goal), clock });
   };
-  const goals = defs.map(paceOf);
+  const goals = await mapSeries(defs, paceOf);
   return { clock, rollup: paceRollup(goals, clock), goals,
     series: { goals: Object.fromEntries(await mapSeries(defs, async goal => [goal.id, await seriesOf(goal)])),
       householdSavings: await savingsSeries(db, clock) }, meters: await metersOf(db, clock, reader) };

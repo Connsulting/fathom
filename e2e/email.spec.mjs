@@ -93,7 +93,7 @@ test('Send test email adds a Test history row and writes a dev outbox file with 
   await expect(first).toContainText('Test');
   await expect(first).toContainText('Sent');
   await expect.poll(async () => (await outboxFiles()).filter((f) => !before.has(f)).length).toBeGreaterThan(0);
-  const subjects = (await outboxFiles()).filter((f) => !before.has(f)).map(outboxSubject);
+  const subjects = await Promise.all((await outboxFiles()).filter((f) => !before.has(f)).map(outboxSubject));
   const rowText = await first.innerText();
   expect(subjects.some((s) => s && rowText.includes(s)), `a new outbox file's subject is in the row: ${subjects.join(' | ')}`).toBe(true);
 });
