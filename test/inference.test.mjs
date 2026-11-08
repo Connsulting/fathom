@@ -9,6 +9,7 @@ import { callTool } from '../src/tools/index.mjs';
 import { createEngine } from '../src/engine/index.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { threadCreate } from '../src/api/handlers.mjs';
+import { writePreference } from '../src/actions/preferences.mjs';
 
 const now = '2026-11-05T12:00:00Z';
 async function store(t) {
@@ -170,14 +171,77 @@ test('AC3/AC4: mortgage uses matched payments and balance snapshots, infers rate
   assert.deepEqual(complete.obligations[0].missing, []);
 });
 
-test('unmatched payments and too little history ask for missing fields without using all debt payments', async t => {
+test('unmatched payments do not establish a mortgage or use all debt payments', async t => {
   const { db, ctx } = await store(t);
   loan(db, { months: 2, matched: false });
-  const row = (await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, ctx)).obligations[0];
-  assert.equal(row.observedMonthly.value, null);
-  assert.equal(row.endDate.value, null);
-  assert.deepEqual(row.missing.sort(), ['rate', 'monthlyPayment', 'escrowMonthly'].map(k => `obligations.mortgage.${k}`).sort());
-  assert.equal(row.terms.balance.value, 18356.72);
+  const out = await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, ctx);
+  assert.equal(out.obligations.length, 0);
+  assert.ok(out.gaps.some(g => /match.*payment/i.test(g.message)));
+});
+
+test('AC6/AC8: a paid-off mortgage memory overrides stale positive loan data throughout planner, Ask and projections', async t => {
+  const { db, ctx } = await store(t);
+  loan(db);
+  await planRun(db);
+  const text = 'Our mortgage is already paid off.';
+  const memory = writePreference({ ...ctx, ownerText: text }, { text, evidence: text }, { fromAsk: true });
+  const out = await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, ctx);
+  assert.equal(out.obligations.length, 0);
+  assert.deepEqual(out.gaps, []);
+  assert.equal(out.inactive[0].status, 'paid_off');
+  assert.match(out.inactive[0].message, /mortgage is paid off/i);
+  assert.ok(out.inactive[0].provenance.sources.some(s => s.table === 'preferences' && s.ids.includes(memory.preference.id)));
+  const summary = await callTool('household', { operation: 'summary' }, ctx);
+  assert.equal(summary.mortgage.status, 'paid_off');
+  assert.ok(!buildScenario(db).recs.some(r => r.question?.keys.includes('obligations.mortgage')), 'a saved memory clears an old payoff question immediately');
+  await planRun(db);
+  assert.ok(!buildScenario(db).recs.some(r => r.question?.keys.includes('obligations.mortgage')));
+  const base = await callTool('spending', { operation: 'total', annualize: true }, ctx);
+  const projection = await callTool('spending', { operation: 'projection', years: 3, obligations: ['mortgage'] }, ctx);
+  assert.ok(projection.years.every(y => y.spending.value === base.total.value && !y.changes.some(c => c.kind === 'mortgage')));
+
+  const calls = [], transport = createEngine({ mode: 'fake' });
+  const engine = { mode: 'live', isOn: () => true, call: request => {
+    calls.push(request);
+    return transport.call({ ...request, fake: [{ toolCalls: [{ name: 'spending', args: { operation: 'obligations', obligations: ['mortgage'] } }] },
+      { text: 'Your mortgage is paid off. There is no mortgage obligation or future mortgage payoff to project. Other debt payments are not a mortgage payment.' }] });
+  } };
+  const reply = await createLiveAnswerer({ engine, root: householdOf(db).root, services: { ...householdOf(db).services, engine } })
+    .answer({ db, key: 'ask:0123456789ab', text: 'When does our mortgage end?' });
+  assert.match(reply.paragraphs.join(' '), /mortgage is paid off/i);
+  assert.ok(calls.some(r => r.systemDynamic?.includes(text)), 'Ask receives the existing household memory');
+  assert.ok(!/\$/.test(reply.paragraphs.join(' ')), 'no debt aggregate is quoted as a mortgage payment');
+});
+
+test('AC7: zero balances and a paid-off structured fact yield no mortgage obligation even with historical payments', async t => {
+  const { db, ctx } = await store(t);
+  loan(db);
+  db.prepare("INSERT INTO balances(account_id,date,amount) VALUES ('loan','2026-11-04',0)").run();
+  let out = await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, ctx);
+  assert.equal(out.obligations.length, 0);
+  assert.deepEqual(out.gaps, []);
+  await planRun(db);
+  assert.ok(!buildScenario(db).recs.some(r => r.question?.keys.includes('obligations.mortgage')));
+  db.prepare("DELETE FROM balances WHERE date='2026-11-04'").run();
+  addFact(db, 'obligations.mortgage', { paidOff: true, balance: 18000, rate: 0.05, monthlyPayment: 1200 });
+  out = await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, ctx);
+  assert.equal(out.obligations.length, 0);
+  assert.equal(out.inactive[0].status, 'paid_off');
+});
+
+test('paid-off memory matching rejects negation, plans, questions and someone else\'s mortgage', async t => {
+  const { db, ctx } = await store(t);
+  loan(db);
+  for (const text of ['Our mortgage is not paid off.', 'We plan to pay off our mortgage.', 'If our mortgage is paid off, we could retire.', 'Is our mortgage paid off?', "My parents' mortgage is paid off.", 'Our mortgage will be paid off next year.']) {
+    db.prepare('DELETE FROM preferences').run();
+    writePreference({ ...ctx, ownerText: text }, { text, evidence: text }, { fromAsk: true });
+    assert.equal((await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, ctx)).obligations.length, 1, text);
+  }
+  for (const text of ['The mortgage is paid off.', 'We have paid off our mortgage.', 'I paid off my mortgage.', 'Our mortgage was fully paid off in 2024.']) {
+    db.prepare('DELETE FROM preferences').run();
+    writePreference({ ...ctx, ownerText: text }, { text, evidence: text }, { fromAsk: true });
+    assert.equal((await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, ctx)).obligations.length, 0, text);
+  }
 });
 
 test('projection removes only the mortgage portion, preserves other debts, and honors a selection excluding the loan', async t => {
