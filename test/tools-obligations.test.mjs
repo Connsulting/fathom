@@ -122,3 +122,15 @@ test('one child leaving care cannot erase care for a younger dependent without a
  assert.ok(out.gaps.some(g=>/per-dependent allocation/.test(g.message)));
  assert.equal(out.years[5].spending.value,base.total.value-7200);
 });
+
+test('one child entering school cannot replace the whole childcare total while another needs full-time care',async t=>{
+ const s=await spendingStore(t);
+ for(let m=1;m<=10;m++)s.tx('checking',`2026-${String(m).padStart(2,'0')}-15`,-1200,'Childcare');
+ s.fact('household.dependentBirthDates',['2022-03-01','2024-03-01']);
+ s.fact('obligations.childcare',{schoolAgeMonthly:200});
+ const base=await s.call('total',{annualize:true});
+ const out=await s.call('projection',{years:6,obligations:['childcare']});
+ assert.equal(out.years[1].changes.find(c=>c.stage==='school_age').applied,false);
+ for(const i of [0,1,2])assert.equal(out.years[i].spending.value,base.total.value);
+ assert.equal(out.years[4].spending.value,base.total.value-12000);
+});
