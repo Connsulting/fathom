@@ -74,7 +74,9 @@ async function referenceState() {
 const comparable = scenario => {
   const c = structuredClone(scenario);
   delete c.engine;
-  if (c.live) delete c.live.engine;
+  // Runtime state, not migrated data: the migration leaves outbound work paused, so the service
+  // status differs by design.
+  if (c.live) { delete c.live.engine; delete c.live.services; }
   for (const item of c.live?.ingest?.items ?? []) delete item.createdAt;
   return c;
 };
