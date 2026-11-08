@@ -88,6 +88,18 @@ function commandOf(scenario, key, text) {
 }
 
 export function fakeAnswerScript({ scenario, key, questionId, text, whatIfPack, summary, propose = false } = {}) {
+  if (typeof text === 'string' && /show (?:our |my )?monthly spending.*chart/i.test(text)) {
+    const args = { operation: 'total', groupBy: 'month', window: 'ytd' };
+    return [{ toolCalls: [{ name: 'spending', args }] },
+      { toolCalls: [{ name: 'show', args: { operation: 'chart', kind: 'line', source: { tool: 'spending', args, path: 'groups' }, x: 'key', series: [{ path: 'figure' }] } }] },
+      { text: 'Your monthly spending follows.\n\n{b:b1}' }];
+  }
+  if (typeof text === 'string' && /(?:recent transactions.*table|table.*recent transactions)/i.test(text)) {
+    const args = { operation: 'search', limit: 5 };
+    return [{ toolCalls: [{ name: 'transactions', args }] },
+      { toolCalls: [{ name: 'show', args: { operation: 'table', source: { tool: 'transactions', args, path: 'rows' }, columns: ['date', 'description', 'amount'] } }] },
+      { text: 'Your recent transactions follow.\n\n{b:b1}' }];
+  }
   const preference = propose && typeof text === 'string' ? /^(?:please )?remember(?: this)?(?: preference)?[: ,]+(.+)$/i.exec(text)?.[1] : null;
   const date = !preference && propose && typeof text === 'string' && /(?:expected|due) date|baby.*due/i.test(text) ? /\b\d{4}-\d{2}-\d{2}\b/.exec(text)?.[0] : null;
   const command = !date && propose && typeof text === 'string' ? commandOf(scenario, key, text) : null;

@@ -1,4 +1,4 @@
-import { instructions } from '../../tools/index.mjs';
+import { mcpInstructions } from '../../tools/index.mjs';
 // AC1 (raw HTTP): POST /mcp on the real server child. Auth, Host and Origin guards, methods,
 // scope-filtered tools, the permission refusal, last-use tracking and log hygiene.
 
@@ -177,7 +177,7 @@ describe('protocol', () => {
     assert.equal(result.serverInfo.version, BUILD_SHA, 'the server reports the git SHA of the build');
     assert.ok(result.capabilities && result.capabilities.tools);
     assert.equal(typeof result.protocolVersion, 'string');
-    assert.equal(result.instructions, instructions);
+    assert.equal(result.instructions, mcpInstructions);
   });
 
   test('tools/list is filtered by scope with read-only annotations', async () => {
@@ -301,4 +301,23 @@ test('operation scopes narrow listed enums and reject step before invalid argume
   const denied = rpcResult(await callToolRpc(s.baseUrl, writeKey.key, 'act_on_recommendation', { operation: 'step', index: 'invalid', extra: true }));
   assert.equal(denied.isError, true);
   assert.ok(denied.content[0].text.startsWith('Permission denied: act_on_recommendation.step needs the write:steps scope'));
+});
+
+test('show is neither listed nor callable and its rules are absent from MCP instructions', async () => {
+  const { SCOPES } = await import('../keys.mjs');
+  const key = await createKey(s.baseUrl, 'All scopes', SCOPES);
+  seenKeys.push(key.key);
+  const listed = await mcpPost(s.baseUrl, { auth: bearer(key.key), method: 'tools/list' });
+  assert.ok(!rpcResult(listed).tools.some(t => t.name === 'show'));
+  const info = await request(s.baseUrl, { path: '/api/mcp' });
+  assert.equal(info.status, 200);
+  assert.ok(info.json.tools.some(t => t.name === 'household'));
+  assert.ok(!info.json.tools.some(t => t.name === 'show'));
+  assert.deepEqual(info.json.tools, rpcResult(listed).tools.map(t => ({
+    name: t.name, description: t.description, kind: t.annotations.readOnlyHint ? 'read' : 'write',
+  })));
+  const called = await callToolRpc(s.baseUrl, key.key, 'show', { operation: 'table' });
+  assert.equal(rpcResult(called).isError, true);
+  const initialized = await mcpPost(s.baseUrl, { auth: bearer(key.key), method: 'initialize', params: initializeParams() });
+  assert.doesNotMatch(rpcResult(initialized).instructions, /show\.(?:chart|table|compare|timeline)|call `?show|\{b:/);
 });

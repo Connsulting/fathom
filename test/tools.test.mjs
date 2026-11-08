@@ -80,7 +80,7 @@ describe('registry', () => {
 
   test('MCP scope filtering sorts even an unsorted registry and preserves each scope', () => {
     for (const scopes of [['read'], ['write:recs'], ['read', 'write:facts', 'write:goals'], []]) {
-      const expected = tools.filter(tool => tool.operations.some(o => (o.scopes || [o.scope]).some(s => scopes.includes(s)))).map(tool => tool.name).sort();
+      const expected = tools.filter(tool => !tool.askOnly && tool.operations.some(o => (o.scopes || [o.scope]).some(s => scopes.includes(s)))).map(tool => tool.name).sort();
       assert.deepEqual(toolsForScopes(scopes, [...tools].reverse()).map(tool => tool.name), expected);
     }
   });
