@@ -1,12 +1,17 @@
 import { HttpError, sendJson } from './http.mjs';
-import { safePath } from '../../web/auth/return-path.js';
+import { safePath, safeHousehold } from '../../web/auth/return-path.js';
+import { checkAssertion } from './household-context.mjs';
 
 export const identityOf = (req, auth) => auth.identity(req);
 
-export function revalidateRequest({ authenticate, checkAccess, household, runtimes }) {
+// After the body is read: the session must still hold, pass the route's access check, still carry
+// the asserted household context (a switch meanwhile is 409 stale) and still name the household
+// fixed before the body.
+export function revalidateRequest({ authenticate, checkAccess, assertion = null, household, runtimes }) {
   const identity = authenticate();
   if (!identity) throw new HttpError(401, 'unauthorized');
   checkAccess?.(identity);
+  if (assertion) checkAssertion(assertion, identity);
   if (household && (identity.householdId !== household.householdId || runtimes.get(household.householdId) !== household)) {
     throw new HttpError(403, 'household membership required');
   }
@@ -22,8 +27,16 @@ export function signInLocation(url) {
   const raw = String(url || '/');
   const q = raw.indexOf('?');
   const path = safePath(q >= 0 ? raw.slice(0, q) : raw);
-  if (!path || path === '/' || path === '/signin') return '/signin';
-  return '/signin?next=' + encodeURIComponent(path);
+  // A deep link's household target (?household=<id>) is kept so the app still asks before opening it.
+  let household = null;
+  if (q >= 0) {
+    try { household = safeHousehold(new URLSearchParams(raw.slice(q + 1)).get('household')); } catch { household = null; }
+  }
+  const params = new URLSearchParams();
+  if (path && path !== '/' && path !== '/signin') params.set('next', path);
+  if (household) params.set('household', household);
+  const query = params.toString();
+  return '/signin' + (query ? '?' + query : '');
 }
 
 export function sendUnauthorized(req, res, isApi) {

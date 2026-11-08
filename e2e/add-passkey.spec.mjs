@@ -94,7 +94,7 @@ test.describe('adding a passkey on another device', () => {
       // householdId is the opaque platform household id (MT-01 contradiction 8), no longer the integer 1.
       expect(ownerIdentity).toMatchObject({ email: OWNER, role: 'admin', householdId: expect.any(String), operator: false });
       expect(ownerIdentity.householdId.length).toBeGreaterThan(0);
-      expect(ownerIdentity.memberships).toEqual([{ householdId: ownerIdentity.householdId, role: 'admin' }]);
+      expect(ownerIdentity.memberships).toEqual([{ householdId: ownerIdentity.householdId, role: 'admin', name: null }]);
       firstCredentials = await first.auth.credentials();
       expect(firstCredentials.length).toBe(1);
       firstSession = await sessionCookie(first);
@@ -124,13 +124,13 @@ test.describe('adding a passkey on another device', () => {
 
     await test.step('a new browser with its own authenticator redeems the link and lands signed in', async () => {
       const second = await browserClient(browser, { authenticator: true });
-      expect((await second.context.request.get('/api/scenario')).status()).toBe(401);
+      expect((await householdGet(second, '/api/scenario')).status()).toBe(401);
       await visitEnrollment(second, addLink);
       const before = outboxNames();
       const registration = await register(second, 'Other device');
       expect(registration.identity.id).toBe(ownerIdentity.id);
       expect(registration.options.excludeCredentials.some((item) => item.id === primaryId)).toBe(true);
-      expect((await second.context.request.get('/api/scenario')).status()).toBe(200);
+      expect((await householdGet(second, '/api/scenario')).status()).toBe(200);
       secondCredentials = await second.auth.credentials();
       expect(secondCredentials.length).toBe(1);
       expect(secondCredentials[0].credentialId).not.toBe(firstCredentials[0].credentialId);
@@ -142,7 +142,7 @@ test.describe('adding a passkey on another device', () => {
 
       expect((await sessionIdentity(first)).id, 'the first browser is still signed in').toBe(ownerIdentity.id);
       expect(await sessionCookie(first)).toBe(firstSession);
-      expect((await first.context.request.get('/api/scenario')).status()).toBe(200);
+      expect((await householdGet(first, '/api/scenario')).status()).toBe(200);
       await assertPasskeyNames(first, ['Primary device', 'Other device']);
       await assertPasskeyNames(second, ['Primary device', 'Other device']);
       await usedLinkIsDenied(browser, addLink);
@@ -153,7 +153,7 @@ test.describe('adding a passkey on another device', () => {
         const client = await browserClient(browser, { authenticator: true, credentials });
         await signin(client);
         expect((await sessionIdentity(client)).id).toBe(ownerIdentity.id);
-        expect((await client.context.request.get('/api/scenario')).status()).toBe(200);
+        expect((await householdGet(client, '/api/scenario')).status()).toBe(200);
       }
       expect((await sessionIdentity(first)).id, 'other sign-ins leave the first browser signed in').toBe(ownerIdentity.id);
     });
@@ -356,5 +356,14 @@ async function usedLinkIsDenied(browser, link) {
   await replay.page.getByRole('button', { name: 'Create passkey', exact: true }).click();
   expect((await denied).status()).toBe(410);
   await expect(replay.page.locator('body')).toContainText(/expired|used|no longer valid/i);
-  expect((await replay.context.request.get('/api/scenario')).status()).toBe(401);
+  expect((await householdGet(replay, '/api/scenario')).status()).toBe(401);
+}
+
+// A household request as the web client sends it: the session's household context asserted
+// (src/api/household-context.mjs). A signed-out client asserts nothing and gets 401.
+async function householdGet(client, path) {
+  const session = await (await client.context.request.get(`${base}/api/auth/session`)).json();
+  const i = session.identity;
+  const headers = i && i.householdId ? { 'X-Fathom-Household': i.householdId, 'X-Fathom-Context-Version': String(i.contextVersion) } : {};
+  return client.context.request.get(path, { headers });
 }

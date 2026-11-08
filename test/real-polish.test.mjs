@@ -184,7 +184,7 @@ describe('engine models', () => {
     const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const sc = buildScenario(await S.store(), { clock: NOW });
     eng.bind({
-      api: { s: { engine: sc.engine }, engineOn: () => true }, arr: a => (Array.isArray(a) ? a : []), esc, T: esc, figHtml: () => '$0',
+      api: { s: { engine: sc.engine }, engineOn: () => true, canAdmin: () => true }, arr: a => (Array.isArray(a) ? a : []), esc, T: esc, figHtml: () => '$0',
       shell: html => html, section: (t, b) => b, pageHead: () => '',
     });
     const html = eng.render();

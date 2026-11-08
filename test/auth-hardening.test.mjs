@@ -190,11 +190,11 @@ test('add-passkey options and verify require a sign-in strictly less than ten mi
   const session = await client.request({ path: '/api/auth/session' });
   assert.equal(session.status, 200);
   assert.equal(session.json.identity.id, client.session.user.id);
-  // Identity gains operator and memberships (MT-01 contradiction 8).
-  assert.deepEqual(Object.keys(session.json.identity).sort(), ['email', 'householdId', 'id', 'login', 'memberships', 'name', 'operator', 'role']);
+  // Identity gains operator and memberships (MT-01 contradiction 8) and the session's context version (MT-09).
+  assert.deepEqual(Object.keys(session.json.identity).sort(), ['contextVersion', 'email', 'householdId', 'id', 'login', 'memberships', 'name', 'operator', 'role']);
   assert.equal(session.json.identity.householdId, app.hh);
   assert.equal(session.json.identity.operator, false);
-  assert.deepEqual(session.json.identity.memberships, [{ householdId: app.hh, role: 'member' }]);
+  assert.deepEqual(session.json.identity.memberships, [{ householdId: app.hh, role: 'member', name: null }]);
   assert.deepEqual(app.store.listPasskeys(client.session.user.id), []);
   const next = await app.client('another@example.test');
   app.advance(RECENT + 1);

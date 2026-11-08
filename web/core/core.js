@@ -12,6 +12,16 @@ import { signInTarget } from '../auth/return-path.js';
 //    tasks, wake) and adds `scenario.live`; api.state is derived from it.
 //  - Any later 401 drops the scenario from memory and the page, then goes to /signin (leaving
 //    one notice code in sessionStorage for that page to explain why).
+//  - Household context (docs/multi-tenancy.md, Active household and switching): on a real store
+//    every request goes through apiFetch, which sends the session's household and context version
+//    as X-Fathom-Household and X-Fathom-Context-Version and drops a response for a context this tab
+//    has left. A 409 household_context_stale (another tab switched) stops the tab: requests are
+//    aborted and refused, and a notice offers a reload. api.switchHousehold(id) aborts every
+//    request and stream, switches on the server and reloads the page, which clears every client
+//    scenario, conversation, pack and search state and fetches the new scenario. A user with
+//    several households and none selected, or a deep link (?household=<id>) to another household,
+//    chooses explicitly before any financial request. Download links carry the context as query
+//    parameters (api.downloadHref). Browser storage is keyed by api.storageScope().
 //  - Actions POST to the API, replace the scenario with the one in the response, then notify. They
 //    return a Promise (designs may ignore it). Requests run one at a time, in order. A failed
 //    request keeps the old state and shows a dismissible error line (role=alert).
@@ -120,6 +130,17 @@ const tokenOpts = {
 
 let S = null;           // scenario object from the API (replaced after every action)
 let IDENT = null;       // { id, email, role, login, name } from GET /api/auth/session, or null (demo)
+let CTX = null;         // { householdId, contextVersion, memberships } of the session, or null (demo)
+let switching = false;  // set once a household switch started: every response is dropped
+let staleNow = false;   // set once the server refused this tab's context as stale
+const inflight = new Set(); // AbortControllers of requests in flight
+const readers = new Set();  // stream readers still being consumed
+const leftContext = () => switching || staleNow || leaving;
+// Abort every request and stream body of this tab.
+function abortAll() {
+  for (const c of inflight) c.abort();
+  for (const r of readers) { try { r.cancel().catch(() => {}); } catch (e) { /* already closed */ } }
+}
 let leaving = false;    // set once a 401 sent the page to /signin
 let version = 0;        // bumped on every change; caches key off it
 let routeStep = null;   // onboarding step of the current route (route state, not stored)
@@ -362,7 +383,7 @@ function hideError() {
 }
 
 function showError(message) {
-  if (leaving) return;
+  if (leaving || staleNow || switching) return;
   hideError();
   const el = document.createElement('div');
   el.className = 'fx-err';
@@ -395,25 +416,151 @@ function signedOut(notice) {
   version += 1;
   if (root) { root.className = ''; root.innerHTML = ''; }
   if (notice) { try { window.sessionStorage.setItem(NOTICE_KEY, notice); } catch (e) { /* the page still works */ } }
-  try { window.location.replace(signInTarget(window.location.pathname, window.location.hash)); } catch (e) { /* ignore */ }
+  let household = null;
+  try { household = new URLSearchParams(window.location.search).get('household'); } catch (e) { household = null; }
+  try { window.location.replace(signInTarget(window.location.pathname, window.location.hash, household)); } catch (e) { /* ignore */ }
 }
+
+// ---------------------------------------------------------------- household context
+
+const STALE_CODE = 'household_context_stale';
+const ctxHeaders = () => (CTX ? { 'X-Fathom-Household': CTX.householdId, 'X-Fathom-Context-Version': String(CTX.contextVersion) } : {});
+const droppedError = () => { const err = new Error('This tab left that household.'); err.dropped = true; return err; };
+
+// Another tab switched the session's household: stop this tab. Requests in flight are aborted,
+// later ones are refused without being sent, and a notice offers a reload into the current household.
+function staleTab() {
+  if (staleNow || leaving || switching) return;
+  staleNow = true;
+  abortAll();
+  hideError();
+  const el = document.createElement('div');
+  el.className = 'fx-err fx-stale';
+  el.setAttribute('role', 'alert');
+  el.setAttribute('data-fx-stale', '');
+  const span = document.createElement('span');
+  span.className = 'fx-err-t';
+  span.textContent = 'The household changed in another tab, so this tab stopped. Nothing more was saved here.';
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'fx-err-x';
+  btn.textContent = 'Reload';
+  btn.addEventListener('click', () => { window.location.reload(); });
+  el.appendChild(span);
+  el.appendChild(btn);
+  document.body.appendChild(el);
+}
+
+// Every API request of the app: same origin, no cache, the context assertion on a real store.
+// Resolves the response of the context it was sent in; a 401 goes to sign-in, a stale refusal or
+// a response stamped with another context stops the tab, and anything after a switch or a stale
+// refusal is dropped (rejects with err.dropped).
+async function apiFetch(path, init) {
+  if (staleNow || switching || leaving) throw droppedError();
+  const sent = CTX;
+  const ctl = new AbortController();
+  inflight.add(ctl);
+  try {
+    const res = await fetch(path, { credentials: 'same-origin', cache: 'no-store', ...(init || {}),
+      headers: { ...((init && init.headers) || {}), ...ctxHeaders() }, signal: ctl.signal });
+    if (res.status === 401) signedOut('expired');
+    if (res.status === 409) {
+      let code = null;
+      try { code = (await res.clone().json()).code; } catch (e) { code = null; }
+      if (code === STALE_CODE) { staleTab(); throw droppedError(); }
+    }
+    const hh = res.headers.get('x-fathom-household');
+    const ver = res.headers.get('x-fathom-context-version');
+    if (sent && hh !== null && (hh !== sent.householdId || ver !== String(sent.contextVersion))) { staleTab(); throw droppedError(); }
+    if (switching || staleNow || CTX !== sent) throw droppedError();
+    return res;
+  } catch (e) {
+    if (e && e.dropped) throw e;
+    if (ctl.signal.aborted || switching || staleNow) throw droppedError();
+    throw e;
+  } finally {
+    inflight.delete(ctl);
+  }
+}
+
+// A link the browser downloads itself (an anchor): the context goes in the query.
+function downloadHref(path) {
+  if (!CTX) return path;
+  const q = 'household=' + encodeURIComponent(CTX.householdId) + '&contextVersion=' + encodeURIComponent(String(CTX.contextVersion));
+  return path + (path.includes('?') ? '&' : '?') + q;
+}
+
+const householdLabel = (m, i) => (m && typeof m.name === 'string' && m.name ? m.name : 'Household ' + (i + 1));
+function households() {
+  if (!CTX) return [];
+  return CTX.memberships.map((m, i) => ({ id: m.householdId, name: householdLabel(m, i), role: m.role, current: m.householdId === CTX.householdId }));
+}
+const currentHousehold = () => households().find(h => h.current) || null;
+
+// Switch the session's household and reload the page. Resolves false (nothing changed) when the
+// server refused; the page is gone otherwise. `target` is the URL to load afterwards (default the
+// home route).
+async function switchHousehold(id, target) {
+  if (!CTX || switching || leaving || typeof id !== 'string' || !id) return false;
+  const to = households().find(h => h.id === id);
+  switching = true;
+  abortAll();
+  // From here until the reload the page shows no household's figures: the old household's content
+  // is taken down before the request, so a slow switch never shows one household's name over
+  // another's data.
+  const shown = Boolean(current);
+  if (shown) {
+    closePopover();
+    unmountCurrent();
+    bootMessage('Switching household', 'Opening ' + (to ? to.name : 'the household') + '.');
+  }
+  let res = null;
+  try {
+    res = await fetch('/api/auth/household', {
+      method: 'POST', credentials: 'same-origin', cache: 'no-store',
+      headers: { 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ householdId: id }),
+    });
+  } catch (e) { res = null; }
+  if (res && res.status === 401) { switching = false; signedOut('expired'); return false; }
+  if (!res || !res.ok) {
+    switching = false;
+    // Nothing changed on the server: put the current household back.
+    if (shown) { const def = pickDesign(); if (def) mountDesign(def); }
+    showError('Could not switch household. ' + (res ? 'The server answered ' + res.status + '.' : 'The server could not be reached.'));
+    return false;
+  }
+  hideError();
+  closePopover();
+  unmountCurrent();
+  S = null;
+  version += 1;
+  if (root) { root.className = ''; root.innerHTML = ''; }
+  try { window.history.replaceState(null, '', target || '/'); } catch (e) { /* the reload still clears the tab */ }
+  window.location.reload();
+  return true;
+}
+
+// Per-viewer browser storage key part: user and household on a real store, '' on a demo store.
+const storageScope = () => (CTX && IDENT ? IDENT.id + ':' + CTX.householdId : '');
 
 // A FormData body goes out as multipart with no content-type header (the browser sets the boundary).
 async function postJson(path, body) {
   const form = typeof FormData !== 'undefined' && body instanceof FormData;
   let res;
   try {
-    res = await fetch(path, {
+    res = await apiFetch(path, {
       method: 'POST',
       headers: form ? { accept: 'application/json' } : { 'content-type': 'application/json', accept: 'application/json' },
       body: form ? body : JSON.stringify(body || {}),
-      credentials: 'same-origin',
     });
   } catch (e) {
+    if (e && e.dropped) throw e;
     throw new Error('The server could not be reached.');
   }
   let data = null;
   try { data = await res.json(); } catch (e) { data = null; }
+  if (leftContext()) throw droppedError();
   if (res.status === 401) signedOut('expired');
   if (!res.ok) {
     const err = new Error((data && typeof data.error === 'string' && data.error) || 'The server answered ' + res.status + '.');
@@ -450,19 +597,19 @@ const broken = (key) => { const err = new Error('The answer stream broke.'); err
 async function postStream(path, body, onEvent) {
   let res;
   try {
-    res = await fetch(path, {
+    res = await apiFetch(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'text/event-stream' },
       body: JSON.stringify(body || {}),
-      credentials: 'same-origin',
     });
   } catch (e) {
+    if (e && e.dropped) throw e;
     throw broken(null);
   }
-  if (res.status === 401) signedOut('expired');
   if (!/text\/event-stream/i.test(res.headers.get('content-type') || '')) {
     let data = null;
     try { data = await res.json(); } catch (e) { data = null; }
+    if (leftContext()) throw droppedError();
     if (!res.ok) {
       const err = new Error((data && typeof data.error === 'string' && data.error) || 'The server answered ' + res.status + '.');
       err.status = res.status;
@@ -474,10 +621,12 @@ async function postStream(path, body, onEvent) {
   let key = null;
   let buf = '';
   const dec = new TextDecoder();
+  const reader = res.body.getReader();
+  readers.add(reader);
   try {
-    const reader = res.body.getReader();
     for (;;) {
       const { value, done: end } = await reader.read();
+      if (leftContext()) throw droppedError();
       if (end) break;
       buf += dec.decode(value, { stream: true }).replace(/\r\n?/g, '\n');
       let at;
@@ -490,6 +639,8 @@ async function postStream(path, body, onEvent) {
           throw broken(key);
         }
         if (ev.name === 'error') {
+          // A switch or sign-out of this session ends its streams as stale.
+          if (ev.data && ev.data.code === STALE_CODE) { staleTab(); throw droppedError(); }
           const err = new Error((ev.data && typeof ev.data.error === 'string' && ev.data.error) || 'The server could not answer.');
           err.status = (ev.data && ev.data.status) || 500;
           throw err;
@@ -499,8 +650,11 @@ async function postStream(path, body, onEvent) {
       }
     }
   } catch (e) {
-    if (e && (e.status || e.broken)) throw e;
+    if (e && (e.status || e.broken || e.dropped)) throw e;
+  } finally {
+    readers.delete(reader);
   }
+  if (leftContext()) throw droppedError();
   throw broken(key);
 }
 
@@ -516,7 +670,7 @@ const threadIds = (scenario) => new Set(arr(scenario && scenario.live && scenari
 // Resolves { scenario, key } or null after RECOVER_FOR_MS.
 async function recoverTurn({ key, before, ids }) {
   const until = Date.now() + RECOVER_FOR_MS;
-  while (!leaving && Date.now() < until) {
+  while (!leftContext() && Date.now() < until) {
     await new Promise(r => setTimeout(r, RECOVER_EVERY_MS));
     let next;
     try { next = await loadScenario(); } catch (e) { continue; }
@@ -535,7 +689,7 @@ function sendStream(path, body, onEvent, onOk, key) {
     const before = key ? meTurns(S, key) : 0;
     const ids = threadIds(S);
     return postStream(path, body, onEvent).catch(err => {
-      if (!err || !err.broken) throw err;
+      if (!err || !err.broken || switching || staleNow) throw err;
       try { onEvent('recovering', {}); } catch (e) { /* ignore */ }
       return recoverTurn({ key: err.key || key, before, ids }).then(got => {
         if (!got) throw new Error('The answer did not arrive in time. Reload the page to check for it.');
@@ -551,7 +705,7 @@ function sendStream(path, body, onEvent, onOk, key) {
         return out;
       },
       err => {
-        showError('Could not get an answer. ' + (err && err.message ? err.message : ''));
+        if (!(err && err.dropped)) showError('Could not get an answer. ' + (err && err.message ? err.message : ''));
         return null;
       }
     );
@@ -1000,10 +1154,10 @@ function buildYourPlans(fileIds) {
 // any failure (a 401 still sends the page to sign-in).
 async function getRead(path) {
   try {
-    const res = await fetch(path, { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
-    if (res.status === 401) signedOut('expired');
+    const res = await apiFetch(path, { headers: { accept: 'application/json' } });
     if (!res.ok) return null;
     const data = await res.json();
+    if (leftContext()) return null;
     return data && typeof data === 'object' ? data : null;
   } catch (e) {
     return null;
@@ -1137,12 +1291,12 @@ function accountMerge(id, withId) {
 async function packEntry(packId, entryId) {
   if (packId == null || entryId == null || packId === '' || entryId === '') return null;
   try {
-    const res = await fetch('/api/packs/' + encodeURIComponent(packId) + '/entries/' + encodeURIComponent(entryId), {
-      headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store',
+    const res = await apiFetch('/api/packs/' + encodeURIComponent(packId) + '/entries/' + encodeURIComponent(entryId), {
+      headers: { accept: 'application/json' },
     });
-    if (res.status === 401) signedOut('expired');
     if (!res.ok) return null;
     const data = await res.json();
+    if (leftContext()) return null;
     const e = data && data.entry;
     if (!e || typeof e !== 'object' || typeof e.body !== 'string') return null;
     return { id: String(e.id == null ? entryId : e.id), title: String(e.title || ''), body: e.body, cites: arr(e.cites) };
@@ -1195,10 +1349,10 @@ const retryable = err => !!err && (err.status == null || RETRY_STATUS.has(err.st
 
 async function confirmItemNow(id) {
   try {
-    const res = await fetch('/api/confirm/' + encodeURIComponent(id), { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
-    if (res.status === 401) signedOut('expired');
+    const res = await apiFetch('/api/confirm/' + encodeURIComponent(id), { headers: { accept: 'application/json' } });
     if (!res.ok) return null;
     const d = await res.json();
+    if (leftContext()) return null;
     return d && d.item && typeof d.item === 'object' ? d.item : null;
   } catch (e) {
     return null;
@@ -1427,6 +1581,16 @@ const api = {
   buildYourPlans,
   ingest,
   identity: () => (IDENT ? { ...IDENT } : null),
+  // Household context: the user's households [{ id, name, role, current }] (empty on a demo store),
+  // the current one or null, switching, anchors that download, the shared request helper for
+  // screens with their own reads, whether the viewer may use admin controls, and the storage scope.
+  households,
+  household: currentHousehold,
+  switchHousehold,
+  downloadHref,
+  fetch: apiFetch,
+  canAdmin: () => !IDENT || IDENT.role === 'admin',
+  storageScope,
   upload,
   simplefinConnect,
   simplefinSync,
@@ -1617,10 +1781,10 @@ function registerDesign(def) {
 // ---------------------------------------------------------------- boot
 
 async function loadScenario() {
-  const res = await fetch('/api/scenario', { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
-  if (res.status === 401) signedOut('expired');
+  const res = await apiFetch('/api/scenario', { headers: { accept: 'application/json' } });
   if (!res.ok) throw new Error('The server answered ' + res.status + '.');
   const data = await res.json();
+  if (leftContext()) throw droppedError();
   if (!data || typeof data !== 'object' || !data.meta) throw new Error('The server sent an unexpected reply.');
   return data;
 }
@@ -1636,7 +1800,20 @@ function identityOf(i) {
   return { id: i.id == null ? null : String(i.id), email: email || login, role: i.role === 'admin' ? 'admin' : 'member', login, name };
 }
 
-// GET /api/auth/session, before any household request: { demo, identity }.
+// The household context of a session identity, or null without one.
+function householdContextOf(i) {
+  if (!i || typeof i !== 'object') return null;
+  const version = Number(i.contextVersion);
+  const memberships = arr(i.memberships).filter(m => m && typeof m.householdId === 'string' && m.householdId)
+    .map(m => ({ householdId: m.householdId, role: m.role === 'admin' ? 'admin' : 'member', name: typeof m.name === 'string' ? m.name : null }));
+  return {
+    householdId: typeof i.householdId === 'string' && i.householdId ? i.householdId : null,
+    contextVersion: Number.isSafeInteger(version) && version > 0 ? version : null,
+    memberships,
+  };
+}
+
+// GET /api/auth/session, before any household request: { demo, identity, context }.
 async function loadSession() {
   let res;
   try {
@@ -1649,7 +1826,75 @@ async function loadSession() {
   let d = null;
   try { d = await res.json(); } catch (e) { d = null; }
   if (!d || typeof d !== 'object') throw new Error('The server sent an unexpected reply.');
-  return { demo: d.demo === true, identity: identityOf(d.identity) };
+  return { demo: d.demo === true, identity: identityOf(d.identity), context: d.demo === true ? null : householdContextOf(d.identity) };
+}
+
+// Explicit household selection before any financial request: a session with no household (several
+// memberships after sign-in) or a deep link naming another household. Renders the chooser and
+// resolves true when it did; false lets boot load the current household. A link to a household the
+// user cannot open is never followed; with a current household its notice shows after mount.
+let pendingNotice = '';
+function chooseHousehold() {
+  const params = new URLSearchParams(window.location.search);
+  const wanted = params.get('household');
+  const hash = window.location.hash || '';
+  const list = households();
+  const current = currentHousehold();
+  if (wanted !== null) {
+    params.delete('household');
+    const q = params.toString();
+    // The fragment names the linked household's records, so it stays only when that household is
+    // the current one; refusing the link or staying never opens a same-id record here.
+    const kept = current && wanted === current.id ? hash : '';
+    try { window.history.replaceState(null, '', window.location.pathname + (q ? '?' + q : '') + kept); } catch (e) { /* ignore */ }
+  }
+  if (wanted !== null && current && wanted === current.id) return false;
+  const target = wanted !== null ? list.find(h => h.id === wanted) || null : null;
+  if (wanted !== null && !target && current) {
+    pendingNotice = 'That link is for a household you cannot open here. You are in ' + current.name + '.';
+    return false;
+  }
+  if (current && !target) return false;
+  renderChooser({ target, current, list, unavailable: wanted !== null && !target, hash });
+  return true;
+}
+
+function renderChooser({ target, current, list, unavailable, hash }) {
+  if (!root) return;
+  root.className = 'fx-choose-root';
+  let title;
+  let body;
+  let buttons;
+  if (target) {
+    title = 'This link opens ' + target.name;
+    body = current
+      ? 'You are working in ' + current.name + '. Opening the link switches this browser to ' + target.name + '; other open tabs stop until they reload.'
+      : 'Choose it to open the link.';
+    buttons = '<button type="button" class="fx-choose-b pri" data-fx-choose="' + esc(target.id) + '" data-fx-target="' + esc(hash) + '">Open ' + esc(target.name) + '</button>'
+      + (current ? '<button type="button" class="fx-choose-b" data-fx-stay>Stay in ' + esc(current.name) + '</button>' : '');
+  } else if (list.length) {
+    title = 'Choose a household';
+    body = (unavailable ? 'That link is for a household you cannot open here. ' : '') + 'You belong to more than one household. Pick the one to work in; you can switch later from the top bar.';
+    buttons = list.map(h => '<button type="button" class="fx-choose-b" data-fx-choose="' + esc(h.id) + '">' + esc(h.name)
+      + '<span>' + (h.role === 'admin' ? 'Household admin' : 'Household member') + '</span></button>').join('');
+  } else {
+    title = 'No household';
+    body = 'This account is not an active member of any household. A household admin can invite you.';
+    buttons = '<a class="fx-choose-b" href="/account">Account</a>';
+  }
+  root.innerHTML = '<main class="fx-boot fx-choose"><h1>' + esc(title) + '</h1><p>' + esc(body) + '</p><div class="fx-choose-list">' + buttons + '</div></main>';
+  root.addEventListener('click', e => {
+    const pick = e.target.closest && e.target.closest('[data-fx-choose]');
+    if (pick) {
+      root.querySelectorAll('button').forEach(b => { b.disabled = true; });
+      const after = pick.getAttribute('data-fx-target');
+      switchHousehold(pick.getAttribute('data-fx-choose'), '/' + (after || '')).then(ok => {
+        if (!ok) root.querySelectorAll('button').forEach(b => { b.disabled = false; });
+      });
+      return;
+    }
+    if (e.target.closest && e.target.closest('[data-fx-stay]')) window.location.reload();
+  });
 }
 
 async function boot() {
@@ -1664,6 +1909,8 @@ async function boot() {
     const session = await loadSession();
     if (!session.demo && !session.identity) { signedOut(null); return; }
     IDENT = session.identity;
+    CTX = session.context;
+    if (CTX && chooseHousehold()) return;
     S = await loadScenario();
   } catch (e) {
     if (leaving) return;
@@ -1677,6 +1924,7 @@ async function boot() {
   const def = pickDesign();
   if (def) mountDesign(def);
   else bootMessage('Fathom could not start.', 'No interface is registered.');
+  if (pendingNotice) showError(pendingNotice);
   // Engine switches and provenance popovers for any .fx-fig, unless a design handles the click
   // and calls preventDefault. These listen on the document, so they run after the design's own
   // root listeners whichever registered first (a design that loads after boot mounts later).

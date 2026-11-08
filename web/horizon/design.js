@@ -161,6 +161,7 @@ function advisorText(r) {
 function icon(name) {
   const p = {
     check: '<path d="M3.5 8.5l3 3 6-7"/>',
+    house: '<path d="M2.75 7.25L8 2.75l5.25 4.5M4.25 6v7.25h7.5V6"/>',
     x: '<path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/>',
     clock: '<circle cx="8" cy="8" r="5.5"/><path d="M8 5v3.2l2 1.3"/>',
     arrow: '<path d="M3 8h10M9 4l4 4-4 4"/>',
@@ -425,7 +426,19 @@ function whoLine() {
   if (!id) return '';
   const who = id.email || id.login || id.name;
   const role = id.role === 'admin' ? 'Household admin' : id.role === 'member' ? 'Household member' : '';
-  return `<div class="h-who">Signed in as ${esc(who)}${role ? `<span>${role}</span>` : ''}</div>`;
+  // With several households, name the one this page shows.
+  const hh = api.households?.().length > 1 ? api.household?.() : null;
+  const where = hh ? `${role ? `${role} of ` : ''}${esc(hh.name)}` : role;
+  return `<div class="h-who">Signed in as ${esc(who)}${where ? `<span>${where}</span>` : ''}</div>`;
+}
+
+// The household picker: only for a user with more than one household. A native select, so the
+// phone gets its own picker; changing it switches the session and reloads the page.
+function householdPicker() {
+  const list = api.households?.() || [];
+  if (list.length < 2) return '';
+  const opts = list.map((h) => `<option value="${esc(h.id)}"${h.current ? ' selected' : ''}>${esc(h.name)}</option>`).join('');
+  return `<label class="h-hh" title="Household">${icon('house')}<select data-hh-switch aria-label="Household">${opts}</select></label>`;
 }
 
 // The route the tabs read: the page under a dialog (rec, account, P&L rows) when one is open.
@@ -471,7 +484,7 @@ function shell(inner) {
   return `<header class="h-top"><div class="h-top-in">
     <a class="h-mark" href="${href('home')}" data-go="home" aria-label="${esc(api.s.meta.product || 'Fathom')}">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></a>
     <div class="h-navbar"><nav class="h-nav" aria-label="Main">${tabLinks(tab)}</nav></div>
-    <div class="h-top-act"><button type="button" class="h-search-btn" data-keys="switcher" aria-label="Search" title="Search (Ctrl+K)">${icon('search')}</button>${gearLink(tab)}</div>
+    <div class="h-top-act">${householdPicker()}<button type="button" class="h-search-btn" data-keys="switcher" aria-label="Search" title="Search (Ctrl+K)">${icon('search')}</button>${gearLink(tab)}</div>
   </div></header>${api.s.live.publicDemo ? '<div class="h-demo-marker" role="note">Demo with sample data</div>' : ''}${off}<main class="h-main">${subNav(tab, r.name)}${inner}</main>${tabBar(tab)}`;
 }
 
@@ -1849,7 +1862,9 @@ function pOnboarding(step) {
   }
   const who = api.identity?.();
   const exit = api.demo() !== 'fresh' ? goA('home', 'Back to the app', {}, 'h-ob-x') : (who ? `<span class="h-ob-id">Signed in as ${esc(who.name || who.login)}</span>` : '');
-  return `<div class="h-ob"><div class="h-ob-top"><span class="h-mark">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></span>${exit}</div>${rail}<div class="h-ob-card">${body}</div></div>`;
+  // With several households, onboarding names and switches the household it sets up.
+  const picker = householdPicker();
+  return `<div class="h-ob"><div class="h-ob-top">${picker ? `<span class="h-ob-hh">${picker}</span>` : ''}<span class="h-mark">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></span>${exit}</div>${rail}<div class="h-ob-card">${body}</div></div>`;
 }
 
 // The Goals step on a Home with no open goals (where 'home', primary Save goals). Onboarding no
@@ -2437,6 +2452,17 @@ function onInput(e) {
 // Committed changes: a goal form select or checkbox, and a released curve or priority slider
 // (saved to the store, so both feed the planner and chat).
 function onChange(e) {
+  if (e.target?.matches?.('select[data-hh-switch]')) {
+    const sel = e.target;
+    const now = api.household?.();
+    sel.disabled = true;
+    api.switchHousehold(sel.value).then((ok) => {
+      if (ok) return;
+      sel.disabled = false;
+      if (now) sel.value = now.id;
+    });
+    return;
+  }
   if (SCREENS.some((s) => s.onChange?.(e))) return;
   if (recAnswers.onChange(e)) return;
   const t = e.target;
