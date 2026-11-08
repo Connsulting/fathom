@@ -155,8 +155,8 @@ export function wireSchema(schema) {
 // testTransport option (tests); no config or environment key sets one.
 export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 
-const messagesClient = (credential, baseURL) => new Anthropic({ apiKey: credential.value, authToken: null,
-  baseURL, maxRetries: 0, timeout: 120000 });
+const messagesClient = (credential, baseURL, timeoutMs = 120000) => new Anthropic({ apiKey: credential.value, authToken: null,
+  baseURL, maxRetries: 0, timeout: timeoutMs });
 
 // An HTTP error response means the API rejected the request without generating, so its cost is a
 // known zero. Only failures with no response (network, timeout) keep the conservative unknown path.
@@ -178,8 +178,9 @@ function pricedUsage(model, usage) {
 
 const textOf = content => content.filter(block => block.type === 'text').map(block => block.text).join('');
 
-export async function messagesRound({ credential, system, systemDynamic, messages, maxTokens, model, schema, baseURL = ANTHROPIC_BASE_URL }) {
-  const { response, round } = await createMessage(messagesClient(credential, baseURL), { model, max_tokens: maxTokens,
+export async function messagesRound({ credential, system, systemDynamic, messages, maxTokens, model, schema, baseURL = ANTHROPIC_BASE_URL,
+  timeoutMs = 120000 }) {
+  const { response, round } = await createMessage(messagesClient(credential, baseURL, timeoutMs), { model, max_tokens: maxTokens,
     system: [{ type: 'text', text: system || 'Extract only documented rows.', cache_control: { type: 'ephemeral' } },
       ...(systemDynamic ? [{ type: 'text', text: systemDynamic }] : [])],
     messages, output_config: { effort: 'low', ...(schema ? { format: { type: 'json_schema', schema: wireSchema(schema) } } : {}) } }, { model });

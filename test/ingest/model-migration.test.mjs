@@ -15,7 +15,7 @@ function legacy() {
   return db;
 }
 function snapshot(db) {
-  return Object.fromEntries(listTables(db).filter(n => !['schema_migrations', 'column_mappings', 'import_proposals', 'import_batches'].includes(n))
+  return Object.fromEntries(listTables(db).filter(n => !['schema_migrations', 'column_mappings', 'import_proposals', 'import_batches', 'import_model_spend'].includes(n))
     .map(n => [n, db.prepare(`SELECT rowid AS _rowid, * FROM "${n}" ORDER BY rowid`).all()]));
 }
 
@@ -23,7 +23,7 @@ test('populated additive upgrade preserves financial rows and provenance; old ma
   const db = legacy();
   try {
     const before = snapshot(db); const old = db.prepare('SELECT * FROM column_mappings').get();
-    assert.deepEqual(migrate(db, { through: 29 }).applied, [29]);
+    assert.deepEqual(migrate(db, { through: 30 }).applied, [29, 30]);
     assert.deepEqual(snapshot(db), before);
     const mapping = db.prepare('SELECT * FROM column_mappings').get();
     for (const k of Object.keys(old)) assert.deepEqual(mapping[k], old[k]);

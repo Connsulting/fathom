@@ -122,7 +122,7 @@ function hasRowid(db, table) {
 
 // Digest rules: the moved table is gone after staging, schema_migrations is compared on the ids
 // before the cutover, the SimpleFIN secret changes envelope (its plaintext is checked apart), store
-// migration 028 adds two nullable columns to preferences and store migration 030 adds the nullable
+// migration 028 adds two nullable columns to preferences and store migration 031 adds the nullable
 // spend_ledger.round_id, which the schema-26 source lacks.
 const TABLE_RULES = Object.freeze({
   schema_migrations: { where: `id <= ${PRE_TENANCY_SCHEMA}` },

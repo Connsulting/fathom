@@ -633,7 +633,7 @@ export const digestRules = throughId => ({
   simplefin_connection: { omit: ['access_blob'] },
   // Store migration 028 adds two nullable columns the pre-tenancy store (schema 26) does not have.
   preferences: { omit: ['origin', 'conversation_key'] },
-  // Store migration 030 adds spend_ledger.round_id (the platform model round of a live mirror).
+  // Store migration 031 adds spend_ledger.round_id (the platform model round of a live mirror).
   spend_ledger: { omit: ['round_id'] },
   column_mappings: { omit: ['schema_version', 'mapping_version', 'approval_status', 'approved_by', 'approved_at', 'structural_context'] },
   schema_migrations: { where: `id <= ${Number(throughId)}` },
