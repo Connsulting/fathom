@@ -8,15 +8,16 @@ test('SEC2: numeric evidence excludes identifier and date spans', () => {
     'account 4821 (last4)', 'account (last4) 4821', 'account x4821',
     'account xx4821', 'account ****4821', 'account ...4821', 'account …4821',
     'account number 4821', 'routing number 4821', 'reference #4821',
-    'account AB4821', 'account AB-4821', 'confirmation 4821',
+    'account AB4821', 'account AB-4821', 'confirmation 4821', 'ID: 4821',
     'Form 4821', '401(k)', '529 account', 'W-2', '1099-NEC',
     'Due 2028-09-17', 'Due 09/17/2028', 'Due September 17, 2028',
     'Due 17 September 2028',
+    '123-45-6789', '555-010-1234', '192.0.2.21',
   ]) assert.deepEqual(statedAmounts(text), [], text);
 });
 
 test('SEC2: amounts keep their sign, magnitude and percent units', () => {
-  for (const text of ['-$4,821', '$-4,821', 'minus $4,821', '−$4,821']) {
+  for (const text of ['-$4,821', '$-4,821', 'minus $4,821', 'MINUS $4,821', '−$4,821']) {
     assert.deepEqual(statedAmounts(text), [-4821], text);
   }
   assert.deepEqual(statedAmounts('Save $4.821k in account ending in 4821 by 2028-09-17'), [4821]);
@@ -24,6 +25,8 @@ test('SEC2: amounts keep their sign, magnitude and percent units', () => {
   assert.deepEqual(statedAmounts('Save 4.821 thousand'), [4821]);
   assert.deepEqual(statedAmounts('The rate is 4.821%'), [0.04821]);
   assert.deepEqual(statedAmounts('The target is 4821'), [4821]);
+  assert.deepEqual(statedAmounts('Save $529 for the 529 account'), [529]);
+  assert.deepEqual(statedAmounts('Save 529 dollars for the 529 account'), [529]);
 });
 
 test('SEC2: evidence excerpts cannot turn identifiers, date parts or partial quantities into numbers', () => {
