@@ -31,9 +31,9 @@ async function fixture(t) {
 test('status is current, then stale after a new transaction; snapshots remain unchanged', async t => {
   const f = await fixture(t);
   const spec = { source: { tool: 'spending', args: { operation: 'total', groupBy: 'category', from: '2026-01', to: '2026-10' }, path: 'groups' }, columns: ['key', 'figure'] };
-  const { id } = await f.store('table', spec);
+  const { id, block } = await f.store('table', spec);
   assert.deepEqual(await f.status(), [{ messageId: id, id: 'b1', state: 'current', changed: 0 }]);
-  const row = f.db.prepare('SELECT * FROM transactions WHERE amount < 0 LIMIT 1').get();
+  const row = f.db.prepare('SELECT * FROM transactions WHERE id = ?').get(block.snapshot.rows[0].cells[1].fig.provenance.sources[0].ids[0]);
   const before = f.db.prepare('SELECT provenance FROM messages WHERE id = ?').get(id.slice(1)).provenance;
   f.db.prepare('INSERT INTO transactions (account_id, date, amount, description) VALUES (?, ?, ?, ?)').run(row.account_id, '2026-10-15', row.amount, row.description);
   const blocks = await f.status();

@@ -548,3 +548,4 @@
 .d-horizon .h-blk-ev-l { min-width: 0; color: var(--tx); font-size: 14px; overflow-wrap: anywhere; }
 .d-horizon .h-blk-asof { margin: 12px 0 0; color: var(--fa); font-size: 12.5px; }
 .d-horizon .h-blk-ev-v { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.h-blk-unavailable { opacity: .55; }
