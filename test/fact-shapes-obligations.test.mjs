@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spendingStore } from './helpers/spending.mjs';
 import { recordFactAnswers, FactAnswerError } from '../src/facts/answers.mjs';
+import { callTool } from '../src/tools/index.mjs';
 import { answerShape, questionFor } from '../src/jobs/triggers/common.mjs';
 
 const now = '2026-11-05T12:00:00Z';
@@ -24,7 +25,11 @@ test('C7 facts accept their declared shapes and reject malformed neighbors atomi
   ];
   for (const [key,value,invalid] of cases) {
     assert.ok(answerShape(key));
-    recordFactAnswers(s.db,[{key,value}],{now});
+    const words = v => v && typeof v === 'object' ? Object.values(v).flatMap(words) : [String(v)];
+    const evidence = words(value).join(' ');
+    const out = await callTool('answer',{operation:'fact',key,value,evidence},{...s.ctx,actorId:'synthetic-actor',ownerText:evidence});
+    assert.ok(out.receipt);
+    assert.deepEqual(out.value,value);
     const before=s.db.prepare('SELECT value FROM facts WHERE key=?').get(key).value;
     assert.throws(()=>recordFactAnswers(s.db,[{key,value:invalid}],{now}),FactAnswerError,key);
     assert.equal(s.db.prepare('SELECT value FROM facts WHERE key=?').get(key).value,before);

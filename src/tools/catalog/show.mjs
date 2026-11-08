@@ -53,8 +53,8 @@ export const operations = Object.entries(definitions).map(([name, shape]) => ({
   },
 }));
 export const askRules = [
-  'When a trend, breakdown, ranking or side-by-side choice is clearer drawn, call show after its reads, copying their exact tool and arguments as source. At most four blocks per answer.',
-  'Never put a number, a label for a number, or markup in show. Select paths to fields the result already has.',
-  'Put the returned {b:<id>} marker on its own line where the block belongs. Do not repeat every block value in prose; quote only the figures the answer turns on as usual.',
-  'If show returns dropped, do not mention the block.',
+  'For trends, breakdowns, rankings or comparisons, call show after reads with their exact tool and arguments as source. At most four blocks per answer.',
+  'No numbers, numeric labels or markup in show; select existing result paths.',
+  'Put {b:<id>} on its own line. In prose, quote only figures the answer turns on; do not repeat every block value.',
+  'Omit dropped blocks.',
 ];

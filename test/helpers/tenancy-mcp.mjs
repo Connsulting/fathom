@@ -87,3 +87,25 @@ export function digest(db) {
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all();
   return JSON.stringify(tables.map(({ name }) => [name, db.prepare(`SELECT * FROM "${name}" ORDER BY rowid`).all()]));
 }
+
+export function c7ReadFixtures(household) {
+  const {db,canary}=household;
+  const amount=household.retirementBalance,monthly=canary.includes('Alpha')?400:600;
+  db.prepare("UPDATE accounts SET owner='owner' WHERE id='colliding-account'").run();
+  const fact=(key,value)=>db.prepare('INSERT INTO facts(key,value,as_of,updated_at) VALUES (?,?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value')
+    .run(key,JSON.stringify(value),'2026-11-05','2026-11-05');
+  fact('household.ownerBirthDate',canary.includes('Alpha')?'1980-06-15':'1985-08-31');
+  fact('household.retireAge',{owner:50});
+  fact('obligations.mortgage',{balance:10000,rate:0,monthlyPayment:monthly,escrowMonthly:100,payoffDate:'2027-01-01'});
+  for(let month=1;month<=10;month++) {
+    const date=`2026-${String(month).padStart(2,'0')}-10`;
+    db.prepare('INSERT INTO transactions(account_id,date,amount,category,description,parser,dedupe_key) VALUES (?,?,?,?,?,?,?)')
+      .run('colliding-account',date,-monthly,'Mortgage',canary,'aggregator',`${canary}-${month}`);
+  }
+  return [
+    {tool:'spending',args:{operation:'obligations',obligations:['mortgage']},path:'obligations.0.monthly.value',expected:monthly},
+    {tool:'spending',args:{operation:'projection',years:2,obligations:['mortgage']},path:'years.1.spending.value',expected:1200},
+    {tool:'retirement',args:{operation:'access',people:'owner'},path:'people.0.born.value',expected:canary.includes('Alpha')?'1980-06-15':'1985-08-31'},
+    {tool:'retirement',args:{operation:'bridge'},path:'accessible.cash.value',expected:amount},
+  ];
+}

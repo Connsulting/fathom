@@ -6,7 +6,7 @@ import { assertRefsResolve } from './helpers/figures.mjs';
 async function setup(t){
  const s=await spendingStore(t);s.ctx.channel='mcp';
  for(const [id,kind,amount] of [['plan','retirement',50000],['ira','ira',20000],['roth','roth',30000],['broker','taxable',40000],['cash','cash',10000],['hsa','hsa',5000]]){
-  s.account(id,kind,'Owner');s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run(id,'2026-10-31',amount);
+  s.account(id,kind,'owner');s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run(id,'2026-10-31',amount);
  }
  s.fact('household.ownerBirthDate','1980-06-15');s.fact('household.spouseBirthDate','1982-08-31');
  s.fact('accounts.planType',{plan:'401k',ira:'traditional_ira',roth:'roth_ira'});
@@ -69,4 +69,33 @@ test('bridge counts stored basis, taxable and cash, gates employer money on sepa
  assert.equal(out.accessible.rothContributions.value,0);
  assert.ok(out.gaps.some(g=>g.message.includes('accounts.rothBasis')));
  await assert.rejects(s.call('bridge',{retireAge:{value:50,source:'owner',evidence:'age 55'}}),e=>e.code==='bad_input');
+});
+
+test('Roth qualification waits for the later clock and missing facts stay unavailable',async t=>{
+ const s=await setup(t);
+ s.fact('household.ownerBirthDate','1960-02-29');
+ s.fact('accounts.rothFirstContributionYear',{roth:2025});
+ const out=await s.call('access',{people:'owner'});
+ assert.equal(out.people[0].milestones.find(m=>m.event==='roth_earnings_qualified').date.value,'2030-01-01');
+ s.db.prepare("DELETE FROM facts WHERE key='accounts.rothFirstContributionYear'").run();
+ const missing=await s.call('access',{people:'owner'});
+ assert.equal(missing.people[0].milestones.find(m=>m.event==='roth_earnings_qualified').date.value,null);
+ assert.ok(missing.gaps.some(g=>g.message.includes('accounts.rothFirstContributionYear')));
+});
+
+test('bridge uses the person-scoped retirement fact, excludes spouse and business balances and exposes missing balances',async t=>{
+ const s=await setup(t);
+ s.fact('household.retireAge',{owner:55,spouse:50});
+ s.account('spouse-cash','cash','spouse');s.account('company-cash','cash','business');
+ for(const id of ['spouse-cash','company-cash'])s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run(id,'2026-10-31',999999);
+ const out=await s.call('bridge');
+ assert.equal(out.yearsToAccess.value,4.5);
+ assert.equal(out.accessible.cash.value,10000);
+ s.db.prepare("DELETE FROM balances WHERE account_id='broker'").run();
+ const missing=await s.call('bridge');
+ assert.equal(missing.accessible.taxable.value,null);
+ assert.equal(missing.shortfall.value,null);
+ assert.ok(missing.gaps.some(g=>g.code==='missing_fact'));
+ s.db.prepare("DELETE FROM facts WHERE key='household.retireAge'").run();
+ assert.equal((await s.call('bridge')).yearsToAccess.value,null);
 });

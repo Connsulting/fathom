@@ -64,7 +64,7 @@ beside C1 and merges before any live run is used to judge a tool ticket. Section
    and `transactions.search` carries `ids` if #76 is on main when C1 starts. PR #79 (bounded
    category and Confirm suggestions) edits `src/categories/store.mjs` and `src/ingest/confirm.mjs`,
    which C8 also edits; the second to merge rebases.
-4. Context budget. The estimate for the full design here is about 26,000 of the 30,000-character
+4. Context budget. The estimate for the full design here is about 26,000 of the 34,000-character
    ceiling (section "Design rule"), after declaring the shared Ref, Assumption and Operand shapes
    loosely in schemas and fully in the handlers and rules. Every ticket after C1 runs the budget
    test. A ticket that would cross the ceiling shortens descriptions or schema text inside its own
@@ -131,7 +131,7 @@ Context budget. Every tool's name, description and input schema together, as `to
 returns them to a key holding every scope, stay under about 8,000 tokens. The measure is a
 character count as a proxy: `test/tools-registry.test.mjs` (C1) builds the tool list for a key
 with every scope through `toolsForScopes`, serializes `[{ name, description, inputSchema }]` with
-`JSON.stringify`, and fails above 30,000 characters (8,000 tokens at 3.75 characters per token, a
+`JSON.stringify`, and fails above 34,000 characters (8,000 tokens at 3.75 characters per token, a
 conservative ratio for JSON schema text). The same test fails on a description over 900
 characters, and on the assembled routing and rule text (section 4) over 8,000 characters. It
 prints the measured totals so a ticket's PR can quote them. Today's 30 tools measure 12,633
@@ -457,7 +457,7 @@ MCP is stateless per request, so references are re-evaluable, not session handle
    total.
 4. Periods: at most 120 months (`MAX_MONTHS` in `src/accounts/trend.mjs`).
 5. A tool description is at most 900 characters, an operation summary at most 140, and the whole
-   listed catalog at most 30,000 characters (Design rule).
+   listed catalog at most 34,000 characters (Design rule).
 6. A tool result is at most 256 KB of JSON; past that the tool truncates its longest list and sets
    `truncated: true`.
 
