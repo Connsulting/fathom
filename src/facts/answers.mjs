@@ -1,3 +1,4 @@
+import { undoDefault } from './derive.mjs';
 import { tx, parseJson } from '../store/db.mjs';
 import { upsertFact } from '../store/facts.mjs';
 import { answerShape, acceptsAnswerAccount } from '../jobs/triggers/common.mjs';
@@ -81,6 +82,7 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
     const label = channel === 'resolver' ? `Fathom resolved this from stored evidence on ${date}` : channel ? `you told Fathom ${channel === 'ask' ? 'in Ask' : 'through MCP'} on ${date}` : `you answered on ${date}`;
     db.prepare('INSERT OR IGNORE INTO sources (id, label, as_of, kind, note) VALUES (?, ?, ?, ?, ?)').run(src, label, date, channel === 'resolver' ? 'derived' : 'owner', '');
     for (const w of writes) {
+      undoDefault(db, w.key, w.value);
       const before = db.prepare('SELECT * FROM facts WHERE key = ?').get(w.key) || null;
       if (!channel || !before || before.value !== JSON.stringify(w.value)) {
         upsertFact(db, { ...w, src, asOf: date, confirmed: true, now, provenance: { parser: channel || 'answer', locator: { note: label,

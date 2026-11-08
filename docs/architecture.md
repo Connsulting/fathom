@@ -474,6 +474,8 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `simplefin_snapshots` | `sf_key` PK (references `simplefin_accounts.sf_key`, cascade delete), `snapshot` JSON `{inst, name, mask, maskSure, balance, balanceDate, from, to, count, recent}` (what the last sync saw of the bridge account; the 3 latest postings; no account or connection ids), `at`. Gives a pending `account_match` card its SimpleFIN side (migration 017). |
 | `ingest_epoch` | `id` PK (always 1), `n`. Bumped by triggers on every `files` insert and update (migration 009); readers treat a missing row as 0. |
 | `column_mappings` | `signature` PK (header signature), `mapping` JSON, `src`, `created_at`, `uses` |
+| `import_proposals` | Household-local `(id, version)` PK, file/hash binding, typed proposal JSON, interpreter/mapping versions, status, actor and approval evidence |
+| `import_batches` | Household-local commit and Undo before/after images, receipt id, unique proposal/version FK |
 | `entity_aliases` | `alias` PK (normalized alias name), `entity` (canonical display name), `created_at` |
 | `held_facts` | `id` PK, `hold` (`employer:<employerKey>`), `key`, `value` JSON, `file_id`, `parser`, `locator`, `confidence`, `created_at` |
 | `simplefin_connection` | `id` PK (always 1), `access_blob` (the SimpleFIN access URL encrypted with the data key, base64; never plaintext), `connected_at`, `last_sync_at`, `status` (`ok`, `reconnect` or `error`), `error_code`, `messages` JSON (sanitized bridge messages from the last sync), `accounts` (count). Migration 014. |
@@ -484,6 +486,8 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `advisor_checkin` | `id` PK (always 1), `date`, `time` (`HH:MM` or NULL), `length_min`, `updated_at`. The owner-set next check-in (migration 011). |
 | `advisor_packets` | `id` PK (`advpkt-` and 16 hex), `created_at`, `clock` (the scenario date it was built for), `rec_ids` JSON, `stored_path` (encrypted under the data key, `files/<id>.bin`), `bytes`, `sha256` (migration 011) |
 | `planner_recs` | `rec_id` PK (references `recs.id`), `trigger_id`, `grounding_hash`, `prose_src` in model, template, `first_run`, `last_run` (reference `job_runs.id`), `retired_at`, `retired_reason`, `retired_from`, `held_from`. Bookkeeping for planner-owned recs (migration 007). |
+
+Migration 029 adds `schema_version`, `mapping_version`, `approval_status`, `approved_by`, `approved_at`, and `structural_context` to `column_mappings`. Existing mappings are unapproved; historical financial rows and locators remain intact. The new proposal contract is internal until upload cutover. It accepts cited fields and declarative transforms only, with complete source-region coverage required for completeness claims. This migration does not change live mapping reuse.
 
 Migration 002 (`002-ingest.sql`) adds the ingest columns above (`files.parser` through
 `files.coverage`, `accounts.source_id` and `identity`, `transactions.occurrence`, every
