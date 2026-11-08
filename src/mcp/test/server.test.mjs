@@ -194,7 +194,7 @@ describe('protocol', () => {
     const w = writeTools.find(x => x.name === 'act_on_recommendation');
     assert.ok(w, 'write key lists the write tool');
     assert.deepEqual(w.annotations, { readOnlyHint: false, destructiveHint: false, openWorldHint: false });
-    assert.equal(writeTools.length, readTools.length + 2);
+    assert.equal(writeTools.length, readTools.length + 3);
   });
 
   test('a read tool call returns its result as JSON text', async () => {
@@ -297,7 +297,7 @@ test('operation scopes narrow listed enums and reject step before invalid argume
   assert.ok(!readTools.some(t => t.annotations.readOnlyHint === false));
   const mixed = rpcResult(await mcpPost(s.baseUrl, { auth: bearer(writeKey.key), method: 'tools/list' })).tools;
   const rec = mixed.find(t => t.name === 'act_on_recommendation');
-  assert.deepEqual(rec.inputSchema.properties.operation.enum, ['owner', 'status']);
+  assert.deepEqual(rec.inputSchema.properties.operation.enum, ['owner', 'start_over', 'status']);
   const denied = rpcResult(await callToolRpc(s.baseUrl, writeKey.key, 'act_on_recommendation', { operation: 'step', index: 'invalid', extra: true }));
   assert.equal(denied.isError, true);
   assert.ok(denied.content[0].text.startsWith('Permission denied: act_on_recommendation.step needs the write:steps scope'));
