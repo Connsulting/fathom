@@ -99,3 +99,19 @@ test('undoing a batch reopen refuses a later edit to any account field it would 
  assert.equal(s.db.prepare("SELECT owner FROM accounts WHERE id='manual'").get().owner,'Later owner');
  assert.equal(getItem(s.db,owner).status,'pending');assert.equal(getItem(s.db,kind).status,'pending');
 });
+
+test('large Confirm batches keep the result bounded while applying and undoing every answer',async t=>{
+ const s=await setup(t),items=[];
+ for(let i=0;i<40;i++){
+  const accountId=`bulk-${i}`;s.db.prepare("INSERT INTO accounts (id,name,kind) VALUES (?,?,'cash')").run(accountId,'Synthetic account');
+  const q=ask(s.db,{kind:'account_owner',subject:accountId,question:'Synthetic imported context '.repeat(320),options:OWNER_OPTIONS,context:{},now:NOW});
+  items.push({id:q.id,answer:'owner'});
+ }
+ const result=await callTool('answer',{operation:'confirm',items},s.ctx);
+ assert.ok(Buffer.byteLength(JSON.stringify(result))<=256*1024);
+ assert.equal(result.truncated,true);
+ assert.equal(s.db.prepare("SELECT count(*) AS n FROM accounts WHERE id LIKE 'bulk-%' AND owner='You'").get().n,items.length);
+ assert.equal(result.undo.args.id,result.receipt.id);
+ await undo(s.ctx,result);
+ assert.equal(s.db.prepare("SELECT count(*) AS n FROM accounts WHERE id LIKE 'bulk-%' AND owner IS NULL").get().n,items.length);
+});

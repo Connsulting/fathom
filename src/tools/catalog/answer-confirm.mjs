@@ -9,6 +9,7 @@ import { taxYearFor } from '../../yearend/expected.mjs';
 import { requireActor, registerReceiptKind, saveReceipt, replanAction } from '../../actions/receipts.mjs';
 import { requireEvidence } from '../../actions/evidence.mjs';
 import { ANSWER_SHAPES, answerShape } from '../../jobs/triggers/common.mjs';
+import { bounded } from './balances.mjs';
 import { clockOf, plainDeep } from './figures.mjs';
 import { tokenScope } from '../../scenario/build.mjs';
 import { ToolError } from '../errors.mjs';
@@ -75,7 +76,7 @@ function confirmWrite(operation,args,ctx){
     if(!isDeepStrictEqual(before.items,after.items))receipt=saveReceipt(ctx,{scope:'write:confirm',kind:operation==='confirm'?'confirm_answer':'confirm_reopen',id:JSON.stringify(ids),label:operation==='confirm'?'Confirm answers':'Reopen Confirm answers',before,after,from:before.items.map(i=>({id:i.id,answer:i.answer})),to:after.items.map(i=>({id:i.id,answer:i.answer}))});
   }));
   ctx.onReceipt?.(receipt);
-  return {items:plainDeep(tokenScope(ctx.db),result.items),receipt:receipt||null};
+  return bounded({items:plainDeep(tokenScope(ctx.db),result.items),receipt:receipt||null});
 }
 async function recQuestions(args,ctx){
   const actorId=requireActor(ctx),receipts=[];
@@ -95,8 +96,8 @@ async function recQuestions(args,ctx){
     receipt.planningPending=planningPending;ctx.db.prepare('UPDATE action_receipts SET planning_pending=? WHERE id=?').run(planningPending?1:0,receipt.id);
   }}
   const row=ctx.db.prepare('SELECT * FROM recs WHERE id=?').get(args.recId);
-  return {rec:plainDeep(tokenScope(ctx.db),{...parseJson(row.def,{}),id:row.id,status:row.status}),receipts,planningPending,
-    undo:receipts.map(r=>({available:true,tool:'undo',args:{operation:'undo',id:r.id}}))};
+  return bounded({rec:plainDeep(tokenScope(ctx.db),{...parseJson(row.def,{}),id:row.id,status:row.status}),receipts,planningPending,
+    undo:receipts.map(r=>({available:true,tool:'undo',args:{operation:'undo',id:r.id}}))});
 }
 function yearendMark(args,ctx){
   requireActor(ctx);
