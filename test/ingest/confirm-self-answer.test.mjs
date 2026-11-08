@@ -166,6 +166,7 @@ test('AC4: every Confirm kind uses a plain question and fact questions use answe
     withholding_conflict: 'Two W-2s from one payer report different federal withholding for 2026. Which should count?',
     account_match: 'Are these the same account?',
     transaction_category: 'Check this transaction category',
+    transaction_payment: 'Is this connected-account payment an estimated tax payment?',
     category_mapping: 'Treat Example Essentials as ...',
     resolver_fact: key,
   };

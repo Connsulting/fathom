@@ -135,6 +135,20 @@ const answerFixture = (db, id, option) => C.answerItem(db, id, option, { now: SE
 // least one direction (asserted below).
 const categoryHistory = () => aggregatorFile('category-history.csv',Array.from({length:8},(_,i)=>['Groceries','Income'].map(category=>({date:`2032-${String(i+1).padStart(2,'0')}-15`,amount:category==='Income' ? -3000 : 100,description:'Covered '+category,category}))).flat());
 const CASES = {
+  transaction_payment: {
+    setup: async s => {
+      const SF = await src('src/ingest/simplefin.mjs');
+      const file = textFile('connected-payment.json', JSON.stringify({ accounts: [{
+        account: { inst: 'Example Bank', name: 'Synthetic checking' }, accountId: 'synthetic-checking', identity: 'simplefin:synthetic',
+        transactions: [{ date: '2032-03-02', amount: -125, description: 'IRS PAYMENT 2032', externalId: 'synthetic-tax-payment' }],
+      }] }), 'application/json');
+      const result = await P.ingestFile(s.db, file, s.opts(await offEngine(), { parser: SF.parser, now: SETUP_AT }));
+      assert.equal(result.status, 'imported');
+      return firstPending(s.db, 'transaction_payment');
+    },
+    pairs: [['estimate', 'not_estimate'], ['not_estimate', 'estimate']],
+    reopen: ['estimate', 'not_estimate'],
+  },
   resolver_fact: {
     setup: async s => C.ask(s.db, { kind: 'resolver_fact', subject: 'benefits.hsaEligible',
       question: 'Is the synthetic health plan HSA eligible?',

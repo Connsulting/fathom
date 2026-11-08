@@ -86,7 +86,7 @@ export function ownerOf(value) {
   return option ? option.id : null;
 }
 
-const CONFIRM_KINDS = ['employer_recipient', 'document_recipient', 'withholding_conflict', 'employer_relation', 'tax_year', 'fact_check'];
+const CONFIRM_KINDS = ['employer_recipient', 'document_recipient', 'withholding_conflict', 'employer_relation', 'tax_year', 'fact_check', 'account_owner'];
 
 // An owner fact's value (any src but the planner's own), or undefined.
 function ownerFact(db, key) {
