@@ -117,6 +117,7 @@ export async function undoAction(ctx, id, scope) {
     receipt = receiptOut(ctx.db.prepare('SELECT * FROM action_receipts WHERE id = ?').get(id));
   });
   if (scope === 'write:facts') await replanAction(ctx, receipt);
+  else if (scope === 'write:sources') ctx.queuePlan?.();
   // A remembered withdrawal rate moves the targets Fathom set, so undoing one moves them back.
   // Imported here, not at the top: goals/write reaches this module through the scenario builder.
   if (scope === 'write:preferences') {

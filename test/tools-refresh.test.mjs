@@ -258,9 +258,11 @@ test('large import lists keep newest rows within the tool result bound and prese
   ctx.db.exec('BEGIN');
   for (let i = 0; i < 1500; i++) insert.run(`file-${i}`, 'Synthetic file ' + 'x'.repeat(180), now, 'imported');
   ctx.db.exec('COMMIT');
+  ctx.db.prepare('UPDATE files SET removed_at = ? WHERE id = ?').run(now, 'file-1499');
   const result = await callTool('household', { operation: 'imports' }, ctx);
   assert.equal(result.truncated, true);
-  assert.equal(result.files[0].id, 'file-1499');
+  assert.equal(result.files[0].id, 'file-1498');
+  assert.ok(!result.files.some(file => file.id === 'file-1499'));
   assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 256 * 1024);
   assert.deepEqual(result, listFiles(api(ctx)));
 });

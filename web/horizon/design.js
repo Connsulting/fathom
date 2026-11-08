@@ -2591,7 +2591,8 @@ SCREENS.forEach((s) => s.bind(KIT));
 function mount(r, a) {
   api = a; root = r; ui = freshUi(); lastKey = ''; lastRoute = null; connectOn = false;
   SCREENS.forEach((s) => s.reset?.());
-  ingest = ingestScreens({ api, shell, section, pageHead, btn, icon, esc, T, X, draw, goA, addBtn, getUi: () => ui });
+  ingest = ingestScreens({ api, shell, section, pageHead, btn, icon, esc, T, X, draw, goA, addBtn, getUi: () => ui,
+    openAccountMerge: (id, trigger) => { accountScreen.requestMerge(id); openAccount(id, trigger); } });
   email = emailScreen({ shell, section, pageHead, btn, esc, draw });
   root.innerHTML = '<div class="h-root"></div><div class="h-dlg-host" hidden></div><div class="h-askp-host"></div>';
   keys = createKeys();
