@@ -16,6 +16,8 @@
 // In an Ask thread with no rec context, free text "add a goal: <words>" adds a propose_goal call with those words as
 // the title (a horizon phrase sets the horizon; the first amount the owner wrote is the target),
 // and the text round says the owner can save it below. Its amounts are not echoed.
+// Free text "propose a goal: <words>" scripts the same update_goal create with propose: true (a
+// stored proposal) and a text round asking the owner to confirm it.
 // Free text matching "show your work" (word bounded, any case) scripts three rounds instead, the
 // way a live model narrates between tool calls: "Let me start with your household summary." with
 // the household.summary call, "Now the details this rests on." with the remaining calls (goals.list
@@ -31,6 +33,8 @@ const COMMAND = /^(?:please\s+)?(start|complete|dismiss|snooze|reopen)\b/i;
 const CONFIRM = 'The recommendation is updated. You can undo the change below.';
 const GOAL_COMMAND = /^(?:please\s+)?add (?:a |another |new |a new )?goal\s*[:,-]?\s*(\S[\s\S]*)$/i;
 const GOAL_CONFIRM = 'The goal is saved. You can undo the change below.';
+const GOAL_PROPOSE = /^(?:please\s+)?propose (?:a |another |new |a new )?goal\s*[:,-]?\s*(\S[\s\S]*)$/i;
+const GOAL_PROPOSAL = 'I can create this goal. Confirm below, or reply yes.';
 const HORIZON_WORDS = [['1-3y', /next few years/i], ['3-10y', /long range|long term/i], ['now', /this year/i]];
 const GOAL_AMOUNT = /\$(\d[\d,]*(?:\.\d+)?)\s*(k|m)?\b/i;
 const SHOW_WORK = /\bshow your work\b/i;
@@ -39,9 +43,9 @@ const SHOW_NOTE_2 = 'Now the details this rests on.';
 
 // propose_goal args for an "add a goal" command in an Ask thread, else null. A thread asked from a
 // rec gets none: the live answerer offers no goal tool in rec context.
-function goalCommandOf(scenario, key, text) {
+function goalCommandOf(scenario, key, text, command = GOAL_COMMAND) {
   if (!isThreadKey(key)) return null;
-  const m = GOAL_COMMAND.exec(String(text ?? '').trim());
+  const m = command.exec(String(text ?? '').trim());
   if (!m) return null;
   const title = m[1].trim().slice(0, 120);
   const args = { title };
@@ -87,7 +91,8 @@ export function fakeAnswerScript({ scenario, key, questionId, text, whatIfPack, 
   const preference = propose && typeof text === 'string' ? /^(?:please )?remember(?: this)?(?: preference)?[: ,]+(.+)$/i.exec(text)?.[1] : null;
   const date = !preference && propose && typeof text === 'string' && /(?:expected|due) date|baby.*due/i.test(text) ? /\b\d{4}-\d{2}-\d{2}\b/.exec(text)?.[0] : null;
   const command = !date && propose && typeof text === 'string' ? commandOf(scenario, key, text) : null;
-  const goal = propose && !command && typeof text === 'string' ? goalCommandOf(scenario, key, text) : null;
+  const proposed = propose && !command && typeof text === 'string' && !recForKey(scenario, key) ? goalCommandOf(scenario, key, text, GOAL_PROPOSE) : null;
+  const goal = proposed || (propose && !command && typeof text === 'string' ? goalCommandOf(scenario, key, text) : null);
   let paragraphs;
   if (preference) {
     paragraphs = ['Your preference is saved. You can edit it on the Memories page or undo it below.'];
@@ -100,7 +105,7 @@ export function fakeAnswerScript({ scenario, key, questionId, text, whatIfPack, 
   } else if (command) {
     paragraphs = [CONFIRM];
   } else if (goal) {
-    paragraphs = [GOAL_CONFIRM];
+    paragraphs = [proposed ? GOAL_PROPOSAL : GOAL_CONFIRM];
   } else {
     paragraphs = list(matchQuestion(scenario, key, text)?.a);
   }
@@ -121,7 +126,7 @@ export function fakeAnswerScript({ scenario, key, questionId, text, whatIfPack, 
   const rec = recForKey(scenario, key);
   if (rec) toolCalls.push({ name: 'recommendations', args: { operation: 'detail',  id: rec.id } });
   if (command) toolCalls.push({ name: 'act_on_recommendation', args: { operation: 'status',  id: command.id, status: { start: 'doing', complete: 'done', dismiss: 'dismissed', snooze: 'snoozed', reopen: 'proposed' }[command.action] } });
-  if (goal) toolCalls.push({ name: 'update_goal', args: { operation: 'create', ...goal } });
+  if (goal) toolCalls.push({ name: 'update_goal', args: { operation: 'create', ...goal, ...(proposed ? { propose: true } : {}) } });
   if (preference) toolCalls.push({ name: 'update_preferences', args: { operation: 'remember',  text: preference, evidence: preference } });
   if (date) toolCalls.push({ name: 'answer', args: { operation: 'fact',  key: 'household.expectedDate', value: date, evidence: text } });
   if (typeof text === 'string' && SHOW_WORK.test(text)) {
