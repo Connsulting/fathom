@@ -39,6 +39,8 @@ test('Home and missing-data identify the same stale account despite a newer hous
   const data = loadPlanningData(db, clock);
   const gaps = missing.items(context(data)).filter(i => ['balances', 'transactions'].includes(i.code));
   assert.equal(healthLine({ accounts: sc.accounts }).staleAccounts, 1);
+  const rec = missing.build(context(data), missing.evaluate(context(data)));
+  assert.deepEqual(rec.tasks.filter(t => ['balances', 'transactions'].includes(t.code)).map(t => t.accountIds), [['stale-account'], ['stale-account']]);
   assert.deepEqual(gaps.map(i => [i.code, i.accountIds]), [
     ['balances', ['stale-account']], ['transactions', ['stale-account']],
   ]);
@@ -122,9 +124,12 @@ test('shutdown of work queued behind occupied dispatcher slots is bounded and ne
     handlers: { plan: async () => { calls++; } }, log: quiet });
   const queued = assert.rejects(s.runNow('plan'), e => e.code === 'locked');
   const start = performance.now();
-  await Promise.race([s.stop(), new Promise((_, reject) => {
-    const timer = setTimeout(() => reject(new Error('shutdown exceeded its bound')), 1000); timer.unref();
-  })]);
+  let deadline;
+  try {
+    await Promise.race([s.stop(), new Promise((_, reject) => {
+      deadline = setTimeout(() => reject(new Error('shutdown exceeded its bound')), 1000);
+    })]);
+  } finally { clearTimeout(deadline); }
   assert.ok(performance.now() - start < 1000);
   assert.equal(calls, 0);
   releases.forEach(resolve => resolve());
@@ -166,4 +171,15 @@ test('a connection mapping without newer account data cannot make that account f
   assert.equal(healthLine({ accounts: sc.accounts }).staleAccounts, 1);
   const data = loadPlanningData(db, clock);
   assert.deepEqual(missing.items(context(data)).find(i => i.code === 'balances').accountIds, ['stale-account']);
+});
+
+test('a named payroll blocker selects that employer rather than another question of the same kind', () => {
+  const data = { accounts: [], freshness: [], confirm: [
+    { id: 11, kind: 'employer_relation', status: 'pending', context: { employer: 'Unrelated Employer' } },
+    { id: 12, kind: 'employer_relation', status: 'pending', context: { employer: 'Relevant Employer' } },
+  ] };
+  const ctx = context(data);
+  ctx.info = { blocked: ['employer_relation_pending'], payrollBlocks: [{ code: 'employer_relation_pending', employer: 'Relevant Employer' }] };
+  const task = missing.build(ctx, missing.evaluate(ctx)).tasks[0];
+  assert.equal(task.confirmId, 12);
 });
