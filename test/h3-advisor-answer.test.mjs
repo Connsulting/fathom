@@ -39,7 +39,7 @@ test('AC3: recording the advisor answer through Ask clears the wait on the next 
   assert.match(html, /data-tax-gap-fix=/, 'one control records it');
   assert.match(buildScenario(db).wargame.salary.takeaway, /plan terms.*pending/i, 'precondition: the salary game assumes the pending answer');
 
-  const text = 'My advisor confirmed my retirement plan terms and eligibility.';
+  const text = 'Yes, my advisor confirmed my retirement plan terms and eligibility.';
   const transport = createEngine({ mode: 'fake' });
   const engine = { mode: 'live', isOn: () => true, call: request => request.purpose === 'title'
     ? Promise.resolve({ text: 'Advisor answer', toolResults: [] })

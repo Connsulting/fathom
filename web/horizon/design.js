@@ -20,7 +20,7 @@ import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
 import * as serviceStatus from './screens/service-status.js';
 import * as recAnswers from './screens/rec-answers.js';
-import { gapControl } from '../core/gap-control.js';
+import * as unlocks from './screens/unlocks.js';
 import * as recBlocker from './screens/rec-blocker.js';
 import * as recSteps from './screens/rec-steps.js';
 import * as accountScreen from './screens/account.js';
@@ -1189,7 +1189,7 @@ function decRow(d) {
   const title = d.r && !d.wargame
     ? `<a class="h-dec-t" href="${href('rec', { id: d.r.id })}" data-go="rec" data-id="${esc(d.r.id)}">${T(d.title)}</a>`
     : d.wargame ? `<a class="h-dec-t" href="${href('wargame', { name: d.wargame })}" data-go="wargame" data-name="${esc(d.wargame)}">${T(d.title)}</a>` : `<span class="h-dec-t">${T(d.title)}</span>`;
-  const body = d.status === 'decided' ? `<p>${T(d.line)}</p>` : d.status === 'unavailable' ? `<p>${esc(d.unavailable || '')}</p>` : `${d.note ? `<p>${T(d.note)}</p>` : ''}${d.when || st ? `<div class="h-meta">${d.when ? `<span class="h-when">${T(d.when)}</span>` : ''}${st}</div>` : ''}`;
+  const body = d.status === 'decided' ? `<p>${T(d.line)}</p>` : d.status === 'unavailable' ? `<p>${esc(d.unavailable || '')} ${unlocks.fixHtml(d.wargame && api.s.wargame?.[d.wargame]?.unavailableFix, esc)}</p>` : `${d.note ? `<p>${T(d.note)}</p>` : ''}${d.when || st ? `<div class="h-meta">${d.when ? `<span class="h-when">${T(d.when)}</span>` : ''}${st}</div>` : ''}`;
   return `<article class="h-dec ${d.status}"><div class="h-dec-b">${title}${body}</div><div class="h-acts">${decideLinks(d, d.status === 'open')}</div></article>`;
 }
 
@@ -1197,13 +1197,10 @@ function decRow(d) {
 // from the server, no figures) and a link to Add files or Confirm.
 function notBuiltRows() {
   const nb = api.s.wargame?.notBuilt || {};
-  return ['salary', 'deferral'].filter((k) => nb[k] && typeof nb[k].text === 'string').map((k) => {
-    const answers = nb[k].unlock === 'answers';
-    const link = nb[k].fix ? gapControl(nb[k].fix, esc) : answers
-      ? `<a href="${href('confirm')}" data-go="confirm" class="h-btn ghost">Open Confirm</a>`
-      : `<a href="${href('add')}" data-go="add" class="h-btn ghost">Add files</a>`;
-    return `<article class="h-dec unbuilt" data-not-built="${esc(k)}"><div class="h-dec-b"><p>${esc(nb[k].text)}</p></div><div class="h-acts">${link}</div></article>`;
-  });
+  const legacy = (r) => (r.unlock === 'answers'
+    ? `<a href="${href('confirm')}" data-go="confirm" class="h-btn ghost">Open Confirm</a>`
+    : `<a href="${href('add')}" data-go="add" class="h-btn ghost">Add files</a>`);
+  return ['salary', 'deferral'].filter((k) => nb[k] && typeof nb[k].text === 'string').map((k) => unlocks.notBuiltHtml(k, nb[k], { esc, legacy }));
 }
 
 function pDecide() {
@@ -1234,11 +1231,11 @@ function pWargame(name) {
   const back = `<a class="h-back" href="${href('wargame')}" data-go="wargame">${icon('back')}Decide</a>`;
   const linked = visibleRecs().filter((r) => r.scenario === cur);
   const lead = gone
-    ? `<div class="h-decided"><div><div class="h-kicker">Not a current choice</div><p>${esc(g.unavailable || '')}</p></div></div>`
+    ? `<div class="h-decided"><div><div class="h-kicker">Not a current choice</div><p>${esc(g.unavailable || '')} ${unlocks.fixHtml(g.unavailableFix, esc)}</p></div></div>`
     : decided
     ? `<div class="h-decided"><i class="h-ok sm">${icon('check')}</i><div><div class="h-kicker">Decided</div><p>${T(g.decided || '')}</p></div></div>`
     : (dec?.when ? `<div class="h-meta h-wg-when"><span class="h-when">${T(dec.when)}</span>${dec.note ? `<span>${T(dec.note)}</span>` : ''}</div>` : '');
-  const body = cur === 'salary' ? salaryChart(g) : deferralView(g);
+  const body = (cur === 'salary' ? salaryChart(g) : deferralView(g)) + unlocks.excludedHtml(g.excluded, { esc, T }) + (past ? '' : unlocks.advisorWaitsHtml(g.advisorWaits, { esc }));
   // Decide on the picked point (an open decision) or revisit it (a decision made here). A decision
   // that became decided because its recommendation finished has no stored choice to revisit.
   const decideBar = !past && dec && dec.status === 'open'

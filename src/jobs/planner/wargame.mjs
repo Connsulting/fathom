@@ -12,8 +12,16 @@ import { cents } from '../../store/db.mjs';
 import { sameName, monthOf, yearOf, sum } from './data.mjs';
 import { notesFor } from './assumptions.mjs';
 import { stepsOf, planInputs, RETIREMENT_BLOCKS } from './household.mjs';
+import { TAX_GAP_RULES } from '../../shared/tax-gaps.mjs';
+import { fixForCode } from '../triggers/missing-data.mjs';
+import { advisorWait } from '../../shared/advisor-waits.mjs';
 
 const PLAN_TERMS = 'plan_terms_confirmed';
+const OVER_LIMIT = 'retirement_contribution_over_limit';
+const OVER_LIMIT_TEXT = Object.freeze({
+  salary: 'A retirement contribution would be over its plan limit at this salary, so this point is left out.',
+  deferral: 'A retirement contribution would be over its plan limit with this much moved, so this option is left out.',
+});
 const round1000 = v => Math.round(v / 1000) * 1000;
 const pointId = s => (s % 1000 === 0 ? `s${s / 1000}` : `s${Math.round(s)}`);
 
@@ -21,7 +29,7 @@ export function buildWargames(data, out, ctx) {
   const model = {};
   const salary = salaryGame(data, out, ctx);
   if (salary) model.salary = salary;
-  else if (out.info.wargameInvalid.salary === 'inputs_changed' && ctx.facts?.['income.sCorp'] === true && !ctx.entities.some(e => e.type === 's_corp') && data.pnl.length) out.info.wargameInvalid.salary = 'scorp_identity_missing';
+  else if (out.info.wargameInvalid.salary === 'scorp_missing' && ctx.facts?.['income.sCorp'] === true && !ctx.entities.some(e => e.type === 's_corp') && data.pnl.length) out.info.wargameInvalid.salary = 'scorp_identity_missing';
   const deferral = deferralGame(data, out, ctx);
   if (deferral) model.deferral = deferral;
   return model;
@@ -35,6 +43,7 @@ export function wargameFigurePrefixes(wargameContent) {
   const wg = wargameContent || {};
   const prefixes = [];
   for (const p of (wg.salary && Array.isArray(wg.salary.points) ? wg.salary.points : [])) prefixes.push(`wg.salary.${p.id}.`);
+  for (const p of (wg.salary && Array.isArray(wg.salary.excluded) ? wg.salary.excluded : [])) prefixes.push(`wg.salary.${p.id}.salary`);
   if (wg.deferral) {
     prefixes.push('wg.deferral.base.');
     for (const o of Array.isArray(wg.deferral.options) ? wg.deferral.options : []) prefixes.push(`wg.deferral.${o.id}.`);
@@ -42,44 +51,74 @@ export function wargameFigurePrefixes(wargameContent) {
   return prefixes;
 }
 
-// Why a war game could not be built, in plain language with no figures, and what unlocks it:
-// unlock 'files' (Add files) or 'answers' (Confirm). brief.mjs stores one per game that has no
-// model and no kept history under content wargame.notBuilt (Decide shows it).
+// Why a war game could not be built, in plain language with no figures, and the one control that
+// unlocks it (H3): `fix` opens the specific answer in Ask (an answer.fact shape) or the upload kind,
+// in TAX1's fix shape; `unlock` ('answers' or 'files') follows it. brief.mjs stores one per game that
+// has no model and no kept history under content wargame.notBuilt (Decide shows it), and the same
+// reason and fix for a game kept only for reference. Tax codes a household run blocks on pass
+// through fixForCode. inputs_changed is left only for a game no plan has explained yet.
 const GAME_NAME = Object.freeze({ salary: 'Salary war game', deferral: 'Invoice deferral war game' });
-const NEEDS = Object.freeze({
-  salary: {
-    inputs_changed: ['needs an S corp with profit on file.', 'files'],
-    'business.salaryRange': ["needs your advisor's reasonable salary range.", 'answers'],
-    'retirement.otherPlanDeferrals': ['needs your deferrals to other workplace plans this year.', 'answers'],
-    'retirement.priorYearFicaWages': ["needs last year's Social Security wages from your business.", 'files'],
-    w2_plan_compensation_unknown: ['needs a W-2 from your business that shows box twelve.', 'files'],
-  },
-  deferral: {
-    inputs_changed: ['needs a business with income and its business bank account on file.', 'files'],
-    'business.cashBasis': ['needs to know whether your business uses cash basis accounting.', 'answers'],
-  },
+const ask = (key, label, prompt) => ({ screen: 'ask', key, label, prompt });
+const upload = (kind, label) => ({ screen: 'upload', kind, label });
+const PNL = upload('pnl', 'Upload the business profit and loss');
+const CONTRIBUTIONS = { ...TAX_GAP_RULES.retirement_contribution_over_limit.fix };
+const CLASSIFY = ask('business.entities', 'Classify the businesses', 'Record how my imported businesses are taxed. Ask me for the missing classifications, preserving existing entries and account links.');
+export const WARGAME_UNLOCKS = Object.freeze({
+  salary: Object.freeze({
+    inputs_changed: ['needs an S corp with profit on file.', upload('pnl', 'Upload the S corp profit and loss')],
+    scorp_missing: ['needs an S corp with profit on file.', upload('pnl', 'Upload the S corp profit and loss')],
+    scorp_profit_missing: ['needs a profit and loss that shows profit for your S corp this year.', upload('pnl', 'Upload the latest S corp profit and loss')],
+    'business.salaryRange': ["needs your advisor's reasonable salary range.", ask('business.salaryRange', 'Enter salary range',
+      'Record the annual salary range my advisor considers reasonable. Ask me for its minimum and maximum.')],
+    salary_points_unavailable: ['needs a salary range your business profit can pay, with room for payroll tax at two or more salaries.', ask('business.salaryRange', 'Correct the salary range',
+      'Record the annual salary range my advisor considers reasonable. Ask me for its minimum and maximum.')],
+    'household.birthYears': ['needs your birth year to size catch-up room.', ask('household.birthYears', 'Enter birth years', 'Record the years my spouse and I were born. Ask me for them.')],
+    'retirement.otherPlanDeferrals': ['needs your deferrals to other workplace plans this year.', { ...TAX_GAP_RULES.deferral_split_unknown.fix }],
+    'retirement.priorYearFicaWages': ["needs last year's Social Security wages from your business.", ask('retirement.priorYearFicaWages', "Enter last year's Social Security wages",
+      "Record last year's Social Security wages my business paid me, from last year's W-2. Ask me for the amount.")],
+    w2_plan_compensation_unknown: ['needs the deferrals from the wage form your business issued.', upload('taxforms', 'Upload a clearer tax form')],
+    wargame_salary_contribution_over_limit: ['needs retirement contributions within the plan limits at your current salary.', CONTRIBUTIONS],
+    scorp_identity_missing: ['needs you to identify the S corp among the imported ledgers.', ask('business.entities', 'Identify the S corp', CLASSIFY.prompt)],
+  }),
+  deferral: Object.freeze({
+    inputs_changed: ['needs a business with income and its business bank account on file.', PNL],
+    business_income_missing: ['needs a business with income this year on file.', PNL],
+    'business.cashBasis': ['needs to know whether your business uses cash basis accounting.', ask('business.cashBasis', 'Answer the accounting method',
+      'Record whether my business keeps its books on a cash basis.')],
+    accrual_basis: ['applies only to cash basis books, and your answer says the business uses accrual.', ask('business.cashBasis', 'Correct the accounting method',
+      'Record whether my business keeps its books on a cash basis.')],
+    business_account_missing: ['needs a current balance for the business bank account.', upload('bank', 'Upload the business bank statement')],
+    business_account_unlinked: ['needs to know which bank account belongs to the business.', ask('accounts.businessEntity', 'Link the business account',
+      'Record which business each business bank account belongs to. Ask me for the business name for each account.')],
+    wargame_contribution_over_limit: ['needs retirement contributions within the plan limits at the incomes it compares.', CONTRIBUTIONS],
+  }),
 });
 
+const lowerFirst = s => s.charAt(0).toLowerCase() + s.slice(1);
+const unlockOf = fix => (fix.screen === 'upload' ? 'files' : 'answers');
+const reason = (code, text, fix) => ({ code, text, unlock: unlockOf(fix), fix: { ...fix } });
+
 export function notBuiltReason(name, code, entities = []) {
-  if (String(code).startsWith('entity_unclassified:')) {
+  code = String(code);
+  const game = GAME_NAME[name] || 'This war game';
+  if (code.startsWith('entity_unclassified:')) {
     const entity = entities.find(e => e.slug === code.slice('entity_unclassified:'.length));
-    if (entity?.needsName) return { code, text: `Salary war game needs the business name for ${entity.displayName}.`, unlock: 'answers' };
-    return { code, text: `${GAME_NAME[name]} needs you to classify ${entity?.displayName || entity?.name || 'the imported business'} as an S corp, sole proprietorship, partnership, personal spending, or not yours.`, unlock: 'answers' };
+    if (entity?.needsName) return reason(code, `${game} needs the business name for ${entity.displayName}.`,
+      ask('accounts.businessEntity', 'Enter the business name', `Record the business name for ${entity.displayName}. Ask me for it.`));
+    return reason(code, `${game} needs you to classify ${entity?.displayName || entity?.name || 'the imported business'} as an S corp, sole proprietorship, partnership, personal spending, or not yours.`, CLASSIFY);
   }
   if (name === 'salary' && code === 'scorp_identity_missing') {
-    const names = [...new Set(entities.map(e => e.displayName || e.name))];
-    return { code, text: `Salary war game needs you to identify the S corp among ${names.join(', ') || 'the imported ledgers'}.`, unlock: 'answers' };
+    const names = [...new Set(entities.map(e => e.displayName || e.name).filter(Boolean))];
+    if (names.length) return reason(code, `Salary war game needs you to identify the S corp among ${names.join(', ')}.`, WARGAME_UNLOCKS.salary.scorp_identity_missing[1]);
   }
-  if (name === 'salary' && code === 'business.salaryRange') return {
-    code, text: "Salary war game needs your advisor's reasonable salary range.", unlock: 'answers',
-    fix: { screen: 'ask', key: 'business.salaryRange', label: 'Enter salary range',
-      prompt: 'Record the annual salary range my advisor considers reasonable. Ask me for its minimum and maximum.' },
-  };
-  const known = (NEEDS[name] || {})[code];
-  const [needs, unlock] = known
-    || (String(code).includes('.') ? ['needs a household answer it does not have yet.', 'answers']
-      : ['is on hold until the tax figures it builds on can be computed from your files.', 'files']);
-  return { code: String(code), text: `${GAME_NAME[name] || 'This war game'} ${needs}`, unlock };
+  const known = (WARGAME_UNLOCKS[name] || {})[code];
+  if (known) return reason(code, `${game} ${known[0]}`, known[1]);
+  // A tax code the household run blocked on: TAX1's fix for it, named in the sentence.
+  let fix;
+  try { fix = fixForCode(code); } catch { fix = null; }
+  if (fix) return reason(code, `${game} is on hold until you ${lowerFirst(fix.label)}.`, fix);
+  const [text, fallback] = WARGAME_UNLOCKS[name]?.inputs_changed || WARGAME_UNLOCKS.salary.inputs_changed;
+  return reason(code, `${game} ${text}`, fallback);
 }
 
 // ---------------------------------------------------------------- salary (S3, T3, R6)
@@ -90,9 +129,9 @@ function salaryGame(data, out, ctx) {
   if (parts.vaBlocked) return invalid(parts.vaBlocked);
   if (!corp) {
     const unclassified = ctx.entities?.find(e => !e.classified);
-    return invalid(unclassified ? `entity_unclassified:${unclassified.slug}` : 'inputs_changed');
+    return invalid(unclassified ? `entity_unclassified:${unclassified.slug}` : 'scorp_missing');
   }
-  if (!(corp.P > 0)) return invalid('inputs_changed');
+  if (!(corp.P > 0)) return invalid('scorp_profit_missing');
   const c = contrib[corp.person];
   const range = owner['business.salaryRange'];
   const valid = range && typeof range === 'object' && Number.isFinite(range.min) && Number.isFinite(range.max) && range.min > 0 && range.max > 0;
@@ -130,8 +169,9 @@ function salaryGame(data, out, ctx) {
   const catchOff = affected && rothFact !== true;
   const rothCodes = catchOff ? [rothFact === false ? 'roth_catch_up_unavailable' : 'roth_catch_up_unconfirmed'] : [];
 
-  // K2: a point whose tax run is blocked (a contribution over its limit at that salary, IRC
-  // 404(a)(3), 402(g), 415(c)) returns {blocked} and makes the game invalid; it is never dropped.
+  // K2: a point whose tax run is blocked returns {blocked}. A contribution over its limit at that
+  // salary (IRC 404(a)(3), 402(g), 415(c)) drops that point alone, listed under excluded with its
+  // reason (H3); over the limit at the current salary, or any other block, makes the game invalid.
   const evaluate = s => out.safe('salaryPoint', () => {
     const pay = payrollTax({ wages: s, filingStatus: f, spouseMedicareWages: otherMedicare });
     const K = cents(P - s - pay.value.employerTotal);
@@ -158,18 +198,19 @@ function salaryGame(data, out, ctx) {
 
   const blockedCode = code => (RETIREMENT_BLOCKS.has(code) ? 'wargame_salary_contribution_over_limit' : code);
   const evaluated = salaries.map(evaluate);
-  const blockedPoint = evaluated.find(p => p && p.blocked);
-  if (blockedPoint) return invalid(blockedCode(blockedPoint.blocked));
-  const points = evaluated.filter(Boolean);
+  const hardBlock = evaluated.find(p => p && p.blocked && (p.blocked !== OVER_LIMIT || (inRange && p.s === current)));
+  if (hardBlock) return invalid(blockedCode(hardBlock.blocked));
+  const over = evaluated.filter(p => p && p.blocked);
+  const points = evaluated.filter(p => p && !p.blocked);
   // MG6: catch-up treatment unknown until last year's Social Security wages from the business are known.
   if (priorWages == null && points.some(p => p.room.value.catchUp > 0)) {
     out.info.confirm.salary = ['retirement.priorYearFicaWages'];
     return invalid('retirement.priorYearFicaWages');
   }
-  if (points.length < 2) return invalid('inputs_changed');
+  if (points.length < 2) return invalid(over.length ? 'wargame_salary_contribution_over_limit' : 'salary_points_unavailable');
   let ref = inRange ? points.find(p => p.s === current) : null;
   if (!ref) ref = evaluate(clamp(round1000((lo + hi) / 2)));
-  if (!ref) return invalid('inputs_changed');
+  if (!ref) return invalid('salary_points_unavailable');
   if (ref.blocked) return invalid(blockedCode(ref.blocked));
 
   const pending = [
@@ -201,6 +242,13 @@ function salaryGame(data, out, ctx) {
     if (inRange && p.s === current) point.current = true;
     content.push(point);
   }
+  const excluded = over.map(p => {
+    const id = pointId(p.s);
+    put(out, `wg.salary.${id}.salary`, p.s, 'Salary point: salary', { calc: 'salaryPoint', inputs: { salary: p.s, profitBeforeSalary: P, filingStatus: f, age },
+      steps: [{ label: 'Salary', formula: 'grid point inside the approved range', value: p.s }], assumptions });
+    return { id, label: `Salary {fk:wg.salary.${id}.salary}`, invalid: OVER_LIMIT_TEXT.salary, fix: { ...WARGAME_UNLOCKS.salary.wargame_salary_contribution_over_limit[1] } };
+  });
+  const advisorWaits = retireMissing.filter(k => ['retirement.planTermsConfirmed', 'retirement.aggregationConfirmed'].includes(k)).map(advisorWait);
   for (const p of content) {
     p.frontier = !content.some(q => q !== p && q.x >= p.x && q.y <= p.y && (q.x > p.x || q.y < p.y));
   }
@@ -223,6 +271,8 @@ function salaryGame(data, out, ctx) {
     xLabel: 'Pre-tax retirement room',
     yLabel: inRange ? 'Tax change vs your current salary' : 'Tax change vs the middle of the range',
     points: content,
+    ...(excluded.length ? { excluded } : {}),
+    ...(advisorWaits.length ? { advisorWaits } : {}),
     takeaway: [takeaway + rothNote, ...notesFor([...pending, ...(otherAssumed ? ['other_plan_deferrals_zero'] : [])])].join(' '),
   };
 }
@@ -239,7 +289,8 @@ function deferralGame(data, out, ctx) {
     if (valid.confirm) out.info.confirm.deferral = valid.confirm;
     return invalid(valid.invalid);
   }
-  if (!deferralOffered(data, ctx.clock, valid.cashAccts)) return null;
+  // Out of season a kept game is not rebuilt, so an option now over its limit marks it unavailable.
+  if (!deferralOffered(data, ctx.clock, valid.cashAccts)) return valid.excluded.length ? invalid('wargame_contribution_over_limit') : null;
   return deferralModel(data, out, ctx, valid);
 }
 
@@ -253,20 +304,20 @@ function deferralValidity(data, ctx) {
   const corpBiz = parts.biz.find(b => b.kind === 'scorp');
   const soles = parts.biz.filter(b => b.kind === 'sole').sort((a, b) => b.agi - a.agi);
   const b = corpBiz || soles[0];
-  if (!b) return { invalid: 'inputs_changed' };
+  if (!b) return { invalid: 'business_income_missing' };
   const e = entities.find(x => x.slug === b.id);
-  if (!e || !(e.sums.income > 0)) return { invalid: 'inputs_changed' };
+  if (!e || !(e.sums.income > 0)) return { invalid: 'business_income_missing' };
   if (owner['business.cashBasis'] !== true) {
     if (owner['business.cashBasis'] == null) {
       return { invalid: 'business.cashBasis', ...(deferralSeason(data, ctx.clock) ? { confirm: ['business.cashBasis'] } : {}) };
     }
-    return { invalid: 'inputs_changed' };
+    return { invalid: 'accrual_basis' };
   }
   const bizAccts = accounts.filter(a => a.kind === 'business' && a.latest);
   const named = bizAccts.filter(a => a.entity && sameName(a.entity, e.name));
   const businesses = entities.filter(x => x.classified && x.lines.length);
   const cashAccts = named.length ? named : businesses.length === 1 ? bizAccts : [];
-  if (!cashAccts.length) return { invalid: 'inputs_changed' };
+  if (!cashAccts.length) return { invalid: bizAccts.length ? 'business_account_unlinked' : 'business_account_missing' };
 
   const A = cents(e.sums.income / e.months);
   const shift = (base, delta) => ({
@@ -286,13 +337,20 @@ function deferralValidity(data, ctx) {
     { id: 'd50', label: 'Move half to January', amount: cents(A / 2) },
     { id: 'd100', label: 'Move it all to January', amount: A },
   ];
-  // MG3, K2: every one of the seven tax runs must be complete and valid, or no option is shown.
+  // MG3, K2: every one of the seven tax runs must be complete and valid. An option whose runs put a
+  // contribution over its limit is dropped alone and listed under excluded with its reason (H3); a
+  // blocked base run, any other block, or no option left beside billing it all now makes the game invalid.
   const t26Base = T(shift(b.agi, 0));
   const t27Base = T(shift(base27, 0));
-  const runs = OPTIONS.map(o => ({ o, t26: T(shift(b.agi, -o.amount)), t27: T(shift(base27, o.amount)) }));
-  const blockedRun = [t26Base, t27Base, ...runs.flatMap(r => [r.t26, r.t27])].find(t => t.blocked);
-  if (blockedRun) return { invalid: RETIREMENT_BLOCKS.has(blockedRun.blocked) ? 'wargame_contribution_over_limit' : blockedRun.blocked };
-  return { b, e, A, cashAccts, next, base27, t26Base, t27Base, runs };
+  const all = OPTIONS.map(o => ({ o, t26: T(shift(b.agi, -o.amount)), t27: T(shift(base27, o.amount)) }));
+  const blocks = r => [r.t26, r.t27].filter(t => t.blocked).map(t => t.blocked);
+  const hard = [t26Base, t27Base].find(t => t.blocked)?.blocked || all.flatMap(blocks).find(c => c !== OVER_LIMIT);
+  if (hard) return { invalid: RETIREMENT_BLOCKS.has(hard) ? 'wargame_contribution_over_limit' : hard };
+  const runs = all.filter(r => !blocks(r).length);
+  const excluded = all.filter(r => blocks(r).length).map(({ o }) => ({ id: o.id, label: o.label, invalid: OVER_LIMIT_TEXT.deferral,
+    fix: { ...WARGAME_UNLOCKS.deferral.wargame_contribution_over_limit[1] } }));
+  if (runs.length < 2) return { invalid: 'wargame_contribution_over_limit' };
+  return { b, e, A, cashAccts, next, base27, t26Base, t27Base, runs, excluded };
 }
 
 const deferralSeason = (data, clock) => yearOf(clock) === data.taxYear && monthOf(clock) >= 10;
@@ -362,6 +420,7 @@ function deferralModel(data, out, ctx, valid) {
     title: 'Invoice now or in January?',
     question: 'Moving December invoices into January shifts tax a year and leaves less business cash for December.',
     options,
+    ...(valid.excluded.length ? { excluded: valid.excluded } : {}),
     takeaway: 'Deferring income moves tax into next year rather than removing it. Keep enough business cash to cover the December payroll.',
   };
 }

@@ -10,7 +10,6 @@ import { needsYou } from '../../shared/rules.mjs';
 import { listParsers } from '../../ingest/registry.mjs';
 import { lawContent, pctContent } from './law.mjs';
 import { dateLabel, dayLabel, monthEnd, addDays } from './data.mjs';
-import { reasonText } from '../triggers/missing-data.mjs';
 import { buildSeries } from './series.mjs';
 import { factEventTitle } from '../../shared/event-labels.mjs';
 import { notBuiltReason } from './wargame.mjs';
@@ -74,12 +73,16 @@ export function writeBrief(db, ctx, { hits }) {
   const prev = parseJson((db.prepare('SELECT value FROM content WHERE key = ?').get('wargame') || {}).value, {}) || {};
   const invalid = (ctx.info && ctx.info.wargameInvalid) || {};
   const wargame = { ...prev };
+  const reasonEntities = [...ctx.entities, ...ctx.data.pnl.map(l => ({ name: ledgerDisplayName(l) }))];
   for (const name of ['salary', 'deferral']) {
     if (ctx.model[name]) wargame[name] = ctx.model[name];
-    else if (prev[name] && invalid[name]) wargame[name] = { ...prev[name], unavailable: reasonText(ctx, invalid[name]) };
-    else if (prev[name] && 'unavailable' in prev[name]) {
-      const { unavailable, ...kept } = prev[name];
-      void unavailable;
+    else if (prev[name] && invalid[name]) {
+      // H3: the reason names the missing input, and its fix sits beside it.
+      const why = notBuiltReason(name, invalid[name], reasonEntities);
+      wargame[name] = { ...prev[name], unavailable: why.text, unavailableFix: why.fix };
+    } else if (prev[name] && 'unavailable' in prev[name]) {
+      const { unavailable, unavailableFix, ...kept } = prev[name];
+      void unavailable; void unavailableFix;
       wargame[name] = kept;
     }
   }
@@ -87,7 +90,6 @@ export function writeBrief(db, ctx, { hits }) {
   // data would unlock it (recomputed every run).
   delete wargame.notBuilt;
   const notBuilt = {};
-  const reasonEntities = [...ctx.entities, ...ctx.data.pnl.map(l => ({ name: ledgerDisplayName(l) }))];
   for (const name of ['salary', 'deferral']) if (!wargame[name] && invalid[name]) notBuilt[name] = notBuiltReason(name, invalid[name], reasonEntities);
   if (Object.keys(notBuilt).length) wargame.notBuilt = notBuilt;
   upsertContent(db, 'wargame', wargame, now);

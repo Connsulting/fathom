@@ -699,10 +699,10 @@ export function computeFigures(data, facts, ctx) {
   } else {
     // R3-7: with no household tax neither game can be built from current inputs. With no S corp
     // on file the salary game's missing input is the S corp itself, whatever else blocks tax.
-    const code = out.info.blocked[0] || vaBlocked || 'inputs_changed';
+    const code = out.info.blocked[0] || vaBlocked || 'calc_failed';
     const unclassified = pnlEntities.find(e => !e.classified);
     out.info.wargameInvalid.salary = unclassified ? `entity_unclassified:${unclassified.slug}` : corps.length ? code
-      : facts['income.sCorp'] === true && data.pnl.length ? 'scorp_identity_missing' : 'inputs_changed';
+      : facts['income.sCorp'] === true && data.pnl.length ? 'scorp_identity_missing' : 'scorp_missing';
     out.info.wargameInvalid.deferral = code;
   }
 

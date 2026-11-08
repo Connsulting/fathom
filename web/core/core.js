@@ -1735,7 +1735,7 @@ function openPopover(anchor, fromKey) {
       '<div class="fx-pop-row"><span class="fx-pop-k">' + (f.v == null ? 'Why' : 'Gap') + '</span><span class="fx-pop-v">' + esc(g.message) + (g.action ? gapControl(g.action, esc, 'fx-pop-add') : '') + '</span></div>').join('') : '') +
     (f.stale ? '<div class="fx-pop-row"><span class="fx-pop-k">Note</span><span class="fx-pop-v">Changed since this answer</span></div>' : '') +
     // Kept only for reference (R2-9), then readable assumptions (MGN1); both are stored plain text.
-    (typeof f.unavailable === 'string' && f.unavailable ? '<div class="fx-pop-row"><span class="fx-pop-k">Not current</span><span class="fx-pop-v">' + esc(f.unavailable) + '</span></div>' : '') +
+    (typeof f.unavailable === 'string' && f.unavailable ? '<div class="fx-pop-row"><span class="fx-pop-k">Not current</span><span class="fx-pop-v">' + esc(f.unavailable) + (f.unavailableFix ? gapControl(f.unavailableFix, esc, 'fx-pop-add') : '') + '</span></div>' : '') +
     (Array.isArray(f.notes) ? f.notes.filter(n => typeof n === 'string').map(n => '<div class="fx-pop-row"><span class="fx-pop-k">Assumes</span><span class="fx-pop-v">' + esc(n) + '</span></div>').join('') : '') +
     // What an aggregate counts (accounts, months, rows), as plain text pairs.
     (Array.isArray(f.detail) ? f.detail.filter(d => d && typeof d === 'object' && d.k != null).map(d =>
