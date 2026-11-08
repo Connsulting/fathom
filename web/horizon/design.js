@@ -28,7 +28,7 @@ import * as pnlScreen from './screens/pnl.js';
 import * as tour from './screens/tour.js';
 import { createKeys } from './keys.js';
 import { createSwipe } from './screens/swipe.js';
-import { homeModel, homeHeadline, healthChip, healthLine, paceReason, boardCharts, reasonText, servedGoalIds, shortDate, longDate, windowSpan, kindLine, orderGoals, orderServes, planOrder, enteredDraft, enteredFields, enteredInputs } from './screens/home-model.js';
+import { homeModel, homeHeadline, healthChip, healthLine, paceMeters, paceReason, boardCharts, reasonText, servedGoalIds, shortDate, longDate, windowSpan, kindLine, orderGoals, orderServes, planOrder, enteredDraft, enteredFields, enteredInputs } from './screens/home-model.js';
 import { STARTERS, existingStarterIds, otherGoals, goalsToCreate, inviteLine } from './screens/onboard-model.js';
 import { KNOWN_FIGURES, GOAL_KINDS, KIND_LABEL, PRIORITIES, PRIORITY_LABEL, personLabel, goalOwnerOptions } from '/shared/goals.mjs';
 import { OWNERS, OWNER_LABEL } from '/shared/rec-links.mjs';
@@ -577,26 +577,26 @@ function serveStateHtml(id) {
   return t ? `<span class="h-serve-k">${t}</span>` : '';
 }
 
-function goalCardHome(c, subject) {
+function goalCardHome(c) {
   const p = c.pace;
   const fk = (k) => `pace.goals.${c.paceIndex}.${k}`;
   let bar = '';
   if (c.bar) {
     const asOf = c.bar.muted && p.dataThrough ? `<em>as of ${esc(shortDate(p.dataThrough))}</em>` : '';
-    bar = `<div class="h-pbar ${c.chip.tone}${c.bar.muted ? ' muted' : ''}" aria-hidden="true"><i class="fill" style="width:${pct(c.bar.fill)}%"></i><i class="tick" style="left:${pct(c.bar.tick)}%"></i></div>`
+    bar = `<div class="h-pbar ${c.chip ? c.chip.tone : 'mute'}${c.bar.muted ? ' muted' : ''}" aria-hidden="true"><i class="fill" style="width:${pct(c.bar.fill)}%"></i><i class="tick" style="left:${pct(c.bar.tick)}%"></i></div>`
       + `<div class="h-pbar-l"><span>${figHtml(fk('actual'), { k: true })} of ${figHtml(fk('target'), { k: true })}</span><span>plan today ${figHtml(fk('expected'), { k: true })}${asOf}</span></div>`;
   } else if (c.suggestion) {
     bar = suggestHtml(c.suggestion);
   } else if (c.kind === 'balance' && c.goal.origin === 'owner' && Number.isFinite(c.goal.target) && !c.goal.track) {
     // A target with nothing tracked: say so rather than the pace reason for a missing plan start.
     bar = `<p class="h-gwhy">${esc(reasonText('missing_actual'))}</p>`;
-  } else if (p && p.reason) {
+  } else if (p && p.reason && p.reason !== 'stale_data') {
+    // Stale data is the data line's to say, not each card's.
     bar = `<p class="h-gwhy">${esc(reasonText(p.reason))}</p>`;
   }
-  const next = c.next ? gnextHtml(c.next) : `<p class="h-gnext-none">Nothing due for ${subject}</p>`;
-  const more = c.actions.length > 1 ? `<a class="h-gmore" href="${href('plan')}" data-go="plan">${plural(c.actions.length - 1, 'more action')} on the plan</a>` : '';
+  // Progress only: the actions live in the due list, the next-thing card and Plan.
   const tags = goalTagsHtml(c.owner, c.priority);
-  return `<article class="h-gcard" data-goal-card="${esc(c.id)}"><div class="h-gcard-h"><a class="h-gcard-t" href="${href('goals')}" data-go="goals">${goalTitle(c.goal)}</a>${chipHtml(c.chip, 'h-pchip')}${addBtn('goal', c.goal.id, goalText(c.goal))}</div>${tags ? `<div class="h-gtags">${tags}</div>` : ''}${bar}${kindHtml(c.line)}${next}${more}</article>`;
+  return `<article class="h-gcard" data-goal-card="${esc(c.id)}"><div class="h-gcard-h"><a class="h-gcard-t" href="${href('goals')}" data-go="goals">${goalTitle(c.goal)}</a>${c.chip ? chipHtml(c.chip, 'h-pchip') : ''}${addBtn('goal', c.goal.id, goalText(c.goal))}</div>${tags ? `<div class="h-gtags">${tags}</div>` : ''}${bar}${kindHtml(c.line)}</article>`;
 }
 
 function hkHtml(list) {
@@ -609,11 +609,15 @@ function ownerFilterHtml(m) {
   return `<div class="h-ownerf" role="group" aria-label="Whose actions">${b('both', 'Both')}${b('me', 'Me')}${b('spouse', 'Spouse')}</div>`;
 }
 
+// The Money page's data health links.
 const healthLinks = (h) => `${h.pending > 0 ? goA('confirm', 'Confirm') : ''}${goA('add', 'Files')}${goA('accounts', 'Accounts')}`;
 
+// The one data line: the data date, and one link only when something needs the owner.
 function dhealthHtml(h) {
-  const links = healthLinks(h);
-  return `<div class="h-dhealth${h.stale ? ' stale' : ''}"><i class="h-dh-dot" aria-hidden="true"></i><span class="h-dhealth-t">${esc(h.parts.join(', '))}</span><span class="h-dhealth-a">${links}</span></div>`;
+  const need = h.needs
+    ? `<span class="h-dh-need">${goA(h.needsGo, esc(h.needsLabel), {}, 'h-dh-link')}<span class="h-dh-what">${esc(h.owner.map((x) => x.text).join(', '))}</span></span>`
+    : '';
+  return `<div class="h-dhealth${h.needs ? ' needs' : ''}"><span class="h-dhealth-t">${esc(h.line)}</span>${need}</div>`;
 }
 
 const homeHealth = () => healthLine({
@@ -759,8 +763,9 @@ function suggRate(t) {
 }
 
 // Desktop: the next goal actions due before Dec 31, up to five, each with date, title and owner.
-function dueHtml(m) {
-  const list = m.due.slice(0, 5);
+function dueHtml(m, skip = null) {
+  // A rec shown in the next-thing card is not listed again.
+  const list = m.due.filter((r) => r !== skip).slice(0, 5);
   if (!list.length) return '';
   const row = (r) => `<div class="h-due-r" data-rec="${esc(r.id)}"><span class="h-due-d${days(r) < 0 ? ' late' : ''}">${fmt(recDate(r))}</span>${recLink(r)}${whoTag(r)}</div>`;
   return `<div class="h-due"><div class="h-due-l">Due before Dec 31</div>${list.map(row).join('')}</div>`;
@@ -781,21 +786,21 @@ function pHome() {
   // The owner filter, when not Both, is part of what the page shows.
   if (ui.owner === 'me' || ui.owner === 'spouse') askPanel.pageContext({ owner: ui.owner });
   const subject = SUBJECT[m.filter];
-  const hd = homeHeadline({ cards: m.cards, pace, pending: m.pending });
-  const hc = healthChip(pace);
-  const due = m.due.length;
+  const hd = homeHeadline({ cards: m.cards, pending: m.pending, due: m.due, filter: m.filter });
+  // The chip links to the pace board; a data excuse is never its label.
+  const hc0 = healthChip(pace);
+  const hc = hc0.tone === 'ok' || hc0.tone === 'warn' ? hc0 : { tone: 'mute', label: 'Pace board' };
   const bulk = hd.bulk ? `<div class="h-home-bulk">${btn('Accept all', 'data-sugg-all="1"', 'pri')}${goA('goals', 'Review targets', {}, 'h-home-rev')}</div>` : '';
   const head = `<div class="h-home-head"><div class="h-home-k">${T(api.s.meta.clockLabel)}</div>`
     + `<a class="h-hchip ${hc.tone}" href="${href('pace')}" data-go="pace">${esc(hc.label)}${icon('arrow')}</a>`
     + `<h1 class="h-home-h">${esc(hd.title)}</h1>`
-    + `<p class="h-home-sub">${due ? `${plural(due, 'thing')} before Dec 31` : 'Nothing due before Dec 31'}</p>${bulk}</div>`;
-  const health = dhealthHtml(homeHealth());
-  const cards = `<div class="h-gcards">${m.cards.map((x) => goalCardHome(x, subject)).join('')}</div>`;
+    + `${dhealthHtml(homeHealth())}${bulk}</div>`;
+  const cards = `<div class="h-gcards">${m.cards.map(goalCardHome).join('')}</div>`;
   const goalsH = `<div class="h-home-sec"><h2>Goals</h2>${goA('goals', 'All goals')}</div>`;
   const rest = `${goalsH}${cards}${hkHtml(m.housekeeping)}`;
   const inner = isPhone()
-    ? `${ownerFilterHtml(m)}${head}${nextHtml(m, subject)}${afterHtml(m)}${health}${rest}`
-    : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${m.nextThing?.question?.primary ? nextHtml(m, subject) : ''}${dueHtml(m)}${health}${rest}`;
+    ? `${ownerFilterHtml(m)}${head}${nextHtml(m, subject)}${afterHtml(m)}${rest}`
+    : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${m.nextThing?.question?.primary ? `${nextHtml(m, subject)}${dueHtml(m, m.nextThing)}` : dueHtml(m)}${rest}`;
   return shell(`<section class="h-home">${inner}</section>`);
 }
 
@@ -891,10 +896,13 @@ function pPace() {
     ? `<div class="h-pcharts">${charts.map(paceChart).join('')}</div>`
     : `<p class="h-pchart-none">${esc(reasonText(pace?.series?.householdSavings?.reason))}</p>`;
   const h = homeHealth();
+  // Only meters with a figure; with none, no This year panel at all.
+  const shown = paceMeters(pace?.meters);
+  const thisYear = METERS.filter(([k]) => shown.includes(k));
   return shell(`<section class="h-pace"><a class="h-back" href="${href('home')}" data-go="home">${icon('back')}Home</a>
     <div class="h-pace-head"><span class="h-hchip ${hc.tone}">${esc(hc.label)}</span><h1>${esc(pace?.rollup?.headline || 'No goals with targets')}</h1><p class="h-pace-why">${esc(paceReason(pace))}</p></div>
     ${section(charts.length && charts[0].id === 'householdSavings' ? 'Household savings' : 'By goal', body, charts.length ? 'Solid is observed, dashed is projected' : '')}
-    ${section('This year', `<div class="h-meters">${METERS.map(meterHtml).join('')}</div>`)}
+    ${thisYear.length ? section('This year', `<div class="h-meters">${thisYear.map(meterHtml).join('')}</div>`) : ''}
     <p class="h-pace-fresh">${icon('clock')}<span>${esc(h.dataLabel)}.${projected ? ' Later months are projected.' : ''} ${goA('add', 'Files')} ${goA('accounts', 'Accounts')}</span></p></section>`);
 }
 
@@ -915,6 +923,21 @@ function recRow(r, ny) {
     </div>
     <div class="h-acts">${actionsFor(r, true).join('')}${advisorScreen.rowAction(r)}</div>
   </article>`;
+}
+
+function planDecisions() {
+  const list = decisionList();
+  const unbuilt = notBuiltRows();
+  const open = list.filter((d) => d.status === 'open');
+  const soon = list.filter((d) => d.status === 'upcoming');
+  const done = list.filter((d) => d.status === 'decided');
+  const gone = list.filter((d) => d.status === 'unavailable');
+  return section('Decisions', `
+    ${section(`Open <em>${open.length}</em>`, open.length ? `<div class="h-decs">${open.map(decRow).join('')}</div>` : '<p class="h-mute">Nothing is waiting on a decision.</p>')}
+    ${unbuilt.length ? section(`Not built yet <em>${unbuilt.length}</em>`, `<div class="h-decs">${unbuilt.join('')}</div>`, 'Needs data') : ''}
+    ${soon.length ? section(`Coming up <em>${soon.length}</em>`, `<div class="h-decs">${soon.map(decRow).join('')}</div>`, 'Not open yet') : ''}
+    ${done.length ? `<details class="h-details" data-det="decided"${ui.det.decided ? ' open' : ''}><summary>Decided <em>${done.length}</em></summary><div class="h-decs">${done.map(decRow).join('')}</div></details>` : ''}
+    ${gone.length ? `<details class="h-details" data-det="unavailable"${ui.det.unavailable ? ' open' : ''}><summary>No longer current <em>${gone.length}</em></summary><div class="h-decs">${gone.map(decRow).join('')}</div></details>` : ''}`);
 }
 
 function pPlan() {
@@ -954,20 +977,23 @@ function pPlan() {
         <div class="h-mailnote">${icon('doc')}<div>This brief also went out as your monthly email. ${goA('email', 'Read the email')}</div></div></div>
     </div>`;
   return shell(`${pageHead('Plan', 'Everything on the calendar', 'Each item sits at the date its window closes. Decide, do it, or set it aside.')}${stats}
-    ${section('Timeline', timeline('plan'))}${body || '<p class="h-mute">No recommendations yet.</p>'}${more}`);
+    ${section('Timeline', timeline('plan'))}${planDecisions()}${body || '<p class="h-mute">No recommendations yet.</p>'}${more}`);
 }
 
 /* ---------- rec detail ---------- */
 
 function thread(msgs, selfId = '') {
   if (!msgs.length) return '';
+  // The latest stored message: only its proposal card offers Confirm and Not now.
+  const lastStored = [...msgs].reverse().find((m) => /^m\d+$/.test(String(m.id)));
   return `<div class="h-thread">${msgs.map((m) => {
     const who = m.role === 'me' ? 'You' : m.role === 'advisor' ? (api.s.advisor?.name ? T(api.s.advisor.name) : esc(api.s.names?.advisor || 'Advisor')) : m.role === 'claude' ? 'Claude' : esc(api.s.meta.product || 'Fathom');
     const refs = arr(m.refs).filter((id) => id !== selfId).map((id) => recById(id)).filter(Boolean);
-    return `<div class="h-msg ${esc(m.role)}${m.notice ? ' notice' : ''}"><div class="h-msg-who">${who}${m.ts ? `<time>${X(m.ts)}</time>` : ''}</div>${chatScreen.workHtml(m)}<div class="h-msg-b">${m.html || ''}</div>`
+    return `<div class="h-msg ${esc(m.role)}${m.notice ? ' notice' : ''}"><div class="h-msg-who">${who}${m.ts ? `<time>${X(m.ts)}</time>` : ''}</div>${chatScreen.workHtml(m)}${chatScreen.bodyHtml(m)}`
       + (refs.length ? `<div class="h-refs">${refs.map((r) => `<a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}"><span>${T(r.title)}</span><em>${T(r.window?.label || '')}</em>${icon('arrow')}</a>`).join('')}</div>` : '')
       + chatScreen.proposalHtml(m)
       + chatScreen.goalProposalHtml(m)
+      + chatScreen.pendingActionHtml(m, { latest: m === lastStored })
       + chatScreen.sourcesHtml(m)
       + '</div>';
   }).join('')}</div>`;

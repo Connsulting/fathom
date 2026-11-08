@@ -1,7 +1,9 @@
 // Fixtures for the MT-03 tests (test/tenancy-context.test.mjs, test/tenancy-migration.test.mjs,
 // test/tenancy-outbound.test.mjs): synthetic instance secrets, an in-process server per data
 // directory, a two-household instance built through the real operator route and auth store, and an
-// MT-02-layout legacy instance with every store table populated and FTHM1 vault objects.
+// MT-02-layout legacy instance with every store table populated and FTHM1 vault objects. The MT-05
+// tests (test/tenancy-budget.test.mjs, test/tenancy-engine.test.mjs, test/tenancy-reconcile.test.mjs)
+// add live-mode fixtures against test/helpers/model-emulator.mjs (liveTwoHouseholds, sideHousehold).
 //
 // Every value is synthetic. Modules MT-03 adds or changes (src/server.mjs startServer, the
 // household vault, src/platform/legacy-vault.mjs, src/platform/migrate-tenancy.mjs) are imported
@@ -93,12 +95,14 @@ export function serverEnv({ dataDir, port, keys, engine = 'fake', extra = {} }) 
 }
 
 // startServer(loadConfig(env)) on a free port. Returns { app, baseUrl, port, env, close() }.
-export async function startRuntime({ dataDir, keys, engine = 'fake', extra = {} }) {
+// engineOptions (MT-05, tests only: { testTransport, fundingNow }) is passed programmatically as
+// startServer(config, { engineOptions }); without it startServer gets no second argument.
+export async function startRuntime({ dataDir, keys, engine = 'fake', extra = {}, engineOptions = null }) {
   const { startServer } = await src('src/server.mjs');
   const { loadConfig } = await src('src/config.mjs');
   const port = await freePort();
   const env = serverEnv({ dataDir, port, keys, engine, extra });
-  const app = await startServer(loadConfig(env));
+  const app = engineOptions ? await startServer(loadConfig(env), { engineOptions }) : await startServer(loadConfig(env));
   let closed = false;
   return {
     app, port, env, baseUrl: `http://localhost:${port}`,
@@ -194,13 +198,14 @@ export const toolText = r => (r.json?.result?.content ?? []).map(c => c.text ?? 
 // user with active memberships in both and no session household.
 // Returns { root, dataDir, keys, server, app, baseUrl, platform, store, A, B, dual, rootOf(id), ctx(id), close() }
 // where A and B are { id, admin (session), client }.
-export async function twoHouseholds({ engine = 'fake', extra = {} } = {}) {
+// engineOptions is passed through to startRuntime (MT-05).
+export async function twoHouseholds({ engine = 'fake', extra = {}, engineOptions = null } = {}) {
   const root = await tempDir('fathom-mt03-two-');
   const dataDir = join(root, 'data');
   const keys = writeInstanceKeys(join(root, 'keys'));
   let server;
   try {
-    server = await startRuntime({ dataDir, keys, engine, extra: { FATHOM_EMAIL_TO: 'both-member@example.test', ...extra } });
+    server = await startRuntime({ dataDir, keys, engine, engineOptions, extra: { FATHOM_EMAIL_TO: 'both-member@example.test', ...extra } });
     const { app, baseUrl } = server;
     const platform = app.platform;
     const { createAuthStore } = await src('src/auth/store.mjs');
@@ -237,6 +242,91 @@ export async function twoHouseholds({ engine = 'fake', extra = {} } = {}) {
     rmSync(root, { recursive: true, force: true });
     throw err;
   }
+}
+
+// ------------------------------------------------------------------------------ live model budgets (MT-05)
+
+export const SYNTHETIC_CREDENTIAL = 'synthetic-credential-not-valid';
+
+// A second household context on its own platform and store connections, built the way a CLI
+// process builds one (openPlatform plus buildHouseholdContext, scheduler not started), with the
+// test-only engineOptions. Returns { household, engine, platform, close() }.
+export async function sideHousehold({ dataDir, env, householdId, engineOptions = null }) {
+  const { loadConfig } = await src('src/config.mjs');
+  const { openPlatform, PLATFORM_FILE } = await src('src/platform/db.mjs');
+  const { buildHouseholdContext } = await src('src/platform/runtime.mjs');
+  const { createInstanceSecrets } = await src('src/platform/secrets.mjs');
+  const config = loadConfig(env);
+  const platform = openPlatform(join(dataDir, PLATFORM_FILE));
+  try {
+    const row = platform.prepare('SELECT mode, storage_root, generation FROM households WHERE id = ?').get(householdId);
+    if (!row) throw new Error('fixture: no such household');
+    const instanceMode = platform.prepare('SELECT mode FROM households WHERE serves_store = 1').get().mode;
+    const household = buildHouseholdContext({
+      householdId, generation: Number(row.generation), mode: row.mode, relativeRoot: row.storage_root, platform, config,
+      secrets: createInstanceSecrets({ config, mode: instanceMode }), ...(engineOptions ? { engineOptions } : {}),
+    });
+    let closing = null;
+    return {
+      household, engine: household.engine, platform,
+      close() {
+        closing ??= household.close().finally(() => { try { platform.close(); } catch { /* already closed */ } });
+        return closing;
+      },
+    };
+  } catch (e) {
+    platform.close();
+    throw e;
+  }
+}
+
+// twoHouseholds in live engine mode against a model emulator: a private synthetic credential file,
+// engineOptions { testTransport: { baseURL: emulator.baseURL }, fundingNow } (engineOptions: null
+// starts the server with no second argument), A's jobs paused (so no background job spends), B's
+// engine flag enabled, and, unless instanceCapUsd is null, the instance cap and both households'
+// allocations set through src/platform/model-budget.mjs. Adds { credentialFile, engineOptions,
+// side(id, engineOptions?) } to the twoHouseholds result; close() also closes every side context.
+export async function liveTwoHouseholds({ emulator, fundingNow = () => Date.now(), extra = {}, engineOptions,
+  instanceCapUsd = 100, allocationUsd = 50 } = {}) {
+  const credDir = await tempDir('fathom-mt05-cred-');
+  const credentialFile = writePrivate(join(credDir, 'claude-credential'), `${SYNTHETIC_CREDENTIAL}\n`);
+  const options = engineOptions === undefined ? { testTransport: { baseURL: emulator.baseURL }, fundingNow } : engineOptions;
+  let two;
+  try {
+    two = await twoHouseholds({ engine: 'live', engineOptions: options, extra: { FATHOM_CLAUDE_CREDENTIAL_FILE: credentialFile, ...extra } });
+  } catch (e) {
+    rmSync(credDir, { recursive: true, force: true });
+    throw e;
+  }
+  const sides = [];
+  const closeTwo = two.close;
+  try {
+    const { setOutbound } = await src('src/platform/outbound.mjs');
+    setOutbound(two.platform, two.A.id, { jobs: false });
+    setOutbound(two.platform, two.B.id, { engine: true });
+    if (instanceCapUsd != null) {
+      const budget = await src('src/platform/model-budget.mjs');
+      await budget.setInstanceCap(two.platform, instanceCapUsd);
+      for (const id of [two.A.id, two.B.id]) await budget.setAllocation(two.platform, id, allocationUsd);
+    }
+  } catch (e) {
+    await closeTwo();
+    rmSync(credDir, { recursive: true, force: true });
+    throw e;
+  }
+  return Object.assign(two, {
+    credentialFile, engineOptions: options,
+    async side(id, sideOptions = options) {
+      const s = await sideHousehold({ dataDir: two.dataDir, env: two.server.env, householdId: id, engineOptions: sideOptions });
+      sides.push(s);
+      return s;
+    },
+    async close() {
+      for (const s of sides) await s.close().catch(() => {});
+      await closeTwo();
+      rmSync(credDir, { recursive: true, force: true });
+    },
+  });
 }
 
 // A private Your plans pack (id your-plans) in a household root with one entry PLAN_ENTRY whose
@@ -543,6 +633,9 @@ export const digestRules = throughId => ({
   simplefin_connection: { omit: ['access_blob'] },
   // Store migration 028 adds two nullable columns the pre-tenancy store (schema 26) does not have.
   preferences: { omit: ['origin', 'conversation_key'] },
+  // Store migration 031 adds spend_ledger.round_id (the platform model round of a live mirror).
+  spend_ledger: { omit: ['round_id'] },
+  column_mappings: { omit: ['schema_version', 'mapping_version', 'approval_status', 'approved_by', 'approved_at', 'structural_context'] },
   schema_migrations: { where: `id <= ${Number(throughId)}` },
 });
 

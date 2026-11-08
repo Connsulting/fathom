@@ -154,6 +154,7 @@ test('a rec waiting on missing data names the blocker on the card and in the dia
   await planRun(db, { now: NOW });
   assert.equal(recRow(db, 'va529').status, 'proposed');
   addFact(db, 'tax.itemizedEstimate', 90000);
+  db.prepare("UPDATE transactions SET category = 'Uncategorized' WHERE lower(category) LIKE '%charit%' OR lower(category) LIKE '%donat%'").run();
   await planRun(db, { now: NOW });
   const row = recRow(db, 'va529');
   assert.equal(row.status, 'waiting');
