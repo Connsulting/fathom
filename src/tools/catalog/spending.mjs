@@ -5,6 +5,8 @@ import { recurring } from '../../calc/recurring.mjs';
 import { resolveDefinition, spendingDefinitions } from '../../spending/definitions.mjs';
 import { BUCKETS } from '../../categories/resolve.mjs';
 import { ToolError } from '../errors.mjs';
+import { loadPlanningData } from '../../jobs/planner/data.mjs';
+import { personalSummaryInput } from '../../spending/summaries.mjs';
 
 const choice = (values) => ({ type: 'string', enum: values });
 export const CLASSES = [
@@ -69,7 +71,9 @@ export function readInput(ctx) {
         return [r.key, v];
       }),
   );
-  return { ...loadCategoryInputs(ctx.db), clock, facts };
+  const input = loadCategoryInputs(ctx.db);
+  const data = loadPlanningData(ctx.db, clock);
+  return { ...input, clock, facts, personalSummaries: personalSummaryInput(data, facts, input) };
 }
 function op(name, params, summary, route, handler) {
   return {

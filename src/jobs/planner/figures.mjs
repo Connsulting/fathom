@@ -26,6 +26,7 @@ import { classifyPayments } from './payments.mjs';
 import { notesFor } from './assumptions.mjs';
 import { trailingCharitable } from './facts.mjs';
 import { buildWargames } from './wargame.mjs';
+import { personalSummaryInput, selectPersonalSummaries, summarySources, SUMMARY_RULE } from '../../spending/summaries.mjs';
 
 const CASH_KINDS = ['checking', 'savings', 'cash', 'business'];
 const PERSONAL_CASH = ['checking', 'savings', 'cash'];
@@ -120,6 +121,15 @@ export function computeFigures(data, facts, ctx) {
   const owner = ctx.owner || {};
   const out = createOut(clock);
   const TY = data.taxYear;
+  const summaries = personalSummaryInput(data, facts, data.categoryInput);
+  const personal = selectPersonalSummaries(summaries, { window: { from: `${data.year}-01`, to: clock.slice(0, 7) }, bankIncome: false });
+  for (const person of ['owner', 'spouse']) {
+    const rows = personal.rows.filter(r => r.person === person && r.income);
+    if (!rows.length) continue;
+    out.source('personal-summary', 'Personal spreadsheet summaries', dateLabel(clock), 'ledger');
+    out.put(`inc.ytd.summary-${person}`, sum(rows.map(r => r.amount)), 'a', `${person === 'owner' ? 'Your' : "Your spouse's"} income from the summary sheet`, 'personal-summary',
+      { ...rowsLoc('pnl_lines', rows.map(r => r.sourceId)), sources: summarySources(rows), notes: ['From the summary sheet; recorded payroll replaces wages for the same person and months.'] }, rows[0].fileId);
+  }
 
   // Accounts and cash.
   const accounts = data.accounts;
@@ -141,7 +151,7 @@ export function computeFigures(data, facts, ctx) {
     if (biz.length) out.put('cash.business', bizTotal, 'a', 'Business cash', 'calc:cash', rowsLoc('balances', biz.flatMap(a => a.latest.ids)));
     out.put('cash.personal', cents(total - bizTotal), 'a', 'Personal cash', 'calc:cash', rowsLoc('balances', withBal(PERSONAL_CASH).flatMap(a => a.latest.ids)));
   }
-  monthlyOutflow(data, out);
+  monthlyOutflow(data, out, summaries);
 
   // Profit and loss per entity.
   const year = data.year;
@@ -835,7 +845,7 @@ function finish(out) {
 const dayNumber = iso => Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))) / 86400000;
 const toCents = v => Math.round(Number(v) * 100);
 
-function monthlyOutflow(data, out) {
+function monthlyOutflow(data, out, summaries) {
   const spend = data.accounts.filter(SPEND_ACCOUNT);
   const ids = new Set(spend.map(a => a.id));
   const household = new Set(data.accounts.map(a => a.id));
@@ -858,11 +868,14 @@ function monthlyOutflow(data, out) {
       && toCents(u.amount) === want && Math.abs(dayNumber(u.date) - dayNumber(t.date)) <= 5);
     if (m) { usedIds.add(m); matched += 1; } else rows.push(t);
   }
-  const total = -sum(rows.map(t => t.amount));
+  const supplemental = selectPersonalSummaries(summaries, { window: { from: months[0], to: months.at(-1) }, payroll: false }).rows.filter(r => !r.income && !['transfer', 'excluded'].includes(r.bucket) && r.amount < 0);
+  const total = -sum([...rows, ...supplemental].map(t => t.amount));
   if (!(total > 0)) return;
   const avg = cents(total / 3);
   out.put('cash.monthlyOut', avg, 'e', 'Average monthly spending from personal accounts', 'calc:cash', {
     calc: 'monthlyOutflow', ...rowsLoc('transactions', rows.map(t => t.id)),
+    sources: summarySources([...rows, ...supplemental]),
+    ...(supplemental.length ? { notes: [SUMMARY_RULE] } : {}),
     inputs: { months, matchedTransfers: matched, accounts: spend.map(a => a.id) },
     steps: [
       { label: 'Matched transfers excluded', formula: 'outflows matched to an equal inflow on another household account within five days', value: matched },

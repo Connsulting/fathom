@@ -172,7 +172,7 @@ describe('MG3 child tax credit phase-out', () => {
     // min(...; (9,293.52 - 9,293.52) / 2) = 0; total 9,293.52. SEP 20% x 9,293.52 = 1,858.70.
     const line = { id: 1, entity: 'Wren Studio', period: '2026-12', category: 'Income', amount: 10000, file_id: null };
     const run = ages => computeFigures(
-      { clock: '2026-12-20', year: 2026, taxYear: 2026, accounts: [], pnl: [line], taxPayments: [], documents: [], transactions: [], files: [], freshness: [] },
+      { clock: '2026-12-20', year: 2026, taxYear: 2026, accounts: [], pnl: [line], taxPayments: [], documents: [], transactions: [], files: [], freshness: [], categoryInput: { accounts: [], transactions: [] } },
       { 'household.filingStatus': 'single', 'household.dependentAges': ages },
       {
         clock: '2026-12-20',
@@ -929,7 +929,7 @@ describe('MG11 cash runway', () => {
   ];
   const CHECKING_PAYMENTS = () => ['08', '09', '10'].map(m => txn('checking', `2026-${m}-24`, -4000, 'Credit Card Payment'));
   const run = ({ accounts, transactions }) => computeFigures(
-    { clock: NOW, year: 2026, taxYear: null, accounts, pnl: [], taxPayments: [], documents: [], transactions, files: [], freshness: [] },
+    { clock: NOW, year: 2026, taxYear: null, accounts, pnl: [], taxPayments: [], documents: [], transactions, files: [], freshness: [], categoryInput: { accounts, transactions } },
     {},
     { clock: NOW, entities: [], owner: {} },
   ).figures;

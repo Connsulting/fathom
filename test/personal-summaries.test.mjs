@@ -30,7 +30,7 @@ async function fixture(t, { bank = [], manual = [] } = {}) {
   }
   db.prepare("INSERT INTO accounts(id,name,kind,owner,parser) VALUES ('owner-card','Personal card','card','You','aggregator')").run();
   for (const [month, category, amount, owner = 'You'] of bank) {
-    const id = owner === 'Your spouse' ? 'spouse-card' : owner === 'Household' ? 'joint-card' : 'owner-card';
+    const id = owner === 'Your spouse' ? 'spouse-card' : owner === 'Joint' ? 'joint-card' : 'owner-card';
     db.prepare("INSERT OR IGNORE INTO accounts(id,name,kind,owner,parser) VALUES (?,?,'card',?,'aggregator')").run(id, id, owner);
     db.prepare('INSERT INTO transactions(account_id,date,amount,category,parser) VALUES (?,?,?,?,?)').run(id, `2026-${month}-15`, amount, category, 'aggregator');
   }
@@ -79,7 +79,7 @@ test('AC3: bank coverage wins only for the covered person, month and category', 
     ['all months one category', ['08', '09', '10'].map(m => [m, 'Groceries', -25]), 825, 375, 450],
     ['different category', [['08', 'Dining', -25]], 1075, 625, 450],
     ['other person', [['08', 'Groceries', -25, 'Your spouse']], 1005, 600, 405],
-    ['joint coverage', [['08', 'Groceries', -25, 'Household']], 905, 500, 380],
+    ['joint coverage', [['08', 'Groceries', -25, 'Joint']], 905, 500, 380],
     ['income does not cover spending', [['08', 'Income', 1000]], 1050, 600, 450],
     ['outside month', [['07', 'Groceries', -25]], 1050, 600, 450],
     ['refund is category coverage', [['08', 'Groceries', 10]], 950, 500, 450],
@@ -111,7 +111,7 @@ test('AC4: a W-2 replaces the same person summary wages without dropping the spo
 
 test('AC4: paystub YTD covers through its month and the summary fills later months', async t => {
   const { db, total } = await fixture(t);
-  await addPayroll(db, paystubDoc({ person: 'owner', relation: 'outside', employerName: 'Synthetic Employer', payDate: '2026-08-31', ytdGross: 8000, grossPay: 1000, payFrequency: 'monthly' }));
+  await addPayroll(db, paystubDoc({ person: 'owner', relation: 'outside', employerName: 'Synthetic Employer', payDate: '2026-08-31', ytdGross: 8000, gross: 1000, periodStart: '2026-08-01', periodEnd: '2026-08-31' }));
   await planRun(db);
   const scenario = buildScenario(db);
   assert.equal(scenario.fig['inc.ytd.summary-owner'].v, 2000);
