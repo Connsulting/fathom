@@ -119,3 +119,30 @@ for (const [operation,params] of [
  s.db.prepare("UPDATE accounts SET display_name='Target reserve' WHERE id='manual'").run();
  assert.notEqual(basis(),pending.basis);
 });
+
+
+test('merge proposals ignore unrelated transactions and retain both accounts and moved rows',async t=>{
+ const s=await realStore();t.after(()=>s.close());const ids=await seedDuplicate(s,{sure:true});account(s,'unrelated');
+ const args={id:ids.keep,withId:ids.own,confirm:true,evidence:'yes, merge these accounts'};
+ const basis=()=>proposalBasis(s.db,'update_account',['write:accounts'],args), before=basis();
+ s.db.prepare("INSERT INTO transactions(account_id,date,amount,description) VALUES ('unrelated','2032-03-01',-10,'Unrelated posting')").run();
+ s.db.prepare("INSERT INTO transactions(account_id,date,amount,description) VALUES (?,'2032-03-01',-999,'Unrelated survivor posting')").run(ids.keep);
+ assert.equal(basis(),before);
+ for(const id of [ids.keep,ids.own]){
+  s.db.exec('SAVEPOINT target_change');
+  s.db.prepare("UPDATE accounts SET display_name='Changed' WHERE id=?").run(id);
+  assert.notEqual(basis(),before);
+  s.db.exec('ROLLBACK TO target_change');s.db.exec('RELEASE target_change');
+ }
+ s.db.prepare('UPDATE transactions SET amount=amount-1 WHERE account_id=?').run(ids.own);
+ assert.notEqual(basis(),before);
+});
+
+
+test('a completed merge makes its outstanding proposal stale without throwing',async t=>{
+ const s=await realStore();t.after(()=>s.close());const ids=await seedDuplicate(s,{sure:true});
+ const args={id:ids.keep,withId:ids.own,confirm:true,evidence:'yes, merge these accounts'};
+ const before=proposalBasis(s.db,'update_account',['write:accounts'],args);
+ await callTool('update_account',{operation:'merge',...args},context(s));
+ assert.notEqual(proposalBasis(s.db,'update_account',['write:accounts'],args),before);
+});
