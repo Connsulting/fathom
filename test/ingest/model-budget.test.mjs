@@ -47,9 +47,10 @@ test('unknown failed call retains conservative accounting across engine restart 
     const first = fileSpend(x.db, file.fileId);
     assert.equal(first.calls, 1); assert.ok(first.costUsd > 0);
     x.ctx.household.engine = createRuntimeEngine({ db: x.db, config: { engine: 'fake' }, now: () => '2032-04-17' });
-    await interpretFile({ ctx: x.ctx, file, fake: [bad], retry: true });
+    const retried = await interpretFile({ ctx: x.ctx, file, fake: [bad], retry: true });
     const second = fileSpend(x.db, file.fileId);
-    assert.equal(second.calls, 2); assert.ok(second.costUsd >= first.costUsd);
+    assert.equal(retried.status, 'budget_exhausted');
+    assert.deepEqual(second, first, 'unknown input reservation still consumes the token ceiling after restart');
     assert.equal((await interpretFile({ ctx: x.ctx, file, fake: [script], retry: true })).status, 'budget_exhausted');
   } finally { x.db.close(); }
 });
@@ -66,5 +67,16 @@ test('no legal call fits a small file/monthly cap; oversized inputs never dispat
   try {
     assert.equal((await interpretFile({ ctx: x.ctx, file: { ...file, bytes: Buffer.from('word '.repeat(15000)) }, fake: [script] })).status, 'budget_exhausted');
     assert.equal(fileSpend(x.db, file.fileId).calls, 0);
+  } finally { x.db.close(); }
+});
+
+test('one known failed round can retry but no further retry dispatches', async () => {
+  const x = setup();
+  try {
+    await interpretFile({ ctx: x.ctx, file, fake: [{ ...script, status: 'api_error', is_error: true }] });
+    assert.equal(fileSpend(x.db, file.fileId).calls, 1);
+    await interpretFile({ ctx: x.ctx, file, fake: [script], retry: true });
+    assert.equal(fileSpend(x.db, file.fileId).calls, 2);
+    assert.equal((await interpretFile({ ctx: x.ctx, file, fake: [script], retry: true })).status, 'budget_exhausted');
   } finally { x.db.close(); }
 });

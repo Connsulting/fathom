@@ -9,7 +9,7 @@ const source = () => indexSource({ fileId: 'f-synthetic', format: 'xlsx', bytes:
 function output(s) {
   const ids = Object.keys(s.refs);
   return { rows: [{ target: 'transaction', fields: { accountId: f([ids[0]]), postedDate: f([ids[1]]), amount: f([ids[2]]), description: f([ids[3]]) } }],
-    coverage: s.regions.map(regionId => ({ regionId, disposition: 'imported_detail', refs: s.inventory[regionId].refs })), completeness: 'complete' };
+    coverage: s.regions.map((regionId, i) => ({ regionId, disposition: i ? 'uncached_formula' : 'imported_detail', refs: s.inventory[regionId].refs, ...(i ? { reason: f([Object.keys(s.refs)[5]]) } : {}) })), completeness: 'complete' };
 }
 test('typed proposals bind local source identity and resolve only cited source values', async () => {
   const s = await source(), parsed = parseInterpretation(output(s), s);

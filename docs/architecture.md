@@ -475,6 +475,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `ingest_epoch` | `id` PK (always 1), `n`. Bumped by triggers on every `files` insert and update (migration 009); readers treat a missing row as 0. |
 | `column_mappings` | `signature` PK (header signature), `mapping` JSON, `src`, `created_at`, `uses` |
 | `import_proposals` | Household-local `(id, version)` PK, file/hash binding, typed proposal JSON, interpreter/mapping versions, status, actor and approval evidence |
+| `import_model_spend` | Household-local `(file_id, call)` PK, source hash, correlation, model, token counts, actual or conservative cost, retry and dispatch state (migration 030) |
 | `import_batches` | Household-local commit and Undo before/after images, receipt id, unique proposal/version FK |
 | `entity_aliases` | `alias` PK (normalized alias name), `entity` (canonical display name), `created_at` |
 | `held_facts` | `id` PK, `hold` (`employer:<employerKey>`), `key`, `value` JSON, `file_id`, `parser`, `locator`, `confidence`, `created_at` |
@@ -486,6 +487,8 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `advisor_checkin` | `id` PK (always 1), `date`, `time` (`HH:MM` or NULL), `length_min`, `updated_at`. The owner-set next check-in (migration 011). |
 | `advisor_packets` | `id` PK (`advpkt-` and 16 hex), `created_at`, `clock` (the scenario date it was built for), `rec_ids` JSON, `stored_path` (encrypted under the data key, `files/<id>.bin`), `bytes`, `sha256` (migration 011) |
 | `planner_recs` | `rec_id` PK (references `recs.id`), `trigger_id`, `grounding_hash`, `prose_src` in model, template, `first_run`, `last_run` (reference `job_runs.id`), `retired_at`, `retired_reason`, `retired_from`, `held_from`. Bookkeeping for planner-owned recs (migration 007). |
+
+Migration 030 adds durable per-file engine accounting. The internal interpreter indexes every sheet or text span and sends scrubbed reference tokens through the household engine with no tools. File limits are USD 0.50, four dispatched calls, 32,768 input tokens and 8,192 output tokens, with 4,096 output tokens per call, a 120-second attempt deadline and one explicit retry. Each dispatch also requires current household generation, outbound permission, funding, engine admission and remaining monthly cap. Unknown or interrupted calls retain conservative reservations after restart; upload routing is unchanged until the later cutover.
 
 Migration 029 adds `schema_version`, `mapping_version`, `approval_status`, `approved_by`, `approved_at`, and `structural_context` to `column_mappings`. Existing mappings are unapproved; historical financial rows and locators remain intact. The new proposal contract is internal until upload cutover. It accepts cited fields and declarative transforms only, with complete source-region coverage required for completeness claims. This migration does not change live mapping reuse.
 
