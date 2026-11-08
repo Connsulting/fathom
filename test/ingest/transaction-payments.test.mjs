@@ -12,6 +12,8 @@ import { computeFigures } from '../../src/jobs/planner/figures.mjs';
 import { deriveSteps } from '../../src/shared/rec-steps.mjs';
 import { build as buildFederal } from '../../src/jobs/triggers/fed-q4-estimate.mjs';
 import { applyRecs } from '../../src/jobs/planner/recs.mjs';
+import { removeFile } from '../../src/accounts/sources.mjs';
+import { undoAction } from '../../src/actions/receipts.mjs';
 
 const NOW = '2026-09-20T12:00:00.000Z';
 const CLOCK = NOW.slice(0, 10);
@@ -53,6 +55,11 @@ const payments = db => db.prepare('SELECT * FROM tax_payments ORDER BY date,id')
 const paymentItems = db => db.prepare("SELECT * FROM confirm_items WHERE kind='transaction_payment' ORDER BY id").all();
 const taxTask = (extra = {}) => ({ t: 'Pay the third-quarter federal estimate', kind: 'payment',
   payment: { jurisdiction: 'federal', taxYear: 2026, quarter: 3, amount: 1800 }, ...extra });
+const projectedFederalPaid = db => {
+  const facts = { 'household.filingStatus': 'mfj', 'household.state': 'VA' };
+  const data = loadPlanningData(db, CLOCK);
+  return computeFigures(data, facts, { clock: CLOCK, entities: resolveEntities(data, facts), owner: facts }).figures['tax.fed.paid'].v;
+};
 
 test('connected payments count once beside an uploaded log, with provenance, one question, and transfer recognition', () => fixture(async (s, opts) => {
   await uploadLog(s);
@@ -94,6 +101,61 @@ test('a later upload replaces the detected duplicate and undo cannot delete the 
   assert.equal(before.find(r => r.parser === 'synthetic-payment-log').amount, 1200);
 }));
 
+test('removing and restoring a payment log keeps observed payments counted with working Undo', () => fixture(async (s, opts) => {
+  const log = await uploadLog(s);
+  await syncSimplefin(s.db, opts);
+  const ctx = { db: s.db, actorId: 'synthetic-owner', now: NOW };
+  const item = paymentItems(s.db).find(i => JSON.parse(i.context).transaction.external_id === 'fed-q2');
+  assert.equal(projectedFederalPaid(s.db), 3000);
+  const removed = removeFile(ctx, log.fileId);
+  assert.equal(projectedFederalPaid(s.db), 3000);
+  assert.equal(payments(s.db).filter(r => r.parser === 'transaction-payment').length, 3);
+  assert.equal(deriveSteps([taxTask({ payment: { jurisdiction: 'federal', taxYear: 2026, quarter: 2, amount: 1200 } })], [], stepEnvOf(s.db))[0].done, true);
+  await undoAction(ctx, removed.receipt.id, 'write:sources');
+  assert.equal(projectedFederalPaid(s.db), 3000);
+  assert.equal(payments(s.db).filter(r => r.parser === 'synthetic-payment-log').length, 1);
+  assert.equal(payments(s.db).length, 3);
+  removeFile(ctx, log.fileId);
+  reopenItem(s.db, item.id, { now: NOW });
+  assert.equal(projectedFederalPaid(s.db), 1800, 'Undo removes the restored inference');
+  await syncSimplefin(s.db, opts);
+  assert.equal(projectedFederalPaid(s.db), 1800, 'resync respects the undone inference');
+}));
+
+test('recovery and source Undo work when the removed log had the only tax payment row', () => fixture(async (s, opts) => {
+  const log = await uploadLog(s);
+  await syncSimplefin(s.db, opts);
+  const ctx = { db: s.db, actorId: 'synthetic-owner', now: NOW };
+  const removed = removeFile(ctx, log.fileId);
+  assert.equal(projectedFederalPaid(s.db), 1200);
+  await undoAction(ctx, removed.receipt.id, 'write:sources');
+  assert.equal(projectedFederalPaid(s.db), 1200);
+  assert.equal(payments(s.db).length, 1);
+  assert.equal(payments(s.db)[0].parser, 'synthetic-payment-log');
+}, [postings()[0]]));
+
+test('a revised payment log no longer suppresses an observed payment of a different amount', () => fixture(async (s, opts) => {
+  await uploadLog(s);
+  await syncSimplefin(s.db, opts);
+  await uploadLog(s, '2026-06-12', 1300);
+  assert.equal(projectedFederalPaid(s.db), 4300);
+  assert.ok(payments(s.db).some(r => r.parser === 'transaction-payment' && r.amount === 1200));
+}));
+
+test('a logged-match answer recovers its own payment after every matching log is removed', () => fixture(async (s, opts) => {
+  const first = await uploadLog(s, '2026-06-12');
+  const second = await uploadLog(s, '2026-06-14', 1200, 'spouse');
+  await syncSimplefin(s.db, opts);
+  const item = pendingItems(s.db).find(i => i.kind === 'transaction_payment');
+  answer(s.db, item.id, item.options.find(o => o.id.startsWith('logged:')).id, { now: NOW });
+  const ctx = { db: s.db, actorId: 'synthetic-owner', now: NOW };
+  removeFile(ctx, first.fileId);
+  removeFile(ctx, second.fileId);
+  assert.equal(projectedFederalPaid(s.db), 1200);
+  reopenItem(s.db, item.id, { now: NOW });
+  assert.equal(payments(s.db).length, 0);
+}, [postings()[0]]));
+
 test('Undo removes a detected payment and its rec evidence, survives resync, and a Confirm answer restores it', () => fixture(async (s, opts) => {
   await syncSimplefin(s.db, opts);
   const row = payments(s.db).find(r => r.amount === 1800);
@@ -113,9 +175,10 @@ test('a recommendation pay and log step completes from the matching quarter, amo
   await syncSimplefin(s.db, opts);
   const tasks = [taxTask(), taxTask({ t: 'Log the third-quarter federal payment' }),
     taxTask({ payment: { jurisdiction: 'federal', taxYear: 2026, quarter: 2, amount: 1800 } }),
-    taxTask({ payment: { jurisdiction: 'federal', taxYear: 2026, quarter: 3, amount: 1900 } })];
+    taxTask({ payment: { jurisdiction: 'federal', taxYear: 2026, quarter: 3, amount: 1900 } }),
+    taxTask({ payment: { jurisdiction: 'federal', taxYear: 2026, quarter: 3, amount: 1799.37 } })];
   const rec = recFromRow({ id: 'federal-q3', def: JSON.stringify({ tasks }), tasks_done: '[]', goal_kinds: '[]' }, CLOCK, stepEnvOf(s.db));
-  assert.deepEqual(rec.tasks.map(t => t.done), [true, true, false, false]);
+  assert.deepEqual(rec.tasks.map(t => t.done), [true, true, false, false, true]);
   assert.equal(rec.tasks[0].auto, true);
   assert.equal(rec.tasks[0].evidence.table, 'transactions');
   assert.ok(rec.tasks[0].evidence.id);
