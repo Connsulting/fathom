@@ -3,26 +3,31 @@
 A year-round financial co-pilot for households of independent professionals: it tells you when
 it's covered, and when something needs you before a window closes.
 
+![A 40-second tour of Fathom on synthetic demo data: Home, a recommendation, Ask with a sourced figure, a war game decision and a one-tap confirm](docs/images/demo.gif)
+
+The same tour as an [MP4](docs/images/demo.mp4). Re-record it with `npm run demo:gif -- --port <n>`.
+
 ![Fathom Home: the household's goals with their pace, and the few actions that need someone this month](docs/images/home.png)
 
-Home starts from your goals. Each one shows whether you are on pace, and the actions that move it
-carry a deadline and an owner, so the owner and the spouse both know whose turn it is.
+Home leads with the few things that need someone before the next deadline, each with a date and an
+owner, so the owner and the spouse both know whose turn it is. Below them, each goal shows whether
+you are on pace.
 
 ## Plan and a recommendation
 
 Fathom watches the calendar, income changes and life events, and turns each trigger into a
 recommendation with a why-now, a window, the household's own figures and a short checklist. For
-decisions with tradeoffs, war games put you on the curve and you pick the point.
+decisions with tradeoffs, war games lay the options side by side with your figures and you pick one.
 
 ![A recommendation on the Plan: why now, the window, the figures and the checklist](docs/images/plan-recommendation.png)
 
 ## Ask, with every figure sourced
 
-Ask questions about your own money in plain language. Answers stream in, grounded in your stored
-data and the knowledge packs that apply to your household, and every figure links to where it
-came from.
+Ask questions about your own money in plain language. Each answer arrives complete, grounded in
+your stored data and the knowledge packs that apply to your household, and every figure links to
+where it came from. Ask never does its own math: figures come from calculators or stored data.
 
-![Ask: a streamed answer whose figures each carry their source](docs/images/ask.png)
+![Ask: an answer whose figures each carry their source](docs/images/ask.png)
 
 ## Money
 
