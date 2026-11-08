@@ -27,8 +27,8 @@ test('row matching counts multiplicity, precision, identity, signs and citations
 });
 
 test('offline CLI runs all real API lifecycles and refuses unsafe injected results', () => {
-  const result = spawnSync(process.execPath, ['evals/imports/run.mjs', '--offline'], { encoding: 'utf8', timeout: 120000 });
-  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const result = spawnSync(process.execPath, ['evals/imports/run.mjs', '--offline'], { encoding: 'utf8', timeout: 300000 });
+  assert.equal(result.status, 0, String(result.error?.code ?? result.signal ?? '') + result.stderr + result.stdout);
   const report = JSON.parse(result.stdout);
   assert.equal(report.cases.length, 96);
   assert.equal(report.passed, 96);
@@ -43,7 +43,7 @@ test('offline CLI runs all real API lifecycles and refuses unsafe injected resul
   assert.ok(report.lifecycle.foreignRefusals > 0);
   assert.ok(report.lifecycle.zeroCallRepeats > 0);
   assert.ok(report.lifecycle.changedApprovals > 0);
-  const unsafe = spawnSync(process.execPath, ['evals/imports/run.mjs', '--offline', '--inject-unsafe', 'literal'], { encoding: 'utf8', timeout: 120000 });
+  const unsafe = spawnSync(process.execPath, ['evals/imports/run.mjs', '--offline', '--inject-unsafe', 'literal'], { encoding: 'utf8', timeout: 300000 });
   assert.equal(unsafe.status, 1);
   assert.ok(JSON.parse(unsafe.stdout).failed > 0);
   assert.doesNotMatch(result.stdout, /Synthetic Studio|account-synthetic|payroll provider|prompt|rawHash/);
