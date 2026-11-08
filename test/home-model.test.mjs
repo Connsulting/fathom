@@ -693,7 +693,7 @@ test('healthLine owner-only data line: one "Fathom needs" link over the things o
   const all = healthLine({ pace: stalePace, ingest: ingestOf(3, ['failed']), accounts: [{ fresh: 'stale' }, { fresh: 'stale' }], metaDataThrough: null });
   assert.deepEqual(all.owner, [
     { key: 'confirm', text: '3 questions to confirm', go: 'confirm' },
-    { key: 'accounts', text: '2 accounts stale', go: 'accounts' },
+    { key: 'accounts', text: '2 accounts stale', go: 'money' },
     { key: 'files', text: '1 file failed', go: 'add' }
   ]);
   assert.equal(all.needs, 3);
