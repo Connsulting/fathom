@@ -2146,7 +2146,7 @@ function draw() {
     case 'packs': html = packsScreen.render(r.params?.id); break;
     case 'yearend': html = yearendScreen.render(); break;
     case 'connect': html = connect.render(connectH); break;
-    case 'engine': html = engineScreen.render(); break;
+    case 'engine': html = engineScreen.render(routeChanged); break;
     case 'email': html = pEmail(routeChanged); break;
     case 'settings': html = pSettings(); break;
     case 'memories': html = memoriesScreen.render(); break;

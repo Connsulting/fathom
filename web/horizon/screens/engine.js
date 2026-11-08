@@ -114,7 +114,10 @@ function ledgerHtml(en) {
   return section('Recent spend', `<div class="h-card h-ledger" role="table" aria-label="Recent model calls">${body}</div>`, 'Prompts and answers are never kept here');
 }
 
-export function render() {
+// fresh: the route was just entered. The scenario may predate a plan started on schedule or in
+// another tab, so it is re-read once; the redraw then follows any running plan.
+export function render(fresh = false) {
+  if (fresh && !S.poll) S.poll = setTimeout(() => { S.poll = null; H.api.refresh(); }, 0);
   const { api, arr, T, figHtml, shell, section, pageHead } = H;
   const en = api.s.engine || {};
   const b = en.budget || {};
