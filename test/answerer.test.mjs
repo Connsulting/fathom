@@ -1799,3 +1799,26 @@ test('Ask keeps original tax identifiers locally and scrubs current and prior tu
   assert.equal(stored[0].text, original);
   assert.equal(stored[1].text, 'Synthetic ITIN 900-70-1234 question.');
 });
+
+
+test('PN1: Ask records a spending ledger from the owner sentence using the advertised answer shape', async t => {
+  const s = await demoStore(t);
+  const text = "Aster's is my card spending, not a business.";
+  const { engine } = scripted(s.runtime, [[
+    { toolCalls: [{ name: 'household', args: { operation: 'fact_shapes' } }] },
+    { toolCalls: [{ name: 'answer', args: { operation: 'fact', key: 'pnl.ledgers', value: { "Aster's": { kind: 'spending' } }, evidence: text } }] },
+    { toolCalls: [{ name: 'answer', args: { operation: 'fact', key: 'pnl.ledgers', value: { "Birch's": { kind: 'spending' } }, evidence: text } }] },
+    { text: 'Saved the named spending ledger classification.' },
+  ]]);
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({ db: s.db, key: THREAD, text, ownerText: text, actorId: 'demo', turnId: 'synthetic-ledger' });
+  assert.ok(!reply.notice);
+  const shapes = await callTool('household', { operation: 'fact_shapes' }, { db: s.db, dataDir: s.root });
+  assert.ok(shapes['pnl.ledgers']);
+  const fact = s.db.prepare("SELECT value, confirmed FROM facts WHERE key = 'pnl.ledgers'").get();
+  assert.ok(fact, JSON.stringify(reply));
+  assert.deepEqual(JSON.parse(fact.value), { "Aster's": { kind: 'spending' } });
+  assert.equal(fact.confirmed, 1);
+  assert.ok(reply.provenance.tools.some(x => x.name === 'answer' && x.args.operation === 'fact'));
+  const refused = reply.provenance.tools.find(x => x.name === 'answer' && Object.hasOwn(x.args.value, "Birch's"));
+  assert.match(refused.result.error, /stated|stored|evidence/i);
+});
