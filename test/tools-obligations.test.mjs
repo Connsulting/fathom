@@ -28,7 +28,7 @@ test('mortgage payoff uses the stated date, then amortization net of escrow, wit
  s.db.prepare("DELETE FROM facts WHERE key='obligations.mortgage'").run();
  out=await s.call('obligations',{obligations:['mortgage']});
  assert.equal(out.obligations[0].endDate.value,null);
- assert.ok(out.gaps.some(g=>g.message.includes('obligations.mortgage')));
+ assert.ok(out.gaps.some(g=>g.fact==='obligations.mortgage'));
 });
 
 test('child dates use school cutoff, age thirteen and college age with pack citations',async t=>{
@@ -69,7 +69,7 @@ test('unstated school care amount is unavailable and never applied; owner assump
  const out=await s.call('projection',{years:3,obligations:['childcare']});
  const change=out.years[1].changes.find(c=>c.stage==='school_age');
  assert.equal(change.applied,false);
- assert.ok(out.gaps.some(g=>g.message.includes('obligations.childcare')));
+ assert.ok(out.gaps.some(g=>g.fact==='obligations.childcare'));
  const changed=await s.call('projection',{years:3,obligations:['childcare'],changes:[{kind:'childcare',stage:'school_age',newMonthly:{value:200,source:'owner',evidence:'$200 a month'}}]});
  assert.ok(changed.years[1].changes.some(c=>c.applied));
  await assert.rejects(s.call('obligations',{changes:[{kind:'childcare',newMonthly:{value:200,source:'owner',evidence:'$300'}}]}),e=>e.code==='bad_input');

@@ -453,6 +453,9 @@
 .d-horizon .h-blk-na { color: var(--fa); }
 .d-horizon .h-blk .fx-fig[data-unavailable] { color: var(--fa); font-family: var(--sans); font-size: 13px; }
 .d-horizon .h-blk-note { margin-top: 10px; color: var(--fa); font-size: 13px; }
+.d-horizon .h-leftout { margin-top: 12px; padding-top: 8px; border-top: 1px solid var(--line); color: var(--fa); font-size: 13px; }
+.d-horizon .h-leftout p { margin: 4px 0 0; }
+.d-horizon .h-leftout-more summary { margin-top: 4px; cursor: pointer; }
 
 /* Table: filter, scroller, sticky first column, right-aligned tabular numbers. */
 .d-horizon .h-blk-filter { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }

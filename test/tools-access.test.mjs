@@ -29,7 +29,7 @@ test('access separates accounts and birth rules, uses real separation dates, and
  s.fact('accounts.separationDate',{plan:'2034-12-31'});
  assert.ok(!(await s.call('access')).people[0].milestones.some(m=>m.event==='rule_of_55'));
  s.db.prepare("DELETE FROM facts WHERE key='accounts.separationDate'").run();
- assert.ok((await s.call('access')).gaps.some(g=>g.message.includes('accounts.separationDate')));
+ assert.ok((await s.call('access')).gaps.some(g=>g.fact==='accounts.separationDate'));
 });
 
 test('RMD birth cohorts and age-only precision are explicit; missing birth facts leave dates unavailable',async t=>{
@@ -67,7 +67,7 @@ test('bridge counts stored basis, taxable and cash, gates employer money on sepa
  s.db.prepare("DELETE FROM facts WHERE key='accounts.rothBasis'").run();
  out=await s.call('bridge',args);
  assert.equal(out.accessible.rothContributions.value,0);
- assert.ok(out.gaps.some(g=>g.message.includes('accounts.rothBasis')));
+ assert.ok(out.gaps.some(g=>g.fact==='accounts.rothBasis'));
  await assert.rejects(s.call('bridge',{retireAge:{value:50,source:'owner',evidence:'age 55'}}),e=>e.code==='bad_input');
 });
 
@@ -80,7 +80,7 @@ test('Roth qualification waits for the later clock and missing facts stay unavai
  s.db.prepare("DELETE FROM facts WHERE key='accounts.rothFirstContributionYear'").run();
  const missing=await s.call('access',{people:'owner'});
  assert.equal(missing.people[0].milestones.find(m=>m.event==='roth_earnings_qualified').date.value,null);
- assert.ok(missing.gaps.some(g=>g.message.includes('accounts.rothFirstContributionYear')));
+ assert.ok(missing.gaps.some(g=>g.fact==='accounts.rothFirstContributionYear'));
 });
 
 test('bridge uses the person-scoped retirement fact, excludes spouse and business balances and exposes missing balances',async t=>{

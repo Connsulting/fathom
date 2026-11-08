@@ -72,6 +72,8 @@ import { listPreferences } from '../actions/preferences.mjs';
 //
 // provenance.blocks: blocks drawn by show carry origin 'model'. When none was drawn and the final text
 // does not lead with a refusal, up to two automatic blocks (origin 'auto') come from the turn's reads.
+// provenance.leftOut (absent when empty) names what the turn's reads left out (src/api/left-out.mjs);
+// an open-ended transactions search reads on to CONTINUE_CAP rows before the model sees it.
 // Ask threads can write through scoped registry tools; receipts and Undo are durable product data.
 // With a signed-in owner every offered write tool also takes propose: true (src/actions/proposals.mjs):
 // the operation is recorded, not run, and the reply carries it as provenance.pendingAction (never
@@ -97,6 +99,7 @@ import { resolveRefs } from './context-refs.mjs';
 import { DEMO_LIMIT_MESSAGE } from '../public-demo/control.mjs';
 import { ANSWER_MAX_WORDS } from '../shared/answer-contract.mjs';
 import { checkAnswerDiscipline } from '../shared/answer-discipline.mjs';
+import { leftOutOf, continueRead } from './left-out.mjs';
 
 // A final text that leads with a refusal gets no automatic block.
 const REFUSAL = /^[\s*_#>"'“]*(?:(?:sorry|unfortunately|i['’]m sorry|i am sorry)[,.!]?\s+)?(?:I|Fathom)(?:\s+|['’])(?:can['’]?t|cannot|can not|won['’]?t|will not|(?:am|m|is) (?:not able|unable)|(?:don['’]?t|do not|doesn['’]?t|does not) have)\b/i;
@@ -738,7 +741,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
     const available = writes ? proposalTools(REGISTRY.filter(t => !t.mcpOnly)) : REGISTRY.filter(t => !t.mcpOnly && t.kind === 'read');
     const offered = available.map(tool => tool.kind !== 'read' ? tool : { ...tool, async handler(args, ctx) {
       const cached = sourceReads.find(r => readIdentity(r) === readIdentity({ name: tool.name, args }));
-      return cached ? structuredClone(cached.result) : tool.handler(args, ctx);
+      return cached ? structuredClone(cached.result) : continueRead(tool.name, args, await tool.handler(args, ctx), a => tool.handler(a, ctx));
     } });
     if (writes) prompt.system += '\n\n' + PROPOSE_RULE;
     // The one operation this turn may propose (provenance.pendingAction), recorded by a propose call.
@@ -836,6 +839,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
       provenance: { discipline: { violations: discipline.violations, triggeredBy } } });
     paragraphs.push(...knowledgeCoverageDisclosure(scenario, context).map(escapeUserText));
     const lower = text.toLowerCase();
+    const leftOut = leftOutOf(toolResults);
     const seenReads = new Set();
     const sources = [...sourceReads, ...toolResults].filter(r => {
       if (getTool(r.name)?.kind !== 'read') return true;
@@ -865,6 +869,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
         ...(references.length ? { references: references.map(({ kind, id }) => ({ kind, id })) } : {}),
         ...(pendingAction ? { pendingAction } : {}),
         blocks: placement.blocks, blockNotes,
+        ...(leftOut.length ? { leftOut } : {}),
         work: { ms: Math.max(0, Math.round(performance.now() - t0)), items: work.items },
       },
     };

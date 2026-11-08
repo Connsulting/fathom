@@ -16,7 +16,7 @@ import { evaluate } from './calculate.mjs';
 import { ToolError } from '../errors.mjs';
 
 const bad = message => { throw new ToolError('bad_input', message); };
-const gap = message => ({ code:'missing_fact', message });
+const gap = (message, fact) => ({ code:'missing_fact', message, ...(fact ? { fact } : {}) });
 const latest = dates => dates.filter(Boolean).sort().at(-1) ?? null;
 const isoDate = d => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && Number.isFinite(Date.parse(d)) && new Date(d).toISOString().slice(0,10) === d;
 const packRef = r => ({ packId:r.pack,entryId:r.entry });
@@ -131,7 +131,7 @@ function personDate(facts,person,age) {
   }
   const year = facts['household.birthYears']?.[person];
   if (Number.isInteger(year) && year >= 1900 && year <= 2100) return {date:`${year+Math.ceil(age)}-12-31`,gaps:[gap(`${person} has only a birth year; month precision is unavailable and the date uses the latest possible year end.`)],keys:['household.birthYears']};
-  return {date:null,gaps:[gap(`${person} needs a birth date or birth year to calculate age and dates.`)],keys:[]};
+  return {date:null,gaps:[gap(`${person} needs a birth date or birth year to calculate age and dates.`, `household.${person}BirthDate`)],keys:[]};
 }
 const monthSpan = (from,to) => Math.max(0,(Number(to.slice(0,4))-Number(from.slice(0,4)))*12 + Number(to.slice(5,7))-Number(from.slice(5,7)) + (to.slice(8,10)>from.slice(8,10) ? 1 : 0));
 
@@ -208,7 +208,7 @@ async function afterTax(args,ctx) {
       const ageDate=person==='owner' || person==='spouse' ? personDate(facts,person,ACCESS_RULES.penaltyFreeAge.years+ACCESS_RULES.penaltyFreeAge.months/12) : {date:null,gaps:[gap('Roth qualification needs the account owner birth date.')],keys:[]};
       rowGaps.push(...ageDate.gaps);
       const first=r.account ? facts['accounts.rothFirstContributionYear']?.[r.account.id] : null;
-      if (!Number.isInteger(first) || first<1975 || first>Number(clock.slice(0,4))) rowGaps.push(gap('Roth qualification needs accounts.rothFirstContributionYear.'));
+      if (!Number.isInteger(first) || first<1975 || first>Number(clock.slice(0,4))) rowGaps.push(gap('Roth qualification needs the year of the first Roth contribution.', 'accounts.rothFirstContributionYear'));
       else if (ageDate.date) qualified=latest([ageDate.date,`${first+ACCESS_RULES.fiveYear.years}-01-01`]);
     } else if (taxable) {
       whenTaxed='Capital gains plus state tax on gains when sold; basis returns untaxed. Annual distributions may also be taxed.';
@@ -229,7 +229,7 @@ async function afterTax(args,ctx) {
       rowGaps.push(...birthday.gaps,gap('Choose medical or nonmedical withdrawal purpose for the HSA after-tax value.'));
       nonmedical=value!==null && birthday.date && !rateMissing ? value*(1-ordinary.value-state.value-(clock<birthday.date ? ACCESS_RULES.hsaAdditionalTax.rate : 0)) : null;
     } else if (treatment==='cash') {whenTaxed='No tax on cash withdrawal; interest is taxed when earned.';tax=value===null ? null : 0;}
-    else {whenTaxed='Tax treatment is unavailable.';rowGaps.push(gap(`${r.label ?? 'Account'} needs accounts.planType for a supported tax treatment.`));}
+    else {whenTaxed='Tax treatment is unavailable.';rowGaps.push(gap(`${r.label ?? 'Account'} needs its plan type for a supported tax treatment.`, 'accounts.planType'));}
     if (tax!==null && value!==null) after=value-tax;
     totals.value = value === null || totals.value === null ? null : totals.value + value;
     totals.afterTax = after === null || totals.afterTax === null ? null : totals.afterTax + after;

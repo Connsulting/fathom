@@ -14,7 +14,7 @@ import { resolveRef } from '../refs.mjs';
 import { ToolError } from '../errors.mjs';
 
 const bad = message => {throw new ToolError('bad_input',message);};
-const gap = message => ({code:'missing_fact',message});
+const gap = (message,fact) => ({code:'missing_fact',message,...(fact?{fact}:{})});
 const latest = dates => dates.filter(Boolean).sort().at(-1) ?? null;
 const pack = r => ({packId:r.pack,entryId:r.entry});
 const ageAccess = ACCESS_RULES.penaltyFreeAge.years+ACCESS_RULES.penaltyFreeAge.months/12;
@@ -26,7 +26,7 @@ function birthOf(facts,person) {
   if(typeof born==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(born)&&Number.isFinite(Date.parse(born))&&new Date(born).toISOString().slice(0,10)===born)return {born,precise:true,keys:[key],gaps:[]};
   const year=facts['household.birthYears']?.[person];
   if(Number.isInteger(year))return {born:`${year}-12-31`,precise:false,keys:['household.birthYears'],gaps:[gap(`${person} has year precision only; a birth date is missing and dates use year end.`)]};
-  return {born:null,precise:false,keys:[key],gaps:[gap(`${person} needs ${key} or household.birthYears.`)]};
+  return {born:null,precise:false,keys:[key],gaps:[gap(`${person} needs a birth date or birth year.`,key)]};
 }
 function dateAt(birth,age) {
   if(!birth.born)return null;
@@ -43,9 +43,9 @@ function accountRecords(ctx,data) {
   });
 }
 function qualifying(r,birth,gaps) {
-  if(!r.plan&&['retirement','ira','roth'].includes(r.a.kind))gaps.push(gap(`${r.label} needs accounts.planType; employer-plan access cannot be inferred.`));
+  if(!r.plan&&['retirement','ira','roth'].includes(r.a.kind))gaps.push(gap(`${r.label} needs its plan type; employer-plan access cannot be inferred.`,'accounts.planType'));
   if(!EMPLOYER_PLAN_TYPES.includes(r.plan))return false;
-  if(!r.separation){gaps.push(gap(`${r.label} needs accounts.separationDate; retirement age does not establish separation.`));return false;}
+  if(!r.separation){gaps.push(gap(`${r.label} needs the date you left that employer; retirement age does not establish separation.`,'accounts.separationDate'));return false;}
   return !!birth.born&&Number(r.separation.slice(0,4))>=Number(birth.born.slice(0,4))+ACCESS_RULES.ruleOf55.years;
 }
 
@@ -71,7 +71,7 @@ function access(args,ctx) {
       if(r.treatment.startsWith('roth')) {
         const first=data.facts['accounts.rothFirstContributionYear']?.[r.a.id];
         const validFirst=Number.isInteger(first)&&first>=1975&&first<=Number(data.clock.slice(0,4));
-        const missing=validFirst?[]:[gap(`${r.label} needs accounts.rothFirstContributionYear.`)];gaps.push(...missing);
+        const missing=validFirst?[]:[gap(`${r.label} needs the year of the first Roth contribution.`,'accounts.rothFirstContributionYear')];gaps.push(...missing);
         const ageDate=dateAt(birth,ageAccess),five=validFirst?`${first+ACCESS_RULES.fiveYear.years}-01-01`:null;
         event('roth_earnings_qualified',ageAccess,ageDate&&five?latest([ageDate,five]):null,[r],ACCESS_RULES.fiveYear.packRef,missing);
       }
@@ -93,7 +93,7 @@ async function bridge(args,ctx) {
   let age,assumptions=[];
   if(args.retireAge!==undefined){const a=checkAssumption(args.retireAge,{name:'retireAge',unit:'age',min:18,max:100},ctx);age=a.value;assumptions.push(a);}
   else if(stored!==undefined)age=stored;
-  else {age=null;gaps.push(gap(`household.retireAge for ${person} is missing; provide a retirement age assumption.`));}
+  else {age=null;gaps.push(gap(`A retirement age for ${person} is missing; provide a retirement age assumption.`,'household.retireAge'));}
   const rr=checkAssumption(args.realReturn ?? {value:0,source:'default'},{name:'realReturn',unit:'ratio',default:0,min:-0.05,max:0.1},ctx);assumptions.push(rr);
   const spending=args.spending?await resolveRef(args.spending,ctx,'spending'):(await (await import('../index.mjs')).callTool('spending',{operation:'total',definition:args.definition ?? 'household_spending',annualize:true},ctx)).total;
   if(Array.isArray(spending)||spending.unit!=='usd_per_year')bad('spending needs a usd_per_year figure');
@@ -117,11 +117,11 @@ async function bridge(args,ctx) {
     else if(r.treatment==='taxable')key='taxable';
     else if(r.treatment.startsWith('roth')) {
       const basis=data.facts['accounts.rothBasis']?.[r.a.id];
-      if(!Number.isFinite(basis)){gaps.push(gap(`${r.label} needs accounts.rothBasis; no contribution basis is counted.`));}
+      if(!Number.isFinite(basis)){gaps.push(gap(`${r.label} needs its Roth contribution basis; no contribution basis is counted.`,'accounts.rothBasis'));}
       else if(r.plan==='roth_401k')notes.push(`${r.label}: workplace Roth contribution basis is not separately withdrawable and is excluded unless the whole plan qualifies for access.`);
       else {
         const accessible=value===null?null:Math.min(basis,Math.max(0,value));
-        if(accessible===null){sums.rothContributions=null;gaps.push(gap(`${r.label} has no stored balance to bound accounts.rothBasis; accessible contributions are unavailable.`));}
+        if(accessible===null){sums.rothContributions=null;gaps.push(gap(`${r.label} has no stored balance to bound its Roth contribution basis; accessible contributions are unavailable.`));}
         else if(sums.rothContributions!==null)sums.rothContributions+=accessible;
         inputs.rothContributions.push({value:accessible,unit:'usd',label:r.label,asOf,account:r.ref,factKey:'accounts.rothBasis',provenance:{sources:(snapshot?.value?.locator?.sources ?? []).map(s=>s.rows)}});
       }
