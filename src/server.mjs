@@ -27,6 +27,7 @@ import { createInstance } from './platform/db.mjs';
 import { openInstance, StartupError } from './platform/ready.mjs';
 import { createInstanceSecrets } from './platform/secrets.mjs';
 import { createRuntimeRegistry } from './platform/runtime.mjs';
+import { carryAllHouseholds } from './platform/model-carry.mjs';
 import { createHandler } from './api/router.mjs';
 import { createAuthService } from './auth/service.mjs';
 import { createKeyService } from './mcp/keys.mjs';
@@ -162,7 +163,9 @@ async function startPublicDemo(config, platform) {
   };
 }
 
-export async function startServer(config = loadConfig()) {
+// options.engineOptions ({ testTransport, fundingNow }) is programmatic only, for tests: the
+// `node src/server.mjs` entry passes none and no config or environment key sets it.
+export async function startServer(config = loadConfig(), { engineOptions = {} } = {}) {
   const { platform, mode, secrets } = openOrCreateInstance(config);
   if (config.publicDemo) return startPublicDemo(config, platform);
   let runtimes = null;
@@ -174,7 +177,9 @@ export async function startServer(config = loadConfig()) {
   try {
     const transport = createTransport(config, { outboxDir: join(config.dataDir, 'outbox') });
     const auth = createAuthService({ platform, config, transport, secrets });
-    runtimes = createRuntimeRegistry({ platform, config, secrets });
+    // Live mode: every household's pre-MT-05 spend is carried before any household is admitted.
+    if (config.engine === 'live') carryAllHouseholds(platform, { dataDir: config.dataDir, now: (engineOptions.fundingNow ?? Date.now)() });
+    runtimes = createRuntimeRegistry({ platform, config, secrets, engineOptions });
     backfillMerged(runtimes);
     const keys = createKeyService({ platform, secret: () => secrets.mcpSecret(), creatorActive: auth.creatorActive });
     const mcp = createMcpHandler({ keys, runtimes, config });
