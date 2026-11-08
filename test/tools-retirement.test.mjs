@@ -9,6 +9,8 @@ import { round } from '../src/calc/figure.mjs';
 import { readInput } from '../src/tools/catalog/spending.mjs';
 import { createRegistryServer } from '../src/engine/tools.mjs';
 import { tools } from '../src/tools/index.mjs';
+import { loadCases } from '../evals/cases.mjs';
+import { runCases } from '../evals/harness.mjs';
 
 const owner = (value, evidence = `$${value}`) => ({ value, source: 'owner', evidence });
 const rate = value => owner(value, `${value * 100} percent`);
@@ -114,4 +116,17 @@ test('retirement validates typed inputs and checks owner statements at the Ask b
   assert.ok(good.target.value > 0);
   assert.ok(server.names.includes('retirement'));
   assert.match(instructions,/Comparisons by account type.*where tax shows up.*never say which to choose/);
+});
+
+test('C6 scripted questions run through Ask with validated calls, grounding and no paid engine',async () => {
+  const cases=(await loadCases()).filter(c=>c.turns.some(t=>t.required.some(r=>r.name==='retirement' && ['target','growth','after_tax'].includes(r.operation))));
+  assert.equal(cases.length,10);
+  assert.ok(cases.every(c=>!c.expectedFail));
+  const result=await runCases({cases});
+  assert.equal(result.costUsd,0);
+  assert.deepEqual(result.cases.filter(c=>c.status!=='pass').map(c=>({id:c.id,status:c.status,checks:c.failingChecks})),[]);
+  for (const c of result.cases) for (const turn of c.turns) {
+    assert.equal(turn.grounding.ok,true,c.id);
+    assert.ok(turn.tools.some(t=>t.name==='retirement'),c.id);
+  }
 });
