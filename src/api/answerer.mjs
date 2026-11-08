@@ -103,7 +103,7 @@ export const PRODUCT_RULES = [
   'For stored figures, call household.figures and write its returned {f:key} token, never numbers from the summary.',
   'Never write a Sources, References or Citations line or cite sources in prose; the app shows them under each answer.',
   'Call tools before you write the answer; do not narrate tool use.',
-  'Do all needed read-only lookups, including every relevant account, all 529s and checking for transfers. Never ask permission to read household data.',
+  'Do all needed read-only lookups before replying, including every relevant account, all 529s and checking for transfers. Never ask permission to read household data.',
   'Use short paragraphs with blank lines. You may use bullet lists ("- "), numbered lists ("1. ") and **bold**; no other markdown, headings, links, tables or HTML.',
   'The context may list references as screen item kinds, ids and reading tools. Read them with those tools; never guess their contents.',
 ].join('\n');

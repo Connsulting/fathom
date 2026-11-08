@@ -353,8 +353,11 @@ test('an empty corrective answer still records the triggering kinds', async t =>
 });
 
 
-test('Ask static rules fit the character budget including product rules and answer style', t => {
+test('Ask rule blocks fit their character budget and reach the assembled prompt', t => {
   const { system } = buildChatPrompt({ packContextText: '', summary: {}, question: 'Describe the plan.' });
-  t.diagnostic(`ask-static-rules=${system.length}`);
-  assert.ok(system.length <= 8000, `Ask static rules use ${system.length} of 8000 characters`);
+  for (const [name, rules] of [['product', PRODUCT_RULES], ['registry', instructions]]) {
+    t.diagnostic(`ask-${name}-rules=${rules.length}`);
+    assert.ok(rules.length <= 8000, `Ask ${name} rules use ${rules.length} of 8000 characters`);
+    assert.ok(system.includes(rules), `Ask receives the ${name} rules`);
+  }
 });
