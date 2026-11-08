@@ -139,3 +139,25 @@ test('a tax source cannot overwrite an estimate with withholding under the same 
     assert.equal(x.db.prepare('SELECT kind FROM tax_payments').get().kind,'estimate');
   } finally { x.close(); }
 });
+
+
+test('corrected typed withholding uses the existing recipient conflict safeguards', async () => {
+  const { importProposedRows } = await import('../helpers/import-proposal-fixture.mjs');
+  const { loadPlanningData } = await import('../../src/jobs/planner/data.mjs');
+  const { classifyPayments } = await import('../../src/jobs/planner/payments.mjs');
+  const { pendingItems, answer } = await import('../../src/ingest/confirm.mjs');
+  const x = await setup();
+  try {
+    const payment = amount => ({target:'tax_payment',kind:'withholding',status:'paid',datePrecision:'month',fields:{jurisdiction:'federal',payer:'Synthetic payer',recipient:'you',amount,taxYear:2032,taxYearBasis:'confirmed_tax_year',paymentDate:'2032-01-31'}});
+    await importProposedRows(x,[payment(100)]);
+    await importProposedRows(x,[payment(125)]);
+    const item = pendingItems(x.db).find(item=>item.kind==='withholding_conflict');
+    assert.ok(item,'different withholding amounts require a choice');
+    assert.equal(x.db.prepare('SELECT count(*) n FROM tax_payments').get().n,2);
+    const classify = ()=>classifyPayments(loadPlanningData(x.db,'2032-03-10'),{persons:['owner','spouse'],f:'mfj',isVa:true});
+    assert.equal(classify().fed.withheld.blocked,'withholding_conflict_pending');
+    answer(x.db,item.id,'second',{now:x.ctx.now});
+    assert.equal(classify().fed.withheld.blocked,null);
+    assert.equal(classify().fed.withheld.total,125);
+  } finally { x.close(); }
+});
