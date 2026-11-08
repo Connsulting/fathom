@@ -64,6 +64,7 @@ export const getPace = ctx => scenarioOf(ctx).pace;
 // A position is a number from 0 to 1 for a known axis (the curve's axes, which the onboarding
 // priorities share by id).
 export function curveSet(ctx) {
+  if (ctx.body.positions === undefined && typeof ctx.body.id !== 'string') throw new HttpError(400, 'unknown curve axis');
   write(() => setCurvePositions(ctx.db, ctx.body.positions !== undefined ? ctx.body.positions : { [ctx.body.id]: ctx.body.value }));
   return { scenario: scenarioOf(ctx) };
 }
