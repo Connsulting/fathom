@@ -10,6 +10,7 @@ const expected = {
   show: ['chart', 'table', 'compare', 'timeline'],
   household: ['summary', 'facts', 'fact_shapes', 'figures', 'deadlines', 'health', 'imports'],
   accounts: ['list', 'holdings', 'detail', 'net_worth', 'sources'], sources: ['archive_account', 'remove_file', 'merge_accounts'], tax: ['estimate', 'room'], transactions: ['search'], business: ['pnl', 'rows'],
+  retirement: ['target', 'growth', 'after_tax'],
   spending: ['total', 'compare', 'definitions', 'cash_flow', 'recurring'],
   goals: ['list', 'pace', 'suggestions'], recommendations: ['list', 'detail', 'advisor', 'wargame'],
   knowledge: ['packs', 'search', 'entry'], answer: ['fact'],
