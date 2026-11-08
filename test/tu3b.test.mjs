@@ -50,13 +50,19 @@ test('Home and missing-data identify the same stale account despite a newer hous
   assert.equal(missing.items(context(after)).filter(i => ['balances', 'transactions'].includes(i.code)).length, 0);
 });
 
-test('missing-data stored template has no count while its data-derived title changes', () => {
+test('missing-data prose has no stored count while Steps renders progress from current task data', () => {
   const uploads = ['balances', 'transactions', 'pnl'].map(code => ({ code, task: `Upload ${code}`, kind: 'upload', noun: code, text: 'Data is out of date.' }));
   const hit = { items: uploads };
   const stored = missing.template({}, hit);
   assert.doesNotMatch(JSON.stringify(stored), /\d/);
-  assert.match(missing.build({}, hit).title, /3 files/);
-  assert.match(missing.build({}, { items: uploads.slice(0, 2) }).title, /2 files/);
+  const before = missing.build({}, hit);
+  const after = missing.build({}, { items: uploads.slice(0, 2) });
+  assert.doesNotMatch(before.title, /\d/);
+  assert.doesNotMatch(after.title, /\d/);
+  steps.bind({ esc: String, T: String, icon: () => '', addBtn: () => '', api: { txt: String } });
+  const html = rec => steps.html({ id: 'missing-data', ...rec, tasks: rec.tasks.map(t => ({ ...t, auto: true, done: false })) });
+  assert.match(html(before), /0 of 3/);
+  assert.match(html(after), /0 of 2/);
   assert.equal(missing.template({}, { items: uploads.slice(0, 2) }).summary, stored.summary);
 });
 

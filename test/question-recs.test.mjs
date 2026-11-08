@@ -28,7 +28,8 @@ test('mixed missing data keeps upload steps and its summary beside the answer fo
   assert.equal(hit.rec.question.primary, false);
   assert.deepEqual(hit.rec.question.keys, ['household.filingStatus']);
   const prose = await writeProse(hit, ctx);
-  assert.match(prose.fields.summary, /^Answer a tax question and upload the latest bank statements/);
+  assert.match(prose.fields.summary, /^Update the missing data/);
+  assert.doesNotMatch(prose.fields.summary, /\d/);
 });
 
 test('missing data leaves the Virginia answers on their existing recommendation', () => {
