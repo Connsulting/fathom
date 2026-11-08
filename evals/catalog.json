@@ -4066,6 +4066,218 @@
           "scriptedReply": "Education savings can support the goal."
         }
       ]
+    },
+    {
+      "id": "block-spending-by-month",
+      "family": "spending",
+      "requires": {
+        "operations": [
+          "spending.total",
+          "show.chart"
+        ],
+        "script": true
+      },
+      "turns": [
+        {
+          "question": "Show our monthly spending this year as a chart.",
+          "required": [
+            {
+              "name": "spending",
+              "operation": "total",
+              "predicates": [
+                {
+                  "path": "groupBy",
+                  "op": "eq",
+                  "value": "month"
+                },
+                {
+                  "path": "window",
+                  "op": "eq",
+                  "value": "ytd"
+                }
+              ]
+            },
+            {
+              "name": "show",
+              "operation": "chart",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "rubric": "Draw only results from this answer; omit invalid blocks and retain their note."
+        }
+      ],
+      "blocks": [
+        {
+          "op": "chart",
+          "kind": "line"
+        }
+      ]
+    },
+    {
+      "id": "block-top-merchants",
+      "family": "spending",
+      "requires": {
+        "operations": [
+          "spending.total",
+          "show.table"
+        ],
+        "script": true
+      },
+      "turns": [
+        {
+          "question": "Who are our ten biggest merchants this year? Put them in a table.",
+          "required": [
+            {
+              "name": "spending",
+              "operation": "total",
+              "predicates": [
+                {
+                  "path": "groupBy",
+                  "op": "eq",
+                  "value": "merchant"
+                },
+                {
+                  "path": "limit",
+                  "op": "eq",
+                  "value": 10
+                },
+                {
+                  "path": "window",
+                  "op": "eq",
+                  "value": "ytd"
+                }
+              ]
+            },
+            {
+              "name": "show",
+              "operation": "table",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "rubric": "Draw only results from this answer; omit invalid blocks and retain their note."
+        }
+      ],
+      "blocks": [
+        {
+          "op": "table"
+        }
+      ]
+    },
+    {
+      "id": "block-recurring",
+      "family": "spending",
+      "requires": {
+        "operations": [
+          "spending.recurring",
+          "show.table"
+        ],
+        "script": true
+      },
+      "turns": [
+        {
+          "question": "List our subscriptions with what they cost a year.",
+          "required": [
+            {
+              "name": "spending",
+              "operation": "recurring",
+              "predicates": []
+            },
+            {
+              "name": "show",
+              "operation": "table",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "rubric": "Draw only results from this answer; omit invalid blocks and retain their note."
+        }
+      ],
+      "blocks": [
+        {
+          "op": "table"
+        }
+      ]
+    },
+    {
+      "id": "block-dropped-not-in-answer",
+      "family": "spending",
+      "requires": {
+        "operations": [
+          "show.chart"
+        ],
+        "script": true
+      },
+      "turns": [
+        {
+          "question": "Chart our net worth.",
+          "required": [
+            {
+              "name": "show",
+              "operation": "chart",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "rubric": "Draw only results from this answer; omit invalid blocks and retain their note."
+        }
+      ]
+    },
+    {
+      "id": "block-compare-returns",
+      "family": "retirement",
+      "requires": {
+        "operations": [
+          "retirement.target",
+          "show.compare"
+        ],
+        "script": true
+      },
+      "turns": [
+        {
+          "question": "Compare when we reach the target at 3 and 4 percent returns.",
+          "required": [
+            {
+              "name": "retirement",
+              "operation": "target",
+              "predicates": []
+            },
+            {
+              "name": "show",
+              "operation": "compare",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "rubric": "Draw only results from this answer; omit invalid blocks and retain their note."
+        }
+      ],
+      "blocks": [
+        {
+          "op": "compare"
+        }
+      ]
     }
   ]
 }

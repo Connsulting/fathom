@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { getTool, callTool, ToolError, operationScopes, instructions } from '../tools/index.mjs';
+import { getTool, callTool, ToolError, operationScopes, mcpInstructions } from '../tools/index.mjs';
 import { toolsForScopes } from './keys.mjs';
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
@@ -19,7 +19,7 @@ const errorResult = text => ({ isError: true, content: [{ type: 'text', text }] 
 // A Server answering tools/list and tools/call for `scopes`, running tools with `ctx`.
 export function createToolServer({ scopes, ctx }) {
   const offered = toolsForScopes(scopes);
-  const server = new Server(serverInfo(), { capabilities: { tools: {} }, instructions });
+  const server = new Server(serverInfo(), { capabilities: { tools: {} }, instructions: mcpInstructions });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: offered.map(t => ({
@@ -33,7 +33,7 @@ export function createToolServer({ scopes, ctx }) {
   server.setRequestHandler(CallToolRequestSchema, async request => {
     const { name } = request.params;
     const tool = getTool(name);
-    if (!tool) return errorResult(`no tool ${name}`);
+    if (!tool || tool.askOnly) return errorResult(`no tool ${name}`);
     const operation = request.params.arguments?.operation;
     const op = tool.operations.find(o => o.name === operation);
     if (op && !operationScopes(op).some(scope => scopes.includes(scope))) {

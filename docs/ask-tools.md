@@ -149,12 +149,12 @@ How tools register (C1). `src/tools/tools.mjs` declares the twenty tool headers 
 tool runs) and `source` (the plain source label for figures it grounds). Each module in
 `src/tools/catalog/` exports `operations`, a list of `{ tool, name, scope, summary, route,
 params, required, referenceable?, routes, handler }`, plus optional `rules` (lines for section 4)
-and `capabilities`. `route` is the question-shape line for the routing table; `routes` lists the
+and `capabilities`. Ask-only modules may export `askRules`, omitted from MCP instructions. `route` is the question-shape line for the routing table; `routes` lists the
 API routes the operation covers (`'POST /api/accounts/:id/name'`). The loader in
 `src/tools/index.mjs` merges operations into their tools, refuses a duplicate operation, a
 parameter name with two schemas in one tool, or an operation whose scope does not match its
 tool's kind, and lists only tools with at least one operation. A ticket adds its own catalog
-modules and can contribute operations to any tool; it never edits `src/tools/index.mjs`,
+modules and can contribute operations to any tool. The rich-answer integration adds `askOnly` headers, which MCP neither lists nor calls; their first operation may require arguments. Other tickets never edit `src/tools/index.mjs`,
 `src/tools/tools.mjs` or `src/tools/parity.mjs`.
 
 ## 1. Question taxonomy
@@ -493,6 +493,7 @@ Twenty tools: eleven read, nine write. "Ticket" is the ticket that adds the oper
 | `goals` | read | list, pace (C1); suggestions (C9) |
 | `recommendations` | read | list, detail, advisor (C1), wargame (B5) |
 | `knowledge` | read | packs, search, entry (C1) |
+| `show` | Ask-only read | chart, table, compare, timeline; validated references to earlier calls, stored snapshots and dropped notes |
 | `calculate` | read | add, subtract, multiply, divide, sum, min, max, negate, annualize, monthly, percent_of, round_up, compound (C3) |
 | `update_account` | write | rename, mask, owner, kind, merge (C8) |
 | `categorize` | write | transaction, merchant_rule (C8) |

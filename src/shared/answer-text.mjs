@@ -179,7 +179,7 @@ export const isListBlock = block => /^<(?:ul|ol)[\s>]/.test(block);
 
 export const wrapBlocks = blocks => blocks.map(b => (isListBlock(b) ? b : `<p>${b}</p>`)).join('');
 
-const TOKEN_LIKE = /\{(?:fk|f|l|p|n):[^{}]*\}/g;
+const TOKEN_LIKE = /\{(?:fk|f|l|p|n|b):[^{}]*\}/g;
 // A number, as the grounding check reads one, without its magnitude words (they stay plain text).
 const NUMBER = /-?\$?\d(?:[\d,]*\d)?(?:\.\d+)?%?/g;
 const CHECKING = '<span class="fx-checking" title="Checking this number">';
@@ -203,6 +203,7 @@ export function streamHtml(text, resolveToken = () => null) {
   let at = 0;
   for (const m of s.matchAll(TOKEN_LIKE)) {
     html += checkingNumbers(s.slice(at, m.index));
+    if (m[0].startsWith('{b:')) { html += '<span class="h-blk h-blk-na">Chart being prepared</span>'; at = m.index + m[0].length; continue; }
     let shown = null;
     try { shown = resolveToken(m[0]); } catch { shown = null; }
     html += CHECKING + escapeUserText(typeof shown === 'string' && shown ? shown : '...') + '</span>';
@@ -210,4 +211,21 @@ export function streamHtml(text, resolveToken = () => null) {
   }
   html += checkingNumbers(s.slice(at));
   return wrapBlocks(markdownBlocks(html));
+}
+
+export function placeBlocks(text, blocks = []) {
+  const placed = new Map();
+  let clean = '';
+  const count = value => markdownBlocks(escapeUserText(value)).length;
+  for (const line of String(text ?? '').split('\n')) {
+    const own = /^\s*\{b:([^{}]*)\}\s*$/.test(line);
+    const without = line.replace(/\{b:([^{}]*)\}/g, '');
+    for (const m of line.matchAll(/\{b:([^{}]*)\}/g)) if (!placed.has(m[1])) {
+      placed.set(m[1], count(clean + (own ? '' : without)));
+    }
+    clean += own ? '\n' : without + '\n';
+  }
+  clean = clean.trim();
+  const total = count(clean);
+  return { text: clean, blocks: blocks.map(block => ({ ...block, after: placed.get(block.id) ?? total })) };
 }

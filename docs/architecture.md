@@ -261,8 +261,16 @@ required `operation` enum. The shared schema contains all parameters, and dispat
 parameter unused by the selected operation or a missing required parameter as `bad_input`.
 Each operation declares its scope, summary, routing line and API routes. Headers in
 `src/tools/tools.mjs` own purpose, progress and source labels. Generated routing and rules are
-shared by Ask and MCP instructions. `getTool`, `callTool`, `tools`, `parity`, `CAPABILITIES` and
-`instructions` expose the registry. There are no retired-name aliases.
+shared by Ask and MCP instructions, except for Ask-only routing and rules. `getTool`, `callTool`, `tools`, `parity`, `CAPABILITIES` and
+`instructions` expose the registry; `mcpInstructions` excludes Ask-only rules. There are no retired-name aliases.
+
+Ask offers the read-only `show` tool with `chart`, `table`, `compare` and `timeline` operations.
+Its sources must match successful reads from this answer, including a corrective retry's earlier
+attempt. A shared turn collector supplies those results to deterministic block validation and
+snapshot building. The message stores `provenance.blocks` and `blockNotes`; placement markers
+are removed before grounding and become paragraph offsets. Reopening draws stored snapshots
+without re-reading tools. Streaming markers show a preparation placeholder. MCP never lists or
+calls `show`, which is not referenceable by calculations or blocks.
 
 The twelve registered tools and their operations are shown below. Dot notation means a call to
 the tool before the dot with the `operation` after it; it is not a dotted MCP tool name.

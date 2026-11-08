@@ -1,4 +1,4 @@
-import { instructions } from '../../tools/index.mjs';
+import { mcpInstructions as instructions } from '../../tools/index.mjs';
 // AC1 (raw HTTP): POST /mcp on the real server child. Auth, Host and Origin guards, methods,
 // scope-filtered tools, the permission refusal, last-use tracking and log hygiene.
 
