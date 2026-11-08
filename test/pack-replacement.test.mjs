@@ -22,6 +22,6 @@ test('feedback survives reload, keeps the saved copy and retry state, and is iso
   reloaded.set('old', { ...reloaded.get('old'), code: 'remove_failed', retried: true });
   assert.equal(replacementFeedback(storage, 'owner:household').get('old').retried, true);
   assert.equal(replacementFeedback(storage, 'owner:other-household').get('old'), undefined);
-  reloaded.clear('old');
+  reloaded.retain([]);
   assert.equal(replacementFeedback(storage, 'owner:household').get('old'), undefined);
 });

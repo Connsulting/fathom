@@ -46,6 +46,7 @@ for (const [mode, cause] of [
     await page.reload();
     await expect(gap.locator('[data-yp-replace-feedback]')).toContainText(cause);
     await expect(gap.getByRole('button', { name: 'Replace document', exact: true })).toBeEnabled();
+    if (mode === 'unsupported') await gap.screenshot({ path: info.outputPath('replacement-feedback.png') });
     await replace(page, gap);
     await expect(page.locator('.h-pack-gap')).toHaveCount(0, { timeout: 30_000 });
   });
@@ -67,4 +68,19 @@ test('removal failure keeps the saved copy and offers one removal retry across r
   await gap.getByRole('button', { name: 'Retry removal', exact: true }).click();
   await expect(page.locator('.h-pack-gap')).toHaveCount(0, { timeout: 30_000 });
   expect(uploads).toBe(1);
+});
+
+test('a failed removal retry keeps its cause visible and Replace usable', async ({ page, request }, info) => {
+  const gap = await openGap(page, request, info);
+  await page.evaluate(() => { window.Fathom.api.removeFile = async () => { throw new Error('Synthetic removal exception'); }; });
+  await replace(page, gap);
+  await gap.getByRole('button', { name: 'Retry removal', exact: true }).click();
+  await expect(gap.getByRole('button', { name: 'Retry removal', exact: true })).toHaveCount(0);
+  await expect(gap.locator('[data-yp-replace-feedback]')).toContainText('new copy was saved');
+  await expect(gap.getByRole('button', { name: 'Replace document', exact: true })).toBeEnabled();
+  await page.reload();
+  await expect(gap.locator('[data-yp-replace-feedback]')).toContainText('old document could not be removed');
+  await expect(gap.getByRole('button', { name: 'Retry removal', exact: true })).toHaveCount(0);
+  await replace(page, gap);
+  await expect(page.locator('.h-pack-gap')).toHaveCount(0, { timeout: 30_000 });
 });
