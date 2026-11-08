@@ -48,8 +48,20 @@ function note(t) {
   if (t.auto) return t.done ? 'Done automatically' : PENDING[t.kind] || PENDING.review;
   if (!t.done) return '';
   const day = t.doneAt ? when(t.doneAt) : '';
-  const who = t.doneBy && t.doneBy !== 'ui' ? ' from Ask' : '';
-  return `You did this${day ? ` ${day}` : ''}${who}`;
+  return `Marked done${day ? ` ${day}` : ''}`;
+}
+
+// A rec card's one line of steps: the next open step with its control, and how many are done.
+// Nothing once every step is done or the rec has none.
+export function nextHtml(r) {
+  const { esc, T } = H;
+  const tasks = Array.isArray(r.tasks) ? r.tasks : [];
+  const i = tasks.findIndex(t => !t.done);
+  if (i < 0) return '';
+  const t = tasks[i];
+  const doneN = tasks.filter(x => x.done).length;
+  return `<div class="h-step-next" data-step="${i}" data-kind="${esc(t.kind || 'manual')}"><span class="h-step-next-k">Next step${tasks.length > 1 ? ` <em>${doneN} of ${tasks.length} done</em>` : ''}</span>`
+    + `<span class="h-step-t">${T(t.t)}</span><div class="h-step-c">${control(r, t, i)}</div></div>`;
 }
 
 export function html(r) {

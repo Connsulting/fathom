@@ -912,6 +912,7 @@ function recRow(r, ny) {
       <p>${T(r.summary)}</p>
       ${recBlocker.html(r, 'plan')}
       ${recAnswers.html(r, 'plan')}
+      ${live ? recSteps.nextHtml(r) : ''}
       <div class="h-meta"><span>${T(r.triggerText || TRIGGER[r.trigger] || '')}</span>${r.status === 'done' || r.status === 'dismissed' ? '' : `<span>${T(r.window?.label || '')}</span>`}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${r.advisor ? `<span class="h-adv ${r.advisor.verdict}">${advisorText(r)}</span>` : ''}${servesHtml(r)}</div>
     </div>
     <div class="h-acts">${actionsFor(r, true).join('')}${advisorScreen.rowAction(r)}</div>
@@ -2291,7 +2292,8 @@ function onClick(e) {
   const sa = e.target.closest('[data-step-answer]');
   if (sa && root.contains(sa)) {
     e.preventDefault();
-    const form = root.querySelector(`[data-rec-answers="${CSS.escape(sa.dataset.stepAnswer)}"]`);
+    const host = sa.closest('.h-dlg, article') || root;
+    const form = host.querySelector(`[data-rec-answers="${CSS.escape(sa.dataset.stepAnswer)}"]`);
     form?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     form?.querySelector('input:not([type=hidden]),select,button')?.focus({ preventScroll: true });
     return;

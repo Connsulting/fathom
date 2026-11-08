@@ -66,19 +66,20 @@ test('an unobservable step is one "I did this" with its time and actor, and Undo
   const db = await s.store();
   await planRun(db);
   const id = buildScenario(db).recs.find(r => r.tasks?.some(t => !isVerifiable(t)) && !r.question?.primary).id;
-  const ctx = body => ({ db, config: { clock: '2026-11-05' }, params: { id }, body });
+  const ctx = body => ({ db, config: { clock: '2026-11-05' }, params: { id }, body, identity: { id: 'member-a' } });
   let rec = buildScenario(db).recs.find(r => r.id === id);
   const i = rec.tasks.findIndex(t => t.kind === 'manual');
   assert.equal(rec.tasks[i].done, false);
   rec = recAction(ctx({ action: 'task', arg: i })).scenario.recs.find(r => r.id === id);
   assert.equal(rec.tasks[i].done, true);
-  assert.equal(rec.tasks[i].doneBy, 'ui');
+  assert.equal(rec.tasks[i].doneBy, 'member-a', 'the signed-in member is recorded as the actor');
   assert.match(rec.tasks[i].doneAt, /^\d{4}-\d{2}-\d{2}T/);
   rec = recAction(ctx({ action: 'task', arg: i })).scenario.recs.find(r => r.id === id);
   assert.equal(rec.tasks[i].done, false);
   assert.equal(rec.tasks[i].doneAt, undefined);
   const events = db.prepare("SELECT action, arg, actor FROM rec_events WHERE rec_id = ? AND action LIKE 'step_%' ORDER BY id").all(id);
   assert.deepEqual(events.map(e => e.action), ['step_did', 'step_undo']);
+  assert.deepEqual(events.map(e => e.actor), ['member-a', 'member-a']);
   assert.equal(events[0].arg, rec.tasks[i].t);
 });
 
@@ -109,6 +110,28 @@ test('no rec renders a free checkbox: open steps carry a control, done ones say 
       if (t.auto) assert.doesNotMatch(li, /data-act="task"/, `${r.id} step ${i} is product-managed`);
     }
   }
+});
+
+test('a rec card shows its next open step with that step\'s control, never a checkbox', () => {
+  recSteps.bind(kit);
+  const tasks = [
+    { t: 'Upload the latest account balances', kind: 'upload', code: 'balances', noun: 'the latest account balances', auto: true, done: true },
+    { t: 'Upload the latest business profit and loss', kind: 'upload', code: 'pnl', noun: 'the latest business profit and loss', auto: true, done: false },
+  ];
+  const card = recSteps.nextHtml({ id: 'missing-data', tasks });
+  assert.match(card, /data-step="1"/);
+  assert.match(card, /data-upload-open/);
+  assert.match(card, /1 of 2 done/);
+  assertNoCheckbox(card, 'card');
+  const manual = recSteps.nextHtml({ id: 'r', tasks: [{ t: 'Call the provider', kind: 'manual', auto: false, done: false }] });
+  assert.match(manual, /data-act="task"[^>]*>I did this</);
+  assert.equal(recSteps.nextHtml({ id: 'r', tasks: tasks.map(t => ({ ...t, done: true })) }), '');
+});
+
+test('a trigger step the planner can verify outside missing-data clears once the trigger stops emitting it', () => {
+  const tasks = [{ t: 'Tell us whose IRA each traditional IRA account is', kind: 'answer', code: 'ira_owner_unknown', link: 'accounts' }];
+  assert.deepEqual(deriveSteps(tasks, [true], { open: ['ira_owner_unknown'] }).map(x => [x.auto, x.done]), [[true, false]]);
+  assert.equal(deriveSteps(tasks, [], { open: [] })[0].done, true);
 });
 
 test('the missing-data rec shows an upload button inline and a done step after the file lands', () => {

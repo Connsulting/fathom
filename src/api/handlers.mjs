@@ -154,7 +154,8 @@ export function recAction(ctx) {
     if (!isIndex(arg) || Number(arg) >= tasks.length) throw new HttpError(400, `task index must be 0 to ${tasks.length - 1}`);
     const i = Number(arg);
     const done = parse(row.tasks_done, []);
-    try { writeRec(db, id, 'step', { index: i, checked: !done[i] }, { now: nowIso(), actor: 'ui' }); }
+    // The step records who acted: the signed-in member, else the app.
+    try { writeRec(db, id, 'step', { index: i, checked: !done[i] }, { now: nowIso(), actor: ctx.identity?.id || 'ui' }); }
     catch (e) { if (e instanceof ToolError) throw new HttpError(e.code === 'conflict' ? 409 : 400, e.message); throw e; }
     return { scenario: scenarioOf(ctx) };
   }
