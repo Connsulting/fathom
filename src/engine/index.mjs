@@ -238,9 +238,8 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
   const scripted = [...responses];
   let poisoned = false;
   const call = async ({ purpose, system = '', systemDynamic = '', messages, tools = [], maxTokens = 1024, schema, grounding = {}, fake,
-    toolContext: callContext, onEvent, budgetUsd, extraInputTokens = 0 } = {}) => {
+    toolContext: callContext, onEvent, budget, beforeDispatch, extraInputTokens = 0 } = {}) => {
     if (mode === 'off') throw new EngineOffError();
-    if (budgetUsd !== undefined && (!Number.isFinite(budgetUsd) || budgetUsd < 0)) throw new TypeError('Invalid call budget');
     const answer = createAnswerAssembler();
     // The text streamed in the current round since its last interim event.
     let roundStream = '';
@@ -286,6 +285,8 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     const rounds = [];
     const toolRounds = [];
     let cost = 0;
+    let accounting = null;
+    if (budget && (!Number.isFinite(budget.maxCostUsd) || budget.maxCostUsd < 0 || budget.maxInputTokens !== undefined && (!Number.isInteger(budget.maxInputTokens) || budget.maxInputTokens <= 0) || budget.timeoutMs !== undefined && (!Number.isInteger(budget.timeoutMs) || budget.timeoutMs <= 0 || budget.timeoutMs > 120000) || budget.correlationId !== undefined && typeof budget.correlationId !== 'string')) throw new TypeError('Invalid request budget');
     for (let roundIndex = 0; roundIndex < maxRounds; roundIndex++) {
       let round;
       const afterTools = [];
@@ -295,37 +296,53 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
         if (allowed() !== true) { const error = new EngineOffError(); error.toolResults = allResults; throw error; }
         if (mode === 'live' && funded() !== true) { const error = fundingUnavailable(); error.toolResults = allResults; throw error; }
         const ts = new Date(now()).toISOString();
-        // The call's own budget (budgetUsd, spent across its rounds) refuses a round whose worst case
-        // no longer fits, in every mode; the platform reservation below is the live authority.
-        const callRemaining = budgetUsd === undefined ? Infinity : budgetUsd - cost;
-        const perResponseCost = () => estimateUnknownCost({ model, maxTokens,
-          system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools, extraInputTokens }).costUsd;
+        // The call's own budget (budget.maxCostUsd across its rounds, budget.maxInputTokens per round)
+        // refuses a round whose worst case no longer fits, in every mode; with reservations the
+        // platform ledger below is the live authority and admits before beforeDispatch runs.
+        const estimateNow = () => estimateUnknownCost({ model, maxTokens,
+          system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools, schema, extraInputTokens });
+        const callRemaining = (budget?.maxCostUsd ?? Infinity) - cost;
         let maxBudgetUsd;
         if (!reserving) {
           const spend = await ledger.monthSpendUsd(monthKey(ts));
           if (!Number.isFinite(spend) || spend < 0) throw new ModelAccountingError();
-          const remainingBudget = Math.min(capUsd - spend, callRemaining);
-          if (budgetUsd !== undefined && perResponseCost() > remainingBudget) throw new BudgetExceededError();
           if (spend >= capUsd) { const error = new BudgetExceededError(); error.toolResults = allResults; throw error; }
-          maxBudgetUsd = remainingBudget;
+          const estimate = budget ? estimateNow() : null;
+          const allowance = Math.min(capUsd - spend, callRemaining);
+          if (budget && (estimate.costUsd > allowance || estimate.inputTokens > (budget.maxInputTokens ?? Infinity))) throw new BudgetExceededError();
+          if (beforeDispatch) await beforeDispatch({ model, ...estimate, allowance });
+          maxBudgetUsd = allowance;
         }
         if (admitRound) await admitRound({ purpose, system, systemDynamic, messages: transcript, tools, maxTokens });
         const auth = mode === 'live' ? explicitCredential(credential) : undefined;
         const context = callContext ?? toolContext;
         const registry = createRegistryServer(tools, { purpose, ctx: { ...context, now: context.now ?? ts,
           ...(purpose === 'chat' && typeof context.replan === 'function' ? { queueAfterTools: task => afterTools.push(task) } : {}) } });
-        const unknownCost = () => estimateUnknownCost({ model, maxTokens,
-          system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools, extraInputTokens });
+        const unknownCost = estimateNow;
         const runner = SINGLE_ROUND.includes(purpose) ? messagesRound : transport ? messagesToolRound : roundRunner;
         let admission = null;
         try {
           if (reserving) {
-            const perResponseUsd = unknownCost().costUsd;
+            const estimate = unknownCost();
+            const perResponseUsd = estimate.costUsd;
             const boundUsd = runner === messagesRound || runner === messagesToolRound ? perResponseUsd : SDK_RESPONSE_BOUND * perResponseUsd;
-            if (budgetUsd !== undefined && boundUsd > callRemaining) { const error = new BudgetExceededError(); error.toolResults = allResults; throw error; }
+            if (budget && (boundUsd > callRemaining || estimate.inputTokens > (budget.maxInputTokens ?? Infinity))) {
+              const error = new BudgetExceededError(); error.toolResults = allResults; throw error;
+            }
             try { admission = await reservations.reserve({ purpose, model, boundUsd }); }
             catch (error) { error.toolResults = allResults; throw error; }
             maxBudgetUsd = perResponseUsd;
+            // The caller's own pre-dispatch accounting runs only after the platform admitted the round;
+            // when it refuses, nothing was dispatched, so the round settles at a known zero.
+            if (beforeDispatch) {
+              try { await beforeDispatch({ model, ...estimate, costUsd: boundUsd, allowance: Math.min(boundUsd, callRemaining) }); }
+              catch (error) {
+                try { await reservations.settle(admission.roundId, { costUsd: 0 }); }
+                catch { poisoned = true; throw withCode(new ModelAccountingError(), 'accounting_unrecorded'); }
+                admission = null;
+                throw error;
+              }
+            }
           }
           if (mode === 'fake') {
             if (!queue.length) throw new ModelCallError('Fake engine has no scripted response');
@@ -358,7 +375,8 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
           } else {
             try {
               round = await runner({ credential: auth, system, systemDynamic, messages: transcript, tools, maxTokens, maxBudgetUsd, model,
-                registry, schema, ...(transport ? { baseURL: transport.baseURL } : {}), ...(emit ? { onEvent: emit } : {}) });
+                registry, schema, ...(transport ? { baseURL: transport.baseURL } : {}), ...(budget ? { timeoutMs: budget.timeoutMs } : {}),
+                ...(emit ? { onEvent: emit } : {}) });
             } catch {
               round = { text: '', content: [], status: 'transport_error', is_error: true,
                 accountingUnknown: true, model, tokens: {}, toolResults: registry.results, details: {} };
@@ -373,6 +391,9 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               estimatedInputTokens: estimate.inputTokens, estimatedOutputTokens: estimate.outputTokens };
             round.accountingUnknown = true;
           }
+          accounting = { costUsd: round.costUsd, model: round.model, tokens: round.tokens, estimated: round.accountingUnknown === true,
+            correlationId: budget?.correlationId ?? null };
+          const mirrorTokens = { ...round.tokens, ...(budget ? { correlationId: budget.correlationId } : {}) };
           if (admission) {
             const { roundId, boundUsd } = admission;
             try {
@@ -380,12 +401,12 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               else await reservations.settle(roundId, { costUsd: round.costUsd, inputTokens: round.tokens?.input_tokens, outputTokens: round.tokens?.output_tokens });
             } catch { poisoned = true; throw withCode(new ModelAccountingError(), 'accounting_unrecorded'); }
             // The platform round is the authority; a lost mirror is restored from it later.
-            try { await ledger.record({ ts, purpose, costUsd: round.costUsd, model: round.model, tokens: round.tokens, roundId }); } catch { /* restored later */ }
+            try { await ledger.record({ ts, purpose, costUsd: round.costUsd, model: round.model, tokens: mirrorTokens, roundId }); } catch { /* restored later */ }
             // Held in the platform (unknown cost, or a cost over the reservation): the hold refuses
             // further rounds until it is reconciled; this engine is not poisoned.
             if (round.accountingUnknown || round.costUsd > boundUsd) throw withCode(new ModelAccountingError(), 'accounting_hold');
           } else if (Number.isFinite(round.costUsd) && round.costUsd >= 0) {
-            try { await ledger.record({ ts, purpose, costUsd: round.costUsd, model: round.model, tokens: round.tokens }); }
+            try { await ledger.record({ ts, purpose, costUsd: round.costUsd, model: round.model, tokens: mirrorTokens }); }
             catch { poisoned = true; throw new ModelAccountingError(); }
           } else { poisoned = true; throw new ModelAccountingError(); }
           if (round.accountingUnknown) {
@@ -394,7 +415,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
             throw new ModelAccountingError();
           }
         } finally { await registry.instance.close(); }
-      }).finally(async () => { for (const task of afterTools) await task(); });
+      }).catch(error => { if (accounting) error.accounting = accounting; throw error; }).finally(async () => { for (const task of afterTools) await task(); });
       cost += round.costUsd;
       rounds.push(round.details);
       allResults.push(...round.toolResults);
@@ -407,12 +428,12 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       }
       const toolBoundary = round.status === 'error_max_turns' && round.toolResults.length > 0;
       if (round.api_error_status != null || (round.is_error && !toolBoundary && round.status !== 'error_max_budget_usd')) {
-        throw new ModelCallError('Model did not complete a valid response');
+        throw Object.assign(new ModelCallError('Model did not complete a valid response'), { accounting });
       }
       if (round.status === 'error_max_budget_usd') {
         const error = new BudgetExceededError(); error.toolResults = allResults; throw error;
       }
-      if (!['success', 'error_max_turns'].includes(round.status)) throw new ModelCallError('Model did not complete a valid response');
+      if (!['success', 'error_max_turns'].includes(round.status)) throw Object.assign(new ModelCallError('Model did not complete a valid response'), { accounting });
       if (round.status === 'error_max_turns' && round.toolResults.length === 0) throw new ModelCallError('Model reached a turn limit without a tool result');
       if (round.toolResults.length === 0 || SINGLE_ROUND.includes(purpose)) {
         const fallback = purpose === 'chat' && !answer.text;
@@ -422,7 +443,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
             toolRounds: fallback ? toolRounds.map(r => ({ ...r, text: '', parts: r.parts.filter(p => !('text' in p)) })) : toolRounds }
           : {};
         return { text, content: round.content, costUsd: Number(cost.toFixed(12)), model: round.model,
-          toolResults: allResults, rounds, ...chatParts, grounding: checkGrounding(text, { ...grounding, toolResults: allResults }) };
+          toolResults: allResults, rounds, accounting, ...chatParts, grounding: checkGrounding(text, { ...grounding, toolResults: allResults }) };
       }
       transcript.push({ role: 'assistant', content: round.content }, { role: 'tool', content: round.toolResults });
     }

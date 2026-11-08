@@ -197,3 +197,34 @@ test('an SDK budget stop is recorded before the gateway reports the cap error', 
   await assert.rejects(engine.call({ ...request, tools: [read] }), error => error instanceof BudgetExceededError && error.toolResults[0].result.value === 125);
   assert.equal(ledger.entries[0].costUsd, 0.01);
 });
+
+test('bounded extraction uses selected prices, the smaller allowance, and one request contract', async () => {
+  const { estimateUnknownCost, DEFAULT_MODEL, TITLE_MODEL } = await import('../pricing.mjs');
+  const base = { ...request, purpose: 'extract', tools: [] };
+  for (const model of [DEFAULT_MODEL, TITLE_MODEL]) {
+    const estimate = estimateUnknownCost({ model, maxTokens: base.maxTokens, system: base.system, messages: base.messages, tools: [] });
+    const ledger = createMemoryLedger();
+    let dispatched = 0;
+    const engine = createEngine({ mode: 'fake', ledger, now, modelOverride: model });
+    const budget = { maxCostUsd: estimate.costUsd / 2, maxInputTokens: 32768, timeoutMs: 120000, correlationId: 'synthetic-import' };
+    await assert.rejects(engine.call({ ...base, budget, beforeDispatch: () => dispatched++, fake: [{ text: '{}' }] }), BudgetExceededError);
+    assert.equal(dispatched, 0); assert.equal(ledger.entries.length, 0);
+    budget.maxCostUsd = estimate.costUsd;
+    const result = await engine.call({ ...base, budget, beforeDispatch: () => dispatched++, fake: [{ text: '{}', costUsd: 0.001 }] });
+    assert.equal(dispatched, 1);
+    assert.equal(result.rounds[0].maxBudgetUsd, estimate.costUsd);
+    assert.equal(result.accounting.correlationId, budget.correlationId);
+    assert.equal(ledger.entries[0].tokens.correlationId, budget.correlationId);
+  }
+});
+
+test('bounded input and pre-dispatch refusal have a valid neighboring extraction', async () => {
+  const engine = createEngine({ mode: 'fake', now });
+  const budget = { maxCostUsd: 0.50, maxInputTokens: 1, timeoutMs: 120000, correlationId: 'synthetic-import' };
+  const req = { ...request, purpose: 'extract', budget, fake: [{ text: '{}' }] };
+  await assert.rejects(engine.call(req), BudgetExceededError);
+  budget.maxInputTokens = 32768;
+  await assert.rejects(engine.call({ ...req, beforeDispatch: () => { throw new EngineOffError(); } }), EngineOffError);
+  assert.equal((await engine.call(req)).text, '{}');
+  await assert.rejects(engine.call({ ...req, budget: { ...budget, timeoutMs: 120001 } }), TypeError);
+});

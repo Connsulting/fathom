@@ -177,7 +177,7 @@ test('the engine rechecks a call budget after serialized competing spend', async
   const { createEngine, createMemoryLedger, BudgetExceededError } = await import('../src/engine/index.mjs');
   const ledger = createMemoryLedger();
   const engine = createEngine({ mode: 'fake', ledger, capUsd: 0.10, now: () => new Date(NOW) });
-  const req = { purpose: 'job', messages: [{ role: 'user', content: 'Synthetic classification' }], maxTokens: 100, budgetUsd: 0.10 };
+  const req = { purpose: 'job', messages: [{ role: 'user', content: 'Synthetic classification' }], maxTokens: 100, budget: { maxCostUsd: 0.10 } };
   await engine.call({ ...req, fake: [{ text: '{}', costUsd: 0.09 }] });
   await assert.rejects(engine.call({ ...req, fake: [{ text: '{}', costUsd: 0.001 }] }), BudgetExceededError);
   assert.equal(ledger.entries.length, 1);

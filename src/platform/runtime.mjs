@@ -212,6 +212,7 @@ export function createHouseholdContext({
     householdId, generation, mode, db, root, config, inFlight: new Set(), vault, packs: livePacks, engine: householdEngine,
     answerer: householdAnswerer, scheduler: householdScheduler, transport: householdTransport, outbound,
     funded: () => instanceFunded(platform),
+    isCurrent: () => { const row = platform.prepare('SELECT status, generation FROM households WHERE id = ?').get(householdId); return row?.status === 'active' && Number(row.generation) === generation; },
     close() {
       closing ??= (async () => {
         try { await householdScheduler?.stop(); } catch { /* stop never rejects; close anyway */ }
