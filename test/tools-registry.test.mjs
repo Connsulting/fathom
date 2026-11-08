@@ -11,10 +11,11 @@ const expected = {
   household: ['summary', 'facts', 'fact_shapes', 'figures', 'deadlines', 'health', 'imports'],
   accounts: ['list', 'holdings', 'detail', 'net_worth', 'sources'], sources: ['archive_account', 'remove_file', 'merge_accounts'], tax: ['estimate', 'room'], transactions: ['search'], business: ['pnl', 'rows'],
   spending: ['total', 'compare', 'definitions', 'cash_flow', 'recurring'],
-  goals: ['list', 'pace'], recommendations: ['list', 'detail', 'advisor', 'wargame'],
+  goals: ['list', 'pace', 'suggestions'], recommendations: ['list', 'detail', 'advisor', 'wargame'],
   knowledge: ['packs', 'search', 'entry'], answer: ['fact'],
-  act_on_recommendation: ['status', 'owner', 'step'], update_goal: ['create', 'edit'],
-  update_preferences: ['remember', 'forget', 'save_definition', 'delete_definition', 'pack'], refresh: ['import_file', 'retry_import', 'build_your_plans', 'run_job'], undo: ['undo'],
+  act_on_recommendation: ['status', 'owner', 'step', 'start_over', 'decide', 'revisit', 'pick_point'], update_goal: ['create', 'edit', 'archive', 'delete', 'suggestion'],
+  advisor_review: ['send', 'verdict', 'checkin', 'packet'], update_preferences: ['remember', 'curve', 'forget', 'save_definition', 'delete_definition', 'pack'],
+  refresh: ['import_file', 'retry_import', 'build_your_plans', 'run_job'], undo: ['undo'],
   calculate: ['add', 'subtract', 'multiply', 'divide', 'sum', 'min', 'max', 'negate', 'annualize', 'monthly', 'percent_of', 'round_up', 'compound'],
 };
 const oldNames = [
@@ -52,6 +53,17 @@ test('loader rejects duplicate operations, conflicting schemas and invalid scope
   assert.throws(() => buildRegistry([{ operations: [{ ...op, scope: 'write:recs' }] }], header), /scope/i);
 });
 
+test('write results preserve explicit unavailable Undo and default a missing Undo', async () => {
+  const header = [{ name: 'example', kind: 'write', purpose: 'Example.', progress: 'Writing', source: 'example' }];
+  const unavailable = { available: false, reason: 'A stored record cannot be undone.' };
+  const op = { tool: 'example', name: 'save', scope: 'write:recs', summary: 'Save.', route: 'Save example',
+    params: {}, required: [], routes: [], handler: () => ({ receipt: { id: 'receipt' }, undo: unavailable }) };
+  const invoke = operation => buildRegistry([{ operations: [operation] }], header).tools[0].handler({ operation: 'save' }, {});
+  assert.deepEqual((await invoke(op)).undo, unavailable);
+  assert.deepEqual((await invoke({ ...op, handler: () => ({ receipt: { id: 'receipt' } }) })).undo,
+    { available: true, tool: 'undo', args: { operation: 'undo', id: 'receipt' } });
+});
+
 test('operation-local validation names the operation through direct and Ask boundaries', async () => {
   const server = createRegistryServer(tools, { purpose: 'chat' });
   for (const args of [{ operation: 'missing' }, { operation: 'summary', keys: [] }, { operation: 'summary', constructor: {} }]) {
@@ -72,7 +84,7 @@ test('scope filtering narrows operation enums and hides all writes from read-onl
   assert.ok(read.every(t => t.kind === 'read'));
   const mixed = toolsForScopes(['read', 'write:recs']);
   const rec = mixed.find(t => t.name === 'act_on_recommendation');
-  assert.deepEqual(rec.inputSchema.properties.operation.enum, ['owner', 'status']);
+  assert.deepEqual(rec.inputSchema.properties.operation.enum, ['owner', 'start_over', 'status']);
   assert.ok(mixed.some(t => t.name === 'undo'));
   assert.ok(createRegistryServer(tools, { purpose: 'chat' }).names.includes('undo'));
   assert.ok(!createRegistryServer(tools, { purpose: 'plan' }).names.includes('undo'));
