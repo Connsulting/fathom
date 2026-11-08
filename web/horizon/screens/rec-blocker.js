@@ -5,7 +5,7 @@
 let H;
 export const bind = kit => { H = kit; };
 
-const PAGE = Object.freeze({ upload: ['add', 'Open Files'], confirm: ['confirm', 'Open Confirm'], accounts: ['accounts', 'Open Accounts'] });
+const PAGE = Object.freeze({ upload: ['add', 'Open Files'], confirm: ['confirm', 'Open Confirm'], accounts: ['money', 'Open Accounts'] });
 
 // The link to where a task or blocker is done: a page, or Ask with this recommendation attached.
 export function linkHtml(recId, link, cls = 'h-btn') {

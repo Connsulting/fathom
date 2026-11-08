@@ -170,7 +170,7 @@ test.describe('passkey accounts through the browser', () => {
       expect({ secure: cookie.secure, httpOnly: cookie.httpOnly, sameSite: cookie.sameSite, path: cookie.path }).toEqual({
         secure: true, httpOnly: true, sameSite: 'Lax', path: '/',
       });
-      await expect(admin.page.getByRole('heading', { level: 1, name: 'What is the money for?', exact: true })).toBeVisible();
+      await expect(admin.page.getByRole('heading', { level: 1, name: 'Dump everything in', exact: true })).toBeVisible();
       await expect(admin.page.locator('.h-ob-steps')).not.toContainText('Sign in');
       await expect(admin.page.locator('body')).not.toContainText('Demo sign-in');
       primaryCredentials = await admin.auth.credentials();

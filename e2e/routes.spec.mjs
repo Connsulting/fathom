@@ -14,7 +14,7 @@ const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct
 // Routes whose heading is product chrome, not a row from the demo scenario.
 const REAL_ROUTES = [
   'home', 'pace', 'plan', 'ask', 'wargame', 'wargame/salary', 'wargame/deferral',
-  'goals', 'accounts', 'pnl', 'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'money', 'settings', 'memories'
+  'goals', 'pnl', 'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'money', 'settings', 'memories'
 ];
 
 test.describe('routes', { tag: '@smoke' }, () => {
@@ -82,7 +82,7 @@ test.describe('routes', { tag: '@smoke' }, () => {
 
     test('#/packs opens a pack when the list has one', async ({ page }) => {
       await gotoRoute(page, 'packs');
-      await expect(page.getByRole('heading', { level: 1, name: 'What Fathom knows' })).toBeVisible();
+      await expect(page.getByRole('heading', { level: 1, name: 'Knowledge packs' })).toBeVisible();
       const link = page.locator('main a[href*="#/packs/"]').first();
       if (await link.count()) {
         await link.click();
