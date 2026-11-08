@@ -9,6 +9,7 @@ import { personOwner } from '../../shared/rec-links.mjs';
 import { accountLabel } from '../../shared/account-label.mjs';
 import { isCollegeAccount } from '../../shared/account-kinds.mjs';
 import { MIN_BIRTH_YEAR, MAX_DEPENDENTS } from '../../shared/ages.mjs';
+import { EMPLOYER_PLAN_TYPES } from '../../calc/treatment.mjs';
 import { VIRGINIA_PLAN_QUESTION, activeInference } from '../../shared/va529-plan.mjs';
 
 // Data-derived text (entity and account names) as stored rec HTML: escaped, braces included, so it
@@ -73,6 +74,27 @@ const dollars = label => ({ type: 'number', unit: 'USD', min: 0, label });
 const birthYear = label => ({ type: 'number', unit: 'year', min: MIN_BIRTH_YEAR, max: 2200, integer: true, label });
 
 export const ANSWER_SHAPES = Object.freeze({
+  'household.dependentAges': { scope: 'household', type: 'years', min: 0, max: 120, maxItems: 10, label: 'Dependent ages' },
+  'household.dependentBirthDates': { scope: 'household', type: 'dates', maxItems: 10, label: 'Dependent birth dates' },
+  'household.ownerBirthDate': { scope: 'household', type: 'date', label: 'Your birth date' },
+  'household.spouseBirthDate': { scope: 'household', type: 'date', label: 'Your spouse birth date' },
+  'household.retireAge': { scope: 'person', type: 'number', min: 18, max: 100, half: true, unit: 'age', label: 'Retirement age for {person}' },
+  'obligations.mortgage': { scope: 'household', type: 'object', fields: {
+    balance: dollars('Mortgage balance'), rate: { type: 'number', min: 0, max: 1, unit: 'ratio', label: 'Annual mortgage rate' },
+    monthlyPayment: { ...dollars('Monthly mortgage payment including escrow'), exclusiveMin: 0 },
+    escrowMonthly: dollars('Monthly escrow continuing after payoff'), payoffDate: { type: 'date', optional: true, label: 'Mortgage payoff date' },
+  } },
+  'obligations.childcare': { scope: 'household', type: 'object', fields: {
+    schoolAgeMonthly: { ...dollars('Monthly care at school age'), optional: true },
+    afterCareEndMonthly: { ...dollars('Monthly care after care ends'), optional: true },
+  } },
+  'obligations.childcareChangeDate': { scope: 'household', type: 'date', label: 'Childcare change date' },
+  'accounts.planType': { scope: 'account', accountKinds: ['retirement','roth','ira','taxable','brokerage'], type: 'choice', label: 'Plan type for {account}',
+    choices: ['traditional_ira','roth_ira','sep_ira','401k','roth_401k','solo_401k','403b','457b','hsa','529','taxable'].map(value => ({value,label:value})) },
+  'accounts.rothFirstContributionYear': { scope: 'account', accountEligibility: 'roth', type: 'number', min: 1975, currentYear: true, integer: true, unit: 'year', label: 'First Roth contribution year for {account}' },
+  'accounts.rothBasis': { scope: 'account', accountKind: 'roth', ...dollars('Roth contribution basis for {account}') },
+  'accounts.separationDate': { scope: 'account', accountEligibility: 'employer', type: 'date', label: 'Separation date for {account}' },
+
   'household.filingStatusDefault': { scope: 'household', ...yesNo('Undo the joint filing assumption?') },
   'business.cashBasisDefault': { scope: 'household', ...yesNo('Undo the cash-basis assumption?') },
   'accounts.va529CarryforwardDefault': { scope: 'account', accountKind: '529', type: 'object', fields: { undone: yesNo('Undo the carryforward assumption?') } },
@@ -114,7 +136,13 @@ export function answerShape(key) {
   return ANSWER_SHAPES[key];
 }
 
-export const acceptsAnswerAccount = (shape, account) => shape.accountKind === '529' ? isCollegeAccount(account) : account.kind === shape.accountKind;
+export function acceptsAnswerAccount(shape, account, facts) {
+  const plan = facts['accounts.planType']?.[account.id];
+  if (shape.accountEligibility === 'employer') return EMPLOYER_PLAN_TYPES.includes(plan);
+  if (shape.accountEligibility === 'roth') return account.kind === 'roth' || ['roth_ira','roth_401k'].includes(plan);
+  if (shape.accountKinds) return shape.accountKinds.includes(account.kind);
+  return shape.accountKind === '529' ? isCollegeAccount(account) : account.kind === shape.accountKind;
+}
 
 // A form field is asked unless its shape part says otherwise: ask: false (recorded from free text
 // only) or requires: {fact, value} (a spouse field only when filing jointly).
@@ -130,7 +158,7 @@ export function questionFor(keys, { accounts = [], facts = {}, names = {}, peopl
   for (const key of unique) {
     const shape = answerShape(key);
     const groups = shape.scope === 'account'
-      ? accounts.filter(a => acceptsAnswerAccount(shape, a)).map(a => ({ path: [a.id], account: accountLabel({ ...a, householdNames: names }), record: a }))
+      ? accounts.filter(a => acceptsAnswerAccount(shape, a, facts)).map(a => ({ path: [a.id], account: accountLabel({ ...a, householdNames: names }), record: a }))
       : shape.scope === 'person'
         ? (people || (facts['household.filingStatus'] === 'mfj' ? ['owner', 'spouse'] : ['owner'])).map(p => ({ path: [p], person: p === 'owner' ? 'you' : 'your spouse' }))
         : [{ path: [] }];

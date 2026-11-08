@@ -68,3 +68,32 @@ test('unstated school care amount is unavailable and never applied; owner assump
  assert.ok(changed.years[1].changes.some(c=>c.applied));
  await assert.rejects(s.call('obligations',{changes:[{kind:'childcare',newMonthly:{value:200,source:'owner',evidence:'$300'}}]}),e=>e.code==='bad_input');
 });
+
+test('amortization with interest matches monthly payoff simulation, and changes honor the projection date',async t=>{
+ const s=await spendingStore(t);
+ const loan={balance:18000,rate:0.048,monthlyPayment:850,escrowMonthly:100};
+ s.fact('obligations.mortgage',loan);
+ let balance=loan.balance,n=0;
+ while(balance>0){balance=balance*(1+loan.rate/12)-(loan.monthlyPayment-loan.escrowMonthly);n++;}
+ const expected=new Date(Date.UTC(2026,10+n,5)).toISOString().slice(0,10);
+ const amortized=await s.call('obligations',{obligations:['mortgage']});
+ assert.equal(amortized.obligations[0].endDate.value,expected);
+ s.fact('obligations.mortgage',{...loan,payoffDate:'2027-07-01'});
+ const base=await s.call('total',{annualize:true});
+ const out=await s.call('projection',{years:3,obligations:['mortgage']});
+ const share=(Date.parse('2028-01-01')-Date.parse('2027-07-01'))/(Date.parse('2028-01-01')-Date.parse('2027-01-01'));
+ assert.equal(out.years[0].spending.value,base.total.value);
+ assert.equal(out.years[1].spending.value,Math.round((base.total.value-2400*share)*100)/100);
+ assert.equal(out.years[2].spending.value,base.total.value-2400);
+});
+
+test('definition selectors and referenced totals produce identical projections without duplicate child drops',async t=>{
+ const s=await spendingStore(t);
+ s.fact('obligations.mortgage',{...mortgage,payoffDate:'2027-01-01'});
+ const base=await s.call('total',{annualize:true,definition:'household_spending'});
+ const a=await s.call('projection',{base:base.total.ref,years:3,obligations:['mortgage']});
+ const b=await s.call('projection',{definition:'household_spending',years:3,obligations:['mortgage']});
+ assert.deepEqual(a.years.map(y=>y.spending.value),b.years.map(y=>y.spending.value));
+ await assert.rejects(s.call('projection',{base:base.total.ref,definition:'core_living'}),e=>e.code==='bad_input');
+ await assert.rejects(s.call('obligations',{changes:[{kind:'mortgage',newMonthly:{value:0,source:'default'}}]}),e=>e.code==='bad_input');
+});
