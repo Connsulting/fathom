@@ -15,8 +15,8 @@
 export const TOUR_STOPS = Object.freeze([
   { id: 'home-goals', route: 'home', anchor: '.h-gcard:has(.h-pbar), .h-gcard', title: 'Your goals, on pace',
     body: 'Home shows each goal and how far along it is against where the plan says it should be today.' },
-  { id: 'home-next', route: 'home', anchor: '.h-gcard .h-gnext', title: 'The next thing to do',
-    body: 'Each goal shows its most urgent action, who owns it and how many days are left.' },
+  { id: 'home-next', route: 'home', anchor: '.h-next, .h-due .h-due-r, .h-home-h', title: 'The next thing to do',
+    body: 'Home says whether you are covered or how many things need you, then lists them with who owns each and when.' },
   { id: 'home-figure', route: 'home', anchor: '.h-gcard .fx-fig, .h-home .fx-fig', title: 'Every number shows its source',
     body: 'Click any underlined figure to see where it came from: the account, the date and how it was worked out.' },
   { id: 'plan-timeline', route: 'plan', anchor: '.h-tl', title: 'Plan: the year on a timeline',
