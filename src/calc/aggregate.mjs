@@ -218,14 +218,18 @@ export function aggregate(input, args = {}, definition = null) {
   const defaultWindow = (args.window ?? (args.from || args.to ? 'custom' : 'spending_window')) === 'spending_window';
   const allowed = new Set(onSpending.map((t) => t.id));
   const inWindow = (t) => window && t.date.slice(0, 7) >= window.from && t.date.slice(0, 7) <= window.to;
-  const summaries = selectPersonalSummaries(input.personalSummaries, { window, payroll: measure === 'income' });
-  const windowRows = enriched.filter(
+  const summaryDerivedWindow = !resolved.window && !!summaryWindow;
+  const bankRows = enriched.filter(
     (t) =>
       inWindow(t) &&
       scopeHas(byId.get(t.account_id), scope) &&
-      (!defaultWindow || input.personalSummaries?.lines.length || !spendingAccount(byId.get(t.account_id)) || allowed.has(t.id)) &&
-      !(measure === 'income' && t.bucket === 'income' && payrollIncomeCategory(t.category) && summaries.payrollRows.some(w => (w.person === t.person) && t.date.slice(0, 7) >= w.from && t.date.slice(0, 7) <= w.to)),
+      (!defaultWindow || summaryDerivedWindow || !spendingAccount(byId.get(t.account_id)) || allowed.has(t.id)),
   );
+  const bankIds = new Set(bankRows.map(t => t.id));
+  const summaryInput = input.personalSummaries ? { ...input.personalSummaries, connected: input.personalSummaries.connected.filter(t => bankIds.has(t.id)) } : null;
+  const summaries = selectPersonalSummaries(summaryInput, { window, payroll: measure === 'income' });
+  const windowRows = bankRows.filter(t => !(measure === 'income' && t.bucket === 'income' && payrollIncomeCategory(t.category)
+    && summaries.payrollRows.some(w => w.person === t.person && t.date.slice(0, 7) >= w.from && t.date.slice(0, 7) <= w.to)));
   if (scope !== 'business') windowRows.push(...[...summaries.rows, ...(measure === 'income' ? summaries.payrollRows : [])]
     .filter(t => t.date <= input.clock || t.sourceTable === 'documents')
     .map(t => ({ ...t, class: classOf(t.category, t.bucket), merchant: normalizeMerchant(t.description) })));
@@ -506,7 +510,7 @@ export function cashFlow(input, args) {
   const categories = resolveCategories({ ...input, transactions: rows });
   const inWindow = (t) => window && t.date.slice(0, 7) >= window.from && t.date.slice(0, 7) <= window.to;
   const summaries = selectPersonalSummaries(input.personalSummaries, { window, payroll: false });
-  const windowRows = [...rows.filter(inWindow), ...summaries.rows];
+  const windowRows = [...rows.filter(inWindow), ...summaries.rows.filter(t => t.date <= input.clock)];
   const make = (rs, w) => {
     const gaps = coverageGaps(input, w, args.scope ?? 'all');
     const f = (v, label, r) => figureFor(v, label, r, { window: w, gaps, sources: summarySources(r),

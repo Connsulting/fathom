@@ -68,7 +68,7 @@ test('AC1/AC2: named mixed summaries infer their people with evidence and Undo, 
   assert.equal(income.total.value, 5400);
   assert.equal(income.byPerson.find(p => p.person === 'spouse').total.value, 2400);
   assert.equal(scenario.fig['inc.ytd.summary-spouse'].v, 2400);
-  assert.equal(scenario.fig['inc.ytd.total'].v, 32400);
+  assert.equal(scenario.fig['inc.ytd.total'].v, 29400);
   assert.equal(scenario.fig['cash.monthlyOut'].v, 350);
   const view = householdSpending({ db, ...period, clock });
   assert.equal(view.figures[view.total].v, spending.total.value);
@@ -133,6 +133,7 @@ test('AC4: a W-2 replaces the same person summary wages without dropping the spo
 
 test('AC4: paystub YTD covers through its month and the summary fills later months', async t => {
   const { db, total } = await fixture(t);
+  addFact(db, 'business.entities', [{ name: 'Example Studio', type: 'sole_prop', owner: 'owner' }]);
   await addPayroll(db, paystubDoc({ person: 'owner', relation: 'outside', employerName: 'Synthetic Employer', payDate: '2026-08-31', ytdGross: 8000, gross: 1000, periodStart: '2026-08-01', periodEnd: '2026-08-31' }));
   await planRun(db);
   const scenario = buildScenario(db);
@@ -155,13 +156,17 @@ test('Ask reads per-person figures and delivers sheet provenance through its reg
   const { db, ctx } = await fixture(t, { bank: [['08', 'Groceries', -25]] });
   await planRun(db);
   const transport = createEngine({ mode: 'fake' });
-  const engine = { mode: 'live', isOn: () => true, call: request => request.purpose === 'title'
-    ? Promise.resolve({ text: 'Household summaries', toolResults: [] })
-    : transport.call({ ...request, fake: [
+  const reads = [];
+  const engine = { mode: 'live', isOn: () => true, call: async request => {
+    if (request.purpose === 'title') return { text: 'Household summaries', toolResults: [] };
+    const result = await transport.call({ ...request, fake: [
       { toolCalls: [{ name: 'spending', args: { operation: 'total', ...period, measure: 'spending' } },
         { name: 'spending', args: { operation: 'total', ...period, measure: 'income' } }] },
       { text: "Your spouse spent $450 from the Birch Summary sheet and received $2,400 in income. You spent $525, using connected transactions first and the spreadsheet summary for months without bank data." },
-    ] }) };
+    ] });
+    reads.push(...result.toolResults);
+    return result;
+  } };
   const household = householdOf(db), root = household.root;
   const answerer = createLiveAnswerer({ engine, root, services: { ...household.services, engine, config: { dataDir: root } } });
   const out = await threadCreate({ db, config: { clock }, identity: { id: ctx.actorId }, answerer,
@@ -170,6 +175,11 @@ test('Ask reads per-person figures and delivers sheet provenance through its reg
   assert.match(out.message.text, /\$525/);
   assert.match(out.message.text, /\$2,400/);
   assert.ok(out.message.provenance.tools.some(c => c.name === 'spending' && !c.isError));
+  const spendingRead = reads.find(r => r.args.measure === 'spending').result;
+  const spouse = spendingRead.byPerson.find(p => p.person === 'spouse').total;
+  assert.equal(spouse.value, 450);
+  assert.ok(spouse.provenance.sources.some(s => s.table === 'pnl_lines' && s.sheets.includes('Birch Summary')));
+  assert.equal(reads.find(r => r.args.measure === 'income').result.byPerson.find(p => p.person === 'spouse').total.value, 2400);
 });
 
 test('sheet and transaction detail figures keep independent row identities', async t => {
@@ -244,4 +254,27 @@ test('AC4: household salary already inside S corp receipts is not added to the i
   scenario = buildScenario(db);
   assert.equal(scenario.fig['inc.ytd.summary-owner'].v, 2000, 'only months backed by household salary are covered');
   assert.equal(scenario.fig['inc.ytd.total'].v, 31400);
+});
+
+test('a historical summary does not change the existing bank-window account selection', async t => {
+  const { db, ctx } = await fixture(t, { bank: Array.from({ length: 10 }, (_, i) => [String(i + 1).padStart(2, '0'), 'Groceries', -25]) });
+  db.prepare("UPDATE pnl_lines SET period=replace(period,'2026','2025') WHERE entity!='Example Studio'").run();
+  db.prepare("INSERT INTO accounts(id,name,kind,owner,parser) VALUES ('short-card','Short history','card','You','aggregator')").run();
+  db.prepare("INSERT INTO transactions(account_id,date,amount,category,parser) VALUES ('short-card','2026-05-15',-55,'Shopping','aggregator')").run();
+  const before = await callTool('spending', { operation: 'total' }, ctx);
+  await planRun(db);
+  const after = await callTool('spending', { operation: 'total' }, ctx);
+  assert.equal(after.total.value, before.total.value);
+  assert.equal(after.total.value, 200);
+});
+
+test('cash flow and spending both exclude summary rows after the clock', async t => {
+  const { db, ctx, total } = await fixture(t);
+  db.prepare("INSERT INTO pnl_lines(entity,period,category,amount,file_id,locator) VALUES ('Birch Summary','2026-11','Groceries',-500,'summary-book',?)")
+    .run(JSON.stringify({ sheet: 'Birch Summary' }));
+  await planRun(db);
+  const current = { from: '2026-11', to: '2026-11' };
+  assert.equal((await total('spending', current)).total.value, 0);
+  const cash = await callTool('spending', { operation: 'cash_flow', ...current }, ctx);
+  assert.equal(cash.totals.household.outflow.value, 0);
 });

@@ -1,8 +1,9 @@
 import { ledgerKind, ledgerDisplayName, summaryPerson, personalIncomeCategory, payrollIncomeCategory } from '../pnl/ledgers.mjs';
 import { resolveCategories, spendingAccount, sourceBucket } from '../categories/resolve.mjs';
-import { ownerOf, resolveEntities } from '../jobs/planner/data.mjs';
+import { ownerOf, resolveEntities, isOfficer } from '../jobs/planner/data.mjs';
 import { payrollRecords } from '../jobs/planner/payroll.mjs';
 import { parseJson } from '../store/db.mjs';
+import { normalizeName } from '../ingest/confirm.mjs';
 
 export const SUMMARY_RULE = 'from the spreadsheet summary for months without bank data; connected transactions win for each person, month and category';
 const categoryKey = category => String(category).trim().toLowerCase();
@@ -19,6 +20,8 @@ export function personalSummaryInput(data, facts, categoryInput) {
   const lines = [];
   for (const [name, rows] of groups) {
     if (ledgerKind(facts, name, rows) !== 'spending') continue;
+    const names = new Set([name, ...rows.map(ledgerDisplayName)].map(normalizeName));
+    if (Array.isArray(facts['business.entities']) && facts['business.entities'].some(e => !e.inferred && e.type && e.type !== 'personal' && names.has(normalizeName(e.name)))) continue;
     const attribution = summaryPerson({ name, displayName: ledgerDisplayName(rows[0]), lines: rows }, facts);
     if (!attribution) continue;
     for (const line of rows) {
@@ -32,8 +35,10 @@ export function personalSummaryInput(data, facts, categoryInput) {
     }
   }
   const people = new Set(lines.filter(l => payrollIncomeCategory(l.category)).map(l => l.person));
-  if (!people.size) return { lines, connected, wages: [] };
+  if (!people.size) return { lines, connected, wages: [], salaryCoverage: [] };
   const entities = resolveEntities(data, facts);
+  const salaryCoverage = entities.filter(e => e.classified && e.type === 's_corp')
+    .flatMap(e => e.lines.filter(l => l.amount < 0 && isOfficer(l.originalCategory || l.category)).map(l => ({ person: e.owner, period: l.period })));
   const years = [...new Set(lines.filter(l => payrollIncomeCategory(l.category)).map(l => Number(l.period.slice(0, 4))))];
   const payroll = years.flatMap(year => payrollRecords({ ...data, year, taxYear: year }, entities, facts).records.map(r => ({ ...r, year }))).filter(r => people.has(r.person));
   const wages = payroll.map(record => {
@@ -42,18 +47,20 @@ export function personalSummaryInput(data, facts, categoryInput) {
     return { person: record.person, from: `${record.year}-01`, to, amount: record.ytdWages,
       ids: record.docIds, fileId: record.fileId, household: record.household };
   }).filter(w => w.to && Number.isFinite(w.amount));
-  return { lines, connected, wages };
+  return { lines, connected, wages, salaryCoverage };
 }
 
-export function selectPersonalSummaries(input, { window, payroll = true, bankIncome = true } = {}) {
+export function selectPersonalSummaries(input, { window, payroll = true, bankIncome = true, householdSalary = false } = {}) {
   if (!input || !window) return { rows: [], evidence: [], payrollRows: [], gaps: [] };
   const rows = [], evidence = [], gaps = [];
   for (const line of input.lines.filter(l => inMonths(l.period, window))) {
+    const salaryCovered = householdSalary && payrollIncomeCategory(line.category)
+      && input.salaryCoverage.some(s => s.person === line.person && s.period === line.period);
     const payrollCovered = payroll && payrollIncomeCategory(line.category)
       && input.wages.some(w => w.person === line.person && inMonths(line.period, w));
     const bankCovered = (!line.income || bankIncome) && input.connected.some(t => (t.person === line.person || t.person === 'joint')
       && t.date.slice(0, 7) === line.period && (line.income ? t.bucket === 'income' && incomeKey(t.category) === incomeKey(line.category) : t.bucket === line.bucket && categoryKey(t.category) === categoryKey(line.category)));
-    if (payrollCovered || bankCovered) evidence.push({ ...line, reason: payrollCovered ? 'payroll' : 'connected' });
+    if (salaryCovered || payrollCovered || bankCovered) evidence.push({ ...line, reason: salaryCovered ? 'household_salary' : payrollCovered ? 'payroll' : 'connected' });
     else rows.push(line);
   }
   const payrollRows = payroll ? input.wages.filter(w => input.lines.some(l => l.person === w.person && payrollIncomeCategory(l.category) && inMonths(l.period, window) && inMonths(l.period, w)))

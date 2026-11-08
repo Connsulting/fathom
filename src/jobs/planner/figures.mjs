@@ -122,13 +122,13 @@ export function computeFigures(data, facts, ctx) {
   const out = createOut(clock);
   const TY = data.taxYear;
   const summaries = personalSummaryInput(data, facts, data.categoryInput);
-  const personal = selectPersonalSummaries(summaries, { window: { from: `${data.year}-01`, to: clock.slice(0, 7) }, bankIncome: false });
+  const personal = selectPersonalSummaries(summaries, { window: { from: `${data.year}-01`, to: clock.slice(0, 7) }, bankIncome: false, householdSalary: true });
   for (const person of ['owner', 'spouse']) {
     const rows = personal.rows.filter(r => r.person === person && r.income);
     if (!rows.length) continue;
     out.source('personal-summary', 'Personal spreadsheet summaries', dateLabel(clock), 'ledger');
     out.put(`inc.ytd.summary-${person}`, sum(rows.map(r => r.amount)), 'a', `${person === 'owner' ? 'Your' : "Your spouse's"} income from the summary sheet`, 'personal-summary',
-      { ...rowsLoc('pnl_lines', rows.map(r => r.sourceId)), sources: summarySources(rows), notes: ['From the summary sheet; recorded payroll replaces wages for the same person and months.'] }, rows[0].fileId);
+      { ...rowsLoc('pnl_lines', rows.map(r => r.sourceId)), sources: summarySources(rows), notes: ['From the summary sheet; recorded payroll and household business salary cover wages for the same person and months.'] }, rows[0].fileId);
   }
 
   // Accounts and cash.
@@ -805,13 +805,13 @@ export function priorFicaWages(data, owner, person, corpName) {
   return amount(fact && typeof fact === 'object' ? fact[person] : undefined);
 }
 
-// inc.ytd.total (F8): every income-received figure, P&L entities plus outside wages.
+// inc.ytd.total: business receipts, outside wages and uncovered personal summary income.
 function incomeTotal(out) {
   const keys = Object.keys(out.figures).filter(k => k.startsWith('inc.ytd.') && k !== 'inc.ytd.total').sort();
   if (!keys.length) return;
   const total = sum(keys.map(k => out.figures[k].v));
   out.put('inc.ytd.total', total, keys.some(k => out.figures[k].kind !== 'a') ? 'e' : 'a', 'Income received this year', 'calc:income',
-    { ...rowsLoc('figures', keys), calc: 'sum', inputs: Object.fromEntries(keys.map(k => [k, out.figures[k].v])), steps: [{ label: 'Income received', formula: 'sum of income received per business plus outside wages', value: total }] });
+    { ...rowsLoc('figures', keys), calc: 'sum', inputs: Object.fromEntries(keys.map(k => [k, out.figures[k].v])), steps: [{ label: 'Income received', formula: 'sum of business receipts, outside wages and uncovered summary income', value: total }] });
 }
 
 function finish(out) {
