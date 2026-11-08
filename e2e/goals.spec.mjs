@@ -108,11 +108,12 @@ test.describe('goals', TAGS, () => {
     await arch.getByRole('button', { name: 'Restore' }).click();
     await expect(page.locator('details.h-garch')).toHaveCount(0);
 
-    // Mark done archives it.
+    // Mark done archives it; it reads Done there, and Reopen brings it back.
     await goalCard(page, title).getByRole('button', { name: 'Mark done' }).click();
     await expect(page.locator('details.h-garch summary')).toHaveText('1 archived goal');
     await openArchived(page);
-    await page.locator('details.h-garch').getByRole('button', { name: 'Restore' }).click();
+    await expect(goalCard(page, title).locator('.h-goal-h span')).toHaveText('Done');
+    await page.locator('details.h-garch').getByRole('button', { name: 'Reopen' }).click();
     await expect(page.locator('details.h-garch')).toHaveCount(0);
 
     // Delete asks first, in the edit view.

@@ -580,11 +580,28 @@ export function loadGoals(db, { fig = {}, accounts = [] } = {}) {
 }
 
 // The tradeoff curve: the content axes (the demo) or the default axes (a real store), each with
-// its position from settings 'curve.positions'.
+// its position from settings 'curve.positions' (onboarding's priorities), unless a remembered
+// preference names one end of the axis: the owner changes the curve by telling Ask.
 export function loadCurve(db, content) {
   const positions = getSetting(db, 'curve.positions', null) || {};
   const axes = Array.isArray(content.curve) && content.curve.length ? content.curve : CURVE_AXES;
-  return axes.map(a => ({ ...a, value: curvePosition(positions, a) }));
+  const told = rememberedCurve(db, axes);
+  return axes.map(a => ({ ...a, value: Object.hasOwn(told, a.id) ? told[a.id] : curvePosition(positions, a) }));
+}
+
+// {axisId: 0 | 1} from the newest remembered preference that names exactly one end of the axis by
+// its label (any case): 0 the left end, 1 the right. The label match is plain text, not a model call.
+export function rememberedCurve(db, axes) {
+  const texts = db.prepare('SELECT text FROM preferences ORDER BY updated_at DESC, created_at DESC, id').all().map(r => String(r.text).toLowerCase());
+  const out = {};
+  for (const a of axes) {
+    const [l, r] = [a.left, a.right].map(x => String(x ?? '').trim().toLowerCase());
+    for (const t of texts) {
+      const hasL = !!l && t.includes(l), hasR = !!r && t.includes(r);
+      if (hasL !== hasR) { out[a.id] = hasL ? 0 : 1; break; }
+    }
+  }
+  return out;
 }
 
 // Onboarding priorities: the content's (the demo) or one per curve axis, at the stored positions.

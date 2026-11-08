@@ -13,6 +13,7 @@ import { rm } from 'node:fs/promises';
 import { tempDb, serveAppFixture } from './helpers/server.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import { adoptSuggestions } from '../src/goals/write.mjs';
+import { callTool } from '../src/tools/index.mjs';
 
 const CLOCK = '2026-11-05';
 const NOW = '2026-11-05T12:00:00.000Z';
@@ -166,4 +167,73 @@ test('the effort curve defaults to "Do not make me think"', async t => {
   const srv = await serve(t);
   const sc = await scenarioOf(srv);
   assert.equal(sc.curve.find(c => c.id === 'effort').value, 1);
+});
+
+// Ask's tools, as the owner's turn calls them (test/goal-kinds-api.test.mjs uses the same context).
+const toolCtx = (db, ownerText) => ({ db, now: NOW, actorId: 'person-a', ownerText, conversationKey: 'ask:0123456789ab', turnId: 'turn-a' });
+const undoReceipt = (ctx, id) => callTool('undo', { operation: 'undo', id }, { ...ctx, channel: 'mcp' });
+
+test('a goal Ask creates gets its target before the receipt is written, so Undo on the receipt works', async t => {
+  const srv = await serve(t);
+  const ctx = toolCtx(srv.db, 'Add a goal: A cash cushion for the next few years');
+  const out = await callTool('update_goal', { operation: 'create', title: 'A cash cushion for the next few years', horizon: '1-3y' }, ctx);
+  assert.equal(out.goal.target, 18100, 'the created goal already carries the adopted target');
+  assert.ok(out.goal.adopted);
+  await undoReceipt(ctx, out.receipt.id);
+  assert.equal(goalOf(await scenarioOf(srv), out.goal.id), undefined, 'undoing the create removes the goal');
+});
+
+test('remembering and undoing a withdrawal rate both move a target Fathom set', async t => {
+  const srv = await serve(t);
+  const { goal } = await create(srv, { title: 'Work less, on our terms', horizon: '3-10y' });
+  const ctx = toolCtx(srv.db, 'Remember this: Use a 3% withdrawal rate');
+  const out = await callTool('update_preferences', { operation: 'remember', text: 'Use a 3% withdrawal rate', evidence: 'Use a 3% withdrawal rate' }, ctx);
+  assert.equal(goalOf(await scenarioOf(srv), goal.id).target, 1202000);
+  await undoReceipt(ctx, out.receipt.id);
+  assert.equal(goalOf(await scenarioOf(srv), goal.id).target, 902000, 'back to the default rate');
+});
+
+test('a new date on a Fathom-set target keeps the target Fathom\'s and the date the owner\'s', async t => {
+  const srv = await serve(t);
+  const { goal } = await create(srv, { title: 'A cash cushion', horizon: '1-3y' });
+  const { scenario } = await ok(srv.postJson(`/api/goals/${goal.id}`, { targetDate: '2028-01-31' }));
+  const g = goalOf(scenario, goal.id);
+  assert.ok(g.adopted, 'still set by Fathom');
+  assert.equal(g.targetDate, '2028-01-31');
+  assert.equal(scenario.fig[`goal.${goal.id}.target`].src, 'calc:targets');
+  remember(srv.db, 'Use a 3% withdrawal rate');
+  srv.db.prepare("INSERT INTO transactions (account_id, date, amount, description, parser, locator) VALUES ('chk', '2026-07-20', -600, 'Repair', 'fixture', 'row')").run();
+  adoptSuggestions(srv.db, { now: NOW, clock: CLOCK });
+  const later = goalOf(await scenarioOf(srv), goal.id);
+  assert.notEqual(later.target, 18100, 'the target follows the calculator');
+  assert.equal(later.targetDate, '2028-01-31', 'a later pass keeps the owner date');
+  const after = goalOf((await ok(undo(srv, goal.id))).scenario, goal.id);
+  assert.equal(after.target ?? null, null);
+  assert.equal(after.targetDate, '2028-01-31', 'Undo keeps the date the owner set');
+});
+
+test('a goal that stops being a balance goal leaves adoption behind', async t => {
+  const srv = await serve(t);
+  const { goal } = await create(srv, { title: 'A cash cushion', horizon: '1-3y' });
+  const { scenario } = await ok(srv.postJson(`/api/goals/${goal.id}`, { kind: 'range', targetLow: 10000, targetHigh: 20000 }));
+  assert.equal(goalOf(scenario, goal.id).adopted ?? null, null);
+  await fails(undo(srv, goal.id), 409);
+});
+
+test('a goal created done is archived too', async t => {
+  const srv = await serve(t);
+  const { goal } = await create(srv, { title: 'Kids and family', status: 'done' });
+  assert.equal(goal.archived, true);
+  assert.equal(goal.status, 'done');
+});
+
+test('a remembered preference that names one end of a tradeoff moves that axis', async t => {
+  const srv = await serve(t);
+  remember(srv.db, 'We would rather keep cash flexible');
+  remember(srv.db, 'Optimize everything you can');
+  const sc = await scenarioOf(srv);
+  const at = id => sc.curve.find(c => c.id === id).value;
+  assert.equal(at('tax_cash'), 1);
+  assert.equal(at('effort'), 0);
+  assert.equal(at('human'), 0.5, 'an axis no memory names keeps its position');
 });
