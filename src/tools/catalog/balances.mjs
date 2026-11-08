@@ -57,7 +57,7 @@ function netWorth(args, ctx) {
     const treatment = plan || (Object.hasOwn(ACCOUNT_TREATMENT.byKind,a.kind) ? ACCOUNT_TREATMENT.byKind[a.kind] : null);
     const key = groupBy === 'part' ? partOf.get(group) : groupBy === 'group' ? group : treatment?.id || 'unknown';
     const gaps = groupBy === 'treatment' && (!treatment || treatment.id === 'needs plan type')
-      ? [{ code: 'missing_fact', message: `${label} needs an accounts.planType fact to identify tax treatment.` }] : [];
+      ? [{ code: 'missing_fact', message: `${label} needs its plan type to identify tax treatment.`, fact: 'accounts.planType' }] : [];
     const readings = monthlyReadings(ctx.db, a.id, clock), months = [...readings.keys()].sort();
     if (!months.length) missing.push({ code: 'missing_fact', message: `${label} has no balance or positions on file.` });
     return { id: a.id, label, group, key, gaps, treatment, readings, months, last: readings.get(months.at(-1))?.date,

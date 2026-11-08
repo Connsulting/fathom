@@ -883,6 +883,7 @@ function pPace() {
   return shell(`<section class="h-pace"><a class="h-back" href="${href('home')}" data-go="home">${icon('back')}Home</a>
     <div class="h-pace-head"><span class="h-hchip ${hc.tone}">${esc(hc.label)}</span><h1>${esc(pace?.rollup?.headline || 'No goals with targets')}</h1><p class="h-pace-why">${esc(paceReason(pace))}</p></div>
     ${section(charts.length && charts[0].id === 'householdSavings' ? 'Household savings' : 'By goal', body, charts.length ? 'Solid is observed, dashed is projected' : '')}
+    ${paceGapsHtml(pace)}
     ${thisYear.length ? section('This year', `<div class="h-meters">${thisYear.map(meterHtml).join('')}</div>`) : ''}
     <p class="h-pace-fresh">${icon('clock')}<span>${esc(h.dataLabel)}.${projected ? ' Later months are projected.' : ''} ${goA('add', 'Files')} ${goA('money', 'Accounts')}</span></p></section>`);
 }
@@ -1264,9 +1265,19 @@ const goalText = (g) => (g && g.origin === 'owner' ? String(g.title ?? '') : api
 
 // A goal reason in plain words with its fix beside it. With no goal (a meter, the household savings
 // chart) only a fix that needs no goal shows.
-function whyHtml(code, goal, cls) {
+function whyHtml(code, goal, cls, lead = '') {
   const ctl = goalReasonControl(goalReasonFix(code, goal ? { ...goal, title: goalText(goal) } : null), esc);
-  return `<p class="${cls}">${esc(reasonText(code))}${ctl ? ` ${ctl}` : ''}</p>`;
+  return `<p class="${cls}">${lead}${esc(reasonText(code))}${ctl ? ` ${ctl}` : ''}</p>`;
+}
+
+// Pace: each goal whose pace cannot be measured, with its reason and fix. Stale data is the freshness
+// line's to say, as on Home.
+function paceGapsHtml(pace) {
+  const rows = arr(pace?.goals).filter((p) => p && p.reason && p.reason !== 'stale_data').map((p) => {
+    const g = arr(api.s.goals).find((x) => x.id === p.id);
+    return g ? `<div data-pace-gap="${esc(g.id)}">${whyHtml(p.reason, g, 'h-gwhy', `<b>${goalTitle(g)}</b>. `)}</div>` : '';
+  }).join('');
+  return rows ? section('Not measured yet', `<div class="h-pgaps">${rows}</div>`) : '';
 }
 
 // The goals a rec serves. In the dialog a rec that serves no open goal reads Housekeeping; plan

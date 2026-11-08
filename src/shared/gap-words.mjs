@@ -72,8 +72,16 @@ export function hasInternalName(text) {
   return /\b[a-z]+\.[a-z][A-Za-z.]+\b/.test(text) || /\b[a-z][a-z0-9]*_[a-z0-9_]+\b/.test(text);
 }
 
+// A known fact key named in a message, longest first (obligations.mortgage.rate before obligations.mortgage).
+const KEYS_LONGEST = Object.keys(FACT_LABELS).sort((a, b) => b.length - a.length);
+const namedFact = message => KEYS_LONGEST.find(key => new RegExp(`\\b${key.replaceAll('.', '\\.')}\\b`).test(message)) ?? null;
+
 export function plainGap(gap) {
-  const own = typeof gap.message === 'string' && gap.message.trim() && !hasInternalName(gap.message) ? gap.message : null;
+  const message = typeof gap.message === 'string' && gap.message.trim() ? gap.message : null;
+  // A missing fact still named in its message keeps its sentence with the key in plain words.
+  const named = gap.code === 'missing_fact' && message && !gap.fact && hasInternalName(message) ? namedFact(message) : null;
+  if (named) gap = { ...gap, fact: named, message: message.replaceAll(named, FACT_LABELS[named].replace(/^its /, 'the ')) };
+  const own = gap.message && !hasInternalName(gap.message) ? gap.message : null;
   if (gap.taxCode && Object.hasOwn(TAX_GAP_RULES, String(gap.taxCode).split(':')[0])) {
     const tax = taxGap(gap.taxCode);
     return { code: gap.code, text: own ?? tax.message, fix: tax.action };

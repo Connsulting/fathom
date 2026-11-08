@@ -166,5 +166,11 @@ test('H4-AC2 leftOutOf names each truncated result, skips errors and collapses r
   assert.deepEqual(leftOutOf([{ ...tx, result: { ...tx.result, truncated: false } }]), [], 'an untruncated result says nothing');
   assert.equal(leftOutOf([tx, structuredClone(tx)]).length, 1, 'the same line once');
   const many = Array.from({ length: 12 }, (_, i) => ({ ...tx, result: { rows: [{ id: i }], total: 100 + i, truncated: true } }));
-  assert.equal(leftOutOf(many).length, 8, 'at most eight entries');
+  assert.equal(leftOutOf(many).length, 12, 'every truncation is named');
+  // Past eight gaps, seven show and one line counts the rest; the truncation still leads.
+  const gaps = Array.from({ length: 10 }, (_, i) => ({ code: 'missing_fact', message: `Synthetic account ${i} has no balance on file.` }));
+  const crowded = leftOutOf([tx, { name: 'accounts', args: {}, result: { gaps } }]);
+  assert.equal(crowded[0].code, 'truncated', 'the truncation is listed first');
+  assert.equal(crowded.length, 9);
+  assert.deepEqual(crowded.at(-1), { code: 'more', text: '3 more gaps are not listed here.', fix: null });
 });

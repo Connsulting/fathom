@@ -213,21 +213,30 @@ const FORM_FIELDS = {
   balance: ['target', 'targetDate', 'track'],
   range: ['targetLow', 'targetHigh', 'targetDate', 'track'],
   floor: ['floor', 'track'],
-  contribution: ['target', 'taxYear', 'targetDate', 'dest', 'shareOwner', 'shareSpouse', 'enteredTotal', 'enteredAsOf']
+  contribution: ['target', 'taxYear', 'targetDate', 'dest', 'shareOwner', 'shareSpouse', 'enteredTotal', 'enteredOwner', 'enteredSpouse', 'enteredAsOf']
 };
 const FIELD_FOR_KIND = { range: { target: 'targetLow' }, floor: { target: 'floor' }, contribution: { track: 'dest' } };
 
+// A split contribution goal with no entered total shows per-person amounts instead of the total.
+function contributedField(goal) {
+  const people = arr(goal.split).map((s) => s?.person);
+  if (!people.length || finite(goal.entered?.total)) return 'enteredTotal';
+  return people.includes('owner') ? 'enteredOwner' : 'enteredSpouse';
+}
+
 // The fix for a reason on a goal: a goal field fix names the goal and the kind's field; an owner goal
-// without that field, or a goal Fathom made, gets an Ask about the goal (`goal.title` in plain text).
-// A goal field fix with no goal is null. Upload, goal-new and null fixes do not depend on the goal.
+// without that field gets an Ask about the goal (`goal.title` in plain text). A goal that came with
+// the demo cannot be edited, so a goal field fix on it, or with no goal, is null. Upload, goal-new
+// and null fixes do not depend on the goal.
 export function goalReasonFix(code, goal) {
   const fix = GOAL_REASONS[code]?.fix;
   if (!fix) return null;
   if (fix.screen !== 'goal') return { ...fix };
-  if (!goal) return null;
+  if (!goal || goal.origin !== 'owner') return null;
   const kind = goal.kind || 'balance', fields = FORM_FIELDS[kind] || [];
-  const field = fields.includes(fix.field) ? fix.field : fields.includes(FIELD_FOR_KIND[kind]?.[fix.field]) ? FIELD_FOR_KIND[kind][fix.field] : null;
-  if (goal.origin === 'owner' && field && goal.id != null) return { screen: 'goal', field, label: fix.label, id: goal.id };
+  const want = kind === 'contribution' && fix.field === 'enteredTotal' ? contributedField(goal) : fix.field;
+  const field = fields.includes(want) ? want : fields.includes(FIELD_FOR_KIND[kind]?.[want]) ? FIELD_FOR_KIND[kind][want] : null;
+  if (field && goal.id != null) return { screen: 'goal', field, label: fix.label, id: goal.id };
   return { screen: 'ask', label: fix.label, prompt: `Change my goal "${goal.title ?? ''}": ${fix.label.toLowerCase()}.` };
 }
 

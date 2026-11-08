@@ -109,7 +109,11 @@ const EXPECTED_FIX = {
 const CASES = [
   ...GAP_CODES.map(code => ({ name: code, gap: { code, message: `Rows flagged ${code} need accounts.planType review.` } })),
   { name: 'missing_fact with a fact', gap: { code: 'missing_fact', message: 'Needs accounts.planType.', fact: 'accounts.planType' } },
+  // A missing fact whose message names no fact: rule text, no control.
+  { name: 'missing_fact naming no fact', gap: { code: 'missing_fact', message: 'Rows flagged missing_fact need review.' } },
 ];
+// A missing fact with no fact field whose message names one (an older producer) still gets that fact's fix.
+const recovered = gap => (gap.code === 'missing_fact' && !gap.fact && /accounts\.planType/.test(gap.message) ? 'accounts.planType' : null);
 const NO_FIX = new Set(['incomplete_month', 'unequal_periods', 'outside_household_ledger', 'missing_fact']);
 
 async function demoAsker(t) {
@@ -175,7 +179,7 @@ test('H4-AC1a every figure-gap code through scripted Ask keeps the value, disclo
     assert.deepEqual(entry, plainGap(gap), `${what}: the entry is plainGap(gap)`);
 
     // The fix target exists.
-    const expected = gap.fact ? factFix(gap.fact) : EXPECTED_FIX[gap.code];
+    const expected = gap.fact ? factFix(gap.fact) : recovered(gap) ? factFix(recovered(gap)) : EXPECTED_FIX[gap.code];
     assert.deepEqual(entry.fix, expected, `${what}: fix`);
     if (gap.fact) {
       assert.equal(entry.fix.screen, 'ask');
@@ -479,11 +483,14 @@ test('H4-AC1c every goal-reason code has plain text and a fix whose target exist
   assert.deepEqual(goalReasonFix('invalid_plan_dates', ownerGoal('floor')),
     { screen: 'ask', label: 'Fix the target date', prompt: 'Change my goal "Synthetic floor goal": fix the target date.' });
 
-  // A seed goal has no editable fields: a goal fix becomes a keyless Ask about that goal.
-  const seedFix = goalReasonFix('missing_actual', SEED);
-  assert.deepEqual(seedFix, { screen: 'ask', label: 'Choose what tracks it', prompt: 'Change my goal "Synthetic cushion": choose what tracks it.' });
-  assertGoalFixTarget(seedFix, SEED, 'seed goal');
-  assertOneControl(seedFix, 'seed goal');
+  // A goal that came with the demo cannot be edited (src/goals/write.mjs checkGoal), so a goal field
+  // fix on it offers no control rather than one that cannot work.
+  assert.equal(goalReasonFix('missing_actual', SEED), null, 'no edit control on a seed goal');
+  assert.equal(goalReasonControl(goalReasonFix('missing_actual', SEED), esc), '');
+  // A split contribution goal with no entered total shows per-person amounts, so the fix names one.
+  const split = { ...ownerGoal('contribution'), split: [{ person: 'spouse', amount: 1 }] };
+  assert.equal(goalReasonFix('missing_contributions', split).field, 'enteredSpouse');
+  assert.equal(goalReasonFix('missing_contributions', { ...split, entered: { total: 5 } }).field, 'enteredTotal');
   assert.deepEqual(goalReasonFix('stale_data', SEED), GOAL_FIX.stale_data[1], 'an upload fix does not depend on the goal');
   assert.equal(goalReasonControl(null, esc), '', 'no control without a fix');
 
