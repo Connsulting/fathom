@@ -86,7 +86,7 @@ export async function uploadFiles(ctx) {
 }
 
 export function listFiles(ctx) {
-  const rows = ctx.db.prepare('SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files ORDER BY uploaded_at DESC, rowid DESC').all();
+  const rows = ctx.db.prepare('SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files WHERE removed_at IS NULL ORDER BY uploaded_at DESC, rowid DESC').all();
   return { files: rows.map(fileOf) };
 }
 

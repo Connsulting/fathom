@@ -914,39 +914,11 @@ function goalUpdate(id, fields) {
   return send('/api/goals/' + encodeURIComponent(id), fields, d => d.goal || null, null, 'Could not save that goal. ');
 }
 
-// A suggested target: { action: 'dismiss' | 'restore' } or { withdrawalRate }. Resolves with the
+// Undo a target Fathom set: { action: 'undo' }. Resolves with the
 // reply, or null on failure (error line shown).
 function goalSuggestion(id, body) {
   if (id == null || id === '' || !body || typeof body !== 'object') return done();
   return send('/api/goals/' + encodeURIComponent(id) + '/suggestion', body, null, null, 'Could not change that suggestion. ');
-}
-
-// Accept several suggested targets: list is [{ id, fields }], posted one at a time in order. The
-// scenario is replaced and listeners notified once, after the last reply, so the page redraws once.
-// A failure stops the run, keeps what saved, and shows the error line. Resolves with the number saved.
-function goalsAccept(list) {
-  const items = arr(list).filter(x => x && x.id != null && x.id !== '' && x.fields && typeof x.fields === 'object');
-  if (!items.length) return done(0);
-  const run = async () => {
-    let last = null, saved = 0, failed = null;
-    for (const x of items) {
-      try {
-        last = await postJson('/api/goals/' + encodeURIComponent(x.id), x.fields);
-        saved += 1;
-      } catch (err) {
-        failed = err;
-        break;
-      }
-    }
-    if (last) applyScenario(last.scenario);
-    if (failed) showError('Could not save that goal. ' + (failed.message || ''));
-    else hideError();
-    notify();
-    return saved;
-  };
-  const p = queue.then(run);
-  queue = p;
-  return p;
 }
 
 function goalArchive(id, archived) {
@@ -1323,6 +1295,18 @@ function yearendMark(year, key, reason) {
   return send('/api/yearend/marks', { year, key, reason: reason == null ? null : String(reason) }, d => d);
 }
 
+// Sources on the Files page. Each resolves { receipt } (null when nothing changed) with the
+// scenario applied, or null on failure (error line shown). Undo is api.actionUndo(receipt.id).
+function archiveAccount(id, archived = true) {
+  if (id == null || id === '') return done();
+  return send(accountPath(id, 'archive'), { archived: archived !== false }, d => ({ receipt: d.receipt || null }), null, 'Could not change that account. ');
+}
+
+function removeFile(id) {
+  if (id == null || id === '') return done();
+  return send('/api/files/' + encodeURIComponent(id) + '/remove', {}, d => ({ receipt: d.receipt || null }), null, 'Could not remove that file. ');
+}
+
 function retryFile(id) {
   if (id == null || id === '') return done();
   return send('/api/files/' + encodeURIComponent(id) + '/retry', {}, d => d.file || null);
@@ -1399,7 +1383,6 @@ const api = {
   goalCreate,
   goalUpdate,
   goalSuggestion,
-  goalsAccept,
   goalArchive,
   goalDelete,
   setCurve,
@@ -1428,6 +1411,8 @@ const api = {
   answerMany,
   reopenMany,
   retryFile,
+  archiveAccount,
+  removeFile,
   yearendMark,
   refresh: refetchScenario,
   sendToAdvisor,

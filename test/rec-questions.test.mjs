@@ -200,7 +200,8 @@ test('missing data names its items in the title and summary, and each task links
   assert.match(prose.fields.summary, /Answer 2 tax questions and upload a paystub/);
   const linked = hit.rec.tasks.filter(t => t.link);
   assert.ok(linked.some(t => t.link === 'upload' && /paystub/i.test(t.t)));
-  assert.ok(linked.some(t => t.link === 'ask'), 'a question with no form opens Ask with the rec attached');
+  assert.ok(linked.some(t => t.link === 'confirm' && t.kind === 'confirm' && t.code === 'tax_year_unconfirmed'), 'a Confirm question links to Confirm');
+  assert.ok(hit.rec.tasks.some(t => t.kind === 'answer' && t.fact === 'household.filingStatus'), 'the form question is a step that clears when answered');
 });
 
 test('missing data that is only uploads is titled as uploads', () => {
@@ -242,14 +243,17 @@ test('a file source whose accounts SimpleFIN covers is not stale anywhere; a hal
   const covered = coveredFileSources(db);
   assert.ok(covered.has(multi[0]));
   const state = ingestState(db, { clock });
-  for (const s of state.sources.filter(x => covered.has(x.id))) assert.equal(s.state, 'covered');
+  for (const s of state.sources.filter(x => covered.has(x.id))) assert.equal(s.state, 'history', `${s.id} is history once SimpleFIN covers it`);
   // Planner freshness (missing-data) agrees: the household transaction log is current through the sync.
   assert.equal(planFresh(db, clock).find(f => f.id === 'transactions').state, 'current');
   // A disconnected bridge covers nothing, though its mappings stay.
   db.prepare('DELETE FROM simplefin_connection').run();
   assert.equal(coveredFileSources(db).size, 0);
-  assert.equal(ingestState(db, { clock }).sources.filter(x => x.state === 'covered').length, 0);
-  assert.equal(planFresh(db, clock).find(f => f.id === 'transactions').state, 'stale');
+  assert.equal(ingestState(db, { clock }).sources.filter(x => x.state === 'covered').length, 0, 'no source state is called covered any more');
+  // One rule (coverage.mjs): the planner calls the transaction log stale only when an active
+  // account is stale, the same accounts the Cash card counts.
+  const anyStale = Object.values(ingestState(db, { clock }).accounts).some(a => a.fresh === 'stale');
+  assert.equal(planFresh(db, clock).find(f => f.id === 'transactions').state, anyStale ? 'stale' : 'current');
   connection.run(NOW);
   assert.deepEqual(state.sources.filter(x => x.state === 'stale' && ['bank_csv', 'card_csv', 'aggregator_csv', 'balances', 'brokerage_positions', 'statement'].includes(x.kind)), []);
   assert.deepEqual(cashStale(state), [], 'the Cash card and the invest note carry no stale file notes once SimpleFIN covers the accounts');

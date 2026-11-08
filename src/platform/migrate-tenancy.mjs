@@ -123,12 +123,15 @@ function hasRowid(db, table) {
 // Digest rules: the moved table is gone after staging, schema_migrations is compared on the ids
 // before the cutover, the SimpleFIN secret changes envelope (its plaintext is checked apart), store
 // migration 028 adds two nullable columns to preferences and store migration 031 adds the nullable
-// spend_ledger.round_id, which the schema-26 source lacks.
+// spend_ledger.round_id, and store migration 032 adds the nullable accounts.archived_at and
+// files.removed_at, which the schema-26 source lacks.
 const TABLE_RULES = Object.freeze({
   schema_migrations: { where: `id <= ${PRE_TENANCY_SCHEMA}` },
   simplefin_connection: { omit: ['access_blob'] },
   preferences: { omit: ['origin', 'conversation_key'] },
   spend_ledger: { omit: ['round_id'] },
+  accounts: { omit: ['archived_at'] },
+  files: { omit: ['removed_at'] },
   column_mappings: { omit: ['schema_version', 'mapping_version', 'approval_status', 'approved_by', 'approved_at', 'structural_context', 'header_signature'] },
 });
 
@@ -522,11 +525,14 @@ function platformKeys(platform, journal, rows) {
   const revokedAt = new Date(journal.startedAt).toISOString();
   return rows.map(r => {
     const owner = r.user_id != null && userExists.get(r.user_id) ? r.user_id : (admins.length === 1 ? admins[0] : null);
-    const unbound = owner === null && r.revoked_at == null;
+    const member = owner === null ? null : platform.prepare('SELECT version, status FROM household_memberships WHERE household_id = ? AND user_id = ?').get(journal.householdId, owner);
+    const unbound = (owner === null || member?.status !== 'active') && r.revoked_at == null;
     return {
       id: r.id, household_id: journal.householdId, user_id: owner, name: r.name, key_hash: r.key_hash, scopes: r.scopes,
       created_at: r.created_at, last_used_at: r.last_used_at ?? null,
-      revoked_at: unbound ? revokedAt : (r.revoked_at ?? null), revoked_code: unbound ? 'migration_no_creator' : null,
+      revoked_at: unbound ? revokedAt : (r.revoked_at ?? null), revoked_code: unbound ? (owner === null ? 'migration_no_creator' : 'migration_inactive_creator') : null,
+      household_generation: 1,
+      membership_version: member?.version ?? null,
     };
   });
 }
@@ -548,7 +554,7 @@ function checkPasskeys(platform, journal) {
   if (now.count !== was.count || now.ids !== was.ids || now.rows !== was.rows) throw refuse('passkeys_changed');
 }
 
-const KEY_COLUMNS = ['id', 'household_id', 'user_id', 'name', 'key_hash', 'scopes', 'created_at', 'last_used_at', 'revoked_at', 'revoked_code'];
+const KEY_COLUMNS = ['id', 'household_id', 'user_id', 'name', 'key_hash', 'scopes', 'created_at', 'last_used_at', 'revoked_at', 'revoked_code', 'household_generation', 'membership_version'];
 
 function publishManifest(ctx) {
   const { platform, source, journal } = ctx;

@@ -34,8 +34,12 @@ const latest = (db, id) => db.prepare('SELECT * FROM import_proposals WHERE id =
 
 export async function prepareImport(ctx, { file, layout = null, fake }) {
   context(ctx); scopes(ctx);
+  const stored = ctx.db.prepare('SELECT sha256,removed_at FROM files WHERE id=?').get(file.fileId);
+  if (!stored) throw new ToolError('not_found', 'No such source file.');
+  if (stored.removed_at) throw new ToolError('bad_input', 'The source file was removed.');
   const source = await indexSource(file);
   context(ctx);
+  if (source.sha256 !== stored.sha256) stale(['source']);
   if (source.status !== 'indexed') return { status: 'needs_source_text' };
   const prior = ctx.db.prepare('SELECT * FROM import_proposals WHERE file_id=? ORDER BY version DESC,rowid DESC LIMIT 1').get(file.fileId);
   if (prior) {
@@ -45,7 +49,8 @@ export async function prepareImport(ctx, { file, layout = null, fake }) {
       if (prior.actor_id !== ctx.actorId || !isDeepStrictEqual(review.effect, importEffect(validateImport(ctx, proposal, source)))) return tx(ctx.db, () => {
         ctx.db.prepare("UPDATE import_proposals SET status='superseded',updated_at=? WHERE id=? AND version=?").run(stamp(ctx), prior.id, prior.version);
         return stageImport(ctx, { source, proposal: { ...proposal, version: prior.version + 1 }, layout: review.layout,
-          delta: review.presentation.delta, preserved: review.presentation.preserved, previousMapping: review.previousMapping });
+          delta: review.presentation.delta, preserved: review.presentation.preserved, previousMapping: review.previousMapping,
+          reasonCode: ['layout_mismatch', 'unsupported_currency'].includes(prior.reason_code) ? prior.reason_code : null });
       });
     }
     return out(prior);
@@ -76,6 +81,7 @@ export function stageImport(ctx, { source, proposal, layout = null, delta = [], 
   scopes(ctx);
   const file = ctx.db.prepare('SELECT * FROM files WHERE id = ?').get(source.fileId);
   if (!file || file.sha256 !== source.sha256) stale(['source']);
+  if (file.removed_at) throw new ToolError('bad_input', 'The source file was removed.');
   const existing = latest(ctx.db, proposal.proposalId);
   const correction = existing?.status === 'waiting_for_engine' && existing.reason_code === 'owner_correction';
   const refreshed = existing?.status === 'superseded' && proposal.version === existing.version + 1;

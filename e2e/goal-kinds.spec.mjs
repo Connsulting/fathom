@@ -44,14 +44,29 @@ const homeCard = (page, id) => page.locator(`section.h-home article.h-gcard[data
 const goalsCard = (page, id) => page.locator(`article.h-goal[data-goal-id="${id}"]`);
 const posted = (page, path) => page.waitForResponse((r) => new URL(r.url()).pathname === path && r.request().method() === 'POST' && r.status() === 200);
 
+// Open the archived goals list unless it is already open (the page remembers it).
+async function openArchived(page) {
+  const det = page.locator('details.h-garch');
+  await expect(det).toHaveCount(1);
+  if (!(await det.evaluate((d) => d.open))) await det.locator('summary').click();
+}
+
 async function gotoGoals(page) {
   await gotoRoute(page, 'goals');
   await expectH1(page, 'Where you are headed');
 }
 
+// A new goal is one sentence that Ask saves (e2e/goals.spec.mjs), so the kind editor is the edit
+// view: create a plain goal through the API, then open its editor. Returns the goal id.
 async function openNewGoal(page) {
-  await page.getByRole('button', { name: 'Goal', exact: true }).click();
+  const res = await page.request.post('/api/goals', { headers: { 'content-type': 'application/json' }, data: { title: 'A synthetic placeholder' } });
+  expect(res.status()).toBe(200);
+  const { goal } = await res.json();
+  await page.reload();
+  await expectH1(page, 'Where you are headed');
+  await goalsCard(page, goal.id).getByRole('button', { name: 'Edit', exact: true }).click();
   await expect(form(page)).toBeVisible();
+  return goal.id;
 }
 
 async function noHorizontalOverflow(page, what) {
@@ -80,7 +95,7 @@ test.describe('goal kinds', TAGS, () => {
     await gotoGoals(page);
 
     // Contribution: kind first (the form redraws its kind block), then the common and kind fields.
-    await openNewGoal(page);
+    let id = await openNewGoal(page);
     await gf(page, 'kind').selectOption('contribution');
     await expect(form(page).getByLabel(/Amount to contribute/)).toBeVisible();
     await expect(form(page).getByLabel(/Target amount/)).toHaveCount(0, { timeout: 2000 });
@@ -107,8 +122,8 @@ test.describe('goal kinds', TAGS, () => {
     await expect(gf(page, 'priority')).toHaveValue('high');
     await noHorizontalOverflow(page, 'the goal editor');
     await attach(page, info, 'editor-contribution');
-    let post = posted(page, '/api/goals');
-    await form(page).getByRole('button', { name: 'Save goal' }).click();
+    let post = posted(page, `/api/goals/${id}`);
+    await form(page).getByRole('button', { name: 'Save changes' }).click();
     const contrib = (await (await post).json()).goal;
     await expect(form(page)).toHaveCount(0);
     expect(contrib).toMatchObject({ kind: 'contribution', owner: 'joint', priority: 'high', status: 'open', target: 6000, taxYear: 2026,
@@ -117,7 +132,7 @@ test.describe('goal kinds', TAGS, () => {
     expect(contrib.entered).toEqual({ asOf: '2026-11-01', people: [{ person: 'owner', amount: 1500 }, { person: 'spouse', amount: 1000 }] });
 
     // Floor tracking the household checking account.
-    await openNewGoal(page);
+    id = await openNewGoal(page);
     await gf(page, 'kind').selectOption('floor');
     await expect(form(page).getByLabel(/Floor amount/)).toBeVisible();
     await gf(page, 'title').fill('Personal checking floor');
@@ -128,8 +143,8 @@ test.describe('goal kinds', TAGS, () => {
     await gf(page, 'owner').selectOption('owner');
     await gf(page, 'priority').selectOption('medium');
     await attach(page, info, 'editor-floor');
-    post = posted(page, '/api/goals');
-    await form(page).getByRole('button', { name: 'Save goal' }).click();
+    post = posted(page, `/api/goals/${id}`);
+    await form(page).getByRole('button', { name: 'Save changes' }).click();
     const floor = (await (await post).json()).goal;
     expect(floor).toMatchObject({ kind: 'floor', owner: 'owner', priority: 'medium', floor: 3000, track: { accounts: ['a_personal'] } });
 
@@ -185,6 +200,7 @@ test.describe('goal kinds', TAGS, () => {
     post = posted(page, `/api/goals/${contrib.id}`);
     await goalsCard(page, contrib.id).getByRole('button', { name: 'Mark done' }).click();
     await post;
+    await openArchived(page);
     await expect(goalsCard(page, contrib.id).locator('.h-goal-h span')).toHaveText('Done');
     await expect(goalsCard(page, contrib.id).getByRole('button', { name: 'Reopen' })).toBeVisible();
     await gotoRoute(page, 'home');
@@ -267,12 +283,15 @@ test.describe('goal kinds', TAGS, () => {
     await form(page).getByRole('button', { name: 'Mark done' }).click();
     await post;
     await expect(form(page)).toHaveCount(0);
+    // A done goal archives itself: it reads Done in the archived list.
+    await openArchived(page);
     await expect(goalsCard(page, id).locator('.h-goal-h span')).toHaveText('Done');
     await expect(goalsCard(page, id).getByRole('button', { name: 'Mark done' })).toHaveCount(0);
     await gotoRoute(page, 'home');
     await expect(homeCard(page, id)).toHaveCount(0);
 
     await gotoGoals(page);
+    await openArchived(page);
     post = posted(page, `/api/goals/${id}`);
     await goalsCard(page, id).getByRole('button', { name: 'Reopen' }).click();
     await post;
