@@ -48,7 +48,9 @@ export function deriveSteps(tasks, done, env = {}) {
     if (isVerifiable(t)) {
       if (t.kind === 'confirm') {
         const { confirmId: _stored, ...rest } = t;
-        const target = (env.confirm ?? []).find(item => item.id === t.confirmId && item.status === 'pending') ?? confirmItemFor(t.code, env.confirm);
+        const target = t.confirmId == null
+          ? confirmItemFor(t.code, env.confirm)
+          : (env.confirm ?? []).find(item => item.id === t.confirmId && item.status === 'pending');
         const confirmId = target?.id;
         return { ...rest, ...(confirmId ? { confirmId } : {}), link: confirmId ? 'confirm' : 'ask', auto: true, done: checkCleared(t, env) };
       }

@@ -10,6 +10,7 @@ import * as missing from '../src/jobs/triggers/missing-data.mjs';
 import * as steps from '../web/horizon/screens/rec-steps.js';
 import { createScheduler } from '../src/jobs/scheduler.mjs';
 import { createJobDispatcher } from '../src/jobs/dispatch.mjs';
+import { deriveSteps } from '../src/shared/rec-steps.mjs';
 import { planRun } from './helpers/plan.mjs';
 import { householdArg } from '../src/platform/cli.mjs';
 
@@ -188,4 +189,19 @@ test('a named payroll blocker selects that employer rather than another question
   ctx.info = { blocked: ['employer_relation_pending'], payrollBlocks: [{ code: 'employer_relation_pending', employer: 'Relevant Employer' }] };
   const task = missing.build(ctx, missing.evaluate(ctx)).tasks[0];
   assert.equal(task.confirmId, 12);
+});
+
+test('an answered Confirm target cannot retarget a step to an unrelated pending employer', () => {
+  const tasks = [{ t: 'Answer whether the employer is your own business in Confirm', kind: 'confirm', code: 'employer_relation_pending', confirmId: 12, link: 'confirm' }];
+  const confirm = [
+    { id: 11, kind: 'employer_relation', status: 'pending', context: { employer: 'Unrelated Employer' } },
+    { id: 12, kind: 'employer_relation', status: 'answered', context: { employer: 'Relevant Employer' } },
+  ];
+  const step = deriveSteps(tasks, [], { confirm, open: ['employer_relation_pending'] })[0];
+  assert.equal(step.confirmId, undefined);
+  assert.equal(step.link, 'ask');
+  confirm[1].status = 'pending';
+  const reopened = deriveSteps(tasks, [], { confirm, open: ['employer_relation_pending'] })[0];
+  assert.equal(reopened.confirmId, 12);
+  assert.equal(reopened.link, 'confirm');
 });
