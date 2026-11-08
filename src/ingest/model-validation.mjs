@@ -7,6 +7,7 @@ import { relativeDateEvidence } from '../actions/evidence.mjs';
 import { persistImport, accountIdentity } from './pipeline.mjs';
 import { toRows, validateExtraction, periodOf, sourceKindOf, labelOf } from './extract.mjs';
 import { isoDate, number, cents } from './format.mjs';
+import { dedupeKey } from './dedupe.mjs';
 
 export const importEffect = validation => Object.fromEntries(['valid', 'errors', 'rows', 'counts', 'bindings', 'identities', 'questions', 'summary', 'actions', 'notes'].map(key => [key, validation[key] ?? null]));
 const collect = (value, out = []) => {
@@ -122,8 +123,14 @@ export function validateImport(ctx, proposal, source) {
     } else if (row.target === 'tax_payment') {
       if (row.status !== 'paid' || !Number.isInteger(Number(f.taxYear)) || Number(f.taxYear) < 1900 || Number(f.taxYear) > 2200 ||
         !f.taxYearBasis || !['you', 'spouse', 'joint'].includes(f.recipient) || row.datePrecision === 'unknown') errors.push('tax_context_unresolved');
-      rows.push({ ...base, kind: 'tax_payment', jurisdiction: String(f.jurisdiction), payer: String(f.payer), recipient: f.recipient,
-        amount, taxYear: Number(f.taxYear), sheetYear: Number(f.taxYear), taxYearBasis: String(f.taxYearBasis), date: f.paymentDate, datePrecision: row.datePrecision, paymentKind: row.kind });
+      const payment = { ...base, kind: 'tax_payment', jurisdiction: String(f.jurisdiction), payer: String(f.payer), recipient: f.recipient === 'you' ? 'owner' : f.recipient,
+        amount, taxYear: Number(f.taxYear), sheetYear: Number(f.taxYear), taxYearBasis: String(f.taxYearBasis), date: f.paymentDate, datePrecision: row.datePrecision, paymentKind: row.kind };
+      if (day(payment.date)) {
+        const key = dedupeKey(payment), kind = value => value === 'paid' ? 'estimate' : value;
+        const stored = ctx.db.prepare('SELECT kind FROM tax_payments WHERE dedupe_key=?').get(key);
+        if ((stored && kind(stored.kind) !== row.kind) || rows.some(prior => prior.kind === 'tax_payment' && day(prior.date) && dedupeKey(prior) === key && kind(prior.paymentKind) !== row.kind)) errors.push('tax_payment_kind_conflict');
+      }
+      rows.push(payment);
     } else if (row.target === 'document') {
       if (!validateExtraction(row.docType, f)) errors.push('invalid_document');
       else {

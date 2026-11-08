@@ -69,7 +69,7 @@ export function classifyPayments(data, { persons, f, isVa }) {
     if (j === 'unknown-state') { block(b.withheld, 'withholding_state_unknown'); continue; }
     if (conflicted.has(r.id)) block(b.withheld, 'withholding_conflict_pending');
     if (persons.includes(r.recipient)) { add(b.withheld, r); continue; }
-    if (r.recipient === 'unknown' || r.recipient == null) {
+    if (r.recipient === 'unknown' || r.recipient === 'joint' || r.recipient == null) {
       if (!mfj || mixed(r)) { block(b.withheld, 'withholding_recipient_unknown'); continue; }
       add(b.withheld, r);
     }
