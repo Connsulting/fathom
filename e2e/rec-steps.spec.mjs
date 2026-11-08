@@ -77,7 +77,7 @@ test.describe('product-managed steps on the missing-data rec', () => {
     await answer.getByRole('button', { name: 'Answer', exact: true }).click();
     const form = dlg.locator('[data-rec-answers="missing-data"]');
     await expect(form).toBeVisible();
-    await form.getByLabel('Single', { exact: true }).check();
+    await form.getByRole('combobox', { name: 'What is your filing status?' }).selectOption('single');
     const saved = page.waitForResponse(r => r.url().endsWith('/api/recs/missing-data/answers') && r.request().method() === 'POST');
     await form.getByRole('button', { name: /^Save/ }).click();
     expect((await saved).status()).toBe(200);
@@ -85,7 +85,8 @@ test.describe('product-managed steps on the missing-data rec', () => {
     const done = dlg.locator('.h-steps li.h-step[data-kind="answer"]');
     await expect(done).toHaveClass(/\bdone\b/);
     await expect(done).toContainText('Done automatically');
-    await expect(done.getByRole('button')).toHaveCount(0);
+    await expect(done.getByRole('button', { name: 'Answer', exact: true })).toHaveCount(0);
+    await expect(done.locator('[data-act="task"]')).toHaveCount(0);
     await expect(dlg.locator('.h-prog span')).toHaveText(`1 of ${total}`);
     await expect(dlg.locator('.h-steps li.h-step[data-kind="upload"]').first()).not.toHaveClass(/\bdone\b/);
     if (process.env.ST1_RENDER_DIR) await shot(page, 'after');
