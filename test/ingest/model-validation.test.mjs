@@ -1,0 +1,59 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { fixture, recipe } from '../helpers/model-import.mjs';
+import { applyLayout } from '../../src/ingest/model-layout.mjs';
+import { validateImport } from '../../src/ingest/model-validation.mjs';
+
+test('validation derives totals and duplicate counts through the actual persistence boundary without active writes', async () => {
+  const x = await fixture();
+  try {
+    const s = await x.source(), p = applyLayout(s, recipe());
+    const v = validateImport(x.ctx, p, s);
+    assert.equal(v.valid, true, JSON.stringify(v.errors));
+    assert.equal(v.summary.totalStatus, 'totals_match');
+    assert.equal(v.summary.rows, 2);
+    assert.equal(v.summary.amount, -10);
+    assert.equal(v.counts.rows.transaction, 2);
+    assert.equal(x.db.prepare('SELECT count(*) n FROM transactions').get().n, 0);
+    assert.equal(x.db.prepare('SELECT count(*) n FROM sources').get().n, 0);
+  } finally { x.close(); }
+});
+
+test('mismatch, missing regions, omitted amount refs, unknown identity and invalid dates fail closed', async () => {
+  const x = await fixture();
+  try {
+    const s = await x.source();
+    for (const change of [p => p.controls[0].rows.pop(), p => p.coverage.pop(), p => p.rows.pop(),
+      p => p.rows[0].fields.accountId.refs = ['r3'], p => p.rows[0].fields.postedDate.refs = ['r2']]) {
+      const p = applyLayout(s, recipe()); change(p);
+      assert.equal(validateImport(x.ctx, p, s).valid, false);
+    }
+    const p = applyLayout(s, recipe());
+    s.values.r6 = 'changed';
+    assert.equal(validateImport(x.ctx, p, s).valid, false);
+  } finally { x.close(); }
+});
+
+test('a fully inventoried no-total layout says no sheet total to check', async () => {
+  const x = await fixture();
+  try {
+    const s = await x.source('Account,Date,Amount USD,Description\naccount-synthetic,2032-03-02,-12.25,Synthetic purchase\n');
+    const v = validateImport(x.ctx, applyLayout(s, recipe()), s);
+    assert.equal(v.valid, true);
+    assert.equal(v.summary.totalStatus, 'no_sheet_total');
+    assert.equal(v.summary.totalMessage, 'No sheet total to check');
+  } finally { x.close(); }
+});
+
+test('same account/day equal postings retain multiplicity and foreign account aliases remain unresolved', async () => {
+  const x = await fixture();
+  try {
+    const s = await x.source('Account,Date,Amount USD,Description\naccount-synthetic,2032-03-02,-12.25,Synthetic purchase\naccount-synthetic,2032-03-02,-12.25,Synthetic purchase\n');
+    const v = validateImport(x.ctx, applyLayout(s, recipe()), s);
+    assert.equal(v.valid, true);
+    assert.equal(v.counts.rows.transaction, 2);
+    x.db.prepare("INSERT INTO accounts (id,name) VALUES ('account-other','Synthetic account')").run();
+    const t = await x.source('Account,Date,Amount USD,Description\nSynthetic account,2032-03-02,-12.25,Synthetic purchase\n');
+    assert.ok(validateImport(x.ctx, applyLayout(t, recipe()), t).errors.includes('account_unresolved'));
+  } finally { x.close(); }
+});
