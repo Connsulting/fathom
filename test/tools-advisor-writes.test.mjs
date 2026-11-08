@@ -6,6 +6,7 @@ import { serveAppFixture } from './helpers/server.mjs';
 import { callTool, getTool } from '../src/tools/index.mjs';
 import { proposalTools, proposalBasis } from '../src/actions/proposals.mjs';
 import { readPacket } from '../src/advisor/packet.mjs';
+import { VaultError } from '../src/ingest/vault.mjs';
 
 const S = scratch('fathom-advisor-writes-');
 after(() => S.cleanup());
@@ -88,6 +89,8 @@ test('packet stores encrypted household bytes and matches the HTTP packet conten
   const ctx = await store();
   await assert.rejects(call(ctx, 'packet'), { code: 'conflict' });
   await call(ctx, 'send', { recId });
+  await assert.rejects(call({ ...ctx, services: { ...ctx.services, vault: async () => { throw new VaultError('platform_key_missing'); } } }, 'packet'), { code: 'conflict' });
+  assert.equal(ctx.db.prepare('SELECT count(*) n FROM advisor_packets').get().n, 0);
   const result = await call(ctx, 'packet');
   assert.deepEqual(result.recIds, [recId]);
   assert.equal(result.undo.available, false);

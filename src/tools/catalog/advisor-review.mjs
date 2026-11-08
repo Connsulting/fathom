@@ -6,6 +6,7 @@ import { requireActor, saveReceipt, registerReceiptKind } from '../../actions/re
 import { requireEvidence } from '../../actions/evidence.mjs';
 import { clockOf } from './figures.mjs';
 import { ToolError } from '../errors.mjs';
+import { VaultError } from '../../ingest/vault.mjs';
 
 registerReceiptKind('advisor_checkin', { table: 'advisor_checkin', pk: 'id' });
 const stamp = ctx => new Date(ctx.now ?? Date.now()).toISOString();
@@ -13,7 +14,11 @@ const id = { type: 'string', minLength: 1 };
 const date = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' };
 function guard(fn) {
   try { return fn(); }
-  catch (err) { if (err instanceof AdvisorError) throw new ToolError(err.status === 404 ? 'not_found' : err.status === 409 ? 'conflict' : 'bad_input', err.message); throw err; }
+  catch (err) {
+    if (err instanceof AdvisorError) throw new ToolError(err.status === 404 ? 'not_found' : err.status === 409 ? 'conflict' : 'bad_input', err.message);
+    if (err instanceof VaultError) throw new ToolError('conflict', err.message);
+    throw err;
+  }
 }
 function receipt(ctx, kind, entityId, before, after, label, from = before, to = after) {
   const result = saveReceipt(ctx, { scope: 'write:recs', kind, id: String(entityId), label, before, after, from, to });
