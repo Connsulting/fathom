@@ -8,7 +8,8 @@
    tool grounded are .fx-src spans, and numbers nothing supports are neutral .fx-checking
    .fx-unchecked spans titled "Not checked against your data" (older stored answers carry
    .fx-unverified). This module only adds the provenance list and the card; it never re-renders
-   the body.
+   the body's text. bodyHtml(m) places an answer's stored blocks (provenance.blocks) after their
+   paragraphs and its block notes under it, through ask-blocks.js.
    Historical proposal messages: a proposal (provenance.proposal {recId, action, wake?}) changes the rec only
    when the owner clicks Confirm, through the ordinary rec action (api.act). The card wording comes
    from a fixed action map and the rec, never from model text; the wake label is escaped text.
@@ -45,14 +46,25 @@
    scrolled into view inside the dialog. */
 
 import { ACTION_STATUS } from '/shared/rules.mjs';
-import { escapeUserText, money } from '/shared/tokens.mjs';
+import { escapeUserText, money, esc } from '/shared/tokens.mjs';
 import { streamHtml } from '/shared/answer-text.mjs';
 import { horizonLabel } from '/shared/goals.mjs';
 import { chipHtml } from './ask-context.js';
+import { useKit, messageBodyHtml } from './ask-blocks.js';
 
 let H = null;
 
-export function bind(kit) { H = kit; }
+export function bind(kit) {
+  H = kit;
+  useKit({ esc, money, registerFigures: (map) => { if (kit.api && kit.api.registerFigures) kit.api.registerFigures(map); } });
+}
+
+// A message's body: its stored html, with an answer's blocks placed after paragraph `after` and
+// its block notes as muted lines under it (ask-blocks.js). Every host that shows Fathom messages
+// (the Ask page and panel, the rec dialog, Packs) draws bodies through this.
+export function bodyHtml(m) {
+  return `<div class="h-msg-b">${messageBodyHtml(m)}</div>`;
+}
 
 const GROUNDED = 'Every number is from your data or a tool result.';
 const UNVERIFIED = 'Some numbers could not be verified and are marked.';
