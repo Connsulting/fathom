@@ -538,3 +538,38 @@ test('business evidence accepts stored ledger names but refuses invented names a
   const saved = await callTool('answer', { operation: 'fact', key: 'business.entities', value: [{ name: 'Current Studio', type: 's_corp', owner: 'owner', status: 'active', accountId: 'business-cash' }], evidence }, { ...ctx, channel: 'mcp', scopes: ['write:facts'], ownerText: evidence });
   assert.ok(saved.receipt);
 });
+
+
+for (const scorp of [true, false]) test(`AC20/AC21: a household payroll employer becomes an undoable business and tax projections run (S corp ${scorp})`, async t => {
+  const { db, ctx } = await store(t);
+  budgetAndBusiness(db, { named: false });
+  addFact(db, 'income.sCorp', scorp);
+  await addPayroll(db, { docType: 'w2', fields: { taxYear: 2026, employerName: 'Payroll Studio', wages: 40000, medicareWages: 40000, federalWithheld: 4000, box12: [] }, recipient: 'owner', relation: 'household' });
+  await addPayroll(db, { docType: 'paystub', fields: { employerName: 'Payroll Studio', payDate: '2026-10-15', gross: 4000, ytdGross: 40000, federalWithholding: 400, retirementDeferral: 0, hsaDeferral: 0 }, recipient: 'owner', relation: 'household' });
+  await planRun(db);
+  const entity = getFacts(db)['business.entities'].find(e => e.name === 'Payroll Studio');
+  assert.ok(entity, 'the known household employer creates the entity');
+  assert.equal(entity.inferred, true);
+  assert.equal(entity.owner, 'owner');
+  assert.equal(entity.type, scorp ? 's_corp' : null);
+  assert.equal(entity.accountId, 'business-cash');
+  assert.ok(figureRow(db, 'agi.est'));
+  assert.ok(figureRow(db, 'tax.fed.proj'));
+  const scenario = buildScenario(db);
+  assert.ok(!JSON.stringify(scenario.recs).includes('does not match any business on file'));
+  assert.ok(!figureRow(db, 'agi.est').unavailable_reason);
+  const questions = scenario.recs.find(r => r.id === 'missing-data')?.tasks.filter(t => !t.done && t.kind === 'classify') || [];
+  assert.equal(questions.length, scorp ? 0 : 1);
+  if (!scorp) {
+    assert.match(questions[0].t, /Payroll Studio/);
+    assert.match(JSON.stringify(figureRow(db, 'agi.est').locator), /pending.*tax|tax.*pending/i);
+  }
+  const rec = scenario.recs.find(r => r.assumptions?.some(a => a.key === 'business.entities' && a.path[0] === 'Payroll Studio'));
+  assert.ok(rec, 'the inferred employer exposes Undo');
+  recordFactAnswers(db, [{ key: 'business.entityInference', value: { 'Payroll Studio': { undone: true } } }], { now });
+  await planRun(db);
+  assert.ok(!getFacts(db)['business.entities'].some(e => e.name === 'Payroll Studio'));
+  recordFactAnswers(db, [{ key: 'business.entities', value: [{ name: 'Payroll Studio', type: 's_corp', owner: 'owner', accountId: 'business-cash' }] }], { now });
+  await planRun(db);
+  assert.equal(getFacts(db)['business.entities'].find(e => e.name === 'Payroll Studio').inferred, undefined);
+});
