@@ -1,0 +1,115 @@
+{
+  "id": "b2",
+  "op": "table",
+  "after": 2,
+  "spec": {
+    "source": {
+      "tool": "transactions.search",
+      "args": {
+        "q": "market"
+      },
+      "path": "rows"
+    },
+    "columns": [
+      "date",
+      "description",
+      "amount"
+    ]
+  },
+  "calls": [
+    {
+      "tool": "transactions.search",
+      "args": {
+        "q": "market"
+      }
+    }
+  ],
+  "snapshot": {
+    "title": "Matching charges",
+    "columns": [
+      {
+        "label": "Date",
+        "type": "text"
+      },
+      {
+        "label": "Description",
+        "type": "text"
+      },
+      {
+        "label": "Amount",
+        "unit": "usd",
+        "type": "row"
+      }
+    ],
+    "rows": [
+      {
+        "cells": [
+          {
+            "t": "text",
+            "text": "2026-10-03"
+          },
+          {
+            "t": "text",
+            "text": "Corner market"
+          },
+          {
+            "t": "row",
+            "value": 42.1,
+            "unit": "usd",
+            "row": {
+              "account": "Everyday card",
+              "date": "2026-10-03",
+              "description": "Corner market"
+            }
+          }
+        ]
+      },
+      {
+        "cells": [
+          {
+            "t": "text",
+            "text": "2026-09-21"
+          },
+          {
+            "t": "text",
+            "text": "Farm market"
+          },
+          {
+            "t": "row",
+            "value": 18,
+            "unit": "usd",
+            "row": {
+              "account": "Everyday card",
+              "date": "2026-09-21",
+              "description": "Farm market"
+            }
+          }
+        ]
+      },
+      {
+        "cells": [
+          {
+            "t": "text",
+            "text": "2026-10-12"
+          },
+          {
+            "t": "text",
+            "text": "Night market"
+          },
+          {
+            "t": "row",
+            "value": 63.75,
+            "unit": "usd",
+            "row": {
+              "account": "Joint checking",
+              "date": "2026-10-12",
+              "description": "Night market"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "asOf": null,
+  "builtAt": "2026-11-01T12:00:00.000Z"
+}
