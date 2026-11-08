@@ -150,6 +150,12 @@ test('every write scope lists undo and restores a receipt through MCP and Ask', 
   const proposalDenied = await proposalServer.invoke('undo', { operation: 'undo', id: r.id, propose: true });
   assert.equal(proposalDenied.isError, true); assert.match(proposalDenied.content[0].text, /^Permission denied:/);
   await proposalServer.instance.close();
+  const otherActor = createRegistryServer(proposalTools(tools), { purpose: 'chat', ctx: {
+    db: s.db, actorId: 'person-b', scopes: ['write:facts'], onProposal() { assert.fail('another actor proposal'); },
+  } });
+  const actorDenied = await otherActor.invoke('undo', { operation: 'undo', id: r.id, propose: true });
+  assert.equal(actorDenied.isError, true); assert.match(actorDenied.content[0].text, /not available to you/);
+  await otherActor.instance.close();
   const readKey = app.keys.create({ householdId: s.householdId, name: 'Read only' }).key;
   const readDenied = rpcResult(await callToolRpc(app.baseUrl, readKey, 'undo', { operation: 'undo' }));
   assert.equal(readDenied.isError, true); assert.match(readDenied.content[0].text, /^Permission denied:/);
