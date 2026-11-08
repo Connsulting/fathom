@@ -11,24 +11,25 @@ import { test, expect, resetDemo, gotoRoute } from './helpers.mjs';
 import { mainDataDir } from './data-dir.mjs';
 import { servedStore } from '../test/helpers/server.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
+import { forEachSeries } from '../src/shared/series.mjs';
 
 const FIELDS = ['amount', 'net', 'decCash', 'need', 'gap', 'tax2026', 'tax2027'];
 // Labels in the planner's shape, "<option label>: <what it is>" (src/jobs/planner/wargame.mjs).
 const LABELS = { amount: 'amount moved to January', net: 'net tax change', decCash: 'December business cash',
   need: 'December payroll need', gap: 'December need less cash', tax2026: 'this year tax change', tax2027: 'next year tax change' };
-function plantDeferral() {
-  const db = new DatabaseSync(servedStore(mainDataDir()).file);
+async function plantDeferral() {
+  const db = new DatabaseSync((await servedStore(mainDataDir())).file);
   try {
-    const { wargame } = buildScenario(db);
+    const { wargame } = await buildScenario(db);
     const put = db.prepare(`INSERT OR REPLACE INTO figures (key, v, kind, label, parser, updated_at) VALUES (?, ?, 'm', ?, 'planner', '2026-11-05')`);
-    wargame.deferral.options.forEach((o, i) => FIELDS.forEach((field, j) => put.run(`wg.deferral.${o.id}.${field}`, 1000 * (i + 1) + 10 * j, `${o.label}: ${LABELS[field]}`)));
-    put.run('wg.deferral.base.income', 5000, 'income');
-  } finally { db.close(); }
+    await forEachSeries(wargame.deferral.options, async (o, i) => await forEachSeries(FIELDS, async (field, j) => await put.run(`wg.deferral.${o.id}.${field}`, 1000 * (i + 1) + 10 * j, `${o.label}: ${LABELS[field]}`)));
+    await put.run('wg.deferral.base.income', 5000, 'income');
+  } finally { await db.close(); }
 }
 
 for (const width of [390, 1280]) test(`the deferral decision card shows figures and fits at ${width}px`, async ({ page, request }, testInfo) => {
   await resetDemo(request);
-  plantDeferral();
+  await plantDeferral();
   const res = await request.post('/api/threads', { data: { questionId: 'wargame-deferral' } });
   expect(res.status()).toBe(200);
   const body = await res.json();

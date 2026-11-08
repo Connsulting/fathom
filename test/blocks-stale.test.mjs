@@ -12,7 +12,6 @@ import { startServer } from '../src/server.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { demoRouteBehavior } from '../src/public-demo/control.mjs';
 import { mapSeries } from '../src/shared/series.mjs';
-import { mapSeries } from '../src/shared/series.mjs';
 
 const clock = '2026-11-05';
 async function fixture(t) {
