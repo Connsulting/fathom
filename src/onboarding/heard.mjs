@@ -24,6 +24,7 @@ const FACTS = [
   ['household.state', 'household', 'State', v => (typeof v === 'string' && /^[A-Za-z]{2}$/.test(v) ? v.toUpperCase() : null)],
   ['household.dependents', 'household', 'Dependents', v => (Number.isInteger(v) && v >= 0 ? String(v) : null)],
   ['household.dependentAges', 'household', 'Dependent ages', v => (Array.isArray(v) && v.every(Number.isInteger) && v.length ? v.join(', ') : null)],
+  ['household.birthYears', 'household', 'Birth years', v => (v && typeof v === 'object' && Number.isInteger(v.owner) ? [`you ${v.owner}`, ...(Number.isInteger(v.spouse) ? [`spouse ${v.spouse}`] : [])].join(', ') : null)],
   ['household.expectingChild', 'household', 'Expecting a child', v => (typeof v === 'boolean' ? yesNo(v) : null)],
   ['income.w2', 'income', 'W-2 income', v => (typeof v === 'boolean' ? yesNo(v) : null)],
   ['income.sCorp', 'income', 'S corporation income', v => (typeof v === 'boolean' ? yesNo(v) : null)],

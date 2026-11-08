@@ -1299,8 +1299,7 @@ Household facts the tools need:
 
 | Key | Type | Exists today | Collectable by `answer.fact` |
 |---|---|---|---|
-| `household.ownerAge` | age | yes, `ANSWER_SHAPES` | yes |
-| `household.spouseAge` | age | yes, `ANSWER_SHAPES` | yes |
+| `household.birthYears` | object `{ owner, spouse?, dependents? }` of birth years | yes, `ANSWER_SHAPES` | yes |
 | `household.expectedDate` | date | yes, `ANSWER_SHAPES` | yes |
 | `household.dependentAges` | int list | frozen key, no answer shape | after C7 adds the shape |
 | `household.dependentBirthDates` | date list (new `dates` shape type, 1..10) | no | after C7 |
@@ -1414,6 +1413,7 @@ lands the covering operation.
 | `POST /api/goals/:id/suggestion` | `update_goal.suggestion` | C9 |  |
 | `POST /api/curve` | `update_preferences.curve` | C9 |  |
 | `POST /api/onboarding` | excluded: onboarding wizard | | |
+| `POST /api/tour/seen` | excluded: guided tour state | | |
 | `POST /api/onboarding/notes` | `refresh.import_file` | C10 | a `text/markdown` note |
 | `POST /api/demo/reset` | excluded: demo reset | | |
 | `GET /api/keys` | excluded: API keys | | |

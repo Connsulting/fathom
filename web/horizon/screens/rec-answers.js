@@ -1,9 +1,12 @@
 let H;
 let drafts = new Map();
 const busy = new Set();
+// Recs whose answered questions the owner opened for editing.
+const editing = new Set();
+const INFERENCE_KEY = 'accounts.va529Inference';
 
 export const bind = kit => { H = kit; };
-export const reset = () => { drafts = new Map(); busy.clear(); };
+export const reset = () => { drafts = new Map(); busy.clear(); editing.clear(); };
 
 function draftFor(r) {
   let draft = drafts.get(r.id);
@@ -19,12 +22,21 @@ function active(field, draft) {
 export function html(r, surface) {
   if (!r.question) return '';
   const { esc } = H;
+  // Every answer is saved: say so and keep the questions out of the way (Edit answers reopens them).
+  if (r.question.answered && !editing.has(r.id)) {
+    return `<div class="h-answered" data-rec-answered="${esc(r.id)}"><span class="h-answered-t">Answered</span><button type="button" class="h-btn ghost" data-qr-edit="${esc(r.id)}">Edit answers</button></div>`;
+  }
   const draft = draftFor(r);
   const pending = busy.has(r.id);
   const fields = r.question.fields.map((f, i) => {
     const value = draft.get(f.id);
     const id = `qr-${surface}-${r.id}-${i}`;
     const on = active(f, draft);
+    const group = f.group ? `<span class="h-answer-for">${esc(f.group)}</span>` : '';
+    // An answer inferred from stored data is shown with its evidence, not asked; Undo asks instead.
+    if (f.inferred && on) {
+      return `<fieldset class="h-answer-field h-answer-inferred" data-qr-wrap="${esc(f.id)}"><legend>${group}${esc(f.label)}</legend><p><b>${value ? 'Yes' : 'No'}.</b> ${esc(f.inferred.evidence)}</p><button type="button" class="h-btn ghost" data-qr-undo="${esc(f.inferred.accountId)}" data-rec="${esc(r.id)}"${pending ? ' disabled' : ''}>Undo</button></fieldset>`;
+    }
     const attrs = `data-qr-field="${esc(f.id)}"${on ? ' required' : ' disabled'}${pending && on ? ' disabled' : ''}`;
     let control;
     if (f.type === 'boolean') {
@@ -35,7 +47,7 @@ export function html(r, surface) {
       const limits = f.type === 'number' ? ` min="${f.exclusiveMin != null ? f.exclusiveMin + 0.01 : f.min ?? 0}"${f.max != null ? ` max="${f.max}"` : ''} step="${f.integer ? '1' : '0.01'}" inputmode="${f.integer ? 'numeric' : 'decimal'}"` : '';
       control = `<div class="h-answer-value"><input id="${esc(id)}" type="${esc(f.type)}" value="${esc(value ?? '')}" ${attrs}${limits}>${f.unit ? `<span class="h-answer-unit">${esc(f.unit)}</span>` : ''}</div>`;
     }
-    return `<fieldset class="h-answer-field" data-qr-wrap="${esc(f.id)}"${on ? '' : ' hidden'}><legend>${esc(f.label)}</legend>${f.type === 'boolean' ? '' : `<label class="sr-only" for="${esc(id)}">${esc(f.label)}${f.unit ? ` (${esc(f.unit)})` : ''}</label>`}${control}</fieldset>`;
+    return `<fieldset class="h-answer-field" data-qr-wrap="${esc(f.id)}"${on ? '' : ' hidden'}><legend>${group}${esc(f.label)}</legend>${f.type === 'boolean' ? '' : `<label class="sr-only" for="${esc(id)}">${esc(f.label)}${f.unit ? ` (${esc(f.unit)})` : ''}</label>`}${control}</fieldset>`;
   }).join('');
   return `<form class="h-answers" data-rec-answers="${esc(r.id)}" aria-label="Answer questions for your plan" aria-busy="${pending}">${fields}<p class="h-answer-note">Your answers update the plan automatically.</p><div class="h-answer-acts"><button type="submit" class="h-btn pri"${pending ? ' disabled' : ''}>${pending ? 'Saving...' : r.question.primary ? 'Save' : 'Save answers'}</button>${r.question.primary ? `<button type="button" class="h-btn" data-act="snooze" data-rec="${esc(r.id)}" data-arg="${esc(H.snoozeLabel())}"${pending ? ' disabled' : ''}>Not now</button><button type="button" class="h-btn" data-ask-next="${esc(r.id)}">Ask</button>` : ''}</div></form>`;
 }
@@ -82,7 +94,32 @@ export function onSubmit(e) {
   H.draw();
   Promise.resolve(H.api.answerRec(r.id, [...values].map(([key, value]) => ({ key, value })))).then(result => {
     busy.delete(r.id);
-    if (result) drafts.delete(r.id);
+    if (result) { drafts.delete(r.id); editing.delete(r.id); }
+    H.draw();
+  });
+  return true;
+}
+
+// Edit answers opens the saved questions; Undo drops an inferred Virginia plan answer so the
+// account is asked. Returns true when the click was one of these.
+export function onClick(e) {
+  const edit = e.target.closest?.('[data-qr-edit]');
+  if (edit) {
+    e.preventDefault();
+    editing.add(edit.dataset.qrEdit);
+    H.draw();
+    return true;
+  }
+  const undo = e.target.closest?.('[data-qr-undo]');
+  if (!undo) return false;
+  e.preventDefault();
+  const id = undo.dataset.rec;
+  if (busy.has(id)) return true;
+  busy.add(id);
+  H.draw();
+  Promise.resolve(H.api.answerRec(id, [{ key: INFERENCE_KEY, value: { [undo.dataset.qrUndo]: { undone: true } } }])).then(result => {
+    busy.delete(id);
+    if (result) drafts.delete(id);
     H.draw();
   });
   return true;

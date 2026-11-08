@@ -876,6 +876,11 @@ function accountRename(id, displayName) {
   return send('/api/accounts/' + encodeURIComponent(id) + '/name', { displayName: displayName ?? '' }, d => d.account || null, null, 'Could not rename that account. ');
 }
 
+// The signed-in user finished or dismissed the guided tour: clear their server-side flag.
+function tourSeen() {
+  return send('/api/tour/seen', {}, null, null, 'Could not save that the tour is done. ');
+}
+
 function preferenceSave(id, text) {
   return send('/api/preferences' + (id ? '/' + encodeURIComponent(id) : ''), { text });
 }
@@ -1352,6 +1357,7 @@ const api = {
   spending,
   spendingRows,
   preferenceSave,
+  tourSeen,
   preferenceDelete,
   actionUndo,
   accountMask,

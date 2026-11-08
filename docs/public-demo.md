@@ -67,6 +67,7 @@ Invalid or nonpositive values refuse startup. An IP request limit returns HTTP 4
 | POST | `/api/household/outbound` | Off, HTTP 403 |
 | GET | `/api/scenario` | Visitor sandbox |
 | GET | `/api/pace` | Visitor sandbox |
+| POST | `/api/tour/seen` | Off, HTTP 403 |
 | GET | `/api/identity` | Visitor sandbox |
 | POST | `/api/recs/:id/action` | Visitor sandbox |
 | POST | `/api/recs/:id/answers` | Off, HTTP 403 |

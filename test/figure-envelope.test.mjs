@@ -20,7 +20,7 @@ test('envelopes keep their context and round only their output by unit', () => {
     sources: [{ table: 'figures', ids: ['synthetic.total'], count: 1 }], steps: [{ label: 'Stored total', formula: 'identity', value: 1 / 3 }] };
   const result = envelope(123.456, { ...options, kind: 'a', window, provenance });
   assert.deepEqual(result, { value: 123.46, unit: 'usd', label: options.label, kind: 'a', asOf: options.asOf,
-    ref, window, provenance, gaps: [] });
+    ref, window, provenance, gaps: [], quote: '$123.46' });
   assert.equal(provenance.inputs[0].value, 1 / 3);
   assert.equal(envelope(1, options).kind, 'e');
   for (const [unit, value, expected, extra] of [
