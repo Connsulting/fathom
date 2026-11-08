@@ -70,7 +70,7 @@ test('configured categorization retains model identity and cannot inherit calibr
     categorize: { adapter: 'ollama', model: 'synthetic-local', baseUrl: 'http://localhost:9999', inputUsdPerMillion: 0, outputUsdPerMillion: 0 } } }, funded: () => true,
     modelTransport: async () => Response.json({ done: true, message: { content: '{"q0":{"choice":"Groceries","confidence":1,"probabilities":{"Groceries":1,"Business":0}}}' }, prompt_eval_count: 20, eval_count: 20 }) });
   const categorizer = await createJev({ complete: engine.complete });
-  const result = await guessCategories(db, categorizer);
+  const result = await guessCategories(db, categorizer, {policy:{autoApply:.5,review:0}});
   assert.equal(result.applied, 0); assert.equal(result.guessed, 1);
   const guess = loadCategoryInputs(db).guesses[0]; assert.equal(guess.model, 'synthetic-local'); assert.ok(isJevProposal(guess));
   assert.equal(db.prepare('SELECT count(*) n FROM transaction_category_corrections').get().n, 0);
@@ -102,7 +102,7 @@ test('a default categorizer retry reserves a fresh response and cannot dispatch 
       : Response.json({model:'jev-1.14.0',answers:{q0:{type:'choice',choice:'Groceries',confidence:.9,probabilities:{Groceries:.9,Business:.1}}},usage:{input_tokens:20,output_tokens:4}}); } });
   const sleeps = [];
   const categorizer = await createJev({ complete: engine.complete, sleep: async ms => { sleeps.push(ms); enabled = false; } });
-  await assert.rejects(categorizer.choose(questions), e => e.code === 'paused');
+  await assert.rejects(categorizer.choose(questions), e => e.name === 'EngineOffError' && e.code === undefined);
   assert.equal(calls, 1); assert.deepEqual(sleeps,[1000]);
   assert.equal(platform.prepare("SELECT count(*) n FROM model_rounds WHERE kind='round' AND state='settled' AND cost_usd=0").get().n,1);
   enabled = true;
@@ -140,4 +140,37 @@ test('alternative fixed-choice confidences stay reviewable and cannot auto-apply
     assert.equal(getItem(db,item.id).status,id==='alternative'?'pending':'answered');
     assert.equal(db.prepare('SELECT kind FROM accounts WHERE id=?').get(id).kind,id==='alternative'?null:'cash');
   }
+});
+
+import { startModelEmulator } from './helpers/model-emulator.mjs';
+import { createScheduler, defaultHandlers } from '../src/jobs/scheduler.mjs';
+for (const mode of ['live','fake']) test(`scheduled Confirm resolution continues without optional categorizer credentials in ${mode} mode`, async t => {
+  const { db, platform, householdId, keyFile, root } = fixture(t);
+  const emulator=await startModelEmulator(); t.after(()=>emulator.close());
+  db.exec("INSERT INTO accounts (id,name) VALUES ('pending-kind','Synthetic account')");
+  const item=ask(db,{kind:'account_kind',subject:'pending-kind',question:'Account kind?',options:KIND_OPTIONS});
+  const text=JSON.stringify({answers:[{item:item.id,option:'cash',basis:'account_name',refs:['accounts:pending-kind']}]});
+  emulator.script([{text}]);
+  let categoryCalls=0, jobCalls=0;
+  const config={engine:mode,claudeCredentialFile:keyFile,clock:'2032-01-01'};
+  const engine=createRuntimeEngine({db,platform,householdId,config,funded:()=>true,testTransport:{baseURL:emulator.baseURL},
+    modelTransport:async()=>{categoryCalls++;assert.fail('the optional categorizer is off');}});
+  const call=engine.call;
+  engine.call=req=>{jobCalls++;return call({...req,...(mode==='fake'?{fake:[{text,costUsd:.001}]}:{})});};
+  const handlers=defaultHandlers({});
+  const scheduler=createScheduler({db,config,engine,handlers:{'confirm-guess':handlers['confirm-guess']},
+    household:()=>({root,outbound:{enabled:()=>true},funded:()=>true}),now:()=>new Date('2032-01-01'),log:{log(){}}});
+  try {await scheduler.runNow('confirm-guess');} finally {await scheduler.stop();}
+  assert.equal(categoryCalls,0); assert.equal(jobCalls,1);
+  assert.equal(getItem(db,item.id).status,'answered');
+  assert.equal(db.prepare("SELECT kind FROM accounts WHERE id='pending-kind'").get().kind,'cash');
+});
+
+test('credential status distinguishes a missing primary key from an available categorize or import purpose', async t => {
+  const {db,platform,householdId,keyFile}=fixture(t);
+  const engine=createRuntimeEngine({db,platform,householdId,config:{engine:'live',typesafeKeyFile:keyFile,
+    modelPorts:{import:{adapter:'ollama',model:'synthetic-model',baseUrl:'http://localhost:9999',inputUsdPerMillion:0,outputUsdPerMillion:0}}},funded:()=>true});
+  await engine.init();
+  assert.equal(engine.credentialState,'failed'); assert.equal(engine.status().credentialState,'failed');
+  assert.equal(engine.credentialStateFor('categorize'),'loaded'); assert.equal(engine.credentialStateFor('extract'),'loaded');
 });

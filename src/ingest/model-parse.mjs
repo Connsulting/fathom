@@ -81,7 +81,7 @@ async function interpretBound({ ctx, file, fake, retry = false, limits: override
   const { db, engine, generation } = household, limits = loweredLimits(overrides);
   const now = () => new Date(typeof ctx.now === 'function' ? ctx.now() : ctx.now ?? Date.now());
   const started = Date.now();
-  const live = () => household.generation === generation && household.isCurrent() === true && household.outbound.enabled('engine') === true && household.funded() === true && engine.isOn() === true && engine.credentialState !== 'failed';
+  const live = () => household.generation === generation && household.isCurrent() === true && household.outbound.enabled('engine') === true && household.funded() === true && engine.isOn() === true && engine.credentialStateFor?.('extract') !== 'failed';
   if (!live()) return code('waiting_for_engine', 'engine_unavailable');
   const source = await indexSource(file, { accounts: db.prepare('SELECT * FROM accounts').all(), householdNames: householdNames(db), entityNames: db.prepare('SELECT alias, entity FROM entity_aliases').all().flatMap(r => [r.alias, r.entity]) });
   if (source.status !== 'indexed') return code('needs_source_text', 'no_safe_source_text');
