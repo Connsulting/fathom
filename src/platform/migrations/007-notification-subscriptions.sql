@@ -10,5 +10,6 @@ CREATE TABLE notification_subscriptions (
 
 CREATE TABLE notification_policy (
   household_id TEXT PRIMARY KEY REFERENCES households(id) ON DELETE CASCADE,
-  initialized_at INTEGER NOT NULL
+  initialized_at INTEGER,
+  skipped_recipients INTEGER NOT NULL DEFAULT 0 CHECK (skipped_recipients >= 0)
 );

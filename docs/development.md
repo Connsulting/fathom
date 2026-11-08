@@ -341,11 +341,12 @@ ids and preferences for an admin. `POST /api/email/subscriptions` replaces the s
 `{"subscriptions":[{"userId":"<member-id>","subscribed":true}]}`; omitted members are unsubscribed.
 A removed or re-enrolled membership needs an explicit subscription again.
 
-The original household imports `FATHOM_EMAIL_TO` or its `_FILE` addresses once, only when every
-address matches a verified active member. A mismatch blocks financial delivery with
-`recipient_unverified` until an admin supplies the subscription set. Later environment changes do
-not reroute subscribed mail. New households start without subscribers. Every financial recipient
-gets a separate message, with membership and subscription rechecked at dispatch. Links identify
+The original household imports the `FATHOM_EMAIL_TO` or `_FILE` addresses that match verified active
+members, once. Other configured addresses are skipped and never receive financial mail. Email
+status reports `skippedRecipients`, the count skipped by that import, without their addresses.
+If none match, delivery fails closed with `recipient_unverified`; an admin can supply the
+subscription set. Later environment changes do not reroute subscribed mail. New households start without
+subscribers. Every financial recipient gets a separate message, with membership and subscription rechecked at dispatch. Links identify
 the household and require normal authentication. Enrollment uses a separate policy and the
 platform-private `outbox/`, including when an invitee is not yet a member.
 
