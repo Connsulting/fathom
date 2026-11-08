@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import { checkGrounding, EngineOffError, BudgetExceededError } from '../../engine/index.mjs';
 import { esc, TOKEN } from '../../shared/tokens.mjs';
 import { lawContent, pctContent } from './law.mjs';
+import { LISTED_RECS } from '../triggers/common.mjs';
 
 export const TEMPLATE_VERSION = 1;
 
@@ -117,7 +118,7 @@ const storedFields = def => ({
 
 export async function writeProse(hit, ctx, { engine = null, stored = null } = {}) {
   const hash = groundingHash(hit, ctx);
-  if (hit.rec.question?.primary) {
+  if (hit.rec.question?.primary && !LISTED_RECS.has(hit.rec.id)) {
     const draft = hit.trigger.template(ctx, hit.vars);
     const fields = { ...draft, summary: hit.rec.question.summary };
     const kept = stored?.hash === hash && stored.src === 'template' && stable(pickFields(stored.def)) === stable(fields);

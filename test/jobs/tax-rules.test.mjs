@@ -176,7 +176,7 @@ describe('MG3 child tax credit phase-out', () => {
       {
         clock: '2026-12-20',
         entities: [{ name: 'Wren Studio', slug: 'wren-studio', type: 'sole_prop', owner: 'owner', classified: true, sstb: false, docId: null, fileId: null, lines: [line], months: 12 }],
-        owner: { 'retirement.planTermsConfirmed': true, 'retirement.aggregationConfirmed': true, 'household.ownerAge': 45 },
+        owner: { 'retirement.planTermsConfirmed': true, 'retirement.aggregationConfirmed': true, 'household.birthYears': { owner: 1981 } },
       },
     );
     const out = run([3]);
@@ -595,7 +595,7 @@ const CEDAR = 'Cedar Advisory';
 const corp61 = (extra = {}) => ({
   ...extra,
   entities: [{ name: CEDAR, type: 's_corp', owner: 'owner', income: 40000, expenses: { 'Officer salary': 15000, 'Payroll taxes': 1147.5 } }, SOLE_PROP],
-  facts: { 'household.ownerAge': 61, ...(extra.facts || {}) },
+  facts: { 'household.birthYears': { owner: 1965, spouse: 1983 }, ...(extra.facts || {}) },
 });
 const box3 = (employer, ss, wages = 140000) => w2Doc({ taxYear: 2025, employerName: employer, person: 'owner', wages, socialSecurityWages: ss });
 const ROOM_KEYS = ['room.solo401k', 'room.solo401k.employee', 'room.solo401k.employer', 'room.solo401k.catchUp', 'room.solo401k.rothCatchUp', 'room.solo401k.pretax'];
@@ -678,7 +678,7 @@ describe('MG6 Roth catch-up', () => {
     // A sole proprietor has no FICA wages from the sponsor (T.D. 10033), so the catch-up is pre-tax
     // and no wage data is needed. Wren Studio 5,000 a month is the owner's only business.
     const wren = { name: 'Wren Studio', type: 'sole_prop', owner: 'owner', income: 5000, expenses: {} };
-    const { db, info } = await planned({ entities: [wren, SOLE_PROP], facts: { 'household.ownerAge': 61 } });
+    const { db, info } = await planned({ entities: [wren, SOLE_PROP], facts: { 'household.birthYears': { owner: 1965, spouse: 1983 } } });
     absent(db, 'room.solo401k.rothCatchUp');
     assert.equal(fig(db, 'room.solo401k.catchUp').v, 11250);
     const steps = fig(db, 'room.solo401k').locator.steps;
@@ -692,7 +692,7 @@ describe('MG6 Roth catch-up', () => {
     // = 12,500; total 48,250. With Roth confirmed x = 48,250 - 11,250 = 37,000 and the Roth figure
     // 11,250. Without confirmation catch-up is disabled: employer min(12,500, 47,500, 25,500) =
     // 12,500, x 37,000, no Roth figure. Box 3 140,000 (not affected): x 48,250.
-    const facts = { 'household.ownerAge': 61 };
+    const facts = { 'household.birthYears': { owner: 1965, spouse: 1983 } };
     const roth = await planned({ payroll: [box3(SCORP.name, 160000, 120000)], facts: { ...facts, 'retirement.planOffersRoth': true } });
     assert.equal(fig(roth.db, 'wg.salary.s50.x').v, 37000);
     assert.equal(fig(roth.db, 'wg.salary.s50.roth').v, 11250);
@@ -751,7 +751,7 @@ describe('MG6 Roth catch-up', () => {
     const small = (facts = {}) => ({
       entities: [{ name: CEDAR, type: 's_corp', owner: 'owner', income: 10000, expenses: { 'Officer salary': 2500, 'Payroll taxes': 191.25 } }, SOLE_PROP],
       payroll: [box3(CEDAR, 160000, 150000)],
-      facts: { 'household.ownerAge': 61, ...facts },
+      facts: { 'household.birthYears': { owner: 1965, spouse: 1983 }, ...facts },
     });
     const off = await planned(small());
     assert.equal(fig(off.db, 'room.solo401k.employee').v, 24500);
@@ -778,8 +778,11 @@ describe('MG6 Roth catch-up', () => {
 // deducts the full amount contributed less amounts previously deducted). The default store has one
 // college account with a 1,000 March contribution; Virginia top rate 5.75% above 17,000.
 describe('MG9 Virginia529', () => {
-  const va529 = async entry => {
-    const db = await S.store();
+  // The owner of the college account is 70 or older when `older` is set (ages come from birth years).
+  const AGES = { 'household.birthYears': { owner: 1950, spouse: 1983 } };
+  const va529 = async (entry, { older = false } = {}) => {
+    const db = await S.store({ variant: { facts: AGES } });
+    if (older) db.prepare("UPDATE accounts SET owner = 'owner' WHERE kind = '529'").run();
     addFact(db, 'accounts.va529', { [accountIdByMask(db, MASKS.college)]: entry });
     await plan(db);
     return { db, info: computeFor(db).info };
@@ -801,8 +804,8 @@ describe('MG9 Virginia529', () => {
     // Uncapped: 1,000 + 5,000 = 6,000. Baseline (capped, carryforward 0): min(4,000, 1,000) = 1,000.
     // Both Virginia taxable incomes are above 17,000, so tax.va.proj falls by 5,000 x 5.75% = 287.50.
     // No capped account, so no deduction-left figure.
-    const base = await planned();
-    const old = await va529({ virginiaPlan: true, ownerAge70Plus: true, carryforward: 5000 });
+    const base = await planned({ facts: AGES });
+    const old = await va529({ virginiaPlan: true, carryforward: 5000 }, { older: true });
     assert.equal(fig(base.db, 'va529.deduction').v, 1000);
     const d = fig(old.db, 'va529.deduction');
     assert.equal(d.v, 6000);
@@ -818,7 +821,7 @@ describe('MG9 Virginia529', () => {
 
   test('MG9: a capped account with a carryforward that fills the cap has no room left', async () => {
     // min(4,000, 1,000 + 5,000) = 4,000; left 4,000 - 4,000 = 0; tax saved by full use 0.
-    const { db } = await va529({ virginiaPlan: true, ownerAge70Plus: false, carryforward: 5000 });
+    const { db } = await va529({ virginiaPlan: true, carryforward: 5000 });
     assert.equal(fig(db, 'va529.deduction').v, 4000);
     assert.equal(fig(db, 'va529.deductionLeft').v, 0);
     assert.equal(fig(db, 'va529.taxSaved').v, 0);
@@ -826,7 +829,7 @@ describe('MG9 Virginia529', () => {
 
   test('MG9: a missing carryforward blocks Virginia tax and its targets', async () => {
     // Without the carryforward the subtraction, and so Virginia taxable income, is unknown.
-    const { db, info } = await va529({ virginiaPlan: true, ownerAge70Plus: false });
+    const { db, info } = await va529({ virginiaPlan: true });
     assert.equal(info.vaBlocked, 'va529_answers_missing');
     assert.ok(info.va529.missing.includes('College 529'), `missing: ${info.va529.missing}`);
     for (const k of ['tax.va.proj', 'sh.va.required', 'sh.va.remaining', 'va529.deduction', 'va529.deductionLeft', 'va529.taxSaved']) absent(db, k);
@@ -835,7 +838,11 @@ describe('MG9 Virginia529', () => {
   });
 
   test('MG9: a college account with no Virginia answers at all blocks Virginia tax', async () => {
-    const { db, info } = await planned({ facts: { 'accounts.va529': undefined } });
+    // With no institution on file the plan is asked, not inferred.
+    const db = await S.store({ variant: { facts: { 'accounts.va529': undefined } } });
+    db.prepare("UPDATE accounts SET inst = '' WHERE kind = '529'").run();
+    await plan(db);
+    const info = computeFor(db).info;
     assert.equal(info.vaBlocked, 'va529_answers_missing');
     absent(db, 'tax.va.proj');
     assert.ok(figureRow(db, 'tax.fed.proj'));

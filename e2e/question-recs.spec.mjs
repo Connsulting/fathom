@@ -30,7 +30,8 @@ test.describe('answerable questions on the synthetic planning household', () => 
     if (dirname(dataDir) !== repo || (basename(dataDir) !== owned && !basename(dataDir).startsWith(`${owned}-`)) || existsSync(dataDir)) throw new Error('Question fixture needs a fresh owned directory');
     mkdirSync(dataDir);
     const db = await buildRealStore(dataDir, { clock, variant: { facts: { 'accounts.va529': undefined } } });
-    db.prepare("UPDATE accounts SET display_name = 'College fund' WHERE kind = '529'").run();
+    // No institution on file, so the Virginia plan is asked rather than inferred.
+    db.prepare("UPDATE accounts SET display_name = 'College fund', inst = '' WHERE kind = '529'").run();
     db.prepare('INSERT INTO goals (id, def, sort) VALUES (?, ?, 0)').run('question-college', JSON.stringify({ title: 'College savings', kind: 'education', horizon: 'This year' }));
     await planRun(db, { now: clock, dataDir });
     db.close();
@@ -68,12 +69,14 @@ test.describe('answerable questions on the synthetic planning household', () => 
       const container = surface === 'home' ? page.locator('article.h-next') : surface === 'dialog' ? page.locator('.h-dlg') : page.locator('article.h-row').filter({ has: page.locator('[data-go="rec"][data-id="va529"]') });
       const form = container.locator('[data-rec-answers="va529"]');
       await expect(form).toBeVisible();
-      await expect(container).toContainText('Is College fund (3333) a Virginia plan?');
+      const plan = 'Is this Virginia\'s own 529 program (Invest529), which is the only kind Virginia deducts?';
+      await expect(container).toContainText('College fund (3333)');
+      await expect(container).toContainText(plan);
       await expect(container.getByRole('button', { name: 'Done', exact: true })).toHaveCount(0);
       await expect(form.getByRole('button', { name: 'Not now', exact: true })).toBeVisible();
       await expect(form.getByRole('button', { name: 'Ask', exact: true })).toBeVisible();
-      await form.getByRole('group', { name: 'Is College fund (3333) a Virginia plan?', exact: true }).getByLabel('Yes', { exact: true }).check();
-      await form.getByRole('group', { name: 'Is the owner of College fund (3333) age 70 or older?', exact: true }).getByLabel('No', { exact: true }).check();
+      await form.getByRole('group', { name: plan }).getByLabel('Yes', { exact: true }).check();
+      await expect(form.getByRole('group', { name: /age 70 or older/ })).toHaveCount(0);
       await form.getByRole('spinbutton').fill('0');
       await expect(form.getByRole('spinbutton')).toHaveAttribute('step', '0.01');
       await expect(form).toContainText('USD');
