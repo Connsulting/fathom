@@ -1,6 +1,7 @@
 import { listMemories } from '../actions/preferences.mjs';
 import { expectedChildWindow } from '../shared/child-window.mjs';
 import { receiptMessages } from '../actions/receipts.mjs';
+import { withDescriptions } from '../actions/describe.mjs';
 // Store to scenario: assembles the CONTRACT.md scenario object from the store, with live state
 // merged in, plus the `live` key (see docs/architecture.md). Pure reads; never writes.
 //
@@ -291,7 +292,7 @@ export function loadConversations(db) {
   for (const m of db.prepare('SELECT * FROM messages ORDER BY id').all()) {
     (out[m.conversation_key] || (out[m.conversation_key] = [])).push(messageOut(m));
   }
-  for (const [key, messages] of Object.entries(out)) receiptMessages(db, key, messages);
+  for (const [key, messages] of Object.entries(out)) withDescriptions(db, receiptMessages(db, key, messages));
   return out;
 }
 

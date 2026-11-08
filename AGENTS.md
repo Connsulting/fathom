@@ -66,9 +66,6 @@ and the `raw/thoughts/2026-08-30-*` notes on the operating model, the year-round
 fractional-professional beachhead. Read them; never edit them from this repository and never copy
 private values from them.
 
-Earlier prototype, spike and MVP work is preserved in local `archive/*` tags (not pushed). Reuse
-code from there deliberately; do not restore the branches.
-
 ## Writing
 
 No emojis. No em dashes. Terse, decision-oriented prose. Separate pinned decisions,

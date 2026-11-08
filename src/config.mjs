@@ -125,6 +125,10 @@ export function loadConfig(env = process.env) {
   const simplefinHosts = parseAllowedHosts(env.FATHOM_SIMPLEFIN_ALLOWED_HOSTS);
   if (!simplefinHosts) throw new ConfigError('FATHOM_SIMPLEFIN_ALLOWED_HOSTS must be comma separated host names with no scheme, port or path');
 
+  const backupRetentionDays = blank(env.FATHOM_BACKUP_RETENTION_DAYS) ? 7 : Number(env.FATHOM_BACKUP_RETENTION_DAYS);
+  if (!Number.isInteger(backupRetentionDays) || backupRetentionDays < 1 || backupRetentionDays > 3650) {
+    throw new ConfigError('FATHOM_BACKUP_RETENTION_DAYS must be an integer from 1 to 3650');
+  }
   return {
     ...publicMode,
     dataDir: publicMode.publicDemo ? publicMode.demoDataDir : resolve(blank(env.FATHOM_DATA) ? 'data' : env.FATHOM_DATA),
@@ -141,6 +145,8 @@ export function loadConfig(env = process.env) {
     platformKeyFile: opt(env.FATHOM_PLATFORM_KEY_FILE),
     mcpSecretFile: opt(env.FATHOM_MCP_SECRET_FILE),
     backupKeyFile: opt(env.FATHOM_BACKUP_KEY_FILE),
+    backupDestination: opt(env.FATHOM_BACKUP_DESTINATION),
+    backupRetentionDays,
     typesafeKeyFile: opt(env.FATHOM_TYPESAFE_KEY_FILE),
     emailTransport,
     emailFrom,

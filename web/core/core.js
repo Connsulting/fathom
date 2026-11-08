@@ -979,6 +979,19 @@ function setCap(usd) {
   return send('/api/engine/cap', { usd: Math.round(n * 100) / 100 }, d => d);
 }
 
+// POST /api/jobs/plan/run (an owner or administrator session, as the route requires). Resolves
+// { res, error }: the run response, or the server's plain message. It never shows the error line;
+// the Engine screen words the outcome beside the button.
+function runPlan() {
+  const run = () => postJson('/api/jobs/plan/run', {}).then(
+    data => { applyScenario(data.scenario); hideError(); notify(); return { res: data, error: '' }; },
+    err => ({ res: null, error: (err && err.message) || 'The server could not complete that.' })
+  );
+  const p = queue.then(run);
+  queue = p;
+  return p;
+}
+
 function buildYourPlans(fileIds) {
   const ids = arr(fileIds).filter(x => x != null && x !== '').map(String);
   return send('/api/your-plans/build', { fileIds: ids }, d => (d.result && typeof d.result === 'object' ? d.result : null));
@@ -1403,6 +1416,7 @@ const api = {
   engineOn: () => !!live().engine,
   setEngine,
   setCap,
+  runPlan,
   demo: demoId,
   packs,
   pack,

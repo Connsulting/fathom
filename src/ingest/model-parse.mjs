@@ -4,6 +4,7 @@ import { PROPOSAL_SCHEMA, FIELD_SCHEMA, validateProposal } from './model-contrac
 import { estimateCompletion } from '../models/port.mjs';
 import { BudgetExceededError, EngineOffError } from '../engine/index.mjs';
 import { SCHEMAS, FACT_TYPES } from './extract.mjs';
+import { scrubDescription } from '../categories/jev.mjs';
 import { householdNames } from '../categories/guess.mjs';
 import { LAYOUT_SCHEMA, validLayout } from './model-layout.mjs';
 
@@ -78,7 +79,7 @@ export async function interpretFile(request = {}) {
   try { return await interpretBound(request); } finally { active.delete(id); }
 }
 
-async function interpretBound({ ctx, file, fake, retry = false, limits: overrides }) {
+async function interpretBound({ ctx, file, fake, correction = null, retry = false, limits: overrides }) {
   const household = ctx?.household;
   if (!household?.db || !household.engine || typeof household.isCurrent !== 'function') throw new TypeError('Captured household context required');
   const { db, engine, generation } = household, limits = loweredLimits(overrides);
@@ -95,7 +96,7 @@ async function interpretBound({ ctx, file, fake, retry = false, limits: override
   if (used.pending && !retry || used.calls >= limits.calls || retry && used.retries >= limits.retries) return code('budget_exhausted', 'file_limit');
   const remainingOutput = Math.min(limits.outputPerCall, limits.outputTokens - used.outputTokens);
   if (remainingOutput <= 0) return code('budget_exhausted', 'output_limit');
-  const messages = [{ role: 'user', content: JSON.stringify(source.envelope) }];
+  const messages = [{ role: 'user', content: JSON.stringify({ ...source.envelope, ...(correction ? { correction: scrubDescription(correction, { accounts: db.prepare('SELECT * FROM accounts').all(), householdNames: householdNames(db) }) } : {}) }) }];
   const estimate = estimateCompletion({ purpose: 'extract', maxTokens: remainingOutput, system: SYSTEM, messages, tools: [], schema: INTERPRETATION_SCHEMA }, engine.modelConfig);
   const status = engine.status();
   const allowance = Math.min(limits.costUsd - used.costUsd, status.capUsd - status.spentUsd);

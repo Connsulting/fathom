@@ -30,6 +30,12 @@ export { DEFAULT_HOSTS, parseAllowedHosts };
 const MAX_BODY = 20 * 1024 * 1024;
 const MAX_TOKEN = 4096;
 const TIMEOUT_MS = 30000;
+// The authenticated accounts request makes the bridge refresh the banks first, which takes about 30
+// seconds (the unauthenticated claim answers in under one). It waits up to two minutes and is tried
+// once more after a short delay on a timeout or network error; the claim call keeps TIMEOUT_MS and
+// is never repeated, because it spends a one-time token.
+export const ACCOUNTS_TIMEOUT_MS = 120000;
+export const RETRY_DELAY_MS = 3000;
 const FIRST_DAYS = 90;
 const OVERLAP_DAYS = 14;
 const DAY = 86400000;
@@ -40,7 +46,7 @@ const MESSAGES = {
   token_used: 'That setup token was already used or does not exist. Setup tokens work once: create a new one on the SimpleFIN Bridge site.',
   claim_failed: 'SimpleFIN did not accept the setup token. Try again or create a new token.',
   bad_access: 'SimpleFIN sent back an access address Fathom cannot use.',
-  network: 'SimpleFIN could not be reached.',
+  network: 'The SimpleFIN bridge did not answer in time. Try again in a moment.',
   revoked: 'SimpleFIN refused access. Reconnect with a new setup token.',
   payment_required: 'SimpleFIN says the subscription needs payment. Renew it, then reconnect.',
   auth: 'SimpleFIN reports a sign-in problem with a connected institution. Fix it on the SimpleFIN Bridge site or reconnect.',
@@ -102,12 +108,12 @@ export function decodeSetupToken(token) {
   return text;
 }
 
-async function call(fetchImpl, url, { method = 'GET', auth = null } = {}) {
+async function call(fetchImpl, url, { method = 'GET', auth = null, timeoutMs = TIMEOUT_MS } = {}) {
   const headers = { accept: 'application/json, text/plain' };
   if (auth) headers.authorization = 'Basic ' + Buffer.from(`${auth.user}:${auth.pass}`, 'utf8').toString('base64');
   let res;
   try {
-    res = await fetchImpl(url, { method, headers, redirect: 'error', signal: AbortSignal.timeout(TIMEOUT_MS), ...(method === 'POST' ? { body: '' } : {}) });
+    res = await fetchImpl(url, { method, headers, redirect: 'error', signal: AbortSignal.timeout(timeoutMs), ...(method === 'POST' ? { body: '' } : {}) });
   } catch {
     throw new SimplefinError('network');
   }
@@ -129,13 +135,22 @@ export async function claimToken(token, { hosts, fetch: fetchImpl }) {
 }
 
 // GET <access>/accounts. Credentials go in the Authorization header, never in the request URL.
-export async function fetchAccounts(access, { hosts, fetch: fetchImpl, startDate }) {
+// `timeoutMs` and `retryDelayMs` default to the constants above; tests shrink them.
+export async function fetchAccounts(access, { hosts, fetch: fetchImpl, startDate, timeoutMs = ACCOUNTS_TIMEOUT_MS, retryDelayMs = RETRY_DELAY_MS }) {
   const u = guardUrl(access, hosts, { credentials: 'require' });
   const auth = { user: decodeURIComponent(u.username), pass: decodeURIComponent(u.password) };
   const base = `${u.origin}${u.pathname.replace(/\/+$/, '')}`;
   const params = new URLSearchParams({ version: '2' });
   if (startDate) params.set('start-date', String(Math.floor(Date.parse(`${startDate}T00:00:00Z`) / 1000)));
-  const res = await call(fetchImpl, `${base}/accounts?${params}`, { auth });
+  const url = `${base}/accounts?${params}`;
+  let res;
+  try {
+    res = await call(fetchImpl, url, { auth, timeoutMs });
+  } catch (e) {
+    if (!(e instanceof SimplefinError) || e.code !== 'network') throw e;
+    if (retryDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    res = await call(fetchImpl, url, { auth, timeoutMs });
+  }
   if (res.status === 403) throw new SimplefinError('revoked');
   if (res.status === 402) throw new SimplefinError('payment_required');
   if (!res.ok) throw new SimplefinError('bad_response');
@@ -356,7 +371,7 @@ function setStatus(db, status, code, messages) {
 
 // One sync. Returns {status: 'skipped' | 'ok' | 'reconnect' | 'error', code?, changed, counts}.
 // Counts only; nothing here logs account data or the access URL.
-export async function syncSimplefin(db, { household, config = {}, hosts, fetch: fetchImpl, now, clock, engine = null } = {}) {
+export async function syncSimplefin(db, { household, config = {}, hosts, fetch: fetchImpl, now, clock, engine = null, timeoutMs, retryDelayMs } = {}) {
   householdOf(db, household);
   const row = connection(db);
   const counts = { accounts: 0, transactions: 0, balances: 0, duplicates: 0, matched: 0, pending: 0, queued: 0, skipped: 0 };
@@ -371,7 +386,7 @@ export async function syncSimplefin(db, { household, config = {}, hosts, fetch: 
   try {
     if (!household.outbound.enabled('simplefin') || !household.isCurrent()) return { status: 'skipped', code: 'paused', changed: false, counts };
     const access = openAccess(vault, row.access_blob);
-    set = normalizeAccountSet(await fetchAccounts(access, { hosts, fetch: fetchImpl, startDate: start }));
+    set = normalizeAccountSet(await fetchAccounts(access, { hosts, fetch: fetchImpl, startDate: start, timeoutMs, retryDelayMs }));
   } catch (e) {
     const code = e instanceof SimplefinError ? e.code : 'bad_access';
     setStatus(db, RECONNECT.has(code) ? 'reconnect' : 'error', code, null);

@@ -1,6 +1,6 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { scratch, addPayroll, addFact, w2Doc, paystubDoc, figureRow, factRow, householdOf } from '../helpers/real-store.mjs';
+import { scratch, addPayroll, addFact, w2Doc, paystubDoc, figureRow, factRow, householdOf, answerPending } from '../helpers/real-store.mjs';
 import { planRun, claimPlanRun } from '../helpers/plan.mjs';
 import { runPlanning } from '../../src/jobs/planner.mjs';
 import { loadPlanningData, resolveEntities } from '../../src/jobs/planner/data.mjs';
@@ -8,6 +8,11 @@ import { payrollRecords } from '../../src/jobs/planner/payroll.mjs';
 import { getFacts } from '../../src/store/facts.mjs';
 import { answerFacts } from '../../src/facts/answers.mjs';
 import { buildScenario } from '../../src/scenario/build.mjs';
+import { seedHistoricalDocument } from '../helpers/historical-import.mjs';
+import { writeXlsx } from '../helpers/xlsx.mjs';
+import { createHash } from 'node:crypto';
+import { indexSource } from '../../src/ingest/model-source.mjs';
+import { createRuntimeEngine } from '../../src/engine/runtime.mjs';
 import { createEngine } from '../../src/engine/index.mjs';
 import { createLiveAnswerer } from '../../src/api/answerer.mjs';
 import { threadCreate } from '../../src/api/handlers.mjs';
@@ -21,9 +26,37 @@ const poor = { employerName: 'Cedar Labs', payDate: '2026-10-31', net: 1600, sta
 async function store({ missing = true, household = true, ...variant } = {}) {
   const db = await s.store({ variant: { files: false, entities: [], facts: { 'business.entities': [], 'income.sCorp': true, 'household.dependents': 0, 'household.birthYears': { owner: 1981, spouse: 1983 } }, ...variant } });
   if (household) await addPayroll(db, w2Doc({ employerName: 'Juniper Studio', person: 'owner', relation: 'household', wages: 72000, medicareWages: 72000, box12: [] }));
-  if (missing) await addPayroll(db, paystubDoc({ ...poor, person: 'spouse', relation: 'outside' }));
+  if (missing) await legacyStub(db);
   await addPayroll(db, paystubDoc({ employerName: 'Maple Works', person: 'spouse', relation: 'outside', payDate: '2026-10-31', gross: 4000, ytdGross: 40000 }));
   return db;
+}
+async function legacyStub(db, person = 'spouse') {
+  const readable = { payDate: poor.payDate, employerName: poor.employerName, net: poor.net, state: poor.state, federalWithholding: 0, gross: 3000, ytdGross: 30000 };
+  const file = { name: 'synthetic-paystub.xlsx', bytes: writeXlsx([{ name: 'Paystub', rows: [Object.keys(readable), Object.values(readable)] }]) };
+  const result = await seedHistoricalDocument({ db, household: householdOf(db) }, file, [[{ docType: 'paystub' }], [{ ...poor, federalWithholding: 0 }]]);
+  const key = nameKey(poor.employerName);
+  answerPending(db, 'employer_relation', 'outside', i => i.subject === key);
+  answerPending(db, 'employer_recipient', person, i => i.subject === key);
+  if (person === 'both') answerPending(db, 'document_recipient', 'owner', i => i.fileId === result.fileId);
+  return { fileId: result.fileId, file, readable };
+}
+async function retryEngine(db, { valid = true } = {}) {
+  const file = { name: 'synthetic-paystub.xlsx', bytes: writeXlsx([{ name: 'Paystub', rows: [
+    ['payDate', 'employerName', 'net', 'state', 'federalWithholding', 'gross', 'ytdGross'],
+    [poor.payDate, poor.employerName, poor.net, poor.state, 0, 3000, 30000],
+  ] }]) };
+  const fileId = 'f-' + createHash('sha256').update(file.bytes).digest('hex').slice(0, 24);
+  const source = await indexSource({ ...file, fileId, format: 'xlsx' });
+  const values = { payDate: poor.payDate, employerName: poor.employerName, net: poor.net, state: poor.state, federalWithholding: 0, gross: 3000, ytdGross: 30000 };
+  const fields = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, { refs: [Object.keys(source.values).find(id => source.values[id] === value)], transform: { op: 'identity' } }]));
+  const output = { rows: [{ target: 'document', docType: 'paystub', fields }], coverage: source.regions.map(regionId => ({ regionId, refs: source.inventory[regionId].refs, disposition: 'imported_detail' })), completeness: 'complete' };
+  const transport = createRuntimeEngine({ db, config: { engine: 'fake' } });
+  let calls = 0;
+  const engine = { ...transport, async call(request) {
+    if (request.purpose === 'extract') calls++;
+    return transport.call({ ...request, fake: [{ text: request.purpose === 'extract' && valid ? JSON.stringify(output) : '{}', costUsd: 0 }] });
+  } };
+  return { engine, household: { ...householdOf(db), engine }, calls: () => calls };
 }
 const payroll = db => { const data = loadPlanningData(db, now); const facts = getFacts(db); return payrollRecords(data, resolveEntities(data, facts), facts); };
 const projection = db => {
@@ -145,25 +178,23 @@ test('AC6 amended: no usable income gives a rough estimate, zero wages remain us
 
 test('low-confidence incomplete extraction retries the stored file once before fallbacks', async () => {
   const db = await store();
-  let calls = 0;
-  const engine = { isOn: () => true, async extract() { calls++; return [{ ...poor, gross: 3000, ytdGross: 30000, confidence: 0.95 }]; } };
-  const plan = () => runPlanning(db, engine, { now, runId: claimPlanRun(db), household: householdOf(db) });
+  const retry = await retryEngine(db);
+  const plan = () => runPlanning(db, retry.engine, { now, runId: claimPlanRun(db), household: retry.household });
   await plan();
-  assert.equal(calls, 1);
+  assert.equal(retry.calls(), 1);
   assert.ok(!projection(db).locator.partial);
   assert.equal(payroll(db).records.find(r => r.employer === 'Cedar Labs').wages, 36000);
   await plan();
-  assert.equal(calls, 1);
+  assert.equal(retry.calls(), 1);
 });
 
 test('an unsuccessful extraction is attempted only once and retains other usable income', async () => {
   const db = await store();
-  let calls = 0;
-  const engine = { isOn: () => true, async extract() { calls++; return [poor]; } };
-  const plan = () => runPlanning(db, engine, { now, runId: claimPlanRun(db), household: householdOf(db) });
+  const retry = await retryEngine(db, { valid: false });
+  const plan = () => runPlanning(db, retry.engine, { now, runId: claimPlanRun(db), household: retry.household });
   await plan();
   await plan();
-  assert.equal(calls, 1);
+  assert.equal(retry.calls(), 1);
   assert.equal(projection(db).locator.partial, true);
 });
 
@@ -246,9 +277,9 @@ test('every missing-data task code targets an existing upload kind or an accepte
 
 test('retrying missing gross keeps a document recipient when both people share the employer', async () => {
   const db = await store({ missing: false });
-  await addPayroll(db, { ...paystubDoc({ ...poor, person: 'both', relation: 'outside' }), document: 'owner' });
-  const engine = { isOn: () => true, async extract() { return [{ ...poor, gross: 3000, ytdGross: 30000, confidence: 0.95 }]; } };
-  await runPlanning(db, engine, { now, runId: claimPlanRun(db), household: householdOf(db) });
+  await legacyStub(db, 'both');
+  const retry = await retryEngine(db);
+  await runPlanning(db, retry.engine, { now, runId: claimPlanRun(db), household: retry.household });
   const r = payroll(db).records.find(r => r.employer === 'Cedar Labs');
   assert.equal(r.person, 'owner');
   assert.equal(r.wages, 36000);

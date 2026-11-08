@@ -85,7 +85,10 @@ export function createMcpHandler({ keys, runtimes, config }) {
       packDirs: packDirsFor(household.root),
       channel: 'mcp', actorId: record.userId || `key:${record.id}`, scopes: record.scopes,
       replan: scheduler ? () => scheduler.runNow('plan') : null, queuePlan: () => scheduler?.soon?.('plan', 'ingest') };
-    const server = createToolServer({ scopes: record.scopes, ctx, authorize: () => principal.check() });
+    const server = createToolServer({ scopes: record.scopes, ctx, authorize: () => principal.check(), runTool: async fn => {
+      runtimes.acquire(household);
+      try { return await fn(); } finally { runtimes.release(household); }
+    } });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {
       transport.close().catch(() => {});
@@ -100,6 +103,8 @@ export function createMcpHandler({ keys, runtimes, config }) {
       console.error(`mcp: request failed (${err && err.name ? err.name : 'Error'})`);
       if (!res.headersSent) sendJson(res, 500, { error: 'internal error' });
       else res.end();
+    } finally {
+      release();
     }
   };
 }

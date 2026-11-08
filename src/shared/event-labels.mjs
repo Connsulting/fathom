@@ -53,3 +53,10 @@ export function factEventTitle(key, { removed = false, kind } = {}) {
   if (!entry) return kindFallbackTitle(kind);
   return removed ? entry.removed : entry.detected;
 }
+
+// The plain name of a frozen fact ('Filing status', 'S corp income'), or null for any other key.
+export function factName(key) {
+  if (Object.hasOwn(BOOL, key)) return BOOL[key][0];
+  if (Object.hasOwn(VALUE, key)) return VALUE[key].replace(/ updated$/, '');
+  return null;
+}

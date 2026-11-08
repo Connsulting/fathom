@@ -7,7 +7,7 @@ import { toolsForScopes, SCOPES } from '../src/mcp/keys.mjs';
 import { createRegistryServer } from '../src/engine/tools.mjs';
 
 // The catalog is cached system context.
-const CATALOG_CHAR_BUDGET = 34000;
+const CATALOG_CHAR_BUDGET = 34500;
 
 const expected = {
   show: ['chart', 'table', 'compare', 'timeline'],
@@ -165,7 +165,7 @@ test('show schema accepts only paths and references, with numeric values confine
 });
 
 
-test('compact descriptions retain literal wording, required argument boundaries and shared MCP output', () => {
+test('readable descriptions retain literal wording, argument boundaries and shared MCP output', () => {
   const header = [{ name: 'sample', kind: 'read', purpose: 'Exact purpose.' }];
   const shared = { tool: 'sample', scope: 'read', route: 'Sample', routes: [], handler: () => null };
   const operations = [
@@ -175,9 +175,9 @@ test('compact descriptions retain literal wording, required argument boundaries 
   ];
   const description = buildRegistry([{ operations }], header).tools[0].description;
   assert.ok(description.startsWith(header[0].purpose));
-  assert.ok(description.includes('list(first?second?)'));
-  assert.ok(description.includes('detail(id,kind,limit?)'));
-  assert.ok(description.includes('count()'));
+  assert.ok(description.includes('\nlist(first?,second?): Exact list summary.'));
+  assert.ok(description.includes('\ndetail(id,kind,limit?): Exact detail summary.'));
+  assert.ok(description.includes('\ncount(): Exact count summary.'));
   for (const operation of operations) assert.ok(description.includes(operation.summary));
   for (const listed of toolsForScopes(SCOPES)) {
     assert.equal(listed.description, getTool(listed.name).description);

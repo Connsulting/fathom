@@ -1,3 +1,4 @@
+import { importProposedRows } from '../helpers/import-proposal-fixture.mjs';
 // AC3 (plan feat-confirm-context, Revisions 2 and 3, Interfaces): Fathom answers a question itself
 // only when stored rows settle it. Each rule (cross_format_duplicate, holder_match, shared_mask)
 // records its answer through the normal answer path with an undo log and evidence; answers made by
@@ -8,7 +9,7 @@
 import test, { describe, before } from 'node:test';
 import assert from 'node:assert/strict';
 import { src } from '../helpers/server.mjs';
-import { fixture, textFile, aggregatorFile, activityFile, positionsFile, realStore, fakeEngine, offEngine, all, one, count, NOW } from '../helpers/ingest.mjs';
+import { fixture, textFile, aggregatorFile, activityFile, positionsFile, realStore, offEngine, all, one, count, NOW } from '../helpers/ingest.mjs';
 
 let P;
 let C;
@@ -188,15 +189,14 @@ describe('cross_format_duplicate', () => {
     }));
   }
 
-  // A mapped export with a reference column against a bank check: same account, date and amount,
-  // different parsers, but two different non-empty external ids.
-  const LEDGER_MAPPING = { target: 'transaction', date: 'posted on', amount: 'value usd', description: 'memo text', externalId: 'ref no', institution: 'bank label', amountSign: 'as_is', dateOrder: 'ymd' };
-  const ledgerFile = () => textFile('synthetic-ledger-0042-a.csv', 'posted on,memo text,value usd,ref no,bank label\n2032-03-01,Synthetic transfer,-125.00,2001,Chase\n', 'text/csv');
+  // A reviewed ledger and bank check disagree on their external ids.
   const checkFile = () => activityFile('Chase0042_Activity_ext.csv', [{ date: '03/01/2032', amount: '-125.00', balance: '', description: 'CHECK 1042', check: '1042' }]);
 
   test('conflicting non-empty external ids never auto resolve', () => withStore(async (s) => {
-    await P.ingestFiles(s.db, [ledgerFile()], s.opts(await fakeEngine([[LEDGER_MAPPING]])));
     await P.ingestFiles(s.db, [checkFile()], s.opts(await offEngine()));
+    const accountId = one(s.db, 'SELECT id FROM accounts').id;
+    const reviewed = await importProposedRows(s,[{ target:'transaction',fields:{accountId,postedDate:'2032-03-01',amount:-125,description:'Synthetic transfer',externalId:'2001'} }]);
+    assert.equal(reviewed.status,'imported');
     A.autoResolve(s.db, { now: NOW });
     assert.equal(count(s.db, 'accounts'), 1, 'precondition: one account for both formats');
     const ext = all(s.db, 'SELECT external_id FROM transactions ORDER BY external_id').map((r) => r.external_id);

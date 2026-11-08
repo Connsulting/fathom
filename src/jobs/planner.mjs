@@ -31,6 +31,7 @@ import { wargameFigurePrefixes } from './planner/wargame.mjs';
 import { prepareRecFacts } from '../facts/derive.mjs';
 import { sendToAdvisor } from '../advisor/index.mjs';
 import { liftStaleVetoes } from '../advisor/index.mjs';
+import { autoDecideCategories } from '../categories/guess.mjs';
 
 export const PLAN_JOB_ID = 'plan';
 
@@ -71,6 +72,7 @@ async function run(db, engine, { now, packDirs, runId, household }) {
 }
 
 async function plan(db, engine, { clock, runId, packDirs }) {
+  autoDecideCategories(db,{now:clock});
   const packs = loadPacks(packDirs);
   const data = loadPlanningData(db, clock);
   const recFacts = prepareRecFacts(db, data);

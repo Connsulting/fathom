@@ -61,7 +61,7 @@ function actionContext(ctx, source, action, capturedAt, correction) {
   return { ...ctx, ownerText: null, conversationKey: null, onReceipt: null,
     sourceEvidence: { source, span: action.span, actorId: ctx.actorId, capturedAt, correction } };
 }
-function execute(ctx, source, actions, capturedAt, correction) {
+export function applySourceActions(ctx, source, actions, capturedAt, correction) {
   const children = [], presentation = [];
   for (const action of actions) {
     const result = apply(action, actionContext(ctx, source, action, capturedAt, correction));
@@ -73,17 +73,7 @@ function execute(ctx, source, actions, capturedAt, correction) {
   return { children, presentation };
 }
 
-export function stageUpdate(ctx, { source, actions, capturedAt = null, proposalId = randomUUID(), version = 1 }) {
-  context(ctx);
-  if (source.format !== 'text' || !Array.isArray(actions) || actions.length > 100) fail('bad_input', 'Use a bounded text source and actions.');
-  const file = ctx.db.prepare('SELECT * FROM files WHERE id=?').get(source.fileId);
-  if (!file || file.removed_at || file.sha256 !== source.sha256) fail('bad_input', 'Invalid source file.');
-  const prior = latest(ctx.db, proposalId);
-  if (prior && (prior.actor_id !== ctx.actorId || prior.status !== 'waiting_for_engine' || prior.reason_code !== 'owner_correction' || prior.version !== version || prior.file_id !== source.fileId)) fail('proposal_stale', 'The proposal changed.');
-  const correction = prior ? parseJson(prior.review_state)?.correction : null;
-  if (prior && capturedAt !== parseJson(prior.proposal).capturedAt) {
-    requireEvidence({ ...ctx, ownerText: correction.evidence, conversationKey: null }, capturedAt, { argument: 'source date anchor' });
-  }
+export function prepareSourceActions(ctx, source, actions) {
   const accepted = [], notes = [], targets = new Set();
   for (const input of actions) {
     if (!input || Object.keys(input).some(k => !['tool', 'operation', 'args', 'span'].includes(k))) fail('bad_input', 'Invalid note action.');
@@ -102,9 +92,24 @@ export function stageUpdate(ctx, { source, actions, capturedAt = null, proposalI
     if (!text.trim()) fail('bad_input', 'Empty source span.');
     accepted.push({ ...structuredClone(input), scopes: operationScopes(op) });
   }
+  return { accepted, notes };
+}
+
+export function stageUpdate(ctx, { source, actions, capturedAt = null, proposalId = randomUUID(), version = 1 }) {
+  context(ctx);
+  if (source.format !== 'text' || !Array.isArray(actions) || actions.length > 100) fail('bad_input', 'Use a bounded text source and actions.');
+  const file = ctx.db.prepare('SELECT * FROM files WHERE id=?').get(source.fileId);
+  if (!file || file.removed_at || file.sha256 !== source.sha256) fail('bad_input', 'Invalid source file.');
+  const prior = latest(ctx.db, proposalId);
+  if (prior && (prior.actor_id !== ctx.actorId || prior.status !== 'waiting_for_engine' || prior.reason_code !== 'owner_correction' || prior.version !== version || prior.file_id !== source.fileId)) fail('proposal_stale', 'The proposal changed.');
+  const correction = prior ? parseJson(prior.review_state)?.correction : null;
+  if (prior && capturedAt !== parseJson(prior.proposal).capturedAt) {
+    requireEvidence({ ...ctx, ownerText: correction.evidence, conversationKey: null }, capturedAt, { argument: 'source date anchor' });
+  }
+  const { accepted, notes } = prepareSourceActions(ctx, source, actions);
   let presentation = [], status = 'needs_confirmation', reasonCode = null;
   ctx.db.exec('SAVEPOINT preview_update');
-  try { presentation = execute({ ...ctx, scopes: undefined }, source, accepted, capturedAt, correction).presentation; }
+  try { presentation = applySourceActions({ ...ctx, scopes: undefined }, source, accepted, capturedAt, correction).presentation; }
   catch (error) {
     if (error.code !== 'needs_date_anchor') throw error;
     status = 'needs_clarification'; reasonCode = error.code;
@@ -153,9 +158,10 @@ export async function reviewUpdate(ctx, args, row) {
     const savedFile = ctx.db.prepare('SELECT sha256,removed_at FROM files WHERE id=?').get(file.id);
     if (current?.version !== row.version || current.status !== row.status || savedFile?.removed_at || savedFile?.sha256 !== source.sha256 || source.sha256 !== row.source_sha256 ||
       JSON.stringify(review.basis) !== JSON.stringify(basis(ctx.db, source.fileId, proposal.actions))) fail('proposal_stale', 'The proposal changed.');
-    const { children } = execute(ctx, source, proposal.actions, proposal.capturedAt, review.correction);
+    const { children } = applySourceActions(ctx, source, proposal.actions, proposal.capturedAt, review.correction);
     const receipt = groupReceipts(ctx, children, { id: row.id });
     const now = stamp(ctx);
+    ctx.db.prepare("UPDATE files SET status='imported',counts=? WHERE id=?").run(JSON.stringify({ actions: children.filter(Boolean).length, notes: proposal.notes.length }), file.id);
     ctx.db.prepare("UPDATE import_proposals SET status='imported',approval_evidence=?,approved_at=?,updated_at=? WHERE id=? AND version=?")
       .run(args.evidence, now, now, row.id, row.version);
     ctx.db.prepare(`INSERT INTO import_batches (id,proposal_id,proposal_version,file_id,status,before_state,after_state,receipt_id,created_at)

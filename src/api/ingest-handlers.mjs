@@ -53,7 +53,7 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const safeCode = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && IDENT.test(v)) || 'unknown';
 
 export { triggerPlan, triggerGuesses, triggerFreshness } from '../ingest/pipeline.mjs';
-export const ingestOpts = ctx => ({ household: ctx.household, engine: ctx.engine, config: ctx.config, now: nowIso() });
+export const ingestOpts = ctx => ({ ...ctx, household: ctx.household, actorId: ctx.identity?.id ?? ctx.actorId ?? (storeMode(ctx.db) === 'demo' ? 'demo' : null), now: nowIso() });
 
 export async function uploadFiles(ctx) {
   await householdVault(ctx);
@@ -80,10 +80,11 @@ export async function retryFile(ctx) {
   await householdVault(ctx);
   let file;
   try {
-    file = await retryIngest(ctx.db, id, ingestOpts(ctx));
+    file = await retryIngest(ctx.db, id, { ...ingestOpts(ctx), mode: ctx.body?.mode ?? 'retry' });
   } catch (err) {
+    if (err && err.status === 400) throw new HttpError(400, err.message);
     if (err && err.status === 404) throw new HttpError(404, `no file ${id}`);
-    if (err && err.status === 409) throw new HttpError(409, 'that file is not waiting for a mapping or extraction');
+    if (err && err.status === 409) throw new HttpError(409, 'that file is not eligible for the requested import mode');
     if (err instanceof VaultError) throw new HttpError(409, err.message);
     throw err;
   }

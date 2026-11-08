@@ -49,6 +49,7 @@ import * as pl from './pnl-handlers.mjs';
 import * as oh from './onboarding-handlers.mjs';
 import * as ah from './advisor-handlers.mjs';
 import * as obh from './outbound-handlers.mjs';
+import * as bh from './backup-handlers.mjs';
 import { identityOf, revalidateRequest, sendUnauthorized } from './identity.mjs';
 import * as authHandlers from '../auth/handlers.mjs';
 import { demoRouteBehavior, DEMO_OFF_MESSAGE } from '../public-demo/control.mjs';
@@ -164,6 +165,8 @@ const TABLE = [
   { method: 'GET', path: '/api/yearend/packet', handler: yh.downloadPacket, raw: true, quiet: true },
   { method: 'GET', path: '/api/household/outbound', handler: obh.getOutbound, quiet: true },
   { method: 'POST', path: '/api/household/outbound', handler: obh.setOutboundFlags, quiet: true, admin: true },
+  { method: 'POST', path: '/api/household/backups', handler: bh.requestBackup, quiet: true, session: true, backupControl: true },
+  { method: 'GET', path: '/api/household/backups/:id/status', handler: bh.backupStatus, quiet: true, session: true, backupControl: true },
 ];
 
 export const routes = TABLE.map(({ method, path }) => ({ method, path }));
@@ -230,7 +233,7 @@ const financial = r => !r.public && !r.auth && !r.session && !r.operator;
 
 // `platform` is the platform DB (accounts, memberships, sessions, keys); `runtimes` the household
 // runtime registry (src/platform/runtime.mjs); `auth` the auth service; `keys` the MCP key service.
-export function createHandler({ platform, config, runtimes, auth, keys, mcp = null, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
+export function createHandler({ platform, config, runtimes, auth, keys, backups = null, mcp = null, webDir = WEB_DIR, sharedDir = SHARED_DIR }) {
   if (!platform || !runtimes || !auth || (!keys && !config.publicDemo)) throw new TypeError('createHandler needs the platform, runtimes, auth and keys');
   const gated = !auth.demo;
   const serveStatic = createStatic({ webDir, sharedDir });
@@ -239,6 +242,10 @@ export function createHandler({ platform, config, runtimes, auth, keys, mcp = nu
   const demoOff = () => new HttpError(403, DEMO_OFF_MESSAGE);
   // Route access beyond a session (see the header).
   const checkAccess = (r, identity) => {
+    if (r.backupControl) {
+      const member = identity?.memberships?.find(m => m.householdId === identity.householdId);
+      if (member?.role !== 'admin') throw adminRequired();
+    }
     if (r.admin && !auth.servedAdmin(identity)) throw adminRequired();
     if (financial(r) && !auth.servedMember(identity)) throw membershipRequired();
   };
@@ -258,6 +265,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, mcp = nu
     let route = null;
     let authPath = false;
     let held = null;
+    let cancelStream = null;
     try {
       auth.sweep();
       if (rawPath === '/mcp') {
@@ -289,7 +297,8 @@ export function createHandler({ platform, config, runtimes, auth, keys, mcp = nu
         if (financial(r)) {
           household = resolveHousehold(identity);
           if (!household) throw membershipRequired();
-          held = runtimes.acquire(household);
+          cancelStream = r.stream ? () => res.destroy() : null;
+          held = runtimes.acquire(household, cancelStream);
         }
         let body = {};
         let uploads = null;
@@ -317,7 +326,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, mcp = nu
         try {
           out = await run(() => r.handler({
             household, db: household?.db, engine: household?.engine, packs: household?.packs, answerer: household?.answerer,
-            scheduler: household?.scheduler, transport: household?.transport, platform, config, identity, auth,
+            scheduler: household?.scheduler, transport: household?.transport, platform, config, identity, auth, backups,
             get keys() { if (config.publicDemo) throw demoOff(); return keys; },
             params, query: queryOf(url, q), body, uploads, req, res, ...(events ? { onEvent: events.send } : {}),
           }));
@@ -369,7 +378,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, mcp = nu
       if (req.readable) req.resume();
       sendError(res, err);
     } finally {
-      if (held) runtimes.release(held);
+      if (held) runtimes.release(held, cancelStream);
     }
   };
 }

@@ -172,6 +172,7 @@ export const partialName = (final, operationId) => `${final}.partial-${operation
 // the host). Returns { file, sha256, logicalDigest (of the store), manifest }.
 export async function createSourceSnapshot({
   db, dataDir, keyFile, key, out, files = DEFAULT_FILES, databases = {}, operationId, onPartial, onPublished, mode = 0o400,
+  householdBackup = null,
 }) {
   const k = key ?? loadBackupKey(keyFile);
   if (typeof operationId !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(operationId)) throw codeError('operation_invalid');
@@ -194,7 +195,8 @@ export async function createSourceSnapshot({
     }
     if (new Set(entries.map(e => e.path)).size !== entries.length) throw codeError('snapshot_source_invalid');
     digest = logicalDigest(source);
-    const packed = pack({ operationId, createdAt: new Date().toISOString(), logicalDigest: digest }, entries);
+    const packed = pack({ operationId, createdAt: new Date().toISOString(), logicalDigest: digest,
+      ...(householdBackup ? { householdBackup } : {}), }, entries);
     manifest = packed.manifest;
     archive = encrypt(k, packed.plain);
   } finally {

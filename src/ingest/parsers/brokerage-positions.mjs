@@ -4,6 +4,7 @@ import { holderOf } from './aggregator.mjs';
 export const id = 'brokerage-positions';
 export const label = 'Brokerage positions';
 export const sourceKind = 'brokerage_positions';
+export const capabilities = Object.freeze({ positions: true });
 const required = ['account number', 'account name', 'symbol', 'description', 'quantity', 'last price', 'current value'];
 export const sniff = (file) => csvScore(file, required);
 
