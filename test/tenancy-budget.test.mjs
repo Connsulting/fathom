@@ -641,6 +641,28 @@ describe('funding months and legacy spend', T, () => {
       assert.equal(carriesOf(two.platform, A).filter(c => c.month === month()).length, 1);
     }));
 
+  // A CLI is the first process to open the upgraded instance: it opens only B, yet A's pre-MT-05
+  // spend must already count against the instance cap when B's context is admitted.
+  test('a CLI opening one household carries every household\'s legacy spend first', T,
+    () => withLive({ instanceCapUsd: 10, allocationUsd: 10 }, async ({ two, A, B }) => {
+      const { budget } = await mods();
+      const { loadConfig } = await src('src/config.mjs');
+      const { openCliHousehold } = await src('src/platform/cli.mjs');
+      upgradedLegacy(two, A, 9);
+      const config = loadConfig(two.server.env);
+      assert.equal(config.engine, 'live', 'precondition: a live instance');
+      const cli = await openCliHousehold(config, ['--household', B, 'synthetic-arg']);
+      try {
+        assert.deepEqual(cli.argv, ['synthetic-arg']);
+        const carries = carriesOf(two.platform, A).filter(c => c.month === month());
+        assert.equal(carries.length, 1, 'opening B recorded A\'s carry');
+        near(carries[0].cost_usd, 9, 'A\'s carry is its legacy spend');
+        near(await budget.committedUsd(two.platform, { month: month() }), 9, 'the instance sees A\'s legacy spend');
+      } finally {
+        await cli.close();
+      }
+    }));
+
   test('ensureCarry records one carry row per household and month, idempotently', T, () => withLive({}, async ({ two, A }) => {
     const { budget } = await mods();
     two.platform.prepare("DELETE FROM model_rounds WHERE household_id = ? AND kind = 'carry'").run(A);
@@ -682,6 +704,34 @@ describe('node scripts/model-budget.mjs counts every household\'s legacy spend',
       const r = await run('--instance-cap-usd', '12');
       assert.equal(r.code, 0, r.stdout + r.stderr);
       assert.equal(r.stdout, 'model-budget: set\n');
+    } finally {
+      await emulator.close();
+      await two?.close();
+    }
+  });
+
+  test('a suspended household\'s legacy spend counts in reductions', T, async () => {
+    const emulator = await startModelEmulator();
+    let two;
+    try {
+      two = await liveTwoHouseholds({ emulator, instanceCapUsd: 100, allocationUsd: 50 });
+      const A = two.A.id;
+      two.platform.prepare("DELETE FROM model_rounds WHERE household_id = ? AND kind = 'carry'").run(A);
+      const ts = new Date().toISOString();
+      two.ctx(A).db.prepare('INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(ts, ts.slice(0, 7), 'chat', 9, 'claude-opus-5-5', '{}');
+      two.platform.prepare("UPDATE households SET status = 'suspended' WHERE id = ?").run(A);
+      const run = (...args) => runCommand(process.execPath, ['scripts/model-budget.mjs', ...args], { env: { FATHOM_DATA: two.dataDir } });
+      const r1 = await run('--instance-cap-usd', '5');
+      assert.equal(r1.code, 1, r1.stdout + r1.stderr);
+      assert.equal(r1.stderr, 'model-budget: below_committed\n');
+      const carries = carriesOf(two.platform, A).filter(c => c.month === month());
+      assert.equal(carries.length, 1, 'the suspended household\'s carry was recorded');
+      near(carries[0].cost_usd, 9, 'carry');
+      // Liveness: a cap above the committed spend is set.
+      const r2 = await run('--instance-cap-usd', '12');
+      assert.equal(r2.code, 0, r2.stdout + r2.stderr);
+      assert.equal(r2.stdout, 'model-budget: set\n');
     } finally {
       await emulator.close();
       await two?.close();
@@ -863,3 +913,83 @@ test('migration 005 seeds existing households from the hand-set instance cap; a 
   }
 });
 
+
+// ---------------------------------------------------------------------------------- PDF bound
+
+// An image-only PDF is billed per page (each page as an image plus its text), so a compact
+// multipage PDF can cost more input tokens than its base64 bytes. createEngine.extract requires the
+// page count of a PDF document and adds pages * PDF_PAGE_INPUT_TOKENS to the round's reservation
+// bound. A recording reservations adapter and the loopback emulator; nothing leaves the process.
+describe('an image-only PDF extract reserves a per-page input bound', T, () => {
+  const SYSTEM = 'Synthetic extract system.';
+  const PDF = Buffer.from('%PDF-synthetic image-only bytes');
+  const INSTRUCTION = { type: 'text', text: 'Return the rows matching the supplied schema.' };
+  const messagesOf = source => [{ role: 'user', content: [{ type: 'document', source }, INSTRUCTION] }];
+
+  async function withExtractEngine(fn) {
+    const { engine: E, pricing } = await mods();
+    const emulator = await startModelEmulator();
+    const log = { reserve: [], settle: [], hold: [] };
+    let n = 0;
+    const reservations = {
+      async reserve(args) { log.reserve.push(args); return { roundId: `r-${++n}`, boundUsd: args.boundUsd }; },
+      async settle(roundId, result) { log.settle.push([roundId, result]); },
+      async hold(roundId, code) { log.hold.push([roundId, code]); },
+    };
+    try {
+      const engine = E.createEngine({ mode: 'live', credential: 'synthetic-credential-not-valid', reservations,
+        testTransport: { baseURL: emulator.baseURL } });
+      return await fn({ engine, emulator, log, pricing });
+    } finally {
+      await emulator.close();
+    }
+  }
+
+  test('PDF_PAGE_INPUT_TOKENS is exported as 5000 and estimateUnknownCost adds extraInputTokens', async () => {
+    const { pricing } = await mods();
+    assert.equal(pricing.PDF_PAGE_INPUT_TOKENS, 5000);
+    const args = { model: pricing.DEFAULT_MODEL, maxTokens: 64, system: SYSTEM, messages: QUESTION, tools: [] };
+    const base = pricing.estimateUnknownCost(args);
+    const more = pricing.estimateUnknownCost({ ...args, extraInputTokens: 10_000 });
+    assert.equal(more.inputTokens, base.inputTokens + 10_000);
+    assert.ok(more.costUsd > base.costUsd);
+    for (const bad of [-1, 1.5, Number.NaN, '5']) {
+      assert.throws(() => pricing.estimateUnknownCost({ ...args, extraInputTokens: bad }), TypeError, String(bad));
+    }
+  });
+
+  test('a PDF document with pages N reserves the byte estimate plus N * PDF_PAGE_INPUT_TOKENS', () => withExtractEngine(async ({ engine, emulator, log, pricing }) => {
+    const pages = 7;
+    const rows = await engine.extract({ document: { type: 'pdf', data: PDF, pages }, schema: ROW_SCHEMA, system: SYSTEM, maxTokens: 256 });
+    assert.ok(Array.isArray(rows));
+    assert.equal(emulator.requests.length, 1, 'one round dispatched');
+    assert.equal(log.reserve.length, 1, 'one reservation');
+    const args = { model: pricing.modelFor('extract'), maxTokens: 256, system: SYSTEM, tools: [],
+      messages: messagesOf({ type: 'base64', media_type: 'application/pdf', data: PDF.toString('base64') }) };
+    const expected = pricing.estimateUnknownCost({ ...args, extraInputTokens: pages * pricing.PDF_PAGE_INPUT_TOKENS }).costUsd;
+    near(log.reserve[0].boundUsd, expected, 'the PDF reservation bound');
+    assert.ok(log.reserve[0].boundUsd > pricing.estimateUnknownCost(args).costUsd, 'above the byte-only estimate');
+    assert.equal(log.settle.length, 1);
+    assert.equal(log.hold.length, 0);
+  }));
+
+  test('a PDF document without an established page count throws TypeError and dispatches nothing', () => withExtractEngine(async ({ engine, emulator, log }) => {
+    for (const pages of [undefined, 0, 101, 2.5, '3', null]) {
+      const document = { type: 'pdf', data: PDF, ...(pages === undefined ? {} : { pages }) };
+      await assert.rejects(engine.extract({ document, schema: ROW_SCHEMA, system: SYSTEM }), TypeError, `pages ${pages}`);
+    }
+    assert.equal(emulator.requests.length, 0, 'nothing dispatched');
+    assert.equal(log.reserve.length, 0, 'nothing reserved');
+  }));
+
+  test('liveness: a text document extract reserves the byte estimate and succeeds', () => withExtractEngine(async ({ engine, emulator, log, pricing }) => {
+    const text = 'Synthetic document body';
+    const rows = await engine.extract({ document: { type: 'text', text }, schema: ROW_SCHEMA, system: SYSTEM, maxTokens: 256 });
+    assert.ok(Array.isArray(rows));
+    assert.equal(emulator.requests.length, 1);
+    const expected = pricing.estimateUnknownCost({ model: pricing.modelFor('extract'), maxTokens: 256, system: SYSTEM, tools: [],
+      messages: messagesOf({ type: 'text', media_type: 'text/plain', data: text }) }).costUsd;
+    near(log.reserve[0].boundUsd, expected, 'the text reservation bound');
+    assert.equal(log.settle.length, 1);
+  }));
+});

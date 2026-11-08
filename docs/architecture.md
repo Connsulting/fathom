@@ -345,10 +345,17 @@ Live mode reserves every paid round in the platform ledger (see Model budgets): 
 runtime engine (`createRuntimeEngine`, `src/engine/runtime.mjs`) refuses to build in live mode
 without `{platform, householdId, generation}`, and passes `createEngine` a `reservations` adapter.
 At construction it records the household's `carry` row for the current funding month when it has
-pre-MT-05 spend, so that spend counts against the instance cap before it ever reserves. Before
+pre-MT-05 spend, so that spend counts against the instance cap before it ever reserves. In live
+mode `startServer` and `openCliHousehold` first carry every non-deleted household with a storage
+root (`carryAllHouseholds`, `src/platform/model-carry.mjs`, reading each store read-only), so
+whichever process opens the instance first, no household's pre-MT-05 spend is invisible to the
+instance cap; an unreadable store refuses `household_store_unavailable`. Before
 each round, tool continuations and retries included, the engine reserves the round's worst-case
 bound. The per-response bound E (`estimateUnknownCost` over its system text, transcript and tools) is the
-round's `maxBudgetUsd`. A Messages API round makes one paid response and reserves E. An SDK round
+round's `maxBudgetUsd`. An extract of a PDF document (an image-only PDF, billed per page as an
+image plus its text) must carry its page count (`pages`, 1 to 100, else TypeError and nothing is
+reserved), and E adds `pages * PDF_PAGE_INPUT_TOKENS` (5000, `src/engine/pricing.mjs`) input
+tokens to the serialized-byte estimate. A Messages API round makes one paid response and reserves E. An SDK round
 (`sdkRound`, the production chat and job path) can make more than one paid response (refusal and
 fallback retries) and stops only once its cumulative cost exceeds `maxBudgetUsd`, so it reserves
 `SDK_RESPONSE_BOUND` (2) times E: the cost before its last response is at most E and that response
@@ -1079,8 +1086,9 @@ Model budgets (`src/platform/model-budget.mjs`, platform migration 005).
 3. `node scripts/model-budget.mjs --instance-cap-usd <n>` and `--household <id> --allocation-usd <n>`
    set the instance cap and a household's allocation (dollars 0 to 10000, cents). Changes are
    audited (`model.instance_cap`, `model.allocation`); repeats print `unchanged`. Before any
-   change it records every active household's `carry` row for the month from its store (read-only),
-   so a household that never reserved still counts. Refusals: `bad_usd`, `no_such_household`,
+   change it records every non-deleted household's `carry` row for the month from its store
+   (read-only, `carryAllHouseholds`), so a household that never reserved, active or suspended,
+   still counts. Refusals: `bad_usd`, `no_such_household`,
    `allocation_above_cap`, `below_committed`, `household_store_unavailable` (a store it cannot read).
 4. `node scripts/reconcile-spend.mjs --household <id> --round <id> --cost-usd <amount> --receipt-ref <id>`
    settles a held round at the receipt's cost (audited `model.reconcile`; the receipt reference is
