@@ -182,19 +182,25 @@ test('compare uses two totals and folds their group union with unequal-period ga
   assert.equal(zero.ratio, undefined);
 });
 
-test('C4 eval scripts call valid operations', async (t) => {
+test('available eval scripts call valid operations through the Ask tool boundary', async (t) => {
   const { loadCases } = await import('../evals/cases.mjs');
   const { createEvalStore } = await import('../evals/harness.mjs');
   const store = await createEvalStore();
   t.after(() => store.close());
+  const { tools } = await import('../src/tools/index.mjs');
+  const { proposalTools } = await import('../src/actions/proposals.mjs');
+  const { createRegistryServer } = await import('../src/engine/tools.mjs');
+  const server = createRegistryServer(proposalTools(tools), { purpose: 'chat', ctx: { db: store.db, dataDir: store.root, clock: '2026-11-05', actorId: 'demo', onProposal() {} } });
   for (const c of await loadCases()) {
     if (!c.requires?.script || c.expectedFail) continue;
     const { script } = await import(`../evals/scripts/${c.id}.mjs`);
     for (const turn of c.turns) {
       const frames = await script({ turn, db: store.db, clock: '2026-11-05' });
       assert.ok(frames[0].toolCalls.length, c.id);
-      for (const call of frames[0].toolCalls)
-        await callTool(call.name, call.args, { db: store.db, dataDir: store.root, clock: '2026-11-05' });
+      for (const call of frames[0].toolCalls) {
+        const result = await server.invoke(call.name, call.args);
+        assert.notEqual(result.isError, true, `${c.id}: ${result.content[0].text}`);
+      }
     }
   }
 });

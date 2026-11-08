@@ -75,7 +75,7 @@ describe('registry', () => {
       assert.equal(typeof x.handler, 'function');
     }
     const writes = tools.filter(x => x.operations.some(o => o.scope === 'write:recs' || o.scopes?.includes('write:recs'))).map(x => x.name);
-    assert.deepEqual(writes, ['act_on_recommendation', 'undo']);
+    assert.deepEqual(writes, ['act_on_recommendation', 'advisor_review', 'undo']);
   });
 
   test('MCP scope filtering sorts even an unsorted registry and preserves each scope', () => {
