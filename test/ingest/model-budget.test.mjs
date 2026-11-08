@@ -1,14 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { openDb, migrate, setSetting } from '../../src/store/db.mjs';
 import { createRuntimeEngine } from '../../src/engine/runtime.mjs';
 import { interpretFile, fileSpend } from '../../src/ingest/model-parse.mjs';
 
 const file = { fileId: 'f-synthetic', format: 'text', bytes: Buffer.from('Synthetic note') };
 const script = { text: JSON.stringify({ rows: [], coverage: [{ regionId: 'g0', disposition: 'unresolved', refs: ['r0'] }], completeness: 'incomplete' }), costUsd: 0.001, tokens: { input_tokens: 20, output_tokens: 30 } };
-function setup() {
-  const db = openDb(':memory:'); migrate(db);
-  db.prepare('INSERT INTO files (id,name,sha256,size,mime,uploaded_at,status) VALUES (?,?,?,?,?,?,?)').run(file.fileId, 'synthetic.txt', 'a'.repeat(64), 14, 'text/plain', '2032-04-17', 'needs_extraction');
+function setup(db = openDb(':memory:')) {
+  migrate(db);
+  db.prepare('INSERT INTO files (id,name,sha256,size,mime,uploaded_at,status) VALUES (?,?,?,?,?,?,?)').run(file.fileId, 'synthetic.txt', createHash('sha256').update(file.bytes).digest('hex'), 14, 'text/plain', '2032-04-17', 'needs_extraction');
   let enabled = true, funded = true, current = true;
   const engine = createRuntimeEngine({ db, config: { engine: 'fake' }, now: () => '2032-04-17', allowed: () => enabled });
   const ctx = { household: { db, engine, generation: 1, isCurrent: () => current, outbound: { enabled: () => enabled }, funded: () => funded }, now: () => new Date('2032-04-17') };
@@ -65,6 +69,7 @@ test('no legal call fits a small file/monthly cap; oversized inputs never dispat
   }
   const x = setup();
   try {
+    x.db.prepare('UPDATE files SET sha256=?').run(createHash('sha256').update(Buffer.from('word '.repeat(15000))).digest('hex'));
     assert.equal((await interpretFile({ ctx: x.ctx, file: { ...file, bytes: Buffer.from('word '.repeat(15000)) }, fake: [script] })).status, 'budget_exhausted');
     assert.equal(fileSpend(x.db, file.fileId).calls, 0);
   } finally { x.db.close(); }
@@ -79,4 +84,86 @@ test('one known failed round can retry but no further retry dispatches', async (
     assert.equal(fileSpend(x.db, file.fileId).calls, 2);
     assert.equal((await interpretFile({ ctx: x.ctx, file, fake: [script], retry: true })).status, 'budget_exhausted');
   } finally { x.db.close(); }
+});
+
+test('pause after an admitted round blocks subsequent dispatch and leaves all financial tables untouched', async () => {
+  const x = setup();
+  try {
+    const call = x.engine.call;
+    x.engine.call = async request => { const result = await call(request); x.pause(); return result; };
+    assert.equal((await interpretFile({ ctx: x.ctx, file, fake: [script] })).status, 'waiting_for_engine');
+    assert.equal((await interpretFile({ ctx: x.ctx, file, fake: [script], retry: true })).status, 'waiting_for_engine');
+    assert.equal(fileSpend(x.db, file.fileId).calls, 1);
+    for (const table of ['transactions', 'balances', 'pnl_lines', 'tax_payments', 'import_proposals']) assert.equal(x.db.prepare(`SELECT count(*) n FROM ${table}`).get().n, 0);
+  } finally { x.db.close(); }
+});
+
+test('household names are scrubbed at dispatch and the request carries only bounded reference inputs', async () => {
+  const x = setup();
+  try {
+    x.db.prepare("INSERT INTO facts (key,value,updated_at) VALUES ('household.names',?,'2032-04-17')").run(JSON.stringify({ me: 'Syntheticperson' }));
+    const named = { ...file, bytes: Buffer.from('Syntheticperson pays $23.45') };
+    x.db.prepare('UPDATE files SET sha256=?').run(createHash('sha256').update(named.bytes).digest('hex'));
+    let observed;
+    const call = x.engine.call;
+    x.engine.call = request => { observed = request; return call(request); };
+    await interpretFile({ ctx: x.ctx, file: named, fake: [script] });
+    assert.ok(observed);
+    assert.equal(observed.purpose, 'extract'); assert.deepEqual(observed.tools, []);
+    assert.ok(!JSON.stringify(observed.messages).includes('Syntheticperson'));
+    assert.ok(!JSON.stringify(observed.messages).includes('23.45'));
+    assert.equal(observed.maxTokens, 4096);
+    assert.ok(observed.budget.maxCostUsd <= 0.50);
+    assert.ok(observed.budget.timeoutMs <= 120000);
+    assert.match(observed.budget.correlationId, /^import:/);
+  } finally { x.db.close(); }
+});
+
+test('output token and USD limits retain spend and never admit the next call', async () => {
+  for (const response of [{ ...script, tokens: { input_tokens: 25, output_tokens: 4096 } }, { ...script, costUsd: 0.45 }]) {
+    const x = setup();
+    try {
+      await interpretFile({ ctx: x.ctx, file, fake: [response] });
+      const first = fileSpend(x.db, file.fileId);
+      if (response.costUsd === 0.45) {
+        assert.equal((await interpretFile({ ctx: x.ctx, file, fake: [script] })).status, 'budget_exhausted');
+        assert.equal(fileSpend(x.db, file.fileId).calls, 1);
+      } else {
+        await interpretFile({ ctx: x.ctx, file, fake: [response] });
+        assert.equal(fileSpend(x.db, file.fileId).outputTokens, 8192);
+        assert.equal((await interpretFile({ ctx: x.ctx, file, fake: [script] })).status, 'budget_exhausted');
+      }
+      assert.ok(fileSpend(x.db, file.fileId).costUsd >= first.costUsd);
+    } finally { x.db.close(); }
+  }
+});
+
+test('file counters survive closing and reopening the household store', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'model-budget-'));
+  const path = join(dir, 'store.sqlite');
+  const x = setup(openDb(path));
+  try {
+    await interpretFile({ ctx: x.ctx, file, fake: [script] });
+    const before = fileSpend(x.db, file.fileId);
+    x.db.close();
+    x.db = openDb(path); x.ctx.household.db = x.db;
+    x.ctx.household.engine = createRuntimeEngine({ db: x.db, config: { engine: 'fake' }, now: () => '2032-04-17' });
+    assert.deepEqual(fileSpend(x.db, file.fileId), before);
+    await interpretFile({ ctx: x.ctx, file, fake: [script], retry: true });
+    assert.equal(fileSpend(x.db, file.fileId).calls, 2);
+  } finally { x.db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('equal file ids in two households have independent spend and populated demo reset clears children', async () => {
+  const a = setup(), b = setup();
+  try {
+    await interpretFile({ ctx: a.ctx, file, fake: [script] });
+    assert.equal(fileSpend(a.db, file.fileId).calls, 1);
+    assert.equal(fileSpend(b.db, file.fileId).calls, 0);
+    setSetting(a.db, 'mode', 'demo');
+    const { seedDemo } = await import('../../demo/seed.mjs');
+    seedDemo(a.db);
+    assert.equal(fileSpend(a.db, file.fileId).calls, 0);
+    assert.deepEqual(a.db.prepare('PRAGMA foreign_key_check').all(), []);
+  } finally { a.db.close(); b.db.close(); }
 });
