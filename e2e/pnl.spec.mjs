@@ -5,10 +5,9 @@
 // Tags: @pl-ac3 rows (in the rows dialog) and provenance, @pl-ac5 phone layout, @pl-ac6 navigation and values;
 // @mobile runs the test at 390px too.
 
-import { scratch, buildRealStore } from '../test/helpers/real-store.mjs';
+import { scratch, buildRealStore, addFact } from '../test/helpers/real-store.mjs';
 import { serveAppFixture } from '../test/helpers/server.mjs';
 import { planRun } from '../test/helpers/plan.mjs';
-import { answerItem } from '../src/ingest/confirm.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { test, expect, resetDemo, gotoRoute, expectH1, expectPopoverSource, bareDollarNodes, recDialog } from './helpers.mjs';
 
@@ -285,7 +284,7 @@ async function closeRows(page) {
 }
 
 
-test('PN1 @mobile confirmed spending ledgers appear apart from businesses with their original display names', async ({ page }) => {
+test('INF1 @mobile personal summaries stay visible apart from businesses with their original display names', async ({ page }) => {
   const state = scratch('fathom-ledger-view-');
   let app;
   try {
@@ -294,14 +293,11 @@ test('PN1 @mobile confirmed spending ledgers appear apart from businesses with t
     db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES ('Asters', '2026-10', 'Groceries', -120, ?)")
       .run(JSON.stringify({ sheet: "Aster's - (Actual Expenses)", cells: ['D2'] }));
     await planRun(db);
-    const q = db.prepare("SELECT id FROM confirm_items WHERE context LIKE '%pnl.ledgers%' AND status = 'pending'").get();
-    answerItem(db, q.id, 'yes');
-    await planRun(db);
     app = await serveAppFixture({ db, authenticated: true, config: loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: '2026-11-05' }) });
     await page.context().addCookies([{ name: '__Host-fathom-session', value: app.session.token, domain: new URL(app.baseUrl).hostname, path: '/', secure: true, httpOnly: true, sameSite: 'Strict' }]);
     await page.goto(`${app.baseUrl}/#/pnl`);
     await expectH1(page, 'P&L');
-    const ledgers = page.getByRole('group', { name: 'Spending ledgers', exact: true });
+    const ledgers = page.getByRole('group', { name: 'Personal summaries', exact: true });
     const businesses = page.getByRole('group', { name: 'Businesses', exact: true });
     await expect(ledgers).toBeVisible();
     await expect(businesses).toBeVisible();
@@ -312,6 +308,54 @@ test('PN1 @mobile confirmed spending ledgers appear apart from businesses with t
     const payload = (await app.request({ path: '/api/pnl?entity=entity:asters' })).json;
     await expectTileValue(page, 'expenses', payload, payload.pnl.expenses.total);
     await noOverflow(page, 'spending ledger');
+  } finally {
+    if (app) await app.close();
+    state.cleanup();
+  }
+});
+
+test('INF1 @mobile person-attributed summaries and historical client income keep their readable figures', async ({ page }) => {
+  const state = scratch('fathom-personal-summaries-');
+  let app;
+  try {
+    const dir = state.dir();
+    const db = state.track(await buildRealStore(dir));
+    addFact(db, 'household.names', { owner: 'Aster', spouse: 'Birch' });
+    const line = db.prepare('INSERT INTO pnl_lines(entity,period,category,amount,locator) VALUES (?,?,?,?,?)');
+    for (const person of ['Aster', 'Birch']) for (const period of ['2025-03', '2026-10']) {
+      for (const category of ['Income', 'Groceries', 'Medical', 'Shopping']) line.run(person, period, category, category === 'Income' ? 2500 : -120,
+        JSON.stringify({ sheet: `${person} Expenses` }));
+    }
+    for (const period of ['2025-01', '2025-02', '2025-03']) line.run('Past Consulting', period, 'Client income', 800, null);
+    await planRun(db);
+    app = await serveAppFixture({ db, authenticated: true, config: loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: '2026-11-05' }) });
+    await page.context().addCookies([{ name: '__Host-fathom-session', value: app.session.token, domain: new URL(app.baseUrl).hostname, path: '/', secure: true, httpOnly: true, sameSite: 'Strict' }]);
+    await page.goto(`${app.baseUrl}/#/pnl`);
+    await expectH1(page, 'P&L');
+    const businesses = page.getByRole('group', { name: 'Businesses', exact: true });
+    const summaries = page.getByRole('group', { name: 'Personal summaries', exact: true });
+    const history = page.getByRole('group', { name: 'Income history', exact: true });
+    await expect(summaries.getByRole('button', { name: /Aster/ })).toContainText('Your summary');
+    await expect(summaries.getByRole('button', { name: /Birch/ })).toContainText('Spouse summary');
+    await expect(businesses).not.toContainText('Aster');
+    await expect(businesses).not.toContainText('Birch');
+    await expect(businesses).not.toContainText('Past Consulting');
+    await summaries.getByRole('button', { name: /Birch/ }).click();
+    await expect(page.locator('[data-pl-scope]')).toContainText('Spouse summary');
+    await expect(page.locator('[data-pl-scope]')).toContainText('separately from connected-account household totals');
+    const spouse = (await app.request({ path: '/api/pnl?entity=Birch' })).json;
+    expect(spouse.pnl.entity.person).toBe('spouse');
+    await expectTileValue(page, 'income', spouse, spouse.pnl.income.total);
+    await expectTileValue(page, 'expenses', spouse, spouse.pnl.expenses.total);
+    await history.getByRole('button', { name: /Past Consulting/ }).click();
+    await expect(page.locator('[data-pl-scope]')).toContainText('Your past income');
+    await expect(page.locator('[data-pl-scope]')).toContainText('excluded from current business figures');
+    await expect(page.locator('.pl-meta')).toContainText('2025');
+    await expect(page.locator('.pl-meta')).not.toContainText('year to date');
+    const past = (await app.request({ path: '/api/pnl?entity=Past%20Consulting' })).json;
+    expect(past.pnl.entity.kind).toBe('income_history');
+    await expectTileValue(page, 'income', past, past.pnl.income.total);
+    await noOverflow(page, 'personal summaries and income history');
   } finally {
     if (app) await app.close();
     state.cleanup();

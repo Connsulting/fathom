@@ -161,7 +161,8 @@ test('unclear personal attribution asks once, accepts an owner answer with Undo,
   budgetAndBusiness(db, { knownPeople: false });
   db.prepare("INSERT INTO accounts(id,name,kind,owner,parser) VALUES ('personal-cash','Personal checking','checking','You','aggregator')").run();
   for (const month of ['08', '09', '10']) db.prepare("INSERT INTO transactions(account_id,date,amount,category,parser) VALUES ('personal-cash',?,-90,'Groceries','aggregator')").run(`2026-${month}-15`);
-  const before = await callTool('spending', { operation: 'total' }, ctx);
+  const selection = { operation: 'total', from: '2026-08', to: '2026-10' };
+  const before = await callTool('spending', selection, ctx);
   await planRun(db);
   let scenario = buildScenario(db);
   const questions = scenario.recs.find(r => r.id === 'missing-data').tasks.filter(t => t.code === 'pnl_people_unknown');
@@ -173,8 +174,8 @@ test('unclear personal attribution asks once, accepts an owner answer with Undo,
   assert.ok(out.receipt);
   assert.equal(getFacts(db)['business.entities'].find(e => e.name === 'Birch').owner, 'spouse');
   scenario = buildScenario(db);
-  assert.ok(!scenario.recs.find(r => r.id === 'missing-data')?.tasks.some(t => t.code === 'pnl_people_unknown'));
-  const after = await callTool('spending', { operation: 'total' }, ctx);
+  assert.ok(!scenario.recs.find(r => r.id === 'missing-data')?.tasks.some(t => t.code === 'pnl_people_unknown' && !t.done));
+  const after = await callTool('spending', selection, ctx);
   assert.equal(after.total.value, before.total.value);
   assert.equal(after.total.value, 270, 'only the connected account contributes to household spending');
   await callTool('undo', { operation: 'undo', id: out.receipt.id }, { ...ctx, scopes: ['write:facts'], channel: 'mcp' });

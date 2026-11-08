@@ -13,7 +13,7 @@ import { parseJson, cents } from '../../store/db.mjs';
 import { accountNaming } from '../../accounts/naming.mjs';
 import { addDays, daysBetween } from '../../scenario/build.mjs';
 import { monthEnd } from '../../ingest/format.mjs';
-import { ledgerDisplayName, ledgerKind, looksLikeSpending, spendingStatement, businessEntry, ownerEntityIdentity } from '../../pnl/ledgers.mjs';
+import { ledgerDisplayName, ledgerKind, looksLikeSpending, spendingStatement, businessEntry, ownerEntityIdentity, summaryPerson } from '../../pnl/ledgers.mjs';
 import { loadCategoryInputs } from '../../categories/store.mjs';
 import { resolveCategories } from '../../categories/resolve.mjs';
 import { staleAccountIds } from '../../../web/core/account-freshness.js';
@@ -107,7 +107,7 @@ export function loadPlanningData(db, clock) {
   const listed = ownerFact(db, 'business.entities');
   const ledgerFacts = { 'pnl.ledgers': ownerFact(db, 'pnl.ledgers'), 'business.entities': listed };
   const businessNames = [...new Map((Array.isArray(listed) ? listed.filter(e => e && (!e.inferred || e.nameSource === 'owner')).map(e => e.name) : [])
-    .filter(n => typeof n === 'string' && normalizeName(n) && !['spending', 'inactive'].includes(ledgerKind(ledgerFacts, n, pnlHistory.filter(l => sameName(l.entity, n))))).map(n => [normalizeName(n), n.trim()])).values()];
+    .filter(n => typeof n === 'string' && normalizeName(n) && !['spending', 'inactive', 'income_history'].includes(ledgerKind(ledgerFacts, n, pnlHistory.filter(l => sameName(l.entity, n))))).map(n => [normalizeName(n), n.trim()])).values()];
   const householdNames = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {};
   const holders = new Map(db.prepare('SELECT account_id, holder FROM account_holders').all().map((r) => [r.account_id, r.holder]));
   const naming = accountNaming(db);
@@ -225,7 +225,7 @@ export function resolveEntities(data, facts) {
     }
     e.lines.push(line);
   }
-  const ownerNames = (Array.isArray(listed) ? listed : []).filter(e => e && (!e.inferred || e.nameSource === 'owner') && !['personal', 'inactive', 'not_mine'].includes(e.type));
+  const ownerNames = (Array.isArray(listed) ? listed : []).filter(e => e && (!e.inferred || e.nameSource === 'owner') && !['personal', 'inactive', 'income_history', 'not_mine'].includes(e.type));
   for (const activity of data.businessActivity || []) {
     if (!activity.rows.length) continue;
     const account = data.accounts.find(a => a.id === activity.accountId);
@@ -248,7 +248,7 @@ export function resolveEntities(data, facts) {
     e.displayName = e.accountLabel || (e.lines.length && e.lines[0].sourceTable !== 'transactions' ? ledgerDisplayName(e.lines[0]) : e.name);
     e.months = e.lines.length ? Math.max(...e.lines.map(l => monthOf(l.period))) : 0;
   }
-  return out.filter(e => !['spending', 'inactive'].includes(ledgerKind(facts, e.name, e.lines)));
+  return out.filter(e => !['spending', 'inactive', 'income_history'].includes(ledgerKind(facts, e.name, e.lines)));
 }
 
 export function inferEntities(data, facts) {
@@ -263,6 +263,11 @@ export function inferEntities(data, facts) {
     const entry = { name: entity.name, type, inferred: true, nameSource, ...(entity.accountIds.length ? { accountIds: entity.accountIds } : {}), evidence: {
       rule, lineCount: entity.lines.length, kinds: [...new Set(entity.lines.map(l => l.originalCategory || l.category))].sort(),
     } };
+    if (['personal', 'income_history'].includes(type)) {
+      const attribution = summaryPerson(entity, baseFacts) || (type === 'income_history' ? { person: 'owner', source: 'owner_income_history' } : null);
+      entry.owner = attribution?.person ?? null;
+      entry.personSource = attribution?.source ?? null;
+    }
     const i = value.findIndex(e => sameName(e?.name, entity.name));
     if (i < 0) value.push(entry); else value[i] = { ...value[i], ...entry };
   };
@@ -271,7 +276,12 @@ export function inferEntities(data, facts) {
   const cutoff = new Date(`${data.clock}T00:00:00Z`); cutoff.setUTCMonth(cutoff.getUTCMonth() - 6);
   const inactive = entities.filter(e => !e.classified && !e.accountIds.length && !spending.includes(e) && !undone(e.name) && !ledgerKind(baseFacts, e.name, e.lines)
     && e.lines.length && new Set(e.lines.map(l => l.period)).size <= 3 && e.lines.every(l => l.period < cutoff.toISOString().slice(0, 7)));
-  for (const entity of inactive) add(entity, 'inactive', 'At most three months of ledger activity, with nothing in the last six months');
+  for (const entity of inactive) {
+    const history = new Set(entity.lines.map(l => l.category)).size === 1 && entity.lines.some(l => l.amount > 0)
+      && entity.lines.every(l => l.amount >= 0 && /income|revenue|sales|client|consult/i.test(l.category));
+    add(entity, history ? 'income_history' : 'inactive', history ? 'Past client-income summary for the owner; no current business activity'
+      : 'At most three months of ledger activity, with nothing in the last six months');
+  }
   const remaining = entities.filter(e => !spending.includes(e) && !inactive.includes(e));
   const accounts = remaining.filter(e => e.accountCandidate);
   const candidates = accounts.length ? accounts : remaining.filter(e => e.lines.some(l => /^income$|revenue|sales|client fees|consulting fees|payroll|officer|salary|wages/i.test(l.category)));

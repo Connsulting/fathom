@@ -141,7 +141,7 @@ export function prepareRecFacts(db, data) {
   const assumptions = defaults.filter(a => a.path.length ? !values[a.undoKey]?.[a.path[0]]?.undone : values[a.undoKey] !== true);
   for (const entity of entityInference.value.filter(e => e?.inferred)) assumptions.push({
     key: 'business.entities', path: [entity.name], value: entity.type, undoKey: 'business.entityInference',
-    evidence: `${entity.name}: inferred ${entity.type === 'personal' ? 'personal spending' : entity.type === 'inactive' ? 'inactive past business' : 'S corp'} from stored ledger activity. Not right? Tell Fathom which one is the S corp.`,
+    evidence: `${entity.name}: inferred ${entity.type === 'personal' ? 'personal spending and income summary' : entity.type === 'income_history' ? 'past client income history' : entity.type === 'inactive' ? 'inactive past business' : 'S corp'} from stored ledger activity.${entity.type === 'personal' ? entity.owner ? ` Attributed to ${entity.owner === 'spouse' ? 'your spouse' : 'you'}.` : ' Tell Fathom who this summary belongs to.' : ''} Not right? Tell Fathom which one is the S corp or correct this summary's person.`,
   });
   return { values, assumptions, writes, deletes, mortgage, write() {
     let changed = 0;

@@ -78,9 +78,9 @@ export const ANSWER_SHAPES = Object.freeze({
     name: { type: 'string', label: 'Entity name', maxLength: 200 },
     type: { type: 'choice', label: 'Entity classification', choices: [
       ['s_corp', 'S corp'], ['sole_prop', 'sole proprietorship'], ['llc_single', 'single member LLC'], ['partnership', 'partnership'],
-      ['c_corp', 'C corp'], ['personal', 'personal spending'], ['inactive', 'inactive past business'], ['not_mine', 'not mine'],
+      ['c_corp', 'C corp'], ['personal', 'personal summary'], ['income_history', 'income history'], ['inactive', 'inactive past business'], ['not_mine', 'not mine'],
     ].map(([value, label]) => ({ value, label })) },
-    owner: { type: 'choice', optional: true, label: 'Business owner', choices: [{ value: 'owner', label: 'you' }, { value: 'spouse', label: 'your spouse' }] },
+    owner: { type: 'choice', optional: true, label: 'Person or business owner', choices: [{ value: 'owner', label: 'you' }, { value: 'spouse', label: 'your spouse' }] },
     sstb: { ...yesNo('Specified service trade or business'), optional: true },
   } } },
   'business.entityInference': { scope: 'household', type: 'map', label: 'Undo an inferred entity classification', values: { type: 'object', fields: { undone: yesNo('Undo this inferred classification?') } } },
@@ -113,6 +113,8 @@ export const ANSWER_SHAPES = Object.freeze({
   'pnl.ledgers': { scope: 'household', type: 'map', label: 'Which imported ledgers are spending or businesses?', values: {
     type: 'object', fields: { kind: { type: 'choice', ownerInterpreted: true, label: 'What does this ledger track?', choices: [{ value: 'spending', label: 'Spending ledger' }, { value: 'business', label: 'Business' }] } },
   } },
+  'pnl.people': { scope: 'household', type: 'map', label: 'Who each personal summary belongs to', values: { type: 'choice', ownerInterpreted: true,
+    label: 'Whose summary is this?', choices: [{ value: 'owner', label: 'you' }, { value: 'spouse', label: 'your spouse' }] } },
   'retirement.planTermsConfirmed': { scope: 'household', ...yesNo('Has your advisor confirmed your retirement plan terms and eligibility?') },
   'retirement.aggregationConfirmed': { scope: 'household', ...yesNo('Has your advisor confirmed no related business shares your plan limits?') },
   'benefits.hsaEligible': { scope: 'household', ...yesNo('Is your health plan HSA eligible for the whole year?') },

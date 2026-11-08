@@ -8,7 +8,7 @@
 //   sum: a figure over every matching row (not just the capped items), equal to the cell it opens from.
 //   Each item: amount (raw signed), value (counted: income as is, expenses negated) and fig (at value).
 
-import { ledgerDisplayName, ledgerKind, businessEntry } from './ledgers.mjs';
+import { ledgerDisplayName, ledgerKind, businessEntry, summaryPerson } from './ledgers.mjs';
 import { normalizeName } from '../ingest/confirm.mjs';
 import { businessAccount } from '../categories/resolve.mjs';
 import {
@@ -55,8 +55,9 @@ function loadBusiness(db, clock) {
   const stated = statedFact && typeof statedFact === 'object' && !Array.isArray(statedFact) ? statedFact : {};
   for (const v of Object.values(stated)) addName(v);
 
-  const ledgerFacts = { 'pnl.ledgers': ownerFact(db, 'pnl.ledgers'), 'business.entities': listed };
-  const businessNames = [...names.keys()].filter(n => !['spending', 'inactive'].includes(ledgerKind(ledgerFacts, names.get(n), lines.filter(l => canon(l.entity).norm === n))));
+  const ledgerFacts = { 'pnl.ledgers': ownerFact(db, 'pnl.ledgers'), 'business.entities': listed,
+    'household.names': ownerFact(db, 'household.names'), 'pnl.people': ownerFact(db, 'pnl.people') };
+  const businessNames = [...names.keys()].filter(n => !['spending', 'inactive', 'income_history'].includes(ledgerKind(ledgerFacts, names.get(n), lines.filter(l => canon(l.entity).norm === n))));
   const only = businessNames.length === 1 ? businessNames[0] : null;
   const owner = new Map();
   for (const a of base.accounts.filter(businessAccount)) {
@@ -86,6 +87,7 @@ function loadBusiness(db, clock) {
     };
     return {
       key, label, kind, accounts: accountIds.map(accountRef), lines: entityLines, txns, lineSection,
+      ...(['spending', 'income_history'].includes(kind) ? { person: summaryPerson({ name: entityLines[0]?.entity || label, displayName: label }, ledgerFacts)?.person ?? (kind === 'income_history' ? 'owner' : null) } : {}),
       linesByMonth: byMonth(entityLines, (l) => l.period), txnsByMonth: byMonth(txns, (t) => t.date.slice(0, 7)),
     };
   };
@@ -96,8 +98,8 @@ function loadBusiness(db, clock) {
     const entityLines = lines.filter(l => canon(l.entity).norm === norm);
     const displayName = entityLines.length ? ledgerDisplayName(entityLines[0]) : label;
     const classification = ledgerKind(ledgerFacts, label, entityLines);
-    const kind = ['spending', 'inactive'].includes(classification) ? classification : 'entity';
-    const e = build(`entity:${norm}`, displayName, kind, ['spending', 'inactive'].includes(kind) ? [] : ids, entityLines);
+    const kind = ['spending', 'inactive', 'income_history'].includes(classification) ? classification : 'entity';
+    const e = build(`entity:${norm}`, displayName, kind, ['spending', 'inactive', 'income_history'].includes(kind) ? [] : ids, entityLines);
     if (e) entities.push(e);
   }
   entities.sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
@@ -111,6 +113,7 @@ function loadBusiness(db, clock) {
 
 const publicEntity = (e) => ({
   key: e.key, label: e.label, kind: e.kind, accounts: e.accounts,
+  ...(['spending', 'income_history'].includes(e.kind) ? { person: e.person, ...(e.kind === 'income_history' ? { inactive: true } : {}) } : {}),
   workbook: e.lines.length ? { from: e.lines[0].period, to: e.lines.at(-1).period, lines: e.lines.length } : null,
   transactions: e.txns.length ? { from: e.txns[0].date.slice(0, 7), to: e.txns.at(-1).date.slice(0, 7), rows: e.txns.length } : null,
 });
@@ -357,7 +360,7 @@ export function businessPnl({ db, entity, from, to, clock } = {}) {
   if (uncategorized.rows) notes.push('Uncategorized outflows count as expenses until they are categorized.');
 
   return {
-    entity: { key: e.key, label: e.label, kind: e.kind, accounts: e.accounts },
+    entity: publicEntity(e),
     from: r.from, to: r.to, months: r.months, monthSources,
     income: f.income, expenses: f.expenses, net: f.net, prior, leftOut, uncategorized, notes,
     ...reg.done(),

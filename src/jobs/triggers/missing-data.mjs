@@ -2,7 +2,7 @@
 // tax inputs (R1, R14, R19, T9.5). Evaluated last so it sees every other trigger's block.
 
 import { normalizeName } from '../../ingest/confirm.mjs';
-import { ledgerDisplayName } from '../../pnl/ledgers.mjs';
+import { ledgerDisplayName, summaryPerson } from '../../pnl/ledgers.mjs';
 import { ADVISOR_KEYS } from '../../facts/derive.mjs';
 import { addDays } from '../planner/data.mjs';
 import { confirmItemFor } from '../../shared/rec-steps.mjs';
@@ -178,6 +178,14 @@ export function items(ctx) {
   }
   if (ctx.mortgage?.present && ctx.mortgage.missing.length) out.push({ code: 'obligations.mortgage', tax: false,
     text: `Mortgage: tell Fathom only the missing ${ctx.mortgage.missing.join(', ')}.`, task: 'Tell Fathom the missing mortgage terms', kind: 'question', link: 'ask' });
+  const summaries = (Array.isArray(ctx.facts['business.entities']) ? ctx.facts['business.entities'] : []).filter(e => e?.type === 'personal').map(e => {
+    const line = (ctx.data?.pnlHistory || ctx.data?.pnl || []).find(l => normalizeName(l.entity) === normalizeName(e.name));
+    return { ...e, displayName: line ? ledgerDisplayName(line) : e.name };
+  }).filter(e => !summaryPerson(e, ctx.facts));
+  if (summaries.length) {
+    const question = `Who do these personal spending and income summaries belong to: ${summaries.map(e => dataText(e.displayName)).join(', ')}? Tell Fathom which is yours and which is your spouse's.`;
+    out.push({ code: 'pnl_people_unknown', tax: false, text: question, task: question, kind: 'question', link: 'ask' });
+  }
   const seen = new Set();
   return out.filter(i => (seen.has(i.code) ? false : (seen.add(i.code), true)));
 }
