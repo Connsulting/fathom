@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createEvalStore } from '../evals/harness.mjs';
 import { createEngine } from '../src/engine/index.mjs';
-import { createLiveAnswerer, buildChatPrompt, ANSWER_STYLE } from '../src/api/answerer.mjs';
+import { createLiveAnswerer, buildChatPrompt, groundAnswer, renderAnswer, ANSWER_STYLE } from '../src/api/answerer.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
 import { gradeFigures, gradeLength } from '../evals/graders.mjs';
 import { ANSWER_MAX_WORDS } from '../src/shared/answer-contract.mjs';
@@ -10,6 +10,7 @@ import { buildScenario } from '../src/scenario/build.mjs';
 import { resolveTokens } from '../src/shared/tokens.mjs';
 import { checkAnswerDiscipline } from '../src/shared/answer-discipline.mjs';
 import { tools as REGISTRY } from '../src/tools/index.mjs';
+import { writeSyntheticPack, ALWAYS, NEVER } from './helpers/packs.mjs';
 
 const LONG = 'Your household plan remains available for review. '.repeat(24).trim();
 const CLEAN = 'Your household plan remains available for review.';
@@ -18,12 +19,13 @@ const CALCULATE = { name: 'calculate', args: { operation: 'add', label: 'Combine
   ref: { tool: 'household', args: { operation: 'figures', keys: [key] }, path: '0' },
 })) } };
 
-async function ask(t, scripts, question = 'Describe the household plan.') {
+async function ask(t, scripts, question = 'Describe the household plan.', { setup, key = 'ask:0a1b2c3d4e5f', actorId } = {}) {
   const store = await createEvalStore();
   t.after(() => store.close());
   for (const [key, value] of [['biz_cash', 173.41], ['sp_cash', 89.26]])
     store.db.prepare('UPDATE figures SET v=? WHERE key=?').run(value, key);
   const packs = createLivePacks(store.db, { dataDir: store.root });
+  setup?.(store);
   packs.refresh();
   const inner = createEngine({ mode: 'fake' });
   const calls = [];
@@ -39,7 +41,7 @@ async function ask(t, scripts, question = 'Describe the household plan.') {
   const scenario = buildScenario(store.db, { packs });
   const text = typeof question === 'function' ? question(scenario) : question;
   const reply = await createLiveAnswerer({ engine, packs, root: store.root, onRead: r => reads.push(r) }).answer({
-    db: store.db, key: 'ask:0a1b2c3d4e5f', text,
+    db: store.db, key, text, actorId, ownerText: text,
   });
   assert.ok(!reply.notice, JSON.stringify(reply));
   return { reply, calls, reads, responses, text: reply.paragraphs.join(' ').replace(/<[^>]+>/g, '') };
@@ -162,4 +164,70 @@ test('a corrective round reuses the pre-model summary and lists each distinct re
     assert.deepEqual(response.toolResults.find(r => r.args.operation === 'summary').result, initial);
   for (const operation of ['summary', 'figures'])
     assert.equal(reply.provenance.tools.filter(r => r.name === 'household' && r.args.operation === operation).length, 1, operation);
+});
+
+const BULLETED = Array.from({ length: 29 }, () => '- Review current household plan details').join('\n');
+const ORDINARY = [
+  { id: 'account-last-four', text: 'Use the account ending in 4321.', calls: [{ name: 'accounts', args: { operation: 'list' }, result: [{ mask: '4321' }] }] },
+  { id: 'due-day', text: 'Pay by the 15th.', data: [{ dueDay: 15 }] },
+  { id: 'quarter', text: 'Review Q3.', data: [{ quarter: 3 }] },
+  { id: 'age', text: 'You are age 59.', data: [{ age: 59 }] },
+  { id: 'day-count', text: 'Within 60 days, review the plan.', data: [{ days: 60 }], calls: [{ name: 'read', args: {}, result: { values: [6, 10] } }] },
+  { id: 'numbered-steps', text: 'Step 1 then step 2.' },
+  { id: 'listed-digit-count', text: 'You have 3 accounts.', calls: [{ name: 'accounts', args: { operation: 'list' }, result: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }] },
+  { id: 'owner-amount', text: 'You said the planned cost is $275.', data: ['The planned cost is $275.'] },
+  { id: 'pack-figure', text: 'The allowance is $750.', data: [{ entries: [{ title: 'Allowance', body: 'The allowance is $750 per year.' }] }] },
+  { id: 'bulleted-word-limit', text: BULLETED, words: 145 },
+];
+
+test('ordinary answers pass grounding and the shared discipline check as Ask applies it', async t => {
+  const { checkAnswerForDelivery } = await import('../src/api/answerer.mjs');
+  for (const fixture of ORDINARY) await t.test(fixture.id, sub => {
+    const { text, calls: toolResults = [], data = [] } = fixture;
+    const scenario = { fig: {} };
+    const grounding = groundAnswer(text, { scenario, toolResults, data });
+    const check = checkAnswerForDelivery(text, { scenario, toolResults, data, grounding });
+    sub.diagnostic(JSON.stringify({ id: fixture.id, grounding: grounding.violations, discipline: check.violations }));
+    assert.deepEqual(grounding.violations, []);
+    assert.deepEqual(check.violations, []);
+    if (fixture.words) assert.equal(check.length.words, fixture.words);
+  });
+});
+
+test('pack figures from active entries and a pack conversation need no correction', async t => {
+  for (const active of [true, false]) await t.test(active ? 'active entry' : 'pack conversation', async sub => {
+    const { reply, calls } = await ask(sub, [[{ text: 'The synthetic allowance is $6,175 per year.' }]], 'Explain the allowance.', {
+      key: active ? 'ask:0a1b2c3d4e5f' : 'pack:synthetic-pack',
+      setup: store => writeSyntheticPack(store.root, { appliesWhen: active ? ALWAYS : NEVER,
+        entries: [{ file: 'allowance.md', title: 'Synthetic allowance', body: 'The synthetic allowance is $6,175 per year.' }] }),
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(reply.provenance.grounding.ok, true);
+    assert.deepEqual(reply.provenance.discipline.violations, []);
+  });
+});
+
+test('an amount stated by the owner is sourced without a corrective call', async t => {
+  const { reply, calls } = await ask(t, [[{ text: 'You said the planned cost is $275.' }]], 'The planned cost is $275.');
+  assert.equal(calls.length, 1);
+  assert.equal(reply.provenance.grounding.ok, true);
+});
+
+test('a bulleted answer at the word limit counts the same plain text as the eval', async t => {
+  const { calls } = await ask(t, [[{ text: BULLETED }]]);
+  assert.equal(calls.length, 1);
+  const { plainAnswerText } = await import('../src/shared/answer-text.mjs');
+  assert.equal(gradeLength(plainAnswerText(renderAnswer(BULLETED).join(' ')), ANSWER_MAX_WORDS).words, 145);
+});
+
+test('a correction keeps an offered proposal and drops a proposal absent from the delivered answer', async t => {
+  const proposal = { name: 'update_goal', args: { operation: 'create', title: 'Synthetic savings', propose: true } };
+  for (const keep of [true, false]) await t.test(keep ? 'retained offer' : 'dropped offer', async sub => {
+    const offered = 'I can create the synthetic savings goal. Confirm below.';
+    const { reply, calls } = await ask(sub, [[{ toolCalls: [proposal] }, { text: `${LONG} ${offered}` }],
+      [{ text: keep ? offered : CLEAN }]], 'Describe the plan.', { actorId: 'demo' });
+    assert.equal(calls.length, 2);
+    assert.match(calls[1].messages.at(-1).content, /keep any proposal sentence/i);
+    assert.equal(Boolean(reply.provenance.pendingAction), keep);
+  });
 });
