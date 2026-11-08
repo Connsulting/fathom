@@ -90,6 +90,7 @@ test('AC3: bank coverage wins only for the covered person, month and category', 
     ['no bank', [], 1050, 600, 450],
     ['one overlapping category', [['08', 'Groceries', -25]], 975, 525, 450],
     ['all months one category', ['08', '09', '10'].map(m => [m, 'Groceries', -25]), 825, 375, 450],
+    ['full owner coverage', ['08', '09', '10'].flatMap(m => [['Groceries', -25], ['Medical', -20], ['Shopping', -15]].map(([c, a]) => [m, c, a])), 630, 180, 450],
     ['different category', [['08', 'Dining', -25]], 1075, 625, 450],
     ['other person', [['08', 'Groceries', -25, 'Your spouse']], 1005, 600, 405],
     ['joint coverage', [['08', 'Groceries', -25, 'Joint']], 905, 500, 380],
@@ -155,8 +156,9 @@ test('Ask reads per-person figures and delivers sheet provenance through its reg
   const engine = { mode: 'live', isOn: () => true, call: request => request.purpose === 'title'
     ? Promise.resolve({ text: 'Household summaries', toolResults: [] })
     : transport.call({ ...request, fake: [
-      { toolCalls: [{ name: 'spending', args: { operation: 'total', ...period, measure: 'spending' } }] },
-      { text: "Your spouse spent $450 from the Birch Summary sheet. You spent $525, using connected transactions first and the spreadsheet summary for months without bank data." },
+      { toolCalls: [{ name: 'spending', args: { operation: 'total', ...period, measure: 'spending' } },
+        { name: 'spending', args: { operation: 'total', ...period, measure: 'income' } }] },
+      { text: "Your spouse spent $450 from the Birch Summary sheet and received $2,400 in income. You spent $525, using connected transactions first and the spreadsheet summary for months without bank data." },
     ] }) };
   const household = householdOf(db), root = household.root;
   const answerer = createLiveAnswerer({ engine, root, services: { ...household.services, engine, config: { dataDir: root } } });
@@ -164,6 +166,7 @@ test('Ask reads per-person figures and delivers sheet provenance through its reg
     body: { text: 'How much did each of us spend from August through October, and where did it come from?' } });
   assert.match(out.message.text, /\$450.*Birch Summary/);
   assert.match(out.message.text, /\$525/);
+  assert.match(out.message.text, /\$2,400/);
   assert.ok(out.message.provenance.tools.some(c => c.name === 'spending' && !c.isError));
 });
 
@@ -175,4 +178,26 @@ test('sheet and transaction detail figures keep independent row identities', asy
   const detail = householdSpendingRows({ db, ...period, clock, bucket: 'household', category: 'Groceries' });
   assert.equal(new Set(detail.items.map(i => i.fig)).size, detail.items.length);
   for (const item of detail.items) assert.equal(detail.figures[item.fig].v, item.value);
+});
+
+test('AC4: prior-year payroll only replaces the matching summary year', async t => {
+  const { db, total } = await fixture(t);
+  db.prepare("INSERT INTO pnl_lines(entity,period,category,amount,file_id,locator) SELECT entity,replace(period,'2026','2025'),category,amount,file_id,locator FROM pnl_lines WHERE entity!='Example Studio'").run();
+  await addPayroll(db, w2Doc({ taxYear: 2025, person: 'owner', relation: 'outside', employerName: 'Synthetic Employer', wages: 15000, medicareWages: 15000, socialSecurityWages: 15000, box12: [] }));
+  await planRun(db);
+  assert.equal((await total('income')).total.value, 5400);
+  const previous = await total('income', { from: '2025-01', to: '2025-12' });
+  assert.equal(previous.total.value, 17400);
+});
+
+test('income coverage replaces wages while preserving a separate income category', async t => {
+  const { db, total } = await fixture(t, { bank: [['08', 'Income', 900]] });
+  db.prepare('INSERT INTO pnl_lines(entity,period,category,amount,file_id,locator) VALUES (?,?,?,?,?,?)')
+    .run("Aster's Summary", '2026-08', 'Interest Income', 100, 'summary-book', JSON.stringify({ sheet: "Aster's Summary", row: 6 }));
+  await planRun(db);
+  assert.equal((await total('income')).total.value, 5400);
+  await addPayroll(db, w2Doc({ person: 'owner', relation: 'outside', employerName: 'Synthetic Employer', wages: 12000, medicareWages: 12000, socialSecurityWages: 12000, box12: [] }));
+  await planRun(db);
+  assert.equal((await total('income', { from: '2026-01', to: '2026-12' })).total.value, 14500);
+  assert.equal(buildScenario(db).fig['inc.ytd.summary-owner'].v, 100);
 });

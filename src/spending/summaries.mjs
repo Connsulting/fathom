@@ -6,6 +6,7 @@ import { parseJson } from '../store/db.mjs';
 
 export const SUMMARY_RULE = 'from the spreadsheet summary for months without bank data; connected transactions win for each person, month and category';
 const categoryKey = category => String(category).trim().toLowerCase();
+const incomeKey = category => /interest|dividend|other income/i.test(category) ? categoryKey(category) : 'income';
 const monthEnd = month => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10);
 const inMonths = (month, range) => month >= range.from && month <= range.to;
 
@@ -32,11 +33,13 @@ export function personalSummaryInput(data, facts, categoryInput) {
   }
   const people = new Set(lines.filter(l => l.income).map(l => l.person));
   if (!people.size) return { lines, connected, wages: [] };
-  const payroll = payrollRecords(data, resolveEntities(data, facts), facts).records.filter(r => people.has(r.person));
+  const entities = resolveEntities(data, facts);
+  const years = [...new Set(lines.filter(l => l.income).map(l => Number(l.period.slice(0, 4))))];
+  const payroll = years.flatMap(year => payrollRecords({ ...data, year, taxYear: year }, entities, facts).records.map(r => ({ ...r, year }))).filter(r => people.has(r.person));
   const wages = payroll.map(record => {
     const docs = data.documents.filter(d => record.docIds.includes(d.id));
-    const to = record.kind === 'w2' ? `${data.year}-12` : docs.map(d => d.fields.payDate?.slice(0, 7)).filter(Boolean).sort().at(-1);
-    return { person: record.person, from: `${data.year}-01`, to, amount: record.ytdWages,
+    const to = record.kind === 'w2' ? `${record.year}-12` : docs.map(d => d.fields.payDate?.slice(0, 7)).filter(Boolean).sort().at(-1);
+    return { person: record.person, from: `${record.year}-01`, to, amount: record.ytdWages,
       ids: record.docIds, fileId: record.fileId, household: record.household };
   }).filter(w => w.to && Number.isFinite(w.amount));
   return { lines, connected, wages };
@@ -49,7 +52,7 @@ export function selectPersonalSummaries(input, { window, payroll = true, bankInc
     const payrollCovered = payroll && line.income && !/interest|dividend|other income/i.test(line.category)
       && input.wages.some(w => w.person === line.person && inMonths(line.period, w));
     const bankCovered = (!line.income || bankIncome) && input.connected.some(t => (t.person === line.person || t.person === 'joint')
-      && t.date.slice(0, 7) === line.period && (line.income ? t.bucket === 'income' : t.bucket === line.bucket && categoryKey(t.category) === categoryKey(line.category)));
+      && t.date.slice(0, 7) === line.period && (line.income ? t.bucket === 'income' && incomeKey(t.category) === incomeKey(line.category) : t.bucket === line.bucket && categoryKey(t.category) === categoryKey(line.category)));
     if (payrollCovered || bankCovered) evidence.push({ ...line, reason: payrollCovered ? 'payroll' : 'connected' });
     else rows.push(line);
   }
@@ -68,7 +71,7 @@ export function selectPersonalSummaries(input, { window, payroll = true, bankInc
 
 export function summarySources(rows) {
   return [...Map.groupBy(rows, r => r.sourceTable || 'transactions')].map(([table, list]) => ({ table,
-    ids: list.flatMap(r => r.sourceIds || [r.sourceId ?? r.id]).slice(0, 50), count: list.length,
+    ids: list.flatMap(r => r.sourceIds || [r.sourceId ?? r.id]).slice(0, 50), count: list.reduce((n, r) => n + (r.sourceIds?.length || 1), 0),
     ...(table === 'pnl_lines' ? { files: [...new Set(list.map(r => r.fileId).filter(Boolean))], sheets: [...new Set(list.map(r => r.sheet))] } : {}),
   }));
 }
