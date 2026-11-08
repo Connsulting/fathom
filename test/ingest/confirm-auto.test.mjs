@@ -121,7 +121,7 @@ describe('multiHolder', () => {
 });
 
 describe('recordAutoAnswer', () => {
-  test('records an answer with its rule and evidence through the undo log, and refuses like answerItem', () => withHousehold(async (s) => {
+  test('records an answer with its rule and evidence through the undo log, and refuses like answerItem', async () => withHousehold(async (s) => {
     const card = kindItem(s.db, 'card');
     const rainy = kindItem(s.db, 'rainyDay');
     C.reopenItem(s.db, card.id, { now: NOW });
@@ -140,7 +140,7 @@ describe('recordAutoAnswer', () => {
 });
 
 describe('cross_format_duplicate', () => {
-  test('the household checking: the AMZN collision and the City Water check are answered same; the Corner Cafe pair stays asked', () => withHousehold(async (s) => {
+  test('the household checking: the AMZN collision and the City Water check are answered same; the Corner Cafe pair stays asked', async () => withHousehold(async (s) => {
     const near = nearItems(s.db);
     assert.equal(near.length, 3, 'precondition: three near-duplicate pairs were found');
     const byDate = async (iso) => await findSeries(near, async (i) => (await datesOf(s.db, i)).includes(iso));
@@ -178,7 +178,7 @@ describe('cross_format_duplicate', () => {
     { date: '03/09/2032', amount: '-54.21', balance: '', description: 'CHARLIE' },
   ]);
   for (const [label, order] of [['export A then B', () => [aggOne(), bankTwo()]], ['export B then A', () => [bankTwo(), aggOne()]]]) {
-    test(`multiplicity (${label}): no real posting is lost and no auto answer merges two distinct postings`, () => withStore(async (s) => {
+    test(`multiplicity (${label}): no real posting is lost and no auto answer merges two distinct postings`, async () => withStore(async (s) => {
       await P.ingestFiles(s.db, order(), s.opts(await offEngine()));
       A.autoResolve(s.db, { now: NOW });
       assert.equal(await count(s.db, 'accounts'), 1, 'precondition: one account for both formats');
@@ -194,7 +194,7 @@ describe('cross_format_duplicate', () => {
   // A reviewed ledger and bank check disagree on their external ids.
   const checkFile = () => activityFile('Chase0042_Activity_ext.csv', [{ date: '03/01/2032', amount: '-125.00', balance: '', description: 'CHECK 1042', check: '1042' }]);
 
-  test('conflicting non-empty external ids never auto resolve', () => withStore(async (s) => {
+  test('conflicting non-empty external ids never auto resolve', async () => withStore(async (s) => {
     await P.ingestFiles(s.db, [checkFile()], s.opts(await offEngine()));
     const accountId = (await one(s.db, 'SELECT id FROM accounts')).id;
     const reviewed = await importProposedRows(s,[{ target:'transaction',fields:{accountId,postedDate:'2032-03-01',amount:-125,description:'Synthetic transfer',externalId:'2001'} }]);
@@ -211,7 +211,7 @@ describe('cross_format_duplicate', () => {
 });
 
 describe('holder_match', () => {
-  test('with household names known before import, single-holder accounts are answered and positions follow', () => withHousehold(async (s) => {
+  test('with household names known before import, single-holder accounts are answered and positions follow', async () => withHousehold(async (s) => {
     const expected = { brokerage1111: ['owner', 'You'], brokerage2222: ['spouse', 'Your spouse'], checking: ['owner', 'You'], card: ['spouse', 'Your spouse'] };
     for (const [role, [answer, label]] of Object.entries(expected)) {
       const item = ownerItem(s.db, role);
@@ -228,12 +228,12 @@ describe('holder_match', () => {
     assert.equal(C.pendingItems(s.db).length, 3);
   }, { names: NAMES }));
 
-  test('without the names fact nothing is answered by holder at import', () => withHousehold((s) => {
+  test('without the names fact nothing is answered by holder at import', async () => withHousehold((s) => {
     for (const role of Object.keys(H)) assertPending(s.db, ownerItem(s.db, role), `${role} owner stays asked`);
     assert.equal(C.pendingItems(s.db).filter((i) => i.kind === 'account_owner').length, 7);
   }));
 
-  test('learned: answering the checking owner answers the brokerage with the same holder, and its positions follow', () => withHousehold(async (s) => {
+  test('learned: answering the checking owner answers the brokerage with the same holder, and its positions follow', async () => withHousehold(async (s) => {
     const checking = ownerItem(s.db, 'checking');
     C.answerItem(s.db, checking.id, 'owner', { now: LATER });
     const out = A.autoResolve(s.db, { now: LATER });
@@ -250,7 +250,7 @@ describe('holder_match', () => {
     for (const role of ['brokerage2222', 'positions2222', 'card', 'rainyDay']) assertPending(s.db, ownerItem(s.db, role), `${role} has no known holder`);
   }));
 
-  test('conflicting sources ask: the names fact says spouse for a holder the owner answered as theirs', () => withHousehold((s) => {
+  test('conflicting sources ask: the names fact says spouse for a holder the owner answered as theirs', async () => withHousehold((s) => {
     setNames(s.db, { me: 'Casey Sample', spouse: 'Avery Example' });
     C.answerItem(s.db, ownerItem(s.db, 'checking').id, 'owner', { now: LATER });
     A.autoResolve(s.db, { now: LATER });
@@ -260,7 +260,7 @@ describe('holder_match', () => {
 });
 
 describe('shared_mask', () => {
-  test('positions account kinds follow the export kind of the same-mask brokerage accounts', () => withHousehold(async (s) => {
+  test('positions account kinds follow the export kind of the same-mask brokerage accounts', async () => withHousehold(async (s) => {
     for (const role of ['positions1111', 'positions2222']) {
       const item = kindItem(s.db, role);
       const info = await assertAuto(s.db, item, { rule: 'shared_mask', answer: 'taxable' });
@@ -271,7 +271,7 @@ describe('shared_mask', () => {
     assertPending(s.db, kindItem(s.db, 'rainyDay'), 'no same-mask sibling');
   }));
 
-  test('a SimpleFIN account never supports nor receives a shared-mask answer', () => withStore(async (s) => {
+  test('a SimpleFIN account never supports nor receives a shared-mask answer', async () => withStore(async (s) => {
     const SF = await src('src/ingest/simplefin.mjs');
     // A positions account (no institution) ending in 4821, the mask of the fake bridge's checking.
     await P.ingestFiles(s.db, [positionsFile('positions-4821.csv', [{ symbol: 'FUNDA', quantity: '1', price: '10.00', value: '10.00', account: 'Z00004821', accountName: 'Synthetic brokerage' }])], s.opts(await offEngine()));
@@ -290,7 +290,7 @@ describe('shared_mask', () => {
     assertPending(s.db, itemFor(s.db, 'account_owner', bridge.id), 'a SimpleFIN account never receives shared_mask');
   }));
 
-  test('an answered account_match "different" between two accounts blocks it', () => withHousehold(async (s) => {
+  test('an answered account_match "different" between two accounts blocks it', async () => withHousehold(async (s) => {
     // The sync asks account_match about a bridge account and a file account; here the two file
     // accounts sharing mask 1111 are named directly in the question's context, the shape the sync
     // writes ({sfKey, candidateId, ownId}), so the rule sees an owner's "different" between them.
@@ -307,7 +307,7 @@ describe('shared_mask', () => {
     assertPending(s.db, ownerItem(s.db, 'positions1111'), 'the owner said these are different accounts');
   }));
 
-  test('differing known holders block it', () => withStore(async (s) => {
+  test('differing known holders block it', async () => withStore(async (s) => {
     const header = 'Date,Original Date,Account Type,Account Name,Account Number,Institution Name,Name,Custom Name,Amount,Description,Category,Note,Ignored From,Tax Deductible,Transaction Tags,Account Holder';
     const row = (account, number, inst, holder, description) => ['2032-03-02', '', 'Checking', account, number, inst, '', '', '10.00', description, 'Other', '', '', '', '', holder].join(',');
     const file = textFile('holders.csv', [header,
@@ -351,7 +351,7 @@ describe('holder ambiguity vetoes owner auto answers', () => {
     return item;
   }
 
-  test('a multi-holder export account never follows its answered same-mask sibling', () => withStore(async (s) => {
+  test('a multi-holder export account never follows its answered same-mask sibling', async () => withStore(async (s) => {
     await answeredPositions(s);
     await P.ingestFiles(s.db, [heldExport('shared-4321.csv', 'Casey Sample & Drew Sample')], s.opts(await offEngine()));
     const exported = await accountId(s.db, '4321', 'Example Brokerage');
@@ -363,7 +363,7 @@ describe('holder ambiguity vetoes owner auto answers', () => {
     assert.equal((await accountOf(s.db, exported)).owner, null);
   }));
 
-  test('conflicting holder sources (names fact versus a learned answer) veto a same-mask answer', () => withHousehold(async (s) => {
+  test('conflicting holder sources (names fact versus a learned answer) veto a same-mask answer', async () => withHousehold(async (s) => {
     // The fact names the brokerage holder "Avery Example" as the spouse; the owner answered the
     // checking (same holder) as theirs; the same-mask positions 1111 is answered "owner".
     setNames(s.db, { me: 'Casey Sample', spouse: 'Avery Example' });
@@ -377,7 +377,7 @@ describe('holder ambiguity vetoes owner auto answers', () => {
     assert.equal((await accountOf(s.db, brokerage.subject)).owner, null);
   }));
 
-  test('liveness: an export account with no holder still follows its answered same-mask sibling', () => withStore(async (s) => {
+  test('liveness: an export account with no holder still follows its answered same-mask sibling', async () => withStore(async (s) => {
     const positions = await answeredPositions(s);
     await P.ingestFiles(s.db, [plainExport('plain-4321.csv')], s.opts(await offEngine()));
     const exported = await accountId(s.db, '4321', 'Example Brokerage');
@@ -389,7 +389,7 @@ describe('holder ambiguity vetoes owner auto answers', () => {
 });
 
 describe('undo', () => {
-  test('reopening an auto answer restores the row, declines it, and autoResolve never answers it again', () => withHousehold(async (s) => {
+  test('reopening an auto answer restores the row, declines it, and autoResolve never answers it again', async () => withHousehold(async (s) => {
     const item = kindItem(s.db, 'positions2222');
     await assertAuto(s.db, item, { rule: 'shared_mask', answer: 'taxable' });
     assert.equal(C.finalReason(s.db, C.getItem(s.db, item.id)), null);
@@ -403,7 +403,7 @@ describe('undo', () => {
     assertPending(s.db, item, 'a declined item is never auto answered again');
   }));
 
-  test('an owner answer the owner reopened is never re-answered, even when another account with the same holder supports it', () => withHousehold(async (s) => {
+  test('an owner answer the owner reopened is never re-answered, even when another account with the same holder supports it', async () => withHousehold(async (s) => {
     const checking = ownerItem(s.db, 'checking');
     C.answerItem(s.db, checking.id, 'owner', { now: LATER });
     A.autoResolve(s.db, { now: LATER });
@@ -417,7 +417,7 @@ describe('undo', () => {
     assert.equal(await declined(s.db, checking.id), 1, 'the reopened item is declined');
   }));
 
-  test('reopening the basis answer reverts every answer that rests on it', () => withHousehold(async (s) => {
+  test('reopening the basis answer reverts every answer that rests on it', async () => withHousehold(async (s) => {
     const checking = ownerItem(s.db, 'checking');
     C.answerItem(s.db, checking.id, 'owner', { now: LATER });
     A.autoResolve(s.db, { now: LATER });
@@ -452,7 +452,7 @@ describe('undo', () => {
     return { a, b, c };
   }
 
-  test('chain with a final tail: revising A reverts B, C stays, and C never supports its own ancestors', () => withHousehold(async (s) => {
+  test('chain with a final tail: revising A reverts B, C stays, and C never supports its own ancestors', async () => withHousehold(async (s) => {
     const { a, b, c } = await chain(s);
     const out = C.reviseItem(s.db, a.id, 'spouse', { now: LATER });
     assert.equal(out.item.answer, 'spouse');
@@ -467,7 +467,7 @@ describe('undo', () => {
     await assertAuto(s.db, b, { rule: 'holder_match', answer: 'spouse' });
   }));
 
-  test('chain with a final tail: reopening A reverts B, and a later autoResolve never uses C to answer A or B', () => withHousehold(async (s) => {
+  test('chain with a final tail: reopening A reverts B, and a later autoResolve never uses C to answer A or B', async () => withHousehold(async (s) => {
     const { a, b, c } = await chain(s);
     C.reopenItem(s.db, a.id, { now: LATER });
     assertPending(s.db, b, 'B rested on A and is reverted');
@@ -477,7 +477,7 @@ describe('undo', () => {
     assertPending(s.db, b, 'C rests on B, so it never answers B');
   }));
 
-  test('an auto owner answer stays undoable after a later import of another format updated the account source', () => withHousehold(async (s) => {
+  test('an auto owner answer stays undoable after a later import of another format updated the account source', async () => withHousehold(async (s) => {
     const item = ownerItem(s.db, 'checking');
     await assertAuto(s.db, item, { rule: 'holder_match', answer: 'owner' });
     const sourceBefore = (await accountOf(s.db, item.subject)).source_id;
@@ -493,7 +493,7 @@ describe('undo', () => {
     assert.equal(acct.source_id, sourceAfter, 'the later source is kept');
   }, { names: NAMES }));
 
-  test('an auto owner answer stays undoable after the kind answer on the same account', () => withHousehold(async (s) => {
+  test('an auto owner answer stays undoable after the kind answer on the same account', async () => withHousehold(async (s) => {
     const owner = ownerItem(s.db, 'card');
     await assertAuto(s.db, owner, { rule: 'holder_match', answer: 'spouse' });
     await assertAuto(s.db, kindItem(s.db, 'card'), { rule: 'account_name', answer: 'card' });
@@ -503,7 +503,7 @@ describe('undo', () => {
     assert.equal(acct.kind, 'card', 'the kind answer stands');
   }, { names: NAMES }));
 
-  test('an auto owner answer refuses undo when the owner itself changed since', () => withHousehold(async (s) => {
+  test('an auto owner answer refuses undo when the owner itself changed since', async () => withHousehold(async (s) => {
     const owner = ownerItem(s.db, 'card');
     await assertAuto(s.db, owner, { rule: 'holder_match', answer: 'spouse' });
     await s.db.prepare("UPDATE accounts SET owner = 'Joint' WHERE id = ?").run(owner.subject);
@@ -519,7 +519,7 @@ describe('undo', () => {
 });
 
 describe('ingestState', () => {
-  test('pending items carry rank and group; decided lists auto answers newest first', () => withHousehold((s) => {
+  test('pending items carry rank and group; decided lists auto answers newest first', async () => withHousehold((s) => {
     // Import-time auto answers are stamped NOW; these two, LATER.
     C.answerItem(s.db, ownerItem(s.db, 'checking').id, 'owner', { now: LATER });
     A.autoResolve(s.db, { now: LATER });

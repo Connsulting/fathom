@@ -63,7 +63,7 @@ test('auto application is provenance-marked, does not teach memory, and undo/rev
   await db.applySchema('INSERT INTO ingest_epoch (id,n) VALUES (1,1) ON CONFLICT(id) DO UPDATE SET n=n+1');
   reopenItem(db,item.id); await queueCategoryChecks(db); assert.equal((await resolutions(db)).get(id).layer,'uncategorized');
   await guessCategories(db,provider(.99),{policy}); assert.equal((await getItem(db,item.id)).status,'pending');
-  const {answerItem}=await import('../src/ingest/confirm.mjs'); answerItem(db,item.id,'Business');
+  const {answerItem}=await import('../src/ingest/confirm.mjs'); await answerItem(db,item.id,'Business');
   assert.equal((await resolutions(db)).get(id).layer,'correction');
   const another=await transaction(db,'Another merchant'); await guessCategories(db,provider(.99),{policy});
   const q=await db.prepare("SELECT id FROM confirm_items WHERE subject=? AND kind='transaction_category'").get(String(another));
@@ -173,7 +173,7 @@ test('duplicate consolidation keeps a model correction from becoming owner memor
   await db.prepare('DELETE FROM transaction_category_corrections WHERE transaction_id=?').run(keep);
   const later=await transaction(db,'Observed first');
   const duplicate=await ask(db,{kind:'near_duplicate',subject:'jev-keep|jev-drop',question:'Same posting?',options:[{id:'same',label:'Same'},{id:'different',label:'Different'}],context:{keys:['jev-keep','jev-drop']}});
-  const {answerItem}=await import('../src/ingest/confirm.mjs');answerItem(db,duplicate.id,'same');
+  const {answerItem}=await import('../src/ingest/confirm.mjs');await answerItem(db,duplicate.id,'same');
   assert.equal((await resolutions(db)).get(keep).layer,'uncategorized');
   assert.equal((await resolutions(db)).get(later).layer,'uncategorized');
   reopenItem(db,duplicate.id);assert.equal((await resolutions(db)).get(drop).layer,'guess');
@@ -203,7 +203,7 @@ test('export enrichment retires its Jev review card and preserves another unreso
   assert.equal((await db.prepare('SELECT count(*) AS n FROM transactions WHERE account_id=?').get(accountId)).n,1);
   assert.equal((await resolutions(db)).get(target).layer,'import');assert.equal((await resolutions(db)).get(target).category,'Business');
   assert.equal(await getItem(db,card.id),null);
-  assert.throws(()=>answerItem(db,card.id,'Groceries'));
+  assert.throws(async ()=>await answerItem(db,card.id,'Groceries'));
   assert.equal((await db.prepare('SELECT count(*) AS n FROM transaction_category_corrections WHERE transaction_id=?').get(target)).n,0);
   assert.ok((await pendingItems(db)).find(q=>q.kind==='transaction_category'&&q.subject===String(other))?.context.jev);
 });
@@ -217,7 +217,7 @@ test('near-duplicate consolidation retires the dropped Jev review and undo can r
   await guessCategories(db,provider(.9),{policy});
   const droppedCard=(await pendingItems(db)).find(q=>q.kind==='transaction_category'&&q.subject===String(drop));assert.ok(droppedCard);
   const duplicate=await ask(db,{kind:'near_duplicate',subject:'review-keep|review-drop',question:'Same posting?',options:[{id:'same',label:'Same'},{id:'different',label:'Different'}],context:{keys:['review-keep','review-drop']}});
-  answerItem(db,duplicate.id,'same');await queueCategoryChecks(db,{policy});
+  await answerItem(db,duplicate.id,'same');await queueCategoryChecks(db,{policy});
   assert.equal(await getItem(db,droppedCard.id),null);
   const current=(await pendingItems(db)).filter(q=>q.kind==='transaction_category');
   assert.equal(current.length,1);assert.equal(current[0].subject,String(keep));assert.equal((await bestGuess(db,current[0],{})).confidence,.9);

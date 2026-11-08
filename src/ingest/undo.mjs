@@ -36,11 +36,11 @@ const changedSince = () => new ConfirmError('final', 'changed_since');
 // Undo a captured log. Throws ConfirmError('final', 'changed_since') when any touched row no
 // longer matches what the log left behind, or its table or columns changed since.
 export async function revertChanges(db, changes) {
-  const known = new Set(tablesOf(db));
+  const known = new Set(await tablesOf(db));
   const shape = new Map();
   const shapeOf = async (table) => {
     if (!shape.has(table)) {
-      const cols = columnsOf(db, table);
+      const cols = await columnsOf(db, table);
       shape.set(table, {
         cols,
         current: db.prepare(`SELECT ${image('t', cols)} AS img FROM main.${ident(table)} AS t WHERE t.rowid = ?`),

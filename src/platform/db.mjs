@@ -74,7 +74,7 @@ async function insertServedHousehold(platform, { id, mode, now, operationId, kin
 export async function createPlatformFile(file, { householdId, mode, operationId = newOperationId(), kind = 'create-instance', now = Date.now() }) {
   const tmp = `${file}.tmp-${process.pid}`;
   try {
-    buildTemp(tmp, async db => {
+    await buildTemp(tmp, async db => {
       await migrate(db, { dir: PLATFORM_MIGRATIONS_DIR });
       await db.transaction(async db => {
         await insertServedHousehold(db, { id: householdId, mode, now, operationId, kind });
@@ -123,7 +123,7 @@ async function buildHouseholdStore(rootPath, { householdId, mode, operationId = 
   if (existsSync(storeFile)) throw codeError('instance_exists');
   const tmp = `${storeFile}.tmp-${process.pid}`;
   try {
-    buildTemp(tmp, async db => {
+    await buildTemp(tmp, async db => {
       await migrate(db);
       await setSetting(db, 'mode', mode);
       init(db);
@@ -170,7 +170,7 @@ export async function createInstance(dataDir, { mode, init = () => {}, platformK
   const root = join(dataDir, relativeRoot);
   const platformTmp = `${platformFile}.tmp-${process.pid}`;
   try {
-    buildTemp(platformTmp, async db => {
+    await buildTemp(platformTmp, async db => {
       await migrate(db, { dir: PLATFORM_MIGRATIONS_DIR });
       await db.transaction(async db => {
         await insertServedHousehold(db, { id: householdId, mode, now, operationId, kind: 'create-instance' });

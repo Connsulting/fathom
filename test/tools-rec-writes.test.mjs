@@ -224,7 +224,7 @@ test('the three C9 eval scripts register as required passes and validate all the
   const { loadCases } = await import('../evals/cases.mjs');
   const { createEvalStore } = await import('../evals/harness.mjs');
   const s = await createEvalStore();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   const cases = await loadCases();
   for (const id of ['q62-decide-salary-option', 'q63-archive-goal', 'q64-send-to-advisor']) {
     assert.equal(cases.find(c => c.id === id).expectedFail, undefined);

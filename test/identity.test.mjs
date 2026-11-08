@@ -522,7 +522,7 @@ const financialDump = async db => Object.fromEntries(await mapSeries(['facts', '
 
 // Bootstrap targets the served household of an instance's platform.sqlite. The CLI writes from
 // its own process while this test reads through `temp.platform`.
-const realInstance = () => tempInstance({ mode: 'real', init: async db => await setSetting(db, 'mode', 'real') });
+const realInstance = async () => tempInstance({ mode: 'real', init: async db => await setSetting(db, 'mode', 'real') });
 const liveInvitations = async platform => (await platform.prepare('SELECT count(*) AS n FROM household_invitations WHERE consumed_at IS NULL AND revoked_at IS NULL AND expires_at > ?').get(Date.now())).n;
 
 test('bootstrap CLI requires explicit admin, reissues only before enrollment, and prints its link only after dev email succeeds', T, async () => {

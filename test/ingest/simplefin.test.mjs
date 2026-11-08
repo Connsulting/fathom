@@ -84,12 +84,12 @@ test('FATHOM_SIMPLEFIN_ALLOWED_HOSTS defaults to the bridge hosts and rejects UR
   assert.throws(() => Cfg.loadConfig({ FATHOM_SIMPLEFIN_ALLOWED_HOSTS: 'https://bridge.example.org' }), /FATHOM_SIMPLEFIN_ALLOWED_HOSTS/);
 });
 
-test('a used or unknown setup token gives a clear error and stores nothing', () => withStore(async (s) => {
+test('a used or unknown setup token gives a clear error and stores nothing', async () => withStore(async (s) => {
   await assert.rejects(S.connectSimplefin(s.db, S.fakeToken('used-token'), opts(s)), (e) => e.code === 'token_used' && /already used/.test(e.message));
   assert.equal((await s.db.prepare('SELECT count(*) AS n FROM simplefin_connection').get()).n, 0);
 }));
 
-test('the access URL is encrypted at rest and never logged', () => withStore(async (s) => {
+test('the access URL is encrypted at rest and never logged', async () => withStore(async (s) => {
   const logs = await captureLogs(async () => {
     await S.connectSimplefin(s.db, S.fakeToken(), opts(s));
     await S.syncSimplefin(s.db, opts(s));
@@ -105,7 +105,7 @@ test('the access URL is encrypted at rest and never logged', () => withStore(asy
   assert.match(openAccess(await s.household.vault(), row.access_blob), /^https:\/\/demo:fake-demo-password@bridge\.simplefin\.org\/simplefin$/);
 }));
 
-test('a sync maps accounts, last four digits, balances and transactions; a resync dedupes', () => withStore(async (s) => {
+test('a sync maps accounts, last four digits, balances and transactions; a resync dedupes', async () => withStore(async (s) => {
   await S.connectSimplefin(s.db, S.fakeToken(), opts(s));
   const first = await S.syncSimplefin(s.db, opts(s));
   assert.equal(first.status, 'ok');
@@ -135,7 +135,7 @@ test('long digit runs in a name are cut to the last four', () => {
   assert.equal(S.lastFour('Checking', 'ACT-9f3e-1234abcd'), null);
 });
 
-test('a connected account matches an imported one by institution and mask and keeps file history', () => withStore(async (s) => {
+test('a connected account matches an imported one by institution and mask and keeps file history', async () => withStore(async (s) => {
   const day = (n) => new Date(Date.parse(`${TODAY}T00:00:00Z`) - n * 86400000).toISOString().slice(0, 10);
   // Imported first: the same checking account (mask 4821), with history through three days ago,
   // including the paycheck the bridge also reports.
@@ -160,7 +160,7 @@ test('a connected account matches an imported one by institution and mask and ke
   assert.deepEqual(rows.filter((r) => r.parser === 'simplefin').map((r) => r.date), [day(9), day(6), day(1)]);
 }));
 
-test('an unsure match asks a Confirm card and imports nothing for it until answered', () => withStore(async (s) => {
+test('an unsure match asks a Confirm card and imports nothing for it until answered', async () => withStore(async (s) => {
   await P.ingestFile(s.db, aggregatorFile('other.csv', [
     { date: '2032-01-05', amount: '5.00', inst: 'Other bank', account: 'Joint checking', number: '', description: 'Old' },
   ]), s.opts(null));
@@ -180,7 +180,7 @@ test('an unsure match asks a Confirm card and imports nothing for it until answe
   assert.equal((await s.db.prepare('SELECT mirror FROM accounts WHERE id = ?').get(imported.id)).mirror, 'connected');
 }));
 
-test('a different answer gives the connected account its own row', () => withStore(async (s) => {
+test('a different answer gives the connected account its own row', async () => withStore(async (s) => {
   await P.ingestFile(s.db, aggregatorFile('other.csv', [
     { date: '2032-01-05', amount: '5.00', inst: 'Other bank', account: 'Joint checking', number: '', description: 'Old' },
   ]), s.opts(null));
@@ -192,7 +192,7 @@ test('a different answer gives the connected account its own row', () => withSto
   assert.equal((await s.db.prepare("SELECT count(*) AS n FROM accounts WHERE inst = 'Other bank'").get()).n, 2);
 }));
 
-test('revoked access and bridge auth errors ask for a reconnect', () => withStore(async (s) => {
+test('revoked access and bridge auth errors ask for a reconnect', async () => withStore(async (s) => {
   await S.connectSimplefin(s.db, S.fakeToken('demo-revoked'), opts(s));
   const out = await S.syncSimplefin(s.db, opts(s));
   assert.deepEqual([out.status, out.code], ['reconnect', 'revoked']);
@@ -213,7 +213,7 @@ test('revoked access and bridge auth errors ask for a reconnect', () => withStor
   assert.deepEqual([junk.status, junk.code], ['error', 'bad_response']);
 }));
 
-test('requests never put credentials in the URL and refuse redirects', () => withStore(async (s) => {
+test('requests never put credentials in the URL and refuse redirects', async () => withStore(async (s) => {
   await S.connectSimplefin(s.db, S.fakeToken(), opts(s));
   const seen = [];
   const inner = S.createFakeSimplefin({ today: () => TODAY });
@@ -224,7 +224,7 @@ test('requests never put credentials in the URL and refuse redirects', () => wit
   assert.equal(seen[0].redirect, 'error');
 }));
 
-test('Disconnect deletes the stored access URL and stops mirroring', () => withStore(async (s) => {
+test('Disconnect deletes the stored access URL and stops mirroring', async () => withStore(async (s) => {
   await S.connectSimplefin(s.db, S.fakeToken(), opts(s));
   await S.syncSimplefin(s.db, opts(s));
   assert.deepEqual(S.disconnectSimplefin(s.db), { disconnected: true });
@@ -276,7 +276,7 @@ const setWith = (accounts, connections = [{ conn_id: 'C1', name: 'Fathom Demo Ba
   async () => new Response(JSON.stringify({ errlist: [], connections, accounts }), { status: 200 });
 const acct = (id, name, extra = {}) => ({ id, conn_id: 'C1', name, currency: 'USD', balance: '100.00', 'balance-date': 1962100000, transactions: [], ...extra });
 
-test('a mask taken from an all-digit id is asked about, never merged silently', () => withStore(async (s) => {
+test('a mask taken from an all-digit id is asked about, never merged silently', async () => withStore(async (s) => {
   await P.ingestFile(s.db, aggregatorFile('chk.csv', [{ date: '2032-01-05', amount: '5.00', inst: 'Fathom Demo Bank', account: 'Checking', number: '9990004821', description: 'Old' }]), s.opts(null));
   await S.connectSimplefin(s.db, S.fakeToken(), opts(s));
   const out = await S.syncSimplefin(s.db, opts(s, { fetch: setWith([acct('9876544821', 'Savings')]) }));
@@ -285,7 +285,7 @@ test('a mask taken from an all-digit id is asked about, never merged silently', 
   assert.equal((await s.db.prepare("SELECT count(*) AS n FROM confirm_items WHERE kind = 'account_match'").get()).n, 1);
 }));
 
-test('two bridge accounts with the same institution, name and balance both import', () => withStore(async (s) => {
+test('two bridge accounts with the same institution, name and balance both import', async () => withStore(async (s) => {
   await S.connectSimplefin(s.db, S.fakeToken(), opts(s));
   const conns = [{ conn_id: 'C1', name: 'Synthetic Bank', org_id: 'a', sfin_url: 'x' }, { conn_id: 'C2', name: 'Synthetic Bank', org_id: 'b', sfin_url: 'x' }];
   const tx = [{ id: 'T1', posted: 1962000000, amount: '-5.00', description: 'Same' }];
@@ -296,7 +296,7 @@ test('two bridge accounts with the same institution, name and balance both impor
   assert.equal((await s.db.prepare('SELECT count(*) AS n FROM transactions').get()).n, 2);
 }));
 
-test('an account held by a match question still gets the full first window after the answer', () => withStore(async (s) => {
+test('an account held by a match question still gets the full first window after the answer', async () => withStore(async (s) => {
   await P.ingestFile(s.db, aggregatorFile('other.csv', [{ date: '2032-01-05', amount: '5.00', inst: 'Other bank', account: 'Joint checking', number: '', description: 'Old' }]), s.opts(null));
   await S.connectSimplefin(s.db, S.fakeToken(), opts(s));
   const starts = [];
@@ -310,7 +310,7 @@ test('an account held by a match question still gets the full first window after
   assert.ok(Number(starts[2]) > Number(starts[0]), 'then the window narrows');
 }));
 
-test('a file uploaded after connecting lands in the connected account', () => withStore(async (s) => {
+test('a file uploaded after connecting lands in the connected account', async () => withStore(async (s) => {
   await S.connectSimplefin(s.db, S.fakeToken(), opts(s));
   await S.syncSimplefin(s.db, opts(s));
   const r = await P.ingestFile(s.db, aggregatorFile('later.csv', [{ date: '2032-01-05', amount: '5.00', inst: 'Fathom Demo Bank', account: 'Everyday Checking', number: '9990004821', description: 'Old' }]), s.opts(null));
@@ -318,7 +318,7 @@ test('a file uploaded after connecting lands in the connected account', () => wi
   assert.equal((await s.db.prepare("SELECT count(*) AS n FROM accounts WHERE mask = '4821'").get()).n, 1);
 }));
 
-test('a resync with a changed description is the same posting', () => withStore(async (s) => {
+test('a resync with a changed description is the same posting', async () => withStore(async (s) => {
   await S.connectSimplefin(s.db, S.fakeToken(), opts(s));
   const tx = (description) => [{ id: 'T1', posted: 1962000000, amount: '-5.00', description }];
   await S.syncSimplefin(s.db, opts(s, { fetch: setWith([acct('A', 'Checking x1111', { transactions: tx('POS 123') })]) }));

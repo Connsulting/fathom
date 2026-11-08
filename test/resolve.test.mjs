@@ -252,7 +252,7 @@ test('remaining transaction choices use the resolver without learning automatic 
   assert.ok(engine.calls.length);
   const { loadCategoryInputs } = await import('../src/categories/store.mjs');
   const { resolveCategories, createHistoryIndex } = await import('../src/categories/resolve.mjs');
-  const inputs = loadCategoryInputs(db);
+  const inputs = await loadCategoryInputs(db);
   assert.equal(resolveCategories(inputs).get(transactionId).layer, 'guess');
   assert.ok(inputs.corrections[0].auto);
   assert.equal(createHistoryIndex(inputs).size, 0);
@@ -270,7 +270,7 @@ test('source category mappings retain automatic provenance and do not train hous
   await resolvePending(db, engine, options);
   const { loadCategoryInputs } = await import('../src/categories/store.mjs');
   const { resolveCategories, createHistoryIndex } = await import('../src/categories/resolve.mjs');
-  const inputs = loadCategoryInputs(db);
+  const inputs = await loadCategoryInputs(db);
   assert.ok(inputs.sourceRules[0].auto);
   assert.equal(resolveCategories(inputs).get(transactionId).layer, 'guess');
   assert.equal(createHistoryIndex(inputs).size, 0);
@@ -349,5 +349,5 @@ test('unresolved recommendation questions do not duplicate the Confirm deck', as
   assert.equal(engine.calls.length, 1);
   assert.equal((await db.prepare("SELECT status FROM confirm_items WHERE kind='resolver_fact'").get()).status, 'pending');
   const { ingestState } = await import('../src/ingest/freshness.mjs');
-  assert.equal(ingestState(db, { clock: NOW.slice(0, 10) }).items.some(item => item.kind === 'resolver_fact'), false);
+  assert.equal((await ingestState(db, { clock: NOW.slice(0, 10) })).items.some(item => item.kind === 'resolver_fact'), false);
 }));

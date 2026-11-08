@@ -225,7 +225,7 @@ test('AC1 migration preserves a populated store and existing Confirm undo histor
   for(const table of ['transaction_category_imports','transaction_category_corrections','transaction_category_guesses','category_merchant_rules','category_source_rules']) await db.applySchema(`DROP TABLE ${table}`);
   await db.prepare('DELETE FROM schema_migrations WHERE id=23').run();
   const {migrate}=await import('../src/store/db.mjs');
-  assert.deepEqual(migrate(db).applied,[23]);
+  assert.deepEqual((await migrate(db)).applied,[23]);
   assert.equal((await db.prepare('SELECT changes FROM confirm_undo WHERE item_id=?').get(q.id)).changes,before);
   assert.equal((await db.prepare('SELECT count(*) AS n FROM transactions').get()).n,count);
   reopenItem(db,q.id);
@@ -240,7 +240,7 @@ test('AC2 a corrected connected row survives the actual account merge and Undo',
   const {own,keep}=await seedDuplicate(s,{sure:true});
   const r=await s.db.prepare('SELECT id FROM transactions WHERE account_id=?').get(own);
   await s.db.prepare("INSERT INTO transaction_category_corrections VALUES (?,'Business','business',?)").run(r.id,'2032-03-10');
-  queueAccountPairs(s.db);
+  await queueAccountPairs(s.db);
   const q=(await pendingItems(s.db)).find(i=>i.kind==='account_match' && i.context?.repair);
   assert.ok(q);
   await answerItem(s.db,q.id,'same');

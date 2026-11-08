@@ -9,10 +9,10 @@ for (const operation of ['import_file', 'note', 'retry_import', 'review_import']
   if (operation === 'retry_import' || operation === 'review_import') {
     if (operation === 'retry_import') {
       const { setSetting } = await import('../src/store/db.mjs');
-      setSetting(x.db, 'engine', { on: false });
+      await setSetting(x.db, 'engine', { on: false });
       const initial = await x.mcp('import_file', { name: 'synthetic.csv', mime: 'text/csv', text: csv });
       args = { operation, fileId: initial.file.fileId };
-      setSetting(x.db, 'engine', { on: true });
+      await setSetting(x.db, 'engine', { on: true });
     } else {
       x.responses.push(response); const initial = await x.upload();
       args = { operation, proposalId: initial.proposalId, version: initial.version, decision: 'correct', evidence: 'Change the sign.' };

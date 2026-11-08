@@ -54,7 +54,7 @@ async function ingest(s, file, now = NOW) {
   return r;
 }
 
-test('a one account file source is named for its institution, with its range, accounts and files', () => withStore(async (s) => {
+test('a one account file source is named for its institution, with its range, accounts and files', async () => withStore(async (s) => {
   await ingest(s, fixture('aggregator.csv', 'text/csv'));
   const file = await fileRow(s, 'aggregator.csv');
   const account = await one(s.db, 'SELECT * FROM accounts WHERE id IN (SELECT account_id FROM transactions WHERE file_id = ?)', file.id);
@@ -75,7 +75,7 @@ test('a one account file source is named for its institution, with its range, ac
   assert.deepEqual(source.files, [{ id: file.id, name: 'aggregator.csv', removable: true }]);
 }));
 
-test('a source with no institution is named for its file', () => withStore(async (s) => {
+test('a source with no institution is named for its file', async () => withStore(async (s) => {
   await ingest(s, fixture('positions.csv', 'text/csv'));
   const file = await fileRow(s, 'positions.csv');
   const account = await one(s.db, 'SELECT * FROM accounts WHERE id IN (SELECT account_id FROM positions WHERE file_id = ?)', file.id);
@@ -89,7 +89,7 @@ test('a source with no institution is named for its file', () => withStore(async
   assert.deepEqual(source.files.map((f) => f.name), ['positions.csv']);
 }));
 
-test('the bank activity and balance fixtures are named by institution or file, never by parser', () => withStore(async (s) => {
+test('the bank activity and balance fixtures are named by institution or file, never by parser', async () => withStore(async (s) => {
   await ingest(s, fixture('Chase7766_Activity_20320305.csv', 'text/csv'));
   await s.db.prepare("INSERT INTO accounts(id,name,kind,identity) VALUES ('balance-synthetic','Daily account','cash','synthetic-balance')").run();
   const reviewed = await importProposedRows(s,[['2032-02-29',1400.25],['2032-03-31',2300.75]].map(([asOf,amount])=>({target:'balance',basis:'closing',datePrecision:'day',fields:{accountId:'balance-synthetic',asOf,amount}})),{name:'month-end-balances.csv'});
@@ -108,7 +108,7 @@ test('the bank activity and balance fixtures are named by institution or file, n
 
 const account = (n, inst) => ({ account: `Synthetic account ${n}`, number: `555000${n}${n}${n}${n}`, inst });
 
-test('a multi account export whose accounts share an institution is named for it', () => withStore(async (s) => {
+test('a multi account export whose accounts share an institution is named for it', async () => withStore(async (s) => {
   await ingest(s, aggregatorFile('shared-institution.csv', [
     { ...account(1, 'Example Bank'), date: '2032-02-03', amount: '11.00' },
     { ...account(2, 'Example Bank'), date: '2032-02-20', amount: '12.00' },
@@ -120,7 +120,7 @@ test('a multi account export whose accounts share an institution is named for it
   assert.deepEqual(shared.range, { from: '2032-02-03', to: '2032-02-20' });
 }));
 
-test('a multi account export whose accounts are at different institutions is named for its file', () => withStore(async (s) => {
+test('a multi account export whose accounts are at different institutions is named for its file', async () => withStore(async (s) => {
   await ingest(s, aggregatorFile('mixed-institutions.csv', [
     { ...account(3, 'Example Bank'), date: '2032-01-05', amount: '13.00' },
     { ...account(4, 'Sample Credit Union'), date: '2032-01-25', amount: '14.00' },
@@ -130,7 +130,7 @@ test('a multi account export whose accounts are at different institutions is nam
   assert.equal(mixed.name, 'mixed-institutions.csv');
 }));
 
-test('several live files in one source: newest file name plus the count of the others, range over all of them', () => withStore(async (s) => {
+test('several live files in one source: newest file name plus the count of the others, range over all of them', async () => withStore(async (s) => {
   const rows = (month, a, b) => [
     { ...account(5, 'Example Bank'), date: `2031-${month}-04`, amount: a },
     { ...account(6, 'Sample Credit Union'), date: `2031-${month}-18`, amount: b },
@@ -149,7 +149,7 @@ test('several live files in one source: newest file name plus the count of the o
   assert.equal(source.accounts.length, 2);
 }));
 
-test('a bank connection source is named for its institutions', () => withStore(async (s) => {
+test('a bank connection source is named for its institutions', async () => withStore(async (s) => {
   const own = P.accountIdOf('simplefin:synthetic-naming');
   const doc = { accounts: [{ accountId: own, identity: 'simplefin:synthetic-naming', account: { inst: 'Example Bank', name: 'Everyday x4321', mask: '4321', kind: 'checking' },
     balance: { date: '2032-03-01', amount: 900 },
@@ -163,7 +163,7 @@ test('a bank connection source is named for its institutions', () => withStore(a
   assert.ok(source.accounts.some((a) => a.id === own));
 }));
 
-test('sources sort stale first, then fresh, then history, then by name', () => withStore(async (s) => {
+test('sources sort stale first, then fresh, then history, then by name', async () => withStore(async (s) => {
   // aggregator.csv then the bank activity export for the same account: the activity file holds
   // newer rows, so the aggregator source is history. An old export of another account is stale.
   await ingest(s, fixture('aggregator.csv', 'text/csv'));
@@ -181,7 +181,7 @@ test('sources sort stale first, then fresh, then history, then by name', () => w
   }
 }));
 
-test('two sources named for the same institution each add their newest file name', () => withStore(async (s) => {
+test('two sources named for the same institution each add their newest file name', async () => withStore(async (s) => {
   await ingest(s, fixture('aggregator.csv', 'text/csv'));
   await ingest(s, fixture('Chase7766_Activity_20320305.csv', 'text/csv'));
   const agg = await sourceOfFile(s, 'aggregator.csv');

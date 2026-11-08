@@ -26,7 +26,7 @@ async function balances(db, id, rows) {
 // Month-end file balances, with August landing after the connected account's last balance that month.
 const FILE_DATES = [['2032-06-30', 1000], ['2032-07-31', 1100.5], ['2032-08-31', 900.25]];
 
-test('checking pairs with cash, and month-end history pairs both accounts as sure', () => withStore(async s => {
+test('checking pairs with cash, and month-end history pairs both accounts as sure', async () => withStore(async s => {
   assert.equal(compatibleKind({ kind: 'checking', name: 'checking' }, { kind: 'cash', name: 'operating' }), true);
   await connect(s.db, { id: 'sf-cash', sfKey: 'sf-cash', name: 'operating', kind: 'cash' });
   await connect(s.db, { id: 'sf-biz', sfKey: 'sf-biz', name: 'operating business', kind: 'business' });
@@ -46,7 +46,7 @@ test('checking pairs with cash, and month-end history pairs both accounts as sur
   assert.ok(questions.some(q => q.includes('business') && q.includes('Balances matched on Jun 30, Jul 31 and Aug 31')));
 }));
 
-test('one unequal balance blocks the pair, two matches stay likely, and two files cannot both be sure', () => withStore(async s => {
+test('one unequal balance blocks the pair, two matches stay likely, and two files cannot both be sure', async () => withStore(async s => {
   await connect(s.db, { id: 'sf-cash', sfKey: 'sf-cash', name: 'operating', kind: 'cash' });
   await balances(s.db, 'sf-cash', [['2032-06-30', 1000], ['2032-07-31', 1100.5], ['2032-08-28', 900.25]]);
   await fileAccount(s.db, { id: 'miss', name: 'checking', kind: 'checking' });
@@ -83,7 +83,7 @@ async function survivor(db) {
   ]);
 }
 
-test('a merged survivor pairs with a balance-only file account', () => withStore(async s => {
+test('a merged survivor pairs with a balance-only file account', async () => withStore(async s => {
   await survivor(s.db);
   await fileAccount(s.db, { id: 'file-only', name: 'checking', kind: 'checking' });
   await balances(s.db, 'file-only', FILE_DATES);
@@ -94,7 +94,7 @@ test('a merged survivor pairs with a balance-only file account', () => withStore
   assert.equal(pairs[0].candidateId === pairs[0].ownId, false);
 }));
 
-test('two connected accounts never pair', () => withStore(async s => {
+test('two connected accounts never pair', async () => withStore(async s => {
   await survivor(s.db);
   await connect(s.db, { id: 'sf-other', sfKey: 'sf-other', name: 'checking', kind: 'checking' });
   await balances(s.db, 'sf-other', FILE_DATES);

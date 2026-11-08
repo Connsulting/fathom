@@ -73,7 +73,7 @@ const statedItems = async db => await db.prepare("SELECT id FROM confirm_items W
 test('AC1: ownerSaidRows quotes each memory and each note sentence with its own ref', async () => store(async db => {
   const { ownerSaidRows } = await import('../src/resolve/owner-said.mjs');
   const id = await remember(db, 'Our business keeps its books on a cash basis.');
-  const rows = ownerSaidRows(db, { notes: [NOTE] });
+  const rows = await ownerSaidRows(db, { notes: [NOTE] });
   const memory = rows.filter(r => r.source === 'memory');
   assert.deepEqual(memory.map(r => [r.ref, r.quote]), [[`preferences:${id}`, 'Our business keeps its books on a cash basis.']]);
   const notes = rows.filter(r => r.source === 'note');
@@ -82,7 +82,7 @@ test('AC1: ownerSaidRows quotes each memory and each note sentence with its own 
   assert.ok(notes[1].quote.includes(SALARY_SENTENCE), notes[1].quote);
   assert.ok(!notes[1].quote.includes('Tuesday'), 'a note row holds one sentence');
   assert.ok(notes.every(r => r.name === 'advisor-notes.md'));
-  assert.deepEqual(ownerSaidRows(db, {}).filter(r => r.source === 'note'), [], 'notes default to none');
+  assert.deepEqual((await ownerSaidRows(db, {})).filter(r => r.source === 'note'), [], 'notes default to none');
 }));
 
 test('AC1: a yes/no question is answered from a memory with quoted evidence, and Undo declines it for good', async () => store(async db => {

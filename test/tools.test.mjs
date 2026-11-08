@@ -545,6 +545,6 @@ test('C4 read metadata and copied refs never ground sentinel argument amounts', 
   ];
   for(const [name,args] of cases){
     const result=await callTool(name,args,s.ctx);
-    for(const text of ['$987,654.31','$2,091'])assert.equal(groundAnswer(`The figure is ${text}.`,{scenario:buildScenario(s.db),data:[],toolResults:[{name,args,result}]}).ok,false,`${name}.${args.operation}: ${text}`);
+    for(const text of ['$987,654.31','$2,091'])assert.equal(groundAnswer(`The figure is ${text}.`,{scenario:await buildScenario(s.db),data:[],toolResults:[{name,args,result}]}).ok,false,`${name}.${args.operation}: ${text}`);
   }
 });

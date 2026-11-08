@@ -133,7 +133,7 @@ test('manual HTTP, successful upload and Confirm dispatch only to the initiating
     assert.equal(uploaded.json.files[0].status, 'imported');
     for (let i = 0; i < 30; i++) await turn();
     assert.ok(a.scheduler.runs({ limit: 200 }).some(r => r.jobId === 'plan' && r.trigger === 'ingest'));
-    const item = ask(a.db, { kind: 'fact_check', subject: 'synthetic.scheduler', question: 'Use this synthetic fact?',
+    const item = await ask(a.db, { kind: 'fact_check', subject: 'synthetic.scheduler', question: 'Use this synthetic fact?',
       options: FACT_CHECK_OPTIONS, context: { key: 'synthetic.scheduler', value: true }, now: '2026-11-05T12:00:00Z' });
     const answer = await fx.A.client.postJson(`/api/confirm/${item.id}/answer`, { answer: 'yes' });
     assert.equal(answer.status, 200, answer.text);
@@ -185,7 +185,7 @@ test('resolver answers queue a separate local plan claim after releasing the hou
     const a = registry.get(instance.householdId); const b = registry.get(other);
     const seedQuestion = async ctx => {
       await ctx.db.prepare('INSERT INTO accounts (id,name,inst,mask) VALUES (?,?,?,?)').run('synthetic-checking', 'Synthetic checking', 'Example Bank', '1234');
-      return ask(ctx.db, { kind: 'account_kind', subject: 'synthetic-checking', question: 'What kind of account is this?', options: KIND_OPTIONS, now: '2026-11-05T12:00:00Z' }).id;
+      return (await ask(ctx.db, { kind: 'account_kind', subject: 'synthetic-checking', question: 'What kind of account is this?', options: KIND_OPTIONS, now: '2026-11-05T12:00:00Z' })).id;
     };
     const own = await seedQuestion(a); const foreign = await seedQuestion(b);
     const resolved = await a.scheduler.runNow('confirm-guess');

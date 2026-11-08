@@ -168,7 +168,7 @@ test('durable quotas reserve atomically and roll over at UTC midnight', async t 
   let time = Date.parse('2026-11-07T23:59:00Z');
   const c = config(dir, { FATHOM_PUBLIC_DEMO_TURNS_PER_DAY: '1', FATHOM_PUBLIC_DEMO_TOKENS_PER_DAY: '20',
     FATHOM_PUBLIC_DEMO_CALLS_PER_DAY: '2', FATHOM_PUBLIC_DEMO_USD_PER_DAY: '1' });
-  let ctl = createDemoControl(c, { now: () => time });
+  let ctl = await createDemoControl(c, { now: () => time });
   assert.equal(await ctl.reserveTurn('a', 'ip'), true);
   assert.equal(await ctl.reserveTurn('a', 'ip'), false);
   assert.equal(await ctl.reserveRound('a', 10, 0.1), true);
@@ -176,7 +176,7 @@ test('durable quotas reserve atomically and roll over at UTC midnight', async t 
   assert.equal(await ctl.reserveRound('b', 10, 0.1), true);
   assert.equal(await ctl.reserveRound('c', 10, 0.1), false);
   ctl.close();
-  ctl = createDemoControl(c, { now: () => time });
+  ctl = await createDemoControl(c, { now: () => time });
   assert.equal(await ctl.reserveTurn('a', 'ip'), false);
   assert.equal(await ctl.reserveRound('c', 1, 0.01), false);
   time += 120000;
@@ -239,7 +239,7 @@ test('live demo boundary applies model/output caps and offers only local read to
   const c = config(dir, { FATHOM_ENGINE: 'live', FATHOM_CLAUDE_CREDENTIAL_FILE: credentialFile,
     FATHOM_PUBLIC_DEMO_MAX_TOKENS: '32', FATHOM_PUBLIC_DEMO_CALLS_PER_DAY: '2' });
   const { db, platform } = await openBase(c);
-  const control = createDemoControl(c);
+  const control = await createDemoControl(c);
   t.after(async () => { await control.close(); await db.close(); await platform.close(); });
   const requests = [];
   // Messages API response shape: https://platform.claude.com/docs/en/api/messages/create
@@ -308,7 +308,7 @@ test('P&L and spending reads use the visitor sandbox and refuse writes', async t
 });
 test('per-IP turn quota applies across visitors and persisted control handles', async t => {
   const c = config(directory(t), { FATHOM_PUBLIC_DEMO_TURNS_PER_IP_PER_DAY: '1' });
-  const first = createDemoControl(c), second = createDemoControl(c);
+  const first = await createDemoControl(c), second = await createDemoControl(c);
   try {
     assert.equal(await first.reserveTurn('one', 'same-ip'), true);
     assert.equal(await second.reserveTurn('two', 'same-ip'), false);
@@ -331,7 +331,7 @@ test('global USD reservations, sandbox TTL/cap and per-IP creation cap are enfor
   let time = Date.parse('2026-11-07T00:00:00Z');
   const c = config(dir, { FATHOM_PUBLIC_DEMO_USD_PER_DAY: '0.1', FATHOM_PUBLIC_DEMO_SANDBOXES: '1',
     FATHOM_PUBLIC_DEMO_CREATIONS_PER_IP_PER_DAY: '1', FATHOM_PUBLIC_DEMO_TTL_SECONDS: '60' });
-  const ctl = createDemoControl(c, { now: () => time });
+  const ctl = await createDemoControl(c, { now: () => time });
   assert.equal(await ctl.reserveRound('a', 1, 0.1), true);
   assert.equal(await ctl.reserveRound('b', 1, 0.001), false);
   const first = await ctl.sandbox(null, 'ip');

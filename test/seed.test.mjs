@@ -235,7 +235,7 @@ test('seedDemo itself refuses a populated store with no mode and leaves it untou
   const t = await tempDb();
   await t.db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
                 VALUES ('household.state', '"VA"', 'you', '2026-11-01', 1, NULL, NULL, NULL, '2026-11-01T09:00:00Z')`).run();
-  assert.throws(() => seedDemo(t.db), /refusing/);
+  assert.throws(async () => await seedDemo(t.db), /refusing/);
   assert.equal(await getSetting(t.db, 'mode', null), null);
   assert.equal((await t.db.prepare('SELECT COUNT(*) AS n FROM facts').get()).n, 1);
   t.close();
@@ -245,7 +245,7 @@ test('seedDemo itself refuses a real store', T, async () => {
   const { seedDemo } = await import('../demo/seed.mjs');
   const t = await tempDb();
   await setSetting(t.db, 'mode', 'real');
-  assert.throws(() => seedDemo(t.db), /refusing/);
+  assert.throws(async () => await seedDemo(t.db), /refusing/);
   assert.equal(await getSetting(t.db, 'mode', null), 'real');
   t.close();
 });
@@ -263,7 +263,7 @@ test('demo seeding and reset keep store_identity without duplicating or erasing 
     const transactions = (await t.db.prepare('SELECT count(*) AS n FROM transactions').get()).n;
     assert.ok(accounts.length > 0 && transactions > 0);
     assert.equal(await getSetting(t.db, 'mode', null), 'demo');
-    seedDemo(t.db);
+    await seedDemo(t.db);
     assert.deepEqual((await t.db.prepare('SELECT * FROM store_identity').all()).map(r => ({ ...r })), identity, 'reset keeps the store identity');
     assert.equal((await t.db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'households'").get()).n, 0, 'no households table in the store');
     assert.deepEqual(await t.db.prepare('SELECT id, mask, kind FROM accounts ORDER BY id').all(), accounts);
@@ -277,7 +277,7 @@ test('seedDemo seeds a fresh migrated store that has an empty store_identity tab
   const t = await tempDb();
   try {
     assert.equal((await t.db.prepare('SELECT count(*) AS n FROM store_identity').get()).n, 0);
-    seedDemo(t.db);
+    await seedDemo(t.db);
     assert.equal(await getSetting(t.db, 'mode', null), 'demo');
     assert.ok((await t.db.prepare('SELECT count(*) AS n FROM accounts').get()).n > 0);
   } finally { t.close(); }

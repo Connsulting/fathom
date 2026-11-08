@@ -46,7 +46,7 @@ test('the accounts timeout is two minutes and the retry delay is short', () => {
   assert.ok(S.RETRY_DELAY_MS > 0 && S.RETRY_DELAY_MS <= 10000);
 });
 
-test('a bridge that answers after 45 seconds completes the sync on the first try', () => withConnected(async (s, fake) => {
+test('a bridge that answers after 45 seconds completes the sync on the first try', async () => withConnected(async (s, fake) => {
   const log = [];
   const out = await S.syncSimplefin(s.db, syncOpts(s, slowBridge(fake, 45000 / SCALE, log), { timeoutMs: S.ACCOUNTS_TIMEOUT_MS / SCALE, retryDelayMs: 0 }));
   assert.equal(out.status, 'ok');
@@ -54,14 +54,14 @@ test('a bridge that answers after 45 seconds completes the sync on the first try
   assert.deepEqual(log, ['accounts'], 'one request, no retry');
 }));
 
-test('liveness: the old 30 second limit would have failed the same 45 second bridge', () => withConnected(async (s, fake) => {
+test('liveness: the old 30 second limit would have failed the same 45 second bridge', async () => withConnected(async (s, fake) => {
   const log = [];
   const out = await S.syncSimplefin(s.db, syncOpts(s, slowBridge(fake, 45000 / SCALE, log), { timeoutMs: 30000 / SCALE, retryDelayMs: 0 }));
   assert.deepEqual([out.status, out.code], ['error', 'network']);
   assert.equal(log.length, 2, 'it retried once, then gave up');
 }));
 
-test('the default accounts request is cancelled by a two minute signal', () => withConnected(async (s, fake) => {
+test('the default accounts request is cancelled by a two minute signal', async () => withConnected(async (s, fake) => {
   const seen = [];
   const original = AbortSignal.timeout;
   AbortSignal.timeout = (ms) => { seen.push(ms); return original.call(AbortSignal, ms); };
@@ -72,7 +72,7 @@ test('the default accounts request is cancelled by a two minute signal', () => w
   assert.ok(seen.includes(120000), `signals used: ${seen}`);
 }));
 
-test('a network error on the first try is retried once and the sync completes', () => withConnected(async (s, fake) => {
+test('a network error on the first try is retried once and the sync completes', async () => withConnected(async (s, fake) => {
   let accountsCalls = 0;
   const flaky = (url, init) => {
     if (isAccounts(url) && ++accountsCalls === 1) return Promise.reject(new TypeError('fetch failed'));
@@ -84,7 +84,7 @@ test('a network error on the first try is retried once and the sync completes', 
   assert.equal((await s.db.prepare('SELECT status, error_code FROM simplefin_connection WHERE id = 1').get()).status, 'ok');
 }));
 
-test('the retry waits the configured delay before the second request', () => withConnected(async (s, fake) => {
+test('the retry waits the configured delay before the second request', async () => withConnected(async (s, fake) => {
   const stamps = [];
   const flaky = (url, init) => {
     if (isAccounts(url)) { stamps.push(Date.now()); if (stamps.length === 1) return Promise.reject(new TypeError('fetch failed')); }
@@ -95,7 +95,7 @@ test('the retry waits the configured delay before the second request', () => wit
   assert.ok(stamps[1] - stamps[0] >= 50, `gap ${stamps[1] - stamps[0]} ms`);
 }));
 
-test('a bridge that always times out ends in the network status after exactly two requests', () => withConnected(async (s, fake) => {
+test('a bridge that always times out ends in the network status after exactly two requests', async () => withConnected(async (s, fake) => {
   const log = [];
   const never = slowBridge(fake, 60 * 60 * 1000, log);
   const out = await S.syncSimplefin(s.db, syncOpts(s, never, { timeoutMs: 120000 / 1000, retryDelayMs: 0 }));
@@ -105,7 +105,7 @@ test('a bridge that always times out ends in the network status after exactly tw
   assert.deepEqual([row.status, row.error_code], ['error', 'network']);
 }));
 
-test('refusals the bridge answers are not retried', () => withConnected(async (s, fake) => {
+test('refusals the bridge answers are not retried', async () => withConnected(async (s, fake) => {
   for (const [status, code] of [[403, 'revoked'], [402, 'payment_required'], [500, 'bad_response']]) {
     let calls = 0;
     const refuse = async (url, init) => {

@@ -37,7 +37,7 @@ const pending = (db) => C.pendingItems(db);
 const itemOf = (db, kind) => pending(db).find((i) => i.kind === kind);
 
 describe('account questions', () => {
-  test('a new account queues owner and kind questions with the frozen options', () => withStore(async (s) => {
+  test('a new account queues owner and kind questions with the frozen options', async () => withStore(async (s) => {
     const r = await P.ingestFile(s.db, fixture('Chase7766_Activity_20320305.csv', 'text/csv'), s.opts(await offEngine()));
     const acct = await one(s.db, 'SELECT * FROM accounts');
     const owner = itemOf(s.db, 'account_owner');
@@ -54,7 +54,7 @@ describe('account questions', () => {
     assert.ok(!JSON.stringify(pending(s.db)).includes('EXAMPLE SHOP'), 'questions carry no transaction text');
   }));
 
-  test('answers set the owner label and the kind; bad option, unknown id and a second answer are refused', () => withStore(async (s) => {
+  test('answers set the owner label and the kind; bad option, unknown id and a second answer are refused', async () => withStore(async (s) => {
     await P.ingestFile(s.db, fixture('Chase7766_Activity_20320305.csv', 'text/csv'), s.opts(await offEngine()));
     const owner = itemOf(s.db, 'account_owner');
     const kind = itemOf(s.db, 'account_kind');
@@ -76,7 +76,7 @@ describe('account questions', () => {
     assert.equal((await one(s.db, 'SELECT answered_at FROM confirm_items WHERE id = ?', owner.id)).answered_at, NOW);
   }));
 
-  test('remembered: an overlapping export touching an answered account asks nothing new', () => withStore(async (s) => {
+  test('remembered: an overlapping export touching an answered account asks nothing new', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, fixture('aggregator.csv', 'text/csv'), s.opts(off));
     const owner = itemOf(s.db, 'account_owner');
@@ -90,7 +90,7 @@ describe('account questions', () => {
     assert.equal((await one(s.db, 'SELECT owner FROM accounts')).owner, 'You');
   }));
 
-  test('ask: existing pending, new subject queued, answered subject remembered and applied', () => withStore(async (s) => {
+  test('ask: existing pending, new subject queued, answered subject remembered and applied', async () => withStore(async (s) => {
     const r = await P.ingestFile(s.db, fixture('aggregator.csv', 'text/csv'), s.opts(await offEngine()));
     const acct = await one(s.db, 'SELECT * FROM accounts');
     const owner = itemOf(s.db, 'account_owner');
@@ -108,7 +108,7 @@ describe('account questions', () => {
 });
 
 describe('entity alias', () => {
-  test('an expense-only entity named differently from the income entity queues an alias question', () => withStore(async (s) => {
+  test('an expense-only entity named differently from the income entity queues an alias question', async () => withStore(async (s) => {
     const r = await seedHistoricalRows(s, northwindFile(), historicalNorthwindRows(200), { parser: 'pnl-workbook', sourceKind: 'pnl_workbook', period: { from: '2032-04-01', to: '2032-04-30' } });
     assert.equal(r.status, 'imported');
     const alias = await items(s.db, 'entity_alias');
@@ -119,7 +119,7 @@ describe('entity alias', () => {
     assert.ok(!opts.some((o) => o.id === 'entity:Northwind'), 'the alias is not offered as its own target');
   }));
 
-  test('choosing the canonical entity merges alias rows (amounts summed, cells kept) and is remembered', () => withStore(async (s) => {
+  test('choosing the canonical entity merges alias rows (amounts summed, cells kept) and is remembered', async () => withStore(async (s) => {
     const off = await offEngine();
     await seedHistoricalRows(s, northwindFile(), historicalNorthwindRows(200), { parser: 'pnl-workbook', sourceKind: 'pnl_workbook', period: { from: '2032-04-01', to: '2032-04-30' } });
     const alias = itemOf(s.db, 'entity_alias');
@@ -147,7 +147,7 @@ describe('entity alias', () => {
       [['Income', 1500], ['Software', -125], ['Travel', -250]]);
   }));
 
-  test('choosing a separate entity keeps the rows apart and records no alias', () => withStore(async (s) => {
+  test('choosing a separate entity keeps the rows apart and records no alias', async () => withStore(async (s) => {
     const off = await offEngine();
     await seedHistoricalRows(s, northwindFile(), historicalNorthwindRows(200), { parser: 'pnl-workbook', sourceKind: 'pnl_workbook', period: { from: '2032-04-01', to: '2032-04-30' } });
     C.answer(s.db, itemOf(s.db, 'entity_alias').id, 'separate', { now: NOW });
@@ -164,7 +164,7 @@ describe('tax year', () => {
   // them by the sheet year in the subject.
   const yearOf = (q) => (/(?:^|:)(203[12])(?::|$)/.exec(q.subject) || [])[1];
 
-  test('payment year shifts January to the prior tax year, tax year keeps it, and both are remembered', () => withStore(async (s) => {
+  test('payment year shifts January to the prior tax year, tax year keeps it, and both are remembered', async () => withStore(async (s) => {
     const off = await offEngine();
     await seedHistoricalRows(s, fixture('tax-payments.xlsx'), historicalTaxRows(false), { parser: 'tax-payments', sourceKind: 'tax_payments', period: { from: '2031-12-31', to: '2032-03-31' } });
     const qs = await items(s.db, 'tax_year');
@@ -214,7 +214,7 @@ describe('fact check', () => {
   const sourceOf = async (db, fileId) => (await one(db, 'SELECT source_id FROM files WHERE id = ?', fileId)).source_id;
   const bySubject = (db, end) => C.listItems(db, { status: 'all' }).find((i) => i.kind === 'fact_check' && i.subject.endsWith(end));
 
-  test('subjects name source, key and value; yes confirms the fact, no removes it', () => withStore(async (s) => {
+  test('subjects name source, key and value; yes confirms the fact, no removes it', async () => withStore(async (s) => {
     const r = await seedHistoricalDocument(s, fixture('notes.md'), [[NOTES_A]]);
     const sid = await sourceOf(s.db, r.fileId);
     assert.deepEqual((await items(s.db, 'fact_check')).map((c) => c.subject).sort(), [`${sid}|household.dependents|2`, `${sid}|household.state|"CO"`]);
@@ -229,7 +229,7 @@ describe('fact check', () => {
     assert.equal(await one(s.db, "SELECT * FROM facts WHERE key = 'household.state'"), undefined);
   }));
 
-  test('answers are remembered: equivalent content in other bytes asks nothing and keeps a rejected fact out', () => withStore(async (s) => {
+  test('answers are remembered: equivalent content in other bytes asks nothing and keeps a rejected fact out', async () => withStore(async (s) => {
     const a = await seedHistoricalDocument(s, fixture('notes.md'), [[NOTES_A]]);
     C.answer(s.db, bySubject(s.db, '|household.state|"CO"').id, 'no', { now: NOW });
     C.answer(s.db, bySubject(s.db, '|household.dependents|2').id, 'yes', { now: NOW });
@@ -243,7 +243,7 @@ describe('fact check', () => {
     assert.equal((await one(s.db, "SELECT confirmed FROM facts WHERE key = 'household.dependents'")).confirmed, 1);
   }));
 
-  test('a newer import with another value closes the older question as superseded; answering it is stale', () => withStore(async (s) => {
+  test('a newer import with another value closes the older question as superseded; answering it is stale', async () => withStore(async (s) => {
     await seedHistoricalDocument(s, fixture('notes.md'), [[NOTES_A]]);
     const older = bySubject(s.db, '|household.state|"CO"');
     await seedHistoricalDocument(s, laterNotes(), [[NOTES_B]]);
@@ -257,7 +257,7 @@ describe('fact check', () => {
     assert.equal(F.getFacts(s.db)['household.state'], 'NM', 'the newer fact is kept');
   }));
 
-  test('a pending question whose value differs from a confirmed fact is stale; a current one is answerable', () => withStore(async (s) => {
+  test('a pending question whose value differs from a confirmed fact is stale; a current one is answerable', async () => withStore(async (s) => {
     const r = await seedHistoricalDocument(s, fixture('notes.md'), [[NOTES_A]]);
     F.upsertFact(s.db, { key: 'household.state', value: 'NM', src: 'you', asOf: '2032-03-10', confirmed: true });
     const st = bySubject(s.db, '|household.state|"CO"');
@@ -269,7 +269,7 @@ describe('fact check', () => {
     assert.ok(r.fileId);
   }));
 
-  test('upsertFact never overwrites a confirmed fact; deleteFact removes only that file\'s unconfirmed fact', () => withStore(async (s) => {
+  test('upsertFact never overwrites a confirmed fact; deleteFact removes only that file\'s unconfirmed fact', async () => withStore(async (s) => {
     const r = await P.ingestFile(s.db, fixture('aggregator.csv', 'text/csv'), s.opts(await offEngine()));
     assert.deepEqual(F.upsertFact(s.db, { key: 'household.state', value: 'CO', src: 'you', asOf: '2032-03-01', confirmed: true }), { written: true, changed: true });
     assert.deepEqual(F.upsertFact(s.db, { key: 'household.state', value: 'NM', src: 'extract', asOf: '2032-03-02', provenance: { fileId: r.fileId } }), { written: false, reason: 'confirmed' });
@@ -285,7 +285,7 @@ describe('fact check', () => {
     assert.ok(!('household.dependents' in F.getFacts(s.db)));
   }));
 
-  test('HTTP: a stale answer is 409 through the real router', () => withStore(async (s) => {
+  test('HTTP: a stale answer is 409 through the real router', async () => withStore(async (s) => {
     await seedHistoricalDocument(s, fixture('notes.md'), [[NOTES_A]]);
     F.upsertFact(s.db, { key: 'household.state', value: 'NM', src: 'you', asOf: '2032-03-10', confirmed: true });
     const st = bySubject(s.db, '|household.state|"CO"');
@@ -307,7 +307,7 @@ describe('near duplicate', () => {
   const near = { date: '2032-03-10', amount: '54.21', description: 'SYNTH GROCERY' };
   const nearLater = { date: '2032-03-12', amount: '54.21', description: 'SYNTH GROCERY STORE 0042' };
 
-  test('same amount within 3 days from another file queues a question; same keeps one and skips it later', () => withStore(async (s) => {
+  test('same amount within 3 days from another file queues a question; same keeps one and skips it later', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, aggregatorFile('near-a.csv', [near]), s.opts(off));
     const b = await P.ingestFile(s.db, aggregatorFile('near-b.csv', [nearLater]), s.opts(off));
@@ -333,7 +333,7 @@ describe('near duplicate', () => {
     assert.equal((await items(s.db, 'near_duplicate')).length, 1, 'no new near-duplicate question');
   }));
 
-  test('different keeps both rows', () => withStore(async (s) => {
+  test('different keeps both rows', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, aggregatorFile('near-a.csv', [near]), s.opts(off));
     await P.ingestFile(s.db, aggregatorFile('near-b.csv', [nearLater]), s.opts(off));
@@ -347,7 +347,7 @@ describe('near duplicate', () => {
   const collide = (name, description, extra = []) => activityFile(name, [{ date: '03/09/2032', amount: '-54.21', balance: '', description }, ...extra]);
   const unrelated = { date: '03/20/2032', amount: '-9.99', balance: '', description: 'SYNTH OTHER' };
 
-  test('a description collision answered same archives the newer row; a re-import of it asks nothing new', () => withStore(async (s) => {
+  test('a description collision answered same archives the newer row; a re-import of it asks nothing new', async () => withStore(async (s) => {
     const off = await offEngine();
     const a = await P.ingestFile(s.db, collide('Chase4321_Activity_A.csv', 'SYNTH GROCERY NORTH'), s.opts(off));
     await P.ingestFile(s.db, collide('Chase4321_Activity_B.csv', 'SYNTH PHARMACY SOUTH'), s.opts(off));
@@ -366,7 +366,7 @@ describe('near duplicate', () => {
     assert.equal((await items(s.db, 'near_duplicate')).length, 1, 'no new question');
   }));
 
-  test('a description collision answered different keeps both; a re-import of it is a duplicate with no new question', () => withStore(async (s) => {
+  test('a description collision answered different keeps both; a re-import of it is a duplicate with no new question', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, collide('Chase4321_Activity_A.csv', 'SYNTH GROCERY NORTH'), s.opts(off));
     await P.ingestFile(s.db, collide('Chase4321_Activity_B.csv', 'SYNTH PHARMACY SOUTH'), s.opts(off));
@@ -379,7 +379,7 @@ describe('near duplicate', () => {
     assert.equal(await count(s.db, 'superseded_rows', "reason != 'duplicate_cross_format'"), 0);
   }));
 
-  test('rows more than 3 days apart or from the same file are not near duplicates', () => withStore(async (s) => {
+  test('rows more than 3 days apart or from the same file are not near duplicates', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, aggregatorFile('far-a.csv', [near, { ...nearLater, date: '2032-03-11' }]), s.opts(off));
     await P.ingestFile(s.db, aggregatorFile('far-b.csv', [{ ...near, date: '2032-03-20' }]), s.opts(off));

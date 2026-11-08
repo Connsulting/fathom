@@ -72,7 +72,7 @@ async function refused(db, fn, code, reason) {
 }
 
 describe('answerItems', () => {
-  test('answers several items, each with its own undo log', () => withHousehold(async (s) => {
+  test('answers several items, each with its own undo log', async () => withHousehold(async (s) => {
     const rows = [['checking', 'owner', 'You'], ['card', 'spouse', 'Your spouse'], ['rainyDay', 'joint', 'Joint']];
     const answers = await mapSeries(rows, async ([role, option]) => ({ id: (await ownerItem(s.db, role)).id, option }));
     const out = C.answerItems(s.db, answers, { now: LATER });
@@ -88,7 +88,7 @@ describe('answerItems', () => {
     assert.equal(await ownerOf(s.db, 'rainyDay'), 'Joint');
   }));
 
-  test('a bad option or an already answered item refuses the whole batch and changes nothing', () => withHousehold(async (s) => {
+  test('a bad option or an already answered item refuses the whole batch and changes nothing', async () => withHousehold(async (s) => {
     const checking = (await ownerItem(s.db, 'checking')).id;
     const card = (await ownerItem(s.db, 'card')).id;
     await refused(s.db, () => C.answerItems(s.db, [{ id: checking, option: 'owner' }, { id: card, option: 'nobody' }], { now: LATER }), 'bad_option');
@@ -99,7 +99,7 @@ describe('answerItems', () => {
     assert.equal(await ownerOf(s.db, 'checking'), null);
   }));
 
-  test('an explicit option in the batch wins over what propagation from another row would choose', () => withHousehold(async (s) => {
+  test('an explicit option in the batch wins over what propagation from another row would choose', async () => withHousehold(async (s) => {
     // The brokerage shares the checking's holder, so answering the checking alone would propagate
     // "owner" to it. Here the owner picked "spouse" for it in the same batch.
     const checking = (await ownerItem(s.db, 'checking')).id;
@@ -119,7 +119,7 @@ describe('answerItems', () => {
 describe('reopenItems', () => {
   const batch = async (db) => await mapSeries(['checking', 'card', 'rainyDay'], async (role, n) => ({ id: (await ownerItem(db, role)).id, option: ['owner', 'spouse', 'joint'][n] }));
 
-  test('reopens every item of a group', () => withHousehold(async (s) => {
+  test('reopens every item of a group', async () => withHousehold(async (s) => {
     const answers = await batch(s.db);
     C.answerItems(s.db, answers, { now: LATER });
     const out = C.reopenItems(s.db, answers.map((a) => a.id), { now: LATER });
@@ -128,7 +128,7 @@ describe('reopenItems', () => {
     for (const role of ['checking', 'card', 'rainyDay']) assert.equal(await ownerOf(s.db, role), null);
   }));
 
-  test('one final item refuses the whole undo with its reason', () => withHousehold(async (s) => {
+  test('one final item refuses the whole undo with its reason', async () => withHousehold(async (s) => {
     const answers = await batch(s.db);
     C.answerItems(s.db, answers, { now: LATER });
     await s.db.prepare("UPDATE accounts SET owner = 'Business' WHERE id = ?").run(await accountId(s.db, 'card'));
@@ -145,7 +145,7 @@ describe('batch routes over HTTP', () => {
     try { return await fn(app); } finally { await app.close(); }
   }
 
-  test('POST /api/confirm/answers answers the batch and propagates; malformed bodies are 400', () => withHousehold(async (s) => withRouter(s, async (client) => {
+  test('POST /api/confirm/answers answers the batch and propagates; malformed bodies are 400', async () => withHousehold(async (s) => withRouter(s, async (client) => {
     for (const body of [{}, { answers: 'owner' }, { answers: [{ id: (await ownerItem(s.db, 'card')).id }] }]) {
       const bad = await client.postJson('/api/confirm/answers', body);
       assert.equal(bad.status, 400, `${JSON.stringify(body)}: ${bad.text.slice(0, 200)}`);
@@ -171,7 +171,7 @@ describe('batch routes over HTTP', () => {
     assert.equal((await ownerItem(s.db, 'rainyDay')).status, 'pending');
   })));
 
-  test('POST /api/confirm/reopen-many reopens the group', () => withHousehold(async (s) => withRouter(s, async (client) => {
+  test('POST /api/confirm/reopen-many reopens the group', async () => withHousehold(async (s) => withRouter(s, async (client) => {
     const card = (await ownerItem(s.db, 'card')).id;
     const rainy = (await ownerItem(s.db, 'rainyDay')).id;
     const ok = await client.postJson('/api/confirm/answers', { answers: [{ id: card, answer: 'spouse' }, { id: rainy, answer: 'joint' }] });

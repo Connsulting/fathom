@@ -171,7 +171,7 @@ const CASES = {
       await imported(s,categoryHistory());
       await imported(s,aggregatorFile('uncategorized.csv',[{date:'2032-03-01',amount:250,category:'Uncategorized',description:'Example Service'}]));
       const {queueCategoryChecks}=await src('src/categories/store.mjs');
-      queueCategoryChecks(s.db,{clock:'2032-11-05',now:SETUP_AT});
+      await queueCategoryChecks(s.db,{clock:'2032-11-05',now:SETUP_AT});
       return firstPending(s.db,'transaction_category');
     },
     pairs: [['always:Business','Shopping'],['Shopping','always:Business']],
@@ -181,7 +181,7 @@ const CASES = {
     setup: async s => {
       await imported(s,aggregatorFile('unknown-category.csv',[{date:'2032-03-01',amount:250,category:'A new category'}]));
       const {queueCategoryChecks}=await src('src/categories/store.mjs');
-      queueCategoryChecks(s.db,{clock:'2032-11-05',now:SETUP_AT});
+      await queueCategoryChecks(s.db,{clock:'2032-11-05',now:SETUP_AT});
       return firstPending(s.db,'category_mapping');
     },
     pairs: [['household','business'],['business','tax']],
@@ -320,7 +320,7 @@ describe('revise equals answering the new option directly', () => {
 describe('reopen restores the store as it was before the answer', () => {
   for (const [kind, c] of Object.entries(CASES)) {
     for (const a of c.reopen) {
-      test(`${kind}: answering ${a} then reopening restores every row and leaves the item pending`, () => withStore(async (s) => {
+      test(`${kind}: answering ${a} then reopening restores every row and leaves the item pending`, async () => withStore(async (s) => {
         const id = await c.setup(s);
         const before = await dataDump(s.db);
         C.answerItem(s.db, id, a, { now: ANSWER_AT });
@@ -345,7 +345,7 @@ describe('reopen restores the store as it was before the answer', () => {
 });
 
 describe('revise liveness and results', () => {
-  test('an ordinary revise right after an answer succeeds, and the item can be revised again', () => withStore(async (s) => {
+  test('an ordinary revise right after an answer succeeds, and the item can be revised again', async () => withStore(async (s) => {
     const id = await CASES.account_owner.setup(s);
     const subject = C.getItem(s.db, id).subject;
     C.answerItem(s.db, id, 'owner', { now: ANSWER_AT });
@@ -361,7 +361,7 @@ describe('revise liveness and results', () => {
     assert.equal((await one(s.db, 'SELECT answered_at FROM confirm_items WHERE id = ?', id)).answered_at, NOW);
   }));
 
-  test('a fact_check revise and reopen report factsChanged', () => withStore(async (s) => {
+  test('a fact_check revise and reopen report factsChanged', async () => withStore(async (s) => {
     const id = await CASES.fact_check.setup(s);
     C.answerItem(s.db, id, 'yes', { now: ANSWER_AT });
     assert.equal((await one(s.db, "SELECT confirmed FROM facts WHERE key = 'household.state'")).confirmed, 1);
@@ -376,7 +376,7 @@ describe('revise liveness and results', () => {
     assert.equal(restored.confirmed, 0, 'and unconfirmed again');
   }));
 
-  test('revising to the stored answer changes nothing', () => withStore(async (s) => {
+  test('revising to the stored answer changes nothing', async () => withStore(async (s) => {
     const id = await CASES.account_owner.setup(s);
     C.answerItem(s.db, id, 'owner', { now: ANSWER_AT });
     const before = await fullDump(s.db);
@@ -389,27 +389,27 @@ describe('revise liveness and results', () => {
 });
 
 describe('refusals', () => {
-  test('a pending item refuses revise and reopen with not_answered', () => withStore(async (s) => {
+  test('a pending item refuses revise and reopen with not_answered', async () => withStore(async (s) => {
     const id = await CASES.account_owner.setup(s);
     await refused(s.db, () => C.reviseItem(s.db, id, 'owner', { now: NOW }), 'not_answered');
     await refused(s.db, () => C.reopenItem(s.db, id, { now: NOW }), 'not_answered');
     assert.equal(C.finalReason(s.db, C.getItem(s.db, id)), null);
   }));
 
-  test('an unknown item refuses with not_found', () => withStore(async (s) => {
+  test('an unknown item refuses with not_found', async () => withStore(async (s) => {
     await CASES.account_owner.setup(s);
     await refused(s.db, () => C.reviseItem(s.db, 999999, 'owner', { now: NOW }), 'not_found');
     await refused(s.db, () => C.reopenItem(s.db, 999999, { now: NOW }), 'not_found');
   }));
 
-  test('a bad option refuses with bad_option and changes nothing', () => withStore(async (s) => {
+  test('a bad option refuses with bad_option and changes nothing', async () => withStore(async (s) => {
     const id = await CASES.account_owner.setup(s);
     C.answerItem(s.db, id, 'owner', { now: ANSWER_AT });
     await refused(s.db, () => C.reviseItem(s.db, id, 'nobody', { now: NOW }), 'bad_option');
     assert.equal((await one(s.db, 'SELECT owner FROM accounts WHERE id = ?', C.getItem(s.db, id).subject)).owner, 'You');
   }));
 
-  test('an import after the answer makes it final (imported_since); finalReason reports it', () => withStore(async (s) => {
+  test('an import after the answer makes it final (imported_since); finalReason reports it', async () => withStore(async (s) => {
     const id = await CASES.account_owner.setup(s);
     const subject = C.getItem(s.db, id).subject;
     C.answerItem(s.db, id, 'owner', { now: ANSWER_AT });
@@ -421,7 +421,7 @@ describe('refusals', () => {
     assert.equal((await one(s.db, 'SELECT owner FROM accounts WHERE id = ?', subject)).owner, 'You');
   }));
 
-  test('an import that re-applies the remembered answer makes it final', () => withStore(async (s) => {
+  test('an import that re-applies the remembered answer makes it final', async () => withStore(async (s) => {
     const id = await CASES.account_owner.setup(s);
     C.answerItem(s.db, id, 'owner', { now: ANSWER_AT });
     // The same account in another export: ask() re-applies the remembered owner answer.
@@ -431,7 +431,7 @@ describe('refusals', () => {
     await refused(s.db, () => C.reviseItem(s.db, id, 'spouse', { now: NOW }), 'final', reason);
   }));
 
-  test('a later change to a row the answer touched makes it final (changed_since)', () => withStore(async (s) => {
+  test('a later change to a row the answer touched makes it final (changed_since)', async () => withStore(async (s) => {
     const id = await CASES.account_owner.setup(s);
     const subject = C.getItem(s.db, id).subject;
     C.answerItem(s.db, id, 'owner', { now: ANSWER_AT });
@@ -441,7 +441,7 @@ describe('refusals', () => {
     assert.equal((await one(s.db, 'SELECT owner FROM accounts WHERE id = ?', subject)).owner, 'Joint');
   }));
 
-  test('answering a document_recipient question that both asked makes the employer answer final (changed_since)', () => withStore(async (s) => {
+  test('answering a document_recipient question that both asked makes the employer answer final (changed_since)', async () => withStore(async (s) => {
     const id = await CASES.employer_recipient.setup(s);
     C.answerItem(s.db, id, 'both', { now: ANSWER_AT });
     const docs = C.pendingItems(s.db).filter((i) => i.kind === 'document_recipient');
@@ -452,7 +452,7 @@ describe('refusals', () => {
     assert.equal(C.getItem(s.db, docs[0].id).answer, 'owner', 'the later answer stands');
   }));
 
-  test('a refusal after a many-row answer rolls back every partial restore', () => withStore(async (s) => {
+  test('a refusal after a many-row answer rolls back every partial restore', async () => withStore(async (s) => {
     const id = await CASES.employer_recipient.setup(s);
     C.answerItem(s.db, id, 'owner', { now: ANSWER_AT });
     assert.ok(await count(s.db, 'superseded_rows', "reason = 'summarized'") > 0, 'the answer archived and removed rows');
@@ -462,7 +462,7 @@ describe('refusals', () => {
     await refused(s.db, () => C.reopenItem(s.db, id, { now: NOW }), 'final', 'changed_since');
   }));
 
-  test('an answer with no undo row is final (no_undo)', () => withStore(async (s) => {
+  test('an answer with no undo row is final (no_undo)', async () => withStore(async (s) => {
     const id = await CASES.account_owner.setup(s);
     C.answerItem(s.db, id, 'owner', { now: ANSWER_AT });
     assert.equal(await count(s.db, 'confirm_undo', 'item_id = ?', id), 1, 'the answer stored an undo row');
@@ -472,7 +472,7 @@ describe('refusals', () => {
     await refused(s.db, () => C.reopenItem(s.db, id, { now: NOW }), 'final', 'no_undo');
   }));
 
-  test('a superseded item refuses revise and reopen with stale', () => withStore(async (s) => {
+  test('a superseded item refuses revise and reopen with stale', async () => withStore(async (s) => {
     const id = await CASES.fact_check.setup(s);
     await imported(s, textFile('notes-later.md', '# Household goals\n\nSynthetic follow-up note with the same content.\n', 'text/markdown'), [[NOTES_LATER]]);
     const item = C.getItem(s.db, id);

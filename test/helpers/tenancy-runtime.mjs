@@ -258,12 +258,12 @@ export async function sideHousehold({ dataDir, env, householdId, engineOptions =
   const { buildHouseholdContext } = await src('src/platform/runtime.mjs');
   const { createInstanceSecrets } = await src('src/platform/secrets.mjs');
   const config = loadConfig(env);
-  const platform = openPlatform(join(dataDir, PLATFORM_FILE));
+  const platform = await openPlatform(join(dataDir, PLATFORM_FILE));
   try {
     const row = await platform.prepare('SELECT mode, storage_root, generation FROM households WHERE id = ?').get(householdId);
     if (!row) throw new Error('fixture: no such household');
     const instanceMode = (await platform.prepare('SELECT mode FROM households WHERE serves_store = 1').get()).mode;
-    const household = buildHouseholdContext({
+    const household = await buildHouseholdContext({
       householdId, generation: Number(row.generation), mode: row.mode, relativeRoot: row.storage_root, platform, config,
       secrets: createInstanceSecrets({ config, mode: instanceMode }), ...(engineOptions ? { engineOptions } : {}),
     });
@@ -303,8 +303,8 @@ export async function liveTwoHouseholds({ emulator, fundingNow = () => Date.now(
   const closeTwo = two.close;
   try {
     const { setOutbound } = await src('src/platform/outbound.mjs');
-    setOutbound(two.platform, two.A.id, { jobs: false });
-    setOutbound(two.platform, two.B.id, { engine: true });
+    await setOutbound(two.platform, two.A.id, { jobs: false });
+    await setOutbound(two.platform, two.B.id, { engine: true });
     if (instanceCapUsd != null) {
       const budget = await src('src/platform/model-budget.mjs');
       await budget.setInstanceCap(two.platform, instanceCapUsd);
@@ -515,11 +515,11 @@ async function populateLegacy(dataDir, legacyKey) {
     // src/ingest/confirm.mjs, so the undo log references the savings account's rowid (after a gap).
     await run('INSERT INTO ingest_epoch (id, n) VALUES (1, 3) ON CONFLICT(id) DO UPDATE SET n = 3');
     const KIND_OPTIONS = confirm.KIND_OPTIONS;
-    const asked = confirm.ask(db, { kind: 'account_kind', subject: 'acct-syn-save', question: 'What kind of account is Synthetic savings?',
+    const asked = await confirm.ask(db, { kind: 'account_kind', subject: 'acct-syn-save', question: 'What kind of account is Synthetic savings?',
       options: KIND_OPTIONS, context: {}, fileId: f1, now: T0 });
     confirmItemId = asked.id;
-    confirm.answer(db, confirmItemId, 'checking', { now: T1 });
-    const pending = confirm.ask(db, { kind: 'account_owner', subject: 'acct-syn-broker', question: 'Whose account is Synthetic brokerage?',
+    await confirm.answer(db, confirmItemId, 'checking', { now: T1 });
+    const pending = await confirm.ask(db, { kind: 'account_owner', subject: 'acct-syn-broker', question: 'Whose account is Synthetic brokerage?',
       options: confirm.OWNER_OPTIONS, context: {}, fileId: f1, now: T0 });
     await run("INSERT INTO confirm_guesses (item_id, option_id, reason, model, ts) VALUES (?, 'owner', 'Synthetic reason', 'fake', ?)", pending.id, T0);
     const rawItem = async (subject) => Number((await run(`INSERT INTO confirm_items (kind, subject, question, options, context, status, answer, file_id, created_at, answered_at)
@@ -663,7 +663,7 @@ export async function legacyScenario(fx) {
     const packs = createLivePacks(db, { dataDir: fx.dataDir });
     packs.refresh();
     const config = { clock: CLOCK, engine: 'fake', dataDir: fx.dataDir };
-    return structuredClone(scenarioOf({ db, config, packs, household: { db, root: fx.dataDir, packs, config } }));
+    return structuredClone(await scenarioOf({ db, config, packs, household: { db, root: fx.dataDir, packs, config } }));
   } finally {
     await db.close();
     rmSync(copy, { force: true });

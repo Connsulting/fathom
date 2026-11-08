@@ -12,7 +12,7 @@ export async function importSnapshot(db) {
 }
 export async function importChanges(db, before, after) {
   return await flatMapSeries(TABLES, async table => {
-    const pk = keys(db, table), prior = new Map(before[table].map(row => [identity(row, pk), row])), next = new Map(after[table].map(row => [identity(row, pk), row]));
+    const pk = await keys(db, table), prior = new Map(before[table].map(row => [identity(row, pk), row])), next = new Map(after[table].map(row => [identity(row, pk), row]));
     return [...new Set([...prior.keys(), ...next.keys()])].filter(id => !isDeepStrictEqual(prior.get(id), next.get(id)))
       .map(id => ({ table, pk, before: prior.get(id) ?? null, after: next.get(id) ?? null }));
   });
@@ -54,7 +54,7 @@ registerReceiptKind('model_import', { async restore(ctx, { before, after, receip
     derived.push({ id:state.id, items:additional.map(item => item.id) });
   }
   for (const change of after.changes) {
-    if (!TABLES.includes(change.table) || !isDeepStrictEqual(keys(ctx.db, change.table), change.pk)) conflict();
+    if (!TABLES.includes(change.table) || !isDeepStrictEqual(await keys(ctx.db, change.table), change.pk)) conflict();
     const row = change.after ?? change.before;
     const current = await ctx.db.prepare(`SELECT * FROM ${change.table} WHERE ${change.pk.map(k => `${k}=?`).join(' AND ')}`).get(...change.pk.map(k => row[k]));
     if (!isDeepStrictEqual(current ? { ...current } : null, change.after)) conflict();

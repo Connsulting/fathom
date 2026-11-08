@@ -14,7 +14,7 @@ const withStore = async fn => { const s = await realStore(); try { await fn(s); 
 const acct = { inst: 'Example Brokerage', name: 'Individual Brokerage x6294', mask: '6294', maskSure: true, balance: 1200, balanceDate: '2032-02-29' };
 const pending = async db => (await C.pendingItems(db)).filter(i => i.context.repair);
 
-test('parser-shaped unknown institutions ask on the same last four; sure, uncertain and new stay distinct', () => withStore(async s => {
+test('parser-shaped unknown institutions ask on the same last four; sure, uncertain and new stay distinct', async () => withStore(async s => {
   await P.ingestFile(s.db, positionsFile(), s.opts(null));
   const id = (await s.db.prepare('SELECT id FROM accounts').get()).id;
   assert.deepEqual(await S.matchAccount(s.db, acct), { candidate: id });
@@ -26,7 +26,7 @@ test('parser-shaped unknown institutions ask on the same last four; sure, uncert
   assert.deepEqual(await S.matchAccount(s.db, { ...acct, name: 'Roth IRA x6294' }), {});
 }));
 
-test('fresh sync asks for the positions account and autoResolve leaves it pending', () => withStore(async s => {
+test('fresh sync asks for the positions account and autoResolve leaves it pending', async () => withStore(async s => {
   await P.ingestFile(s.db, positionsFile(), s.opts(null));
   const options = { config: s.config, household: s.household, now: NOW, clock: '2032-03-10' };
   await S.connectSimplefin(s.db, S.fakeToken(), { ...options, fetch: S.createFakeSimplefin() });
@@ -37,7 +37,7 @@ test('fresh sync asks for the positions account and autoResolve leaves it pendin
   assert.equal((await s.db.prepare('SELECT count(*) n FROM accounts').get()).n, 1);
 }));
 
-test('repair is idempotent and Keep both survives repeated reads and remains undoable', () => withStore(async s => {
+test('repair is idempotent and Keep both survives repeated reads and remains undoable', async () => withStore(async s => {
   await seedDuplicate(s);
   assert.equal((await M.detectAccountPairs(s.db)).length, 1);
   await M.queueAccountPairs(s.db, { now: NOW }); await M.queueAccountPairs(s.db, { now: NOW });
@@ -51,7 +51,7 @@ test('repair is idempotent and Keep both survives repeated reads and remains und
   assert.equal((await pending(s.db)).length, 1);
 }));
 
-test('merge keeps stable references, history and metadata, counts the merged account once in the household trend, and Undo restores after planning', () => withStore(async s => {
+test('merge keeps stable references, history and metadata, counts the merged account once in the household trend, and Undo restores after planning', async () => withStore(async s => {
   const pair = await seedDuplicate(s, { sure: true });
   await s.db.prepare("INSERT INTO goals (id,def,origin) VALUES ('synthetic-goal',?,'owner')").run(JSON.stringify({ title: 'Reserve', track: { accounts: [pair.keep] } }));
   const beforeAccounts = await s.db.prepare('SELECT * FROM accounts ORDER BY id').all();
@@ -78,7 +78,7 @@ test('merge keeps stable references, history and metadata, counts the merged acc
   assert.deepEqual(await s.db.prepare('SELECT * FROM balances ORDER BY id').all(), beforeBal);
 }));
 
-test('sure repair excludes unknown institution, unreliable mask, conflicts and ambiguous candidates', () => withStore(async s => {
+test('sure repair excludes unknown institution, unreliable mask, conflicts and ambiguous candidates', async () => withStore(async s => {
   const p = await seedDuplicate(s, { sure: true });
   assert.equal((await M.detectAccountPairs(s.db))[0].confidence, 'sure');
   await s.db.prepare('UPDATE simplefin_snapshots SET snapshot = json_set(snapshot,\'$.maskSure\',json(\'false\'),\'$.name\',\'Opaque account\')').run();
@@ -90,7 +90,7 @@ test('sure repair excludes unknown institution, unreliable mask, conflicts and a
   assert.equal((await M.detectAccountPairs(s.db)).length, 0);
 }));
 
-test('merge reimports positions into the surviving account and keeps distinct historical postings', () => withStore(async s => {
+test('merge reimports positions into the surviving account and keeps distinct historical postings', async () => withStore(async s => {
   const p = await seedDuplicate(s);
   await M.queueAccountPairs(s.db, { now: NOW });
   await C.answer(s.db, (await pending(s.db))[0].id, 'same', { now: NOW });
@@ -100,7 +100,7 @@ test('merge reimports positions into the surviving account and keeps distinct hi
   assert.equal((await s.db.prepare('SELECT account_id FROM positions').get()).account_id, p.keep);
 }));
 
-test('repair HTTP answers do not sync; repeated scenario reads leave Keep both and Merge undoable', () => withStore(async s => {
+test('repair HTTP answers do not sync; repeated scenario reads leave Keep both and Merge undoable', async () => withStore(async s => {
   const {serveAppFixture}=await import('../helpers/server.mjs');
   const p=await seedDuplicate(s,{sure:true});
   const jobs=[];
@@ -123,7 +123,7 @@ test('repair HTTP answers do not sync; repeated scenario reads leave Keep both a
   } finally {await app.close();}
 }));
 
-test('reverse-order resync remembers removed external ids and keeps history', () => withStore(async s => {
+test('reverse-order resync remembers removed external ids and keeps history', async () => withStore(async s => {
   const opts={config:s.config,household:s.household,now:NOW,clock:'2032-03-10'};
   const bridge={id:'opaque',conn_id:'synthetic',name:'Synthetic checking x6294',balance:'1200','balance-date':Date.parse('2032-02-29T12:00:00Z')/1000,currency:'USD',transactions:[
     {id:'bridge-posting',posted:Date.parse('2032-02-29T12:00:00Z')/1000,amount:'-10',description:'Bridge posting'},
@@ -144,7 +144,7 @@ test('reverse-order resync remembers removed external ids and keeps history', ()
   assert.equal((await s.db.prepare('SELECT account_id FROM transactions WHERE description=?').get('Historical posting')).account_id,p.keep);
 }));
 
-test('connect, sync and later positions upload expose repair through the real HTTP boundary', () => withStore(async s => {
+test('connect, sync and later positions upload expose repair through the real HTTP boundary', async () => withStore(async s => {
   const {serveAppFixture}=await import('../helpers/server.mjs');
   const {offEngine}=await import('../helpers/ingest.mjs');
   const opts={config:s.config,household:s.household,now:NOW,clock:'2032-03-10'};
@@ -165,7 +165,7 @@ test('connect, sync and later positions upload expose repair through the real HT
   } finally {await app.close();}
 }));
 
-test('a file routed into the redundant bridge account reimports without resurrecting rows after merge', () => withStore(async s => {
+test('a file routed into the redundant bridge account reimports without resurrecting rows after merge', async () => withStore(async s => {
   await seedDuplicate(s,{sure:true});
   const f=aggregatorFile('alias.csv',[{date:'2032-02-12',amount:'17',inst:'Example Bank N.A.',account:'Synthetic checking',number:'0006294',description:'Distinct file posting'}]);
   await P.ingestFile(s.db,f,s.opts(null));
@@ -177,7 +177,7 @@ test('a file routed into the redundant bridge account reimports without resurrec
   assert.equal((await s.db.prepare('SELECT count(*) n FROM accounts').get()).n,1);
 }));
 
-test('balance contradictions, name-only masks and multiple candidates remain owner questions', () => withStore(async s => {
+test('balance contradictions, name-only masks and multiple candidates remain owner questions', async () => withStore(async s => {
   const p=await seedDuplicate(s,{sure:true,conflict:true});
   assert.equal((await M.detectAccountPairs(s.db))[0].confidence,'likely');
   await s.db.prepare('UPDATE balances SET amount=1200 WHERE account_id=? AND date=?').run(p.own,'2032-02-29');
@@ -188,7 +188,7 @@ test('balance contradictions, name-only masks and multiple candidates remain own
   assert.deepEqual((await M.detectAccountPairs(s.db)).map(p=>p.confidence),['likely','likely']);
 }));
 
-test('stale repair answers refuse without changing the store; valid repairs remain answerable', () => withStore(async s => {
+test('stale repair answers refuse without changing the store; valid repairs remain answerable', async () => withStore(async s => {
   const p=await seedDuplicate(s,{sure:true});
   await M.queueAccountPairs(s.db,{now:NOW}); const q=(await pending(s.db))[0];
   await s.db.prepare("UPDATE accounts SET mask='5837' WHERE id=?").run(p.own);
@@ -203,7 +203,7 @@ test('stale repair answers refuse without changing the store; valid repairs rema
   assert.equal((await s.db.prepare('SELECT count(*) n FROM accounts').get()).n,1);
 }));
 
-test('queue retires stale repair signals and reopens the same subject if evidence returns', () => withStore(async s => {
+test('queue retires stale repair signals and reopens the same subject if evidence returns', async () => withStore(async s => {
   const p=await seedDuplicate(s,{sure:true});
   await s.db.prepare('UPDATE accounts SET mask=NULL,name=? WHERE id=?').run('Connected reserve',p.own);
   await s.db.prepare('UPDATE accounts SET mask=NULL,name=? WHERE id=?').run('Imported reserve',p.keep);
@@ -222,7 +222,7 @@ test('queue retires stale repair signals and reopens the same subject if evidenc
   assert.equal(await C.finalReason(s.db,await C.getItem(s.db,q.id)),null);
 }));
 
-test('Keep both remains answerable when a repair becomes stale before the next read', () => withStore(async s => {
+test('Keep both remains answerable when a repair becomes stale before the next read', async () => withStore(async s => {
   const p=await seedDuplicate(s,{sure:true});
   await M.queueAccountPairs(s.db,{now:NOW});const q=(await pending(s.db))[0];
   await s.db.prepare("UPDATE accounts SET kind='card' WHERE id=?").run(p.own);
@@ -231,7 +231,7 @@ test('Keep both remains answerable when a repair becomes stale before the next r
   assert.equal((await s.db.prepare('SELECT count(*) n FROM accounts').get()).n,2);
 }));
 
-test('HTTP reads remove stale type questions and Chase bank-name variants share existing normalization', () => withStore(async s => {
+test('HTTP reads remove stale type questions and Chase bank-name variants share existing normalization', async () => withStore(async s => {
   const {serveAppFixture}=await import('../helpers/server.mjs');
   const p=await seedDuplicate(s,{sure:true});
   await s.db.prepare("UPDATE accounts SET inst='Chase' WHERE id=?").run(p.keep);
@@ -247,7 +247,7 @@ test('HTTP reads remove stale type questions and Chase bank-name variants share 
   } finally {await app.close();}
 }));
 
-test('repair questions use shared labels and preserve the imported display name through merge and undo', () => withStore(async s => {
+test('repair questions use shared labels and preserve the imported display name through merge and undo', async () => withStore(async s => {
   const p=await seedDuplicate(s,{sure:true});
   await M.queueAccountPairs(s.db,{now:NOW});
   await s.db.prepare('UPDATE accounts SET display_name=? WHERE id=?').run('Household reserve',p.keep);
@@ -261,10 +261,10 @@ test('repair questions use shared labels and preserve the imported display name 
   assert.equal((await s.db.prepare('SELECT display_name FROM accounts WHERE id=?').get(p.own)).display_name,'Bridge reserve');
 }));
 
-test('merge moves expected payments and merge Undo restores their original account', () => withStore(async s => {
+test('merge moves expected payments and merge Undo restores their original account', async () => withStore(async s => {
   const { expectedTransaction } = await import('../../src/actions/expected-transaction.mjs');
   const p = await seedDuplicate(s, { sure: true });
-  const out = expectedTransaction({ subject: 'Synthetic payer', direction: 'inflow', dueDate: '2032-03-19', datePrecision: 'day',
+  const out = await expectedTransaction({ subject: 'Synthetic payer', direction: 'inflow', dueDate: '2032-03-19', datePrecision: 'day',
     amount: null, accountId: p.own, evidence: 'Synthetic payer pays on 2032-03-19' },
   { db: s.db, actorId: 'synthetic-owner', ownerText: 'Synthetic payer pays on 2032-03-19', now: NOW });
   await M.queueAccountPairs(s.db, { now: NOW });

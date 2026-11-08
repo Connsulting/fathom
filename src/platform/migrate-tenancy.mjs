@@ -264,7 +264,7 @@ async function singleHousehold(platform) {
 
 // The completed tenancy-migration operation of the household, when the platform and root prove it.
 async function completedOperation(platform, dataDir, householdId) {
-  if (!columnsOf(platform, 'households').includes('storage_root')) return null;
+  if (!(await columnsOf(platform, 'households')).includes('storage_root')) return null;
   const hh = await platform.prepare('SELECT storage_root FROM households WHERE id = ?').get(householdId);
   const ops = await platform.prepare("SELECT id FROM platform_operations WHERE kind = ? AND status = 'done'").all(OPERATION_KIND);
   if (!hh || hh.storage_root !== householdRootRel(householdId) || ops.length !== 1) return null;
@@ -280,7 +280,7 @@ async function completedOperation(platform, dataDir, householdId) {
 
 // The manifest transaction committed for this operation.
 async function manifestCommitted(platform, journal) {
-  if (!columnsOf(platform, 'households').includes('storage_root')) return false;
+  if (!(await columnsOf(platform, 'households')).includes('storage_root')) return false;
   const op = await platform.prepare('SELECT 1 AS x FROM platform_operations WHERE id = ? AND kind = ?').get(journal.operationId, OPERATION_KIND);
   const hh = await platform.prepare('SELECT storage_root FROM households WHERE id = ?').get(journal.householdId);
   return !!op && hh?.storage_root === householdRootRel(journal.householdId);

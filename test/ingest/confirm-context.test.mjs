@@ -29,7 +29,7 @@ async function withStore(fn) {
   try { return await fn(s); } finally { s.close(); }
 }
 // The three household files in one ingestFiles call, engine off.
-const withHousehold = (fn) => withStore(async (s) => {
+const withHousehold = async (fn) => withStore(async (s) => {
   await P.ingestFiles(s.db, household(), s.opts(await offEngine()));
   return fn(s);
 });
@@ -47,7 +47,7 @@ describe('account cards', () => {
   let X;
   before(async () => { X = await src('src/ingest/context.mjs'); });
 
-  test('Everyday Checking: institution, mask, holder, both files, range, row counts, latest balance and recent rows with provenance', () => withHousehold(async (s) => {
+  test('Everyday Checking: institution, mask, holder, both files, range, row counts, latest balance and recent rows with provenance', async () => await withHousehold(async (s) => {
     const id = await acct(s.db, '4455', 'Chase');
     const d = X.cardDetail(s.db, pendingFor(s.db, 'account_owner', id));
     assert.equal(d.type, 'account');
@@ -76,7 +76,7 @@ describe('account cards', () => {
     assert.ok(v.recent.every((r) => [AGG_FILE, CHASE_FILE].includes(r.fileName)));
   }));
 
-  test('Individual TOD: the other three same-named accounts are listed and mask, holder and institution differ', () => withHousehold(async (s) => {
+  test('Individual TOD: the other three same-named accounts are listed and mask, holder and institution differ', async () => await withHousehold(async (s) => {
     const id = await acct(s.db, '1111', 'Example Brokerage');
     const spouseTod = await acct(s.db, '2222', 'Example Brokerage');
     const d = X.cardDetail(s.db, pendingFor(s.db, 'account_owner', id));
@@ -89,7 +89,7 @@ describe('account cards', () => {
     assert.ok(d.differs.every((f) => ACCOUNT_FIELDS.includes(f)), `only view fields, got ${d.differs}`);
   }));
 
-  test('a positions account shows its holdings total as the balance, from the positions file', () => withHousehold(async (s) => {
+  test('a positions account shows its holdings total as the balance, from the positions file', async () => await withHousehold(async (s) => {
     const id = await acct(s.db, '1111', '');
     const v = X.cardDetail(s.db, pendingFor(s.db, 'account_owner', id)).account;
     const pos = await fileIdOf(s.db, POS_FILE);
@@ -105,7 +105,7 @@ describe('account cards', () => {
   // Two positions exports of one account (Z5550002222) as of 2032-03-05 with different symbols. The
   // second carries a truncated record of that account, so removeOmittedPositions treats its snapshot
   // as incomplete and keeps the first file's FUNDA row: both files' rows stay stored.
-  test('a holdings balance from two positions files on one account and date lists both files as sources', () => withStore(async (s) => {
+  test('a holdings balance from two positions files on one account and date lists both files as sources', async () => withStore(async (s) => {
     const first = positionsFile('positions-part-a.csv', [{ symbol: 'FUNDA', quantity: '6', price: '100.00', value: '600.00' }]);
     const second = positionsFile('positions-part-b.csv', [{ symbol: 'FUNDB', quantity: '4', price: '100.00', value: '400.00' }], { extra: ['Z5550002222'] });
     await P.ingestFiles(s.db, [first], s.opts(await offEngine()));
@@ -128,7 +128,7 @@ describe('account cards', () => {
     assert.ok(bal.fileName.includes(first.name) && bal.fileName.includes(second.name));
   }));
 
-  test('an account_kind card uses the same view; an account with no same-named sibling differs in nothing', () => withHousehold(async (s) => {
+  test('an account_kind card uses the same view; an account with no same-named sibling differs in nothing', async () => await withHousehold(async (s) => {
     const id = await acct(s.db, '3344', 'Example Card');
     C.reopenItem(s.db, C.listItems(s.db, { status: 'answered' }).find(i => i.kind === 'account_kind' && i.subject === id).id, { now: NOW });
     const d = X.cardDetail(s.db, pendingFor(s.db, 'account_kind', id));
@@ -148,7 +148,7 @@ describe('compare cards', () => {
     S = await src('src/ingest/simplefin.mjs');
   });
 
-  test('near_duplicate: the Corner Cafe pair side by side; date, description and file differ, amount does not', () => withHousehold((s) => {
+  test('near_duplicate: the Corner Cafe pair side by side; date, description and file differ, amount does not', async () => await withHousehold((s) => {
     const items = C.pendingItems(s.db).filter((i) => i.kind === 'near_duplicate');
     const found = items.map((item) => [item, X.cardDetail(s.db, item)])
       .find(([, d]) => d.entries?.some((e) => e.description === 'Corner Cafe'));
@@ -181,7 +181,7 @@ describe('compare cards', () => {
     return file.name;
   };
 
-  test('withholding_conflict: both tax payment rows side by side; amount and file differ', () => withStore(async (s) => {
+  test('withholding_conflict: both tax payment rows side by side; amount and file differ', async () => withStore(async (s) => {
     const first = await importW2(s, 'first', W2_FIRST);
     const second = await importW2(s, 'second', { ...W2_FIRST, federalWithheld: 13000 });
     const employer = C.pendingItems(s.db).find((i) => i.kind === 'employer_recipient');
@@ -206,7 +206,7 @@ describe('compare cards', () => {
   const TODAY = NOW.slice(0, 10);
   const sfOpts = (s) => ({ config: s.config, household: s.household, now: NOW, clock: TODAY, fetch: S.createFakeSimplefin({ today: () => TODAY }) });
 
-  test('account_match: the imported candidate beside the SimpleFIN snapshot, with no bridge account ids', () => withStore(async (s) => {
+  test('account_match: the imported candidate beside the SimpleFIN snapshot, with no bridge account ids', async () => withStore(async (s) => {
     await P.ingestFile(s.db, aggregatorFile('other.csv', [
       { date: '2032-01-05', amount: '5.00', inst: 'Other bank', account: 'Joint checking', number: '', description: 'Old' },
     ]), s.opts(null));
@@ -240,7 +240,7 @@ describe('compare cards', () => {
   const HELD_HEADER = 'Date,Original Date,Account Type,Account Name,Account Number,Institution Name,Name,Custom Name,Amount,Description,Category,Note,Ignored From,Tax Deductible,Transaction Tags,Account Holder';
   const heldRow = (date, account, number, inst, amount, description, holder) => [date, '', 'Checking', account, number, inst, '', '', amount, description, 'Other', '', '', '', '', holder].join(',');
 
-  test('account_match: the detail carries the candidate view, its same-named accounts and the SimpleFIN snapshot', () => withStore(async (s) => {
+  test('account_match: the detail carries the candidate view, its same-named accounts and the SimpleFIN snapshot', async () => withStore(async (s) => {
     await P.ingestFile(s.db, textFile('other.csv', [HELD_HEADER,
       heldRow('2032-01-05', 'Joint checking', '', 'Other bank', '5.00', 'Old', 'Avery Example'),
       heldRow('2032-01-09', 'Joint checking', '', 'Other bank', '7.50', 'Older still', 'Avery Example'),
@@ -302,7 +302,7 @@ describe('values cards', () => {
     return { item, d };
   };
 
-  test('fact_check names its file, the fact key and the imported value', () => withStore(async (s) => {
+  test('fact_check names its file, the fact key and the imported value', async () => withStore(async (s) => {
     const facts = [{ key: 'household.state', value: 'CO', confidence: 0.6 }];
     const r = await seedHistoricalDocument(s, fixture('notes.md'), [[{ facts, goals: [] }]]);
     const { d } = valuesOf(s.db, 'fact_check');
@@ -311,14 +311,14 @@ describe('values cards', () => {
     assert.ok(text.includes('household.state') && text.includes('CO'), text);
   }));
 
-  test('tax_year names its file and the sheet year', () => withStore(async (s) => {
+  test('tax_year names its file and the sheet year', async () => withStore(async (s) => {
     const r = await seedHistoricalRows(s, fixture('tax-payments.xlsx'), historicalTaxRows(false), { parser: 'tax-payments', sourceKind: 'tax_payments', period: { from: '2031-12-31', to: '2032-03-31' } });
     const { item, d } = valuesOf(s.db, 'tax_year');
     assert.deepEqual(d.file, { id: r.fileId, name: 'tax-payments.xlsx' });
     assert.ok(JSON.stringify(d.values).includes(String(item.context.sheetYear)));
   }));
 
-  test('entity_alias names its file and the alias', () => withStore(async (s) => {
+  test('entity_alias names its file and the alias', async () => withStore(async (s) => {
     const r = await seedHistoricalRows(s, northwindFile(), historicalNorthwindRows(200), { parser: 'pnl-workbook', sourceKind: 'pnl_workbook', period: { from: '2032-04-01', to: '2032-04-30' } });
     const { d } = valuesOf(s.db, 'entity_alias');
     assert.deepEqual(d.file, { id: r.fileId, name: 'northwind-pnl.xlsx' });

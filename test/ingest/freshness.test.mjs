@@ -84,7 +84,7 @@ describe('freshnessOf', () => {
 });
 
 describe('recordSource', () => {
-  test('keeps the latest as_of and always updates last_ingest_at', () => withStore(async (s) => {
+  test('keeps the latest as_of and always updates last_ingest_at', async () => withStore(async (s) => {
     const id = 'ing:test-source:all';
     FR.recordSource(s.db, { id, label: 'Synthetic source', kind: 'bank_csv', asOf: '2032-03-01', now: '2032-03-02T00:00:00.000Z' });
     let row = await one(s.db, 'SELECT * FROM sources WHERE id = ?', id);
@@ -99,7 +99,7 @@ describe('recordSource', () => {
 });
 
 describe('ingest state and scenario', () => {
-  test('ingestState lists ingest sources with cadence, state, how-to and per-account freshness', () => withStore(async (s) => {
+  test('ingestState lists ingest sources with cadence, state, how-to and per-account freshness', async () => withStore(async (s) => {
     const { cash, invest } = await seeded(s);
     const st = FR.ingestState(s.db, { clock: '2032-03-10' });
     assert.equal(st.sources.length, 2);
@@ -127,7 +127,7 @@ describe('ingest state and scenario', () => {
     assert.equal(st.formats.length, 7);
   }));
 
-  test('buildScenario at a fresh clock: live.ingest, account asOf/fresh/sourceId, no domain notes', () => withStore(async (s) => {
+  test('buildScenario at a fresh clock: live.ingest, account asOf/fresh/sourceId, no domain notes', async () => withStore(async (s) => {
     const { cash } = await seeded(s);
     const sc = B.buildScenario(s.db, { clock: '2032-03-10' });
     assert.ok(sc.live.ingest, 'live.ingest present');
@@ -140,7 +140,7 @@ describe('ingest state and scenario', () => {
     assert.deepEqual(sc.domains, [], 'a real store with no domains gains none while sources are fresh');
   }));
 
-  test('buildScenario at a stale clock: stale sources and accounts, cash and invest domains created with notes', () => withStore(async (s) => {
+  test('buildScenario at a stale clock: stale sources and accounts, cash and invest domains created with notes', async () => withStore(async (s) => {
     const { cash, invest } = await seeded(s);
     const sc = B.buildScenario(s.db, { clock: '2032-06-30' });
     const agg = sc.live.ingest.sources.find((x) => x.kind === 'aggregator_csv');
@@ -166,7 +166,7 @@ describe('ingest state and scenario', () => {
     const { seedDemo } = await src('demo/seed.mjs');
     const store = await tempDb();
     try {
-      seedDemo(store.db);
+      await seedDemo(store.db);
       const sc = B.buildScenario(store.db);
       assert.ok(sc.accounts.length > 0);
       for (const a of sc.accounts) {
@@ -196,7 +196,7 @@ describe('stale to fresh', () => {
   const engineFor = (periodEnd, bal) => fakeEngine([[{ docType: 'statement', confidence: 0.9 }], [statement(periodEnd, bal)]]);
   const STALE_NOTE = /Export a fresh copy\./;
 
-  test('a stale statement source becomes fresh after a newer statement import', () => withStore(async (s) => {
+  test('a stale statement source becomes fresh after a newer statement import', async () => withStore(async (s) => {
     const first = await seedHistoricalDocument(s,pdf('march'), (await engineFor('2032-03-31',1500.25)).responses);
     assert.equal(first.status, 'imported');
     const acct = await one(s.db, "SELECT * FROM accounts WHERE mask = '4321'");
@@ -235,7 +235,7 @@ describe('stale account inside a fresh multi-account export', () => {
   const accountA = { account: 'Synthetic reserve', number: '5550003333' };
   const accountB = { account: 'Synthetic daily', number: '5550004444' };
 
-  test('A (last row in January) is stale, B (June) is fresh, and the cash note names A', () => withStore(async (s) => {
+  test('A (last row in January) is stale, B (June) is fresh, and the cash note names A', async () => withStore(async (s) => {
     await seedCashDomain(s.db);
     const r = await P.ingestFile(s.db, aggregatorFile('household-export.csv', [
       { ...accountA, date: '2032-01-05', amount: '15.00', description: 'Synthetic reserve fee' },
@@ -257,7 +257,7 @@ describe('stale account inside a fresh multi-account export', () => {
     assert.ok(!cash.note.includes(accountB.account), 'the fresh account is not called stale');
   }));
 
-  test('counter-case: when every account in the export is fresh, no note is added', () => withStore(async (s) => {
+  test('counter-case: when every account in the export is fresh, no note is added', async () => withStore(async (s) => {
     await seedCashDomain(s.db);
     await P.ingestFile(s.db, aggregatorFile('household-export-june.csv', [
       { ...accountA, date: '2032-06-05', amount: '15.00', description: 'Synthetic reserve fee' },
@@ -338,7 +338,7 @@ describe('how to export', () => {
 
 // Review finding F6: the files list is limited, so a waiting file must also be listed in `waiting`.
 describe('waiting files', () => {
-  test('an old needs_mapping file stays in waiting after 50+ newer files; retryFile still works', () => withStore(async (s) => {
+  test('an old needs_mapping file stays in waiting after 50+ newer files; retryFile still works', async () => withStore(async (s) => {
     const off = await offEngine();
     const odd = await P.ingestFile(s.db, { name: 'odd.csv', bytes: new TextEncoder().encode('Zeta,Omega,Sigma\nq,w,e\nr,t,y\n'), mime: 'text/csv' }, s.opts(off));
     assert.equal(odd.status, 'waiting_for_engine');
@@ -366,7 +366,7 @@ describe('waiting files', () => {
 // Newest stored row wins over an older file source. refreshFreshness is the function a merge or
 // undo calls when it does not itself rebuild the scenario.
 describe('freshness after import, sync and merge', () => {
-  test('an import sets data through from the imported rows', () => withStore(async (s) => {
+  test('an import sets data through from the imported rows', async () => withStore(async (s) => {
     await seeded(s);
     const fresh = FR.refreshFreshness(s.db, { clock: '2032-03-10' });
     assert.equal(fresh.dataThrough, '2032-03-05');
@@ -375,7 +375,7 @@ describe('freshness after import, sync and merge', () => {
     assert.equal(sc.pace.rollup.dataThrough, '2032-03-05');
   }));
 
-  test('a newer balance on a file account stays fresh after the file source date is rolled back, and a sync moves data through', () => withStore(async (s) => {
+  test('a newer balance on a file account stays fresh after the file source date is rolled back, and a sync moves data through', async () => withStore(async (s) => {
     const { cash } = await seeded(s);
     await s.db.prepare('UPDATE sources SET as_of = ? WHERE id = ?').run('2032-01-05', cash.source_id);
     await s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(cash.id, '2032-06-01', 10);
@@ -400,7 +400,7 @@ describe('freshness after import, sync and merge', () => {
     assert.equal(sc.pace.rollup.dataThrough, day);
   }));
 
-  test('a later tax payment or P&L month moves Home and Money together', () => withStore(async (s) => {
+  test('a later tax payment or P&L month moves Home and Money together', async () => withStore(async (s) => {
     const { cash } = await seeded(s);
     await s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(cash.id, '2032-06-01', 10);
     await s.db.prepare(`INSERT INTO content (key, value, src, updated_at) VALUES ('meta', ?, 'test', ?)`)

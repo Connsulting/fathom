@@ -41,7 +41,7 @@ async function storeText(db) {
 }
 
 describe('routing and persistence per fixture', () => {
-  test('aggregator.csv: two transactions with provenance, one account, counts stored on the file', () => withStore(async (s) => {
+  test('aggregator.csv: two transactions with provenance, one account, counts stored on the file', async () => withStore(async (s) => {
     const file = fixture('aggregator.csv', 'text/csv');
     const r = await P.ingestFile(s.db, file, s.opts(await offEngine()));
     assert.equal(r.status, 'imported');
@@ -98,7 +98,7 @@ describe('routing and persistence per fixture', () => {
     assert.ok(!(await storeText(s.db)).includes('9911227766'), 'the full account number is stored nowhere');
   }));
 
-  test('bank activity CSV: transactions, running balances, Chase plus mask account, balance figure', () => withStore(async (s) => {
+  test('bank activity CSV: transactions, running balances, Chase plus mask account, balance figure', async () => withStore(async (s) => {
     const r = await P.ingestFile(s.db, fixture('Chase7766_Activity_20320305.csv', 'text/csv'), s.opts(await offEngine()));
     assert.equal(r.status, 'imported');
     assert.equal(r.parser, 'chase-activity');
@@ -125,7 +125,7 @@ describe('routing and persistence per fixture', () => {
     assert.deepEqual((await items(s.db, 'account_kind')).map((i) => i.subject), [a.id]);
   }));
 
-  test('positions.csv: two positions on a masked account and a holdings total figure', () => withStore(async (s) => {
+  test('positions.csv: two positions on a masked account and a holdings total figure', async () => withStore(async (s) => {
     const r = await P.ingestFile(s.db, fixture('positions.csv', 'text/csv'), s.opts(await offEngine()));
     assert.equal(r.status, 'imported');
     assert.equal(r.parser, 'brokerage-positions');
@@ -151,7 +151,7 @@ describe('routing and persistence per fixture', () => {
 });
 
 describe('identity, occurrence and source scope', () => {
-  test('an unnamed, unmasked account is scoped by locator.source; masks keep at most 4 digits', () => withStore(async (s) => {
+  test('an unnamed, unmasked account is scoped by locator.source; masks keep at most 4 digits', async () => withStore(async (s) => {
     const file = aggregatorFile('unnamed.csv', [
       { date: '2032-03-04', account: '', number: '', amount: '12.00', description: 'Synthetic unnamed row' },
     ]);
@@ -166,7 +166,7 @@ describe('identity, occurrence and source scope', () => {
     for (const acct of await all(s.db, 'SELECT mask FROM accounts')) assert.ok(acct.mask === null || /^\d{4}$/.test(acct.mask));
   }));
 
-  test('repeated identical postings in one export keep distinct occurrences', () => withStore(async (s) => {
+  test('repeated identical postings in one export keep distinct occurrences', async () => withStore(async (s) => {
     const row = { date: '2032-03-06', amount: '3.50', description: 'Synthetic coffee' };
     const r = await P.ingestFile(s.db, aggregatorFile('repeats.csv', [row, row, { ...row, date: '2032-03-07' }]), s.opts(await offEngine()));
     assert.equal(inserted(r, 'transaction'), 3);
@@ -188,7 +188,7 @@ describe('deduplication', () => {
     { date: '2032-03-07', amount: '66.06', description: 'Synthetic row six' },
   ];
 
-  test('overlapping aggregator dumps: second import counts the overlap as duplicates', () => withStore(async (s) => {
+  test('overlapping aggregator dumps: second import counts the overlap as duplicates', async () => withStore(async (s) => {
     const off = await offEngine();
     const a = await P.ingestFile(s.db, aggregatorFile('dump-a.csv', rowsA), s.opts(off));
     assert.equal(inserted(a, 'transaction'), 4);
@@ -207,7 +207,7 @@ describe('deduplication', () => {
     assert.equal(await count(s.db, 'files'), 2);
   }));
 
-  test('the same postings from the bank export and the aggregator dedupe across formats', () => withStore(async (s) => {
+  test('the same postings from the bank export and the aggregator dedupe across formats', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, fixture('Chase7766_Activity_20320305.csv', 'text/csv'), s.opts(off));
     const r = await P.ingestFile(s.db, fixture('aggregator.csv', 'text/csv'), s.opts(off));
@@ -218,7 +218,7 @@ describe('deduplication', () => {
     assert.equal(await count(s.db, 'accounts'), 1, 'accounts upsert by institution and mask');
   }));
 
-  test('one request: same bytes twice is a duplicate; same name with different bytes stores both', () => withStore(async (s) => {
+  test('one request: same bytes twice is a duplicate; same name with different bytes stores both', async () => withStore(async (s) => {
     const first = aggregatorFile('export.csv', [{ date: '2032-03-02', amount: '7.25', description: 'Synthetic first' }]);
     const other = aggregatorFile('export.csv', [{ date: '2032-03-03', amount: '8.75', description: 'Synthetic second' }]);
     const { results } = await P.ingestFiles(s.db, [first, { ...first }, other], s.opts(await offEngine()));
@@ -231,7 +231,7 @@ describe('deduplication', () => {
 });
 
 describe('unsupported inputs', () => {
-  test('an empty file, non UTF-8 text and a corrupt workbook are unsupported; a valid CSV beside them imports', () => withStore(async (s) => {
+  test('an empty file, non UTF-8 text and a corrupt workbook are unsupported; a valid CSV beside them imports', async () => withStore(async (s) => {
     const eng = await fakeEngine([]);
     const empty = await P.ingestFile(s.db, { name: 'empty.csv', bytes: new Uint8Array(0) }, s.opts(eng));
     assert.equal(empty.status, 'unsupported');
@@ -261,7 +261,7 @@ describe('interrupted ingest', () => {
     return fileId;
   }
 
-  test('re-uploading the same bytes of a pending file that is not in flight re-routes it and imports its rows', () => withStore(async (s) => {
+  test('re-uploading the same bytes of a pending file that is not in flight re-routes it and imports its rows', async () => withStore(async (s) => {
     const file = csv();
     const fileId = await interrupted(s, file);
     assert.equal(await count(s.db, 'transactions'), 0);
@@ -274,7 +274,7 @@ describe('interrupted ingest', () => {
     assert.equal((await one(s.db, 'SELECT status FROM files WHERE id = ?', fileId)).status, 'imported');
   }));
 
-  test('retryFile accepts a pending file that is not in flight and imports it', () => withStore(async (s) => {
+  test('retryFile accepts a pending file that is not in flight and imports it', async () => withStore(async (s) => {
     const file = csv();
     const fileId = await interrupted(s, file);
     const r = await P.retryFile(s.db, fileId, s.opts(await offEngine()));
@@ -284,7 +284,7 @@ describe('interrupted ingest', () => {
     assert.equal((await one(s.db, 'SELECT status FROM files WHERE id = ?', fileId)).status, 'imported');
   }));
 
-  test('two concurrent uploads of identical bytes import once and the other is a duplicate', () => withStore(async (s) => {
+  test('two concurrent uploads of identical bytes import once and the other is a duplicate', async () => withStore(async (s) => {
     const file = csv();
     const eng = await offEngine();
     const results = await Promise.all([
@@ -309,13 +309,13 @@ describe('balance revisions', () => {
 
   async function figureValue(db) {
     const { buildScenario } = await src('src/scenario/build.mjs');
-    const sc = buildScenario(db, { clock: '2032-03-10' });
+    const sc = await buildScenario(db, { clock: '2032-03-10' });
     const acct = sc.accounts.find((a) => a.mask === '4321');
     assert.ok(acct && acct.fig, 'account has a balance figure');
     return sc.fig[acct.fig].v;
   }
 
-  test('older then newer: the newer period revises the day and archives the old value', () => withStore(async (s) => {
+  test('older then newer: the newer period revises the day and archives the old value', async () => withStore(async (s) => {
     const off = await offEngine();
     const a = await P.ingestFile(s.db, older(), s.opts(off));
     const b = await P.ingestFile(s.db, newer(), s.opts(off));
@@ -331,7 +331,7 @@ describe('balance revisions', () => {
     assert.equal(await figureValue(s.db), 965);
   }));
 
-  test('newer then older: the stored newer value stays and the older snapshot is archived', () => withStore(async (s) => {
+  test('newer then older: the stored newer value stays and the older snapshot is archived', async () => withStore(async (s) => {
     const off = await offEngine();
     const b = await P.ingestFile(s.db, newer(), s.opts(off));
     const a = await P.ingestFile(s.db, older(), s.opts(off));
@@ -346,7 +346,7 @@ describe('balance revisions', () => {
     assert.equal(await figureValue(s.db), 965);
   }));
 
-  test('the same balance again is a plain duplicate', () => withStore(async (s) => {
+  test('the same balance again is a plain duplicate', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, older(), s.opts(off));
     const again = await P.ingestFile(s.db, activityFile('Chase4321_Activity_copy.csv', [{ date: '03/05/2032', amount: '-20.00', balance: '970.00', description: 'Synthetic card' }]), s.opts(off));
@@ -369,7 +369,7 @@ describe('balance authority across three exports', () => {
   const orders = { ABC: [A, Bx, Cx], CAB: [Cx, A, Bx], ACB: [A, Cx, Bx] };
 
   for (const [label, files] of Object.entries(orders)) {
-    test(`order ${label}: stored value is 100 from B`, () => withStore(async (s) => {
+    test(`order ${label}: stored value is 100 from B`, async () => withStore(async (s) => {
       const off = await offEngine();
       const ids = {};
       for (const make of files) {
@@ -392,7 +392,7 @@ describe('position revisions', () => {
   const rowsA = [{ symbol: 'EXMPL', quantity: '10', price: '20.00', value: '200.00' }, { symbol: 'OTHR', quantity: '5', price: '10.00', value: '50.00' }];
   const rowsB = [{ symbol: 'EXMPL', quantity: '10', price: '21.00', value: '210.00' }, { symbol: 'OTHR', quantity: '5', price: '10.00', value: '50.00' }];
 
-  test('a corrected positions CSV for the same day revises the changed holding', () => withStore(async (s) => {
+  test('a corrected positions CSV for the same day revises the changed holding', async () => withStore(async (s) => {
     const off = await offEngine();
     const a = await P.ingestFile(s.db, positionsFile('positions-a.csv', rowsA), s.opts(off));
     const b = await P.ingestFile(s.db, positionsFile('positions-corrected.csv', rowsB), s.opts(off));
@@ -472,7 +472,7 @@ describe('bounded parsing (D1)', () => {
     assert.ok(Date.now() - started < 1000, 'sniffing a 6 MB file is header-only');
   });
 
-  test('a 3 MB CSV of single-character cells is too_large; a normal fixture still imports after it', () => withStore(async (s) => {
+  test('a 3 MB CSV of single-character cells is too_large; a normal fixture still imports after it', async () => withStore(async (s) => {
     const off = await offEngine();
     const file = wideCsv();
     const r = await P.ingestFile(s.db, file, s.opts(off));
@@ -482,20 +482,20 @@ describe('bounded parsing (D1)', () => {
     assert.equal(inserted(ok, 'transaction'), 2);
   }));
 
-  test('a bank-format CSV past the row limit is too_large through its parser, not imported with warnings', () => withStore(async (s) => {
+  test('a bank-format CSV past the row limit is too_large through its parser, not imported with warnings', async () => withStore(async (s) => {
     const file = textFile('Chase4321_Activity_rows.csv', `${REQUIRED.join(',')}\n` + 'x,x,x,x,x,x,x\n'.repeat(200001), 'text/csv');
     const r = await P.ingestFile(s.db, file, s.opts(await offEngine()));
     await assertTooLarge(s, file, r);
   }));
 
-  test('a header wider than the column limit is too_large at sniff', () => withStore(async (s) => {
+  test('a header wider than the column limit is too_large at sniff', async () => withStore(async (s) => {
     const cols = Array.from({ length: 600 }, (_, i) => `c${i}`);
     const file = textFile('wide-header.csv', `${cols.join(',')}\n${cols.map(() => 'x').join(',')}\n`, 'text/csv');
     const r = await P.ingestFile(s.db, file, s.opts(await offEngine()));
     await assertTooLarge(s, file, r);
   }));
 
-  test('an xlsx whose single sheet holds more cells than the cell limit is too_large', () => withStore(async (s) => {
+  test('an xlsx whose single sheet holds more cells than the cell limit is too_large', async () => withStore(async (s) => {
     const empty = { empty: true };
     const row = new Array(512).fill(empty);
     const rows = Array.from({ length: 3907 }, () => row); // 2000384 cells, 512 columns, 3907 rows
@@ -520,7 +520,7 @@ describe('no silently dropped transactions (D3)', () => {
   const normalize = (v) => String(v).toLowerCase().replace(/[^a-z0-9]/g, '');
   const row = (description, extra = {}) => ({ date: '03/09/2032', amount: '-54.21', balance: '', description, ...extra });
 
-  test('two uploads of one bank format, same day and amount, different descriptions: both rows and one question', () => withStore(async (s) => {
+  test('two uploads of one bank format, same day and amount, different descriptions: both rows and one question', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, activityFile('Chase4321_Activity_A.csv', [row('SYNTH GROCERY NORTH')]), s.opts(off));
     const b = await P.ingestFile(s.db, activityFile('Chase4321_Activity_B.csv', [row('SYNTH PHARMACY SOUTH')]), s.opts(off));
@@ -534,7 +534,7 @@ describe('no silently dropped transactions (D3)', () => {
     assert.equal(q[0].subject, tx.map((t) => t.dedupe_key).sort().join('|'));
   }));
 
-  test('identical descriptions in two uploads of one format are deduped', () => withStore(async (s) => {
+  test('identical descriptions in two uploads of one format are deduped', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, activityFile('Chase4321_Activity_A.csv', [row('SYNTH GROCERY NORTH')]), s.opts(off));
     const b = await P.ingestFile(s.db, activityFile('Chase4321_Activity_B.csv', [row('Synth Grocery  North')]), s.opts(off));
@@ -544,7 +544,7 @@ describe('no silently dropped transactions (D3)', () => {
     assert.equal((await items(s.db, 'near_duplicate')).length, 0);
   }));
 
-  test('aggregator plus bank overlap still dedupes and counts the differing description as crossFormat', () => withStore(async (s) => {
+  test('aggregator plus bank overlap still dedupes and counts the differing description as crossFormat', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, fixture('Chase7766_Activity_20320305.csv', 'text/csv'), s.opts(off));
     const r = await P.ingestFile(s.db, fixture('aggregator.csv', 'text/csv'), s.opts(off));
@@ -555,7 +555,7 @@ describe('no silently dropped transactions (D3)', () => {
     assert.equal((await items(s.db, 'near_duplicate')).length, 0);
   }));
 
-  test('bank rows with a check number dedupe by it even when the posting date differs', () => withStore(async (s) => {
+  test('bank rows with a check number dedupe by it even when the posting date differs', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, activityFile('Chase4321_Activity_A.csv', [row('CHECK 1042', { date: '03/01/2032', amount: '-125.00', check: '1042' })]), s.opts(off));
     const b = await P.ingestFile(s.db, activityFile('Chase4321_Activity_B.csv', [row('CHECK 1042', { date: '03/04/2032', amount: '-125.00', check: '1042' })]), s.opts(off));
@@ -576,7 +576,7 @@ describe('no silently dropped transactions (D3)', () => {
   ];
   for (const [what, bankDesc, aggDesc] of unrelatedPairs) {
     for (const order of ['bank first', 'aggregator first']) {
-      test(`G1: unrelated same-day same-amount bank and aggregator rows (${what}, ${order}) are both kept with one question`, () => withStore(async (s) => {
+      test(`G1: unrelated same-day same-amount bank and aggregator rows (${what}, ${order}) are both kept with one question`, async () => withStore(async (s) => {
         const off = await offEngine();
         const files = [bankFile('Chase4321_Activity_G1.csv', bankDesc), aggFile('aggregator-g1.csv', aggDesc)];
         if (order === 'aggregator first') files.reverse();
@@ -595,7 +595,7 @@ describe('no silently dropped transactions (D3)', () => {
     }
   }
 
-  test('G1: the aggregator plus bank overlap fixture still dedupes with the aggregator imported first', () => withStore(async (s) => {
+  test('G1: the aggregator plus bank overlap fixture still dedupes with the aggregator imported first', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, fixture('aggregator.csv', 'text/csv'), s.opts(off));
     const r = await P.ingestFile(s.db, fixture('Chase7766_Activity_20320305.csv', 'text/csv'), s.opts(off));
@@ -625,7 +625,7 @@ describe('no silently dropped transactions (D3)', () => {
   }
 
   for (const answer of ['same', 'different']) {
-    test(`G2: after a confirmed duplicate, a distinct same-key lunch is kept and asked about; answered ${answer}, re-imports ask nothing new`, () => withStore(async (s) => {
+    test(`G2: after a confirmed duplicate, a distinct same-key lunch is kept and asked about; answered ${answer}, re-imports ask nothing new`, async () => withStore(async (s) => {
       const off = await offEngine();
       const tombKey = await confirmSecondCoffee(s, off);
       const r = await P.ingestFile(s.db, lunch('Chase4321_Activity_lunch.csv'), s.opts(off));
@@ -657,7 +657,7 @@ describe('no silently dropped transactions (D3)', () => {
   const shopAgg = () => aggregatorFile('aggregator-c2.csv', [{ date: '2032-03-09', amount: '25.00', description: 'Example Shop', number: '9999990042', inst: 'Chase', account: 'Synthetic checking' }]);
   const shopBank = (name, description, extra = []) => activityFile(name, [{ date: '03/09/2032', amount: '-25.00', balance: '', description }, ...extra]);
 
-  test('C2: aggregator then bank (cross-format duplicate) then a distinct same-key bank row: the third row is kept with one question; re-imports change nothing', () => withStore(async (s) => {
+  test('C2: aggregator then bank (cross-format duplicate) then a distinct same-key bank row: the third row is kept with one question; re-imports change nothing', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, shopAgg(), s.opts(off));
     const bankA = await P.ingestFile(s.db, shopBank('Chase0042_Activity_C2_A.csv', 'EXAMPLE SHOP 0042'), s.opts(off));
@@ -697,7 +697,7 @@ describe('no silently dropped transactions (D3)', () => {
   // uploads are two rows; the same check at the same amount still dedupes.
   const check = (date, amount) => ({ date, amount, balance: '', description: 'CHECK 1042', check: '1042' });
 
-  test('C3: a check and its return in separate uploads share an id but not an amount: both rows are kept; the same id and amount still dedupes', () => withStore(async (s) => {
+  test('C3: a check and its return in separate uploads share an id but not an amount: both rows are kept; the same id and amount still dedupes', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, activityFile('Chase0042_Activity_C3_A.csv', [check('03/01/2032', '-125.00')]), s.opts(off));
     const b = await P.ingestFile(s.db, activityFile('Chase0042_Activity_C3_B.csv', [check('03/04/2032', '125.00')]), s.opts(off));
@@ -717,7 +717,7 @@ describe('no silently dropped transactions (D3)', () => {
 
   // E3: an external-id key collision kept under the alt key (other description) is asked about
   // whatever the distance between the dates.
-  test('E3: same check id and amount 9 days apart with different descriptions: both rows are kept with exactly one question', () => withStore(async (s) => {
+  test('E3: same check id and amount 9 days apart with different descriptions: both rows are kept with exactly one question', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, activityFile('Chase0042_Activity_E3_A.csv', [{ ...check('03/01/2032', '-125.00'), description: 'CHECK 1042 SYNTH LANDLORD' }]), s.opts(off));
     const b = await P.ingestFile(s.db, activityFile('Chase0042_Activity_E3_B.csv', [{ ...check('03/10/2032', '-125.00'), description: 'CHECK 1042 SYNTH PLUMBER' }]), s.opts(off));
@@ -758,7 +758,7 @@ describe('no silently dropped transactions (D3)', () => {
     return rows[0];
   }
 
-  test('F2: after a confirmed duplicate, the same check id and amount 9 days later with another description is kept with exactly one new question', () => withStore(async (s) => {
+  test('F2: after a confirmed duplicate, the same check id and amount 9 days later with another description is kept with exactly one new question', async () => withStore(async (s) => {
     const off = await offEngine();
     const agg = await confirmCheckIntoAggregator(s, off);
     const tomb = await one(s.db, "SELECT * FROM superseded_rows WHERE reason = 'duplicate_confirmed'");
@@ -776,7 +776,7 @@ describe('no silently dropped transactions (D3)', () => {
   }));
 
   for (const answer of [null, 'same', 'different']) {
-    test(`F2: re-importing the March 11 check ${answer ? `after answering ${answer} ` : ''}asks nothing new`, () => withStore(async (s) => {
+    test(`F2: re-importing the March 11 check ${answer ? `after answering ${answer} ` : ''}asks nothing new`, async () => withStore(async (s) => {
       const off = await offEngine();
       await confirmCheckIntoAggregator(s, off);
       await P.ingestFile(s.db, checkBank('Chase0042_Activity_F2_B.csv', '03/11/2032', PLUMBER), s.opts(off));
@@ -836,7 +836,7 @@ describe('no silently dropped transactions (D3)', () => {
     return { a, b, c };
   }
 
-  test('H2: C confirmed into B, then B into A; check 1042 on March 15 with another description is kept and asked once against A', () => withStore(async (s) => {
+  test('H2: C confirmed into B, then B into A; check 1042 on March 15 with another description is kept and asked once against A', async () => withStore(async (s) => {
     const off = await offEngine();
     const { a, c } = await confirmChain(s, off);
     const questions = await count(s.db, 'confirm_items', "kind = 'near_duplicate'");
@@ -851,7 +851,7 @@ describe('no silently dropped transactions (D3)', () => {
     assert.equal(asked[0].subject, [kept.dedupe_key, a.dedupe_key].sort().join('|'), 'asked against A, the end of the survivor chain');
   }));
 
-  test('H2: after the chain, re-importing the March 15 check asks nothing new', () => withStore(async (s) => {
+  test('H2: after the chain, re-importing the March 15 check asks nothing new', async () => withStore(async (s) => {
     const off = await offEngine();
     await confirmChain(s, off);
     await P.ingestFile(s.db, checkBank('Chase0042_Activity_H2_D.csv', '03/15/2032', PLUMBER), s.opts(off));
@@ -935,7 +935,7 @@ describe('no silently dropped transactions (D3)', () => {
     ['a missing survivor (C names X, which has no row and no tombstone)', [['C', 'X']]],
   ];
   for (const [what, links] of survivorGuards) {
-    test(`H2 guard: ${what} ends; the March 15 check is kept and asks nothing against an inactive key`, () => withStore(async (s) => {
+    test(`H2 guard: ${what} ends; the March 15 check is kept and asks nothing against an inactive key`, async () => withStore(async (s) => {
       const off = await offEngine();
       const c = await tombstoneC(s, off, links);
       assert.equal(await count(s.db, 'transactions'), 0, 'nothing is active');
@@ -960,7 +960,7 @@ describe('authoritative position snapshots (D5)', () => {
   };
   const removed = async (db) => await all(db, "SELECT * FROM superseded_rows WHERE table_name = 'positions' AND reason = 'removed'");
 
-  test('A and B, then the same day with A only: B is archived as removed and the total equals A', () => withStore(async (s) => {
+  test('A and B, then the same day with A only: B is archived as removed and the total equals A', async () => withStore(async (s) => {
     const off = await offEngine();
     const first = await P.ingestFile(s.db, positionsFile('positions-ab.csv', [A, B]), s.opts(off));
     const second = await P.ingestFile(s.db, positionsFile('positions-a.csv', [A]), s.opts(off));
@@ -971,7 +971,7 @@ describe('authoritative position snapshots (D5)', () => {
     assert.equal(await figure(s.db), 200);
   }));
 
-  test('a pending activity row does not make the snapshot incomplete', () => withStore(async (s) => {
+  test('a pending activity row does not make the snapshot incomplete', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, positionsFile('positions-ab.csv', [A, B]), s.opts(off));
     const pending = { symbol: 'PENDING', description: 'Pending activity', quantity: '', price: '0', value: '0' };
@@ -981,7 +981,7 @@ describe('authoritative position snapshots (D5)', () => {
     assert.equal((await removed(s.db)).length, 1);
   }));
 
-  test('an invalid position row for the account keeps B (incomplete snapshot)', () => withStore(async (s) => {
+  test('an invalid position row for the account keeps B (incomplete snapshot)', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, positionsFile('positions-ab.csv', [A, B]), s.opts(off));
     const second = await P.ingestFile(s.db, positionsFile('positions-a-invalid.csv', [A, { symbol: 'BROKEN', quantity: '1', price: '1.00', value: 'n/a' }]), s.opts(off));
@@ -991,7 +991,7 @@ describe('authoritative position snapshots (D5)', () => {
     assert.equal(await figure(s.db), 250);
   }));
 
-  test('an older second file keeps B', () => withStore(async (s) => {
+  test('an older second file keeps B', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, positionsFile('positions-ab.csv', [A, B]), s.opts(off));
     await P.ingestFile(s.db, positionsFile('positions-a-older.csv', [A], { asOf: 'Mar-04-2032' }), s.opts(off));
@@ -1001,7 +1001,7 @@ describe('authoritative position snapshots (D5)', () => {
   }));
 
   // G5: a snapshot is authoritative per (account, asOf) only when the file proves coverage.
-  test('G5: a truncated record for the account warns truncated_position and keeps the omitted holding', () => withStore(async (s) => {
+  test('G5: a truncated record for the account warns truncated_position and keeps the omitted holding', async () => withStore(async (s) => {
     const off = await offEngine();
     await P.ingestFile(s.db, positionsFile('positions-ab.csv', [A, B]), s.opts(off));
     const second = await P.ingestFile(s.db, positionsFile('positions-a-truncated.csv', [A], { extra: ['Z5550002222,Synthetic brokerage'] }), s.opts(off));
@@ -1011,7 +1011,7 @@ describe('authoritative position snapshots (D5)', () => {
     assert.equal(await figure(s.db), 250);
   }));
 
-  test('G5: a warning on account X does not block a complete account Y in the same file', () => withStore(async (s) => {
+  test('G5: a warning on account X does not block a complete account Y in the same file', async () => withStore(async (s) => {
     const off = await offEngine();
     const X = { account: 'Z5550003333', accountName: 'Synthetic brokerage X' };
     await P.ingestFile(s.db, positionsFile('positions-xy-ab.csv', [{ ...A, ...X }, { ...B, ...X }, A, B]), s.opts(off));
@@ -1024,7 +1024,7 @@ describe('authoritative position snapshots (D5)', () => {
     assert.equal(await figure(s.db), 200);
   }));
 
-  test('G5: an unattributable warning marks the whole file incomplete', () => withStore(async (s) => {
+  test('G5: an unattributable warning marks the whole file incomplete', async () => withStore(async (s) => {
     const off = await offEngine();
     const X = { account: 'Z5550003333', accountName: 'Synthetic brokerage X' };
     await P.ingestFile(s.db, positionsFile('positions-xy-ab.csv', [{ ...A, ...X }, { ...B, ...X }, A, B]), s.opts(off));
@@ -1044,14 +1044,14 @@ describe('authoritative position snapshots (D5)', () => {
   const HOLDINGS = [{ symbol: 'EXMPL', name: 'Example Index Fund', quantity: 10, value: 200 }, { symbol: 'OTHR', name: 'Other Example Fund', quantity: 5, value: 50 }];
   const statementSymbols = async (db) => (await all(db, "SELECT p.symbol FROM positions p JOIN accounts a ON a.id = p.account_id WHERE a.mask = '4321' ORDER BY p.symbol")).map((p) => p.symbol);
 
-  test('G5: a statement extraction without a holdings key keeps the stored holdings', () => withStore(async (s) => {
+  test('G5: a statement extraction without a holdings key keeps the stored holdings', async () => withStore(async (s) => {
     assert.equal((await importStatement(s, 'full', HOLDINGS)).status, 'imported');
     assert.equal((await importStatement(s, 'no-holdings', undefined)).status, 'imported');
     assert.deepEqual(await statementSymbols(s.db), ['EXMPL', 'OTHR']);
     assert.equal((await removed(s.db)).length, 0);
   }));
 
-  test('G5: an explicit empty holdings array is a complete empty snapshot that archives every stored symbol', () => withStore(async (s) => {
+  test('G5: an explicit empty holdings array is a complete empty snapshot that archives every stored symbol', async () => withStore(async (s) => {
     const first = await importStatement(s, 'full', HOLDINGS);
     const empty = await importStatement(s, 'empty', []);
     assert.equal(empty.status, 'imported');
@@ -1078,7 +1078,7 @@ describe('authoritative position snapshots (D5)', () => {
   };
   const sourceOf = async (db, fileId) => (await one(db, 'SELECT source_id FROM files WHERE id = ?', fileId)).source_id;
 
-  test('H3: holdings without an ending balance, then the same date with an empty holdings list: no positions and a figure of 0 from the second file', () => withStore(async (s) => {
+  test('H3: holdings without an ending balance, then the same date with an empty holdings list: no positions and a figure of 0 from the second file', async () => withStore(async (s) => {
     const first = await importHoldings(s, 'full', '2032-03-31', HOLDINGS);
     assert.equal(await count(s.db, 'balances'), 0, 'no ending balance');
     assert.equal((await holdingsFigure(s.db)).shown.v, 250, 'the figure is the holdings total');
@@ -1094,7 +1094,7 @@ describe('authoritative position snapshots (D5)', () => {
     assert.equal(JSON.parse(row.locator)?.field, 'holdings', 'located at the holdings list');
   }));
 
-  test('H3: an empty holdings list dated after the first statement makes the figure 0 from the later file', () => withStore(async (s) => {
+  test('H3: an empty holdings list dated after the first statement makes the figure 0 from the later file', async () => withStore(async (s) => {
     await importHoldings(s, 'full', '2032-03-31', HOLDINGS);
     const empty = await importHoldings(s, 'empty-later', '2032-04-30', []);
     assert.equal(await count(s.db, 'positions', "as_of = '2032-04-30'"), 0, 'nothing held on April 30');
@@ -1105,7 +1105,7 @@ describe('authoritative position snapshots (D5)', () => {
     assert.equal(JSON.parse(row.locator)?.field, 'holdings');
   }));
 
-  test('H3: an empty holdings list dated before a stored full statement leaves the later total and its provenance', () => withStore(async (s) => {
+  test('H3: an empty holdings list dated before a stored full statement leaves the later total and its provenance', async () => withStore(async (s) => {
     const full = await importHoldings(s, 'full-later', '2032-04-30', HOLDINGS);
     await importHoldings(s, 'empty-earlier', '2032-03-31', []);
     assert.deepEqual(await statementSymbols(s.db), ['EXMPL', 'OTHR']);

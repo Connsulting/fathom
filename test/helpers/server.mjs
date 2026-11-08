@@ -382,7 +382,7 @@ export async function withAuthenticatedServer(options, fn) {
 export async function householdContext({ db, platform, householdId, mode = 'real', config, secrets, generation = 1, ...inject }) {
   const { createHouseholdContext } = await src('src/platform/runtime.mjs');
   const given = Object.fromEntries(Object.entries(inject).filter(([, v]) => v != null));
-  return createHouseholdContext({ householdId, generation, mode, db, config, platform, secrets, ...given });
+  return await createHouseholdContext({ householdId, generation, mode, db, config, platform, secrets, ...given });
 }
 
 // In-process router over `db` (src/api/router.mjs createHandler), with the platform, runtime
@@ -420,12 +420,12 @@ export async function serveAppFixture({
     });
     const runtimes = createRuntimeRegistry({
       platform: handle, config: fixtureConfig, secrets: instance,
-      build: args => (args.householdId === served.id ? servedContext : buildHouseholdContext(args)),
+      build: async args => (args.householdId === served.id ? servedContext : await buildHouseholdContext(args)),
     });
     const authTransport = transport ?? createTransport(fixtureConfig, { outboxDir: join(dataDir, 'outbox') });
     const auth = createAuthService({ platform: handle, config: fixtureConfig, transport: authTransport, secrets: instance });
     const keys = createKeyService({ platform: handle, secret: () => instance.mcpSecret(), creatorActive: auth.creatorActive });
-    const session = authenticated && getSetting(db, 'mode', null) !== 'demo' ? await createSessionFixture(handle) : null;
+    const session = authenticated && await getSetting(db, 'mode', null) !== 'demo' ? await createSessionFixture(handle) : null;
     server = http.createServer(createHandler({
       platform: handle, config: fixtureConfig, runtimes, auth, keys,
       ...(webDir ? { webDir } : {}), ...(sharedDir ? { sharedDir } : {}),
@@ -446,13 +446,13 @@ async function fixturePlatform(db, config) {
   const file = config?.dataDir ? join(config.dataDir, PLATFORM_FILE) : null;
   if (file && existsSync(file)) {
     const { openPlatform } = await src('src/platform/db.mjs');
-    const platform = openPlatform(file);
+    const platform = await openPlatform(file);
     return { platform, dir: config.dataDir, close: async () => await platform.close() };
   }
   const { getSetting } = await src('src/store/db.mjs');
   const { createInstance } = await src('src/platform/db.mjs');
   const dir = await tempDir('fathom-platform-');
-  const instance = createInstance(dir, { mode: getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real', init: () => {} });
+  const instance = await createInstance(dir, { mode: await getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real', init: () => {} });
   await instance.db.close();
   return {
     platform: instance.platform,
@@ -477,7 +477,7 @@ export async function tempInstance({ mode = 'real', init = () => {} } = {}) {
   const platformKey = secrets.platformKey();
   let made;
   try {
-    made = createInstance(dataDir, { mode, init, platformKey });
+    made = await createInstance(dataDir, { mode, init, platformKey });
   } finally {
     platformKey.fill(0);
   }
@@ -488,8 +488,8 @@ export async function tempInstance({ mode = 'real', init = () => {} } = {}) {
     db, platform, householdId, mode, dataDir, root, secrets, keys,
     file: join(root, DB_FILE), platformFile: join(dataDir, PLATFORM_FILE),
     async household(config = null, inject = {}) {
-      const make = () => householdContext({ db, platform, householdId, mode, config: { ...config, dataDir }, secrets, ...inject });
-      if (config || Object.keys(inject).length) return make();
+      const make = async () => householdContext({ db, platform, householdId, mode, config: { ...config, dataDir }, secrets, ...inject });
+      if (config || Object.keys(inject).length) return await make();
       context ??= await make();
       return context;
     },
@@ -549,22 +549,22 @@ export async function tempDb() {
   const { openDb, migrate } = await src('src/store/db.mjs');
   const dataDir = await tempDir();
   const file = join(dataDir, DB_FILE);
-  const db = openDb(file);
-  migrate(db);
+  const db = await openDb(file);
+  await migrate(db);
   return { db, dataDir, file, close: async () => await db.close() };
 }
 
 // Open an existing store file without migrating it.
 export async function openStore(file) {
   const { openDb } = await src('src/store/db.mjs');
-  return openDb(file);
+  return await openDb(file);
 }
 
 // Open an existing platform.sqlite without migrating it (a running server has already done so).
 export async function openPlatformStore(file) {
   if (!existsSync(file)) throw new Error('no platform.sqlite at the given path');
   const { openDb } = await src('src/store/db.mjs');
-  return openDb(file);
+  return await openDb(file);
 }
 
 // Run fn(platform, authStore) on a platform file and close it.
@@ -579,10 +579,10 @@ export async function withPlatform(file, fn) {
 // Logical dump of every user table (rows as sorted JSON strings) to compare "unchanged".
 export async function dumpStore(file) {
   const { openDb, listTables } = await src('src/store/db.mjs');
-  const db = openDb(file);
+  const db = await openDb(file);
   try {
     const out = {};
-    for (const t of listTables(db)) {
+    for (const t of await listTables(db)) {
       out[t] = (await db.prepare(`SELECT * FROM "${t}"`).all()).map(r => JSON.stringify({ ...r })).sort();
     }
     return out;

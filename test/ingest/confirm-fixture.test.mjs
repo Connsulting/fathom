@@ -40,7 +40,7 @@ const acct = async (db, mask, inst) => (await one(db, "SELECT id FROM accounts W
 const byKind = (items) => items.reduce((out, i) => ({ ...out, [i.kind]: (out[i.kind] ?? 0) + 1 }), {});
 const textOf = (evidence) => (typeof evidence === 'string' ? evidence : evidence?.text);
 
-test('no names known: 12 pending including three source categories and 5 decided for the owner', () => withHousehold(async (s) => {
+test('no names known: 12 pending including three source categories and 5 decided for the owner', async () => withHousehold(async (s) => {
   const state = FR.ingestState(s.db);
   const pending = C.pendingItems(s.db);
   assert.equal(pending.length, 12);
@@ -74,7 +74,7 @@ test('no names known: 12 pending including three source categories and 5 decided
   }
 }));
 
-test('names known before the import: 6 pending including three source categories, the only owner question is Rainy Day', () => withHousehold(async (s) => {
+test('names known before the import: 6 pending including three source categories, the only owner question is Rainy Day', async () => withHousehold(async (s) => {
   const state = FR.ingestState(s.db);
   const pending = C.pendingItems(s.db);
   assert.equal(pending.length, 6);

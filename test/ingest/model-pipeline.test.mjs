@@ -101,7 +101,7 @@ test('source groups retain financial freshness when an unrelated note is approve
     const source = await x.db.prepare("SELECT * FROM sources WHERE kind='balances'").get();
     await importProposedRows(x,[],{ marker: 'Synthetic explanatory note' });
     assert.deepEqual(await x.db.prepare('SELECT * FROM sources WHERE id=?').get(source.id),source);
-    assert.equal(sourceStates(x.db,'2032-03-10').sources.get(source.id).state,'fresh');
+    assert.equal((await sourceStates(x.db,'2032-03-10')).sources.get(source.id).state,'fresh');
     assert.equal((await x.db.prepare("SELECT count(*) n FROM sources WHERE substr(id,1,4)='ing:'").get()).n,2);
   } finally { x.close(); }
 });
@@ -116,7 +116,7 @@ test('typed withholding recipients reach the planner in the filing unit and join
     const rows = ['you','spouse','joint'].map((recipient,i)=>({target:'tax_payment',kind:'withholding',status:'paid',datePrecision:'month',fields:{jurisdiction:'federal',payer:'Synthetic payer '+i,recipient,amount:100,taxYear:2032,taxYearBasis:'confirmed_tax_year',paymentDate:'2032-01-31'}}));
     const imported = await importProposedRows(x,rows);
     assert.equal(imported.status,'imported');
-    const data = loadPlanningData(x.db,'2032-03-10');
+    const data = await loadPlanningData(x.db,'2032-03-10');
     const joint = classifyPayments(data,{persons:['owner','spouse'],f:'mfj',isVa:true});
     assert.equal(joint.fed.withheld.total,300);
     assert.equal(joint.fed.withheld.blocked,null);
@@ -151,13 +151,13 @@ test('corrected typed withholding uses the existing recipient conflict safeguard
     const payment = amount => ({target:'tax_payment',kind:'withholding',status:'paid',datePrecision:'month',fields:{jurisdiction:'federal',payer:'Synthetic payer',recipient:'you',amount,taxYear:2032,taxYearBasis:'confirmed_tax_year',paymentDate:'2032-01-31'}});
     await importProposedRows(x,[payment(100)]);
     await importProposedRows(x,[payment(125)]);
-    const item = pendingItems(x.db).find(item=>item.kind==='withholding_conflict');
+    const item = (await pendingItems(x.db)).find(item=>item.kind==='withholding_conflict');
     assert.ok(item,'different withholding amounts require a choice');
     assert.equal((await x.db.prepare('SELECT count(*) n FROM tax_payments').get()).n,2);
-    const classify = ()=>classifyPayments(loadPlanningData(x.db,'2032-03-10'),{persons:['owner','spouse'],f:'mfj',isVa:true});
-    assert.equal(classify().fed.withheld.blocked,'withholding_conflict_pending');
-    answer(x.db,item.id,'second',{now:x.ctx.now});
-    assert.equal(classify().fed.withheld.blocked,null);
-    assert.equal(classify().fed.withheld.total,125);
+    const classify = async ()=>classifyPayments(await loadPlanningData(x.db,'2032-03-10'),{persons:['owner','spouse'],f:'mfj',isVa:true});
+    assert.equal((await classify()).fed.withheld.blocked,'withholding_conflict_pending');
+    await answer(x.db,item.id,'second',{now:x.ctx.now});
+    assert.equal((await classify()).fed.withheld.blocked,null);
+    assert.equal((await classify()).fed.withheld.total,125);
   } finally { x.close(); }
 });

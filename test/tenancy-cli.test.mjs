@@ -37,7 +37,7 @@ test('operational CLIs require registered household selectors without touching a
     }
     const { ask, KIND_OPTIONS } = await import('../src/ingest/confirm.mjs');
     await a.db.prepare('INSERT INTO accounts (id,name,inst,mask) VALUES (?,?,?,?)').run('synthetic-cli-checking', 'Synthetic checking', 'Example Bank', '1234');
-    ask(a.db, { kind: 'account_kind', subject: 'synthetic-cli-checking', question: 'What kind of account is this?', options: KIND_OPTIONS, now: '2026-11-05T12:00:00Z' });
+    await ask(a.db, { kind: 'account_kind', subject: 'synthetic-cli-checking', question: 'What kind of account is this?', options: KIND_OPTIONS, now: '2026-11-05T12:00:00Z' });
     const plansBefore = (await a.db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan'").get()).n;
     const guessed = await run('src/jobs/guess-cli.mjs', ['--household', fx.A.id], envOf(fx));
     assert.equal(guessed.code, 0, guessed.stderr);

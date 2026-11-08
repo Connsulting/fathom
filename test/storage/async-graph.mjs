@@ -67,7 +67,7 @@ export function loadModule(file) {
 }
 
 // Build the analysis. `files` are absolute paths. Returns the graph with `asyncFns`, `calls`.
-export function analyze(files, { roots = () => false } = {}) {
+export function analyze(files, { roots = () => false, root = null } = {}) {
   const modules = new Map(files.map(f => [f, loadModule(f)]));
   const fns = [];            // FunctionInfo
   const fnOf = new Map();    // node -> FunctionInfo
@@ -133,6 +133,15 @@ export function analyze(files, { roots = () => false } = {}) {
     });
   }
 
+  // The module a dynamic import (`await import('./x.mjs')` or the test helper `await src('src/x.mjs')`) loads.
+  function dynamicImport(mod, init) {
+    const n = init?.type === 'AwaitExpression' ? init.argument : null;
+    if (!n) return null;
+    if (n.type === 'ImportExpression' && n.source.type === 'Literal' && String(n.source.value).startsWith('.')) return resolve(dirname(mod.file), n.source.value);
+    if (n.type === 'CallExpression' && n.callee.type === 'Identifier' && n.callee.name === 'src' && root && n.arguments[0]?.type === 'Literal') return resolve(root, n.arguments[0].value);
+    return null;
+  }
+
   // Declarations a scope node introduces.
   function scopeNames(mod, node) {
     if (mod.scopes.has(node)) return mod.scopes.get(node);
@@ -153,6 +162,15 @@ export function analyze(files, { roots = () => false } = {}) {
         else if (st.type === 'ClassDeclaration') declare(st.id.name, { kind: 'class' });
         else if (st.type === 'VariableDeclaration') {
           for (const d of st.declarations) {
+            const dyn = dynamicImport(mod, d.init);
+            if (dyn && d.id.type === 'ObjectPattern') {
+              for (const q of d.id.properties) {
+                if (q.type !== 'Property') continue;
+                for (const n of patternNames(q.value)) declare(n, { kind: 'import', from: dyn, name: propName(q.key) });
+              }
+              continue;
+            }
+            if (dyn && d.id.type === 'Identifier') { declare(d.id.name, { kind: 'import', from: dyn, name: '*' }); continue; }
             for (const n of patternNames(d.id)) {
               if (d.id.type === 'Identifier' && isFunction(d.init)) declare(n, { kind: 'fn', info: fnOf.get(d.init) });
               else declare(n, { kind: 'value', init: d.id.type === 'Identifier' ? d.init : null, decl: d });

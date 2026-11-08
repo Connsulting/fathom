@@ -157,7 +157,7 @@ export function paystubText({ payDate = '2032-03-15', employer = 'Example Employ
 // Returns { db, platform, householdId, dataDir, root, file, config, household, opts(engine), close() }.
 export async function realStore({ engine = 'off' } = {}) {
   const { setSetting } = await src('src/store/db.mjs');
-  const store = await tempInstance({ mode: 'real', init: db => setSetting(db, 'mode', 'real') });
+  const store = await tempInstance({ mode: 'real', init: async db => await setSetting(db, 'mode', 'real') });
   const config = {
     dataDir: store.dataDir, platformKeyFile: store.keys.platformKeyFile, mcpSecretFile: store.keys.mcpSecretFile,
     engine, clock: null, demo: false, port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev',

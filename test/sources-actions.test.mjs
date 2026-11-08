@@ -244,7 +244,7 @@ const scenarioIds = (s) => idsOf(B.buildScenario(s.db, { clock: CLOCK }));
 const askIds = async (s) => (await T.callTool('accounts', { operation: 'list' }, toolCtx(s))).map((a) => a.id);
 const txCount = async (s, id) => (await s.db.prepare('SELECT count(*) AS n FROM transactions WHERE account_id = ?').get(id)).n;
 
-test('sources.archive_account archives with a receipt and Undo; another actor or scope cannot undo it', () => withStore(async ({ s, cash }) => {
+test('sources.archive_account archives with a receipt and Undo; another actor or scope cannot undo it', async () => withStore(async ({ s, cash }) => {
   const txBefore = await txCount(s, cash);
   const out = await T.callTool('sources', { operation: 'archive_account', id: cash }, toolCtx(s));
   assert.ok(out.receipt?.id, 'a valid archive is not refused');
@@ -263,7 +263,7 @@ test('sources.archive_account archives with a receipt and Undo; another actor or
   await assert.rejects(T.callTool('sources', { operation: 'archive_account', id: 'acct-no-such-account' }, toolCtx(s)), isCode('not_found'));
 }));
 
-test('sources.remove_file removes rows with a receipt; the undo tool restores them; removing twice is a conflict', () => withStore(async ({ s, bank, cash }) => {
+test('sources.remove_file removes rows with a receipt; the undo tool restores them; removing twice is a conflict', async () => withStore(async ({ s, bank, cash }) => {
   const txBefore = await txCount(s, cash);
   const scenarioBefore = B.buildScenario(s.db, { clock: CLOCK });
   const out = await T.callTool('sources', { operation: 'remove_file', id: bank.fileId }, toolCtx(s));
@@ -278,7 +278,7 @@ test('sources.remove_file removes rows with a receipt; the undo tool restores th
   assert.equal(totalOf(B.buildScenario(s.db, { clock: CLOCK })), totalOf(scenarioBefore));
 }));
 
-test('sources.merge_accounts merges with a receipt and the undo tool reopens it', () => withStore(async ({ s, file, own }) => {
+test('sources.merge_accounts merges with a receipt and the undo tool reopens it', async () => withStore(async ({ s, file, own }) => {
   const out = await T.callTool('sources', { operation: 'merge_accounts', id: file, withId: own }, toolCtx(s));
   assert.ok(out.receipt?.id);
   assert.deepEqual(out.undo, undoArgs(out.receipt));
@@ -333,7 +333,7 @@ test('the public demo sandboxes archive and the Sources list, but not file remov
   assert.equal(demoRouteBehavior('POST', '/api/files/:id/remove'), 'off');
 });
 
-test('an archived account leaves accounts.holdings, with or without an account filter', () => withStore(async ({ s, invest }) => {
+test('an archived account leaves accounts.holdings, with or without an account filter', async () => withStore(async ({ s, invest }) => {
   const holdings = (args = {}) => T.callTool('accounts', { operation: 'holdings', ...args }, toolCtx(s));
   assert.ok((await holdings()).some((p) => p.accountId === invest), 'precondition: the investment account has holdings');
   const out = await T.callTool('sources', { operation: 'archive_account', id: invest }, toolCtx(s));
@@ -343,7 +343,7 @@ test('an archived account leaves accounts.holdings, with or without an account f
   assert.ok((await holdings({ id: invest })).length > 0);
 }));
 
-test('removing a file removes its documents and recomputes a balance figure it owned without rows', () => withStore(async ({ s, bank, invest }) => {
+test('removing a file removes its documents and recomputes a balance figure it owned without rows', async () => withStore(async ({ s, bank, invest }) => {
   // A synthetic document read from the bank file, and the investment account's balance figure
   // pointed at that file the way an empty holdings snapshot owns a figure with no rows.
   await s.db.prepare("INSERT INTO documents (doc_type, tax_year, fields, file_id) VALUES ('w2', 2031, '{}', ?)").run(bank.fileId);
@@ -359,7 +359,7 @@ test('removing a file removes its documents and recomputes a balance figure it o
   assert.equal(await docs(), 1);
 }));
 
-test('an archived account leaves accounts.net_worth and household.health by default', () => withStore(async ({ s, invest }) => {
+test('an archived account leaves accounts.net_worth and household.health by default', async () => withStore(async ({ s, invest }) => {
   const worth = () => T.callTool('accounts', { operation: 'net_worth' }, toolCtx(s));
   const health = () => T.callTool('household', { operation: 'health' }, toolCtx(s));
   const mentions = (out) => JSON.stringify(out).includes(invest);

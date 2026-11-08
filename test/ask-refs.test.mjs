@@ -433,9 +433,9 @@ test('resolveRefs keeps a P&L entity and a real category row as /api/pnl keys th
   const s = await demoStore(t);
   const scenario = await buildScenario(s.db, { packs: s.packs });
   const { pnlEntities, businessPnl } = await import('../src/pnl/business.mjs');
-  const ent = pnlEntities({ db: s.db, clock: scenario.meta.clock }).find(e => e.kind === 'entity');
+  const ent = (await pnlEntities({ db: s.db, clock: scenario.meta.clock })).find(e => e.kind === 'entity');
   assert.ok(ent, 'the demo store has a business entity');
-  const real = businessPnl({ db: s.db, entity: ent.key, clock: scenario.meta.clock }).expenses.categories[0].category;
+  const real = (await businessPnl({ db: s.db, entity: ent.key, clock: scenario.meta.clock })).expenses.categories[0].category;
   const out = await resolveRefs(s.db, scenario, [
     { kind: 'pnl', id: ent.key }, { kind: 'pnl', id: `${ent.key}|${real}` }, { kind: 'pnl', id: `${ent.key}|Synthetic invented category` },
     { kind: 'pnl', id: 'entity:nosuchbusiness' }, { kind: 'page', id: 'pnl' },
@@ -459,7 +459,7 @@ test('resolveRefs accepts a view qualifier on money, page, pnl and account ids, 
   const s = await demoStore(t);
   const scenario = await buildScenario(s.db, { packs: s.packs });
   const { pnlEntities } = await import('../src/pnl/business.mjs');
-  const ent = pnlEntities({ db: s.db, clock: scenario.meta.clock }).find(e => e.kind === 'entity');
+  const ent = (await pnlEntities({ db: s.db, clock: scenario.meta.clock })).find(e => e.kind === 'entity');
   assert.ok(ent, 'the demo store has a business entity');
   const rows = [
     ['money', 'overview', 'range=1Y', 'range 1Y'],
@@ -540,9 +540,9 @@ test('pnl2-ac3 resolveRefs keeps a P&L category row with a month suffix, names t
   const s = await demoStore(t);
   const scenario = await buildScenario(s.db, { packs: s.packs });
   const { pnlEntities, businessPnl } = await import('../src/pnl/business.mjs');
-  const ent = pnlEntities({ db: s.db, clock: scenario.meta.clock }).find(e => e.kind === 'entity');
+  const ent = (await pnlEntities({ db: s.db, clock: scenario.meta.clock })).find(e => e.kind === 'entity');
   assert.ok(ent, 'the demo store has a business entity');
-  const p = businessPnl({ db: s.db, entity: ent.key, clock: scenario.meta.clock });
+  const p = await businessPnl({ db: s.db, entity: ent.key, clock: scenario.meta.clock });
   const real = p.expenses.categories[0].category;
   const month = p.months[Math.min(2, p.months.length - 1)];
   const label = MONTH_LABEL(month);

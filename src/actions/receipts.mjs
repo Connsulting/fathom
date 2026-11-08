@@ -73,7 +73,7 @@ export function registerReceiptKind(kind, definition) {
   if (KINDS.has(kind)) throw new TypeError(`Receipt kind ${kind} is already registered`);
   const keys = Object.keys(definition).sort().join(',');
   const table = keys === 'pk,table' && typeof definition.table === 'string' && typeof definition.pk === 'string' && IDENTIFIER.test(definition.table) && IDENTIFIER.test(definition.pk);
-  const hook = keys === 'restore' && typeof definition.restore === 'function' && definition.restore.constructor.name !== 'AsyncFunction';
+  const hook = keys === 'restore' && typeof definition.restore === 'function';
   if (!table && !hook) throw new TypeError('Invalid receipt kind definition');
   KINDS.set(kind, Object.freeze({ ...definition }));
 }
@@ -185,7 +185,7 @@ export async function undoAction(ctx, id, scope) {
   else if (scope === 'write:sources') ctx.queuePlan?.();
   if (scope === 'write:preferences') {
     const { adoptSuggestions } = await import('../goals/write.mjs');
-    adoptSuggestions(ctx.db, { now: new Date(ctx.now ?? Date.now()).toISOString(), clock: ctx.config?.clock });
+    await adoptSuggestions(ctx.db, { now: new Date(ctx.now ?? Date.now()).toISOString(), clock: ctx.config?.clock });
   }
   return { receipt };
 }

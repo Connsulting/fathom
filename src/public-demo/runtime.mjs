@@ -36,7 +36,7 @@ const SHIPPED_SCHEMA = listMigrations().at(-1)?.id ?? 0;
 // the visitor's turn limits. `platform` is the base instance's platform DB (health only).
 export async function createPublicDemoHandler(config, { platform: basePlatform }) {
   const requestAddress = new AsyncLocalStorage();
-  const control = createDemoControl(config);
+  const control = await createDemoControl(config);
   const clientAddress = createClientAddressResolver(config.trustedProxies);
   const runtimes = new Map();
   const serveStatic = createStatic({ webDir: fileURLToPath(new URL('../../web/', import.meta.url)),

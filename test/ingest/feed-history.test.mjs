@@ -59,7 +59,7 @@ function missingData(db) {
   return { freshness: data.freshness, uploads: list.filter((i) => i.kind === 'upload' && i.code.startsWith('balances:')) };
 }
 
-test('a connected fresh account lists its older file sources as history, and nothing asks for a fresh export', () => withStore(async (s) => {
+test('a connected fresh account lists its older file sources as history, and nothing asks for a fresh export', async () => withStore(async (s) => {
   const agg = await ingest(s, 'aggregator.csv');
   const bank = await ingest(s, 'Chase7766_Activity_20320305.csv');
   const acct = await accountOfFile(s, bank);
@@ -95,7 +95,7 @@ test('a connected fresh account lists its older file sources as history, and not
   assert.deepEqual(uploads, [], 'no upload step for balances or transactions');
 }));
 
-test('an unconnected account with an old file stays stale with How to refresh, beside a connected one', () => withStore(async (s) => {
+test('an unconnected account with an old file stays stale with How to refresh, beside a connected one', async () => withStore(async (s) => {
   const agg = await ingest(s, 'aggregator.csv');
   const pos = await ingest(s, 'positions.csv');
   const cash = await accountOfFile(s, agg);

@@ -63,7 +63,7 @@ export async function prepareImport(ctx, { file, layout = null, fake, reinterpre
       const review = parseJson(prior.review_state, {}), proposal = parseJson(prior.proposal);
       if (review.kind === 'actions') {
         const { stageUpdate } = await import('./model-updates.mjs');
-        return stageUpdate(ctx, { source, actions: proposal.actions.map(({ scopes, ...action }) => action), capturedAt: proposal.capturedAt });
+        return await stageUpdate(ctx, { source, actions: proposal.actions.map(({ scopes, ...action }) => action), capturedAt: proposal.capturedAt });
       }
       return await stageImport({ ...ctx, capturedAt: review.capturedAt }, { source, proposal: { ...proposal, version: prior.version + 1 }, layout: review.layout, reinterpret: review.reinterpret });
     }

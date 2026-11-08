@@ -40,7 +40,7 @@ async function withStore(fn) {
 }
 
 describe('Tell us note save path', () => {
-  test('a saved note retains encrypted bytes and waits for source-grounded approval before any facts', () => withStore(async s => {
+  test('a saved note retains encrypted bytes and waits for source-grounded approval before any facts', async () => withStore(async s => {
     const engine = await recordingEngine([[NOTES_OUT]]);
     const out = await O.saveNotes(ctxOf(s, engine, { text: NOTE }));
     assert.equal(out.file.status, 'waiting_for_engine');
@@ -56,7 +56,7 @@ describe('Tell us note save path', () => {
     assert.equal(out.scenario.live.heard.empty, true);
   }));
 
-  test('engine off: the parser stores the note and it waits; nothing is read and nothing is invented', () => withStore(async (s) => {
+  test('engine off: the parser stores the note and it waits; nothing is read and nothing is invented', async () => withStore(async (s) => {
     const out = await O.saveNotes(ctxOf(s, await offEngine(), { text: NOTE }));
     assert.equal(out.file.status, 'waiting_for_engine');
     assert.equal(await count(s.db, 'documents', "doc_type = 'notes'"), 0);
@@ -65,7 +65,7 @@ describe('Tell us note save path', () => {
     assert.equal(out.scenario.live.heard.empty, true);
   }));
 
-  test('the same note twice is a duplicate, not a second import', () => withStore(async (s) => {
+  test('the same note twice is a duplicate, not a second import', async () => withStore(async (s) => {
     const engine = await fakeEngine([[NOTES_OUT]]);
     const first = await O.saveNotes(ctxOf(s, engine, { text: NOTE }));
     const again = await O.saveNotes(ctxOf(s, engine, { text: `  ${NOTE}\r\n` }));
@@ -78,7 +78,7 @@ describe('Tell us note save path', () => {
     assert.equal(await count(s.db, 'files'), 1);
   }));
 
-  test('a second, different note adds to the first (Setup for a returning owner)', () => withStore(async (s) => {
+  test('a second, different note adds to the first (Setup for a returning owner)', async () => withStore(async (s) => {
     const engine = await fakeEngine([[NOTES_OUT], [{ facts: [{ key: 'income.sCorp', value: 'true', confidence: 0.95 }], goals: [] }]]);
     await O.saveNotes(ctxOf(s, engine, { text: NOTE }));
     const more = await O.saveNotes(ctxOf(s, engine, { text: 'I also take a salary from my S corporation.' }));
@@ -88,7 +88,7 @@ describe('Tell us note save path', () => {
     assert.equal(await count(s.db,'facts'), 0);
   }));
 
-  test('bad input is refused with a fixed message and nothing is stored', () => withStore(async (s) => {
+  test('bad input is refused with a fixed message and nothing is stored', async () => withStore(async (s) => {
     const engine = await fakeEngine([]);
     for (const [body, code] of [[{}, 400], [{ text: 5 }, 400], [{ text: '   \n ' }, 400], [{ text: 'bad\u0000note' }, 400], [{ text: 'x'.repeat(O.NOTE_MAX_BYTES + 1) }, 413]]) {
       await assert.rejects(O.saveNotes(ctxOf(s, engine, body)), (err) => {
@@ -127,11 +127,11 @@ describe('what we heard (deriveHeard)', () => {
     try { return await fn(t.db); } finally { t.close(); }
   }
 
-  test('an empty store hears nothing: no sections, no invented values', () => withDb((db) => {
+  test('an empty store hears nothing: no sections, no invented values', async () => withDb((db) => {
     assert.deepEqual(H.deriveHeard(db, { clock: '2026-11-05' }), { sections: [], deadlines: 0, pending: 0, empty: true });
   }));
 
-  test('facts, entities and accounts by kind come out with provenance and an edit target', () => withDb(async (db) => {
+  test('facts, entities and accounts by kind come out with provenance and an edit target', async () => withDb(async (db) => {
     await file(db, 'f-note', 'Setup notes 2026-11-05.md');
     await file(db, 'f-pnl', 'books.xlsx');
     fact(db, 'household.filingStatus', 'mfj', { confirmed: true, src: 'you' });
@@ -171,7 +171,7 @@ describe('what we heard (deriveHeard)', () => {
     assert.equal(item('accounts', 'accounts:taxable').prov, 'Stored accounts');
   }));
 
-  test('an open question about a fact makes its edit target the Confirm deck, and the open count is reported', () => withDb(async (db) => {
+  test('an open question about a fact makes its edit target the Confirm deck, and the open count is reported', async () => withDb(async (db) => {
     await file(db, 'f-note', 'Setup notes.md');
     fact(db, 'household.dependents', 2, { provenance: { fileId: 'f-note', parser: 'extract-notes' } });
     fact(db, 'household.state', 'VA', { provenance: { fileId: 'f-note', parser: 'extract-notes' } });
@@ -184,14 +184,14 @@ describe('what we heard (deriveHeard)', () => {
     assert.equal(items.find((i) => i.key === 'household.state').edit.route, 'onboarding');
   }));
 
-  test('file-sourced names are returned as plain strings, never tokens or markup', () => withDb(async (db) => {
+  test('file-sourced names are returned as plain strings, never tokens or markup', async () => withDb(async (db) => {
     await file(db, 'f-x', '<img src=x onerror=1>{{fig.a}}.md');
     fact(db, 'household.state', 'VA', { provenance: { fileId: 'f-x' } });
     const item = H.deriveHeard(db, { clock: '2026-11-05' }).sections[0].items[0];
     assert.equal(item.prov, 'From <img src=x onerror=1>{{fig.a}}.md', 'escaping is the renderer\'s job; the value is verbatim');
   }));
 
-  test('the scenario carries live.heard for real and demo stores', () => withDb((db) => {
+  test('the scenario carries live.heard for real and demo stores', async () => withDb((db) => {
     fact(db, 'household.state', 'VA');
     const sc = B.buildScenario(db);
     assert.equal(sc.live.heard.sections[0].items[0].value, 'VA');

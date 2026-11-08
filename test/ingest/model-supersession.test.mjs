@@ -73,14 +73,14 @@ test('reinterpretation preserves owner category corrections and posting ids by s
   try {
     await approve(x, await upload(x, transactions()));
     const ids = (await x.db.prepare('SELECT id FROM transactions ORDER BY id').all()).map(r => r.id);
-    setTransactionCategory(x.db, ids[0], 'Groceries', { now: x.ctx.now });
-    setTransactionCategory(x.db, ids[1], 'Business', { now: x.ctx.now });
+    await setTransactionCategory(x.db, ids[0], 'Groceries', { now: x.ctx.now });
+    await setTransactionCategory(x.db, ids[1], 'Business', { now: x.ctx.now });
     const corrections = await x.db.prepare('SELECT * FROM transaction_category_corrections ORDER BY transaction_id').all();
     const layout = recipe(); layout.tables[0].fields.amount.transform = { op: 'sign', mode: 'negate' };
     await approve(x, await upload(x, transactions(), layout, { reinterpret: true }));
     assert.deepEqual((await x.db.prepare('SELECT id,amount FROM transactions ORDER BY id').all()).map(r => [r.id,r.amount]), ids.map(id => [id,12.25]));
     assert.deepEqual(await x.db.prepare('SELECT * FROM transaction_category_corrections ORDER BY transaction_id').all(), corrections);
-    const resolved = resolveCategories(loadCategoryInputs(x.db));
+    const resolved = resolveCategories(await loadCategoryInputs(x.db));
     assert.deepEqual(ids.map(id => resolved.get(id).category), ['Groceries','Business']);
   } finally { x.close(); }
 });
@@ -134,7 +134,7 @@ test('reinterpretation cannot discard a source occurrence with an owner correcti
   try {
     await approve(x,await upload(x,transactions()));
     const last = (await x.db.prepare('SELECT max(id) id FROM transactions').get()).id;
-    setTransactionCategory(x.db,last,'Groceries',{now:x.ctx.now});
+    await setTransactionCategory(x.db,last,'Groceries',{now:x.ctx.now});
     const before = await x.db.prepare('SELECT * FROM transactions ORDER BY id').all();
     const staged = await upload(x,transactions(),recipe(),{reinterpret:true,change:proposal=>{
       proposal.rows.pop();

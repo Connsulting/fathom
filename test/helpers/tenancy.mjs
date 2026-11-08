@@ -393,7 +393,7 @@ export async function platformModules() {
 export async function freshInstance(dataDir, mode = 'real') {
   const { createInstance } = await src('src/platform/db.mjs');
   mkdirSync(dataDir, { recursive: true });
-  const { db, platform, householdId } = createInstance(dataDir, { mode, init() {} });
+  const { db, platform, householdId } = await createInstance(dataDir, { mode, init() {} });
   await db.close();
   await platform.close();
   return { householdId };

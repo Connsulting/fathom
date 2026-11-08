@@ -77,7 +77,7 @@ const askKind = (C, db, id) => C.ask(db, { kind: 'account_kind', subject: id, qu
 
 /* ---------- AC1: last 4 ---------- */
 
-test('AC1: last 4 refuses anything that is not exactly four digits', () => withStore(async (s, { A }) => {
+test('AC1: last 4 refuses anything that is not exactly four digits', async () => withStore(async (s, { A }) => {
   const id = await plainAccount(s);
   for (const mask of ['123', '12345', '12ab', 'abcd', '12 34', ' 1234x', null, '', 1234, ['1234'], { mask: '1234' }]) {
     assert.equal(await status(() => A.accountMask(ctx(s, id, { mask }))), 400, `mask ${JSON.stringify(mask)} is refused`);
@@ -86,7 +86,7 @@ test('AC1: last 4 refuses anything that is not exactly four digits', () => withS
   assert.equal((await row(s.db, id)).mask, null, 'nothing was stored');
 }));
 
-test('AC1: last 4 refuses an account that already has a mask or a SimpleFIN identity, and an unknown account', () => withStore(async (s, { A }) => {
+test('AC1: last 4 refuses an account that already has a mask or a SimpleFIN identity, and an unknown account', async () => withStore(async (s, { A }) => {
   const masked = await plainAccount(s, 'acct-masked', { mask: '5555' });
   const linked = await plainAccount(s, 'acct-linked', { identity: 'simplefin:synthetic-linked' });
   assert.equal(await status(() => A.accountMask(ctx(s, masked, { mask: '1234' }))), 409);
@@ -97,7 +97,7 @@ test('AC1: last 4 refuses an account that already has a mask or a SimpleFIN iden
   assert.equal(await status(() => A.accountMask(ctx(s, '', { mask: '1234' }))), 400);
 }));
 
-test('AC1: a good last 4 is stored, the label shows it after the name, and the control is offered only while it can be used', () => withStore(async (s, { A, D }) => {
+test('AC1: a good last 4 is stored, the label shows it after the name, and the control is offered only while it can be used', async () => withStore(async (s, { A, D }) => {
   const id = await plainAccount(s);
   const masked = await plainAccount(s, 'acct-masked', { mask: '5555' });
   const linked = await plainAccount(s, 'acct-linked', { identity: 'simplefin:synthetic-linked' });
@@ -119,7 +119,7 @@ test('AC1: a good last 4 is stored, the label shows it after the name, and the c
   assert.equal((await row(s.db, id)).mask, '1234');
 }));
 
-test('AC1: a stored last 4 lets duplicate detection propose a pair it could not see before', () => withStore(async (s, m) => {
+test('AC1: a stored last 4 lets duplicate detection propose a pair it could not see before', async () => withStore(async (s, m) => {
   const { A, M } = m;
   const file = await fileAccount(s, m.P, 'Household spending');
   const own = await connectedAccount(s, m, { mask: '4321' });
@@ -135,7 +135,7 @@ test('AC1: a stored last 4 lets duplicate detection propose a pair it could not 
   assert.equal(items[0].status, 'pending', 'a Same account? question is waiting');
 }));
 
-test('AC1: Add last 4 returns an undo receipt, and undoing it puts the account back as it was', () => withStore(async (s, { A, D }) => {
+test('AC1: Add last 4 returns an undo receipt, and undoing it puts the account back as it was', async () => withStore(async (s, { A, D }) => {
   const id = await plainAccount(s);
   const saved = await A.accountMask(ctx(s, id, { mask: '1234' }));
   assert.deepEqual(saved.before, { set: '1234' }, 'the receipt names the last 4 that was stored');
@@ -147,7 +147,7 @@ test('AC1: Add last 4 returns an undo receipt, and undoing it puts the account b
   assert.equal(await status(() => A.accountMask(ctx(s, id, { undo: saved.before }))), 409, 'a second undo is refused');
 }));
 
-test('AC1: undoing a last 4 withdraws the Same account? question it raised', () => withStore(async (s, m) => {
+test('AC1: undoing a last 4 withdraws the Same account? question it raised', async () => withStore(async (s, m) => {
   const { A, M } = m;
   const file = await fileAccount(s, m.P, 'Household spending');
   const own = await connectedAccount(s, m, { mask: '4321' });
@@ -162,7 +162,7 @@ test('AC1: undoing a last 4 withdraws the Same account? question it raised', () 
   assert.equal(item.answer, 'superseded', 'the question is withdrawn, not left to ask about a pair that is gone');
 }));
 
-test('AC1: a last 4 undo is refused when it is stale, malformed, or later answers build on it', () => withStore(async (s, m) => {
+test('AC1: a last 4 undo is refused when it is stale, malformed, or later answers build on it', async () => withStore(async (s, m) => {
   const { A } = m;
   const id = await plainAccount(s);
   const saved = await A.accountMask(ctx(s, id, { mask: '1234' }));
@@ -185,7 +185,7 @@ test('AC1: a last 4 undo is refused when it is stale, malformed, or later answer
 
 const OWNER_LABEL = { owner: 'You', spouse: 'Your spouse', joint: 'Joint', business: 'Business' };
 
-test('AC2: every owner id is accepted and stored as the confirm label; anything else is refused and changes nothing', () => withStore(async (s, { A, C }) => {
+test('AC2: every owner id is accepted and stored as the confirm label; anything else is refused and changes nothing', async () => withStore(async (s, { A, C }) => {
   const id = await plainAccount(s, 'acct-o', { owner: null });
   askOwner(C, s.db, id);
   const before = { acct: await row(s.db, id), items: await itemsOf(s.db, 'account_owner', id) };
@@ -210,7 +210,7 @@ test('AC2: every owner id is accepted and stored as the confirm label; anything 
   }
 }));
 
-test('AC2: every kind id is accepted and stored; anything else is refused and changes nothing', () => withStore(async (s, { A, C }) => {
+test('AC2: every kind id is accepted and stored; anything else is refused and changes nothing', async () => withStore(async (s, { A, C }) => {
   const id = await plainAccount(s, 'acct-k', { kind: null });
   askKind(C, s.db, id);
   const before = { acct: await row(s.db, id), items: await itemsOf(s.db, 'account_kind', id) };
@@ -232,7 +232,7 @@ test('AC2: every kind id is accepted and stored; anything else is refused and ch
   }
 }));
 
-test('AC2: an owner edit works from a pending item, an answered item, a final item and no item', () => withStore(async (s, { A, C }) => {
+test('AC2: an owner edit works from a pending item, an answered item, a final item and no item', async () => withStore(async (s, { A, C }) => {
   const pending = await plainAccount(s, 'acct-pending', { owner: null });
   askOwner(C, s.db, pending);
   const answered = await plainAccount(s, 'acct-answered', { owner: null });
@@ -255,7 +255,7 @@ test('AC2: an owner edit works from a pending item, an answered item, a final it
   }
 }));
 
-test('AC2: a later import asking the same question keeps the edited owner and kind', () => withStore(async (s, { A, C }) => {
+test('AC2: a later import asking the same question keeps the edited owner and kind', async () => withStore(async (s, { A, C }) => {
   const id = await plainAccount(s, 'acct-keep', { owner: null, kind: null });
   C.answer(s.db, askOwner(C, s.db, id).id, 'owner', { now: NOW });
   C.answer(s.db, askKind(C, s.db, id).id, 'checking', { now: NOW });
@@ -276,7 +276,7 @@ test('AC2: a later import asking the same question keeps the edited owner and ki
   assert.equal((await row(s.db, fresh)).kind, 'business');
 }));
 
-test('AC2: restating a final owner reverts the auto answers that rested on it', () => withStore(async (s, { A, C }) => {
+test('AC2: restating a final owner reverts the auto answers that rested on it', async () => withStore(async (s, { A, C }) => {
   const a = await plainAccount(s, 'acct-dep-a', { owner: null });
   const b = await plainAccount(s, 'acct-dep-b', { owner: null });
   const aId = askOwner(C, s.db, a).id;
@@ -292,19 +292,19 @@ test('AC2: restating a final owner reverts the auto answers that rested on it', 
   assert.equal((await row(s.db, b)).owner, null);
 }));
 
-test('AC1: a connected account shows its last 4 only when the bridge is sure of it', () => withStore(async (s, m) => {
+test('AC1: a connected account shows its last 4 only when the bridge is sure of it', async () => withStore(async (s, m) => {
   const own = await connectedAccount(s, m, { sfKey: 'synthetic-unsure', mask: '5432', name: 'Checking' });
   const { accountNaming } = await src('src/accounts/naming.mjs');
   const { accountLabel } = await src('src/shared/account-label.mjs');
   const snap = async (patch) => await s.db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?')
     .run(JSON.stringify({ inst: INST, name: 'Checking', mask: '5432', ...patch }), 'synthetic-unsure');
   await snap({ maskSure: false });
-  assert.equal(accountLabel(accountNaming(s.db).byId.get(own)), 'Checking');
+  assert.equal(accountLabel((await accountNaming(s.db)).byId.get(own)), 'Checking');
   await snap({ maskSure: true });
-  assert.equal(accountLabel(accountNaming(s.db).byId.get(own)), 'Checking (5432)');
+  assert.equal(accountLabel((await accountNaming(s.db)).byId.get(own)), 'Checking (5432)');
 }));
 
-test('AC2: undo restores an answered owner, including one that was final', () => withStore(async (s, { A, C }) => {
+test('AC2: undo restores an answered owner, including one that was final', async () => withStore(async (s, { A, C }) => {
   const id = await plainAccount(s, 'acct-undo-a', { owner: null });
   const itemId = askOwner(C, s.db, id).id;
   C.answer(s.db, itemId, 'owner', { now: NOW });
@@ -327,7 +327,7 @@ test('AC2: undo restores an answered owner, including one that was final', () =>
   assert.equal(C.getItem(s.db, finalId).answer, 'owner');
 }));
 
-test('AC2: undo of an edit that answered a pending question puts it back to pending', () => withStore(async (s, { A, C }) => {
+test('AC2: undo of an edit that answered a pending question puts it back to pending', async () => withStore(async (s, { A, C }) => {
   const id = await plainAccount(s, 'acct-undo-p', { owner: null, kind: null, name: 'Synthetic flexible account' });
   const ownerItem = askOwner(C, s.db, id).id;
   const kindItem = askKind(C, s.db, id).id;
@@ -344,7 +344,7 @@ test('AC2: undo of an edit that answered a pending question puts it back to pend
   assert.equal(C.getItem(s.db, kindItem).status, 'pending');
 }));
 
-test('AC2: undo of an edit that created the question removes it and restores the column', () => withStore(async (s, { A }) => {
+test('AC2: undo of an edit that created the question removes it and restores the column', async () => withStore(async (s, { A }) => {
   const id = await plainAccount(s, 'acct-undo-n', { owner: 'You', kind: 'cash' });
   const o = await A.accountOwner(ctx(s, id, { owner: 'business' }));
   const k = await A.accountKind(ctx(s, id, { kind: 'retirement' }));
@@ -358,7 +358,7 @@ test('AC2: undo of an edit that created the question removes it and restores the
   assert.equal((await itemsOf(s.db, 'account_kind', id)).length, 0, 'the created kind item is gone');
 }));
 
-test('AC2: repeating the same value is a quiet no-op', () => withStore(async (s, { A }) => {
+test('AC2: repeating the same value is a quiet no-op', async () => withStore(async (s, { A }) => {
   const id = await plainAccount(s, 'acct-same', { owner: 'You', kind: 'cash' });
   await A.accountOwner(ctx(s, id, { owner: 'spouse' }));
   const again = await A.accountOwner(ctx(s, id, { owner: 'spouse' }));
@@ -371,7 +371,7 @@ test('AC2: repeating the same value is a quiet no-op', () => withStore(async (s,
   assert.ok((await itemsOf(s.db, 'account_kind', id)).length <= 1);
 }));
 
-test('AC2: an owner or kind edit schedules a replan and the detail reports the option keys', () => withStore(async (s, { A, D }) => {
+test('AC2: an owner or kind edit schedules a replan and the detail reports the option keys', async () => withStore(async (s, { A, D }) => {
   const id = await plainAccount(s, 'acct-plan', { owner: 'You', kind: 'cash' });
   const calls = [];
   const scheduler = { soon: (job) => { calls.push(job); return true; }, trigger: (job) => { calls.push(job); return Promise.resolve(); } };
@@ -411,7 +411,7 @@ async function undetectedPair(s, m) {
   return { file, own };
 }
 
-test('AC3: merge candidates list every other account with what a merge would keep and move', () => withStore(async (s, m) => {
+test('AC3: merge candidates list every other account with what a merge would keep and move', async () => withStore(async (s, m) => {
   const { file, own } = await undetectedPair(s, m);
   const other = await fileAccount(s, m.P, 'Rainy day fund');
   const total = (await s.db.prepare('SELECT count(*) AS n FROM accounts').get()).n;
@@ -452,7 +452,7 @@ test('AC3: merge candidates list every other account with what a merge would kee
   assert.equal(await status(() => m.A.accountMergeCandidates(ctx(s, 'nope'))), 404);
 }));
 
-test('AC3: two connected accounts are listed as refused and a merge of them is refused with nothing changed', () => withStore(async (s, m) => {
+test('AC3: two connected accounts are listed as refused and a merge of them is refused with nothing changed', async () => withStore(async (s, m) => {
   const first = await seedDuplicate(s, { sure: true, mask: '6294', sfKey: 'synthetic-one' });
   const second = await seedDuplicate(s, { sure: true, mask: '7310', sfKey: 'synthetic-two' });
   const list = await m.A.accountMergeCandidates(ctx(s, first.own));
@@ -464,7 +464,7 @@ test('AC3: two connected accounts are listed as refused and a merge of them is r
   assert.deepEqual(await snapshot(s.db), before);
 }));
 
-test('AC3: a merge with itself, an unknown account or no account is refused', () => withStore(async (s, m) => {
+test('AC3: a merge with itself, an unknown account or no account is refused', async () => withStore(async (s, m) => {
   const { file } = await undetectedPair(s, m);
   const before = await snapshot(s.db);
   assert.equal(await status(() => m.A.accountMerge(ctx(s, file, { withId: file }))), 400);
@@ -475,7 +475,7 @@ test('AC3: a merge with itself, an unknown account or no account is refused', ()
 }));
 
 for (const from of ['file', 'connected']) {
-  test(`AC3: a manual merge of an undetected pair, opened from the ${from} account, keeps the file account and undo restores both`, () => withStore(async (s, m) => {
+  test(`AC3: a manual merge of an undetected pair, opened from the ${from} account, keeps the file account and undo restores both`, async () => withStore(async (s, m) => {
     const { file, own } = await undetectedPair(s, m);
     await putGoal(s.db, own);
     const ownTx = (await s.db.prepare('SELECT id FROM transactions WHERE account_id = ?').all(own)).map((r) => r.id);
@@ -510,7 +510,7 @@ for (const from of ['file', 'connected']) {
 
 // Imports find an account by its own identity, so a removed imported account would come back with
 // its next file; two imported accounts are refused instead of merged.
-test('AC3: two imported accounts are refused and nothing changes', () => withStore(async (s, m) => {
+test('AC3: two imported accounts are refused and nothing changes', async () => withStore(async (s, m) => {
   const a = await fileAccount(s, m.P, 'Spending alpha');
   const b = await fileAccount(s, m.P, 'Spending beta', { amount: '40.00' });
   const before = await snapshot(s.db);
@@ -551,7 +551,7 @@ async function mergeDetected(s, m, { file, own }) {
 
 // The survivor keeps its imported identity, so a later import of its file still lands on it;
 // merging it into another imported account would delete an identity that import recreates.
-test('AC3: a merged survivor is still an imported account, so merging it with another imported account is refused', () => withStore(async (s, m) => {
+test('AC3: a merged survivor is still an imported account, so merging it with another imported account is refused', async () => withStore(async (s, m) => {
   const pair = await bareDuplicate(s);
   await mergeDetected(s, m, pair);
   assert.equal((await row(s.db, pair.file)).mirror, 'connected');
@@ -562,7 +562,7 @@ test('AC3: a merged survivor is still an imported account, so merging it with an
   assert.deepEqual(await snapshot(s.db), before);
 }));
 
-test('AC1: a goal tracking a connected account shows the last 4 only when the bridge is sure of it', () => withStore(async (s, m) => {
+test('AC1: a goal tracking a connected account shows the last 4 only when the bridge is sure of it', async () => withStore(async (s, m) => {
   const own = await connectedAccount(s, m, { sfKey: 'synthetic-goal', mask: '1234', name: 'Checking' });
   await putGoal(s.db, own);
   const snap = async (patch) => await s.db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?')
@@ -574,14 +574,14 @@ test('AC1: a goal tracking a connected account shows the last 4 only when the br
   assert.equal(await trackLabel(), 'Checking (1234)');
 }));
 
-test('AC1: the last 4 shown is the stored one, not a later snapshot mask the account never took', () => withStore(async (s, m) => {
+test('AC1: the last 4 shown is the stored one, not a later snapshot mask the account never took', async () => withStore(async (s, m) => {
   const own = await connectedAccount(s, m, { sfKey: 'synthetic-drift', mask: '1234', name: 'Checking' });
   await s.db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?')
     .run(JSON.stringify({ inst: INST, name: 'Checking x9876', mask: '9876', maskSure: true }), 'synthetic-drift');
   const { accountNaming } = await src('src/accounts/naming.mjs');
   const { accountLabel } = await src('src/shared/account-label.mjs');
   assert.equal((await row(s.db, own)).mask, '1234');
-  assert.doesNotMatch(accountLabel(accountNaming(s.db).byId.get(own)), /ending/);
+  assert.doesNotMatch(accountLabel((await accountNaming(s.db)).byId.get(own)), /ending/);
 }));
 
 const setSnapshot = async (db, sfKey, patch) => {
@@ -589,7 +589,7 @@ const setSnapshot = async (db, sfKey, patch) => {
   await db.prepare('UPDATE simplefin_snapshots SET snapshot = ? WHERE sf_key = ?').run(JSON.stringify({ ...cur, ...patch }), sfKey);
 };
 
-test('AC3: a manual merge fills a survivor with no institution or last 4 from the connected account', () => withStore(async (s, m) => {
+test('AC3: a manual merge fills a survivor with no institution or last 4 from the connected account', async () => withStore(async (s, m) => {
   const pair = await bareDuplicate(s);
   const before = await row(s.db, pair.file);
   assert.equal(before.inst, null);
@@ -605,7 +605,7 @@ test('AC3: a manual merge fills a survivor with no institution or last 4 from th
   assert.equal(m.D.accountDetail(ctx(s, pair.file)).account.mask, '1234');
 }));
 
-test('AC3: a detected merge carries the institution and last 4 over the same way', () => withStore(async (s, m) => {
+test('AC3: a detected merge carries the institution and last 4 over the same way', async () => withStore(async (s, m) => {
   const pair = await bareDuplicate(s);
   await mergeDetected(s, m, pair);
   const after = await row(s.db, pair.file);
@@ -678,7 +678,7 @@ async function olderMergeSurvivor(s, m, opts = {}) {
   return { id: pair.keep, sfKey: pair.sfKey };
 }
 
-test('AC3: backfill fills an older merge survivor from its snapshot and is idempotent', () => withStore(async (s, m) => {
+test('AC3: backfill fills an older merge survivor from its snapshot and is idempotent', async () => withStore(async (s, m) => {
   assert.equal(typeof m.M.backfillMergedIdentity, 'function');
   const survivor = await olderMergeSurvivor(s, m);
   assert.equal((await row(s.db, survivor.id)).inst, null);
@@ -690,7 +690,7 @@ test('AC3: backfill fills an older merge survivor from its snapshot and is idemp
   assert.deepEqual(await row(s.db, survivor.id), after);
 }));
 
-test('AC3: backfill never overwrites an institution or last 4 that is already set', () => withStore(async (s, m) => {
+test('AC3: backfill never overwrites an institution or last 4 that is already set', async () => withStore(async (s, m) => {
   const survivor = await olderMergeSurvivor(s, m);
   await s.db.prepare("UPDATE accounts SET inst = 'Kept Bank' WHERE id = ?").run(survivor.id);
   assert.equal(m.M.backfillMergedIdentity(s.db), 1);
@@ -705,7 +705,7 @@ test('AC3: backfill never overwrites an institution or last 4 that is already se
   assert.equal(m.M.backfillMergedIdentity(s.db), 0);
 }));
 
-test('AC3: backfill applies the same reliability rule to the last 4', () => withStore(async (s, m) => {
+test('AC3: backfill applies the same reliability rule to the last 4', async () => withStore(async (s, m) => {
   const survivor = await olderMergeSurvivor(s, m);
   await setSnapshot(s.db, survivor.sfKey, { maskSure: false, name: 'Synthetic checking' });
   assert.equal(m.M.backfillMergedIdentity(s.db), 1, 'only the institution changed');
@@ -718,7 +718,7 @@ test('AC3: backfill applies the same reliability rule to the last 4', () => with
   assert.equal((await row(s.db, survivor.id)).mask, '6294');
 }));
 
-test('AC3: backfill ignores a survivor with no snapshot and accounts that were never merged', () => withStore(async (s, m) => {
+test('AC3: backfill ignores a survivor with no snapshot and accounts that were never merged', async () => withStore(async (s, m) => {
   const survivor = await olderMergeSurvivor(s, m);
   await s.db.prepare('DELETE FROM simplefin_snapshots WHERE sf_key = ?').run(survivor.sfKey);
   const loose = await seedDuplicate(s, { sure: true, mask: '7310', sfKey: 'synthetic-unmerged' });
@@ -766,12 +766,12 @@ test('AC4: a checking account that is manual shows Checking and Manual once each
 
 /* ---------- labels: owner prefix, name, sure last 4 ---------- */
 
-test('the label is owner prefix, name and last 4 on every surface, and the dialog edits the bare name', () => withStore(async (s, m) => {
+test('the label is owner prefix, name and last 4 on every surface, and the dialog edits the bare name', async () => withStore(async (s, m) => {
   const { upsertFact } = await src('src/store/facts.mjs');
   const { accountNaming } = await src('src/accounts/naming.mjs');
   const { accountLabels } = await src('src/pnl/shared.mjs');
-  upsertFact(s.db, { key: 'household.names', value: { me: 'Avery Example', spouse: 'Blair Example' }, src: 'you', asOf: '2032-02-01', confirmed: true, now: NOW });
-  upsertFact(s.db, { key: 'accounts.businessEntity', value: { 'acct-biz': 'Sample Studio LLC' }, src: 'you', asOf: '2032-02-01', confirmed: true, now: NOW });
+  await upsertFact(s.db, { key: 'household.names', value: { me: 'Avery Example', spouse: 'Blair Example' }, src: 'you', asOf: '2032-02-01', confirmed: true, now: NOW });
+  await upsertFact(s.db, { key: 'accounts.businessEntity', value: { 'acct-biz': 'Sample Studio LLC' }, src: 'you', asOf: '2032-02-01', confirmed: true, now: NOW });
   const mine = await plainAccount(s, 'acct-mine', { owner: 'You', name: 'Venture One', mask: '0323' });
   const hers = await plainAccount(s, 'acct-hers', { owner: 'Your spouse', name: 'Venture Two', mask: '1111' });
   const joint = await plainAccount(s, 'acct-joint', { owner: 'Joint', name: 'Venture Three', mask: '2222' });
@@ -790,8 +790,8 @@ test('the label is owner prefix, name and last 4 on every surface, and the dialo
     [nobody]: 'Loose account (4444)',
     [unsure]: "Avery's Bridge checking",
   };
-  const naming = accountNaming(s.db);
-  const pnl = accountLabels(s.db);
+  const naming = await accountNaming(s.db);
+  const pnl = await accountLabels(s.db);
   const scenario = (await m.A.accountRename(ctx(s, mine, { displayName: 'Venture One' }))).scenario;
   for (const [id, label] of Object.entries(expected)) {
     assert.equal(naming.label(await row(s.db, id)), label, `${id} through the naming hint on a raw row`);

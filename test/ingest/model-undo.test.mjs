@@ -63,7 +63,7 @@ test('Undo survives the real category guessing job but refuses a later owner cor
       assert.equal((await x.db.prepare('SELECT count(*) n FROM transaction_category_guesses').get()).n,2);
       assert.equal((await x.db.prepare('SELECT count(*) n FROM confirm_auto').get()).n,confidence>=0.9 ? 2 : 0);
       if (ownerChange) {
-        setTransactionCategory(x.db,(await x.db.prepare('SELECT min(id) id FROM transactions').get()).id,'Business',{now:x.ctx.now});
+        await setTransactionCategory(x.db,(await x.db.prepare('SELECT min(id) id FROM transactions').get()).id,'Business',{now:x.ctx.now});
         await assert.rejects(undoAction(x.ctx,approved.receipt.id,'write:imports'), e=>e.code==='conflict');
         assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n,2);
       } else {

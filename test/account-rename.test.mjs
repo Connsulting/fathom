@@ -13,7 +13,7 @@ test('a display name survives a re-import and a SimpleFIN refresh, and clearing 
     const first = await P.ingestFile(s.db, aggregatorFile('first.csv', [row]), s.opts(null));
     assert.equal(first.status, 'imported');
     const acct = await s.db.prepare('SELECT * FROM accounts').get();
-    const renamed = accountRename({ db: s.db, config: s.config, params: { id: acct.id }, body: { displayName: 'Household cash' } });
+    const renamed = await accountRename({ db: s.db, config: s.config, params: { id: acct.id }, body: { displayName: 'Household cash' } });
     assert.equal(renamed.account.name, 'Household cash (2738)');
     assert.equal(renamed.account.displayName, 'Household cash');
 
@@ -41,7 +41,7 @@ test('a display name survives a re-import and a SimpleFIN refresh, and clearing 
     assert.equal(after.display_name, 'Household cash');
     assert.equal(after.name, 'Chase 2738 2738');
 
-    const cleared = accountRename({ db: s.db, config: s.config, params: { id: acct.id }, body: { displayName: '  ' } });
+    const cleared = await accountRename({ db: s.db, config: s.config, params: { id: acct.id }, body: { displayName: '  ' } });
     assert.equal(cleared.account.displayName, null);
     assert.equal(cleared.account.name, 'Chase savings (2738)');
     assert.equal(cleared.account.name.includes('2738 2738'), false);
@@ -61,7 +61,7 @@ test('a rename updates the trend, the source and the question, and accounts.list
   const { upsertFact } = await src('src/store/facts.mjs');
   const row = { date: '2032-02-01', amount: '10.00', type: 'Brokerage', account: 'Avery Example', number: '9993046', inst: 'Harbor', description: 'Synthetic' };
   try {
-    upsertFact(s.db, { key: 'household.names', value: { me: 'Avery Example', spouse: 'Blair Example' }, src: 'you', asOf: '2032-02-01', confirmed: true, now: NOW });
+    await upsertFact(s.db, { key: 'household.names', value: { me: 'Avery Example', spouse: 'Blair Example' }, src: 'you', asOf: '2032-02-01', confirmed: true, now: NOW });
     const imported = await P.ingestFile(s.db, aggregatorFile('holder.csv', [row]), s.opts(null));
     assert.equal(imported.status, 'imported');
     const acct = await s.db.prepare('SELECT * FROM accounts').get();
@@ -76,8 +76,8 @@ test('a rename updates the trend, the source and the question, and accounts.list
       'series', JSON.stringify({ [key]: { label: 'Individual 3046', unit: '$', src: 'balances', points: [] } }), 'test', NOW);
     await s.db.prepare('INSERT INTO sources (id, label, as_of, kind) VALUES (?, ?, ?, ?)').run(`acct:${acct.id}`, 'Individual 3046', '2032-02-01', 'account');
 
-    accountRename({ db: s.db, config: s.config, params: { id: acct.id }, body: { displayName: 'Household reserve' } });
-    const scenario = buildScenario(s.db, {});
+    await accountRename({ db: s.db, config: s.config, params: { id: acct.id }, body: { displayName: 'Household reserve' } });
+    const scenario = await buildScenario(s.db, {});
     assert.equal(scenario.series[key].label, 'Household reserve (3046)');
     assert.equal(scenario.src[`acct:${acct.id}`].label, 'Household reserve (3046)');
     await s.db.prepare(`INSERT INTO figures (key, v, src, kind, label, updated_at) VALUES (?, 10, ?, 'a', ?, ?)`).run(
@@ -99,12 +99,12 @@ test('renaming a mortgage does not drop its 1098, and year end hides a holder na
   const { yearendChecklist } = await src('src/yearend/expected.mjs');
   const { upsertFact } = await src('src/store/facts.mjs');
   try {
-    upsertFact(s.db, { key: 'household.names', value: { me: 'Avery Example' }, src: 'you', asOf: '2032-02-01', confirmed: true, now: NOW });
+    await upsertFact(s.db, { key: 'household.names', value: { me: 'Avery Example' }, src: 'you', asOf: '2032-02-01', confirmed: true, now: NOW });
     await s.db.prepare(`INSERT INTO accounts (id, inst, mask, name, kind, display_name) VALUES ('loan1', 'Harbor', '3046', 'Avery Example', 'taxable', NULL)`).run();
     await s.db.prepare('INSERT INTO account_holders (account_id, holder, created_at) VALUES (?, ?, ?)').run('loan1', 'Avery Example', NOW);
     await s.db.prepare(`INSERT INTO accounts (id, inst, name, kind, display_name) VALUES ('mtg', 'Harbor', 'Home mortgage', 'loan', 'Primary residence debt')`).run();
     await s.db.prepare(`INSERT INTO transactions (account_id, date, amount, description) VALUES ('loan1', '2032-02-01', 1, 'Synthetic'), ('mtg', '2032-02-01', -1, 'Synthetic')`).run();
-    const list = yearendChecklist(s.db, { year: 2032, clock: '2032-06-01' });
+    const list = await yearendChecklist(s.db, { year: 2032, clock: '2032-06-01' });
     const brokerage = list.items.find((i) => i.key === '1099-composite:loan1');
     assert.ok(brokerage, 'the brokerage is on the checklist');
     assert.equal(brokerage.t.includes('Avery'), false);

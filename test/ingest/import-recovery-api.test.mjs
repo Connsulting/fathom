@@ -91,7 +91,7 @@ async function until(fn, ms = DEADLINE_MS) {
   }
 }
 
-test('an interrupted upload is resumed by the next scheduler tick', T, () => withInstance(async (instance) => {
+test('an interrupted upload is resumed by the next scheduler tick', T, async () => withInstance(async (instance) => {
   const s = await serve(instance);
   try {
     const id = await leavePending(s.app, 'interrupted-tick-synthetic.csv', csv('interrupted tick', '21.25'));
@@ -110,7 +110,7 @@ test('an interrupted upload is resumed by the next scheduler tick', T, () => wit
   } finally { await s.close(); }
 }));
 
-test('an interrupted upload is resumed when the server starts', T, () => withInstance(async (instance) => {
+test('an interrupted upload is resumed when the server starts', T, async () => withInstance(async (instance) => {
   const first = await serve(instance);
   let id;
   try {
@@ -129,7 +129,7 @@ test('an interrupted upload is resumed when the server starts', T, () => withIns
   } finally { await second.close(); }
 }));
 
-test('a failed file imports on Retry and on an identical re-upload, never as a duplicate; a tick leaves it alone', T, () => withInstance(async (instance) => {
+test('a failed file imports on Retry and on an identical re-upload, never as a duplicate; a tick leaves it alone', T, async () => withInstance(async (instance) => {
   const s = await serve(instance);
   const db = instance.db;
   try {
@@ -192,7 +192,7 @@ test('a failed file imports on Retry and on an identical re-upload, never as a d
   } finally { await healStore(db); await s.close(); }
 }));
 
-test('a transient failure is retried once by a tick and imports', T, () => withInstance(async (instance) => {
+test('a transient failure is retried once by a tick and imports', T, async () => withInstance(async (instance) => {
   const s = await serve(instance);
   const db = instance.db;
   try {
@@ -216,7 +216,7 @@ test('a transient failure is retried once by a tick and imports', T, () => withI
   } finally { await healStore(db); await s.close(); }
 }));
 
-test('a transient failure that fails again on its automatic retry is left failed and not retried again', T, () => withInstance(async (instance) => {
+test('a transient failure that fails again on its automatic retry is left failed and not retried again', T, async () => withInstance(async (instance) => {
   const s = await serve(instance);
   const db = instance.db;
   try {

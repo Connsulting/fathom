@@ -219,7 +219,7 @@ describe('household A sees only its own data on every financial route', T, () =>
   test('a foreign-only id behaves like a nonexistent one and leaves B unchanged', async () => {
     const { logicalDigest } = await src('src/platform/digest.mjs');
     const bDb = h.ctx(h.B.id).db;
-    const before = logicalDigest(bDb);
+    const before = await logicalDigest(bDb);
     const B = seeds.B;
     const pairs = [
       ['GET', `/api/threads/${B.threadId}`, '/api/threads/0123456789ab'],
@@ -239,7 +239,7 @@ describe('household A sees only its own data on every financial route', T, () =>
       assert.equal(typeof f.json?.error, 'string');
       assert.ok(!f.text.includes(B_CANARY));
     }
-    assert.equal(logicalDigest(bDb), before, 'B\'s store is unchanged');
+    assert.equal(await logicalDigest(bDb), before, 'B\'s store is unchanged');
     const keys = await ok(h.B.client.request({ path: '/api/keys' }), 'B keys');
     assert.equal(keys.keys.find(k => k.id === B.keyId)?.revokedAt ?? null, null, 'B\'s key is still live');
   });
@@ -387,7 +387,7 @@ test('each household context is frozen and holds its own DB, root, vault and run
     assert.ok(Object.isFrozen(ctx), 'frozen');
     assert.equal(ctx.householdId, id);
     assert.ok(Number.isInteger(ctx.generation) && ctx.generation >= 1);
-    assert.equal(storeIdentity(ctx.db).householdId, id, 'store_identity names the household');
+    assert.equal((await storeIdentity(ctx.db)).householdId, id, 'store_identity names the household');
     assert.ok(ctx.root.endsWith(join('households', id)), 'root is households/<id>');
     assert.equal(realpath(ctx.root), realpath(join(h.dataDir, 'households', id)));
     const vault = await ctx.vault();

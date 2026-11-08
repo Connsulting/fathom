@@ -424,7 +424,7 @@ test('AC1 the card shows no model-supplied amount or date', async () => {
   const { describeProposal, describedFields } = await import('../src/actions/describe.mjs');
   const proposal = { tool: 'update_goal', operation: 'create', args: { title: 'Synthetic fund', horizon: 'now', target: 97361, targetDate: '2028-03-17' } };
   // The description the server stores with the proposal (no store row is read for a new goal).
-  const pendingAction = { ...proposal, scopes: ['write:goals'], basis: 'ab12cd', ...describedFields(describeProposal(null, proposal)) };
+  const pendingAction = { ...proposal, scopes: ['write:goals'], basis: 'ab12cd', ...describedFields(await describeProposal(null, proposal)) };
   const html = chat.pendingActionHtml({ id: 'm7', role: 'fathom', text: '<p>x</p>', refs: [], notice: false, provenance: { pendingAction } });
   assert.ok(html.includes('Synthetic fund'));
   assert.ok(!/97361|97,361|2028/.test(html), 'no unsourced figure in the card');

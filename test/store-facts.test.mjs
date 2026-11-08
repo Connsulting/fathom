@@ -111,9 +111,9 @@ test('MGI4: recordFact treats an identical value as accepted', async () => {
   const db = await fresh();
   await addFile(db, 'file-a');
   const args = { key: 'income.w2', value: true, confidence: 0.95, sourceId: 'ing:extract-w2:all', fileId: 'file-a', parser: 'extract-w2', locator: { document: 'w2', field: 'employerName' }, asOf: '2026-12-31' };
-  assert.deepEqual(recordFact(db, { ...args, now: T1 }), { written: true, changed: true, queued: false });
+  assert.deepEqual(await recordFact(db, { ...args, now: T1 }), { written: true, changed: true, queued: false });
   const before = await changes(db);
-  assert.deepEqual(recordFact(db, { ...args, now: T2 }), { written: true, changed: false, queued: false });
+  assert.deepEqual(await recordFact(db, { ...args, now: T2 }), { written: true, changed: false, queued: false });
   assert.equal(await changes(db), before, 'nothing was written');
   assert.equal((await row(db, 'income.w2')).updated_at, T1);
 });

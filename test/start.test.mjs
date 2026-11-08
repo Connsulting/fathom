@@ -56,7 +56,7 @@ test('FATHOM_DEMO=0 on an empty data dir serves a valid empty scenario', T, asyn
     const sc = await s.getScenario();
     // The startup tick may run the nightly plan job; any rec is the planner's, never a seeded one.
     const { openDb } = await src('src/store/db.mjs');
-    const db = openDb((await servedStore(s.dataDir)).file);
+    const db = await openDb((await servedStore(s.dataDir)).file);
     let planned;
     let identity;
     try {

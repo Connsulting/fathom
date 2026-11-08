@@ -86,8 +86,8 @@ for (const confirmation of ['yes','Confirmed']) test(`a stored Ask merge proposa
   assert.ok(await s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get(ids.own));
   const id=Number((await s.db.prepare("INSERT INTO messages (conversation_key,role,text,ts,provenance) VALUES (?,'fathom','Merge these shown candidates?',?,?)").run(key,NOW,JSON.stringify({pendingAction:pending,tools:[{name:'accounts',args:{operation:'merge_candidates',id:ids.keep}}]}))).lastInsertRowid);
   await api.accountMergeCandidates({...ctx,params:{id:ids.keep}});
-  const {scenarioOf}=await import('../src/api/scenario.mjs');scenarioOf(ctx);
-  const claim=claimProposal(s.db,{key,id,decision:'confirm',scopes:ctx.scopes,at:NOW});assert.equal(claim.status,'confirmed');
+  const {scenarioOf}=await import('../src/api/scenario.mjs');await scenarioOf(ctx);
+  const claim=await claimProposal(s.db,{key,id,decision:'confirm',scopes:ctx.scopes,at:NOW});assert.equal(claim.status,'confirmed');
   const out=await executeProposal(claim.pending,{...ctx,ownerText:confirmation,evidenceMessageId:id});
   assert.equal(out.receipt.scope,'write:accounts');assert.equal(await s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get(ids.own),undefined);
   await assert.rejects(undo({...ctx,scopes:['write:confirm']},out),{code:'forbidden'});
@@ -102,7 +102,7 @@ test('source-operation proposals retain the merged catalog scope and durable Und
  let pending;await proposalTools(tools).find(t=>t.name==='sources').handler({operation:'archive_account',id:'manual',propose:true},{...ctx,onProposal:p=>{pending=p;}});
  assert.equal((await row(s)).archived_at,null);
  const id=Number((await s.db.prepare("INSERT INTO messages (conversation_key,role,text,ts,provenance) VALUES (?,'fathom','Archive this account?',?,?)").run(key,NOW,JSON.stringify({pendingAction:pending}))).lastInsertRowid);
- const claim=claimProposal(s.db,{key,id,decision:'confirm',scopes:ctx.scopes,at:NOW});assert.equal(claim.status,'confirmed');
+ const claim=await claimProposal(s.db,{key,id,decision:'confirm',scopes:ctx.scopes,at:NOW});assert.equal(claim.status,'confirmed');
  const out=await executeProposal(claim.pending,ctx);assert.ok((await row(s)).archived_at);assert.equal(out.receipt.scope,'write:sources');
  await undo(ctx,out);assert.equal((await row(s)).archived_at,null);
 });

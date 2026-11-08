@@ -579,15 +579,15 @@ test('a paused household: ticks and the job listing write nothing; resumed, the 
       db: t.db, config: configOf(t.dataDir), engine: null, handlers: { 'brief-email': h }, transport: captureTransport(),
       now: clockAt('2026-12-01T12:00:00Z').now, tickMs: 3600000, holder: 'test-holder', allowed: () => enabled,
     });
-    const before = logicalDigest(t.db);
+    const before = await logicalDigest(t.db);
     await s.tick();
     s.jobs();
-    assert.equal(logicalDigest(t.db), before, 'no job rows, labels, lease or runs written while paused');
+    assert.equal(await logicalDigest(t.db), before, 'no job rows, labels, lease or runs written while paused');
     assert.equal(h.calls.length, 0);
     enabled = true;
     await s.tick();
     assert.equal(h.calls.length, 1, 'the resumed tick runs the due job');
-    assert.notEqual(logicalDigest(t.db), before);
+    assert.notEqual(await logicalDigest(t.db), before);
     await s.stop();
   } finally { t.done(); }
 });

@@ -394,7 +394,7 @@ test('B5: a row is kept only when its page matches the Page markers before its e
 // against their extracted text and pages, image-only PDFs are skipped before any model call.
 
 // A demo-seeded household (for the answerer) whose data dir is outside the repository.
-const demoPlanStore = t => store(t, { mode: 'demo', init: seedDemo });
+const demoPlanStore = async t => store(t, { mode: 'demo', init: seedDemo });
 
 // The runtime with every chat call answered by `text` (first answer and corrective retry).
 function sayingEngine(runtime, text) {

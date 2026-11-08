@@ -125,7 +125,7 @@ const insertCarry = async (platform, { householdId, month, legacySpendUsd, at })
 export async function ensureCarry(platform, { householdId, month, legacySpendUsd = 0, now = Date.now() } = {}) {
   if (!platform || typeof householdId !== 'string' || typeof month !== 'string' || !/^\d{4}-\d{2}$/.test(month)
     || !Number.isFinite(legacySpendUsd) || legacySpendUsd < 0 || !Number.isFinite(now)) throw new TypeError('Invalid carry');
-  return immediate(platform, async (platform) => {
+  return await immediate(platform, async (platform) => {
     await insertCarry(platform, { householdId, month, legacySpendUsd, at: now });
     return { value: undefined };
   });
@@ -143,7 +143,7 @@ export function createModelLedger(platform, { householdId, generation, now = Dat
       }
       const at = now();
       const month = fundingMonth(at);
-      return immediate(platform, async (platform) => {
+      return await immediate(platform, async (platform) => {
         await expireStale(platform, householdId, at);
         const hh = await platform.prepare('SELECT status, generation FROM households WHERE id = ?').get(householdId);
         if (!hh || hh.status !== 'active' || Number(hh.generation) !== generation) return { refuse: withCode(new EngineOffError(), 'household_unavailable') };
@@ -168,7 +168,7 @@ export function createModelLedger(platform, { householdId, generation, now = Dat
     },
     async settle(roundId, { costUsd, inputTokens = null, outputTokens = null } = {}) {
       if (!Number.isFinite(costUsd) || costUsd < 0) throw new TypeError('Invalid round cost');
-      return immediate(platform, async (platform) => {
+      return await immediate(platform, async (platform) => {
         const row = await own(roundId);
         if (!row) throw codeError('no_such_round');
         if (row.state === 'reserved') {
@@ -202,7 +202,7 @@ export function createModelLedger(platform, { householdId, generation, now = Dat
 
 export async function setInstanceCap(platform, usd, { now = Date.now() } = {}) {
   const value = checkUsd(usd);
-  return immediate(platform, async (platform) => {
+  return await immediate(platform, async (platform) => {
     if (await storedCap(platform) === value) return { value: { changed: false } };
     if (value + EPS < await committedUsd(platform, { month: fundingMonth(now) })) return { refuse: codeError('below_committed') };
     await platform.prepare(`INSERT INTO platform_settings (key, value, updated_at) VALUES (?, ?, ?)
@@ -214,7 +214,7 @@ export async function setInstanceCap(platform, usd, { now = Date.now() } = {}) {
 
 export async function setAllocation(platform, householdId, usd, { now = Date.now() } = {}) {
   const value = checkUsd(usd);
-  return immediate(platform, async (platform) => {
+  return await immediate(platform, async (platform) => {
     const hh = typeof householdId === 'string' ? await platform.prepare('SELECT status FROM households WHERE id = ?').get(householdId) : null;
     if (!hh || hh.status === 'deleted') return { refuse: codeError('no_such_household') };
     const current = await platform.prepare('SELECT allocation_usd FROM household_model_budgets WHERE household_id = ?').get(householdId);
@@ -231,7 +231,7 @@ export async function setAllocation(platform, householdId, usd, { now = Date.now
 export async function reconcileRound(platform, { householdId, roundId, costUsd, receiptRef, now = Date.now() } = {}) {
   if (typeof receiptRef !== 'string' || !RECEIPT_REF.test(receiptRef)) throw codeError('bad_receipt_ref');
   if (typeof costUsd !== 'number' || !Number.isFinite(costUsd) || costUsd < 0) throw codeError('bad_cost');
-  return immediate(platform, async (platform) => {
+  return await immediate(platform, async (platform) => {
     const found = typeof roundId === 'string' ? await platform.prepare("SELECT household_id FROM model_rounds WHERE id = ? AND kind = 'round'").get(roundId) : null;
     if (!found) return { refuse: codeError('no_such_round') };
     if (found.household_id !== householdId) return { refuse: codeError('foreign_round') };

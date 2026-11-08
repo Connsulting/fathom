@@ -170,7 +170,7 @@ test('equal file ids in two households have independent spend and populated demo
     assert.equal((await fileSpend(b.db, file.fileId)).calls, 0);
     await setSetting(a.db, 'mode', 'demo');
     const { seedDemo } = await import('../../demo/seed.mjs');
-    seedDemo(a.db);
+    await seedDemo(a.db);
     assert.equal((await fileSpend(a.db, file.fileId)).calls, 0);
     assert.deepEqual(await a.db.prepare('PRAGMA foreign_key_check').all(), []);
   } finally { await a.db.close(); await b.db.close(); }

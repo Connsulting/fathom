@@ -143,7 +143,7 @@ describe("engine purpose 'confirm'", () => {
 });
 
 describe('guessPending', () => {
-  test('stores valid guesses with option, reason, model and ts; the scenario items carry guess and fileName', () => withStore(async (s) => {
+  test('stores valid guesses with option, reason, model and ts; the scenario items carry guess and fileName', async () => withStore(async (s) => {
     const off = await offEngine();
     const r = await P.ingestFile(s.db, fixture('Chase7766_Activity_20320305.csv', 'text/csv'), s.opts(off));
     assert.equal(r.status, 'imported');
@@ -182,7 +182,7 @@ describe('guessPending', () => {
     for (const i of items) assert.equal(i.fileName, 'Chase7766_Activity_20320305.csv');
   }));
 
-  test('the scenario guess is null when the stored row has no option or an option no longer offered', () => withStore(async (s) => {
+  test('the scenario guess is null when the stored row has no option or an option no longer offered', async () => withStore(async (s) => {
     const [a, b, c] = queue(s.db, 3);
     const insert = s.db.prepare('INSERT INTO confirm_guesses (item_id, option_id, reason, model, ts) VALUES (?, ?, ?, ?, ?)');
     await insert.run(a, null, null, 'fake', NOW);
@@ -197,7 +197,7 @@ describe('guessPending', () => {
     for (const i of items) assert.equal(i.fileName, null, 'an item with no file has no file name');
   }));
 
-  test('validation drops bad guesses, stores a null row for each, and never re-sends the batch', () => withStore(async (s) => {
+  test('validation drops bad guesses, stores a null row for each, and never re-sends the batch', async () => withStore(async (s) => {
     const ids = queue(s.db, 11);
     const id = (i) => ids[i - 1];
     const [answered] = queue(s.db, 1, { start: 12 });
@@ -243,7 +243,7 @@ describe('guessPending', () => {
     assert.equal(await count(s.db, 'spend_ledger', "purpose = 'confirm'"), 1);
   }));
 
-  test('validateGuesses keeps only guesses that pass every rule', () => withStore(async (s) => {
+  test('validateGuesses keeps only guesses that pass every rule', async () => withStore(async (s) => {
     const [a, b] = queue(s.db, 2);
     const batch = C.pendingItems(s.db);
     const accepted = G.validateGuesses(batch, { guesses: [
@@ -285,7 +285,7 @@ describe('guessPending', () => {
       assert.equal(item.required.includes('reason'), false);
     });
 
-    test('a guess with a valid basis keeps the fixed text for each code', () => withStore(async (s) => {
+    test('a guess with a valid basis keeps the fixed text for each code', async () => withStore(async (s) => {
       const id = queueOne(s.db);
       const batch = C.pendingItems(s.db);
       for (const code of G.REASON_CODES) {
@@ -293,7 +293,7 @@ describe('guessPending', () => {
       }
     }));
 
-    test('an unknown, missing or wrongly typed basis is dropped', () => withStore(async (s) => {
+    test('an unknown, missing or wrongly typed basis is dropped', async () => withStore(async (s) => {
       const id = queueOne(s.db);
       const batch = C.pendingItems(s.db);
       for (const basis of ['made_up', 'Question', 'account-name', '', ' question', 'question ', 7, null, true, ['question'], { code: 'question' }]) {
@@ -303,7 +303,7 @@ describe('guessPending', () => {
       assert.deepEqual(keptWith(batch, id, { reason: 'Named like a checking account' }), [], 'dropped: free text without a basis');
     }));
 
-    test('free text sent next to a valid basis is ignored and only the fixed text is stored', () => withStore(async (s) => {
+    test('free text sent next to a valid basis is ignored and only the fixed text is stored', async () => withStore(async (s) => {
       const id = queueOne(s.db);
       const batch = C.pendingItems(s.db);
       const out = keptWith(batch, id, { basis: 'imported_values', reason: 'The import lists 100, $100, 12.5% and one hundred thousand.', note: 'extra 250' });
@@ -312,7 +312,7 @@ describe('guessPending', () => {
       assert.deepEqual(Object.keys(out[0]).sort(), ['item', 'option', 'reason']);
     }));
 
-    test('guessPending stores the fixed text, drops a bad basis to a null row, and ignores model-written text', () => withStore(async (s) => {
+    test('guessPending stores the fixed text, drops a bad basis to a null row, and ignores model-written text', async () => withStore(async (s) => {
       const good = queueOne(s.db, 'acct-basis-good');
       const noisy = queueOne(s.db, 'acct-basis-noisy');
       const bad = queueOne(s.db, 'acct-basis-bad');
@@ -337,7 +337,7 @@ describe('guessPending', () => {
     }));
   });
 
-  test('25 pending items with batchSize 20 make two calls, each carrying only its own items with no locator', () => withStore(async (s) => {
+  test('25 pending items with batchSize 20 make two calls, each carrying only its own items with no locator', async () => withStore(async (s) => {
     const ids = queue(s.db, 25);
     const engine = runtimeEngine(s.db);
     const out = await G.guessPending(s.db, engine, { now: NOW, batchSize: 20, fake: [script([]), script([])] });
@@ -375,7 +375,7 @@ describe('guessPending', () => {
     const near = (a, b) => Math.abs(a - b) < 1e-9;
     const empty = JSON.stringify({ guesses: [] });
 
-    test('a normal two-batch run: costUsd is the ledger delta and the sum of the batch costs', () => withStore(async (s) => {
+    test('a normal two-batch run: costUsd is the ledger delta and the sum of the batch costs', async () => withStore(async (s) => {
       queue(s.db, 25);
       const before = await confirmSpend(s.db);
       const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, batchSize: 20, fake: [[{ text: empty, costUsd: 0.5 }], [{ text: empty, costUsd: 0.25 }]] });
@@ -385,7 +385,7 @@ describe('guessPending', () => {
       assert.ok(near(out.costUsd, out.batches.reduce((n, b) => n + b.costUsd, 0)));
     }));
 
-    test('an unparseable response still counts its cost', () => withStore(async (s) => {
+    test('an unparseable response still counts its cost', async () => withStore(async (s) => {
       queue(s.db, 2);
       const before = await confirmSpend(s.db);
       const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, fake: [[{ text: 'not json', costUsd: 0.05 }]] });
@@ -395,7 +395,7 @@ describe('guessPending', () => {
       assert.ok(near(out.costUsd, await confirmSpend(s.db) - before));
     }));
 
-    test('a ledger-recorded failed call counts its cost, after an earlier good batch', () => withStore(async (s) => {
+    test('a ledger-recorded failed call counts its cost, after an earlier good batch', async () => withStore(async (s) => {
       queue(s.db, 25);
       const before = await confirmSpend(s.db);
       const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, batchSize: 20, fake: [[{ text: empty, costUsd: 0.5 }], [{ text: '', status: 'error_max_turns', costUsd: 0.25 }]] });
@@ -408,7 +408,7 @@ describe('guessPending', () => {
     }));
   });
 
-  test('a guess never answers: every item stays pending', () => withStore(async (s) => {
+  test('a guess never answers: every item stays pending', async () => withStore(async (s) => {
     const ids = queue(s.db, 3);
     const engine = runtimeEngine(s.db);
     await G.guessPending(s.db, engine, { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', basis: 'question' })))] });
@@ -421,7 +421,7 @@ describe('guessPending', () => {
 });
 
 describe('guessPending makes no guess when it must not', () => {
-  test('engine setting off: skipped engine_off, no call and no ledger row', () => withStore(async (s) => {
+  test('engine setting off: skipped engine_off, no call and no ledger row', async () => withStore(async (s) => {
     queue(s.db, 2);
     DB.setSetting(s.db, 'engine', { on: false });
     const engine = runtimeEngine(s.db);
@@ -432,7 +432,7 @@ describe('guessPending makes no guess when it must not', () => {
     assert.equal(await count(s.db, 'confirm_guesses'), 0);
   }));
 
-  test('fake mode with no per-call script: skipped not_live, no call and no ledger row', () => withStore(async (s) => {
+  test('fake mode with no per-call script: skipped not_live, no call and no ledger row', async () => withStore(async (s) => {
     queue(s.db, 2);
     const engine = runtimeEngine(s.db);
     const out = await G.guessPending(s.db, engine, { now: NOW });
@@ -442,7 +442,7 @@ describe('guessPending makes no guess when it must not', () => {
     assert.equal(await count(s.db, 'confirm_guesses'), 0);
   }));
 
-  test('engine mode off gives no guess', () => withStore(async (s) => {
+  test('engine mode off gives no guess', async () => withStore(async (s) => {
     const ids = queue(s.db, 2);
     const engine = runtimeEngine(s.db, 'off');
     const out = await G.guessPending(s.db, engine, { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', basis: 'question' })))] });
@@ -452,7 +452,7 @@ describe('guessPending makes no guess when it must not', () => {
     assert.ok(FR.ingestState(s.db).items.every((i) => i.guess === null));
   }));
 
-  test('a zero monthly cap stops the run with no stored guesses', () => withStore(async (s) => {
+  test('a zero monthly cap stops the run with no stored guesses', async () => withStore(async (s) => {
     const ids = queue(s.db, 2);
     DB.setSetting(s.db, 'cap', { usd: 0 });
     const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', basis: 'question' })))] });
@@ -461,7 +461,7 @@ describe('guessPending makes no guess when it must not', () => {
     assert.equal(await count(s.db, 'spend_ledger'), 0);
   }));
 
-  test('a month already spent past the cap stops the run with no stored guesses', () => withStore(async (s) => {
+  test('a month already spent past the cap stops the run with no stored guesses', async () => withStore(async (s) => {
     const ids = queue(s.db, 2);
     await s.db.prepare('INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens) VALUES (?, ?, ?, ?, ?, ?)')
       .run(NOW, NOW.slice(0, 7), 'chat', 250, 'fake', '{}');
@@ -472,7 +472,7 @@ describe('guessPending makes no guess when it must not', () => {
     assert.ok(C.pendingItems(s.db).length === 2);
   }));
 
-  test('a model call error stops the run and stores nothing', () => withStore(async (s) => {
+  test('a model call error stops the run and stores nothing', async () => withStore(async (s) => {
     queue(s.db, 2);
     const engine = stubEngine({ fail: true });
     const out = await G.guessPending(s.db, engine, { now: NOW });
@@ -520,7 +520,7 @@ describe('imports trigger the confirm-guess job through the scheduler', () => {
     assert.equal('scheduleGuesses' in G, false);
   });
 
-  test('an upload that imports a file triggers confirm-guess and plan, and guesses nothing itself', () => withStore(async (s) => {
+  test('an upload that imports a file triggers confirm-guess and plan, and guesses nothing itself', async () => withStore(async (s) => {
     const engine = stubEngine();
     const scheduler = fakeScheduler();
     const app = await serve(s, engine, scheduler);
@@ -538,7 +538,7 @@ describe('imports trigger the confirm-guess job through the scheduler', () => {
     }
   }));
 
-  test('an upload that imports nothing triggers nothing; a retry that imports triggers confirm-guess and plan', () => withStore(async (s) => {
+  test('an upload that imports nothing triggers nothing; a retry that imports triggers confirm-guess and plan', async () => withStore(async (s) => {
     const signature = 'synthetic-unapproved-layout';
     const scheduler = fakeScheduler();
     const app = await serve(s, await offEngine(), scheduler);
@@ -565,7 +565,7 @@ describe('imports trigger the confirm-guess job through the scheduler', () => {
     }
   }));
 
-  test('a trigger that rejects never fails the upload', () => withStore(async (s) => {
+  test('a trigger that rejects never fails the upload', async () => withStore(async (s) => {
     const calls = [];
     const scheduler = {
       trigger(jobId) { calls.push(jobId); return Promise.reject(new Error('synthetic rejection')); },
@@ -627,7 +627,7 @@ describe('guess CLI (npm run confirm:guess runs the confirm-guess job once throu
 });
 
 
-test('confirm guesses scrub imported filenames on the outbound transport and retain stored metadata', () => withStore(async s => {
+test('confirm guesses scrub imported filenames on the outbound transport and retain stored metadata', async () => withStore(async s => {
   const off = await offEngine();
   await P.ingestFile(s.db, fixture('Chase7766_Activity_20320305.csv', 'text/csv'), s.opts(off));
   const filename = 'synthetic_900-12-3456_900-70-1234_90-1234567.csv';

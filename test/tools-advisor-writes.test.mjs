@@ -139,8 +139,8 @@ test('advisor proposals do not write and become stale when reviews or checkin ch
   assert.equal((await ctx.db.prepare('SELECT count(*) n FROM advisor_reviews').get()).n, 0);
   const p = proposals[0];
   const { setSetting } = await import('../src/store/db.mjs');
-  setSetting(ctx.db, 'ask.titleRejects', { unparsable: 1 });
-  setSetting(ctx.db, 'ask.titleRetried.ask:0123456789ab', true);
+  await setSetting(ctx.db, 'ask.titleRejects', { unparsable: 1 });
+  await setSetting(ctx.db, 'ask.titleRetried.ask:0123456789ab', true);
   assert.equal(await proposalBasis(ctx.db, p.tool, p.scopes, p.args), p.basis);
   await call(ctx, 'send', { recId });
   assert.notEqual(await proposalBasis(ctx.db, p.tool, p.scopes, p.args), p.basis);

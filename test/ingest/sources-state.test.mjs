@@ -113,7 +113,7 @@ async function assertAgree(db, clock) {
   return c;
 }
 
-test('a file source whose accounts a live SimpleFIN connection covers is history, not stale, though its file date is old', () => withStore(async (s) => {
+test('a file source whose accounts a live SimpleFIN connection covers is history, not stale, though its file date is old', async () => withStore(async (s) => {
   const file = await ingest(s, 'aggregator.csv');
   const acct = await accountOfFile(s, file);
 
@@ -143,7 +143,7 @@ test('a file source whose accounts a live SimpleFIN connection covers is history
   assert.equal(c.ingestAccount(acct.id), 'fresh');
 }));
 
-test('an account with no newer source and old data is stale in every caller; a covered one beside it is not', () => withStore(async (s) => {
+test('an account with no newer source and old data is stale in every caller; a covered one beside it is not', async () => withStore(async (s) => {
   const agg = await ingest(s, 'aggregator.csv');
   const pos = await ingest(s, 'positions.csv');
   const cash = await accountOfFile(s, agg);
@@ -163,7 +163,7 @@ test('an account with no newer source and old data is stale in every caller; a c
   assert.equal(c.source(agg.source_id).state, 'history');
 }));
 
-test('an archived account is never stale, and its only source becomes history', () => withStore(async (s) => {
+test('an archived account is never stale, and its only source becomes history', async () => withStore(async (s) => {
   const agg = await ingest(s, 'aggregator.csv');
   const pos = await ingest(s, 'positions.csv');
   const cash = await accountOfFile(s, agg);
@@ -186,7 +186,7 @@ test('an archived account is never stale, and its only source becomes history', 
   assert.notEqual(c.planner('transactions'), 'stale');
 }));
 
-test('a file source whose account has newer rows from another file is history; the newer file decides freshness', () => withStore(async (s) => {
+test('a file source whose account has newer rows from another file is history; the newer file decides freshness', async () => withStore(async (s) => {
   const agg = await ingest(s, 'aggregator.csv');
   const bank = await ingest(s, 'Chase7766_Activity_20320305.csv');
   const acct = await accountOfFile(s, bank);

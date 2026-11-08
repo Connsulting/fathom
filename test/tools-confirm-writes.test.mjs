@@ -119,7 +119,7 @@ test('large Confirm batches keep the result bounded while applying and undoing e
 });
 
 test('C8 eval scripts select the requested household subjects without unrelated substitutes',async t=>{
- const {createEvalStore}=await import('../evals/harness.mjs');const s=await createEvalStore();t.after(()=>s.close());
+ const {createEvalStore}=await import('../evals/harness.mjs');const s=await createEvalStore();t.after(async ()=>await s.close());
  const owner=await import('../evals/scripts/q59-change-account-owner.mjs');
  const ownerCalls=(await owner.script({db:s.db}))[0].toolCalls;
  const account=await s.db.prepare('SELECT owner,kind FROM accounts WHERE id=?').get(ownerCalls[1].args.id);

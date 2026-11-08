@@ -288,7 +288,7 @@ describe('toRows', () => {
 describe('historical document rows', () => {
 
 
-  test('R1: four paystubs store eight distinct withholding rows', () => withStore(async (s) => {
+  test('R1: four paystubs store eight distinct withholding rows', async () => withStore(async (s) => {
     const cases = [
       [{ payDate: '2032-03-15' }, PAYSTUB],
       [{ payDate: '2032-03-31' }, { ...PAYSTUB, payDate: '2032-03-31', periodStart: '2032-03-16', periodEnd: '2032-03-31' }],
@@ -317,7 +317,7 @@ describe('historical document rows', () => {
     assert.deepEqual(tax.filter((t) => t.jurisdiction === 'federal').map((t) => t.tax_year).sort(), [2031, 2032, 2032, 2032]);
   }));
 
-  test('R6: an unknown employer queues employer_relation and holds the employer facts', () => withStore(async (s) => {
+  test('R6: an unknown employer queues employer_relation and holds the employer facts', async () => withStore(async (s) => {
     const extracted = { ...PAYSTUB, retirementDeferral: 400, hsaDeferral: 100 };
     const r = await seedHistoricalDocument(s, paystubFile(), paystubResponses(extracted));
     assert.equal(r.status, 'imported');
@@ -347,7 +347,7 @@ describe('historical document rows', () => {
     assert.equal(F.getFacts(s.db)['income.w2'], true);
   }));
 
-  test('R6: answering household writes income.sCorp, not income.w2', () => withStore(async (s) => {
+  test('R6: answering household writes income.sCorp, not income.w2', async () => withStore(async (s) => {
     await seedHistoricalDocument(s, paystubFile(), paystubResponses(PAYSTUB));
     C.answer(s.db, (await items(s.db, 'employer_relation'))[0].id, 'household', { now: NOW });
     const f = F.getFacts(s.db);
@@ -355,7 +355,7 @@ describe('historical document rows', () => {
     assert.ok(!('income.w2' in f));
   }));
 
-  test('R6: an employer named like a stored P&L entity is the household business, with no question', () => withStore(async (s) => {
+  test('R6: an employer named like a stored P&L entity is the household business, with no question', async () => withStore(async (s) => {
     await seedHistoricalRows(s,northwindFile(),historicalNorthwindRows(), { parser: 'pnl-workbook', period: { from: '2032-04-01', to: '2032-04-30' } });
     const packState = async () => await all(s.db, 'SELECT id, def, updated_at FROM packs_state ORDER BY id');
     const before = await packState();
@@ -373,7 +373,7 @@ describe('historical document rows', () => {
 
 
 
-  test('markdown notes skip classify; a low-confidence fact is stored unconfirmed and queues fact_check', () => withStore(async (s) => {
+  test('markdown notes skip classify; a low-confidence fact is stored unconfirmed and queues fact_check', async () => withStore(async (s) => {
     const engine = await recordingEngine([[NOTES]]);
     const r = await seedHistoricalDocument(s, fixture('notes.md'), engine.responses);
     assert.equal(r.status, 'imported');
@@ -394,7 +394,7 @@ describe('historical document rows', () => {
 
 // R14: held assertions per document while the employer relation is open.
 describe('held employer facts', () => {
-  test('two paystubs before the answer each hold their own facts; outside applies both with their own file ids', () => withStore(async (s) => {
+  test('two paystubs before the answer each hold their own facts; outside applies both with their own file ids', async () => withStore(async (s) => {
     const first = await seedHistoricalDocument(s, paystubFile(), paystubResponses({ ...PAYSTUB, retirementDeferral: 400, hsaDeferral: 0 }));
     const second = await seedHistoricalDocument(s, paystubFile({ payDate: '2032-03-31' }), paystubResponses({
       ...PAYSTUB, payDate: '2032-03-31', periodStart: '2032-03-16', periodEnd: '2032-03-31', retirementDeferral: 0, hsaDeferral: 100,
@@ -454,7 +454,7 @@ describe('annual withholding supersedes paystub detail', () => {
     assert.deepEqual(sup.map((x) => JSON.parse(x.row).amount).sort((a, b) => a - b), [250, 250, 700, 700]);
   }
 
-  test('W-2 first, answer owner, then paystubs: paystub withholding is archived instead of inserted', () => withStore(async (s) => {
+  test('W-2 first, answer owner, then paystubs: paystub withholding is archived instead of inserted', async () => withStore(async (s) => {
     const w = await seedHistoricalDocument(s, w2File(), (await w2Engine()).responses);
     assert.equal(w.status, 'imported');
     answerRecipient(s.db, 'owner');
@@ -465,7 +465,7 @@ describe('annual withholding supersedes paystub detail', () => {
     await assertSummarized(s.db);
   }));
 
-  test('paystubs first, then the W-2, then answer owner: paystub withholding is archived and deleted', () => withStore(async (s) => {
+  test('paystubs first, then the W-2, then answer owner: paystub withholding is archived and deleted', async () => withStore(async (s) => {
     for (const [file, extracted] of stubs) await seedHistoricalDocument(s, file, paystubResponses(extracted));
     assert.equal(await count(s.db, 'tax_payments'), 4);
     await seedHistoricalDocument(s, w2File(), (await w2Engine()).responses);
@@ -542,13 +542,13 @@ describe('withholding recipients (D4, G4)', () => {
     return r.fileId;
   };
 
-  test('the new kinds exist and tax_payments has a recipient column', () => withStore(async (s) => {
+  test('the new kinds exist and tax_payments has a recipient column', async () => withStore(async (s) => {
     assert.ok(C.KINDS.includes('employer_recipient'));
     assert.ok(C.KINDS.includes('document_recipient'));
     assert.ok((await all(s.db, 'PRAGMA table_info(tax_payments)')).some((c) => c.name === 'recipient'));
   }));
 
-  test('unknown recipient: a W-2 plus paystubs leave everything active under per-document payers and queue the employer question', () => withStore(async (s) => {
+  test('unknown recipient: a W-2 plus paystubs leave everything active under per-document payers and queue the employer question', async () => withStore(async (s) => {
     const ids = await importAll(s);
     const p = payers();
     const rows = await active(s.db);
@@ -562,7 +562,7 @@ describe('withholding recipients (D4, G4)', () => {
     assert.deepEqual(q[0].options, [{ id: 'owner', label: 'You' }, { id: 'spouse', label: 'Your spouse' }, { id: 'both', label: 'Both of you' }]);
   }));
 
-  test('two members at one employer: after both and each document recipient, B stays active and A is summarized', () => withStore(async (s) => {
+  test('two members at one employer: after both and each document recipient, B stays active and A is summarized', async () => withStore(async (s) => {
     const ids = await importAll(s);
     answerEmployer(s.db, 'both');
     const docs = pendingOf(s.db, 'document_recipient');
@@ -585,7 +585,7 @@ describe('withholding recipients (D4, G4)', () => {
 
   for (const importOrder of [['a', 'b'], ['b', 'a']]) {
     for (const answerOrder of [['a', 'b'], ['b', 'a']]) {
-      test(`identical payroll figures for two members (import ${importOrder.join(',')}, answer ${answerOrder.join(',')}) never collapse`, () => withStore(async (s) => {
+      test(`identical payroll figures for two members (import ${importOrder.join(',')}, answer ${answerOrder.join(',')}) never collapse`, async () => withStore(async (s) => {
         const ids = {};
         for (const m of importOrder) ids[m] = await importStub(s, m);
         const base = payers().a;
@@ -614,7 +614,7 @@ describe('withholding recipients (D4, G4)', () => {
   }
 
   for (const answerOrder of [['a', 'b'], ['b', 'a']]) {
-    test(`identical documents answered with one recipient (answer ${answerOrder.join(',')}): the rekeyed newer row is archived as duplicate`, () => withStore(async (s) => {
+    test(`identical documents answered with one recipient (answer ${answerOrder.join(',')}): the rekeyed newer row is archived as duplicate`, async () => withStore(async (s) => {
       const ids = { a: await importStub(s, 'a'), b: await importStub(s, 'b') };
       const base = payers().a;
       answerEmployer(s.db, 'both');
@@ -629,7 +629,7 @@ describe('withholding recipients (D4, G4)', () => {
   }
 
   for (const option of ['owner', 'spouse']) {
-    test(`a remembered employer answer (${option}) resolves a later import at once`, () => withStore(async (s) => {
+    test(`a remembered employer answer (${option}) resolves a later import at once`, async () => withStore(async (s) => {
       await importStub(s, 'a');
       answerEmployer(s.db, option);
       const base = payers().a;
@@ -644,7 +644,7 @@ describe('withholding recipients (D4, G4)', () => {
     }));
   }
 
-  test('a remembered both and document answer: a later identical document is asked about on its own and the answered one is kept', () => withStore(async (s) => {
+  test('a remembered both and document answer: a later identical document is asked about on its own and the answered one is kept', async () => withStore(async (s) => {
     const a = await importStub(s, 'a');
     const base = payers().a;
     answerEmployer(s.db, 'both');
@@ -713,7 +713,7 @@ describe('withholding recipients (D4, G4)', () => {
   });
 
   for (const docType of Object.keys(FORM_1099)) {
-    test(`H1: two members' identical ${docType} withholding, recipient unknown, both kept and asked per document; owner and spouse keep both`, () => withStore(async (s) => {
+    test(`H1: two members' identical ${docType} withholding, recipient unknown, both kept and asked per document; owner and spouse keep both`, async () => withStore(async (s) => {
       const { ids, docs, base } = await importBoth1099(s, docType);
       answerDoc(s, docs, `${base}:doc:${ids.a}`, 'owner');
       answerDoc(s, docs, `${base}:doc:${ids.b}`, 'spouse');
@@ -728,7 +728,7 @@ describe('withholding recipients (D4, G4)', () => {
     }));
 
     for (const answerOrder of [['a', 'b'], ['b', 'a']]) {
-      test(`H1: two members' identical ${docType} withholding answered with one recipient (answer ${answerOrder.join(',')}) collapse; the newer is archived as duplicate`, () => withStore(async (s) => {
+      test(`H1: two members' identical ${docType} withholding answered with one recipient (answer ${answerOrder.join(',')}) collapse; the newer is archived as duplicate`, async () => withStore(async (s) => {
         const { ids, docs, base } = await importBoth1099(s, docType);
         for (const m of answerOrder) answerDoc(s, docs, `${base}:doc:${ids[m]}`, 'owner');
         const rows = await active(s.db);
@@ -811,7 +811,7 @@ describe('withholding recipients (D4, G4)', () => {
   });
 
   for (const c of CONFLICT_CASES) {
-    test(`K1: ${c.name}: differing withholding is not a duplicate; one withholding_conflict question and both rows stay active`, () => withStore(async (s) => {
+    test(`K1: ${c.name}: differing withholding is not a duplicate; one withholding_conflict question and both rows stay active`, async () => withStore(async (s) => {
       const { ids, amounts } = await c.run(s);
       assert.deepEqual((await federal(s.db)).map((t) => [t.recipient, t.amount, t.file_id]), [['owner', amounts.first, ids.first], ['owner', amounts.second, ids.second]]);
       assert.equal((await archivedWith(s.db, 'duplicate')).length, 0, 'no row is archived as duplicate');
@@ -825,7 +825,7 @@ describe('withholding recipients (D4, G4)', () => {
 
     const KEEP = { first: ['first'], second: ['second'], both: ['first', 'second'] };
     for (const option of ['first', 'second', 'both']) {
-      test(`K1: ${c.name}: answering ${option} keeps ${KEEP[option].join(' and ')}; a re-import asks nothing and changes nothing`, () => withStore(async (s) => {
+      test(`K1: ${c.name}: answering ${option} keeps ${KEEP[option].join(' and ')}; a re-import asks nothing and changes nothing`, async () => withStore(async (s) => {
         const { ids, base, docs, amounts, again } = await c.run(s);
         answerConflict(s, option);
         const kept = await federal(s.db);
@@ -857,7 +857,7 @@ describe('withholding recipients (D4, G4)', () => {
     }
   }
 
-  test('K1 guard: two W-2s with equal state and differing federal withholding: the state row collapses as duplicate, only federal is asked about', () => withStore(async (s) => {
+  test('K1 guard: two W-2s with equal state and differing federal withholding: the state row collapses as duplicate, only federal is asked about', async () => withStore(async (s) => {
     const first = await importDoc(s, w2Of('first', { ...W2_FIRST, stateWithheld: 3500 }));
     const second = await importDoc(s, w2Of('second', { ...W2_SECOND, stateWithheld: 3500 }));
     answerEmployer(s.db, 'owner');
@@ -881,7 +881,7 @@ describe('withholding recipients (D4, G4)', () => {
     engine: () => fakeEngine(paystubResponses({ ...PAYSTUB, stateWithholding: undefined, federalWithholding })),
   });
 
-  test('L1: a paystub withholding_conflict whose rows a W-2 summarizes is closed; answering it later never touches 1099 rows that reuse the ids', () => withStore(async (s) => {
+  test('L1: a paystub withholding_conflict whose rows a W-2 summarizes is closed; answering it later never touches 1099 rows that reuse the ids', async () => withStore(async (s) => {
     const w2 = await importDoc(s, w2Of('federal-only', { ...W2_2032, stateWithheld: undefined }));
     await importDoc(s, stubVersion(1, 700));
     await importDoc(s, stubVersion(2, 650));
@@ -911,7 +911,7 @@ describe('withholding recipients (D4, G4)', () => {
     }],
   ];
   for (const [how, mutate] of MUTATIONS) {
-    test(`L1 guard: a pending withholding_conflict whose later row changed (${how}) is refused as stale and changes nothing`, () => withStore(async (s) => {
+    test(`L1 guard: a pending withholding_conflict whose later row changed (${how}) is refused as stale and changes nothing`, async () => withStore(async (s) => {
       const ids = { first: await importDoc(s, int1099Of('original', 200)), second: await importDoc(s, int1099Of('corrected', 240)) };
       const base = base1099('1099-int');
       const asked = pendingOf(s.db, 'document_recipient');
@@ -962,7 +962,7 @@ describe('withholding recipients (D4, G4)', () => {
   ];
   for (const c of ZERO_CASES) {
     for (const option of ['first', 'second']) {
-      test(`L2: ${c.name} corrected to explicit zero federal withholding queues one withholding_conflict; answering ${option} leaves ${option === 'first' ? c.amount : 0}`, () => withStore(async (s) => {
+      test(`L2: ${c.name} corrected to explicit zero federal withholding queues one withholding_conflict; answering ${option} leaves ${option === 'first' ? c.amount : 0}`, async () => withStore(async (s) => {
         const { ids, base } = await c.run(s);
         assert.equal(pendingOf(s.db, 'withholding_conflict').length, 1, 'one withholding_conflict question');
         answerConflict(s, option);
@@ -987,7 +987,7 @@ describe('withholding recipients (D4, G4)', () => {
     ['W-2', 'w2', { ...W2_FIRST, federalWithheld: undefined }, () => w2Of('first', W2_FIRST), () => w2Of('absent', { ...W2_FIRST, federalWithheld: undefined }), () => payers().w2, true],
   ];
   for (const [name, docType, extracted, firstDoc, absentDoc, baseOf, employer] of ABSENT_CASES) {
-    test(`L2 guard: a ${name} with the federal withholding field absent emits no federal row and queues no withholding_conflict`, () => withStore(async (s) => {
+    test(`L2 guard: a ${name} with the federal withholding field absent emits no federal row and queues no withholding_conflict`, async () => withStore(async (s) => {
       const fields = JSON.parse(JSON.stringify(extracted));
       assert.ok(!Object.hasOwn(fields, 'federalWithheld'));
       assert.equal(taxRows(X.toRows(docType, fields, ctx)).filter((r) => r.jurisdiction === 'federal').length, 0, 'toRows emits no federal withholding row');
@@ -1063,7 +1063,7 @@ describe('withholding recipients (D4, G4)', () => {
   for (const c of M1_CASES) {
     for (const option of ['first', 'second', 'both']) {
       const left = M1_KEEP[option].reduce((sum, k) => sum + c.amounts[k], 0);
-      test(`M1: ${c.name}: one withholding_conflict; answering ${option} leaves ${left} federal withholding for the payer`, () => withStore(async (s) => {
+      test(`M1: ${c.name}: one withholding_conflict; answering ${option} leaves ${left} federal withholding for the payer`, async () => withStore(async (s) => {
         const ids = await c.run(s);
         assert.equal(recipientQuestions(s.db).length, 0, 'both documents are resolved to the owner');
         assert.deepEqual((await inSlot(s.db, c.slot())).map((t) => [t.amount, t.file_id]), [[c.amounts.first, ids.first], [c.amounts.second, ids.second]], 'both rows stay active until the answer');
@@ -1084,7 +1084,7 @@ describe('withholding recipients (D4, G4)', () => {
     }
   }
 
-  test('M1: two genuinely separate 1099-INTs from one payer for one recipient ask once; both keeps both and a re-import asks nothing new', () => withStore(async (s) => {
+  test('M1: two genuinely separate 1099-INTs from one payer for one recipient ask once; both keeps both and a re-import asks nothing new', async () => withStore(async (s) => {
     const docs = { first: formOf('1099-int', 'm1-account-1', { interest: 1200, federalWithheld: 200 }), second: formOf('1099-int', 'm1-account-2', { interest: 300, federalWithheld: 45 }) };
     const ids = { first: await importDoc(s, docs.first), second: await importDoc(s, docs.second) };
     answerDocs(s, () => 'owner');
@@ -1126,7 +1126,7 @@ describe('withholding recipients (D4, G4)', () => {
     }],
   ];
   for (const [order, run] of W2_STUB_ORDERS) {
-    test(`M1 guard: a W-2 plus its employer's paystubs in one slot (${order}) summarize as today and never conflict`, () => withStore(async (s) => {
+    test(`M1 guard: a W-2 plus its employer's paystubs in one slot (${order}) summarize as today and never conflict`, async () => withStore(async (s) => {
       await run(s);
       const p = payers();
       assert.deepEqual((await active(s.db)).map((t) => [t.payer, t.amount]).sort((x, y) => x[1] - y[1]), [[`${p.w2}:owner`, 3500], [`${p.w2}:owner`, 12000]], 'only the W-2 totals stay active');
@@ -1139,14 +1139,14 @@ describe('withholding recipients (D4, G4)', () => {
     ['remembered owner, then the later paystub', async (s) => { await importStub(s, 'a'); answerEmployer(s.db, 'owner'); await importStub(s, 'a', '2032-03-31'); }],
     ['both paystubs, then owner', async (s) => { await importStub(s, 'a'); await importStub(s, 'a', '2032-03-31'); answerEmployer(s.db, 'owner'); }],
   ]) {
-    test(`M1 guard: two paystubs of one employer on different pay dates with no W-2 (${order}) both stay and never conflict`, () => withStore(async (s) => {
+    test(`M1 guard: two paystubs of one employer on different pay dates with no W-2 (${order}) both stay and never conflict`, async () => withStore(async (s) => {
       await run(s);
       assert.deepEqual((await inSlot(s.db, employerSlot())).map((t) => [t.date, t.amount]), [['2032-03-15', 700], ['2032-03-31', 700]].sort((x, y) => x[0].localeCompare(y[0])));
       assert.equal((await items(s.db, 'withholding_conflict')).length, 0);
     }));
   }
 
-  test('M1 guard: two 1099-INTs from one payer with different interest for different recipients never conflict', () => withStore(async (s) => {
+  test('M1 guard: two 1099-INTs from one payer with different interest for different recipients never conflict', async () => withStore(async (s) => {
     const ids = {
       owner: await importDoc(s, formOf('1099-int', 'm1-owner', { interest: 1200, federalWithheld: 200 })),
       spouse: await importDoc(s, formOf('1099-int', 'm1-spouse', { interest: 1000, federalWithheld: 0 })),
@@ -1157,7 +1157,7 @@ describe('withholding recipients (D4, G4)', () => {
     assert.equal((await items(s.db, 'withholding_conflict')).length, 0);
   }));
 
-  test('M1 guard: two W-2s from one employer with different wages for different recipients never conflict', () => withStore(async (s) => {
+  test('M1 guard: two W-2s from one employer with different wages for different recipients never conflict', async () => withStore(async (s) => {
     const ids = { owner: await importDoc(s, w2Of('m1-owner', W2_FIRST)), spouse: await importDoc(s, w2Of('m1-spouse', W2_CORRECTED)) };
     answerEmployer(s.db, 'both');
     answerDocs(s, (d) => (d.context.payer.endsWith(`:doc:${ids.owner}`) ? 'owner' : 'spouse'));
@@ -1167,7 +1167,7 @@ describe('withholding recipients (D4, G4)', () => {
   }));
 
   for (const answerOrder of [['1099-int', '1099-div'], ['1099-div', '1099-int']]) {
-    test(`M1 guard: a 1099-INT and a 1099-DIV from one payer for one recipient (answers ${answerOrder.join(',')}) never conflict`, () => withStore(async (s) => {
+    test(`M1 guard: a 1099-INT and a 1099-DIV from one payer for one recipient (answers ${answerOrder.join(',')}) never conflict`, async () => withStore(async (s) => {
       const ids = {
         '1099-int': await importDoc(s, formOf('1099-int', 'm1-int', { interest: 1200, federalWithheld: 200 })),
         '1099-div': await importDoc(s, formOf('1099-div', 'm1-div', { federalWithheld: 240 })),
@@ -1225,7 +1225,7 @@ describe('withholding recipients (D4, G4)', () => {
   for (const c of N1_CASES) {
     for (const sc of N1_SCENARIOS) {
       const left = sc.keep.reduce((sum, k) => sum + c.amounts[k], 0);
-      test(`N1: ${c.name}: ${sc.label} keeps ${sc.keep.join(' and ')} (${left}) and asks nothing new`, () => withStore(async (s) => {
+      test(`N1: ${c.name}: ${sc.label} keeps ${sc.keep.join(' and ')} (${left}) and asks nothing new`, async () => withStore(async (s) => {
         const ids = { first: await importDoc(s, c.docs.first), second: await importDoc(s, c.docs.second) };
         c.resolve(s);
         answerConflict(s, sc.option);
@@ -1275,7 +1275,7 @@ describe('Unicode minus (D7)', () => {
     assert.equal(RD.redactForExtraction(prose).text, prose);
   });
 
-  test('each minus form yields a negative stored balance through extraction', () => withStore(async (s) => {
+  test('each minus form yields a negative stored balance through extraction', async () => withStore(async (s) => {
     for (const [i, m] of MINUS.entries()) {
       const file = textFile(`statement-minus-${hex(m)}.txt`, `SYNTHETIC STATEMENT\nEnding balance ${m}$123456.78\n`, 'text/plain');
       const engine = await fakeEngine([[{ docType: 'statement', confidence: 0.9 }], [{ ...STATEMENT, accountLast4: `900${i}`, endingBalance: '#A1#', holdings: [] }]]);

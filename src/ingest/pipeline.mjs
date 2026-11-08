@@ -210,7 +210,7 @@ export async function retryIncompletePaystubs(db, { household, engine, now, taxY
       const { validateImport } = await import('./model-validation.mjs');
       const ctx = { db, household, now };
       const interpretation = await interpretFile({ ctx, file });
-      const checked = interpretation.valid ? validateImport(ctx, interpretation.proposal, interpretation.source) : null;
+      const checked = interpretation.valid ? await validateImport(ctx, interpretation.proposal, interpretation.source) : null;
       const fresh = checked?.valid ? checked.rows.find(r => r.kind === 'document' && r.docType === 'paystub') : null;
       const same = fresh && fresh.fields.payDate === fields.payDate && normalizeName(fresh.fields.employerName) === normalizeName(fields.employerName);
       await db.prepare('UPDATE documents SET fields = ?, locator = ? WHERE id = ?').run(JSON.stringify(same ? { ...fields, ...fresh.fields } : fields), JSON.stringify({ ...locator,
@@ -845,7 +845,7 @@ async function putTax(ctx, row, parser, locator) {
   const group = ctx.coverage.find(g => g.table === 'tax_payments' && g.slot === slot && g.period === row.date.slice(0, 7));
   if (await olderGroup(ctx,group)) { counts.incomplete++; return; }
   if (!stored) {
-    const id = insert(payer, key);
+    const id = await insert(payer, key);
     bump(ctx, 'tax_payment');
     if (summarizes) tally(ctx, await askSlotConflict(db, await db.prepare('SELECT * FROM tax_payments WHERE id = ?').get(id), { now }));
   } else if (moneyEq(stored.amount, amount)) {
@@ -862,7 +862,7 @@ async function putTax(ctx, row, parser, locator) {
     if (await conflictAsked(db, key, stored.amount, amount)) counts.duplicates += 1;
     else {
       const later = conflictPayer(payer, fileId);
-      const id = insert(later, dedupeKey({ ...row, payer: later }));
+      const id = await insert(later, dedupeKey({ ...row, payer: later }));
       bump(ctx, 'tax_payment');
       const second = await db.prepare('SELECT * FROM tax_payments WHERE id = ?').get(id);
       tally(ctx, await askConflict(db, { key, payer, first: stored, second, now }));
