@@ -1,3 +1,4 @@
+import { sameStore } from '../storage/index.mjs';
 import { restoreRemovedFile } from '../accounts/sources.mjs';
 import { CATEGORY_TABLES } from '../categories/resolve.mjs';
 import { kindOf, accountMask, compatibleKind, sameInstitution } from './account-match.mjs';
@@ -71,7 +72,7 @@ function householdOf(db, opts) {
   if (!household || typeof household.vault !== 'function' || !(household.inFlight instanceof Set) || typeof household.root !== 'string') {
     throw new TypeError('ingest needs opts.household');
   }
-  if (household.db !== db) throw new TypeError('ingest opts.household must own the db');
+  if (!sameStore(household.db, db)) throw new TypeError('ingest opts.household must own the db');
   return household;
 }
 
@@ -193,7 +194,7 @@ export async function resumeImports(db, opts = {}) {
 }
 
 export async function retryIncompletePaystubs(db, { household, engine, now, taxYear }) {
-  if (!household?.vault || household.db !== db || !await engine?.isOn?.()) return;
+  if (!household?.vault || !sameStore(household.db, db) || !await engine?.isOn?.()) return;
   const docs = await db.prepare("SELECT d.*, f.name, f.mime, f.stored_path FROM documents d JOIN files f ON f.id = d.file_id WHERE d.doc_type = 'paystub' AND f.removed_at IS NULL").all();
   for (const doc of docs) {
     const fields = parseJson(doc.fields, {}), locator = parseJson(doc.locator, {});

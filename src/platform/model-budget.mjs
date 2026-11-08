@@ -1,3 +1,4 @@
+import { currentHandle } from '../storage/index.mjs';
 // Household and instance model budgets (MT-05): the platform authority every paid live round
 // passes, across server and CLI processes, before it is dispatched. Tables (platform migration
 // 005): household_model_budgets (operator allocation per household; no row is zero) and
@@ -135,7 +136,8 @@ export function createModelLedger(platform, { householdId, generation, now = Dat
   if (!platform || typeof householdId !== 'string' || !Number.isInteger(generation) || typeof now !== 'function') {
     throw new TypeError('createModelLedger needs the platform, a household, its generation and a clock');
   }
-  const own = async id => await platform.prepare("SELECT * FROM model_rounds WHERE id = ? AND household_id = ? AND kind = 'round'").get(id, householdId);
+  // Reads the round on the open transaction when called inside one.
+  const own = async id => await currentHandle(platform).prepare("SELECT * FROM model_rounds WHERE id = ? AND household_id = ? AND kind = 'round'").get(id, householdId);
   return {
     async reserve({ purpose, model, boundUsd, adminCapUsd, legacySpendUsd = 0, principal = null }) {
       if (!Number.isFinite(boundUsd) || boundUsd < 0 || !Number.isFinite(adminCapUsd) || !Number.isFinite(legacySpendUsd) || legacySpendUsd < 0) {

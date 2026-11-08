@@ -1,3 +1,4 @@
+import { sameStore } from '../storage/index.mjs';
 import { accountNaming } from '../accounts/naming.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
 import { queueAccountPairs } from './account-merge.mjs';
@@ -234,7 +235,7 @@ function householdOf(db, household) {
   if (!household || typeof household.vault !== 'function' || typeof household.outbound?.enabled !== 'function' || typeof household.isCurrent !== 'function') {
     throw new TypeError('SimpleFIN needs the household context');
   }
-  if (household.db !== db) throw new TypeError('SimpleFIN household must own the db');
+  if (!sameStore(household.db, db)) throw new TypeError('SimpleFIN household must own the db');
   return household;
 }
 

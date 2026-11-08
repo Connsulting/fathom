@@ -96,7 +96,7 @@ export async function getSubscriptions(ctx) {
 export async function setSubscriptions(ctx) {
   try {
     if (!ctx.body || Object.keys(ctx.body).some(k => k !== 'subscriptions')) throw { code: 'bad_subscriptions' };
-    ctx.household.emailRecipients.update(ctx.body.subscriptions, ctx.identity?.id ?? null);
+    await ctx.household.emailRecipients.update(ctx.body.subscriptions, ctx.identity?.id ?? null);
   } catch (err) {
     if (err?.code === 'bad_subscriptions') throw new HttpError(400, 'subscriptions must name verified household members and boolean preferences');
     throw err;

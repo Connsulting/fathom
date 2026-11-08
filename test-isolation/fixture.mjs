@@ -80,8 +80,8 @@ export async function isolationFixture({ engine = 'fake', extra = {}, engineOpti
     operator.identity = ok(signed.verify).identity;
     for (const hh of [A, B]) {
       Object.defineProperties(hh, {
-        ctx: { get: () => app.runtimes.get(hh.id) },
-        db: { get: () => hh.ctx.db },
+        // The household's current runtime context (resolved per call: a reload replaces it).
+        ctx: { value: async () => await app.runtimes.get(hh.id) },
         platform: { value: app.platform },
       });
     }

@@ -1,3 +1,4 @@
+import { sameStore } from '../storage/index.mjs';
 import { DEFAULT_TIMEZONE, ownerTimezone } from '../shared/timezone.mjs';
 import { createJev } from '../categories/jev.mjs';
 import { selectionFor } from '../models/config.mjs';
@@ -445,7 +446,7 @@ export function createScheduler({
   // Rule 15: called only while this tick holds the lease. Not awaited: a model call must not delay jobs.
   function resumeImports(t) {
     const h = household();
-    if (resuming || stopping || !h || h.db !== db || !(h.inFlight instanceof Set)) return;
+    if (resuming || stopping || !h || !sameStore(h.db, db) || !(h.inFlight instanceof Set)) return;
     const p = withoutPrincipal(async () => {
       const { resumeImports: resume } = await import('../ingest/pipeline.mjs');
       await resume(h.db, { household: h, db: h.db, config, engine: h.engine, scheduler: h.scheduler, actorId: BACKGROUND_ACTOR, now: t.toISOString() });

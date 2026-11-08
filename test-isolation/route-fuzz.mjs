@@ -47,7 +47,7 @@ const platformSnapshot = async hh => hash(JSON.stringify([
   await hh.platform.prepare('SELECT * FROM households WHERE id=?').get(hh.id),
   ...await mapSeries(platformTables, async table => [table, (await hh.platform.prepare(`SELECT * FROM ${table} WHERE household_id=?`).all(hh.id)).map(row => JSON.stringify(row)).sort()]),
 ]));
-const snapshot = async hh => [await logicalDigest(hh.db), manifest(hh.ctx.root), await platformSnapshot(hh)];
+const snapshot = async hh => [await logicalDigest((await hh.ctx()).db), manifest((await hh.ctx()).root), await platformSnapshot(hh)];
 const stable = async (hh, before, code) => assert.deepEqual(await snapshot(hh), before, code);
 const FAMILY = {
   household: `account_holders accounts action_receipts advisor_checkin advisor_packets advisor_reviews balances category_merchant_rules category_source_rules column_mappings confirm_auto confirm_auto_declined confirm_guesses confirm_items confirm_undo content conversations deadline_alerts deadlines decisions documents email_sends entity_aliases events expected_transactions facts figures files goals held_facts import_batches import_model_spend import_proposals ingest_epoch job_lock job_runs jobs messages packs_state planner_recs pnl_lines positions preferences rec_events recs schema_migrations settings simplefin_accounts simplefin_connection simplefin_snapshots source_changes sources spend_ledger spending_definitions store_identity superseded_rows tax_payments transaction_category_corrections transaction_category_guesses transaction_category_imports transactions yearend_marks yearend_packets`.split(' '),
@@ -146,7 +146,7 @@ async function adversarialRoutes(f, inventory, specs) {
           activeCase = { seed, route: keyOf(route), mutation: kind, assertion: 'route_isolation' };
           checkTime();
           const before = await snapshot(other), wireSpec = { ...spec };
-          const outbound = [f.externalCount(), manifest(join(own.ctx.root, 'outbox')), manifest(join(f.dataDir, 'outbox'))];
+          const outbound = [f.externalCount(), manifest(join((await own.ctx()).root, 'outbox')), manifest(join(f.dataDir, 'outbox'))];
           const headers = {};
           let method = route.method, expected;
           if (scoped) {
@@ -172,7 +172,7 @@ async function adversarialRoutes(f, inventory, specs) {
           assert.equal(r.status, expected, `seed=${seed} ${keyOf(route)} mutation=${kind} refusal`);
           assert.ok(!r.text.includes(other.canary), `seed=${seed} ${keyOf(route)} mutation=${kind} disclosure`);
           await stable(other, before, `seed=${seed} ${keyOf(route)} mutation=${kind} foreign_effect`);
-          assert.deepEqual([f.externalCount(), manifest(join(own.ctx.root, 'outbox')), manifest(join(f.dataDir, 'outbox'))], outbound, 'unauthorized_outbound_effect');
+          assert.deepEqual([f.externalCount(), manifest(join((await own.ctx()).root, 'outbox')), manifest(join(f.dataDir, 'outbox'))], outbound, 'unauthorized_outbound_effect');
           count++;
         }
       }
@@ -327,7 +327,7 @@ async function toolGate(f) {
   for (const [own, other] of [[f.A, f.B], [f.B, f.A]]) {
     // Inspect the actual SDK registrations without executing them. Wire requests below use the
     // server's real key verifier, runtime resolver and persistence.
-    const catalog = createToolServer({ scopes: SCOPES, ctx: own.ctx, authorize: () => false, runTool: () => assert.fail('inventory_dispatch') });
+    const catalog = createToolServer({ scopes: SCOPES, ctx: (await own.ctx()), authorize: () => false, runTool: () => assert.fail('inventory_dispatch') });
     assert.deepEqual([...catalog._requestHandlers.keys()].sort(), ['initialize', 'ping', 'tools/call', 'tools/list'], 'unclassified_rpc_method');
     assert.deepEqual([...catalog._notificationHandlers.keys()].sort(), ['notifications/cancelled', 'notifications/initialized', 'notifications/progress'], 'unclassified_notification_method');
     await catalog.close();
@@ -342,7 +342,7 @@ async function toolGate(f) {
       recommendations: { operation: 'list' }, refresh: refreshImportFixture(own),
       retirement: { operation: 'growth', solve: 'balance', years: 0, balance: { ref: { tool: 'accounts', args: { operation: 'detail', id: 'colliding-account' }, path: 'balance' } } },
       sources: { operation: 'archive_account', id: 'colliding-account' }, spending: { operation: 'total' }, tax: { operation: 'estimate' }, transactions: { operation: 'search' },
-      ...await accountCategoryFixtures(own), update_goal: { operation: 'create', title: own.canary + ' tool reserve' },
+      ...await accountCategoryFixtures({ canary: own.canary, db: (await own.ctx()).db }), update_goal: { operation: 'create', title: own.canary + ' tool reserve' },
       update_preferences: { operation: 'remember', text: 'Prefer a steady reserve', evidence: 'Prefer a steady reserve', conversationKey: thread.key },
     };
     const invoke = (name, args, headers = {}) => mcp(f.baseUrl, own.key.key, 'tools/call', { name, arguments: args }, headers);
@@ -441,8 +441,8 @@ async function collidingUploads(f) {
   const responses = await Promise.all(await mapSeries([f.A, f.B], async hh => uploadFiles(f.baseUrl, { cookie: (await headersOf(hh.admin)).cookie, householdId: hh.id, contextVersion: hh.admin.identity.contextVersion }, [{ name: 'shared.csv', bytes }])));
   const ids = responses.map(r => { ok(r); assert.equal(r.json.files[0].status, 'imported', 'independent_upload'); return r.json.files[0].fileId; });
   assert.equal(ids[0], ids[1], 'colliding_file_hash');
-  const vaults = await Promise.all([f.A.ctx.vault(), f.B.ctx.vault()]);
-  const blobs = [f.A, f.B].map(hh => readFileSync(join(hh.ctx.root, 'files', ids[0] + '.bin')));
+  const vaults = await Promise.all([(await f.A.ctx()).vault(), (await f.B.ctx()).vault()]);
+  const blobs = await Promise.all([f.A, f.B].map(async hh => readFileSync(join((await hh.ctx()).root, 'files', ids[0] + '.bin'))));
   assert.ok(!blobs[0].equals(blobs[1]), 'independent_ciphertexts');
   for (let own = 0; own < 2; own++) {
     assert.deepEqual(Buffer.from(openObject(vaults[own].handle, { purpose: 'upload', objectId: ids[own], blob: blobs[own] })), bytes, 'own_decryption');
@@ -503,12 +503,12 @@ test('adversarial isolation gate crosses real sessions, dispatch, runtimes, pers
     classify(probe === 'unclassified-route' ? [...inventory, { method: 'GET', path: '/api/deliberately-unclassified' }] : inventory, specs.get(f.A.id));
     assert.throws(() => classify([...inventory, { method: 'GET', path: '/api/deliberately-unclassified' }], specs.get(f.A.id)), /unclassified_route/, 'unknown_route_probe');
     assert.deepEqual(await tables(f.platform), FAMILY.platform, 'platform_schema_scope');
-    assert.deepEqual(await tables(f.A.db), FAMILY.household, 'household_schema_scope');
-    f.A.db.exec('CREATE TABLE deliberately_unclassified (id TEXT)');
-    try { assert.throws(async () => assert.deepEqual(await tables(f.A.db), FAMILY.household), 'unclassified_schema_probe'); }
-    finally { f.A.db.exec('DROP TABLE deliberately_unclassified'); }
+    assert.deepEqual(await tables((await f.A.ctx()).db), FAMILY.household, 'household_schema_scope');
+    await (await f.A.ctx()).db.applySchema('CREATE TABLE deliberately_unclassified (id TEXT)');
+    try { await assert.rejects(async () => assert.deepEqual(await tables((await f.A.ctx()).db), FAMILY.household), 'unclassified_schema_probe'); }
+    finally { await (await f.A.ctx()).db.applySchema('DROP TABLE deliberately_unclassified'); }
     if (probe === 'foreign-runtime') {
-      const foreign = { ...f.A.ctx, db: f.B.db, root: f.B.ctx.root, packs: f.B.ctx.packs, engine: f.B.ctx.engine, answerer: f.B.ctx.answerer };
+      const foreign = { ...(await f.A.ctx()), db: (await f.B.ctx()).db, root: (await f.B.ctx()).root, packs: (await f.B.ctx()).packs, engine: (await f.B.ctx()).engine, answerer: (await f.B.ctx()).answerer };
       const get = f.app.runtimes.get;
       f.app.runtimes.forIdentity = identity => identity.householdId === f.A.id ? foreign : get(identity.householdId);
       f.app.runtimes.get = id => id === f.A.id ? foreign : get(id);
@@ -535,7 +535,7 @@ test('adversarial isolation gate crosses real sessions, dispatch, runtimes, pers
         assert.ok(!r.text.includes(other.canary), `response ${keyOf(route)}`);
         if (route.path === '/api/email/test' || route.path === '/api/email/brief') {
           assert.equal(r.json.send.status, 'sent', 'authorized_email_delivery');
-          const dir = join(own.ctx.root, 'outbox');
+          const dir = join((await own.ctx()).root, 'outbox');
           const messages = readdirSync(dir).filter(p => p.endsWith('.json')).map(p => JSON.parse(readFileSync(join(dir, p), 'utf8')));
           assert.ok(messages.length >= 1, 'local_financial_mail_sink');
           for (const message of messages) {
@@ -549,7 +549,7 @@ test('adversarial isolation gate crosses real sessions, dispatch, runtimes, pers
           const scenario = r.json?.scenario ?? (route.path === '/api/scenario' ? r.json : null);
           if (scenario) {
             assert.ok(!JSON.stringify(scenario).includes(other.canary), `scenario_identity ${keyOf(route)}`);
-            const expectedGoals = (await own.db.prepare('SELECT id FROM goals ORDER BY id').all()).map(g => g.id);
+            const expectedGoals = (await (await own.ctx()).db.prepare('SELECT id FROM goals ORDER BY id').all()).map(g => g.id);
             assert.deepEqual(scenario.goals.map(g => g.id).sort(), expectedGoals, `complete_goals ${keyOf(route)}`);
           }
         }
@@ -623,7 +623,7 @@ if (!probe) test('live-mode model and tool continuations see only the real-sessi
       emulator.script([{ toolUse: { name: body => body.tools.find(t => /(?:^|__)household$/.test(t.name)).name, input: { operation: 'summary' } } },
         { text: 'Synthetic household answer.' }]);
       const r = ok(await own.admin.client.post('/api/threads', { text: 'Explain the stored reserve policy.' }));
-      assert.equal(r.message.notice, false, 'live_answer');
+      assert.equal(r.message.notice, false, `live_answer: ${r.message.text}`);
       const calls = emulator.requests.slice(from);
       assert.ok(calls.length >= 2, 'live_tool_continuation');
       assert.ok(calls.some(c => JSON.stringify(c.body).includes(own.canary)), 'own_model_context');

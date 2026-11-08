@@ -65,7 +65,7 @@ export async function pickWargame(db, name, point, { onWrite } = {}) {
     const picks = { ...defaultPicks(wargame), ...(await getSetting(db, 'wargame.picks', null) || {}), [name]: index };
     await setSetting(db, 'wargame.picks', picks);
     const after = await db.prepare("SELECT * FROM settings WHERE key = 'wargame.picks'").get();
-    await onWrite?.(before, after);
+    await await onWrite?.(before, after);
     return { name, index, label: String(list[index].label ?? list[index].id) };
   });
 }
@@ -114,7 +114,7 @@ export async function decide(db, id, { point: selected, clock, now = new Date().
       await decisionEvent(db, row.rec_id, 'decide', point.id, rec.status, now, actor);
     }
     const after = await decisionState(db, id);
-    onWrite?.(before, after);
+    await onWrite?.(before, after);
     return { decision: { id, status: 'decided', decidedLine: line }, decidedIndex: i };
   });
 }
@@ -140,7 +140,7 @@ export async function revisit(db, id, { now = new Date().toISOString(), actor = 
       await decisionEvent(db, row.rec_id, 'revisit', null, rec.status, now, actor);
     }
     const after = await decisionState(db, id);
-    onWrite?.(before, after, { decidedIndex });
+    await onWrite?.(before, after, { decidedIndex });
     return { decision: { id, status: 'open' }, decidedIndex };
   });
 }

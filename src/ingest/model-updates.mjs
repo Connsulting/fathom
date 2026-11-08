@@ -1,3 +1,4 @@
+import { sameStore } from '../storage/index.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { tx, parseJson, rehearseWith } from '../store/db.mjs';
 import { ToolError } from '../tools/errors.mjs';
@@ -18,7 +19,7 @@ const stamp = ctx => new Date(ctx.now ?? Date.now()).toISOString();
 const fail = (code, text) => { throw new ToolError(code, text); };
 async function context(ctx) {
   await requireActor(ctx); requireScope(ctx, 'write:imports');
-  if (!ctx.household || ctx.household.db !== ctx.db || !await ctx.household.isCurrent()) fail('proposal_stale', 'The household changed.');
+  if (!ctx.household || !sameStore(ctx.household.db, ctx.db) || !await ctx.household.isCurrent()) fail('proposal_stale', 'The household changed.');
   if (await currentPrincipal()?.check() === false) fail('forbidden', 'The signed-in owner is no longer authorized.');
 }
 const output = row => ({ proposalId: row.id, version: row.version, status: row.status, reasonCode: row.reason_code, ...parseJson(row.review_state).presentation });

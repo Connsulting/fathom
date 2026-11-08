@@ -24,6 +24,12 @@ const connections = new WeakMap();
 
 // The handle statements on scope (or on a transaction handle) should use in the current async
 // context: the innermost open transaction or savepoint handle on that connection, else the handle itself.
+// Whether a and b (scopes or transaction handles) run on the same physical connection.
+export function sameStore(a, b) {
+  const connection = connections.get(a);
+  return connection !== undefined && connection === connections.get(b);
+}
+
 export function currentHandle(scope) {
   const connection = connections.get(scope);
   if (!connection) throw storageError();

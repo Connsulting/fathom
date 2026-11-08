@@ -1,3 +1,4 @@
+import { currentHandle } from '../storage/index.mjs';
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { getSetting, parseJson as parse, tx, rehearseWith } from '../store/db.mjs';
@@ -37,12 +38,14 @@ export async function saveReceipt(ctx, { scope, kind, id, label, before, after, 
   const actor = await requireActor(ctx);
   const stamp = new Date(ctx.now ?? Date.now()).toISOString();
   const receiptId = randomUUID();
-  await ensureActionConversation(ctx.db, ctx.conversationKey, stamp, ctx.recId);
-  await ctx.db.prepare(`INSERT INTO action_receipts
+  // A receipt joins the write it records: the open transaction on ctx.db, when there is one.
+  const db = currentHandle(ctx.db);
+  await ensureActionConversation(db, ctx.conversationKey, stamp, ctx.recId);
+  await db.prepare(`INSERT INTO action_receipts
     (id, scope, kind, entity_id, actor_id, conversation_key, turn_id, label, before_state, after_state, before_value, after_value, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(receiptId, scope, kind, id, actor, ctx.conversationKey || null,
     ctx.turnId || null, label, JSON.stringify(before), JSON.stringify(after), JSON.stringify(from), JSON.stringify(to), stamp);
-  return receiptOut(await ctx.db.prepare('SELECT * FROM action_receipts WHERE id = ?').get(receiptId));
+  return receiptOut(await db.prepare('SELECT * FROM action_receipts WHERE id = ?').get(receiptId));
 }
 
 export async function receiptMessages(db, key, messages) {

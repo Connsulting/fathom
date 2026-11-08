@@ -1,7 +1,7 @@
 import { openConnection } from './sqlite/connection.mjs';
-import { createScope, currentHandle, registerScope } from './kernel.mjs';
+import { createScope, currentHandle, registerScope, sameStore } from './kernel.mjs';
 
-export { currentHandle };
+export { currentHandle, sameStore };
 import { storageError } from './errors.mjs';
 
 function validPath(config) {

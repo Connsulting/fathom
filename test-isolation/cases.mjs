@@ -23,20 +23,20 @@ export const CONTROL = new Set([
 ]);
 
 export async function seedHousehold(f, hh) {
-  await setSetting(hh.db, 'mode', 'demo');
-  await seedDemo(hh.db);
-  await setSetting(hh.db, 'mode', 'real');
-  await setSetting(hh.db, 'engine', { on: true });
-  await hh.db.prepare("UPDATE content SET value=? WHERE key='meta'").run(JSON.stringify({ household: hh.canary }));
-  await hh.db.prepare("INSERT OR REPLACE INTO facts(key,value,updated_at) VALUES ('synthetic.canary',?,?)").run(JSON.stringify(hh.canary), now);
-  await hh.db.prepare("INSERT OR REPLACE INTO accounts(id,name,kind) VALUES ('colliding-account',?,'checking')").run(hh.canary);
+  await setSetting((await hh.ctx()).db, 'mode', 'demo');
+  await seedDemo((await hh.ctx()).db);
+  await setSetting((await hh.ctx()).db, 'mode', 'real');
+  await setSetting((await hh.ctx()).db, 'engine', { on: true });
+  await (await hh.ctx()).db.prepare("UPDATE content SET value=? WHERE key='meta'").run(JSON.stringify({ household: hh.canary }));
+  await (await hh.ctx()).db.prepare("INSERT OR REPLACE INTO facts(key,value,updated_at) VALUES ('synthetic.canary',?,?)").run(JSON.stringify(hh.canary), now);
+  await (await hh.ctx()).db.prepare("INSERT OR REPLACE INTO accounts(id,name,kind) VALUES ('colliding-account',?,'checking')").run(hh.canary);
   hh.retirementBalance = hh === f.A ? 12345 : 67890;
-  await hh.db.prepare("INSERT INTO balances(account_id,date,amount) VALUES ('colliding-account','2026-11-05',?)").run(hh.retirementBalance);
-  await hh.db.prepare("INSERT OR REPLACE INTO recs(id,def,status,updated_at) VALUES ('colliding-rec',?,'proposed',?)")
+  await (await hh.ctx()).db.prepare("INSERT INTO balances(account_id,date,amount) VALUES ('colliding-account','2026-11-05',?)").run(hh.retirementBalance);
+  await (await hh.ctx()).db.prepare("INSERT OR REPLACE INTO recs(id,def,status,updated_at) VALUES ('colliding-rec',?,'proposed',?)")
     .run(JSON.stringify({ id: 'colliding-rec', title: hh.canary, summary: hh.canary, domain: 'data' }), now);
-  await hh.db.prepare("INSERT INTO recs(id,def,status,updated_at) VALUES (?,?,'proposed',?)")
+  await (await hh.ctx()).db.prepare("INSERT INTO recs(id,def,status,updated_at) VALUES (?,?,'proposed',?)")
     .run(hh.canary + '-only', JSON.stringify({ title: hh.canary }), now);
-  writePlansPack(hh.ctx.root, hh.canary); await hh.ctx.packs.refresh();
+  writePlansPack((await hh.ctx()).root, hh.canary); await (await hh.ctx()).packs.refresh();
   hh.key = ok(await hh.admin.client.post('/api/keys', { name: hh.canary, scopes: SCOPES }));
   hh.thread = ok(await hh.admin.client.post('/api/threads', { text: hh.canary + ' plan' })).thread;
   hh.packet = ok(await hh.admin.client.post('/api/advisor/packets', {})).packetId;
@@ -47,7 +47,7 @@ export async function seedHousehold(f, hh) {
 const canaryNote = hh => hh.canary + ' synthetic reserve policy';
 
 export async function financialCases(f, hh) {
-  const db = hh.db, canary = hh.canary;
+  const db = (await hh.ctx()).db, canary = hh.canary;
   const war = (await db.prepare("SELECT value FROM content WHERE key='wargame'").get()).value;
   const resetWar = async () => {
     await db.prepare("UPDATE content SET value=? WHERE key='wargame'").run(war);
@@ -146,7 +146,7 @@ export async function financialCases(f, hh) {
     'GET /api/files': basic('/api/files'),
     'POST /api/files/:id/retry': basic(`/api/files/${hh.upload}/retry`, {}, { async before() { await db.prepare("UPDATE files SET status='pending' WHERE id=?").run(hh.upload); } }),
     'POST /api/import-proposals/:proposalId/review': basic('/api/import-proposals/pending/review', { version: 1, decision: 'correct', evidence: 'The state should be MD instead.' }, { async prepare() {
-      const p = await importProposedRows({ db, platform: f.platform, household: hh.ctx }, [{ target: 'fact', fields: { key: 'household.state', value: 'VA' } }], { approve: false, marker: canary });
+      const p = await importProposedRows({ db, platform: f.platform, household: (await hh.ctx()) }, [{ target: 'fact', fields: { key: 'household.state', value: 'VA' } }], { approve: false, marker: canary });
       await db.prepare('UPDATE import_proposals SET actor_id=? WHERE id=?').run(hh.admin.identity.id, p.proposalId);
       return { path: `/api/import-proposals/${p.proposalId}/review`, body: { version: p.version, decision: 'correct', evidence: 'The state should be MD instead.' } };
     } }),

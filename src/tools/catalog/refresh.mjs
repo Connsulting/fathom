@@ -1,3 +1,4 @@
+import { sameStore } from '../../storage/index.mjs';
 import { randomUUID } from 'node:crypto';
 import { ingestFiles, retryFile, triggerPlan, triggerFreshness, triggerGuesses } from '../../ingest/pipeline.mjs';
 import { pendingItems } from '../../ingest/confirm.mjs';
@@ -27,7 +28,7 @@ function content(args) {
 async function preflight(name, args, ctx) {
   await requireActor(ctx);
   if (!ctx.services || !apiContext(ctx).household) refusal('Household services are unavailable.');
-  if (apiContext(ctx).household.db !== ctx.db) refusal('Household services do not own this store.');
+  if (!sameStore(apiContext(ctx).household.db, ctx.db)) refusal('Household services do not own this store.');
   if (name === 'import_file') content(args);
   if (name === 'retry_import' && !await ctx.db.prepare('SELECT id FROM files WHERE id=?').get(args.fileId)) throw new ToolError('not_found', 'No such file.');
   if (name === 'review_import' && !await ctx.db.prepare('SELECT id FROM import_proposals WHERE id=?').get(args.proposalId)) throw new ToolError('not_found', 'No such proposal.');

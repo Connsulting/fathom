@@ -23,6 +23,7 @@
 // running server refreshes. The target must resolve outside the repository entirely. Warnings
 // never carry document text.
 
+import { sameStore } from '../storage/index.mjs';
 import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -312,7 +313,7 @@ function writePack(dir, { entries, clock }) {
 // uploads (a vault refusal propagates as VaultError before any model call).
 export async function buildYourPlans({ db, engine, household, fileIds = [], excludeDocumentIds = [], clock } = {}) {
   if (!db || !engine || !household || typeof household.root !== 'string' || !household.root) throw new TypeError('buildYourPlans needs db, engine and household');
-  if (household.db !== db) throw new TypeError('buildYourPlans household must own the db');
+  if (!sameStore(household.db, db)) throw new TypeError('buildYourPlans household must own the db');
   if (!Array.isArray(fileIds) || !fileIds.every(id => typeof id === 'string')) throw new TypeError('fileIds must be strings');
   if (!Array.isArray(excludeDocumentIds) || !excludeDocumentIds.every(id => Number.isSafeInteger(id) && id > 0)) throw new TypeError('excludeDocumentIds must be document ids');
   for (const id of excludeDocumentIds) {

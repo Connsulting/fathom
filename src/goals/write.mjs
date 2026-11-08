@@ -46,7 +46,7 @@ export async function createGoal(db, fields, { now, clock, onWrite } = {}) {
     // Fathom sets the calculator's target before the receipt sees the row, so Undo matches it.
     await adoptIn(db, { now, clock, only: id });
     const row = await db.prepare('SELECT * FROM goals WHERE id = ?').get(id);
-    onWrite?.(null, row);
+    await onWrite?.(null, row);
     return row;
   });
 }
@@ -85,7 +85,7 @@ export async function updateGoal(db, id, fields, { now, clock, onWrite } = {}) {
       .run(JSON.stringify(def), now, archivedAt, doneAt, id);
     await adoptIn(db, { now, clock, only: id });
     const after = await db.prepare('SELECT * FROM goals WHERE id = ?').get(id);
-    onWrite?.(row, after);
+    await onWrite?.(row, after);
     return after;
   });
 }
@@ -106,7 +106,7 @@ export async function archiveGoal(db, id, { archived = true, now, clock, onWrite
       await adoptIn(db, { now, clock, only: id });
     }
     const after = await goalRow(db, id);
-    onWrite?.(before, after);
+    await onWrite?.(before, after);
     return after;
   });
 }
@@ -116,7 +116,7 @@ export async function deleteGoal(db, id, { ownerOnly = false, onWrite } = {}) {
     const before = await goalRow(db, id);
     if (ownerOnly && before.origin !== 'owner') throw new ToolError('conflict', 'only your own goals can be deleted with this tool');
     await db.prepare('DELETE FROM goals WHERE id = ?').run(id);
-    onWrite?.(before, null);
+    await onWrite?.(before, null);
     return before;
   });
 }
@@ -206,7 +206,7 @@ export async function undoAdoption(db, id, { now, onWrite } = {}) {
     await writeDef(db, row, previous, def, now);
     await declineSuggestion(db, id);
     const after = await db.prepare('SELECT * FROM goals WHERE id = ?').get(id);
-    onWrite?.(before, { goal: after, setting: await setting() });
+    await onWrite?.(before, { goal: after, setting: await setting() });
     return after;
   });
 }
