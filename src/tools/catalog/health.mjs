@@ -56,4 +56,4 @@ function health(args, ctx) {
 }
 
 export const operations = [{ tool: 'household', name: 'health', scope: 'read', summary: 'Freshness, category coverage, missing figures, Confirm, year-end documents and jobs.',
-  route: 'Freshness, uncategorized rows, missing history, expected tax documents', routes: [], params: { accounts: accountIds }, required: [], referenceable: true, handler: (args,ctx) => bounded(health(args,ctx)) }];
+  route: 'Freshness, uncategorized rows, missing history, expected tax documents', routes: ['GET /api/jobs'], params: { accounts: accountIds }, required: [], referenceable: true, handler: (args,ctx) => bounded(health(args,ctx)) }];
