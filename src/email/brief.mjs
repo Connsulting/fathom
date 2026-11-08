@@ -181,7 +181,7 @@ export function buildBrief(db, { clock, publicUrl = null } = {}) {
   const freshness = {
     dataThrough: sc.meta.dataThrough || '',
     total: sources.length,
-    stale: sources.filter((s) => s.state === 'stale').map((s) => ({ label: s.label, ageDays: s.ageDays, asOf: s.asOf })),
+    stale: sources.filter((s) => s.state === 'stale').map((s) => ({ label: s.name || s.label, ageDays: s.ageDays, asOf: s.asOf })),
   };
 
   const spend = {
