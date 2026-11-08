@@ -30,3 +30,20 @@ test('corrected overlapping files remove only complete represented groups, retai
     assert.equal(x.db.prepare("SELECT count(*) n FROM superseded_rows WHERE reason IN ('revised','removed')").get().n, 2);
   } finally { x.close(); }
 });
+
+test('month-precision tax revisions retain tax year basis, recipient and full source history', async () => {
+  const x = await setup();
+  try {
+    const payment = amount => ({ target: 'tax_payment', kind: 'estimate', status: 'paid', datePrecision: 'month', fields: {
+      jurisdiction: 'federal', payer: 'Synthetic payer', recipient: 'you', amount, taxYear: 2031, taxYearBasis: 'confirmed_tax_year', paymentDate: '2032-01-31',
+    } });
+    const first = await importProposedRows(x,[payment(250)]);
+    const second = await importProposedRows(x,[payment(275)]);
+    const stored = x.db.prepare('SELECT * FROM tax_payments').get();
+    assert.equal(stored.amount,275); assert.equal(stored.tax_year,2031);
+    assert.equal(stored.date_precision,'month'); assert.equal(stored.tax_year_basis,'confirmed_tax_year');
+    assert.equal(stored.date,'2032-01-31'); assert.equal(stored.file_id,second.fileId);
+    const archived = x.db.prepare("SELECT * FROM superseded_rows WHERE table_name='tax_payments' AND reason='revised'").get();
+    assert.equal(JSON.parse(archived.row).amount,250); assert.equal(archived.file_id,first.fileId);
+  } finally { x.close(); }
+});

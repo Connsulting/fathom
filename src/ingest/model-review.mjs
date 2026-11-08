@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { tx, parseJson } from '../store/db.mjs';
 import { ToolError } from '../tools/errors.mjs';
-import { requireActor, saveReceipt, groupReceipts } from '../actions/receipts.mjs';
+import { requireActor, requireScope, saveReceipt, groupReceipts } from '../actions/receipts.mjs';
 import { requireImportReviewEvidence } from '../actions/evidence.mjs';
 import { LimitError } from './format.mjs';
 import { indexSource } from './model-source.mjs';
@@ -27,7 +27,7 @@ function context(ctx) {
 }
 function scopes(ctx, proposal) {
   const required = ['write:imports'];
-  if (proposal?.rows.some(r => ['fact', 'document'].includes(r.target))) required.push('write:facts');
+  if (proposal?.rows.some(r => r.target === 'fact')) required.push('write:facts');
   for (const scope of required) if (ctx.scopes && !ctx.scopes.includes(scope)) throw new ToolError('forbidden', `Permission denied: import review needs ${scope}.`);
 }
 function stale(diff = []) {
@@ -56,6 +56,14 @@ export async function prepareImport(ctx, { file, layout = null, fake, reinterpre
   }
   if (prior && !reinterpret) {
     if (prior.source_sha256 !== source.sha256) stale(['source']);
+    if (prior.status === 'rejected') {
+      const review = parseJson(prior.review_state, {}), proposal = parseJson(prior.proposal);
+      if (review.kind === 'actions') {
+        const { stageUpdate } = await import('./model-updates.mjs');
+        return stageUpdate(ctx, { source, actions: proposal.actions.map(({ scopes, ...action }) => action), capturedAt: proposal.capturedAt });
+      }
+      return stageImport({ ...ctx, capturedAt: review.capturedAt }, { source, proposal: { ...proposal, version: prior.version + 1 }, layout: review.layout, reinterpret: review.reinterpret });
+    }
     if (['needs_confirmation', 'needs_clarification'].includes(prior.status)) {
       const review = parseJson(prior.review_state, {}), proposal = parseJson(prior.proposal);
       if (prior.actor_id !== ctx.actorId || !isDeepStrictEqual(review.effect, importEffect(validateImport({ ...ctx, reinterpret: review.reinterpret, capturedAt: review.capturedAt }, proposal, source)))) return tx(ctx.db, () => {
@@ -101,7 +109,7 @@ export function stageImport(ctx, { source, proposal, layout = null, delta = [], 
   if (file.removed_at) throw new ToolError('bad_input', 'The source file was removed.');
   const existing = latest(ctx.db, proposal.proposalId);
   const correction = existing?.status === 'waiting_for_engine' && existing.reason_code === 'owner_correction';
-  const refreshed = (existing?.status === 'superseded' || reinterpret && existing?.status === 'imported') && proposal.version === existing.version + 1;
+  const refreshed = (['superseded', 'rejected'].includes(existing?.status) || reinterpret && existing?.status === 'imported') && proposal.version === existing.version + 1;
   if (existing && !correction && !refreshed) {
     if (existing.source_sha256 !== source.sha256 || !isDeepStrictEqual(parseJson(existing.proposal), proposal)) stale(['proposal']);
     return out(existing);
@@ -155,6 +163,8 @@ function commit(ctx, row, proposal, source, file, review, validation, { automati
   if (!validation.valid || row.status !== 'needs_confirmation') throw new ToolError('bad_input', 'Resolve the proposal validation issues first.');
   const snapshot = importSnapshot(db);
   scopes(ctx, proposal);
+  const requiredScopes = [...new Set(['write:imports', ...(validation.rows.some(r => r.kind === 'fact') ? ['write:facts'] : []), ...(validation.actions ?? []).flatMap(a => a.scopes)])];
+  requiredScopes.forEach(scope => requireScope(ctx,scope));
   const before = { proposalId: row.id, version: row.version, status: row.status, mappingApproved: Boolean(proposal.mappingId && db.prepare("SELECT 1 FROM column_mappings WHERE signature=? AND approval_status='approved'").get(proposal.mappingId)) };
   const result = persistImport(db, source.fileId, file, importPlan(structuredClone(validation.rows), { reinterpret: review.reinterpret }), { now }).result;
   const actionChildren = applySourceActions({ ...ctx, now }, source, validation.actions ?? [], review.capturedAt, review.correction).children;
@@ -187,10 +197,10 @@ function commit(ctx, row, proposal, source, file, review, validation, { automati
     return child ? [child] : [];
   });
   for (const current of afterSnapshot.facts.filter(r => !actionFacts.has(r.key) && !snapshot.facts.some(old => old.key === r.key))) factReceipts.push(saveReceipt({ ...ctx, now }, { scope: 'write:facts', kind: 'fact', id: current.key, label: 'Imported fact', before: null, after: current }));
-  const batchReceipt = saveReceipt({ ...ctx, now }, { scope: 'write:imports', kind: 'model_import', id: row.id, label: 'Reviewed import', before,
-    after: { status: 'imported', counts: result.counts, scopes: ['write:imports'], changes: importChanges(db, snapshot, afterSnapshot).filter(c => c.table !== 'facts'),
+  const batchReceipt = saveReceipt({ ...ctx, now }, { scope: requiredScopes.includes('write:facts') ? 'write:facts' : 'write:imports', kind: 'model_import', id: row.id, label: 'Reviewed import', before,
+    after: { status: 'imported', counts: result.counts, scopes: requiredScopes, changes: importChanges(db, snapshot, afterSnapshot).filter(c => c.table !== 'facts'),
       mapping: proposal.mappingId ? { id: proposal.mappingId, version: proposal.mappingVersion } : null } });
-  const receipt = factReceipts.length || actionChildren.some(Boolean) ? groupReceipts({ ...ctx, now }, [batchReceipt, ...factReceipts, ...actionChildren], { id: row.id, label: 'Reviewed import' }) : batchReceipt;
+  const receipt = requiredScopes.length > 1 || factReceipts.length || actionChildren.some(Boolean) ? groupReceipts({ ...ctx, now }, [batchReceipt, ...factReceipts, ...actionChildren], { id: row.id, label: 'Reviewed import' }) : batchReceipt;
   db.prepare(`INSERT INTO import_batches (id,proposal_id,proposal_version,file_id,status,before_state,after_state,receipt_id,created_at)
     VALUES (?,?,?,?,'committed',?,?,?,?)`).run(randomUUID(), row.id, row.version, row.file_id, JSON.stringify({ effect: review.effect, changes: importChanges(db, snapshot, afterSnapshot) }), JSON.stringify(effect), receipt?.id ?? null, now);
   return { proposalId: row.id, version: row.version, status: 'imported', counts: result.counts, receipt, confirmationRequired: false };
@@ -225,7 +235,7 @@ export async function reviewImport(ctx, args) {
   });
   const { source, file } = await readSource(ctx, row);
   const result = tx(ctx.db, () => commit(ctx, row, proposal, source, file, review, validateImport({ ...ctx, reinterpret: review.reinterpret, capturedAt: review.capturedAt }, proposal, source), { evidence: args.evidence }));
-  try { refreshPackState(ctx.db, { dataDir: ctx.household.root, now: stamp(ctx) }); } catch {}
+  try { refreshPackState(ctx.db, { dataDir: ctx.household.root, now: stamp(ctx) }); } catch (error) { console.error('fathom: pack refresh failed', error?.name ?? 'error'); }
   triggerPlan(ctx); triggerGuesses(ctx); triggerFreshness(ctx);
   ctx.onReceipt?.(result.receipt);
   return result;

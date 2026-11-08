@@ -1,3 +1,4 @@
+import { seedHistoricalDocument } from '../helpers/historical-import.mjs';
 // AC7: every ingest source has a cadence, a freshness state at the scenario clock and generic
 // export instructions; stale sources add a note to their domain; accounts carry their last data
 // date and freshness. The fixtures are dated 2032, so the clock decides fresh or stale.
@@ -196,7 +197,7 @@ describe('stale to fresh', () => {
   const STALE_NOTE = /Export a fresh copy\./;
 
   test('a stale statement source becomes fresh after a newer statement import', () => withStore(async (s) => {
-    const first = await P.ingestFile(s.db, pdf('march'), s.opts(await engineFor('2032-03-31', 1500.25)));
+    const first = await seedHistoricalDocument(s,pdf('march'), (await engineFor('2032-03-31',1500.25)).responses);
     assert.equal(first.status, 'imported');
     const acct = one(s.db, "SELECT * FROM accounts WHERE mask = '4321'");
 
@@ -211,7 +212,7 @@ describe('stale to fresh', () => {
     assert.ok(invest, 'stale statement adds the invest domain');
     assert.match(invest.note, / data is 91 days old\. Export a fresh copy\./);
 
-    const second = await P.ingestFile(s.db, pdf('june'), s.opts(await engineFor('2032-06-15', 1600.5)));
+    const second = await seedHistoricalDocument(s,pdf('june'), (await engineFor('2032-06-15',1600.5)).responses);
     assert.equal(second.status, 'imported');
     sc = B.buildScenario(s.db, { clock: '2032-06-30' });
     src = sc.live.ingest.sources.filter((x) => x.kind === 'statement');
@@ -342,8 +343,7 @@ describe('waiting files', () => {
     const odd = await P.ingestFile(s.db, { name: 'odd.csv', bytes: new TextEncoder().encode('Zeta,Omega,Sigma\nq,w,e\nr,t,y\n'), mime: 'text/csv' }, s.opts(off));
     assert.equal(odd.status, 'waiting_for_engine');
     for (let i = 0; i < 55; i++) {
-      const csv = `month,account_alias,ending_balance\n2032-02,acct${i},${1000 + i}.25\n`;
-      const r = await P.ingestFile(s.db, { name: `bal-${i}.csv`, bytes: new TextEncoder().encode(csv), mime: 'text/csv' }, s.opts(off));
+      const r = await P.ingestFile(s.db, aggregatorFile(`export-${i}.csv`, [{ date: '2032-02-20', amount: 1000+i, description: `Synthetic row ${i}`, number: '44441111' }]), s.opts(off));
       assert.equal(r.status, 'imported', `file ${i}`);
     }
     const st = FR.ingestState(s.db, { clock: '2032-03-10' });
@@ -354,7 +354,7 @@ describe('waiting files', () => {
     assert.deepEqual(Object.keys(w).sort(), ['counts', 'id', 'name', 'parser', 'sourceKind', 'status', 'uploadedAt']);
     assert.equal(w.name, 'odd.csv');
     assert.equal(w.status, 'waiting_for_engine');
-    assert.ok(st.waiting.every((f) => ['waiting_for_engine', 'waiting_for_engine'].includes(f.status)));
+    assert.ok(st.waiting.every((f) => f.status === 'waiting_for_engine'));
     const sc = B.buildScenario(s.db, { clock: '2032-03-10' });
     assert.ok(sc.live.ingest.waiting.some((f) => f.id === odd.fileId), 'scenario carries the waiting file');
     const again = await P.retryFile(s.db, odd.fileId, s.opts(off));

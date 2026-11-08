@@ -510,7 +510,7 @@ describe('bounded parsing on a 128 MB heap', () => {
 
   // F1: a stored mapping applied on retry reads the same table, so the empty rows stay unwidened there
   // too, and the one data row imports.
-  test('F1: a stored mapping applied on retry to an xlsx with a 512-cell header and 199998 empty rows imports the data row; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('F1: an unapproved stored mapping cannot import a sparse workbook on retry; the server stays up', T, () => withSmallHeap(async (s) => {
     const rows = emptyRowsExport((r) => (r % 2 ? NO_CELLS : VALUELESS[(r >> 1) % VALUELESS.length]));
     const waiting = await waitsForMapping(s, 'empty-rows-retry.xlsx', writeXlsx([{ name: 'Synthetic export', rows }], { deflate: true }));
     const signature = 'synthetic-unapproved-layout';

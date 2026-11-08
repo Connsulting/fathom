@@ -161,6 +161,7 @@ export async function reviewUpdate(ctx, args, row) {
     const { children } = applySourceActions(ctx, source, proposal.actions, proposal.capturedAt, review.correction);
     const receipt = groupReceipts(ctx, children, { id: row.id });
     const now = stamp(ctx);
+    ctx.db.prepare("UPDATE files SET status='imported',counts=? WHERE id=?").run(JSON.stringify({ actions: children.filter(Boolean).length, notes: proposal.notes.length }), file.id);
     ctx.db.prepare("UPDATE import_proposals SET status='imported',approval_evidence=?,approved_at=?,updated_at=? WHERE id=? AND version=?")
       .run(args.evidence, now, now, row.id, row.version);
     ctx.db.prepare(`INSERT INTO import_batches (id,proposal_id,proposal_version,file_id,status,before_state,after_state,receipt_id,created_at)

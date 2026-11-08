@@ -124,7 +124,7 @@ test('a waiting file shows on Accounts with Retry, without any pending question'
   const retry = page.locator(`[data-retry="${file.fileId}"]`);
   await expect(retry).toBeVisible();
   await expect(page.getByText('novel-export.csv').first()).toBeVisible();
-  await expect(page.getByText('Needs a mapping').first()).toBeVisible();
+  await expect(page.getByText('Waiting for the engine').first()).toBeVisible();
 
   const retried = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/files/${file.fileId}/retry`);
   await retry.click();

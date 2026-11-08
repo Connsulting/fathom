@@ -4,7 +4,7 @@ import { parseInterpretation } from './model-parse.mjs';
 import { resolveField } from './model-source.mjs';
 import { prepareSourceActions, applySourceActions } from './model-updates.mjs';
 import { relativeDateEvidence } from '../actions/evidence.mjs';
-import { persistImport } from './pipeline.mjs';
+import { persistImport, accountIdentity } from './pipeline.mjs';
 import { toRows, validateExtraction, periodOf } from './extract.mjs';
 import { isoDate, number, cents } from './format.mjs';
 
@@ -84,7 +84,7 @@ export function validateImport(ctx, proposal, source) {
       }
     }
     const base = { locator, ...(account ? { accountId: account.id, account: { inst: account.inst, mask: account.mask, name: account.name },
-      ...(account.identity?.startsWith('simplefin:') ? { identity: account.identity } : {}) } : {}) };
+      ...(account.identity && account.identity !== accountIdentity({ account: { inst: account.inst, mask: account.mask, name: account.name } }) ? { identity: account.identity } : {}) } : {}) };
     const amount = f.amount;
     if (Object.hasOwn(f, 'amount') && (typeof amount !== 'number' || !Number.isFinite(amount))) errors.push('invalid_amount');
     const date = f.postedDate ?? f.asOf ?? f.paymentDate;

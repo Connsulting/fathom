@@ -82,8 +82,9 @@ export async function retryFile(ctx) {
   try {
     file = await retryIngest(ctx.db, id, { ...ingestOpts(ctx), mode: ctx.body?.mode ?? 'retry' });
   } catch (err) {
+    if (err && err.status === 400) throw new HttpError(400, err.message);
     if (err && err.status === 404) throw new HttpError(404, `no file ${id}`);
-    if (err && err.status === 409) throw new HttpError(409, 'that file is not waiting for a mapping or extraction');
+    if (err && err.status === 409) throw new HttpError(409, 'that file is not eligible for the requested import mode');
     if (err instanceof VaultError) throw new HttpError(409, err.message);
     throw err;
   }

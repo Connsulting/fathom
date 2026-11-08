@@ -53,5 +53,41 @@ test('typed note facts use shared actions, require their scope, and expose group
     await assert.rejects(undoAction({ ...x.ctx, scopes: ['write:imports'] }, approved.receipt.id, 'write:imports'), e => e.code === 'forbidden');
     await undoAction(x.ctx, approved.receipt.id, 'write:imports');
     assert.equal(x.db.prepare('SELECT count(*) n FROM facts').get().n, 0);
+    const { retryFile } = await import('../../src/ingest/pipeline.mjs');
+    const again = await retryFile(x.db,fileId,{ ...x.opts, scopes: x.ctx.scopes });
+    assert.equal(again.status,'needs_confirmation');
+    assert.equal(x.db.prepare('SELECT count(*) n FROM facts').get().n,0);
+  } finally { x.close(); }
+});
+
+test('resolved accounts scope external ids independently even with equal display names', async () => {
+  const { recipe } = await import('../helpers/model-import.mjs');
+  const x = await setup();
+  try {
+    x.db.prepare("INSERT INTO accounts(id,name,inst,kind,owner,identity) VALUES ('account-second','Synthetic account','Example bank','cash','you','synthetic-second')").run();
+    const layout = recipe(); layout.tables[0].fields.externalId = { columns: [5], transform: { op: 'trim' } };
+    const text = 'Account,Date,Amount USD,Description,Reference\n' +
+      'account-synthetic,2032-03-02,-12.25,Synthetic purchase,reference-one\n' +
+      'account-synthetic,2032-03-02,-12.25,Synthetic purchase,reference-one\n' +
+      'account-second,2032-03-02,-12.25,Synthetic purchase,reference-one\n';
+    const staged = await upload(x,text,layout); assert.equal(staged.status,'needs_confirmation');
+    await approve(x,staged);
+    assert.deepEqual(x.db.prepare('SELECT account_id,count(*) n FROM transactions GROUP BY account_id ORDER BY account_id').all().map(r => [r.account_id,r.n]), [['account-second',1],['account-synthetic',2]]);
+    assert.deepEqual(x.db.prepare('SELECT occurrence FROM transactions WHERE account_id=?').all('account-second').map(r => r.occurrence), [1]);
+  } finally { x.close(); }
+});
+
+test('model rows and standard exports retain the same semantic posting identity', async () => {
+  const { recipe } = await import('../helpers/model-import.mjs');
+  const { activityFile } = await import('../helpers/ingest.mjs');
+  const x = await setup();
+  try {
+    await ingestFile(x.db, activityFile('Chase0042_Activity.csv', [{ date: '03/02/2032', amount: '-12.25', description: 'Synthetic purchase', check: '1042' }]), x.opts);
+    const account = x.db.prepare("SELECT id FROM accounts WHERE mask='0042'").get();
+    const layout = recipe(); layout.tables[0].fields.externalId = { columns: [5], transform: { op: 'trim' } };
+    const staged = await upload(x, `Account,Date,Amount USD,Description,Reference\n${account.id},2032-03-02,-12.25,Synthetic purchase,1042\n`, layout);
+    const r = await approve(x,staged);
+    assert.equal(r.counts.duplicates, 1);
+    assert.equal(x.db.prepare('SELECT count(*) n FROM transactions').get().n, 1);
   } finally { x.close(); }
 });

@@ -134,7 +134,7 @@ test.describe('demo build', () => {
     const res = await saved;
     expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(body.file.parser).toBe('notes');
+    expect(body.file.parser).toBe('model-import');
     const panel = page.locator('[data-understood]');
     await expect(panel).toBeVisible();
     await expect(panel).toContainText('Saved');

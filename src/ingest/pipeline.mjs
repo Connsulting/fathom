@@ -31,7 +31,7 @@ const RETRYABLE = [...WAITING, 'needs_mapping', 'needs_extraction'];
 
 export class IngestError extends Error {
   constructor(status, code) {
-    super(code === 'not_found' ? 'file not found' : 'file is not waiting for a retry');
+    super(code === 'not_found' ? 'file not found' : code === 'invalid_mode' ? 'mode must be retry or reinterpret' : 'file is not eligible for the requested import mode');
     this.name = 'IngestError';
     this.status = status;
     this.code = code;
