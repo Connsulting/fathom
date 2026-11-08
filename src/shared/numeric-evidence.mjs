@@ -1,7 +1,7 @@
 import { findDates } from '../engine/grounding.mjs';
 
 const IDENTIFIERS = [
-  /\b(?:ending(?:\s+in)?|last\s*(?:four|4)(?:\s+digits)?)\s*[:#]?\s*\d+\b/gi,
+  /\b(?:end(?:s|ing)(?:\s+(?:in|with))?|last\s*(?:four|4)(?:\s+digits)?(?:\s+(?:are|is))?)\s*[:#]?\s*\d+\b/gi,
   /\b\d+\s*\(\s*last\s*(?:four|4)\s*\)/gi,
   /\(\s*last\s*(?:four|4)\s*\)\s*\d+\b/gi,
   /\b(?:account|acct|card|routing|reference|confirmation|transaction|invoice|policy|phone|telephone|SSN|EIN|tax\s+ID|ID|identifier|number)(?:\s+(?:number|no\.?|ID))?\s*[:#]?\s*\d+(?:[- /]\d+)*\b/gi,
