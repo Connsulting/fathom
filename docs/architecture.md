@@ -440,7 +440,8 @@ The data directory holds `platform.sqlite` (accounts, memberships, sessions, MCP
 data keys, outbound flags) and one directory per household: `households/<id>/{fathom.sqlite,files,
 packs/your-plans,outbox,work}`. A request resolves its runtime (store, engine, packs, scheduler,
 transport) through the session's household membership; a session with no household or no runtime
-is 403. MCP keys are bound to a household (platform `api_keys.household_id`); a CLI that opens a
+is 403. MCP keys bind immutably to a household, its generation and their creator's membership
+version in platform `api_keys`; a CLI that opens a
 store takes `--household <id>`. Files, advisor packets and SimpleFIN access URLs are stored in the
 FTHM2 vault (see Encryption at rest) under the household's data key, wrapped by
 `FATHOM_PLATFORM_KEY_FILE`.
@@ -1316,14 +1317,15 @@ UI.
 MCP keys.
 
 1. Bearer keys stay independent of sessions: a session never authorizes `/mcp` and a key never
-   opens a page. Bearer verification is unchanged.
+   opens a page. Each stateless request resolves the key's household, ignoring browser cookies
+   and refusing household tool arguments.
 2. A new key records its creator in `api_keys.user_id`, from the session. Members list and revoke
-   their own keys (403 for anyone else's); admins list and revoke every key. Keys created before
-   accounts have no creator, stay valid as household keys, and only admins manage them. Removing a
-   user deletes the keys they created; demotion keeps them, because members keep the same data and
-   recommendation access. Revoking a passkey, even the last one, leaves the user's MCP keys live;
-   only removing the user or revoking the key ends them. No MCP tool manages users. Demo key
-   behavior is unchanged.
+   their own keys (403 for anyone else's); admins list and revoke every key in their household.
+   Membership version changes, removal and restore generation changes invalidate old keys.
+   Suspension refuses keys while the household is unavailable. A member can create a fresh key
+   within their current permissions. Legacy ownerless keys bind to the single active admin during
+   offline migration, or are revoked when ownership is ambiguous. Only demo keys may stay
+   ownerless. Revoking a passkey leaves the user's MCP keys live. No MCP tool manages users.
 
 Deployment. The container sits behind a reverse proxy that terminates HTTPS for the
 `FATHOM_PUBLIC_URL` host, serves the app at the root path, and passes `Cookie` and `Origin`
@@ -2949,7 +2951,7 @@ assistant messages, imported prose and account masks cannot supply evidence. Fac
 "you told Fathom in Ask on <date>" with the signed-in actor id. MCP provenance says "through MCP".
 MCP new fact values require existing typed Fathom conversation evidence or stored data; an invented
 caller quote is insufficient. Read-only keys receive `Permission denied:` before argument validation.
-New scopes appear in key creation with plain descriptions. Ownerless keys use a stable key actor.
+New scopes appear in key creation with plain descriptions. Ownerless demo keys use a stable key actor.
 
 Migration 025 adds durable `action_receipts` and `preferences`. Each receipt commits in the same
 transaction as its write and records actor, conversation, changed fields and prior values. Receipts
