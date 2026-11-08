@@ -38,7 +38,7 @@ export async function guessClosedOptions(db,jev,{now}={}) {
           const a=answers[j];
           if(!fresh.options.some(o=>o.id===a.choice)) return;
           db.prepare('INSERT INTO confirm_guesses VALUES (?,?,?,?,?) ON CONFLICT(item_id) DO NOTHING')
-            .run(item.id,a.choice,JSON.stringify({confidence:a.confidence,probabilities:a.probabilities}),JEV_MODEL,now??new Date().toISOString());
+            .run(item.id,a.choice,JSON.stringify({confidence:a.confidence,probabilities:a.probabilities}),jev.model??JEV_MODEL,now??new Date().toISOString());
           guessed++;
         });
       });

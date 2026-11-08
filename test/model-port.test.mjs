@@ -68,3 +68,95 @@ for (const adapter of ['openai', 'ollama']) {
     });
   }
 }
+
+const tool = { name: 'synthetic_read', kind: 'read', operations: [], description: 'Read a synthetic value',
+  inputSchema: { type: 'object', properties: { key: { type: 'string' } }, required: ['key'], additionalProperties: false },
+  handler: args => ({ label: args.key }) };
+for (const adapter of ['openai', 'ollama']) {
+  test(`${adapter} executes registered tools and correlates the continuation`, async () => {
+    const bodies = [], reservations = admitted(), entries = [];
+    const engine = createEngine({ mode: 'live', modelConfig: config(adapter), reservations,
+      ledger: { monthSpendUsd: () => 0, record: entry => entries.push(entry) },
+      modelTransport: async (_, options) => {
+        const body = JSON.parse(options.body); bodies.push(body);
+        if (bodies.length === 1) {
+          const call = { id: 'synthetic-call', type: 'function', function: { name: 'synthetic_read', arguments: adapter === 'openai' ? '{"key":"hello"}' : { key: 'hello' } } };
+          assert.equal(body.tools[0].function.name, tool.name);
+          return Response.json(adapter === 'openai'
+            ? { choices: [{ finish_reason: 'tool_calls', message: { content: '', tool_calls: [call] } }], usage: { prompt_tokens: 15, completion_tokens: 5 } }
+            : { done: true, message: { content: '', tool_calls: [call] }, prompt_eval_count: 15, eval_count: 5 });
+        }
+        const result = body.messages.find(m => m.role === 'tool');
+        assert.equal(result.tool_call_id, 'synthetic-call');
+        assert.equal(result.content, '{"label":"hello"}');
+        return Response.json(adapter === 'openai'
+          ? { choices: [{ finish_reason: 'stop', message: { content: 'Synthetic answer.' } }], usage: { prompt_tokens: 22, completion_tokens: 8 } }
+          : { done: true, message: { content: 'Synthetic answer.' }, prompt_eval_count: 22, eval_count: 8 });
+      } });
+    const r = await engine.call({ purpose: 'chat', messages, tools: [tool], maxTokens: 128, budget: { maxCostUsd: .1, correlationId: 'synthetic' } });
+    assert.equal(r.text, 'Synthetic answer.'); assert.equal(r.toolResults.length, 1); assert.equal(entries.length, 2);
+    assert.equal(entries[0].tokens.correlationId, 'synthetic');
+    assert.deepEqual(reservations.events.map(e => e[0]), ['reserve', 'settle', 'reserve', 'settle']);
+    assert.ok(reservations.events[0][1].boundUsd >= (Buffer.byteLength(JSON.stringify(bodies[0])) + 4096) / 1e6);
+  });
+  test(`${adapter} pause between tool rounds, predispatch refusal, and recovery`, async () => {
+    let enabled = true, calls = 0;
+    const reservations = admitted();
+    const engine = createEngine({ mode: 'live', modelConfig: config(adapter), reservations, allowed: () => enabled,
+      modelTransport: async () => {
+        calls++;
+        if (calls === 1) return Response.json(adapter === 'openai'
+          ? { choices: [{ finish_reason: 'tool_calls', message: { tool_calls: [{ id: 'c', function: { name: tool.name, arguments: '{"key":"x"}' } }] } }], usage: { prompt_tokens: 2, completion_tokens: 3 } }
+          : { done: true, message: { tool_calls: [{ function: { name: tool.name, arguments: { key: 'x' } } }] }, prompt_eval_count: 2, eval_count: 3 });
+        return Response.json(adapter === 'openai'
+          ? { choices: [{ finish_reason: 'stop', message: { content: 'Resumed' } }], usage: { prompt_tokens: 2, completion_tokens: 3 } }
+          : { done: true, message: { content: 'Resumed' }, prompt_eval_count: 2, eval_count: 3 });
+      } });
+    await assert.rejects(engine.call({ purpose: 'chat', messages, tools: [{ ...tool, handler: () => { enabled = false; return {}; } }] }), e => e.code === 'paused');
+    assert.equal(calls, 1); assert.equal(reservations.events.filter(e => e[0] === 'reserve').length, 1);
+    enabled = true;
+    await assert.rejects(engine.call({ purpose: 'chat', messages, beforeDispatch: () => { throw new Error('synthetic refusal'); } }), /synthetic refusal/);
+    assert.equal(calls, 1); assert.equal(reservations.events.at(-1)[2].costUsd, 0);
+    assert.equal((await engine.call({ purpose: 'chat', messages })).text, 'Resumed');
+  });
+  test(`${adapter} validates typed choices and JSON without losing paid usage`, async () => {
+    const choices = [{ state: { description: 'Synthetic merchant' }, instructions: 'Pick one', options: ['Groceries', 'Business'] }];
+    let bad = true;
+    const port = createModelPort({ selection: selectionFor(config(adapter), 'chat'), transport: async (_, o) => {
+      const body = JSON.parse(o.body);
+      assert.ok(adapter === 'openai' ? body.response_format.json_schema.schema.properties.q0 : body.format.properties.q0);
+      const content = JSON.stringify({ q0: { choice: bad ? 'Unknown' : 'Groceries', confidence: .9, probabilities: { Groceries: .9, Business: .1 } } });
+      return Response.json(adapter === 'openai'
+        ? { choices: [{ finish_reason: 'stop', message: { content } }], usage: { prompt_tokens: 20, completion_tokens: 10 } }
+        : { done: true, message: { content }, prompt_eval_count: 20, eval_count: 10 });
+    } });
+    const req = { messages, choices, tools: [], maxTokens: 256 };
+    const failed = await port.complete(req); assert.equal(failed.errorCode, 'invalid_response'); assert.ok(failed.costUsd > 0);
+    bad = false; assert.equal((await port.complete(req)).choices[0].choice, 'Groceries');
+  });
+  test(`${adapter} bounds a hung transport and holds missing usage`, async () => {
+    const port = createModelPort({ selection: selectionFor(config(adapter), 'chat'), transport: async () => new Promise(() => {}) });
+    const timeout = await port.complete({ messages, tools: [], maxTokens: 16, timeoutMs: 5 });
+    assert.equal(timeout.errorCode, 'timeout'); assert.equal(timeout.accountingUnknown, true);
+    const reservations = admitted();
+    const engine = createEngine({ mode: 'live', modelConfig: config(adapter), reservations, modelTransport: async () => Response.json(adapter === 'openai'
+      ? { choices: [{ finish_reason: 'stop', message: { content: 'No usage' } }] } : { done: true, message: { content: 'No usage' } }) });
+    await assert.rejects(engine.call({ purpose: 'chat', messages }), e => e.code === 'accounting_hold');
+    assert.deepEqual(reservations.events.map(e => e[0]), ['reserve', 'hold']);
+  });
+  test(`${adapter} refuses a binary document before reservation or dispatch`, async () => {
+    const reservations = admitted(); let calls = 0;
+    const engine = createEngine({ mode: 'live', modelConfig: config(adapter), reservations, modelTransport: async () => { calls++; } });
+    await assert.rejects(engine.call({ purpose: 'chat', messages: [{ role: 'user', content: [{ type: 'document', source: { type: 'base64', data: 'synthetic' } }] }] }), /text documents only/);
+    assert.equal(calls, 0); assert.equal(reservations.events.length, 0);
+  });
+}
+
+test('reported aggregator cost settles exactly and an underpriced bound holds', async () => {
+  const reservations = admitted(), entries = [];
+  const engine = createEngine({ mode: 'live', modelConfig: config('openai'), reservations,
+    ledger: { monthSpendUsd: () => 0, record: e => entries.push(e) }, modelTransport: async () => Response.json({
+      choices: [{ finish_reason: 'stop', message: { content: 'Synthetic' } }], usage: { prompt_tokens: 1, completion_tokens: 1, cost: 10 } }) });
+  await assert.rejects(engine.call({ purpose: 'chat', messages }), e => e.code === 'accounting_hold');
+  assert.equal(reservations.events.at(-1)[2].costUsd, 10); assert.equal(entries[0].costUsd, 10);
+});

@@ -10,7 +10,7 @@ import { answerShape } from '../jobs/triggers/common.mjs';
 import { guessCategories } from '../categories/guess.mjs';
 import { confidenceBand, jevEvidence, categoryEvidence } from '../categories/policy.mjs';
 import { createSpendLedger } from '../engine/runtime.mjs';
-import { estimateUnknownCost, modelFor } from '../engine/pricing.mjs';
+import { estimateCompletion } from '../models/port.mjs';
 import { activePacks, loadPacks } from '../packs/index.mjs';
 import { defaultPackDirs } from '../packs/state.mjs';
 
@@ -171,7 +171,7 @@ export async function resolvePending(db, engine, { now = new Date().toISOString(
     const cap = getSetting(db, 'cap', { usd: 200 })?.usd;
     const monthlyRemaining = Number.isFinite(cap) && cap >= 0 ? cap - ledger.monthSpendUsd(now.slice(0, 7)) : 0;
     const budgetUsd = Math.min(runCap() - spent, monthlyRemaining);
-    const reserve = estimateUnknownCost({ model: modelFor('job'), ...request }).costUsd;
+    const reserve = estimateCompletion(request, engine.modelConfig).costUsd;
     if (budgetUsd < reserve) { stopped = 'budget'; break; }
     let response;
     const beforeCall = cost();
