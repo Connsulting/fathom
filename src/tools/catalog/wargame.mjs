@@ -23,7 +23,7 @@ export const operations = [{
     const args = { operation: 'wargame', name };
     const figure = (key, path) => {
       const row = stored.get(key) || { key, v: null, kind: 'm', src: 'wargame-model',
-        label: path.split('.').at(-1), unavailable_reason: 'The stored figure is missing. Run planning to build it.' };
+        label: path.split('.').at(-1), unavailable_reason: 'The stored figure is missing. Use Run plan now on the Engine page to build it.' };
       return fromStored({ ...row, label: plainDeep(scope, row.label) },
         { ref: { tool: 'recommendations', args, path } });
     };
