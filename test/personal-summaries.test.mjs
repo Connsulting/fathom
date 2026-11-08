@@ -217,3 +217,31 @@ test('AC1: month and summary labels can surround a household name or possessive'
   assert.equal(listed.find(e => e.name === "Birch's 2026 summary").owner, 'spouse');
   assert.equal((await total()).total.value, 1050);
 });
+
+test('AC5: excluded summary classifications never contribute household amounts', async t => {
+  const { db, total } = await fixture(t, { manual: [{ name: 'Birch Summary', type: 'not_mine' }] });
+  await planRun(db);
+  assert.equal((await total()).total.value, 600);
+  assert.equal((await total()).byPerson.find(p => p.person === 'spouse'), undefined);
+  assert.equal((await total('income')).total.value, 3000);
+  assert.equal(buildScenario(db).fig['inc.ytd.summary-spouse'], undefined);
+  const view = householdSpending({ db, ...period, clock });
+  assert.equal(view.figures[view.total].v, 600);
+  const cash = await callTool('spending', { operation: 'cash_flow', ...period }, { db, clock });
+  assert.equal(cash.totals.household.outflow.value, 600);
+});
+
+test('AC4: household salary already inside S corp receipts is not added to the income pace again', async t => {
+  const { db, total } = await fixture(t);
+  db.prepare("UPDATE pnl_lines SET amount=2000 WHERE entity=? AND category='Wages'").run("Aster's Summary");
+  await planRun(db);
+  let scenario = buildScenario(db);
+  assert.equal(scenario.fig['inc.ytd.total'].v, 29400);
+  assert.equal(scenario.fig['inc.ytd.summary-owner'], undefined);
+  assert.equal((await total('income')).byPerson.find(p => p.person === 'owner').total.value, 6000, 'the person still sees their received pay');
+  db.prepare("DELETE FROM pnl_lines WHERE entity='Example Studio' AND category='Officer salary' AND period='2026-10'").run();
+  await planRun(db);
+  scenario = buildScenario(db);
+  assert.equal(scenario.fig['inc.ytd.summary-owner'].v, 2000, 'only months backed by household salary are covered');
+  assert.equal(scenario.fig['inc.ytd.total'].v, 31400);
+});
