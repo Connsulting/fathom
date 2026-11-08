@@ -48,3 +48,10 @@ test('SEC2: range separators preserve both bounds without reversing a loss', () 
   }
   assert.deepEqual(statedAmounts('-$4,000 to -$2,000'), [-4000, -2000]);
 });
+
+test('SEC2: map evidence retains key attribution and the shared numeric guard', () => {
+  const shape = { type: 'map', values: { type: 'number', unit: 'USD' } };
+  assert.doesNotThrow(() => requireEvidence({ ownerText: 'Rental income is $4,821.' }, { rental: 4821 }, { shape }));
+  assert.throws(() => requireEvidence({ ownerText: 'Rental account ending in 4821.' }, { rental: 4821 }, { shape }), /stated/);
+  assert.throws(() => requireEvidence({ ownerText: 'Income is $4,821.' }, { rental: 4821 }, { shape }), /stated/);
+});

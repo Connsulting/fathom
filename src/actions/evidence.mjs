@@ -29,6 +29,8 @@ function dates(text) {
 
 function stated(value, text, shape, evidence) {
   if (typeof value === 'number') return statedAmounts(text, { unit: shape?.unit, evidence }).includes(value);
+  if (shape?.type === 'map' && value && typeof value === 'object') return Object.entries(value).every(([k, v]) =>
+    (evidence || text).toLowerCase().includes(k.toLowerCase()) && stated(v, text, shape.values, evidence));
   if (value && typeof value === 'object') return Object.entries(value).every(([k, v]) => stated(v, text, shape?.fields?.[k], evidence));
   if (evidence) text = evidence;
   if (value === null) return /\b(clear|remove|unset|no target|no date)\b/i.test(text);
@@ -38,6 +40,7 @@ function stated(value, text, shape, evidence) {
     return value ? yes && !no : no && !yes;
   }
   if (shape?.type === 'choice') {
+    if (shape.ownerInterpreted === true && typeof value === 'string') return shape.choices.some(c => c.value === value);
     const escape = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const matches = shape.choices.filter(c => [c.value, c.label].some(label => new RegExp(`\\b${escape(label)}\\b`, 'i').test(text)));
     return matches.length === 1 && matches[0].value === value;
