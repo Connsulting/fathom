@@ -1,7 +1,7 @@
 # Ask and MCP tool catalog
 
-This is the plan for Fathom's deterministic tool layer: twenty intent-level tools, each with a small
-closed set of operations and typed parameters, that compute every figure Ask and an MCP client
+This is the plan for Fathom's deterministic tool layer: twenty shared intent-level tools and one
+Ask-only visualization tool, each with a small closed set of operations and typed parameters, that compute every figure Ask and an MCP client
 need and put every household read and write the API can do in the agent's reach. It replaces both
 the registry on main (30 tools) and the previous revision of this plan (55 planned tool names in
 28 tickets). It extends the frozen tool interface in
@@ -479,7 +479,8 @@ their keys.
 
 ### Catalog at a glance
 
-Twenty tools: eleven read, nine write. "Ticket" is the ticket that adds the operation (section 7).
+Twenty-one tools: twelve read, including Ask-only `show`, and nine write. "Ticket" is the ticket
+that adds the operation (section 7).
 
 | Tool | Kind | Operations (ticket) |
 |---|---|---|

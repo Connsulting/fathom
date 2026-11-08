@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { getTool, callTool, ToolError, operationScopes, mcpInstructions } from '../tools/index.mjs';
-import { toolsForScopes } from './keys.mjs';
+import { toolsForScopes, isMcpTool } from './keys.mjs';
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')).version;
 
@@ -36,7 +36,7 @@ export function createToolServer({ scopes, ctx, authorize }) {
     if (!authorize()) return errorResult('Key authorization is no longer available');
     const { name } = request.params;
     const tool = getTool(name);
-    if (!tool || tool.askOnly) return errorResult(`no tool ${name}`);
+    if (!tool || !isMcpTool(tool)) return errorResult(`no tool ${name}`);
     const operation = request.params.arguments?.operation;
     const op = tool.operations.find(o => o.name === operation);
     if (op && !operationScopes(op).some(scope => scopes.includes(scope))) {

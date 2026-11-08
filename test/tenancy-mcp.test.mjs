@@ -2,7 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mcpHouseholds, mcp, toolText, result, digest } from './helpers/tenancy-mcp.mjs';
 import { tools } from '../src/tools/index.mjs';
+import { isMcpTool } from '../src/mcp/keys.mjs';
+
 import { request } from './helpers/server.mjs';
+
+const mcpTools = tools.filter(isMcpTool);
 
 test('bearer household controls reads, colliding writes and private packs despite foreign cookie and arguments', async () => {
   const f = await mcpHouseholds();
@@ -51,8 +55,8 @@ test('each registered MCP tool executes with only its bearer household context',
       for (const name of ['answer', 'update_preferences']) samples[name].conversationKey = `ask:${thread.json.thread.id}`;
       const changed = result(await f.call(own, 'act_on_recommendation', { operation: 'status', id: 'colliding-rec', status: 'doing' }));
       samples.undo = { operation: 'undo', id: changed.receipt.id };
-      assert.deepEqual(Object.keys(samples).sort(), tools.map(t => t.name).sort(), 'every tool needs a successful household fixture');
-      for (const tool of tools) {
+      assert.deepEqual(Object.keys(samples).sort(), mcpTools.map(t => t.name).sort(), 'every tool needs a successful household fixture');
+      for (const tool of mcpTools) {
         const response = await f.call(own, tool.name, samples[tool.name], { cookie: other.admin.cookie });
         result(response);
         assert.ok(!toolText(response).includes(other.canary), tool.name);
@@ -78,6 +82,6 @@ test('exact MCP transport retains bearer-only auth, stateless responses and Host
     }
     const listed = await mcp(f.baseUrl, f.A.key.key, 'tools/list');
     assert.equal(listed.status, 200);
-    assert.deepEqual(listed.json.result.tools.map(t => t.name), tools.map(t => t.name));
+    assert.deepEqual(listed.json.result.tools.map(t => t.name), mcpTools.map(t => t.name));
   } finally { await f.close(); }
 });
