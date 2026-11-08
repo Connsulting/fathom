@@ -7,6 +7,8 @@
 // householdTax(parts, ctx) -> re-exported from household.mjs
 
 import { isCollegeAccount } from '../../shared/account-kinds.mjs';
+import { ageAtYearEnd, accountOwnerAge } from '../../shared/ages.mjs';
+import { activeInference } from '../../shared/va529-plan.mjs';
 import { estimatedPaymentSafeHarbor, solo401kRoom, sepRoom, hsaLimit, payrollTax, TAX_2026 } from '../../calc/index.mjs';
 import { cents } from '../../store/db.mjs';
 import { accountLabel, sourceLabel } from '../../shared/account-label.mjs';
@@ -151,25 +153,25 @@ export function computeFigures(data, facts, ctx) {
     e.sums = s;
     e.proj = proj;
     const loc = ids => rowsLoc('pnl_lines', ids);
-    out.put(`pnl.${e.slug}.income`, s.income, 'a', `${e.name} income, year to date`, 'pnl', loc(s.ids.income), s.fileId);
-    out.put(`pnl.${e.slug}.expenses`, s.expenses, 'a', `${e.name} expenses, year to date`, 'pnl', loc(s.ids.all), s.fileId);
-    out.put(`pnl.${e.slug}.net`, s.net, 'a', `${e.name} net profit, year to date`, 'pnl', loc(s.ids.all), s.fileId);
-    out.put(`inc.ytd.${e.slug}`, s.income, 'a', `${e.name} income received this year`, 'pnl', loc(s.ids.income), s.fileId);
+    out.put(`pnl.${e.slug}.income`, s.income, 'a', `${e.displayName || e.name} income, year to date`, 'pnl', loc(s.ids.income), s.fileId);
+    out.put(`pnl.${e.slug}.expenses`, s.expenses, 'a', `${e.displayName || e.name} expenses, year to date`, 'pnl', loc(s.ids.all), s.fileId);
+    out.put(`pnl.${e.slug}.net`, s.net, 'a', `${e.displayName || e.name} net profit, year to date`, 'pnl', loc(s.ids.all), s.fileId);
+    out.put(`inc.ytd.${e.slug}`, s.income, 'a', `${e.displayName || e.name} income received this year`, 'pnl', loc(s.ids.income), s.fileId);
     const projLoc = (what, value) => ({ calc: 'straightLineProjection', inputs: { ytd: value, months: m }, steps: [{ label: what, formula: 'year to date * twelve / months of data', value: proj(value) }] });
-    out.put(`pnl.${e.slug}.netProj`, proj(s.net), 'p', `${e.name} net profit, projected for the year`, 'plan-projection', projLoc('Projected net', s.net));
+    out.put(`pnl.${e.slug}.netProj`, proj(s.net), 'p', `${e.displayName || e.name} net profit, projected for the year`, 'plan-projection', projLoc('Projected net', s.net));
     if (e.classified && e.type === 's_corp') {
-      out.put(`pnl.${e.slug}.salary`, s.salary, 'a', `${e.name} officer salary, year to date`, 'pnl', loc(s.ids.salary), s.fileId);
-      out.put(`pnl.${e.slug}.payrollTax`, s.payrollTax, 'a', `${e.name} employer payroll tax, year to date`, 'pnl', loc(s.ids.payrollTax), s.fileId);
+      out.put(`pnl.${e.slug}.salary`, s.salary, 'a', `${e.displayName || e.name} officer salary, year to date`, 'pnl', loc(s.ids.salary), s.fileId);
+      out.put(`pnl.${e.slug}.payrollTax`, s.payrollTax, 'a', `${e.displayName || e.name} employer payroll tax, year to date`, 'pnl', loc(s.ids.payrollTax), s.fileId);
       // A salary the owner decided in Decide is the payroll assumption: it replaces the straight-line
       // P&L projection. The second pass below drops it when a W-2 exists or the salary leaves no
       // distributions; profit before salary still comes from the P&L.
       const decided = decidedSalary(owner, e.slug);
-      const putProjection = () => out.put(`pnl.${e.slug}.salaryProj`, proj(s.salary), 'p', `${e.name} officer salary, projected for the year`, 'plan-projection', projLoc('Projected salary', s.salary));
+      const putProjection = () => out.put(`pnl.${e.slug}.salaryProj`, proj(s.salary), 'p', `${e.displayName || e.name} officer salary, projected for the year`, 'plan-projection', projLoc('Projected salary', s.salary));
       e.salaryAssumed = decided ?? proj(s.salary);
       e.salaryDecided = decided != null;
       e.restoreSalaryProj = () => { e.salaryDecided = false; e.salaryAssumed = proj(s.salary); putProjection(); };
       if (decided != null) {
-        out.put(`pnl.${e.slug}.salaryProj`, decided, 'p', `${e.name} officer salary, as you decided`, 'owner-decision',
+        out.put(`pnl.${e.slug}.salaryProj`, decided, 'p', `${e.displayName || e.name} officer salary, as you decided`, 'owner-decision',
           { calc: 'ownerDecision', inputs: { decision: SALARY_DECIDED_KEY }, steps: [{ label: 'Salary you decided', formula: 'the point you picked in Decide', value: decided }] });
       } else {
         putProjection();
@@ -187,7 +189,7 @@ export function computeFigures(data, facts, ctx) {
   if (corp) {
     const s = corp.sums;
     const P = cents(corp.proj(s.net) + corp.proj(s.salary) + corp.proj(s.payrollTax));
-    out.put('scorp.profitProj', P, 'p', `${corp.entity.name} profit before owner salary, projected`, 'plan-projection',
+    out.put('scorp.profitProj', P, 'p', `${corp.entity.displayName || corp.entity.name} profit before owner salary, projected`, 'plan-projection',
       { calc: 'straightLineProjection', inputs: { net: s.net, salary: s.salary, payrollTax: s.payrollTax, months: corp.entity.months }, steps: [{ label: 'Profit before salary', formula: 'projected net + projected salary + projected employer payroll tax', value: P }] });
     corp.P = P;
   }
@@ -299,11 +301,10 @@ export function computeFigures(data, facts, ctx) {
     out.put('inc.ytd.w2', sum(outsideYtd.map(r => r.ytdWages)), 'a', label, 'docs',
       rowsLoc('documents', outsideYtd.flatMap(r => r.docIds), { assumptions: outsideYtd.some(r => r.section125Unknown) ? ['section125_unknown'] : [] }), outsideYtd[0].fileId);
   }
-  const ageOf = p => {
-    const v = owner[p === 'spouse' ? 'household.spouseAge' : 'household.ownerAge'];
-    return typeof v === 'number' && Number.isFinite(v) ? v : null;
-  };
-  const ageKey = p => (p === 'spouse' ? 'household.spouseAge' : 'household.ownerAge');
+  // Every age comes from the one household.birthYears answer (age by the end of the planning year).
+  const birthYears = owner['household.birthYears'];
+  const ageOf = p => ageAtYearEnd(birthYears, p, data.year);
+  const ageKey = () => 'household.birthYears';
   const sstbOf = e => (e && typeof e.sstb === 'boolean' ? e.sstb : typeof facts['business.sstb'] === 'boolean' ? facts['business.sstb'] : (out.warn('sstb_assumed'), true));
 
   // Inputs (parts) and what blocks them.
@@ -398,7 +399,7 @@ export function computeFigures(data, facts, ctx) {
   const complete = k => fields.every(x => k[x] !== null && k[x] !== '' && k[x] !== undefined && Number.isFinite(Number(k[x])));
   const incompleteK1 = k1Inputs.filter(k => !complete(k));
   out.info.partnershipsMissing = [
-    ...missingPartners.filter(e => inUnit(e.owner)).map(e => e.name),
+    ...missingPartners.filter(e => inUnit(e.owner)).map(e => e.displayName || e.name),
     ...incompleteK1.map(k => k.partnership).filter(Boolean),
   ];
   if (blocked.includes('partnership_incomplete') || incompleteK1.length) out.warn('partnership_incomplete');
@@ -442,28 +443,37 @@ export function computeFigures(data, facts, ctx) {
     if (a && contrib[a.owner]) contrib[a.owner].ira = cents(contrib[a.owner].ira + t.amount);
   }
 
-  // Virginia529 accounts (S8, T5, MG9, R2-4). An entry is complete when virginiaPlan is boolean and,
-  // for a Virginia plan, ownerAge70Plus is boolean and carryforward is a number of at least zero.
-  // Capped accounts deduct up to the cap; an owner seventy or older deducts in full (Va. Code
-  // 58.1-322.03(7)(a), (7)(b)).
+  // Virginia529 accounts (S8, T5, MG9, R2-4). The plan answer is the owner's, else inferred from the
+  // institution unless the owner undid the inference. An entry is complete when the plan answer is
+  // known and, for a Virginia plan, the carryforward is a number of at least zero and the account
+  // owner's age is known (from household.birthYears). Capped accounts deduct up to the cap; an owner
+  // seventy or older deducts in full (Va. Code 58.1-322.03(7)(a), (7)(b)).
   const vaPlans = owner['accounts.va529'] && typeof owner['accounts.va529'] === 'object' ? owner['accounts.va529'] : null;
   const cap = law('va529Cap');
   const college = collegeAccts.map(a => {
     const entry = vaPlans && vaPlans[a.id] && typeof vaPlans[a.id] === 'object' ? vaPlans[a.id] : null;
     const contribYtd = sum(inflows([a]).map(t => t.amount));
     const cf = entry ? entry.carryforward : undefined;
-    const completeEntry = !!entry && typeof entry.virginiaPlan === 'boolean'
-      && (entry.virginiaPlan === false || (typeof entry.ownerAge70Plus === 'boolean' && typeof cf === 'number' && Number.isFinite(cf) && cf >= 0));
-    const va = completeEntry && entry.virginiaPlan === true;
-    const age70 = va && entry.ownerAge70Plus === true;
+    const inference = entry && typeof entry.virginiaPlan === 'boolean' ? null : activeInference(a, owner);
+    const plan = entry && typeof entry.virginiaPlan === 'boolean' ? entry.virginiaPlan : inference ? inference.value : null;
+    const ownerAge = plan === true ? accountOwnerAge(birthYears, a.owner, data.year, { married: facts['household.filingStatus'] === 'mfj' }) : null;
+    const cfKnown = typeof cf === 'number' && Number.isFinite(cf) && cf >= 0;
+    const answersMissing = plan === null || (plan === true && !cfKnown);
+    const ageMissing = plan === true && ownerAge === null;
+    const completeEntry = !answersMissing && !ageMissing;
+    const va = completeEntry && plan === true;
+    const age70 = va && ownerAge >= 70;
     const capped = va && !age70;
     const deduction = capped ? Math.min(cap, cents(contribYtd + cf)) : age70 ? cents(contribYtd + cf) : 0;
-    return { account: a, entry, contribYtd, carryforward: va ? cf : null, complete: completeEntry, capped, age70, deduction };
+    return { account: a, entry, contribYtd, carryforward: va ? cf : null, complete: completeEntry, answersMissing, ageMissing, inferred: !!inference, capped, age70, deduction };
   });
   const va529Deduction = cents(sum(college.map(c => c.deduction)));
   out.info.va529 = {
     accounts: college.length,
     missing: college.filter(c => !c.complete).map(c => c.account.name),
+    answersMissing: college.filter(c => c.answersMissing).map(c => c.account.name),
+    ageMissing: college.filter(c => c.ageMissing && !c.answersMissing).map(c => c.account.name),
+    inferred: college.filter(c => c.inferred).map(c => c.account.name),
     age70: college.filter(c => c.age70).map(c => c.account.name),
     eligible: college.filter(c => c.capped).length,
     age70Count: college.filter(c => c.age70).length,
@@ -475,7 +485,10 @@ export function computeFigures(data, facts, ctx) {
   const vaBlocked = !isVa ? null
     : itemized > stdDeduction(f) && vaItemized == null ? 'va_itemized_missing'
       : out.info.va529.missing.length ? 'va529_answers_missing' : null;
-  const ages = Array.isArray(facts['household.dependentAges']) ? facts['household.dependentAges'] : [];
+  // Dependent ages: from the birth years the owner told us, else the dependent ages a note or the
+  // seed recorded (the pack gates read that fact too).
+  const ages = Array.isArray(birthYears?.dependents) ? birthYears.dependents.map((_, i) => ageAtYearEnd(birthYears, { dependent: i }, data.year)).filter(a => a !== null)
+    : Array.isArray(facts['household.dependentAges']) ? facts['household.dependentAges'] : [];
   // D2: an owner-stated prior-year qualified business loss carryforward, else none (with a note).
   const qbiCarry = owner['tax.prior.qbiLossCarryforward'];
   const parts = {
