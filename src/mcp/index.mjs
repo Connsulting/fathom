@@ -8,6 +8,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { HttpError, sendJson, sendError, readJsonBody } from '../api/http.mjs';
 import { isAllowedHost, isAllowedOrigin } from './guard.mjs';
 import { createToolServer } from './server.mjs';
+import { revalidateRequest } from '../api/identity.mjs';
 
 export const MCP_BODY_LIMIT = 1024 * 1024;
 
@@ -38,7 +39,7 @@ export function createMcpHandler({ keys, runtimes, config }) {
     const host = req.headers.host;
     if (!isAllowedHost(host, config)) return refuse(req, res, 403, { error: 'forbidden host' });
     if (!isAllowedOrigin(req.headers.origin, host)) return refuse(req, res, 403, { error: 'forbidden origin' });
-    const record = authenticate(req, keys);
+    let record = authenticate(req, keys);
     const household = record ? runtimes.get(record.householdId) : null;
     if (!household) return refuse(req, res, 401, { error: 'unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
     if (req.method !== 'POST') return refuse(req, res, 405, { error: 'method not allowed' }, { Allow: 'POST' });
@@ -57,6 +58,14 @@ export function createMcpHandler({ keys, runtimes, config }) {
     } catch (err) {
       if (req.readable) req.resume();
       sendError(res, err instanceof HttpError ? err : new HttpError(400, 'malformed JSON body'));
+      release();
+      return undefined;
+    }
+
+    try {
+      record = revalidateRequest({ authenticate: () => authenticate(req, keys), household, runtimes });
+    } catch {
+      refuse(req, res, 401, { error: 'unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
       release();
       return undefined;
     }
