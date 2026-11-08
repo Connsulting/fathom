@@ -45,7 +45,7 @@ export function sortRows(rows, sort) {
 // The text a filter matches: text cells and a row number's description and account, the readable
 // name and the raw bank text both.
 function rowText(r) {
-  return arr(r.cells).map((c) => (!isObj(c) ? '' : c.t === 'text' ? `${c.text ?? ''} ${c.name || ''}` : c.t === 'row' && isObj(c.row) ? `${c.row.name || ''} ${c.row.description || ''} ${c.row.account || ''}` : ''))
+  return arr(r.cells).map((c) => (!isObj(c) ? '' : c.t === 'text' ? `${c.text ?? ''} ${c.name || ''} ${typeof c.raw === 'string' ? c.raw : ''}` : c.t === 'row' && isObj(c.row) ? `${c.row.name || ''} ${c.row.description || ''} ${c.row.account || ''}` : ''))
     .join(' ').toLowerCase();
 }
 
@@ -59,7 +59,7 @@ const sortOf = (snapshot, state) => state.sort || (isObj(snapshot.sort) && Numbe
 function cellHtml(c, ctx) {
   if (!isObj(c)) return '';
   // A bank description shows its readable name, the raw text on hover.
-  if (c.t === 'text') return typeof c.name === 'string' && c.name && c.name !== c.text ? `<span title="${ctx.esc(c.text)}">${ctx.esc(c.name)}</span>` : ctx.esc(c.text);
+  if (c.t === 'text') return typeof c.name === 'string' && c.name && c.name !== c.text ? `<span title="${ctx.esc(typeof c.raw === 'string' ? c.raw : c.text)}">${ctx.esc(c.name)}</span>` : ctx.esc(c.text);
   if (c.t === 'fig' || c.t === 'row' || (c.t === 'none' && c.fig)) return ctx.fig(c);
   if (c.t === 'none') return '<span class="h-blk-na">Unavailable</span>';
   return '';

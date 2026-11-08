@@ -511,3 +511,14 @@ test('compare cells show a description\'s readable name and keep the raw bank te
   assert.ok(html.includes(`<span title="${esc(raw)}">Gusto payroll (net)</span>`), 'the name shows with the raw text as its title');
   assert.ok(html.includes('<dd>Grocery market</dd>'), 'a name equal to its text is shown plainly');
 });
+
+// UI3 AC2: a merchant cell carries the raw bank text separately; hover and the row filter use it.
+test('a merchant cell shows its name, keeps the raw bank text on hover and matches it in the filter', async () => {
+  const { render, filterRows } = await import('../web/horizon/screens/ask-block-table.js');
+  const raw = 'OUTGOING WIRE TRANSFER A/C: SAMPLE TRADING LLC REF: SYN0042';
+  const cell = { t: 'text', text: 'outgoing wire transfer a c sample trading llc ref', name: 'Wire to Sample Trading', raw };
+  const snapshot = { title: 'Rows', columns: [{ label: 'Merchant', type: 'text' }], rows: [{ cells: [cell] }, { cells: [{ t: 'text', text: 'grocery market' }] }] };
+  const html = render(snapshot, { esc, key: 'm:m', ctl: (x) => x, fig: () => '', state: { sort: null, filter: '', all: false } });
+  assert.ok(html.includes(`<span title="${esc(raw)}">Wire to Sample Trading</span>`), 'the raw bank text is the hover title');
+  assert.deepEqual(filterRows(snapshot.rows, 'SYN0042').map((r) => r.cells[0].name), ['Wire to Sample Trading'], 'the filter matches the raw reference');
+});

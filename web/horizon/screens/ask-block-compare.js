@@ -5,7 +5,7 @@ function cellHtml(c, ctx) {
   if (!isObj(c)) return '<span class="h-blk-na">Unavailable</span>';
   // A transaction description shows its readable name, with the raw bank text on hover.
   if (c.t === 'text') return typeof c.name === 'string' && c.name && c.name !== c.text
-    ? `<span title="${ctx.esc(c.text)}">${ctx.esc(c.name)}</span>` : ctx.esc(c.text);
+    ? `<span title="${ctx.esc(typeof c.raw === 'string' ? c.raw : c.text)}">${ctx.esc(c.name)}</span>` : ctx.esc(c.text);
   if (c.t === 'fig' || c.t === 'row' || (c.t === 'none' && c.fig)) return ctx.fig(c);
   return '<span class="h-blk-na">Unavailable</span>';
 }

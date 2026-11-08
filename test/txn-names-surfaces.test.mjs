@@ -43,7 +43,7 @@ test('Ask blocks that pick a transaction\'s merchant show its readable name, and
   const source = { tool: 'transactions', args: { operation: 'search' }, path: 'rows' };
   const table = buildSnapshot('table', { source, columns: ['date', 'merchant', 'amount'] }, calls);
   const merchant = table.rows.map((r) => r.cells[1]);
-  assert.deepEqual(merchant.map((c) => [c.text, c.name]), rows.map((r, i) => [r.merchant, ['Gusto payroll (net)', 'Wire to Sample Trading'][i]]));
+  assert.deepEqual(merchant.map((c) => [c.text, c.name, c.raw]), rows.map((r, i) => [r.merchant, ['Gusto payroll (net)', 'Wire to Sample Trading'][i], r.description]));
   const compare = buildSnapshot('compare', { source, fields: ['merchant', 'amount'] }, calls);
   assert.deepEqual(compare.options.map((o) => o.label), ['Gusto payroll (net)', 'Wire to Sample Trading']);
 });
