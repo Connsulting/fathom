@@ -644,7 +644,8 @@ test('homeModel over the seeded demo store matches the server housekeeping count
 
 const ingestOf = (pending, statuses = []) => ({ pending, items: [], files: statuses.map((status, i) => ({ id: i + 1, name: `file-${i}.csv`, status })), waiting: [] });
 
-test('healthLine reports the data date, stale accounts, questions and failed files in order', () => {
+// H1: failed files are counted by the Imports service line (services.attention), not here.
+test('healthLine reports the data date, stale accounts and questions in order, leaving failed files to the Imports line', () => {
   const pace = paceOf([pg('a', 'unknown', { dataThrough: '2026-08-07' }), pg('b', 'unknown', { dataThrough: '2026-08-30' })]);
   const h = healthLine({
     pace,
@@ -657,9 +658,9 @@ test('healthLine reports the data date, stale accounts, questions and failed fil
   assert.equal(h.staleAccounts, 1);
   assert.equal(h.staleGoals, 2);
   assert.equal(h.pending, 3);
-  assert.equal(h.failed, 2);
+  assert.equal('failed' in h, false, 'no failed field');
   assert.equal(h.stale, true);
-  assert.deepEqual(h.parts, ['Data through Aug 7', '1 account stale', '3 questions to confirm', '2 files failed']);
+  assert.deepEqual(h.parts, ['Data through Aug 7', '1 account stale', '3 questions to confirm']);
 });
 
 test('healthLine names stale goals only when no account is stale, with singular wording', () => {
@@ -668,7 +669,7 @@ test('healthLine names stale goals only when no account is stale, with singular 
   assert.equal(h.dataLabel, 'Data through Sep 1', 'dates are UTC');
   assert.equal(h.staleAccounts, 0);
   assert.equal(h.staleGoals, 1);
-  assert.deepEqual(h.parts, ['Data through Sep 1', 'pace data stale for 1 goal', '1 question to confirm', '1 file failed']);
+  assert.deepEqual(h.parts, ['Data through Sep 1', 'pace data stale for 1 goal', '1 question to confirm']);
 
   const three = paceOf([pg('a', 'unknown'), pg('b', 'unknown'), pg('c', 'unknown')], { dataThrough: '2026-08-07' });
   assert.deepEqual(healthLine({ pace: three, ingest: ingestOf(0), accounts: [], metaDataThrough: null }).parts,
@@ -689,22 +690,28 @@ test('healthLine owner-only data line: one "Fathom needs" link over the things o
   assert.equal(quiet.needs, 0);
   assert.equal(quiet.needsLabel, null);
 
-  // Questions, then stale accounts, then failed files; the link goes to the first.
+  // Questions, then stale accounts; the link goes to the first. Failed files are not an owner item
+  // here: the Imports service line counts them (H1).
   const all = healthLine({ pace: stalePace, ingest: ingestOf(3, ['failed']), accounts: [{ fresh: 'stale' }, { fresh: 'stale' }], metaDataThrough: null });
   assert.deepEqual(all.owner, [
     { key: 'confirm', text: '3 questions to confirm', go: 'confirm' },
-    { key: 'accounts', text: '2 accounts stale', go: 'money' },
-    { key: 'files', text: '1 file failed', go: 'add' }
+    { key: 'accounts', text: '2 accounts stale', go: 'money' }
   ]);
-  assert.equal(all.needs, 3);
-  assert.equal(all.needsLabel, 'Fathom needs 3 things');
+  assert.equal(all.needs, 2);
+  assert.equal(all.needsLabel, 'Fathom needs 2 things');
   assert.equal(all.needsGo, 'confirm');
   assert.equal(all.line, 'Data through Aug 7');
 
-  const one = healthLine({ pace: stalePace, ingest: ingestOf(0, ['failed', 'failed']), accounts: [], metaDataThrough: null });
+  const failedOnly = healthLine({ pace: stalePace, ingest: ingestOf(0, ['failed', 'failed']), accounts: [], metaDataThrough: null });
+  assert.deepEqual(failedOnly.owner, [], 'failed files alone are not an owner item');
+  assert.equal(failedOnly.needs, 0);
+  assert.equal(failedOnly.needsLabel, null);
+  assert.equal(failedOnly.needsGo, null);
+
+  const one = healthLine({ pace: stalePace, ingest: ingestOf(1, ['failed', 'failed']), accounts: [], metaDataThrough: null });
   assert.equal(one.needsLabel, 'Fathom needs 1 thing');
-  assert.equal(one.needsGo, 'add');
-  assert.deepEqual(one.owner.map((x) => x.text), ['2 files failed']);
+  assert.equal(one.needsGo, 'confirm');
+  assert.deepEqual(one.owner.map((x) => x.text), ['1 question to confirm']);
 });
 
 test('cardChip drops the stale and unknown chips a goal card used to carry, keeping progress chips', () => {
@@ -734,7 +741,7 @@ test('healthLine falls back to the meta label, then to No data yet, and is not s
   assert.equal(none.staleAccounts, 0);
   assert.equal(none.staleGoals, 0);
   assert.equal(none.pending, 0);
-  assert.equal(none.failed, 0);
+  assert.equal('failed' in none, false);
 });
 
 /* ---------- pace board charts ---------- */

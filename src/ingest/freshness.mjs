@@ -13,6 +13,7 @@ import { cardDetail } from './context.mjs';
 import { bestGuess } from './bestguess.mjs';
 import { sourceStates } from './coverage.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
+import { UNRESOLVED } from './file-status.mjs';
 import { transactionDisplayName, plainEvidence } from '../categories/display.mjs';
 
 const MONTHLY = Object.freeze({ label: 'monthly', staleAfterDays: 45 });
@@ -372,9 +373,10 @@ export function ingestState(db, { clock } = {}) {
   const files = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at, note FROM files
                             WHERE stored_path IS NOT NULL AND removed_at IS NULL ORDER BY uploaded_at DESC, rowid DESC LIMIT ?`)
     .all(FILES_LIMIT).map(row => fileWithProposal(db,row));
+  // Every unresolved file stays listed after a reload, with its stored reason.
   const waiting = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at, note FROM files
-                              WHERE stored_path IS NOT NULL AND removed_at IS NULL AND status IN ('needs_mapping', 'needs_extraction', 'waiting_for_engine', 'budget_exhausted', 'needs_confirmation', 'needs_clarification', 'needs_source_text')
-                              ORDER BY uploaded_at DESC, rowid DESC`).all().map(row => fileWithProposal(db,row));
+                              WHERE stored_path IS NOT NULL AND removed_at IS NULL AND status IN (${UNRESOLVED.map(() => '?').join(', ')})
+                              ORDER BY uploaded_at DESC, rowid DESC`).all(...UNRESOLVED).map(row => fileWithProposal(db,row));
 
   const states = sourceStates(db, at);
   const sources = sourceList(db, at, states);

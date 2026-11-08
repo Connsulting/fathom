@@ -16,6 +16,7 @@ import { applySourceActions } from './model-updates.mjs';
 import { importSnapshot, importChanges, importCategoryState } from './model-undo.mjs';
 import { refreshPackState } from '../packs/state.mjs';
 import { triggerPlan, triggerGuesses, triggerFreshness } from './pipeline.mjs';
+import { BACKGROUND_ACTOR } from './file-status.mjs';
 
 const stamp = ctx => new Date(typeof ctx.now === 'function' ? ctx.now() : ctx.now ?? Date.now()).toISOString();
 function context(ctx) {
@@ -242,6 +243,8 @@ async function review(ctx, args) {
   scopes(ctx, proposal);
   if (row.version !== args.version || ['imported', 'superseded', 'rejected', 'approved'].includes(row.status)) stale(['proposal']);
   if (!['needs_confirmation', 'needs_clarification'].includes(row.status)) throw new ToolError('bad_input', 'The revised proposal is waiting for interpretation.');
+  // A background pass staged it: answer stale so the client's retry restages it under this owner.
+  if (review && row.actor_id === BACKGROUND_ACTOR && ctx.actorId !== BACKGROUND_ACTOR) stale(['actor']);
   if (!review || row.actor_id !== ctx.actorId) throw new ToolError('forbidden', 'Review the summary as the current signed-in owner.');
   if (args.decision === 'correct') return tx(ctx.db, () => {
     context(ctx);

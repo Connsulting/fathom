@@ -238,6 +238,9 @@ test('a file past the parse limits is labeled Too large to read', async ({ page 
   const res = await uploaded;
   expect(res.status()).toBe(200);
   expect((await res.json()).files.map((f) => f.status)).toEqual(['too_large']);
-  const row = page.locator('.h-ing-files li').filter({ hasText: 'wide-header.csv' });
-  await expect(row).toContainText('Too large to read');
+  // The upload result and the waiting list both show it: a file too large to read stays listed until replaced.
+  const rows = page.locator('.h-ing-files li').filter({ hasText: 'wide-header.csv' });
+  await expect(rows).toHaveCount(2);
+  for (const row of await rows.all()) await expect(row).toContainText('Too large to read');
+  await expect(page.locator('[data-proposal-file] [data-replace]').filter({ hasText: 'Add files' })).toHaveCount(1);
 });

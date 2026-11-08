@@ -53,6 +53,9 @@ import { guessCategories } from '../categories/guess.mjs';
 //    row under another holder's live lease is left alone: the lease take fails and nothing runs.
 // 14. schedule() is read-only: [{ id, nextAt, retryMs }] for handled jobs, no store writes. SQLite
 //    busy and locked errors (errcode 5 or 6) are recorded as error_class `store_locked`.
+// 15. Import resume: once a tick holds the lease and household() owns this db, it starts one
+//    resumeImports pass (src/ingest/pipeline.mjs) unless one is running, as actor `fathom`. The
+//    tick does not await it; it is tracked in the active set, so stop() and idle() wait for it.
 
 import { getSetting } from '../store/db.mjs';
 import { createJobDispatcher } from './dispatch.mjs';
@@ -67,6 +70,10 @@ import { resolvePending } from '../resolve/index.mjs';
 import { defaultPackDirs } from '../packs/state.mjs';
 import { syncSimplefin, createFakeSimplefin } from '../ingest/simplefin.mjs';
 import { withoutPrincipal } from '../platform/model-budget.mjs';
+import { isTransient } from './transient.mjs';
+import { BACKGROUND_ACTOR } from '../ingest/file-status.mjs';
+
+export { isTransient };
 
 const DAY = 86400000;
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -74,12 +81,6 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const TRIGGERS = new Set(['manual', 'ingest', 'confirm', 'decide', 'resolve']);
 const RETRY_MS = 15 * 60000;
 
-// Error classes worth one automatic retry: network, rate limit, store lock and timeout failures.
-const TRANSIENT = new Set(['simplefin_network', 'simplefin_bad_response', 'email_network', 'email_rate_limited', 'store_locked', 'TimeoutError', 'AbortError']);
-const TRANSIENT_RE = /timeout|network|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN/i;
-export function isTransient(errorClass) {
-  return typeof errorClass === 'string' && errorClass !== '' && (TRANSIENT.has(errorClass) || TRANSIENT_RE.test(errorClass));
-}
 // Resolver stop causes the confirm-guess note records under stoppedBy (src/resolve/index.mjs).
 const STOP_CAUSES = new Set(['engine_paused', 'engine_off', 'funding_unavailable', 'budget']);
 
@@ -265,6 +266,8 @@ export function createScheduler({
   // Promises of executions in flight, awaited by stop().
   const active = new Set();
   let ticking = null;
+  // The import resume pass in flight (rule 15), or null.
+  let resuming = null;
   let timer = null;
   let first = null;
   let renewer = null;
@@ -412,6 +415,7 @@ export function createScheduler({
       return;
     }
     recoverInterrupted(t);
+    resumeImports(t);
     const zone = tz();
     for (const job of handled) {
       if (stopping) break;
@@ -434,6 +438,18 @@ export function createScheduler({
       if (inFlight.has(r.id)) continue;
       if (q.interrupt.run(t.toISOString(), r.id).changes) log.log(`fathom: job ${r.job_id} interrupted`);
     }
+  }
+
+  // Rule 15: called only while this tick holds the lease. Not awaited: a model call must not delay jobs.
+  function resumeImports(t) {
+    const h = household();
+    if (resuming || stopping || !h || h.db !== db || !(h.inFlight instanceof Set)) return;
+    const p = withoutPrincipal(async () => {
+      const { resumeImports: resume } = await import('../ingest/pipeline.mjs');
+      await resume(h.db, { household: h, db: h.db, config, engine: h.engine, scheduler: h.scheduler, actorId: BACKGROUND_ACTOR, now: t.toISOString() });
+    }).catch((e) => { log.log(`fathom: import resume error ${errorClassOf(e)}`); }).finally(() => { resuming = null; active.delete(p); });
+    resuming = p;
+    active.add(p);
   }
 
   // Rule 2: the period's claimed run failed transiently or was interrupted, has no retry yet and

@@ -38,25 +38,39 @@ const STATUS = {
   needs_confirmation: 'Ready for review',
   needs_clarification: 'Needs clarification',
   needs_source_text: 'Needs readable text',
-  needs_mapping: 'Waiting for interpretation',
-  needs_extraction: 'Waiting for interpretation',
-  unsupported: 'Not a supported file',
+  needs_mapping: 'Columns not matched yet',
+  needs_extraction: 'Not read yet',
+  pending: 'Finishing import',
+  unsupported: 'Not a file Fathom reads',
   too_large: 'Too large to read',
   failed: 'Could not import'
 };
 
 // A waiting file's status: its label, the plain cause, and the one control that moves it on.
-const INTERPRETING = 'File saved. Waiting for interpretation.';
 export const PROPOSAL_STATES = Object.freeze({
   waiting_for_engine: { label: STATUS.waiting_for_engine, cause: 'File saved. Waiting for the engine to interpret it.', control: 'engine' },
   budget_exhausted: { label: STATUS.budget_exhausted, cause: 'File saved. Interpretation stopped at the budget limit.', control: 'engine' },
   needs_confirmation: { label: STATUS.needs_confirmation, cause: 'Nothing is imported until you approve.', control: 'approve' },
   needs_clarification: { label: STATUS.needs_clarification, cause: 'Fathom needs one answer before it can import this.', control: 'answer' },
   needs_source_text: { label: STATUS.needs_source_text, cause: 'File saved. It has no readable text; add a text export or a PDF with selectable text.', control: 'upload' },
-  needs_mapping: { label: STATUS.needs_mapping, cause: INTERPRETING, control: 'retry' },
-  needs_extraction: { label: STATUS.needs_extraction, cause: INTERPRETING, control: 'retry' }
+  needs_mapping: { label: STATUS.needs_mapping, cause: "Fathom has not matched this file's columns yet. Retry reads it again.", control: 'retry' },
+  needs_extraction: { label: STATUS.needs_extraction, cause: 'Fathom has not read this document yet. Retry reads it again.', control: 'retry' }
 });
+// Unresolved file statuses no proposal carries. `replace` adds a new file, then removes this one.
+export const FILE_STATES = Object.freeze({
+  pending: { label: STATUS.pending, cause: 'File saved. Fathom finishes importing it automatically.', control: 'retry' },
+  failed: { label: STATUS.failed, cause: 'File saved. Something went wrong while reading it. Retry reads the saved file again.', control: 'retry' },
+  unsupported: { label: STATUS.unsupported, cause: 'Fathom cannot read this kind of file. Add a CSV, Excel workbook, PDF or text export instead.', control: 'replace' },
+  too_large: { label: STATUS.too_large, cause: 'This file is too large to read at once. Add a smaller export, such as one year at a time.', control: 'replace' }
+});
+// Causes that depend on the stored reason (or, for an empty file, its warning code).
+const RETRYING_CAUSE = 'File saved. Something went wrong while reading it; Fathom tries once more automatically.';
+const EMPTY_CAUSE = 'The file is empty. Export it again and add the new copy.';
+const PDF_UNREADABLE_CAUSE = 'Fathom could not read the text in this PDF. Add a text export or a PDF with selectable text.';
 const stateOf = (status) => (Object.hasOwn(PROPOSAL_STATES, String(status)) ? PROPOSAL_STATES[status] : null);
+const fileStateOf = (status) => stateOf(status) ?? (Object.hasOwn(FILE_STATES, String(status)) ? FILE_STATES[status] : null);
+// Statuses whose file was not read at all: a replacement in one of them keeps the file it replaces.
+const UNREAD = new Set(['failed', 'unsupported', 'too_large']);
 
 // The status a waiting file shows: its proposal's when that is a waiting state, else the file's.
 export const proposalStatus = (file) => (stateOf(file?.proposal?.status) ? file.proposal.status : String(file?.status ?? ''));
@@ -71,14 +85,60 @@ const FILE_LIMIT = new Set(['file_limit', 'output_limit', 'request_does_not_fit'
 export function proposalControl(status, { engineOn = false, reasonCode = null } = {}) {
   if (status === 'budget_exhausted' && FILE_LIMIT.has(reasonCode)) return 'upload';
   if ((status === 'waiting_for_engine' || status === 'budget_exhausted') && engineOn) return 'retry';
-  return stateOf(status)?.control ?? 'retry';
+  if (status === 'needs_extraction' && reasonCode === 'pdf_unreadable') return 'replace';
+  return fileStateOf(status)?.control ?? 'retry';
 }
 
 export function proposalCause(file) {
   const s = proposalStatus(file), reason = proposalReason(file);
   if (s === 'waiting_for_engine' && reason === 'owner_correction') return 'Your correction is saved. Waiting for the engine to read the file again.';
+  if (s === 'waiting_for_engine' && reason === 'model_transient') return 'File saved. The engine did not answer in time; Fathom tries once more automatically.';
   if (s === 'budget_exhausted' && FILE_LIMIT.has(reason)) return 'File saved. This file needs more interpretation than one file is allowed; add a smaller file or split it.';
-  return stateOf(s)?.cause ?? '';
+  if (s === 'failed' && String(reason ?? '').startsWith('retry:')) return RETRYING_CAUSE;
+  if (s === 'unsupported' && (reason === 'empty_file' || num(file?.counts?.warningCodes?.empty_file) > 0)) return EMPTY_CAUSE;
+  if (s === 'needs_extraction' && reason === 'pdf_unreadable') return PDF_UNREADABLE_CAUSE;
+  return fileStateOf(s)?.cause ?? '';
+}
+
+// Parse warnings in plain words: one sentence per code, naming its rows when the file recorded them
+// (counts.warningRows, at most five, plus counts.warningMore). [singular, plural] verb phrases.
+const ROW_WARNING = {
+  invalid_transaction: ['had no readable date or amount and was skipped', 'had no readable date or amount and were skipped'],
+  missing_account_mask: ['has no account number', 'have no account number'],
+  invalid_balance: ['has a balance Fathom could not read', 'have a balance Fathom could not read'],
+  invalid_position: ['has a holding Fathom could not read', 'have a holding Fathom could not read'],
+  truncated_position: ['was cut off', 'were cut off'],
+  pending_activity: ['is pending activity and was skipped', 'are pending activity and were skipped'],
+  invalid_cost_basis: ['has a cost basis Fathom could not read', 'have a cost basis Fathom could not read']
+};
+const ROW_UNKNOWN = ['could not be read', 'could not be read'];
+const FILE_WARNING = {
+  missing_headers: 'The file has no header row Fathom recognizes.',
+  missing_as_of: 'The file has no as-of date.',
+  malformed_csv: 'The file is not a well-formed CSV.',
+  limit_exceeded: 'The file is larger than Fathom reads at once.',
+  empty_file: 'The file is empty.',
+  unsupported_format: 'The file is not in a format Fathom reads.'
+};
+// Codes that set the file's own status: its cause already says them.
+const STATUS_WARNINGS = new Set(['limit_exceeded', 'empty_file', 'unsupported_format']);
+const listText = (xs) => (xs.length < 2 ? xs.join('') : `${xs.slice(0, -1).join(', ')} and ${xs.at(-1)}`);
+
+export function warningText(counts) {
+  const c = counts && typeof counts === 'object' ? counts : {};
+  const codes = c.warningCodes && typeof c.warningCodes === 'object' ? c.warningCodes : {};
+  const out = [];
+  for (const code of Object.keys(codes)) {
+    if (!(num(codes[code]) > 0)) continue;
+    if (Object.hasOwn(FILE_WARNING, code)) { out.push(FILE_WARNING[code]); continue; }
+    const phrase = Object.hasOwn(ROW_WARNING, code) ? ROW_WARNING[code] : ROW_UNKNOWN;
+    const rows = arr(c.warningRows?.[code]).filter((r) => Number.isInteger(r) && r >= 1);
+    if (!rows.length) { out.push(Object.hasOwn(ROW_WARNING, code) ? `Some rows ${phrase[1]}.` : 'The file has parts Fathom could not read.'); continue; }
+    const more = num(c.warningMore?.[code]);
+    const many = rows.length + more > 1;
+    out.push(`${many ? 'Rows' : 'Row'} ${listText(rows.map(String))}${more > 0 ? `, and ${more} more` : ''} ${phrase[many ? 1 : 0]}.`);
+  }
+  return out;
 }
 
 // What changed since the approved layout, in plain phrases; '' when nothing did. A filled-area
@@ -348,12 +408,20 @@ export function ingestScreens(h) {
     return section('Same account?', `${cards}${st.deck.notice ? `<p role="status">${esc(st.deck.notice)}</p>` : ''}`, 'Merge keeps your imported account and its history.');
   }
 
+  // One upload result. Another unresolved status shows the same cause as Waiting files.
   function fileRow(f) {
     const s = String(f.status || '');
     const summary = s === 'imported' || s === 'duplicate' ? countsText(f.counts)
-      : s === 'needs_confirmation' || s === 'needs_clarification' ? 'Review it under Waiting files.' : '';
+      : s === 'needs_confirmation' || s === 'needs_clarification' ? 'Review it under Waiting files.' : proposalCause(f);
     const rid = s === 'imported' && f.receipt?.id && !st.undone[f.receipt.id] ? String(f.receipt.id) : '';
-    return `<li class="${esc(s)}">${icon('doc')}<div class="h-ing-f"><div class="h-ing-f-h"><span class="h-ing-f-n">${esc(f.name)}</span><em>${esc(STATUS[s] || s)}</em></div>${summary ? `<p>${esc(summary)}</p>` : ''}</div>${rid ? undoBtn(rid) : ''}</li>`;
+    return `<li class="${esc(s)}">${icon('doc')}<div class="h-ing-f"><div class="h-ing-f-h"><span class="h-ing-f-n">${esc(f.name)}</span><em>${esc(STATUS[s] || s)}</em></div>${summary ? `<p>${esc(summary)}</p>` : ''}${warningLines(f.counts)}</div>${rid ? undoBtn(rid) : ''}</li>`;
+  }
+
+  // Warning sentences under a file, minus the codes its status cause already explains.
+  function warningLines(counts) {
+    const codes = counts?.warningCodes && typeof counts.warningCodes === 'object' ? counts.warningCodes : {};
+    const kept = Object.fromEntries(Object.entries(codes).filter(([k]) => !STATUS_WARNINGS.has(k)));
+    return warningText({ ...counts, warningCodes: kept }).map((line) => `<p class="h-mute sm" data-warning>${esc(line)}</p>`).join('');
   }
 
   const undoBtn = (rid) => btn(st.reviewBusy === 'undo' ? 'Undoing' : 'Undo', `data-review-undo="${esc(rid)}"${st.reviewBusy != null ? ' disabled' : ''}`, 'ghost');
@@ -469,10 +537,12 @@ export function ingestScreens(h) {
       body = `<p data-proposal-question>${esc(q)}</p>${sum}${proposalSource(f)}${reviewBlock(p, false, f.id)}`;
     }
     else if (ctl === 'engine') body = `<a class="h-btn ghost" href="#/engine" data-go="engine" data-proposal-engine>${s === 'budget_exhausted' ? 'Check the engine budget' : 'Turn on the engine'}</a>`;
-    else if (ctl === 'upload') body = `<div class="h-ing-ctl">${btn(`${icon('plus')}Add files`, `data-upload-open="1"${st.busy ? ' disabled' : ''}`, 'ghost')}<input type="file" multiple data-upload="1" hidden tabindex="-1"></div>`;
+    // Add files here replaces this file: a different file that was read removes it.
+    else if (ctl === 'upload') body = `<div class="h-ing-ctl">${btn(`${icon('plus')}Add files`, `data-upload-open="1"${st.busy ? ' disabled' : ''}`, 'ghost')}<input type="file" multiple data-upload="1" hidden tabindex="-1" data-replace-for="${esc(f.id)}"></div>`;
+    else if (ctl === 'replace') body = `<div class="h-ing-ctl">${btn(`${icon('plus')}Add files`, `data-replace="${esc(f.id)}"${st.busy ? ' disabled' : ''}`, 'ghost')}<input type="file" multiple data-upload="1" data-replace-for="${esc(f.id)}" hidden tabindex="-1"></div>`;
     else side = btn(st.retrying[f.id] ? 'Retrying' : 'Retry', `data-retry="${esc(f.id)}"${st.retrying[f.id] ? ' disabled' : ''}`, 'ghost');
-    const label = stateOf(s)?.label ?? STATUS[s] ?? s;
-    return `<li class="${esc(s)}" data-proposal-file="${esc(f.id)}">${icon('doc')}<div class="h-ing-f"><div class="h-ing-f-h"><span class="h-ing-f-n">${esc(f.name)}</span><em data-proposal-status>${esc(label)}</em></div><p data-proposal-cause>${esc(proposalCause(f))}</p>${body}</div>${side}</li>`;
+    const label = fileStateOf(s)?.label ?? STATUS[s] ?? s;
+    return `<li class="${esc(s)}" data-proposal-file="${esc(f.id)}">${icon('doc')}<div class="h-ing-f"><div class="h-ing-f-h"><span class="h-ing-f-n">${esc(f.name)}</span><em data-proposal-status>${esc(label)}</em></div><p data-proposal-cause>${esc(proposalCause(f))}</p>${warningLines(f.counts)}${body}</div>${side}</li>`;
   }
 
   // Looks right (approve only) and a correction in the owner's own words. No per-column inputs.
@@ -1193,20 +1263,25 @@ export function ingestScreens(h) {
     if (!format) return;
     st.gapKind = kind;
     draw();
-    const input = document.querySelector('input[type=file][data-upload]');
+    const input = document.querySelector('input[type=file][data-upload]:not([data-replace-for])');
     if (input) { input.accept = ['pnl', 'estimates'].includes(kind) ? '.xlsx,.csv' : kind === 'paystub' || kind === 'taxforms' ? '.pdf,.txt' : '.csv,.pdf,.xlsx'; input.click(); }
   }
 
+  // A replacement upload (data-replace-for) removes the file it replaces once every new file was read
+  // and none is that file itself (identical bytes answer the same file id).
   function upload(input) {
     const files = Array.from(input.files || []);
+    const replaces = String(input.dataset?.replaceFor ?? '');
     input.value = '';
     if (!files.length || st.busy) return;
     st.busy = files.length;
     draw();
     api.upload(files).then((res) => {
       st.busy = 0;
-      if (res && Array.isArray(res.files)) st.results = res.files;
-      draw();
+      const out = res && Array.isArray(res.files) ? res.files : null;
+      if (out) st.results = out;
+      if (!replaces || !out?.length || out.some((f) => String(f?.fileId ?? '') === replaces || UNREAD.has(String(f?.status ?? '')))) return draw();
+      return Promise.resolve(api.removeFile(replaces)).then(() => draw());
     });
   }
 
@@ -1275,7 +1350,7 @@ export function ingestScreens(h) {
   }
 
   function handleClick(e) {
-    const t = e.target.closest?.('[data-upload-open],[data-answer],[data-row-answer],[data-row-undo],[data-group-apply],[data-take-guess],[data-decided-undo],[data-decided-more],[data-deck],[data-deck-home],[data-retry],[data-src-archive],[data-src-remove],[data-src-undo],[data-src-merge],[data-proposal-approve],[data-proposal-correct],[data-review-undo],details[data-howto] > summary,details[data-row-detail] > summary,details[data-bank-details] > summary,details[data-src-manage] > summary,details[data-proposal-source] > summary');
+    const t = e.target.closest?.('[data-upload-open],[data-replace],[data-answer],[data-row-answer],[data-row-undo],[data-group-apply],[data-take-guess],[data-decided-undo],[data-decided-more],[data-deck],[data-deck-home],[data-retry],[data-src-archive],[data-src-remove],[data-src-undo],[data-src-merge],[data-proposal-approve],[data-proposal-correct],[data-review-undo],details[data-howto] > summary,details[data-row-detail] > summary,details[data-bank-details] > summary,details[data-src-manage] > summary,details[data-proposal-source] > summary');
     if (!t) return false;
     if (t.tagName === 'SUMMARY') {
       // The native toggle runs; the open state is kept so a redraw does not close it.
@@ -1289,7 +1364,7 @@ export function ingestScreens(h) {
     }
     e.preventDefault();
     const d = t.dataset;
-    if (d.uploadOpen) {
+    if (d.uploadOpen || d.replace) {
       if (!st.busy) t.parentElement.querySelector('input[type=file][data-upload]')?.click();
       return true;
     }
