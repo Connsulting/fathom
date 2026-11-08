@@ -22,7 +22,7 @@ const isoDate = d => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && N
 const packRef = r => ({ packId:r.pack,entryId:r.entry });
 const assumption = { type:'object',properties:{ value:{type:'number'},source:{type:'string',enum:['owner','preference','fact','default']},evidence:{type:'string'},factKey:{type:'string'},preferenceId:{type:'string'},note:{type:'string',maxLength:200} },required:['value','source'],additionalProperties:false };
 const operand = { type:'object',properties:{ ref:{type:'object'},assumption:{type:'object'},expr:{type:'object'} },additionalProperties:false };
-const inputSchema = { anyOf:[assumption,operand] };
+const inputSchema = { type:'object',properties:{ ...assumption.properties,...operand.properties,note:{type:'string'} },additionalProperties:false };
 const choice = values => ({type:'string',enum:values});
 const treatments = ['pretax','roth','roth_ira','roth_401k','taxable','hsa','cash'];
 

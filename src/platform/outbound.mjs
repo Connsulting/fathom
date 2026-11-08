@@ -13,8 +13,7 @@
 // outboundGuard(platform, householdId) -> { enabled(kind) } reading the platform on every call.
 // initOutbound(platform, householdId, { enabled, now }) inserts the row with every kind set to
 //   `enabled` (createInstance, createHouseholdStorage and the tenancy migration).
-// recipientsVerified(platform, householdId, addresses) -> true when there is at least one address
-//   and each is an enrolled user with an active membership in the household (the email guard).
+
 
 import { codeError } from './db.mjs';
 
@@ -86,11 +85,4 @@ export function outboundGuard(platform, householdId) {
       }
     },
   });
-}
-
-export function recipientsVerified(platform, householdId, addresses) {
-  if (!Array.isArray(addresses) || !addresses.length) return false;
-  const member = platform.prepare(`SELECT 1 AS x FROM users u JOIN household_memberships m ON m.user_id = u.id
-    WHERE u.email = ? AND m.household_id = ? AND m.status = 'active' AND u.enrolled_at IS NOT NULL`);
-  return addresses.every(a => typeof a === 'string' && Boolean(member.get(a.trim().toLowerCase(), householdId)));
 }

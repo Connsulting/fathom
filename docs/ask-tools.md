@@ -1,7 +1,7 @@
 # Ask and MCP tool catalog
 
-This is the plan for Fathom's deterministic tool layer: twenty intent-level tools, each with a small
-closed set of operations and typed parameters, that compute every figure Ask and an MCP client
+This is the plan for Fathom's deterministic tool layer: twenty shared intent-level tools and one
+Ask-only visualization tool, each with a small closed set of operations and typed parameters, that compute every figure Ask and an MCP client
 need and put every household read and write the API can do in the agent's reach. It replaces both
 the registry on main (30 tools) and the previous revision of this plan (55 planned tool names in
 28 tickets). It extends the frozen tool interface in
@@ -149,12 +149,12 @@ How tools register (C1). `src/tools/tools.mjs` declares the twenty tool headers 
 tool runs) and `source` (the plain source label for figures it grounds). Each module in
 `src/tools/catalog/` exports `operations`, a list of `{ tool, name, scope, summary, route,
 params, required, referenceable?, routes, handler }`, plus optional `rules` (lines for section 4)
-and `capabilities`. `route` is the question-shape line for the routing table; `routes` lists the
+and `capabilities`. Ask-only modules may export `askRules`, omitted from MCP instructions. `route` is the question-shape line for the routing table; `routes` lists the
 API routes the operation covers (`'POST /api/accounts/:id/name'`). The loader in
 `src/tools/index.mjs` merges operations into their tools, refuses a duplicate operation, a
 parameter name with two schemas in one tool, or an operation whose scope does not match its
 tool's kind, and lists only tools with at least one operation. A ticket adds its own catalog
-modules and can contribute operations to any tool; it never edits `src/tools/index.mjs`,
+modules and can contribute operations to any tool. The rich-answer integration adds `askOnly` headers, which MCP neither lists nor calls; their first operation may require arguments. Other tickets never edit `src/tools/index.mjs`,
 `src/tools/tools.mjs` or `src/tools/parity.mjs`.
 
 ## 1. Question taxonomy
@@ -479,7 +479,8 @@ their keys.
 
 ### Catalog at a glance
 
-Twenty tools: eleven read, nine write. "Ticket" is the ticket that adds the operation (section 7).
+Twenty-one tools: twelve read, including Ask-only `show`, and nine write. "Ticket" is the ticket
+that adds the operation (section 7).
 
 | Tool | Kind | Operations (ticket) |
 |---|---|---|
@@ -493,6 +494,7 @@ Twenty tools: eleven read, nine write. "Ticket" is the ticket that adds the oper
 | `goals` | read | list, pace (C1); suggestions (C9) |
 | `recommendations` | read | list, detail, advisor (C1), wargame (B5) |
 | `knowledge` | read | packs, search, entry (C1) |
+| `show` | Ask-only read | chart, table, compare, timeline; validated references to earlier calls, stored snapshots and dropped notes |
 | `calculate` | read | add, subtract, multiply, divide, sum, min, max, negate, annualize, monthly, percent_of, round_up, compound (C3) |
 | `update_account` | write | rename, mask, owner, kind, merge (C8) |
 | `categorize` | write | transaction, merchant_rule (C8) |
@@ -1343,7 +1345,7 @@ route's response shape is the screen's, not the tool's.
 
 ### Route map
 
-All 100 routes on main at this revision: 52 covered, 48 excluded. "Ticket" is the ticket that
+All 103 routes on main at this revision: 55 covered, 48 excluded. "Ticket" is the ticket that
 lands the covering operation.
 
 | Route | Covered by | Ticket | Note |
@@ -1407,7 +1409,8 @@ lands the covering operation.
 | `POST /api/accounts/:id/owner` | `update_account.owner` | C8 |  |
 | `POST /api/accounts/:id/kind` | `update_account.kind` | C8 |  |
 | `GET /api/accounts/:id/merge-candidates` | `accounts.merge_candidates` | C8 |  |
-| `POST /api/accounts/:id/merge` | `update_account.merge` | C8 | explicit confirm |
+| `POST /api/accounts/:id/merge` | `sources.merge_accounts`, `update_account.merge` | SRC1, C8 | Undo reopens the merge; C8 adds the explicit confirm |
+| `POST /api/accounts/:id/archive` | `sources.archive_account` | SRC1 | `{archived: false}` restores; Undo by receipt |
 | `GET /api/goals/suggestions` | `goals.suggestions` | C9 |  |
 | `POST /api/goals` | `update_goal.create` | C1 |  |
 | `POST /api/goals/:id` | `update_goal.edit` | C1 |  |
@@ -1425,6 +1428,8 @@ lands the covering operation.
 | `POST /api/files` | `refresh.import_file` | C10 |  |
 | `GET /api/files` | `household.imports` | C10 |  |
 | `POST /api/files/:id/retry` | `refresh.retry_import` | C10 |  |
+| `POST /api/files/:id/remove` | `sources.remove_file` | SRC1 | rows archived in a change log; Undo by receipt |
+| `GET /api/sources` | `accounts.sources` | SRC1 | real names, range, history or stale |
 | `GET /api/confirm` | `household.confirm_items` | C8 | status pending |
 | `POST /api/confirm/list` | `household.confirm_items` | C8 | a read despite POST |
 | `POST /api/confirm/answers` | `answer.confirm` | C8 |  |
@@ -1432,6 +1437,8 @@ lands the covering operation.
 | `GET /api/confirm/:id` | `household.confirm_items` | C8 | `ids` |
 | `POST /api/confirm/:id/answer` | `answer.confirm` | C8 | one item; `revise` |
 | `POST /api/confirm/:id/reopen` | `answer.reopen` | C8 |  |
+| `GET /api/email/subscriptions` | excluded: outbound email | | |
+| `POST /api/email/subscriptions` | excluded: outbound email | | |
 | `GET /api/email` | excluded: outbound email | | |
 | `POST /api/email/test` | excluded: outbound email | | |
 | `POST /api/email/brief` | excluded: outbound email | | |

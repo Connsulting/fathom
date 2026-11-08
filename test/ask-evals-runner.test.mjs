@@ -281,3 +281,29 @@ test('title calls share the cap and later unaffordable cases are reported', asyn
   assert.equal(r.cases[1].status, 'budget-stopped');
   assert.equal(r.outstandingReservedUsd, 0);
 });
+
+test('a required block cannot pass vacuously when a script omits it', async () => {
+  const c = structuredClone((await loadCases()).find(c => c.id === 'retirement-hsa-room'));
+  c.blocks = [{ op: 'table' }];
+  const result = await runCases({ cases: [c] });
+  assert.equal(result.cases[0].status, 'fail');
+  assert.ok(result.cases[0].failingChecks.includes('block_missing'));
+});
+
+test('gradeBlocks identifies every violation and accepts the real snapshot', async () => {
+  const { gradeBlocks } = await import('../evals/graders.mjs');
+  const { buildSnapshot } = await import('../src/blocks/snapshot.mjs');
+  const call = { name: 'transactions', args: { operation: 'search' }, result: { rows: [{ date: '2026-03-01', amount: -12 }] } };
+  const spec = { source: { tool: call.name, args: call.args, path: 'rows' }, columns: ['date', 'amount'] };
+  const block = { id: 'b1', op: 'table', calls: [{ tool: call.name, args: call.args }], spec, snapshot: buildSnapshot('table', spec, [call]) };
+  const grade = (b, calls = [call], notes = []) => gradeBlocks({ blocks: b, blockNotes: notes }, calls, [{ op: 'table' }]);
+  assert.equal(grade([block]).ok, true);
+  assert.equal(grade([]).violations[0].kind, 'block_missing');
+  assert.ok(grade([block], []).violations.some(v => v.kind === 'block_unreferenced'));
+  const badValue = structuredClone(block); badValue.snapshot.rows[0].cells[1].value++;
+  assert.ok(grade([badValue]).violations.some(v => v.kind === 'block_value_mismatch'));
+  for (const spec of [{ ...block.spec, title: 'Double spending' }, { ...block.spec, injected: 12 }]) {
+    assert.ok(grade([{ ...block, spec }]).violations.some(v => v.kind === 'block_literal'));
+  }
+  assert.ok(grade([block], [call], [{ reason: 'bad_input' }]).violations.some(v => v.kind === 'block_dropped'));
+});
