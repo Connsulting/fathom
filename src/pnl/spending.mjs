@@ -113,8 +113,8 @@ export function householdSpending(opts = {}) {
 
   // Months with any household account transaction: the divisor for every monthly average.
   const active = a.months.filter((m) => a.activeMonths.has(m)).length;
-  const AVG_NOTE = ['The average divides the total by the months that have any household account transaction.'];
-  const AVG_DETAIL = [{ k: 'Uses', v: `${active} ${active === 1 ? 'month' : 'months'} with household account transactions` }];
+  const AVG_NOTE = ['The average divides the total by the months that have household account transactions or summary lines.'];
+  const AVG_DETAIL = [{ k: 'Uses', v: `${active} ${active === 1 ? 'month' : 'months'} with household spending records` }];
   const buckets = [];
   const totalByMonth = new Map();
   for (const bucket of BUCKETS) {
@@ -217,8 +217,8 @@ export function householdSpendingRows({ bucket, category, month, ...opts } = {})
   const reg = figureRegistry({ kind: 'spend', labels: a.labels, files: a.files });
   const byMonth = a.counted[bucket].get(category);
   const rows = (byMonth ? (month ? byMonth.get(month) ?? [] : all(byMonth)) : []).sort(byDateDesc);
-  const items = rows.slice(0, ITEM_LIMIT).map((row) => rowItem(reg, `spend.row.${row.id}`, row, {
-    account: a.labels.get(row.accountId)?.label ?? row.accountId, category, label: `Transaction on ${row.date}`,
+  const items = rows.slice(0, ITEM_LIMIT).map((row) => rowItem(reg, `spend.row.${row.table}.${row.id}`, row, {
+    account: row.table === 'pnl_lines' ? 'Summary sheet' : a.labels.get(row.accountId)?.label ?? row.accountId, category, label: `${row.table === 'pnl_lines' ? 'Summary line' : 'Transaction'} on ${row.date}`,
   }));
   const where = month ? spanLabel(month, month) : spanLabel(a.from, a.to);
   const sum = reg.add(`${keyBase(a)}.rows.${bucket}.${enc(category)}.${month ?? 'total'}`, { v: sumOf(rows), label: `${category}, ${where}`, rows, counted: true, notes: SPEND_NOTE });

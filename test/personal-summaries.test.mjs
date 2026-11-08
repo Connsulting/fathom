@@ -1,11 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { scratch, createRealStore, closeRealStore, addFact, addPayroll, w2Doc, paystubDoc } from './helpers/real-store.mjs';
+import { scratch, createRealStore, closeRealStore, addFact, addPayroll, w2Doc, paystubDoc, householdOf } from './helpers/real-store.mjs';
 import { planRun } from './helpers/plan.mjs';
 import { getFacts } from '../src/store/facts.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
 import { callTool } from '../src/tools/index.mjs';
 import { recordFactAnswers } from '../src/facts/answers.mjs';
+import { householdSpending, householdSpendingRows } from '../src/pnl/index.mjs';
+import { createEngine } from '../src/engine/index.mjs';
+import { createLiveAnswerer } from '../src/api/answerer.mjs';
+import { threadCreate } from '../src/api/handlers.mjs';
 
 const clock = '2026-11-05';
 const period = { from: '2026-08', to: '2026-10' };
@@ -66,6 +70,15 @@ test('AC1/AC2: named mixed summaries infer their people with evidence and Undo, 
   assert.equal(scenario.fig['inc.ytd.summary-spouse'].v, 2400);
   assert.equal(scenario.fig['inc.ytd.total'].v, 32400);
   assert.equal(scenario.fig['cash.monthlyOut'].v, 350);
+  const view = householdSpending({ db, ...period, clock });
+  assert.equal(view.figures[view.total].v, spending.total.value);
+  assert.equal(view.figures[view.total].src, 'spend:workbook');
+  const detail = householdSpendingRows({ db, ...period, clock, bucket: 'household', category: 'Groceries' });
+  assert.equal(detail.total, 6);
+  assert.ok(detail.items.every(i => i.kind === 'workbook'));
+  const cash = await callTool('spending', { operation: 'cash_flow', ...period }, { db, clock });
+  assert.equal(cash.totals.household.outflow.value, spending.total.value);
+  assert.equal(cash.totals.household.inflow.value, income.total.value);
   recordFactAnswers(db, [{ key: 'business.entityInference', value: { 'Birch Summary': { undone: true } } }], { now: clock });
   await planRun(db);
   assert.ok(!getFacts(db)['business.entities'].some(e => e.name === 'Birch Summary'));
@@ -93,6 +106,9 @@ test('AC3: bank coverage wins only for the covered person, month and category', 
     assert.equal(result.byPerson.find(p => p.person === 'spouse').total.value, spouse);
     const joint = result.byPerson.find(p => p.person === 'joint')?.total.value ?? 0;
     assert.equal(owner + spouse + joint, expected);
+    const view = householdSpending({ db, ...period, clock });
+    assert.equal(view.figures[view.total].v, expected - (label.startsWith('refund') ? 10 : 0));
+    assert.equal(buildScenario(db).fig['cash.monthlyOut'].v, Math.round(expected / 3 * 100) / 100);
   });
 });
 
@@ -107,6 +123,9 @@ test('AC4: a W-2 replaces the same person summary wages without dropping the spo
   const result = await total('income', { from: '2026-01', to: '2026-12' });
   assert.equal(result.total.value, 14400);
   assert.ok(result.byPerson.find(p => p.person === 'owner').total.provenance.sources.some(s => s.table === 'documents'));
+  const partial = await total('income');
+  assert.equal(partial.total.value, 2400);
+  assert.ok(partial.gaps.some(g => g.detail === 'payroll_period_unallocated'));
 });
 
 test('AC4: paystub YTD covers through its month and the summary fills later months', async t => {
@@ -127,4 +146,33 @@ test('AC5: owner classifications win over summary signals across repeated planni
   const entry = getFacts(db)['business.entities'].find(e => e.name === "Aster's Summary");
   assert.deepEqual(entry, { name: "Aster's Summary", type: 'sole_prop', owner: 'spouse' });
   assert.equal((await total()).total.value, 450);
+});
+
+test('Ask reads per-person figures and delivers sheet provenance through its registered spending tool', async t => {
+  const { db, ctx } = await fixture(t, { bank: [['08', 'Groceries', -25]] });
+  await planRun(db);
+  const transport = createEngine({ mode: 'fake' });
+  const engine = { mode: 'live', isOn: () => true, call: request => request.purpose === 'title'
+    ? Promise.resolve({ text: 'Household summaries', toolResults: [] })
+    : transport.call({ ...request, fake: [
+      { toolCalls: [{ name: 'spending', args: { operation: 'total', ...period, measure: 'spending' } }] },
+      { text: "Your spouse spent $450 from the Birch Summary sheet. You spent $525, using connected transactions first and the spreadsheet summary for months without bank data." },
+    ] }) };
+  const household = householdOf(db), root = household.root;
+  const answerer = createLiveAnswerer({ engine, root, services: { ...household.services, engine, config: { dataDir: root } } });
+  const out = await threadCreate({ db, config: { clock }, identity: { id: ctx.actorId }, answerer,
+    body: { text: 'How much did each of us spend from August through October, and where did it come from?' } });
+  assert.match(out.message.text, /\$450.*Birch Summary/);
+  assert.match(out.message.text, /\$525/);
+  assert.ok(out.message.provenance.tools.some(c => c.name === 'spending' && !c.isError));
+});
+
+test('sheet and transaction detail figures keep independent row identities', async t => {
+  const { db } = await fixture(t, { bank: [['08', 'Groceries', -25]] });
+  await planRun(db);
+  const line = db.prepare("SELECT id FROM pnl_lines WHERE entity='Birch Summary' AND category='Groceries' LIMIT 1").get();
+  db.prepare('UPDATE transactions SET id=?').run(line.id);
+  const detail = householdSpendingRows({ db, ...period, clock, bucket: 'household', category: 'Groceries' });
+  assert.equal(new Set(detail.items.map(i => i.fig)).size, detail.items.length);
+  for (const item of detail.items) assert.equal(detail.figures[item.fig].v, item.value);
 });

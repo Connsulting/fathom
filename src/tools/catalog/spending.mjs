@@ -1,4 +1,3 @@
-import { loadCategoryInputs } from '../../categories/store.mjs';
 import { resolveClock } from '../../scenario/build.mjs';
 import { aggregate, compare, cashFlow, bindFigures, boundResult } from '../../calc/aggregate.mjs';
 import { recurring } from '../../calc/recurring.mjs';
@@ -71,8 +70,8 @@ export function readInput(ctx) {
         return [r.key, v];
       }),
   );
-  const input = loadCategoryInputs(ctx.db);
   const data = loadPlanningData(ctx.db, clock);
+  const input = data.categoryInput;
   return { ...input, clock, facts, personalSummaries: personalSummaryInput(data, facts, input) };
 }
 function op(name, params, summary, route, handler) {

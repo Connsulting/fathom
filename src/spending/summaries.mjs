@@ -31,6 +31,7 @@ export function personalSummaryInput(data, facts, categoryInput) {
     }
   }
   const people = new Set(lines.filter(l => l.income).map(l => l.person));
+  if (!people.size) return { lines, connected, wages: [] };
   const payroll = payrollRecords(data, resolveEntities(data, facts), facts).records.filter(r => people.has(r.person));
   const wages = payroll.map(record => {
     const docs = data.documents.filter(d => record.docIds.includes(d.id));
@@ -48,7 +49,7 @@ export function selectPersonalSummaries(input, { window, payroll = true, bankInc
     const payrollCovered = payroll && line.income && !/interest|dividend|other income/i.test(line.category)
       && input.wages.some(w => w.person === line.person && inMonths(line.period, w));
     const bankCovered = (!line.income || bankIncome) && input.connected.some(t => (t.person === line.person || t.person === 'joint')
-      && t.date.slice(0, 7) === line.period && (line.income ? t.bucket === 'income' : t.bucket === 'household' && categoryKey(t.category) === categoryKey(line.category)));
+      && t.date.slice(0, 7) === line.period && (line.income ? t.bucket === 'income' : t.bucket === line.bucket && categoryKey(t.category) === categoryKey(line.category)));
     if (payrollCovered || bankCovered) evidence.push({ ...line, reason: payrollCovered ? 'payroll' : 'connected' });
     else rows.push(line);
   }
