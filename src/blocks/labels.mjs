@@ -1,3 +1,4 @@
+import { transactionDisplayName } from '../categories/display.mjs';
 import { headers } from '../tools/tools.mjs';
 import { at, isFigure } from './paths.mjs';
 
@@ -37,7 +38,11 @@ export function dateText(value) {
 }
 export function itemLabel(item, ref) {
   for (const key of ['label', 'key', 'month', 'year', 'merchant']) {
-    if (typeof item?.[key] === 'string') return key === 'month' || key === 'year' ? dateText(item[key]) : item[key];
+    if (typeof item?.[key] !== 'string') continue;
+    if (key === 'month' || key === 'year') return dateText(item[key]);
+    // A transaction's merchant is its normalized description; it is labeled by its readable name.
+    if (key === 'merchant' && typeof item.description === 'string' && item.description.trim()) return transactionDisplayName(item.description);
+    return item[key];
   }
   return sourceLabel(ref);
 }

@@ -9,6 +9,7 @@ import { resolveTokens } from '../shared/tokens.mjs';
 import { resolveClock, tokenScope } from '../scenario/build.mjs';
 import { loadCategoryInputs } from '../categories/store.mjs';
 import { resolveCategories } from '../categories/resolve.mjs';
+import { transactionDisplayName } from '../categories/display.mjs';
 
 export const MAX_MONTHS = 120;
 export const ROW_IDS = 50;
@@ -209,7 +210,7 @@ export function rowItem(reg, key, r, { account, category, label }) {
   const fig = reg.add(key, { v: value, label, rows: [r], counted: true });
   return r.table === 'pnl_lines'
     ? { id: r.id, kind: 'workbook', date: r.month, description: 'Workbook line', account, category, amount: r.amount, value, fig }
-    : { id: r.id, kind: 'transaction', date: r.date, description: r.description, account, category, amount: r.amount, value, fig };
+    : { id: r.id, kind: 'transaction', date: r.date, description: r.description, name: transactionDisplayName(r.description), account, category, amount: r.amount, value, fig };
 }
 
 export function boundedRows(result) {

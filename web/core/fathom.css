@@ -12,6 +12,22 @@ body { margin: 0; background: #0a0c0d; color: #e6eaeb; }
 }
 .fx-boot b { display: block; margin-bottom: 6px; color: #e6eaeb; font-weight: 500; }
 
+/* ---------- household chooser (Horizon tokens: --s1 surface, --ac accent) ---------- */
+
+.fx-choose h1 { margin: 0 0 8px; color: #e6eaeb; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+.fx-choose p { margin: 0 0 20px; }
+.fx-choose-list { display: flex; flex-direction: column; gap: 8px; }
+.fx-choose-b {
+  all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-direction: column; gap: 2px;
+  padding: 12px 16px; border: 1px solid #1c2124; border-radius: 10px; background: #101315; color: #e6eaeb; font-size: 14px;
+}
+.fx-choose-b span { color: #5f696c; font-size: 12.5px; }
+.fx-choose-b:hover { border-color: #5f696c; }
+.fx-choose-b.pri { background: #3fcfae; border-color: #3fcfae; color: #04120e; font-weight: 500; }
+.fx-choose-b.pri:hover { background: #8be6d1; border-color: #8be6d1; }
+.fx-choose-b:focus-visible { outline: 2px solid #3fcfae; outline-offset: 2px; }
+.fx-choose-b[disabled] { opacity: 0.6; cursor: default; }
+
 /* ---------- figure popover ---------- */
 
 .fx-pop {

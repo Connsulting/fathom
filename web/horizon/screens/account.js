@@ -164,6 +164,7 @@ function schedule() {
 function chip(state) {
   if (state === 'fresh') return '<span class="h-fresh fresh">Fresh</span>';
   if (state === 'stale') return '<span class="h-fresh stale">Stale</span>';
+  if (state === 'history') return '<span class="h-fresh history">History</span>';
   return '';
 }
 
@@ -322,7 +323,8 @@ function feedHtml(f) {
   } else {
     bits.push('No dated rows');
   }
-  if (f.cadence) bits.push(`Export ${esc(f.cadence)}`);
+  // A history feed is no longer how the data arrives, so its export cadence is not a to-do.
+  if (f.cadence && f.state !== 'history') bits.push(`Export ${esc(f.cadence)}`);
   const act = f.kind === 'simplefin' && f.status !== undefined
     ? `<div class="h-ad-feed-a">${btn(sf.busy === 'sync' ? 'Syncing' : 'Sync now', `type="button" data-sf="sync"${sf.busy || !S.detail?.syncable ? ' disabled' : ''}`, 'sm')}${sf.notice ? `<span class="h-mute sm" role="status">${esc(sf.notice)}</span>` : ''}</div>`
     : '';
@@ -343,7 +345,10 @@ function txnRow(t) {
   const { esc, api } = H;
   const f = api.fig(t.fig);
   const money = api.money(t.amount, { cents: true, sign: true });
-  return `<li class="h-ad-txn"><time class="h-ad-txn-d" datetime="${esc(t.date)}">${esc(t.date)}</time><div class="h-ad-txn-t"><span>${esc(t.description || 'No description')}</span>${t.category ? `<em>${esc(t.category)}</em>` : ''}</div><b class="h-ad-txn-a"><span class="fx-fig" data-fig="${esc(t.fig)}" data-kind="${esc(f.kind || 'a')}" tabindex="0">${esc(money)}</span></b>${H.addBtn('transaction', t.id, `${t.date} ${t.description || 'No description'}`)}</li>`;
+  // The readable name leads; the bank's raw text stays one hover away when it differs.
+  const name = t.name || t.description;
+  const raw = t.description && t.description !== name ? ` title="${esc(t.description)}"` : '';
+  return `<li class="h-ad-txn"><time class="h-ad-txn-d" datetime="${esc(t.date)}">${esc(t.date)}</time><div class="h-ad-txn-t"><span${raw}>${esc(name || 'No description')}</span>${t.category ? `<em>${esc(t.category)}</em>` : ''}</div><b class="h-ad-txn-a"><span class="fx-fig" data-fig="${esc(t.fig)}" data-kind="${esc(f.kind || 'a')}" tabindex="0">${esc(money)}</span></b>${H.addBtn('transaction', t.id, `${t.date} ${t.description || 'No description'}`)}</li>`;
 }
 
 function filterHtml() {

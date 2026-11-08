@@ -21,6 +21,13 @@ let H = null;
 export function bind(kit) { H = kit; }
 
 const STORE = 'fathom.askPanel';
+// Keyed by user and household on a real store (api.storageScope), so another person or household
+// never opens this one's thread or context; a demo store keeps the plain key.
+const scopedKey = (base) => {
+  let scope = '';
+  try { scope = window.Fathom?.api?.storageScope?.() || ''; } catch (e) { scope = ''; }
+  return scope ? `${base}:${scope}` : base;
+};
 const W_DEF = 400;
 const W_MIN = 320;
 const W_MAX = 640;
@@ -69,7 +76,7 @@ function cleanChips(list) {
 
 function load() {
   let v = null;
-  try { v = JSON.parse(window.localStorage.getItem(STORE) || 'null'); } catch (e) { v = null; }
+  try { v = JSON.parse(window.localStorage.getItem(scopedKey(STORE)) || 'null'); } catch (e) { v = null; }
   if (!v || typeof v !== 'object' || Array.isArray(v)) return;
   P.open = v.open === true;
   const w = Number(v.width);
@@ -87,7 +94,7 @@ function load() {
 
 function save() {
   try {
-    window.localStorage.setItem(STORE, JSON.stringify({ open: P.open, width: P.width, threadId: P.threadId, chips: P.chips, page: P.page, ctx: P.ctx }));
+    window.localStorage.setItem(scopedKey(STORE), JSON.stringify({ open: P.open, width: P.width, threadId: P.threadId, chips: P.chips, page: P.page, ctx: P.ctx }));
   } catch (e) { /* storage blocked: the panel still works for this visit */ }
 }
 

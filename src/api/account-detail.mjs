@@ -8,11 +8,13 @@ import { parseJson } from '../store/db.mjs';
 import { accountLabel, accountLabelParts, accountSubtitle } from '../shared/account-label.mjs';
 import { accountNaming } from '../accounts/naming.mjs';
 import { accountFreshness, freshnessOf } from '../ingest/freshness.mjs';
+import { fileSourceHistory } from '../ingest/coverage.mjs';
 import { howToFor } from '../ingest/howto.mjs';
 import { seriesKey } from '../jobs/planner/series.mjs';
 import { resolveClock } from '../scenario/build.mjs';
 import { HttpError } from './http.mjs';
 import { OWNER_OPTIONS, KIND_OPTIONS } from '../ingest/confirm.mjs';
+import { transactionDisplayName } from '../categories/display.mjs';
 
 export const PAGE_DEFAULT = 50;
 export const PAGE_MAX = 200;
@@ -81,9 +83,11 @@ export function accountDetail(ctx) {
     LEFT JOIN files f ON f.id = x.file_id GROUP BY x.file_id, x.parser`).all(id);
   const sourceOf = db.prepare('SELECT label, kind, as_of FROM sources WHERE id = ?');
   const feedsByKey = new Map();
+  const sourceKeys = new Set();
   for (const r of perFile) {
     const sf = r.parser === SIMPLEFIN;
     const key = sf ? SIMPLEFIN : (r.source_id || r.file_id || 'unknown');
+    if (!sf && r.source_id) sourceKeys.add(key);
     const src = r.source_id ? sourceOf.get(r.source_id) : null;
     const kind = sf ? SIMPLEFIN : (src?.kind || r.source_kind || null);
     const prior = feedsByKey.get(key);
@@ -108,12 +112,16 @@ export function accountDetail(ctx) {
     syncable = conn.status !== 'reconnect';
   }
 
+  // A file source the shared rule (coverage.mjs) calls history for this account is no longer how its
+  // data arrives: an old date there is history, with nothing to refresh.
+  const history = fileSourceHistory(db);
   const feeds = [...feedsByKey.values()].map((f) => {
     const state = f.lastDataDate && f.sourceKind ? freshnessOf({ kind: f.sourceKind, asOf: f.lastDataDate }, clock) : null;
-    const how = f.sourceKind ? howToFor(f.sourceKind) : null;
+    const past = f.kind === 'file' && sourceKeys.has(f.id) && history(id, f.id);
+    const how = f.sourceKind && !past ? howToFor(f.sourceKind) : null;
     return {
       ...f,
-      state: state ? state.state : 'unknown',
+      state: past ? 'history' : state ? state.state : 'unknown',
       ageDays: state ? state.ageDays : null,
       cadence: state?.cadence ? state.cadence.label : null,
       howTo: how ? { id: how.id, title: how.title, steps: [...how.steps], cadence: how.cadence } : null,
@@ -209,7 +217,8 @@ export function accountTransactions(ctx) {
     }
     const fig = `txn.${r.id}`;
     figures[fig] = { v: r.amount, src: srcId, kind: 'a', label: `Transaction on ${r.date}` };
-    return { id: r.id, date: r.date, description: r.description ?? '', amount: r.amount, category: r.category ?? '', fig };
+    // name is the readable label; description stays the bank's raw text, which the filter searches.
+    return { id: r.id, date: r.date, description: r.description ?? '', name: transactionDisplayName(r.description ?? ''), amount: r.amount, category: r.category ?? '', fig };
   });
   const last = page[page.length - 1];
   return { items, next: more && last ? `${last.date}|${last.id}` : null, total, figures, sources };

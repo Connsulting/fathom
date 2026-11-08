@@ -328,8 +328,13 @@ export async function createSessionFixture(platform, { email = 'admin@example.te
   return { user, householdId: household.id, role: membership.role, token, expiresAt, cookie: `__Host-fathom-session=${token}` };
 }
 
+// The household context assertion a browser sends for a session (src/api/household-context.mjs):
+// the session's household at context version 1 (a new session's), or none without a household.
+export const contextHeaders = session => (session?.householdId
+  ? { 'x-fathom-household': session.householdId, 'x-fathom-context-version': String(session.contextVersion ?? 1) } : {});
+
 export function sessionClient(baseUrl, session = null) {
-  const headers = session ? { cookie: session.cookie, origin: new URL(baseUrl).origin } : {};
+  const headers = session ? { cookie: session.cookie, origin: new URL(baseUrl).origin, ...contextHeaders(session) } : {};
   const read = (options = {}) => request(baseUrl, { ...options, headers: { ...headers, ...options.headers } });
   return {
     headers,

@@ -309,11 +309,19 @@ export async function holdStore(file) {
 
 // --------------------------------------------------------------------------- HTTP
 
-// A browser: cookie jar applying Set-Cookie, same-origin POSTs.
+// A browser: cookie jar applying Set-Cookie, same-origin POSTs. Like the web client, it keeps the
+// household context of the last identity a response carried and asserts it on every request
+// (src/api/household-context.mjs); a new session's context is its household at version 1.
 export function browser(baseUrl, cookies = {}) {
   const jar = new Map(Object.entries(cookies));
+  let context = {};
   const cookie = () => (jar.size ? [...jar].map(([name, value]) => `${name}=${value}`).join('; ') : undefined);
   const absorb = response => {
+    const identity = response.json?.identity;
+    if (identity && typeof identity === 'object') {
+      context = identity.householdId && identity.contextVersion
+        ? { 'x-fathom-household': identity.householdId, 'x-fathom-context-version': String(identity.contextVersion) } : {};
+    }
     for (const line of response.headers['set-cookie'] || []) {
       const pair = line.split(';', 1)[0];
       const at = pair.indexOf('=');
@@ -324,11 +332,23 @@ export function browser(baseUrl, cookies = {}) {
     }
     return response;
   };
+  // Before a household request with no known context, read the session the way the web client
+  // does at boot.
+  const learn = async path => {
+    if (context['x-fathom-household'] || !jar.has(SESSION) || !path.startsWith('/api/') || /^\/api\/(auth|operator)\//.test(path)) return;
+    absorb(await request(baseUrl, { path: '/api/auth/session', headers: { cookie: cookie() } }));
+  };
   return {
     jar,
     session: () => jar.get(SESSION) ?? null,
-    post: async (path, body = {}, headers = {}) => absorb(await postJson(baseUrl, path, body, { origin: baseUrl, cookie: cookie(), ...headers })),
-    get: async path => absorb(await request(baseUrl, { path, headers: { cookie: cookie() } })),
+    post: async (path, body = {}, headers = {}) => {
+      await learn(path);
+      return absorb(await postJson(baseUrl, path, body, { origin: baseUrl, cookie: cookie(), ...context, ...headers }));
+    },
+    get: async path => {
+      await learn(path);
+      return absorb(await request(baseUrl, { path, headers: { cookie: cookie(), ...context } }));
+    },
     raw: async (options) => absorb(await request(baseUrl, { ...options, headers: { cookie: cookie(), origin: baseUrl, ...options.headers } })),
   };
 }
