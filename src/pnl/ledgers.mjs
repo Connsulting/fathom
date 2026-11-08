@@ -30,7 +30,9 @@ export function ownerEntityIdentity(entity) {
 }
 
 const personName = text => normalizeName(String(text || '').replace(/\s+(?:personal\s+)?(?:summary|summary sheet|monthly summary|budget|income and expenses|income & expenses)$/i, '').replace(/['’]s$/i, ''));
-export const personalIncomeCategory = category => /^(?:income|wages|salary|paychecks?|employment income|wages and salary|client income|self.employment income|interest income|dividend income|other income)$/i.test(String(category).trim());
+const nameWords = text => (String(text || '').normalize('NFKC').toLowerCase().replace(/['’]s\b/g, '').match(/[\p{L}\p{N}]+/gu) || []).join(' ');
+export const payrollIncomeCategory = category => /^(?:income|wages|salary|paychecks?|employment income|wages and salary)$/i.test(String(category).trim());
+export const personalIncomeCategory = category => payrollIncomeCategory(category) || /^(?:client income|self.employment income|interest income|dividend income|other income)$/i.test(String(category).trim());
 export function summaryPerson(entity, facts) {
   const labels = [entity.name, entity.displayName, ...(entity.lines || []).map(ledgerDisplayName)].filter(Boolean);
   const names = new Set(labels.map(personName));
@@ -41,7 +43,8 @@ export function summaryPerson(entity, facts) {
   if (assigned) return { person: assigned[1], source: 'owner_answer' };
   const household = facts['household.names'] || {};
   const matches = ['owner', 'spouse'].filter(person => [household[person], ...(person === 'owner' ? [household.me] : [])]
-    .filter(n => typeof n === 'string' && n.trim()).some(n => names.has(personName(n)) || names.has(personName(n.split(/\s+/)[0]))));
+    .filter(n => typeof n === 'string' && n.trim()).some(n => [n, n.trim().split(/\s+/)[0]].some(candidate => names.has(personName(candidate))
+      || labels.some(label => ` ${nameWords(label)} `.includes(` ${nameWords(candidate)} `)))));
   return matches.length === 1 ? { person: matches[0], source: 'household_names' } : null;
 }
 

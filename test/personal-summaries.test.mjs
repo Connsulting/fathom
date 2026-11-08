@@ -103,6 +103,8 @@ test('AC3: bank coverage wins only for the covered person, month and category', 
     await planRun(db);
     const result = await total();
     assert.equal(result.total.value, expected);
+    const defaultResult = await callTool('spending', { operation: 'total' }, { db, clock });
+    assert.equal(defaultResult.total.value, expected, 'the default summary window keeps bank rows that supplied overlap evidence');
     assert.equal(result.byPerson.find(p => p.person === 'owner').total.value, owner);
     assert.equal(result.byPerson.find(p => p.person === 'spouse').total.value, spouse);
     const joint = result.byPerson.find(p => p.person === 'joint')?.total.value ?? 0;
@@ -194,10 +196,24 @@ test('income coverage replaces wages while preserving a separate income category
   const { db, total } = await fixture(t, { bank: [['08', 'Income', 900]] });
   db.prepare('INSERT INTO pnl_lines(entity,period,category,amount,file_id,locator) VALUES (?,?,?,?,?,?)')
     .run("Aster's Summary", '2026-08', 'Interest Income', 100, 'summary-book', JSON.stringify({ sheet: "Aster's Summary", row: 6 }));
+  db.prepare('INSERT INTO pnl_lines(entity,period,category,amount,file_id,locator) VALUES (?,?,?,?,?,?)')
+    .run("Aster's Summary", '2026-08', 'Client income', 200, 'summary-book', JSON.stringify({ sheet: "Aster's Summary", row: 7 }));
   await planRun(db);
-  assert.equal((await total('income')).total.value, 5400);
+  assert.equal((await total('income')).total.value, 5600);
   await addPayroll(db, w2Doc({ person: 'owner', relation: 'outside', employerName: 'Synthetic Employer', wages: 12000, medicareWages: 12000, socialSecurityWages: 12000, box12: [] }));
   await planRun(db);
-  assert.equal((await total('income', { from: '2026-01', to: '2026-12' })).total.value, 14500);
-  assert.equal(buildScenario(db).fig['inc.ytd.summary-owner'].v, 100);
+  assert.equal((await total('income', { from: '2026-01', to: '2026-12' })).total.value, 14700);
+  assert.equal(buildScenario(db).fig['inc.ytd.summary-owner'].v, 300);
+});
+
+test('AC1: month and summary labels can surround a household name or possessive', async t => {
+  const { db, total } = await fixture(t);
+  for (const [before, after] of [["Aster's Summary", 'Monthly summary for Aster 2026'], ['Birch Summary', "Birch's 2026 summary"]]) {
+    db.prepare("UPDATE pnl_lines SET entity=?,locator=json_set(locator,'$.sheet',?) WHERE entity=?").run(after, after, before);
+  }
+  await planRun(db);
+  const listed = getFacts(db)['business.entities'];
+  assert.equal(listed.find(e => e.name === 'Monthly summary for Aster 2026').owner, 'owner');
+  assert.equal(listed.find(e => e.name === "Birch's 2026 summary").owner, 'spouse');
+  assert.equal((await total()).total.value, 1050);
 });

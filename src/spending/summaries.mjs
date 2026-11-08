@@ -1,4 +1,4 @@
-import { ledgerKind, ledgerDisplayName, summaryPerson, personalIncomeCategory } from '../pnl/ledgers.mjs';
+import { ledgerKind, ledgerDisplayName, summaryPerson, personalIncomeCategory, payrollIncomeCategory } from '../pnl/ledgers.mjs';
 import { resolveCategories, spendingAccount, sourceBucket } from '../categories/resolve.mjs';
 import { ownerOf, resolveEntities } from '../jobs/planner/data.mjs';
 import { payrollRecords } from '../jobs/planner/payroll.mjs';
@@ -6,7 +6,7 @@ import { parseJson } from '../store/db.mjs';
 
 export const SUMMARY_RULE = 'from the spreadsheet summary for months without bank data; connected transactions win for each person, month and category';
 const categoryKey = category => String(category).trim().toLowerCase();
-const incomeKey = category => /interest|dividend|other income/i.test(category) ? categoryKey(category) : 'income';
+const incomeKey = category => payrollIncomeCategory(category) ? 'income' : categoryKey(category);
 const monthEnd = month => new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0)).toISOString().slice(0, 10);
 const inMonths = (month, range) => month >= range.from && month <= range.to;
 
@@ -15,7 +15,7 @@ export function personalSummaryInput(data, facts, categoryInput) {
   const accounts = new Map(categoryInput.accounts.map(a => [a.id, a]));
   const connected = categoryInput.transactions.filter(t => accounts.has(t.account_id) && spendingAccount(accounts.get(t.account_id)) && t.date <= data.clock)
     .map(t => ({ ...t, ...categories.get(t.id), person: ownerOf(accounts.get(t.account_id).owner) }));
-  const groups = Map.groupBy(data.pnlHistory || data.pnl, line => line.entity);
+  const groups = Map.groupBy(data.pnlHistory, line => line.entity);
   const lines = [];
   for (const [name, rows] of groups) {
     if (ledgerKind(facts, name, rows) !== 'spending') continue;
@@ -31,10 +31,10 @@ export function personalSummaryInput(data, facts, categoryInput) {
         description: ledgerDisplayName(line), income });
     }
   }
-  const people = new Set(lines.filter(l => l.income).map(l => l.person));
+  const people = new Set(lines.filter(l => payrollIncomeCategory(l.category)).map(l => l.person));
   if (!people.size) return { lines, connected, wages: [] };
   const entities = resolveEntities(data, facts);
-  const years = [...new Set(lines.filter(l => l.income).map(l => Number(l.period.slice(0, 4))))];
+  const years = [...new Set(lines.filter(l => payrollIncomeCategory(l.category)).map(l => Number(l.period.slice(0, 4))))];
   const payroll = years.flatMap(year => payrollRecords({ ...data, year, taxYear: year }, entities, facts).records.map(r => ({ ...r, year }))).filter(r => people.has(r.person));
   const wages = payroll.map(record => {
     const docs = data.documents.filter(d => record.docIds.includes(d.id));
@@ -49,14 +49,14 @@ export function selectPersonalSummaries(input, { window, payroll = true, bankInc
   if (!input || !window) return { rows: [], evidence: [], payrollRows: [], gaps: [] };
   const rows = [], evidence = [], gaps = [];
   for (const line of input.lines.filter(l => inMonths(l.period, window))) {
-    const payrollCovered = payroll && line.income && !/interest|dividend|other income/i.test(line.category)
+    const payrollCovered = payroll && payrollIncomeCategory(line.category)
       && input.wages.some(w => w.person === line.person && inMonths(line.period, w));
     const bankCovered = (!line.income || bankIncome) && input.connected.some(t => (t.person === line.person || t.person === 'joint')
       && t.date.slice(0, 7) === line.period && (line.income ? t.bucket === 'income' && incomeKey(t.category) === incomeKey(line.category) : t.bucket === line.bucket && categoryKey(t.category) === categoryKey(line.category)));
     if (payrollCovered || bankCovered) evidence.push({ ...line, reason: payrollCovered ? 'payroll' : 'connected' });
     else rows.push(line);
   }
-  const payrollRows = payroll ? input.wages.filter(w => input.lines.some(l => l.person === w.person && l.income && inMonths(l.period, window) && inMonths(l.period, w)))
+  const payrollRows = payroll ? input.wages.filter(w => input.lines.some(l => l.person === w.person && payrollIncomeCategory(l.category) && inMonths(l.period, window) && inMonths(l.period, w)))
     .flatMap(w => {
       if (w.from < window.from || w.to > window.to) {
         gaps.push({ code: 'missing_fact', detail: 'payroll_period_unallocated', message: 'Payroll covers a wider period; its wages cannot be assigned to the requested months.', person: w.person });

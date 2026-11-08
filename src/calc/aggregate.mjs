@@ -11,6 +11,7 @@ import { envelope, round } from './figure.mjs';
 import { ToolError } from '../tools/errors.mjs';
 import { selectPersonalSummaries, summarySources, SUMMARY_RULE } from '../spending/summaries.mjs';
 import { ownerOf } from '../jobs/planner/data.mjs';
+import { payrollIncomeCategory } from '../pnl/ledgers.mjs';
 
 export const monthIndex = (m) => Number(m.slice(0, 4)) * 12 + Number(m.slice(5, 7)) - 1;
 export const monthAt = (i) => `${Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}`;
@@ -204,7 +205,8 @@ export function aggregate(input, args = {}, definition = null) {
   const selected = selectSpendingRows(input),
     { rows, categories, resolved, onSpending } = selected;
   const summaryMonths = input.personalSummaries?.lines.map(l => l.period).filter(m => m < input.clock.slice(0, 7)).sort() || [];
-  const summaryWindow = summaryMonths.length ? { from: summaryMonths[0], to: summaryMonths.at(-1), months: monthIndex(summaryMonths.at(-1)) - monthIndex(summaryMonths[0]) + 1 } : null;
+  const summaryFrom = summaryMonths.length ? monthAt(Math.max(monthIndex(summaryMonths[0]), monthIndex(summaryMonths.at(-1)) - 11)) : null;
+  const summaryWindow = summaryFrom ? { from: summaryFrom, to: summaryMonths.at(-1), months: monthIndex(summaryMonths.at(-1)) - monthIndex(summaryFrom) + 1 } : null;
   const window = periodOf(args, input.clock, resolved.window || summaryWindow);
   const scope = args.scope ?? 'household',
     measure = args.measure ?? 'spending';
@@ -221,8 +223,8 @@ export function aggregate(input, args = {}, definition = null) {
     (t) =>
       inWindow(t) &&
       scopeHas(byId.get(t.account_id), scope) &&
-      (!defaultWindow || !spendingAccount(byId.get(t.account_id)) || allowed.has(t.id)) &&
-      !(measure === 'income' && t.bucket === 'income' && summaries.payrollRows.some(w => (w.person === t.person) && t.date.slice(0, 7) >= w.from && t.date.slice(0, 7) <= w.to)),
+      (!defaultWindow || input.personalSummaries?.lines.length || !spendingAccount(byId.get(t.account_id)) || allowed.has(t.id)) &&
+      !(measure === 'income' && t.bucket === 'income' && payrollIncomeCategory(t.category) && summaries.payrollRows.some(w => (w.person === t.person) && t.date.slice(0, 7) >= w.from && t.date.slice(0, 7) <= w.to)),
   );
   if (scope !== 'business') windowRows.push(...[...summaries.rows, ...(measure === 'income' ? summaries.payrollRows : [])]
     .filter(t => t.date <= input.clock || t.sourceTable === 'documents')
