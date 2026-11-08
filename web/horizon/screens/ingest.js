@@ -819,7 +819,7 @@ export function ingestScreens(h) {
       : (dk.answers[id] != null && !busy ? '<p class="h-deck-state">Answered. Pick another option to change it.</p>' : '');
     return `<article class="h-deck-card cur${fin ? ' final' : ''}" data-item="${esc(id)}">
       <div class="h-cf-k">${esc(KIND[it.kind] || 'Question')}${name ? `<span>${esc(name)}</span>` : ''}${addBtn('confirm', id, KIND[it.kind] || 'Question')}</div>
-      ${cat ? txnHead(it, id) : `<p class="h-cf-q">${esc(it.question)}</p>${detailHtml(it)}`}${guess}${it.kind === 'transaction_category' && it.context?.merchant ? `<label class="h-cf-sub"><input type="checkbox" data-category-always="${esc(id)}"${dk.categoryAlways?.[id] ? ' checked' : ''}${busy || fin ? ' disabled' : ''}> Always for this merchant</label>` : ''}<div class="h-deck-opts${short ? ' short' : ''}">${opts}</div>${state}</article>`;
+      ${cat ? txnHead(it, id) : `<p class="h-cf-q">${esc(it.question)}</p>${detailHtml(it)}`}${guess}${it.kind === 'transaction_category' && it.context?.merchant ? `<label class="h-cf-sub"><input type="checkbox" data-category-always="${esc(id)}"${dk.categoryAlways?.[id] !== false ? ' checked' : ''}${busy || fin ? ' disabled' : ''}> Apply to all from ${esc(it.txn?.name || it.context.merchant)}</label>` : ''}<div class="h-deck-opts${short ? ' short' : ''}">${opts}</div>${state}</article>`;
   }
 
   function rowHtml(dk, key, id) {
@@ -1011,7 +1011,7 @@ export function ingestScreens(h) {
       if (!stay && dk.cur === id) { dk.cur = nextOpen(dk, id); draw(); }
       return true;
     }
-    opt = categoryAnswerOption(it,opt,dk.categoryAlways?.[id] === true);
+    opt = categoryAnswerOption(it,opt,dk.categoryAlways?.[id] !== false);
     if (opt == null) return false;
     const revise = !pendingNow().some((i) => String(i.id) === id);
     if (stay) dk.rowBusy[id] = String(opt);

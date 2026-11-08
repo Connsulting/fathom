@@ -85,7 +85,7 @@ test('number keys mean the same category on every card', async () => {
   for (let i = 0; i < items.length; i++) {
     assert.equal(screens.deckAction('pick', { key: '2' }), true);
     await settle();
-    assert.deepEqual(answers[i], [String(items[i].id), CATEGORY_ORDER[1]], `card ${i + 1}`);
+    assert.deepEqual(answers[i], [String(items[i].id), 'always:' + CATEGORY_ORDER[1]], `card ${i + 1}`);
   }
 });
 
@@ -111,7 +111,7 @@ test('Enter takes the highlighted guess, wherever it sits in the list', async ()
   screens.confirmPage(true);
   assert.equal(screens.deckAction('guess', { key: 'Enter' }), true);
   await settle();
-  assert.deepEqual(answers, [['1', 'Taxes']]);
+  assert.deepEqual(answers, [['1', 'always:Taxes']]);
 });
 
 test('a category card shows the clean merchant name, a signed amount and a short date, with the raw text behind Bank details', () => {
@@ -254,4 +254,16 @@ test('real server state renders without a vendor name or a percentage', async (t
   assert.doesNotMatch(page, VENDOR);
   assert.doesNotMatch(page, /%/);
   assert.equal(plainEvidence(done.evidence), done.evidence);
+});
+
+test('merchant-wide answers are checked by default, named plainly, and can be limited to one transaction', async () => {
+  const { screens, answers } = harness([categoryItem(1, 'Shopping')]);
+  const html = screens.confirmPage(true);
+  assert.match(html, /data-category-always="1" checked/);
+  assert.match(text(html), /Apply to all from Sample Coffee/);
+  screens.handleChange({ type: 'change', target: { matches: s => s === 'input[data-category-always]',
+    dataset: { categoryAlways: '1' }, checked: false } });
+  screens.deckAction('guess', { key: 'Enter' });
+  await settle();
+  assert.deepEqual(answers, [['1', 'Shopping']]);
 });

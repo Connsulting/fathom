@@ -13,6 +13,7 @@ import { dedupeKey } from './dedupe.mjs';
 import { cents } from './format.mjs';
 import { captureChanges, revertChanges, touches } from './undo.mjs';
 import { accountNaming } from '../accounts/naming.mjs';
+import { answerShape } from '../jobs/triggers/common.mjs';
 
 function confirmTransaction(db, fn) {
   if (!db.isTransaction) return tx(db, fn);
@@ -79,12 +80,27 @@ const canonical = (value) => Array.isArray(value) ? value.map(canonical)
 export const canonicalJson = (value) => JSON.stringify(canonical(value));
 const stamp = (now) => now || new Date().toISOString();
 
+function plainQuestion(kind, question, context) {
+  if (!['fact_check', 'resolver_fact'].includes(kind) || !context?.key) return question;
+  const { key, value } = context;
+  if (kind === 'fact_check' && !question.includes(key)) return question;
+  let shape;
+  try { shape = answerShape(key); } catch { shape = null; }
+  const label = (shape?.label || key.split('.').at(-1).replace(/([a-z])([A-Z])/g, '$1 $2').replaceAll('_', ' '))
+    .replaceAll('{person}', 'you').replaceAll('{account}', 'this account');
+  if (kind === 'resolver_fact') return label;
+  const display = shape?.choices?.find(c => c.value === value)?.label
+    ?? (typeof value === 'boolean' ? value ? 'Yes' : 'No' : typeof value === 'number' ? String(value)
+      : typeof value === 'string' ? value.replaceAll('_', ' ') : 'the imported details');
+  return `The import says ${display} for "${label.replace(/\?$/, '')}". Is that right?`;
+}
+
 function itemOf(row) {
   return {
     id: row.id,
     kind: row.kind,
     subject: row.subject,
-    question: row.question,
+    question: plainQuestion(row.kind, row.question, parseJson(row.context, {})),
     options: parseJson(row.options, []),
     context: parseJson(row.context, {}),
     status: row.status,
@@ -119,6 +135,7 @@ export function listItems(db, { status = 'pending' } = {}) {
 // Returns {remembered: true, factsChanged} | {existing: true} | {queued: true, id}.
 export function ask(db, { kind, subject, question, options, context = {}, fileId = null, now } = {}) {
   if (!KINDS.includes(kind)) throw new TypeError('Unknown confirm kind');
+  question = plainQuestion(kind, question, context);
   const prior = findItem(db, kind, subject);
   if (prior && prior.status === 'answered') {
     markUsed(db, prior.id, { now });
@@ -235,7 +252,7 @@ function markUsed(db, id, { now } = {}) {
 // pending item). Cheap: a later change to a logged row (changed_since) shows only on revert. An
 // auto answer to account_owner or account_kind is not final on a later import (imported_since):
 // its account columns revert one by one, so an ordinary import does not block it.
-const IMPORT_EXEMPT = ['account_owner', 'account_kind', 'resolver_fact'];
+const IMPORT_EXEMPT = ['account_owner', 'account_kind', 'resolver_fact', 'employer_relation', 'employer_recipient', 'document_recipient'];
 export function finalReason(db, item) {
   if (!item || item.status !== 'answered') return null;
   if (item.answer === 'superseded') return 'stale';
@@ -410,6 +427,11 @@ function reopenOne(db, item, { now }) {
   const dependents = revertDependents(db, item.id);
   const reverted = revertAnswer(db, getItem(db, item.id));
   decline(db, item.id, { now });
+  for (const change of reverted) {
+    if (change.table !== 'confirm_items' || change.op !== 'update') continue;
+    const before = parseJson(change.before, {}), after = parseJson(change.after, {});
+    if (before.status === 'pending' && after.status === 'answered' && getItem(db, before.id)?.status === 'pending') decline(db, before.id, { now });
+  }
   return [...dependents, ...reverted];
 }
 
