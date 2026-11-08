@@ -15,8 +15,8 @@ const conflict = () => { throw new ToolError('conflict', 'This item changed sinc
 const itemState = async (db, id) => { const row=await db.prepare('SELECT * FROM confirm_items WHERE id=?').get(id); return row ? {...row} : null; };
 const answerState = async (db, id, kind) => ({ value: (await accountOf(db,id))[kind === 'account_owner' ? 'owner' : 'kind'],
   item: (async () => { const row=await db.prepare('SELECT * FROM confirm_items WHERE kind=? AND subject=?').get(kind,id); return row ? {...row} : null; })() });
-function domain(fn) {
-  try { return fn(); } catch (err) {
+async function domain(fn) {
+  try { return await fn(); } catch (err) {
     if (err instanceof HttpError || err.name === 'ConfirmError') throw new ToolError(err.reason || (err.status === 404 ? 'not_found' : err.status === 409 ? 'conflict' : 'bad_input'), err.reason || err.message);
     throw err;
   }
@@ -25,18 +25,18 @@ registerReceiptKind('account_field', { async restore(ctx,{id,before,after}) {
   const current = await accountOf(ctx.db,id), fields = Object.keys(after);
   if (!fields.every(k => current[k] === after[k])) conflict();
   if (Object.hasOwn(after,'mask')) {
-    domain(async () => await restoreAccountMask(ctx.db,id,{set:after.mask}));
+    await domain(async () => await restoreAccountMask(ctx.db,id,{set:after.mask}));
     if (before.mask !== null) await ctx.db.prepare('UPDATE accounts SET mask=? WHERE id=?').run(before.mask,id);
   }
   else await renameAccount(ctx.db,id,before.display_name);
 } });
 registerReceiptKind('account_answer', { async restore(ctx,{id,before,after}) {
   if (!isDeepStrictEqual(await answerState(ctx.db,id,after.kind),after.state)) conflict();
-  domain(async () => await afterAnswer(ctx,async () => await undoAccountAnswer(ctx.db,after.kind,id,before.undo,{now:nowOf(ctx)})));
+  await domain(async () => await afterAnswer(ctx,async () => await undoAccountAnswer(ctx.db,after.kind,id,before.undo,{now:nowOf(ctx)})));
 } });
 registerReceiptKind('account_merge', { async restore(ctx,{before,after}) {
   if (!isDeepStrictEqual(await itemState(ctx.db,after.itemId),after.item)) conflict();
-  domain(async () => await afterAnswer(ctx,async () => await reopenItem(ctx.db,after.itemId,{now:nowOf(ctx)})));
+  await domain(async () => await afterAnswer(ctx,async () => await reopenItem(ctx.db,after.itemId,{now:nowOf(ctx)})));
 } });
 
 async function mergeEvidence(args,ctx) {
@@ -57,7 +57,7 @@ async function update(operation,args,ctx) {
   await requireActor(ctx);
   if (operation==='merge') await mergeEvidence(args,ctx);
   let receipt, result;
-  domain(async () => await txWith(ctx,async (ctx) => {
+  await domain(async () => await txWith(ctx,async (ctx) => {
     const row=await accountOf(ctx.db,args.id);
     if (operation==='rename' || operation==='mask') {
       const field=operation==='rename'?'display_name':'mask', before={ [field]:row[field] };

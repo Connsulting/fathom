@@ -31,7 +31,7 @@ async function withStore(fn) {
 // The three household files in one ingestFiles call, engine off.
 const withHousehold = async (fn) => withStore(async (s) => {
   await P.ingestFiles(s.db, household(), s.opts(await offEngine()));
-  return fn(s);
+  return await fn(s);
 });
 
 // Account id by mask and institution ('' for the positions accounts, which carry none).

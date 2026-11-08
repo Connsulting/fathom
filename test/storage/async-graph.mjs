@@ -67,7 +67,7 @@ export function loadModule(file) {
 }
 
 // Build the analysis. `files` are absolute paths. Returns the graph with `asyncFns`, `calls`.
-export function analyze(files, { roots = () => false, root = null } = {}) {
+export function analyze(files, { roots = () => false, root = null, driver = () => false } = {}) {
   const modules = new Map(files.map(f => [f, loadModule(f)]));
   const fns = [];            // FunctionInfo
   const fnOf = new Map();    // node -> FunctionInfo
@@ -153,7 +153,7 @@ export function analyze(files, { roots = () => false, root = null } = {}) {
     const statements = node.type === 'Program' || node.type === 'BlockStatement' || node.type === 'StaticBlock' ? node.body
       : node.type === 'SwitchCase' ? node.consequent : null;
     if (isFunction(node)) {
-      for (const p of node.params) for (const n of patternNames(p)) declare(n, { kind: 'param' });
+      for (const p of node.params) for (const n of patternNames(p)) declare(n, { kind: 'param', owner: node, name: n });
       if (node.type === 'FunctionExpression' && node.id) declare(node.id.name, { kind: 'fn', info: fnOf.get(node) });
       if (node.body.type === 'BlockStatement') for (const [k, v] of scopeNames(mod, node.body)) declare(k, v);
     }
@@ -373,7 +373,11 @@ export function analyze(files, { roots = () => false, root = null } = {}) {
     });
   }
 
-  for (const c of calls) Object.assign(c, classify(c));
+  for (const c of calls) Object.assign(c, driver(c.mod.file) ? { targets: [] } : classify(c));
+  const fnObject = new Map();
+  for (const c of calls) c.node.arguments.forEach((a, index) => {
+    if (a.type === 'ObjectExpression') for (const q of a.properties) if (q.type === 'Property') fnObject.set(q, { call: c.node, index });
+  });
   const callersOf = new Map();
   for (const c of calls) for (const t of c.targets) {
     if (!callersOf.has(t)) callersOf.set(t, []);
@@ -399,12 +403,54 @@ export function analyze(files, { roots = () => false, root = null } = {}) {
     fn.reaches = true;
     if (!fn.async) fn.async = true;
     for (const c of callersOf.get(fn) || []) if (!done.has(c) && reaches(c)) work.push(c);
+    // Handed to another function as an argument or an object argument's property.
+    const fp = fn.parent;
+    if (fp?.type === 'CallExpression' && fp.arguments.includes(fn.node)) passCallback(fp, fp.arguments.indexOf(fn.node), null);
+    if (fp?.type === 'Property' && fp.value === fn.node) {
+      const objNode = fnObject.get(fp);
+      if (objNode?.call) passCallback(objNode.call, objNode.index, propName(fp.key));
+    }
     // An async callback makes an array iteration call asynchronous too.
     const p = fn.parent;
     if (p?.type === 'CallExpression' && p.arguments.includes(fn.node)) {
       const pc = callNode.get(p);
       const name = p.callee.type === 'MemberExpression' ? propName(p.callee.property) : null;
       if (pc && !pc.seed && name && ARRAY_CALLBACKS.has(name)) { pc.seed = 'series'; pc.series = name; work.push(pc); }
+    }
+  };
+  // Async callbacks handed to a function: calls of the parameter that receives one are asynchronous.
+  const paramCalls = new Map(); // owner function node -> name -> [call]
+  for (const c of calls) {
+    const callee = c.node.callee;
+    if (callee.type !== 'Identifier') continue;
+    const b = lookup(c.mod, callee.name, c.ancestors);
+    if (b?.kind !== 'param' || !b.owner) continue;
+    if (!paramCalls.has(b.owner)) paramCalls.set(b.owner, new Map());
+    const m = paramCalls.get(b.owner);
+    if (!m.has(b.name)) m.set(b.name, []);
+    m.get(b.name).push(c);
+  }
+  const asyncParam = (owner, name) => {
+    for (const c of paramCalls.get(owner)?.get(name) || []) if (!done.has(c) && !c.seed) { c.seed = 'callback'; work.push(c); }
+  };
+  const paramName = (param, key) => {
+    if (param?.type === 'AssignmentPattern') param = param.left;
+    if (!param) return null;
+    if (key === null) return param.type === 'Identifier' ? param.name : null;
+    if (param.type !== 'ObjectPattern') return null;
+    for (const q of param.properties) {
+      if (q.type !== 'Property' || propName(q.key) !== key) continue;
+      const v = q.value.type === 'AssignmentPattern' ? q.value.left : q.value;
+      return v.type === 'Identifier' ? v.name : null;
+    }
+    return null;
+  };
+  const passCallback = (call, index, key) => {
+    const pc = callNode.get(call);
+    if (!pc) return;
+    for (const t of pc.targets) {
+      const name = paramName(t.node.params[index], key);
+      if (name) asyncParam(t.node, name);
     }
   };
   const callNode = new Map(calls.map(c => [c.node, c]));
@@ -469,7 +515,7 @@ export function consumption(call) {
       case 'NewExpression': {
         if (p.callee === child) return 'member';
         const callee = p.callee.type === 'MemberExpression' ? p.callee.property.name : p.callee.name;
-        if (['all', 'allSettled', 'race', 'any', 'resolve', 'push', 'add', 'set', 'track', 'waitUntil', 'rejects', 'doesNotReject'].includes(callee)) return 'all';
+        if (['all', 'allSettled', 'race', 'any', 'resolve', 'push', 'add', 'set', 'track', 'waitUntil', 'rejects', 'doesNotReject', 'refuses'].includes(callee)) return 'all';
         return 'argument';
       }
       case 'IfStatement': case 'WhileStatement': case 'DoWhileStatement': case 'ForStatement':

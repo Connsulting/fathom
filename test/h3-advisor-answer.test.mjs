@@ -41,9 +41,9 @@ test('AC3: recording the advisor answer through Ask clears the wait on the next 
 
   const text = 'Yes, my advisor confirmed my retirement plan terms and eligibility.';
   const transport = createEngine({ mode: 'fake' });
-  const engine = { mode: 'live', isOn: () => true, call: request => request.purpose === 'title'
+  const engine = { mode: 'live', isOn: () => true, call: async request => request.purpose === 'title'
     ? Promise.resolve({ text: 'Advisor answer', toolResults: [] })
-    : transport.call({ ...request, fake: [{ toolCalls: [{ name: 'answer', args: {
+    : await transport.call({ ...request, fake: [{ toolCalls: [{ name: 'answer', args: {
       operation: 'fact', key: 'retirement.planTermsConfirmed', value: true, evidence: text,
     } }] }, { text: 'Saved your advisor answer.' }] }) };
   const root = householdOf(db).root;

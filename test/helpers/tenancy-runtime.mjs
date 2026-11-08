@@ -347,7 +347,7 @@ const canonical = row => JSON.stringify(Object.keys(row).sort().map(k => [k, pla
 export async function withSqlite(file, fn) {
   if (!existsSync(file)) throw new Error(`no database at ${file}`);
   const db = await openScope({ path: file, journal: null, busyTimeout: 0 });
-  try { return fn(db); } finally { await db.close(); }
+  try { return await fn(db); } finally { await db.close(); }
 }
 
 const hasRowid = async (db, table) => {

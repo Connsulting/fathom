@@ -176,8 +176,8 @@ export async function recAction(ctx) {
 // veto dismisses with 'advisor vetoed').
 export { applyStatusAction } from '../store/recs.mjs';
 
-function decisionWrite(ctx, fn) {
-  try { return fn(); }
+async function decisionWrite(ctx, fn) {
+  try { return await fn(); }
   catch (err) { if (err instanceof ToolError) throw new HttpError(err.code === 'not_found' ? 404 : err.code === 'conflict' ? 409 : 400, err.message); throw err; }
 }
 
@@ -187,18 +187,18 @@ async function scheduleReplan(ctx) {
 }
 
 export async function wargamePick(ctx) {
-  decisionWrite(ctx, async () => await pickWargame(ctx.db, ctx.params.name, ctx.body.index));
+  await decisionWrite(ctx, async () => await pickWargame(ctx.db, ctx.params.name, ctx.body.index));
   return { scenario: await scenarioOf(ctx) };
 }
 
 export async function decisionDecide(ctx) {
-  decisionWrite(ctx, async () => await decide(ctx.db, ctx.params.id, { point: ctx.body.index, clock: ctx.config?.clock }));
+  await decisionWrite(ctx, async () => await decide(ctx.db, ctx.params.id, { point: ctx.body.index, clock: ctx.config?.clock }));
   await scheduleReplan(ctx);
   return { scenario: await scenarioOf(ctx) };
 }
 
 export async function decisionRevisit(ctx) {
-  decisionWrite(ctx, async () => await revisit(ctx.db, ctx.params.id));
+  await decisionWrite(ctx, async () => await revisit(ctx.db, ctx.params.id));
   await scheduleReplan(ctx);
   return { scenario: await scenarioOf(ctx) };
 }
@@ -342,7 +342,7 @@ const streaming = async ctx => ({
 async function storeTurn(ctx, key, mine, reply, before) {
   return await txWith(ctx, async (ctx) => {
     if ((await receiptsFor(ctx.db, key)).length) await ensureActionConversation(ctx.db, key, await stamp(ctx), ctx.body.recId);
-    if (before) before();
+    if (before) await before();
     const actorId = ctx.identity?.id || (await getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null);
     const ownerInput = typeof ctx.body.text === 'string' && ctx.body.questionId == null && actorId
       ? { ownerInput: { actorId } } : null;
@@ -573,7 +573,7 @@ async function dropIfEmpty(db, key) {
 export async function recStartOver(ctx) {
   const { db } = ctx;
   const { id } = ctx.params;
-  decisionWrite(ctx, async () => await detachRecThreads(db, id, { now: await stamp(ctx) }));
+  await decisionWrite(ctx, async () => await detachRecThreads(db, id, { now: await stamp(ctx) }));
   return { scenario: await scenarioOf(ctx) };
 }
 

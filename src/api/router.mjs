@@ -331,7 +331,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
           body = await readJsonBody(req);
         }
         if (gated && !r.public) {
-          identity = revalidateRequest({ authenticate: async () => await identityOf(req, auth), checkAccess: async fresh => await checkAccess(r, fresh), assertion, household, runtimes });
+          identity = await revalidateRequest({ authenticate: async () => await identityOf(req, auth), checkAccess: async fresh => await checkAccess(r, fresh), assertion, household, runtimes });
         }
         // A write to a seeded demo household drops its synthetic marker.
         const seeded = household && !gated && !config.publicDemo && r.method === 'POST' && path !== '/api/demo/reset' ? household.db : null;

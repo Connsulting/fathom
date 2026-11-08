@@ -66,10 +66,10 @@ function fakeEngine(scripts) {
   const engine = {
     mode: 'fake',
     isOn: () => true,
-    call(request) {
+    async call(request) {
       const n = calls.length;
       calls.push(request);
-      return inner.call({ ...request, fake: scripts[Math.min(n, scripts.length - 1)] });
+      return await inner.call({ ...request, fake: scripts[Math.min(n, scripts.length - 1)] });
     },
   };
   return { engine, calls };

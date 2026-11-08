@@ -20,7 +20,7 @@ async function twoAccounts(s) {
 const ctx = (s, id, query = {}) => ({ db: s.db, config: s.config, params: { id }, query });
 
 async function status(fn) {
-  try { fn(); } catch (e) { return e.status ?? e.code ?? 'throw'; }
+  try { await fn(); } catch (e) { return e.status ?? e.code ?? 'throw'; }
   return 'ok';
 }
 
@@ -209,7 +209,7 @@ test('transactions refuse bad input', async () => {
   const { accountTransactions } = await src('src/api/account-detail.mjs');
   try {
     const { chase } = await twoAccounts(s);
-    const bad = (query) => status(async () => await accountTransactions(ctx(s, chase, query)));
+    const bad = async (query) => status(async () => await accountTransactions(ctx(s, chase, query)));
     assert.equal(await bad({ limit: '0' }), 400);
     assert.equal(await bad({ limit: '1000' }), 400);
     assert.equal(await bad({ limit: 'x' }), 400);

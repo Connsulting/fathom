@@ -106,18 +106,18 @@ test('after migration 020 auth_tokens takes add-passkey, refuses unknown purpose
   await migrate(db, THROUGH);
   const insert = db.prepare('INSERT INTO auth_tokens (hash, user_id, purpose, expires_at) VALUES (?, ?, ?, ?)');
   await assert.doesNotReject(async () => await insert.run(hex('5'), 'user-owner', 'add-passkey', 1_900_000_005_000));
-  await assert.rejects(async () => await insert.run(hex('6'), 'user-owner', 'add-passkey', 1_900_000_006_000), /UNIQUE/, 'one pending add-passkey token per user');
+  await assert.rejects(async () => await insert.run(hex('6'), 'user-owner', 'add-passkey', 1_900_000_006_000), /constraint_unique/, 'one pending add-passkey token per user');
   await assert.doesNotReject(async () => await insert.run(hex('6'), 'user-member', 'add-passkey', 1_900_000_006_000));
-  await assert.rejects(async () => await insert.run(hex('9'), 'user-owner', 'bogus', 1_900_000_007_000), /CHECK/);
-  await assert.rejects(async () => await insert.run(hex('9'), 'user-owner', 'Add-Passkey', 1_900_000_007_000), /CHECK/);
-  await assert.rejects(async () => await insert.run(hex('5'), 'user-pending', 'recovery', 1_900_000_007_000), /UNIQUE|PRIMARY/, 'hash stays the primary key');
-  await assert.rejects(async () => await insert.run(hex('9'), 'user-absent', 'recovery', 1_900_000_007_000), /FOREIGN KEY/);
-  await assert.rejects(async () => await db.prepare('INSERT INTO auth_tokens (hash, user_id, purpose) VALUES (?, ?, ?)').run(hex('9'), 'user-pending', 'recovery'), /NOT NULL/);
+  await assert.rejects(async () => await insert.run(hex('9'), 'user-owner', 'bogus', 1_900_000_007_000), /constraint_check/);
+  await assert.rejects(async () => await insert.run(hex('9'), 'user-owner', 'Add-Passkey', 1_900_000_007_000), /constraint_check/);
+  await assert.rejects(async () => await insert.run(hex('5'), 'user-pending', 'recovery', 1_900_000_007_000), /constraint_unique/, 'hash stays the primary key');
+  await assert.rejects(async () => await insert.run(hex('9'), 'user-absent', 'recovery', 1_900_000_007_000), /constraint_foreign_key/);
+  await assert.rejects(async () => await db.prepare('INSERT INTO auth_tokens (hash, user_id, purpose) VALUES (?, ?, ?)').run(hex('9'), 'user-pending', 'recovery'), /constraint_check/);
 
   await db.prepare('INSERT INTO auth_challenges (hash, ceremony, user_id, token_hash, session_hash, challenge, expires_at) VALUES (?, ?, ?, ?, NULL, ?, ?)')
     .run(hex('0'), 'register', 'user-owner', hex('5'), 'synthetic-challenge-add', 1_900_000_000_900);
   await assert.rejects(async () => await db.prepare('INSERT INTO auth_challenges (hash, ceremony, user_id, token_hash, session_hash, challenge, expires_at) VALUES (?, ?, ?, ?, NULL, ?, ?)')
-    .run(hex('9'), 'register', 'user-owner', hex('9'), 'synthetic-challenge-orphan', 1_900_000_000_900), /FOREIGN KEY/);
+    .run(hex('9'), 'register', 'user-owner', hex('9'), 'synthetic-challenge-orphan', 1_900_000_000_900), /constraint_foreign_key/);
 
   await db.prepare('DELETE FROM auth_tokens WHERE hash = ?').run(hex('b'));
   assert.equal((await db.prepare('SELECT count(*) AS n FROM auth_challenges WHERE hash = ?').get(hex('1'))).n, 0, 'deleting a token cascades its challenge');

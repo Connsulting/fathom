@@ -23,7 +23,7 @@ export async function setCurvePositions(db, positions, { now = new Date().toISOS
         VALUES (?, ?, ?, ?, ?, ?, ?)`).run(key, text, actorId, origin, conversationKey, now, now);
       rows.push(await db.prepare('SELECT * FROM preferences WHERE id = ?').get(key));
     }
-    onWrite?.([], rows);
+    await onWrite?.([], rows);
     return Object.fromEntries((await loadCurve(db, await loadContent(db))).map(a => [a.id, a.value]));
   });
 }

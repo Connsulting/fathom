@@ -24,7 +24,7 @@ function domainError(err) {
   if (err.name === 'ConfirmError' || err instanceof HttpError) return new ToolError(err.reason || err.code || (err.status === 404 ? 'not_found' : err.status === 409 ? 'conflict' : 'bad_input'), err.reason || err.message);
   return err;
 }
-function domain(fn) { try { return fn(); } catch (err) { throw domainError(err); } }
+async function domain(fn) { try { return await fn(); } catch (err) { throw domainError(err); } }
 async function changedRows(db,ids) {
   const changes=await flatMapSeries(ids, async id=>parseJson((await db.prepare('SELECT changes FROM confirm_undo WHERE item_id=?').get(id))?.changes,[])||[]);
   const rows=new Map();
@@ -46,7 +46,7 @@ async function rowStates(db,rows){return await mapSeries(rows, async ({table,row
 registerReceiptKind('confirm_answer',{async restore(ctx,{before,after}){
   const ids=after.ids;
   if(!isDeepStrictEqual(await itemState(ctx.db,ids),after.items))changed();
-  domain(async ()=>await afterAnswer(ctx,async ()=>{
+  await domain(async ()=>await afterAnswer(ctx,async ()=>{
     const out=await reopenItems(ctx.db,ids,{now:nowOf(ctx)});
     const prior=before.items.filter(i=>i.status==='answered').map(i=>({id:i.id,option:i.answer}));
     if(prior.length)await answerItems(ctx.db,prior,{now:nowOf(ctx)});
@@ -55,7 +55,7 @@ registerReceiptKind('confirm_answer',{async restore(ctx,{before,after}){
 }});
 registerReceiptKind('confirm_reopen',{async restore(ctx,{before,after}){
   if(!isDeepStrictEqual(await itemState(ctx.db,after.ids),after.items)||!isDeepStrictEqual(await rowStates(ctx.db,after.rows),after.rows))changed();
-  domain(async ()=>await afterAnswer(ctx,async ()=>await answerItems(ctx.db,before.items.map(i=>({id:i.id,option:i.answer})),{now:nowOf(ctx)})));
+  await domain(async ()=>await afterAnswer(ctx,async ()=>await answerItems(ctx.db,before.items.map(i=>({id:i.id,option:i.answer})),{now:nowOf(ctx)})));
 }});
 registerReceiptKind('yearend_mark',{async restore(ctx,{id,before,after}){
   const [year,key]=JSON.parse(id);
@@ -68,7 +68,7 @@ registerReceiptKind('yearend_mark',{async restore(ctx,{id,before,after}){
 async function confirmWrite(operation,args,ctx){
   await requireActor(ctx);
   let result,receipt;
-  domain(async ()=>await txWith(ctx,async (ctx)=>{
+  await domain(async ()=>await txWith(ctx,async (ctx)=>{
     const ids=operation==='confirm'?args.items.map(i=>i.id):args.ids;
     if(new Set(ids).size!==ids.length)throw new ToolError('bad_input','Each Confirm item may appear only once.');
     const before={items:await itemState(ctx.db,ids)};
@@ -104,7 +104,7 @@ async function yearendMark(args,ctx){
   await requireActor(ctx);
   const year=args.year??taxYearFor(await clockOf(ctx)),key=args.itemKey;
   let receipt;
-  domain(async ()=>await txWith(ctx,async (ctx)=>{
+  await domain(async ()=>await txWith(ctx,async (ctx)=>{
     const get=async ()=>await ctx.db.prepare('SELECT * FROM yearend_marks WHERE tax_year=? AND item_key=?').get(year,key)||null;
     const before=await get();await markItem({...ctx,config:{...ctx.config,clock:await clockOf(ctx)},body:{year,key,reason:args.reason}});
     receipt=await saveReceipt(ctx,{scope:'write:confirm',kind:'yearend_mark',id:JSON.stringify([year,key]),label:'Expected tax document',before,after:await get()});

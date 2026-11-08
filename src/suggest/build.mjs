@@ -87,7 +87,7 @@ export async function buildSuggestions(db, { clock: override, goals } = {}) {
   const settings = await getSetting(db, SUGGEST_SETTING, null) || {};
   const accounts = await loadAccounts(db);
   // Each input is read once, and only when some goal needs it.
-  const lazy = fn => { let memo; return () => (memo ??= { v: fn() }).v; };
+  const lazy = fn => { let memo; return async () => (memo ??= { v: await fn() }).v; };
   const spending = lazy(async () => spendingInputs({
     ...await loadCategoryInputs(db),
     accounts,

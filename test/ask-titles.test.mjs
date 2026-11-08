@@ -178,7 +178,7 @@ function stubEngine(reply, { on = true, during } = {}) {
       isOn: () => on,
       call: async req => {
         calls.push(req);
-        if (during) during();
+        if (during) await during();
         if (reply instanceof Error) throw reply;
         return { text: typeof reply === 'string' ? reply : JSON.stringify(reply), costUsd: 0, model: TITLE_MODEL, toolResults: [] };
       },
@@ -763,16 +763,16 @@ test('AC3 the fake engine accepts the title purpose and records it in the ledger
   assert.equal(ledger.entries.length, 1);
   assert.equal(ledger.entries[0].purpose, 'title');
   assert.equal(ledger.entries[0].costUsd, 0.0001);
-  await assert.rejects(engine.call({ purpose: 'bogus', messages: [{ role: 'user', content: 'x' }], fake: [{ text: '{}' }] }), TypeError);
+  await assert.rejects(await engine.call({ purpose: 'bogus', messages: [{ role: 'user', content: 'x' }], fake: [{ text: '{}' }] }), TypeError);
 });
 
 test('AC3 a title call is refused when the engine is off or the cap is spent', async () => {
   const off = createEngine({ mode: 'off' });
-  await assert.rejects(off.call({ purpose: 'title', messages: [{ role: 'user', content: 'x' }] }), EngineOffError);
+  await assert.rejects(await off.call({ purpose: 'title', messages: [{ role: 'user', content: 'x' }] }), EngineOffError);
   const now = () => new Date('2026-11-05T12:00:00.000Z');
   const ledger = createMemoryLedger([{ ts: '2026-11-05T09:00:00.000Z', purpose: 'chat', costUsd: 5 }]);
   const capped = createEngine({ mode: 'fake', ledger, capUsd: 1, now });
-  await assert.rejects(capped.call({ purpose: 'title', messages: [{ role: 'user', content: 'x' }], fake: [{ text: '{"title":"A"}' }] }),
+  await assert.rejects(await capped.call({ purpose: 'title', messages: [{ role: 'user', content: 'x' }], fake: [{ text: '{"title":"A"}' }] }),
     BudgetExceededError);
   assert.equal(ledger.entries.length, 1, 'nothing was spent');
 });

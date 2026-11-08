@@ -25,7 +25,7 @@ async function model(db, answer) {
     async call(req) {
       calls.push(req);
       const payload = JSON.parse(req.messages[0].content);
-      const answers = typeof answer === 'function' ? answer(payload) : answer;
+      const answers = typeof answer === 'function' ? await answer(payload) : answer;
       return await runtime.call({ ...req, fake: [{ text: JSON.stringify({ answers }), costUsd: 0.001 }] });
     } };
 }
@@ -189,7 +189,7 @@ test('the engine rechecks a call budget after serialized competing spend', async
   const engine = createEngine({ mode: 'fake', ledger, capUsd: 0.10, now: () => new Date(NOW) });
   const req = { purpose: 'job', messages: [{ role: 'user', content: 'Synthetic classification' }], maxTokens: 100, budget: { maxCostUsd: 0.10 } };
   await engine.call({ ...req, fake: [{ text: '{}', costUsd: 0.09 }] });
-  await assert.rejects(engine.call({ ...req, fake: [{ text: '{}', costUsd: 0.001 }] }), BudgetExceededError);
+  await assert.rejects(await engine.call({ ...req, fake: [{ text: '{}', costUsd: 0.001 }] }), BudgetExceededError);
   assert.equal(ledger.entries.length, 1);
 });
 

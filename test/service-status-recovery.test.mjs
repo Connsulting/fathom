@@ -35,11 +35,11 @@ function bindEngine({ running = false, route = 'engine' } = {}) {
 }
 
 function pollCase(name, fn) {
-  test(`F1 engine poll: ${name}`, () => {
+  test(`F1 engine poll: ${name}`, async () => {
     mock.timers.enable({ apis: ['setTimeout'] });
     try {
       engineScreen.reset();
-      fn();
+      await fn();
     } finally {
       engineScreen.reset();
       mock.timers.reset();

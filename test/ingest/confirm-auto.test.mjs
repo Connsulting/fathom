@@ -43,7 +43,7 @@ async function withHousehold(fn, { names = null } = {}) {
   return withStore(async (s) => {
     if (names) setNames(s.db, names);
     await P.ingestFiles(s.db, householdFiles(), s.opts(await offEngine()));
-    return fn(s);
+    return await fn(s);
   });
 }
 

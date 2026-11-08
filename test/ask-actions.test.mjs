@@ -149,9 +149,9 @@ for (const recId of [null, 'new-child']) for (const fail of [false, true]) {
     await addFact(db, 'household.expectingChild', true);
     await planRun(db);
     const transport = createEngine({ mode: 'fake' });
-    const engine = { mode: 'live', isOn: () => true, call: request => request.purpose === 'title'
+    const engine = { mode: 'live', isOn: () => true, call: async request => request.purpose === 'title'
       ? Promise.resolve({ text: 'Expected date', toolResults: [] })
-      : transport.call({ ...request, fake: [ { toolCalls: [{ name: 'answer', args: factArgs }] },
+      : await transport.call({ ...request, fake: [ { toolCalls: [{ name: 'answer', args: factArgs }] },
         fail ? { status: 'transport_error', is_error: true } : { text: 'The expected date is saved.' } ] }) };
     const answerer = createLiveAnswerer({ engine, root: householdOf(db).root, services: { ...householdOf(db).services, engine: engine, config: { dataDir: householdOf(db).root } } });
     const ctx = { db, config: {}, identity: { id: 'person-a' }, scheduler: { runNow: async () => planRun(db) }, answerer,
@@ -241,7 +241,7 @@ test('a fact action replans with the same locked engine after the model round re
   await planRun(db);
   let proseCalls = 0;
   const core = createEngine({ mode: 'fake' });
-  const engine = { mode: 'live', isOn: () => true, call(request) {
+  const engine = { mode: 'live', isOn: () => true, async call(request) {
     let fake;
     if (request.purpose === 'job') {
       if (request.system.includes('rewrite one recommendation')) proseCalls++;
@@ -250,7 +250,7 @@ test('a fact action replans with the same locked engine after the model round re
       fake = [{ text: JSON.stringify(input.draft || {}) }];
     } else if (request.purpose === 'title') fake = [{ text: 'Expected date' }];
     else fake = [{ toolCalls: [{ name: 'answer', args: factArgs }] }, { text: 'The expected date is saved.' }];
-    return core.call({ ...request, fake });
+    return await core.call({ ...request, fake });
   } };
   const out = await threadCreate({ db, config: {}, identity: { id: 'person-a' },
     body: { recId: 'new-child', text: words }, answerer: createLiveAnswerer({ engine, root: householdOf(db).root, services: { ...householdOf(db).services, engine: engine, config: { dataDir: householdOf(db).root } } }),

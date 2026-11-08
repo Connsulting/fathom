@@ -34,7 +34,7 @@ registerReceiptKind('curve_preferences', { async restore(ctx, { after }) {
 async function writing(ctx, { scope, kind, id: entityId, label }, fn) {
   await requireActor(ctx);
   let receipt;
-  const result = fn(async (before, after) => {
+  const result = await fn(async (before, after) => {
     const value = row => !row ? null : kind === 'setting' ? JSON.parse(row.value)
       : { id: row.id, title: JSON.parse(row.def).title, status: goalStatusOf(row) };
     receipt = await saveReceipt(ctx, { scope, kind, id: entityId, label, before, after, from: value(before), to: value(after) });

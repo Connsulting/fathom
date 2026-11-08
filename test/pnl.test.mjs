@@ -149,8 +149,8 @@ const months = (from, to) => {
   while (y < ty || (y === ty && m <= tm)) { out.push(`${y}-${pad(m)}`); m++; if (m > 12) { m = 1; y++; } }
   return out;
 };
-function code(fn) {
-  try { fn(); } catch (e) {
+async function code(fn) {
+  try { await fn(); } catch (e) {
     assert.ok(e instanceof PnlError, `expected PnlError, got ${e && e.constructor && e.constructor.name}: ${e && e.message}`);
     assert.ok(e instanceof Error);
     return e.code;
@@ -408,20 +408,20 @@ test('pl-ac1 prior year present when it has data and null otherwise; default ran
 test('pl-ac1 errors: unknown entity, from after to, more than 120 months, malformed months; nearby valid input is accepted', async (t) => {
   const { db } = await store(t);
   await business(db);
-  assert.equal(code(async () => await businessPnl({ db, entity: 'entity:nosuchname' })), 'unknown_entity');
-  assert.equal(code(async () => await businessPnl({ db, entity: 'No Such Name' })), 'unknown_entity');
-  assert.equal(code(async () => await businessPnl({ db, entity: 'Idle Venture' })), 'unknown_entity', 'a name with no data is not a P&L');
-  assert.equal(code(async () => await businessPnl({ db, entity: 'Example Studio' })), 'ok');
-  assert.equal(code(async () => await businessPnl({ db, entity: STUDIO, from: '2032-05', to: '2032-04' })), 'bad_range');
-  assert.equal(code(async () => await businessPnl({ db, entity: STUDIO, from: '2032-04', to: '2032-04' })), 'ok');
-  assert.equal(code(async () => await businessPnl({ db, entity: STUDIO, from: '2022-08', to: '2032-08' })), 'bad_range', '121 months');
-  assert.equal(code(async () => await businessPnl({ db, entity: STUDIO, from: '2022-09', to: '2032-08' })), 'ok', '120 months');
+  assert.equal(await code(async () => await businessPnl({ db, entity: 'entity:nosuchname' })), 'unknown_entity');
+  assert.equal(await code(async () => await businessPnl({ db, entity: 'No Such Name' })), 'unknown_entity');
+  assert.equal(await code(async () => await businessPnl({ db, entity: 'Idle Venture' })), 'unknown_entity', 'a name with no data is not a P&L');
+  assert.equal(await code(async () => await businessPnl({ db, entity: 'Example Studio' })), 'ok');
+  assert.equal(await code(async () => await businessPnl({ db, entity: STUDIO, from: '2032-05', to: '2032-04' })), 'bad_range');
+  assert.equal(await code(async () => await businessPnl({ db, entity: STUDIO, from: '2032-04', to: '2032-04' })), 'ok');
+  assert.equal(await code(async () => await businessPnl({ db, entity: STUDIO, from: '2022-08', to: '2032-08' })), 'bad_range', '121 months');
+  assert.equal(await code(async () => await businessPnl({ db, entity: STUDIO, from: '2022-09', to: '2032-08' })), 'ok', '120 months');
   for (const bad of ['2032-13', '2032-1', '2032/01', 'soon', '2032-00']) {
-    assert.equal(code(async () => await businessPnl({ db, entity: STUDIO, from: bad, to: '2032-08' })), 'bad_range', bad);
-    assert.equal(code(async () => await businessPnl({ db, entity: STUDIO, from: '2032-01', to: bad })), 'bad_range', bad);
+    assert.equal(await code(async () => await businessPnl({ db, entity: STUDIO, from: bad, to: '2032-08' })), 'bad_range', bad);
+    assert.equal(await code(async () => await businessPnl({ db, entity: STUDIO, from: '2032-01', to: bad })), 'bad_range', bad);
   }
-  assert.equal(code(async () => await businessPnlRows({ db, entity: 'entity:nosuchname', section: 'income', category: 'Income' })), 'unknown_entity');
-  assert.equal(code(async () => await businessPnlRows({ db, entity: STUDIO, section: 'income', category: 'Income', from: '2032-13' })), 'bad_range');
+  assert.equal(await code(async () => await businessPnlRows({ db, entity: 'entity:nosuchname', section: 'income', category: 'Income' })), 'unknown_entity');
+  assert.equal(await code(async () => await businessPnlRows({ db, entity: STUDIO, section: 'income', category: 'Income', from: '2032-13' })), 'bad_range');
 });
 
 test('pl-ac1 demo store: workbook entities own their mapped business checking account', async (t) => {
@@ -664,7 +664,7 @@ test('pl-ac4 the module exports the contract, takes one object, never writes, an
   const directRows = await businessPnlRows({ db, entity: STUDIO, section: 'income', category: 'Consulting revenue' });
   await businessPnl({ db, entity: BIZ, from: '2032-01', to: '2032-12' });
   await PNL.householdSpending({ db });
-  code(async () => await businessPnl({ db, entity: 'entity:nosuchname' }));
+  await code(async () => await businessPnl({ db, entity: 'entity:nosuchname' }));
   assert.equal(await changes(), before, 'P&L reads never write the store');
 
   const srv = await serveAppFixture({ authenticated: true, db, config: { clock: CLOCK, dataDir: dir }, answerer: null });

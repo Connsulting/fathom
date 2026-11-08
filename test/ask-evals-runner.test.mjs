@@ -85,7 +85,7 @@ test('budget ledger excludes demo spend and refuses a later round inside one eng
     const engine = createEngine({ admitRound: async req => await ledger.admitRound(req), mode: 'fake', ledger, capUsd: 1, responses: [
       { toolCalls: [{ name: 'read', args: {} }], costUsd: 0.99 }, { text: '10', costUsd: 0.02 },
     ] });
-    await assert.rejects(engine.call(wrapped), BudgetExceededError);
+    await assert.rejects(await engine.call(wrapped), BudgetExceededError);
     assert.equal(ledger.state.stopped, 'budget');
     assert.equal(ledger.costUsd, 0.99);
     assert.equal(ledger.reserves.length, 2);

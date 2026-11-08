@@ -18,7 +18,7 @@ export async function confirmItems(args, ctx) {
   return {items};
 }
 async function read(fn,args,ctx) {
-  try {return bounded(plainDeep(await tokenScope(ctx.db),fn(args,ctx)));}
+  try {return bounded(plainDeep(await tokenScope(ctx.db),await fn(args,ctx)));}
   catch(err){if(err instanceof HttpError)throw new ToolError(err.status===404?'not_found':'bad_input',err.message);throw err;}
 }
 export const operations=[

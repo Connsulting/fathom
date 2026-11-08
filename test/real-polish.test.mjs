@@ -267,13 +267,13 @@ describe('decide and revisit', () => {
 
   test('refusals: unknown, already decided, not decided, upcoming, out-of-range pick', async () => {
     const db = await plannedStore();
-    const code = fn => { try { fn(); } catch (e) { assert.ok(e instanceof HttpError); return e.status; } return 200; };
-    assert.equal(code(async () => await decisionDecide(ctxFor(db, 'nope'))), 404);
-    assert.equal(code(async () => await decisionRevisit(ctxFor(db, 'salary-2026'))), 409, 'revisit an open decision');
-    assert.equal(code(async () => await decisionDecide(ctxFor(db, 'salary-2026', { index: 99 }))), 400);
-    assert.equal(code(async () => await decisionDecide(ctxFor(db, 'salary-2027'))), 409, 'upcoming');
-    assert.equal(code(async () => await decisionDecide(ctxFor(db, 'salary-2026'))), 200, 'default pick');
-    assert.equal(code(async () => await decisionDecide(ctxFor(db, 'salary-2026'))), 409, 'already decided');
+    const code = async fn => { try { await fn(); } catch (e) { assert.ok(e instanceof HttpError); return e.status; } return 200; };
+    assert.equal(await code(async () => await decisionDecide(ctxFor(db, 'nope'))), 404);
+    assert.equal(await code(async () => await decisionRevisit(ctxFor(db, 'salary-2026'))), 409, 'revisit an open decision');
+    assert.equal(await code(async () => await decisionDecide(ctxFor(db, 'salary-2026', { index: 99 }))), 400);
+    assert.equal(await code(async () => await decisionDecide(ctxFor(db, 'salary-2027'))), 409, 'upcoming');
+    assert.equal(await code(async () => await decisionDecide(ctxFor(db, 'salary-2026'))), 200, 'default pick');
+    assert.equal(await code(async () => await decisionDecide(ctxFor(db, 'salary-2026'))), 409, 'already decided');
   });
 });
 

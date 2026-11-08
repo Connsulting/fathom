@@ -14,9 +14,9 @@ test('confirmed Ask proposals keep household services and owner statements', asy
   const s = await tempInstance();
   let receiptId, confirmedContext;
   const transport = createEngine({ mode: 'fake' });
-  const engine = { mode: 'live', isOn: () => true, call(request) {
+  const engine = { mode: 'live', isOn: () => true, async call(request) {
     if (request.purpose === 'title') return Promise.resolve({ text: JSON.stringify({ title: 'Synthetic undo' }), toolResults: [] });
-    return transport.call({ ...request, fake: [
+    return await transport.call({ ...request, fake: [
       { toolCalls: [{ name: 'undo', args: { operation: 'undo', id: receiptId, propose: true } }] },
       { text: 'Undo your change? Confirm below.' },
     ] });
@@ -88,7 +88,7 @@ test('Ask and MCP share the resolved household services and root, with actor-bou
   };
   t.after(() => { probe.handler = original; });
   const fake = createEngine({ mode: 'fake' });
-  const engine = { mode: 'live', isOn: () => true, call: request => fake.call({ ...request, fake: [
+  const engine = { mode: 'live', isOn: () => true, call: async request => await fake.call({ ...request, fake: [
     { toolCalls: [{ name: 'transactions', args: { operation: 'search' } }] }, { text: 'Your request is recorded.' },
   ] }) };
   const scheduler = { runNow: () => ({ status: 'ok' }), stop() {} };

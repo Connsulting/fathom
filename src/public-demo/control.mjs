@@ -49,7 +49,7 @@ export async function createDemoControl(config, { now = Date.now } = {}) {
       PRIMARY KEY(minute, ip));`);
   const limits = config.publicDemoLimits;
   const day = () => new Date(now()).toISOString().slice(0, 10);
-  const atomic = async fn => await scope.transaction((scope) => fn());
+  const atomic = async fn => await scope.transaction(async (scope) => await fn());
   const usage = async subject => {
     await db.prepare('INSERT OR IGNORE INTO usage(day, subject) VALUES (?, ?)').run(day(), subject);
     return await db.prepare('SELECT * FROM usage WHERE day = ? AND subject = ?').get(day(), subject);

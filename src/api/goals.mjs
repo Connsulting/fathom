@@ -29,8 +29,8 @@ import { setCurvePositions } from '../goals/curve.mjs';
 const stamp = async ctx => await clockNow(ctx.db, ctx.config && ctx.config.clock);
 const toolHttp = e => new HttpError(e.code === 'not_found' ? 404 : e.code === 'conflict' ? 409 : 400, e.message);
 
-function write(fn) {
-  try { return fn(); }
+async function write(fn) {
+  try { return await fn(); }
   catch (err) { if (err instanceof ToolError) throw new HttpError(err.code === 'not_found' ? 404 : err.code === 'conflict' ? 409 : 400, err.message); throw err; }
 }
 
@@ -53,13 +53,13 @@ export async function goalUpdate(ctx) {
 }
 
 export async function goalArchive(ctx) {
-  write(async () => await archiveGoal(ctx.db, ctx.params.id, { archived: ctx.body.archived, now: await stamp(ctx), clock: ctx.config?.clock }));
+  await write(async () => await archiveGoal(ctx.db, ctx.params.id, { archived: ctx.body.archived, now: await stamp(ctx), clock: ctx.config?.clock }));
   const scenario = await scenarioOf(ctx);
   return { scenario, goal: goalOut(scenario, ctx.params.id) };
 }
 
 export async function goalDelete(ctx) {
-  write(async () => await deleteGoal(ctx.db, ctx.params.id));
+  await write(async () => await deleteGoal(ctx.db, ctx.params.id));
   return { scenario: await scenarioOf(ctx) };
 }
 
@@ -69,7 +69,7 @@ export const getPace = async ctx => (await scenarioOf(ctx)).pace;
 // priorities share by id).
 export async function curveSet(ctx) {
   if (ctx.body.positions === undefined && typeof ctx.body.id !== 'string') throw new HttpError(400, 'unknown curve axis');
-  write(async () => await setCurvePositions(ctx.db, ctx.body.positions !== undefined ? ctx.body.positions : { [ctx.body.id]: ctx.body.value }, { now: await stamp(ctx), actorId: ctx.identity?.id || 'ui' }));
+  await write(async () => await setCurvePositions(ctx.db, ctx.body.positions !== undefined ? ctx.body.positions : { [ctx.body.id]: ctx.body.value }, { now: await stamp(ctx), actorId: ctx.identity?.id || 'ui' }));
   return { scenario: await scenarioOf(ctx) };
 }
 
@@ -80,6 +80,6 @@ export async function goalSuggestions(ctx) {
 }
 
 export async function goalSuggestion(ctx) {
-  write(async () => await setGoalSuggestion(ctx.db, ctx.params.id, ctx.body, { now: await stamp(ctx) }));
+  await write(async () => await setGoalSuggestion(ctx.db, ctx.params.id, ctx.body, { now: await stamp(ctx) }));
   return { scenario: await scenarioOf(ctx) };
 }

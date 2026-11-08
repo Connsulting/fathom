@@ -102,7 +102,7 @@ export async function accountMerge(ctx) {
 // rebuilt scenario.
 async function afterSourceAction(ctx, fn) {
   let out;
-  try { out = fn(await actionCtx(ctx)); } catch (e) { throw httpOf(e); }
+  try { out = await fn(await actionCtx(ctx)); } catch (e) { throw httpOf(e); }
   await schedulePlan(ctx);
   triggerFreshness(ctx);
   return { scenario: await scenarioOf(ctx), receipt: out.receipt };

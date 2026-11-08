@@ -336,9 +336,9 @@ test('AC4: a typed answer sent to Ask from a Confirm card is recorded with one r
   const id = await factCheck(db, `${CLOCK}T12:00:00Z`);
   const text = 'Yes, our business keeps its books on a cash basis.';
   const transport = createEngine({ mode: 'fake' });
-  const engine = { mode: 'live', isOn: () => true, call: request => request.purpose === 'title'
+  const engine = { mode: 'live', isOn: () => true, call: async request => request.purpose === 'title'
     ? Promise.resolve({ text: 'Books basis', toolResults: [] })
-    : transport.call({ ...request, fake: [{ toolCalls: [{ name: 'answer', args: {
+    : await transport.call({ ...request, fake: [{ toolCalls: [{ name: 'answer', args: {
       operation: 'fact', key: 'business.cashBasis', value: true, evidence: text,
     } }] }, { text: 'Saved: your business keeps its books on a cash basis.' }] }) };
   const root = householdOf(db).root;

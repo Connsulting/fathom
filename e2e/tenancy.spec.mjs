@@ -355,7 +355,7 @@ async function seedPlatformSetting(key, value) {
 
 async function householdDb(id, fn) {
   const db = await openScope({ path: join(dataDir, 'households', id, 'fathom.sqlite'), readOnly: true, journal: null, busyTimeout: 5000 });
-  try { return fn(db); } finally { await db.close(); }
+  try { return await fn(db); } finally { await db.close(); }
 }
 const goalTitles = async (id) => await householdDb(id, async (db) => (await db.prepare('SELECT def FROM goals').all()).map((r) => JSON.parse(r.def).title));
 const storedQuestions = async (id) => await householdDb(id, async (db) => (await db.prepare("SELECT text FROM messages WHERE role = 'me'").all()).map((r) => r.text));

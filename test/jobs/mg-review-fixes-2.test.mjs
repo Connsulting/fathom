@@ -405,7 +405,7 @@ function scripted(reply) {
     async call(args) {
       calls.push(args);
       const engine = createEngine({ mode: 'fake', responses: [{ text: reply(args), costUsd: 0.01 }] });
-      return engine.call(args);
+      return await engine.call(args);
     },
   };
 }

@@ -196,8 +196,8 @@ test('known partial cost records before the fake engine refuses further spending
     { text: 'partial', costUsd: 0.01, accountingUnknown: true }, { text: 'must not run', costUsd: 0.01 },
   ] });
   const request = { purpose: 'job', messages: [{ role: 'user', content: 'demo' }] };
-  await assert.rejects(engine.call(request), ModelAccountingError);
-  await assert.rejects(engine.call(request), ModelAccountingError);
+  await assert.rejects(await engine.call(request), ModelAccountingError);
+  await assert.rejects(await engine.call(request), ModelAccountingError);
   assert.equal(ledger.entries.length, 1);
   assert.ok(ledger.entries[0].costUsd >= 0.01);
   assert.equal(ledger.entries[0].tokens.knownCostUsd, 0.01);
@@ -215,7 +215,7 @@ test('success-subtype SDK API errors reject after recording their known cost', a
     const ledger = createMemoryLedger();
     const engine = createEngine({ mode: 'fake', ledger, responses: [response, { text: 'A valid neighboring response', costUsd: 0.01 }] });
     const request = { purpose: 'chat', messages: [{ role: 'user', content: 'Hello' }] };
-    await assert.rejects(engine.call(request), ModelCallError);
+    await assert.rejects(await engine.call(request), ModelCallError);
     assert.equal(ledger.entries.length, 1);
     assert.equal(ledger.entries[0].costUsd, 0);
     assert.equal((await engine.call(request)).text, 'A valid neighboring response');

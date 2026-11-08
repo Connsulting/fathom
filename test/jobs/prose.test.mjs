@@ -34,7 +34,7 @@ function scripted(reply, { costUsd = 0.01 } = {}) {
       calls.push(args);
       const request = parseJson(args.messages?.[0]?.content, {});
       const engine = createEngine({ mode: 'fake', responses: [{ text: reply(request, args), costUsd }] });
-      return engine.call(args);
+      return await engine.call(args);
     },
   };
 }

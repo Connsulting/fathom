@@ -65,7 +65,7 @@ export function createMcpHandler({ keys, runtimes, config }) {
     }
 
     try {
-      record = revalidateRequest({ authenticate: () => authenticate(req, keys), household, runtimes });
+      record = await revalidateRequest({ authenticate: () => authenticate(req, keys), household, runtimes });
     } catch {
       refuse(req, res, 401, { error: 'unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
       release();

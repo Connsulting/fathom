@@ -75,8 +75,8 @@ test('migration 015 rewrites rec history so it reads in the new vocabulary', asy
 test('migration 015 leaves the recs table refusing accepted, with its index and foreign keys intact', async () => {
   const db = await storeBefore();
   await migrate(db);
-  await assert.rejects(async () => await db.prepare("UPDATE recs SET status = 'accepted' WHERE id = 'r0'").run(), /CHECK/);
-  await assert.rejects(async () => await db.prepare(`INSERT INTO rec_events (rec_id, ts, action, actor) VALUES ('nope', 'x', 'start', 'ui')`).run(), /FOREIGN KEY/);
+  await assert.rejects(async () => await db.prepare("UPDATE recs SET status = 'accepted' WHERE id = 'r0'").run(), /constraint_check/);
+  await assert.rejects(async () => await db.prepare(`INSERT INTO rec_events (rec_id, ts, action, actor) VALUES ('nope', 'x', 'start', 'ui')`).run(), /constraint_foreign_key/);
   await assert.doesNotReject(async () => await db.prepare("UPDATE recs SET status = 'doing' WHERE id = 'r0'").run());
   const cols = (await db.columns('recs')).map(c => c.name);
   // Later migrations add columns (019: owner, owner_override, goal_kinds) after the rebuilt ones.

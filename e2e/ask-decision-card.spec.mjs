@@ -6,7 +6,7 @@
 
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { openScope } from '../src/storage/index.mjs';
 import { test, expect, resetDemo, gotoRoute } from './helpers.mjs';
 import { mainDataDir } from './data-dir.mjs';
 import { servedStore } from '../test/helpers/server.mjs';
@@ -18,7 +18,7 @@ const FIELDS = ['amount', 'net', 'decCash', 'need', 'gap', 'tax2026', 'tax2027']
 const LABELS = { amount: 'amount moved to January', net: 'net tax change', decCash: 'December business cash',
   need: 'December payroll need', gap: 'December need less cash', tax2026: 'this year tax change', tax2027: 'next year tax change' };
 async function plantDeferral() {
-  const db = new DatabaseSync((await servedStore(mainDataDir())).file);
+  const db = await openScope({ path: (await servedStore(mainDataDir())).file, journal: null, busyTimeout: 5000 });
   try {
     const { wargame } = await buildScenario(db);
     const put = db.prepare(`INSERT OR REPLACE INTO figures (key, v, kind, label, parser, updated_at) VALUES (?, ?, 'm', ?, 'planner', '2026-11-05')`);

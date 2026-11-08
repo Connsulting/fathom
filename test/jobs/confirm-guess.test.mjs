@@ -17,7 +17,7 @@ const quiet = { log() {} };
 const settle = (ms = 20) => new Promise((r) => setTimeout(r, ms));
 async function waitFor(cond, ms = 3000) {
   const deadline = Date.now() + ms;
-  while (!cond()) {
+  while (!await cond()) {
     if (Date.now() > deadline) return false;
     await settle();
   }

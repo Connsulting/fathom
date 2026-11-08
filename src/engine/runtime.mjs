@@ -149,7 +149,7 @@ export async function createRuntimeEngine({ db, config = {}, now, allowed = () =
 
   async function engine(purpose) {
     if (refused) throw new ModelAccountingError();
-    if (!await settingOn(db) || allowed() !== true) throw new EngineOffError();
+    if (!await settingOn(db) || await allowed() !== true) throw new EngineOffError();
     const cap = await capOf(db);
     await init();
     if (failedCredentials.has(purpose)) throw Object.assign(new ModelCallError('engine credential unavailable'), {code:'authentication'});
@@ -181,10 +181,10 @@ export async function createRuntimeEngine({ db, config = {}, now, allowed = () =
     init,
     get credentialState() { return state.credentialState; },
     credentialStateFor: purpose => credentialStates[purpose] ?? 'none',
-    isOn: async () => mode !== 'off' && !refused && await settingOn(db) && allowed() === true
-      && (mode !== 'live' || (funded() === true && !await platformLedger.held())),
+    isOn: async () => mode !== 'off' && !refused && await settingOn(db) && await allowed() === true
+      && (mode !== 'live' || (await funded() === true && !await platformLedger.held())),
     async status() {
-      const base = { mode, on: mode !== 'off' && await settingOn(db), credentialState: state.credentialState, funded: mode !== 'live' || funded() === true };
+      const base = { mode, on: mode !== 'off' && await settingOn(db), credentialState: state.credentialState, funded: mode !== 'live' || await funded() === true };
       if (platformLedger) {
         await syncMirror();
         const s = platformLedger.status(month());

@@ -19,7 +19,7 @@ export async function detachRecThreads(db, id, { now, onWrite } = {}) {
     const before = await db.prepare('SELECT key, rec_id, rec_detached_at FROM conversations WHERE rec_id = ? AND rec_detached_at IS NULL ORDER BY key').all(id);
     await db.prepare('UPDATE conversations SET rec_detached_at = ? WHERE rec_id = ? AND rec_detached_at IS NULL').run(now, id);
     const after = before.map(row => ({ ...row, rec_detached_at: now }));
-    onWrite?.(before, after);
+    await onWrite?.(before, after);
     return before.length;
   });
 }
@@ -54,7 +54,7 @@ export async function writeRec(db, id, kind, value, { now, actor = 'ui', onWrite
     const step = kind === 'step' ? def.tasks[value.index] : null;
     if (kind !== 'owner') await db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor)
       VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, now, step ? (value.checked ? 'step_did' : 'step_undo') : eventAction || 'set_status', step ? step.t : value.wake ?? null, row.status, after.status, actor);
-    onWrite?.(row, after);
+    await onWrite?.(row, after);
     return after;
   });
 }

@@ -41,7 +41,7 @@ async function withStore(fn) {
 const withHousehold = async (fn, { names = false, extra = [] } = {}) => withStore(async (s) => {
   if (names) F.upsertFact(s.db, { key: 'household.names', value: NAMES, src: 'you', asOf: NOW.slice(0, 10), confirmed: true, now: NOW });
   await P.ingestFiles(s.db, [...household(), ...extra], s.opts(await offEngine()));
-  return fn(s);
+  return await fn(s);
 });
 
 const acct = async (db, mask, inst) => (await one(db, "SELECT id FROM accounts WHERE mask = ? AND coalesce(inst, '') = ?", mask, inst)).id;

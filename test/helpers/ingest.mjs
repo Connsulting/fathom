@@ -180,7 +180,7 @@ export async function realStore({ engine = 'off' } = {}) {
 export async function fakeEngine(responses = [], { capUsd = 200 } = {}) {
   const { createEngine } = await src('src/engine/index.mjs');
   const inner = createEngine({ mode: 'fake', capUsd, responses: responses.map((rows) => ({ text: JSON.stringify({ rows }) })) });
-  return { responses, mode: 'fake', isOn: () => true, call: (req) => inner.call(req), extract: (req) => inner.extract(req) };
+  return { responses, mode: 'fake', isOn: () => true, call: async (req) => await inner.call(req), extract: async (req) => inner.extract(req) };
 }
 
 // A fake engine that records every request it receives (extract and call), independent of the
@@ -195,8 +195,8 @@ export async function recordingEngine(responses = [], opts) {
     isOn: () => true,
     extracts,
     calls,
-    call(req) { calls.push(structuredClone(req)); return base.call(req); },
-    extract(req) { extracts.push(req); return base.extract(req); },
+    async call(req) { calls.push(structuredClone(req)); return await base.call(req); },
+    async extract(req) { extracts.push(req); return await base.extract(req); },
     sent() {
       const out = [];
       for (const r of extracts) {
@@ -212,7 +212,7 @@ export async function recordingEngine(responses = [], opts) {
 export async function offEngine() {
   const { createEngine } = await src('src/engine/index.mjs');
   const inner = createEngine({ mode: 'off' });
-  return { mode: 'off', isOn: () => false, call: (req) => inner.call(req), extract: (req) => inner.extract(req) };
+  return { mode: 'off', isOn: () => false, call: async (req) => await inner.call(req), extract: async (req) => inner.extract(req) };
 }
 
 export const all = async (db, sql, ...args) => (await db.prepare(sql).all(...args)).map((r) => ({ ...r }));

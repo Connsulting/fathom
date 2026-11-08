@@ -125,8 +125,8 @@ function monthMap(p) {
 }
 const prov = (f, table) => f.provenance.rows.find((r) => r.table === table);
 const near = (a, b) => Math.abs(a - b) < 1e-6;
-function code(fn) {
-  try { fn(); } catch (e) {
+async function code(fn) {
+  try { await fn(); } catch (e) {
     assert.ok(e instanceof PnlError, `expected PnlError, got ${e && e.constructor && e.constructor.name}: ${e && e.message}`);
     return e.code;
   }
@@ -293,16 +293,16 @@ test('pl-ac2 gaps: a stopped feed with its last month, an account with no rows, 
 test('pl-ac2 bad include or exclude is bad_option; the allowed options and a bad range are handled', async (t) => {
   const { db } = await store(t);
   await household(db);
-  assert.equal(code(async () => await householdSpending({ db, include: ['rent'] })), 'bad_option');
-  assert.equal(code(async () => await householdSpending({ db, include: ['tax'] })), 'ok');
-  assert.equal(code(async () => await householdSpending({ db, exclude: ['tax'] })), 'bad_option');
-  assert.equal(code(async () => await householdSpending({ db, exclude: ['housing'] })), 'ok');
-  assert.equal(code(async () => await householdSpending({ db, include: ['housing'] })), 'bad_option');
-  assert.equal(code(async () => await householdSpendingRows({ db, include: ['rent'], bucket: 'household', category: 'Groceries' })), 'bad_option');
-  assert.equal(code(async () => await householdSpending({ db, from: '2032-05', to: '2032-04' })), 'bad_range');
-  assert.equal(code(async () => await householdSpending({ db, from: '2022-10', to: '2032-10' })), 'bad_range', '121 months');
-  assert.equal(code(async () => await householdSpending({ db, from: '2022-11', to: '2032-10' })), 'ok', '120 months');
-  assert.equal(code(async () => await householdSpending({ db, from: '2032-1', to: '2032-10' })), 'bad_range');
+  assert.equal(await code(async () => await householdSpending({ db, include: ['rent'] })), 'bad_option');
+  assert.equal(await code(async () => await householdSpending({ db, include: ['tax'] })), 'ok');
+  assert.equal(await code(async () => await householdSpending({ db, exclude: ['tax'] })), 'bad_option');
+  assert.equal(await code(async () => await householdSpending({ db, exclude: ['housing'] })), 'ok');
+  assert.equal(await code(async () => await householdSpending({ db, include: ['housing'] })), 'bad_option');
+  assert.equal(await code(async () => await householdSpendingRows({ db, include: ['rent'], bucket: 'household', category: 'Groceries' })), 'bad_option');
+  assert.equal(await code(async () => await householdSpending({ db, from: '2032-05', to: '2032-04' })), 'bad_range');
+  assert.equal(await code(async () => await householdSpending({ db, from: '2022-10', to: '2032-10' })), 'bad_range', '121 months');
+  assert.equal(await code(async () => await householdSpending({ db, from: '2022-11', to: '2032-10' })), 'ok', '120 months');
+  assert.equal(await code(async () => await householdSpending({ db, from: '2032-1', to: '2032-10' })), 'bad_range');
 });
 
 test('pl-ac2 demo seed: estimated tax payments resolve to the tax bucket and including taxes raises the total by their sum', async (t) => {
@@ -492,7 +492,7 @@ test('pl-ac4 household reads never write, and the HTTP routes return the same va
   const direct = await householdSpending({ db });
   const elective = await householdSpending({ db, include: ['tax'], exclude: ['housing'] });
   const rows = await householdSpendingRows({ db, bucket: 'household', category: 'Groceries' });
-  code(async () => await householdSpending({ db, include: ['rent'] }));
+  await code(async () => await householdSpending({ db, include: ['rent'] }));
   assert.equal(await changes(), before, 'household reads never write the store');
 
   const srv = await serveAppFixture({ authenticated: true, db, config: { clock: CLOCK, dataDir: dir }, answerer: null });

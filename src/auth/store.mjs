@@ -58,7 +58,7 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
   // joins it as a savepoint.
   const db = { prepare: text => currentHandle(platform).prepare(text) };
   async function transaction(fn) {
-    return await atomically(currentHandle(platform), () => fn());
+    return await atomically(currentHandle(platform), async () => await fn());
   }
 
   const userRow = async id => typeof id === 'string' ? await db.prepare('SELECT * FROM users WHERE id = ?').get(id) || null : null;

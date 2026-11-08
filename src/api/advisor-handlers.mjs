@@ -14,9 +14,9 @@ import { txWith } from '../store/db.mjs';
 const nowIso = () => new Date().toISOString();
 const stamp = async ctx => await clockNow(ctx.db, ctx.config && ctx.config.clock);
 
-function guard(fn) {
+async function guard(fn) {
   try {
-    return fn();
+    return await fn();
   } catch (err) {
     if (err instanceof AdvisorError) throw new HttpError(err.status, err.message);
     throw err;
@@ -37,7 +37,7 @@ async function householdVault(ctx) {
 export async function sendReview(ctx) {
   const { recId } = ctx.body;
   if (typeof recId !== 'string' || !recId) throw new HttpError(400, 'recId is required');
-  const reviewId = guard(async () => await txWith(ctx, async (ctx) => await sendToAdvisor(ctx.db, recId, { now: await stamp(ctx) })));
+  const reviewId = await guard(async () => await txWith(ctx, async (ctx) => await sendToAdvisor(ctx.db, recId, { now: await stamp(ctx) })));
   return { reviewId, scenario: await scenarioOf(ctx) };
 }
 
@@ -45,7 +45,7 @@ export async function sendReview(ctx) {
 export async function reviewVerdict(ctx) {
   const { verdict, note, date } = ctx.body;
   const db = ctx.db;
-  guard(async () => await tx(db, async (db) => await recordVerdict(db, ctx.params.id, { verdict, note, date, now: await stamp(ctx) },
+  await guard(async () => await tx(db, async (db) => await recordVerdict(db, ctx.params.id, { verdict, note, date, now: await stamp(ctx) },
     async row => await applyStatusAction(db, row, 'dismiss', VETO_REASON))));
   return { scenario: await scenarioOf(ctx) };
 }
@@ -53,7 +53,7 @@ export async function reviewVerdict(ctx) {
 // POST /api/advisor/checkin { date, time, lengthMin }
 export async function saveCheckin(ctx) {
   const { date, time, lengthMin } = ctx.body;
-  guard(async () => await setCheckin(ctx.db, { date, time, lengthMin, now: nowIso() }));
+  await guard(async () => await setCheckin(ctx.db, { date, time, lengthMin, now: nowIso() }));
   return { scenario: await scenarioOf(ctx) };
 }
 

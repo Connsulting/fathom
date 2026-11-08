@@ -71,7 +71,7 @@ function scripted(runtime, scripts = [], { before } = {}) {
         return async request => {
           const n = requests.length;
           requests.push(request);
-          if (before) before(n);
+          if (before) await before(n);
           const next = queue.shift();
           const response = await target.call(next ? { ...request, fake: next } : request);
           responses.push(response);

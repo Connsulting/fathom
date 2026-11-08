@@ -960,7 +960,7 @@ describe('an image-only PDF extract reserves a per-page input bound', T, () => {
     }
   });
 
-  test('a PDF document with pages N reserves the byte estimate plus N * PDF_PAGE_INPUT_TOKENS', () => withExtractEngine(async ({ engine, emulator, log, pricing }) => {
+  test('a PDF document with pages N reserves the byte estimate plus N * PDF_PAGE_INPUT_TOKENS', async () => withExtractEngine(async ({ engine, emulator, log, pricing }) => {
     const pages = 7;
     const rows = await engine.extract({ document: { type: 'pdf', data: PDF, pages }, schema: ROW_SCHEMA, system: SYSTEM, maxTokens: 256 });
     assert.ok(Array.isArray(rows));
@@ -975,7 +975,7 @@ describe('an image-only PDF extract reserves a per-page input bound', T, () => {
     assert.equal(log.hold.length, 0);
   }));
 
-  test('a PDF document without an established page count throws TypeError and dispatches nothing', () => withExtractEngine(async ({ engine, emulator, log }) => {
+  test('a PDF document without an established page count throws TypeError and dispatches nothing', async () => withExtractEngine(async ({ engine, emulator, log }) => {
     for (const pages of [undefined, 0, 101, 2.5, '3', null]) {
       const document = { type: 'pdf', data: PDF, ...(pages === undefined ? {} : { pages }) };
       await assert.rejects(engine.extract({ document, schema: ROW_SCHEMA, system: SYSTEM }), TypeError, `pages ${pages}`);
@@ -984,7 +984,7 @@ describe('an image-only PDF extract reserves a per-page input bound', T, () => {
     assert.equal(log.reserve.length, 0, 'nothing reserved');
   }));
 
-  test('liveness: a text document extract reserves the byte estimate and succeeds', () => withExtractEngine(async ({ engine, emulator, log, pricing }) => {
+  test('liveness: a text document extract reserves the byte estimate and succeeds', async () => withExtractEngine(async ({ engine, emulator, log, pricing }) => {
     const text = 'Synthetic document body';
     const rows = await engine.extract({ document: { type: 'text', text }, schema: ROW_SCHEMA, system: SYSTEM, maxTokens: 256 });
     assert.ok(Array.isArray(rows));

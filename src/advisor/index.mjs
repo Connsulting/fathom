@@ -160,7 +160,7 @@ export async function recordVerdict(db, reviewId, { verdict, note, date, now }, 
   const pr = await db.prepare('SELECT grounding_hash FROM planner_recs WHERE rec_id = ?').get(r.rec_id);
   await db.prepare('UPDATE advisor_reviews SET verdict = ?, note = ?, reviewed_on = ?, recorded_at = ?, grounding_hash = ? WHERE id = ?')
     .run(verdict, escapeUserText(text), date, now, pr ? pr.grounding_hash : null, id);
-  if (verdict === 'vetoed' && row.status !== 'dismissed') dismiss(row);
+  if (verdict === 'vetoed' && row.status !== 'dismissed') await dismiss(row);
   return r.rec_id;
 }
 

@@ -65,7 +65,7 @@ export async function pickWargame(db, name, point, { onWrite } = {}) {
     const picks = { ...defaultPicks(wargame), ...(await getSetting(db, 'wargame.picks', null) || {}), [name]: index };
     await setSetting(db, 'wargame.picks', picks);
     const after = await db.prepare("SELECT * FROM settings WHERE key = 'wargame.picks'").get();
-    onWrite?.(before, after);
+    await onWrite?.(before, after);
     return { name, index, label: String(list[index].label ?? list[index].id) };
   });
 }

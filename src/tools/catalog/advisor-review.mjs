@@ -13,8 +13,8 @@ registerReceiptKind('advisor_checkin', { table: 'advisor_checkin', pk: 'id' });
 const stamp = ctx => new Date(ctx.now ?? Date.now()).toISOString();
 const id = { type: 'string', minLength: 1 };
 const date = { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' };
-function guard(fn) {
-  try { return fn(); }
+async function guard(fn) {
+  try { return await fn(); }
   catch (err) {
     if (err instanceof AdvisorError) throw new ToolError(err.status === 404 ? 'not_found' : err.status === 409 ? 'conflict' : 'bad_input', err.message);
     if (err instanceof VaultError) throw new ToolError('conflict', err.message);
@@ -38,7 +38,7 @@ export const operations = [
     route: 'Send a recommendation for advisor review', routes: ['POST /api/advisor/reviews'], params: { recId: id }, required: ['recId'],
     async handler(args, ctx) {
       await requireActor(ctx);
-      return guard(async () => await txWith(ctx, async (ctx) => {
+      return await guard(async () => await txWith(ctx, async (ctx) => {
         const before = await reviews(ctx.db, args.recId);
         const reviewId = await sendToAdvisor(ctx.db, args.recId, { now: stamp(ctx) });
         return { reviewId, receipt: await receipt(ctx, 'advisor_send', reviewId, before, await reviews(ctx.db, args.recId), 'Advisor review',
@@ -55,7 +55,7 @@ export const operations = [
       const evidenceCtx = ctx.channel === 'mcp' ? { ...ctx, ownerText: args.evidence } : ctx;
       await requireEvidence(evidenceCtx, args.verdict, { evidence: args.evidence, argument: 'verdict', shape: verdictShape });
       if (args.note) await requireEvidence(evidenceCtx, args.note, { evidence: args.evidence, argument: 'note' });
-      return guard(async () => await txWith(ctx, async (ctx) => {
+      return await guard(async () => await txWith(ctx, async (ctx) => {
         const before = await ctx.db.prepare('SELECT * FROM advisor_reviews WHERE id = ?').get(args.reviewId) ?? null;
         await recordVerdict(ctx.db, args.reviewId, { ...args, now: stamp(ctx) },
           async row => await applyStatusAction(ctx.db, row, 'dismiss', VETO_REASON, { now: stamp(ctx), actor }));
@@ -71,7 +71,7 @@ export const operations = [
     params: { date, time: { type: 'string', pattern: '^([01]\\d|2[0-3]):[0-5]\\d$' }, lengthMin: { type: 'integer', minimum: 15, maximum: 480 } }, required: ['date'],
     async handler(args, ctx) {
       await requireActor(ctx);
-      return guard(async () => await txWith(ctx, async (ctx) => {
+      return await guard(async () => await txWith(ctx, async (ctx) => {
         const before = await ctx.db.prepare('SELECT * FROM advisor_checkin WHERE id = 1').get() ?? null;
         const lengthMin = args.lengthMin ?? 30;
         await setCheckin(ctx.db, { ...args, lengthMin, now: stamp(ctx) });
@@ -88,7 +88,7 @@ export const operations = [
       await requireActor(ctx);
       let result;
       try { result = await buildAndStorePacket(ctx.db, { clock: await clockOf(ctx), now: stamp(ctx), vault: () => ctx.services.vault() }); }
-      catch (err) { return guard(() => { throw err; }); }
+      catch (err) { return await guard(() => { throw err; }); }
       const after = await ctx.db.prepare('SELECT * FROM advisor_packets WHERE id = ?').get(result.packetId);
       return { ...result, receipt: await receipt(ctx, 'advisor_packet', result.packetId, null, after, 'Advisor packet', null, result),
         undo: unavailable('A stored packet is a record.') };

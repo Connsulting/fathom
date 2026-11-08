@@ -27,7 +27,7 @@ test('opt-in live SDK tool, caching, per-round accounting and continuation cap',
   const cappedLedger = createMemoryLedger();
   const capped = createEngine({ mode: 'live', credential, ledger: cappedLedger, capUsd: 0.000001 });
   const callsBeforeCap = calls;
-  await assert.rejects(capped.call(request), BudgetExceededError);
+  await assert.rejects(await capped.call(request), BudgetExceededError);
   assert.equal(cappedLedger.entries.length, 1);
   assert.ok(calls > callsBeforeCap);
   const extractionLedger = createMemoryLedger();

@@ -183,7 +183,7 @@ export async function accountIds(db) {
 
 const engineOf = (mode, responses = []) => {
   const inner = createEngine({ mode, responses: responses.map(rows => ({ text: JSON.stringify({ rows }) })) });
-  return { mode, isOn: () => mode !== 'off', call: req => inner.call(req), extract: req => inner.extract(req) };
+  return { mode, isOn: () => mode !== 'off', call: async req => await inner.call(req), extract: async req => inner.extract(req) };
 };
 
 // Answer every pending item of `kind` that `filter(item)` accepts; `option` is an option id or a
@@ -192,7 +192,7 @@ export async function answerPending(db, kind, option, filter = () => true) {
   const done = [];
   for (const item of await pendingItems(db)) {
     if (item.kind !== kind || !filter(item)) continue;
-    const id = typeof option === 'function' ? option(item) : option;
+    const id = typeof option === 'function' ? await option(item) : option;
     if (id == null) continue;
     await answer(db, item.id, id, { now: await stampOf(db) });
     done.push(item.id);

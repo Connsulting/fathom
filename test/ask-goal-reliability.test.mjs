@@ -276,10 +276,10 @@ test('AC5 and AC3: real Ask gets read/retry rules and saves failed write reasons
   const { db, root } = await setup(t);
   const transport = createEngine({ mode: 'fake' });
   let seen;
-  const engine = { mode: 'fake', isOn: () => true, call(request) {
+  const engine = { mode: 'fake', isOn: () => true, async call(request) {
     if (request.purpose === 'title') return Promise.resolve({ text: 'Contribution goals', toolResults: [] });
     seen = request.system;
-    return transport.call({ ...request, fake: [
+    return await transport.call({ ...request, fake: [
       { toolCalls: [{ name: 'update_goal', args: { operation: 'create', ...args, horizon: 'This year' } }] },
       { text: 'The horizon needs a valid identifier.' },
     ] });
@@ -327,13 +327,13 @@ test('AC7: the confirmed Ask write persists the goal and attributed receipt', as
   await storedGoal(db);
   const transport = createEngine({ mode: 'fake' });
   let turn = 0;
-  const engine = { mode: 'fake', isOn: () => true, call(request) {
+  const engine = { mode: 'fake', isOn: () => true, async call(request) {
     if (request.purpose === 'title') return Promise.resolve({ text: 'Parent contribution', toolResults: [] });
     const fake = turn++ === 0 ? [
       { toolCalls: [{ name: 'goals', args: { operation: 'list' } }] },
       { text: 'Create a goal for $4,000 by 2026-12-31?' },
     ] : [ { toolCalls: [{ name: 'update_goal', args: { operation: 'create', ...args } }] }, { text: 'Your goal is saved.' } ];
-    return transport.call({ ...request, fake });
+    return await transport.call({ ...request, fake });
   } };
   const ctx = { db, config: {}, answerer: createLiveAnswerer({ engine, root, services: { engine, config: { dataDir: root } } }), body: { text: 'Propose the parent contribution goal from its note.' } };
   const first = await threadCreate(ctx);

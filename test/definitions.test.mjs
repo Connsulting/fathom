@@ -125,9 +125,9 @@ test('Ask saves a definition only after explicit confirmation and the receipt of
   const { threadCreate, ask } = await import('../src/api/handlers.mjs');
   const db = await store(), household = householdOf(db);
   const inner = createEngine({ mode: 'fake' });
-  const engine = { mode: 'fake', isOn: () => true, call: req => req.purpose === 'title'
+  const engine = { mode: 'fake', isOn: () => true, call: async req => req.purpose === 'title'
     ? Promise.resolve({ text: '{"title":"Synthetic selection"}' })
-    : inner.call({ ...req, fake: [{ toolCalls: [{ name: 'update_preferences', args: { ...args, propose: true } }], costUsd: 0 },
+    : await inner.call({ ...req, fake: [{ toolCalls: [{ name: 'update_preferences', args: { ...args, propose: true } }], costUsd: 0 },
       { text: 'Save your elective spending selection? Confirm below.', costUsd: 0 }] }) };
   const ctx = { db, household, identity: { id: 'person-a' }, config: {},
     answerer: createLiveAnswerer({ engine, root: household.root, services: { ...household.services, engine } }) };

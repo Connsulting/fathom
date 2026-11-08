@@ -131,10 +131,10 @@ test('HTTP Ask confirms a decision without another model call and rejects a chan
   const transport = createEngine({ mode: 'fake' });
   let chatCalls = 0;
   let operation = 'decide';
-  const engine = { mode: 'fake', isOn: () => true, call(request) {
+  const engine = { mode: 'fake', isOn: () => true, async call(request) {
     if (request.purpose !== 'chat') return Promise.resolve({ text: '{"title":"Salary choice"}', toolResults: [] });
     chatCalls++;
-    return transport.call({ ...request, fake: [
+    return await transport.call({ ...request, fake: [
       { toolCalls: [{ name: 'act_on_recommendation', args: { operation, decisionId: 'salary-2026', ...(operation === 'decide' ? { point: 1 } : {}), propose: true } }] },
       { text: 'I can record this change to the salary decision. Confirm below.' },
     ] });

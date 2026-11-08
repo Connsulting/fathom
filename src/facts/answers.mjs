@@ -126,7 +126,7 @@ export async function recordFactAnswers(db, answers, { now = new Date().toISOStr
         await upsertFact(db, { ...w, src, asOf: date, confirmed: true, now, provenance: { parser: channel || 'answer', locator: { note: label,
           ...(actorId ? { actorId } : {}), ...(recId ? { recId } : {}), ...(sourceEvidence ? { sourceSpan: sourceEvidence.span } : {}) } } });
       }
-      const receipt = onWrite?.(before, await db.prepare('SELECT * FROM facts WHERE key = ?').get(w.key));
+      const receipt = await onWrite?.(before, await db.prepare('SELECT * FROM facts WHERE key = ?').get(w.key));
       if (receipt?.id) receipts.push(receipt.id);
     }
     if (recId) {

@@ -136,8 +136,8 @@ export async function mergeAccounts(ctx, id, withId) {
 // Undo for each receipt kind, run by actions/receipts.mjs undoAction inside its transaction:
 // archive is the generic single-row revert; a file removal replays its stored change log; a merge
 // reopens its confirm item. A changed row refuses with a conflict and the transaction rolls back.
-const conflictOnChange = (fn) => {
-  try { return fn(); } catch (e) {
+const conflictOnChange = async (fn) => {
+  try { return await fn(); } catch (e) {
     if (e instanceof ConfirmError) throw new ToolError('conflict', CHANGED_SINCE);
     throw e;
   }
@@ -147,12 +147,12 @@ registerReceiptKind('file', {
   async restore(ctx, { receipt }) {
     const log = await ctx.db.prepare('SELECT changes FROM source_changes WHERE receipt_id = ?').get(receipt.id);
     if (!log) throw new ToolError('conflict', CHANGED_SINCE);
-    conflictOnChange(async () => await revertChanges(ctx.db, JSON.parse(log.changes)));
+    await conflictOnChange(async () => await revertChanges(ctx.db, JSON.parse(log.changes)));
     await reconcileTransactionPayments(ctx.db, { now: stampOf(ctx) });
   },
 });
 registerReceiptKind('merge', {
-  restore(ctx, { id }) {
-    conflictOnChange(async () => await reopenItemInTx(ctx.db, Number(id), { now: stampOf(ctx) }));
+  async restore(ctx, { id }) {
+    await conflictOnChange(async () => await reopenItemInTx(ctx.db, Number(id), { now: stampOf(ctx) }));
   },
 });

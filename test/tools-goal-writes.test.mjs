@@ -178,10 +178,10 @@ test('a thread-title settings write between an archive proposal and HTTP confirm
   const row = await add(ctx, { title: 'Kitchen remodel' });
   const transport = createEngine({ mode: 'fake' });
   let chatCalls = 0;
-  const engine = { mode: 'fake', isOn: () => true, call(request) {
+  const engine = { mode: 'fake', isOn: () => true, async call(request) {
     if (request.purpose !== 'chat') return Promise.resolve({ text: 'not a title response', toolResults: [] });
     chatCalls++;
-    return transport.call({ ...request, fake: [
+    return await transport.call({ ...request, fake: [
       { toolCalls: [{ name: 'update_goal', args: { operation: 'archive', id: row.id, propose: true } }] },
       { text: 'I can archive the kitchen remodel goal. Confirm below.' },
     ] });

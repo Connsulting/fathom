@@ -38,11 +38,11 @@ function scriptedEngine(turns = []) {
   const transport = createEngine({ mode: 'fake' });
   const queue = [...turns];
   const calls = [];
-  const engine = { mode: 'fake', isOn: () => true, call(request) {
+  const engine = { mode: 'fake', isOn: () => true, async call(request) {
     if (request.purpose === 'title') return Promise.resolve({ text: 'Synthetic goal', toolResults: [] });
     calls.push(request);
     const fake = queue.shift() ?? [{ text: 'Nothing else to change.' }];
-    return transport.call({ ...request, fake });
+    return await transport.call({ ...request, fake });
   } };
   return { engine, calls, push: (...more) => queue.push(...more) };
 }

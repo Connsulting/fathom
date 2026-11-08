@@ -87,7 +87,7 @@ function op(name, params, summary, route, handler) {
     scope: 'read',
     required: name === 'compare' ? ['a', 'b'] : [],
     referenceable: name !== 'definitions',
-    handler(args, ctx) {
+    async handler(args, ctx) {
       if (
         args.since &&
         (!Number.isFinite(Date.parse(`${args.since}T00:00:00Z`)) ||
@@ -95,7 +95,7 @@ function op(name, params, summary, route, handler) {
       )
         throw new ToolError('bad_input', 'since must be a calendar date');
       const bind = (value) => bindFigures(value, 'spending', { operation: name, ...args });
-      let result = bind(handler(args, ctx));
+      let result = bind(await handler(args, ctx));
       let limit = args.limit ?? 25;
       while (
         ['total', 'compare'].includes(name) &&
@@ -103,7 +103,7 @@ function op(name, params, summary, route, handler) {
         limit > 1
       ) {
         limit = Math.max(1, Math.floor(limit / 2));
-        result = bind(handler({ ...args, limit }, ctx));
+        result = bind(await handler({ ...args, limit }, ctx));
         result.truncated = true;
       }
       return bind(boundResult(result));

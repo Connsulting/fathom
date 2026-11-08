@@ -9,9 +9,9 @@ import { KeyError, SCOPE_INFO, isMcpTool } from '../mcp/keys.mjs';
 
 const KEY_STATUS = { not_found: 404, forbidden: 403, unavailable: 503 };
 
-function keyCall(fn) {
+async function keyCall(fn) {
   try {
-    return fn();
+    return await fn();
   } catch (err) {
     if (err instanceof KeyError) throw new HttpError(KEY_STATUS[err.code] ?? 400, err.message);
     throw err;
@@ -28,19 +28,19 @@ async function keyOwner(ctx) {
   return identity.role === 'admin' ? scope : { ...scope, userId: identity.id };
 }
 
-export function listKeys(ctx) {
-  return { keys: keyCall(async () => ctx.keys.list(await keyOwner(ctx))) };
+export async function listKeys(ctx) {
+  return { keys: await keyCall(async () => ctx.keys.list(await keyOwner(ctx))) };
 }
 
 export async function createKey(ctx) {
   const userId = isDemo(ctx) ? null : (await ctx.auth.requireUser(ctx.req)).id;
-  const { key, record } = keyCall(() => ctx.keys.create({ householdId: ctx.household.householdId, name: ctx.body.name, scopes: ctx.body.scopes, userId }));
-  return { key, record, ...listKeys(ctx) };
+  const { key, record } = await keyCall(() => ctx.keys.create({ householdId: ctx.household.householdId, name: ctx.body.name, scopes: ctx.body.scopes, userId }));
+  return { key, record, ...await listKeys(ctx) };
 }
 
-export function revokeKey(ctx) {
-  const record = keyCall(async () => ctx.keys.revoke(ctx.params.id, await keyOwner(ctx)));
-  return { record, ...listKeys(ctx) };
+export async function revokeKey(ctx) {
+  const record = await keyCall(async () => ctx.keys.revoke(ctx.params.id, await keyOwner(ctx)));
+  return { record, ...await listKeys(ctx) };
 }
 
 export function mcpUrl(config) {

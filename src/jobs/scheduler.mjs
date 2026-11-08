@@ -529,9 +529,9 @@ export function createScheduler({
     soon,
     start() {
       if (timer) return;
-      first = setTimeout(() => { first = null; tick().catch(() => {}); }, 0);
+      first = setTimeout(async () => { first = null; tick().catch(() => {}); }, 0);
       first.unref?.();
-      timer = setInterval(() => { tick().catch(() => {}); }, tickMs);
+      timer = setInterval(async () => { tick().catch(() => {}); }, tickMs);
       timer.unref?.();
     },
     // Resolves once active runs settle (or drainMs passes) and the lease is released. Never rejects.

@@ -31,9 +31,9 @@ const plain = html => String(html ?? '').replace(/<[^>]*>/g, ' ').replace(/&(?:a
 function scriptedEngine(turns) {
   const transport = createEngine({ mode: 'fake' });
   const queue = [...turns];
-  return { mode: 'fake', isOn: () => true, call(request) {
+  return { mode: 'fake', isOn: () => true, async call(request) {
     if (request.purpose === 'title') return Promise.resolve({ text: 'Dependent care', toolResults: [] });
-    return transport.call({ ...request, fake: queue.shift() ?? [{ text: 'Nothing else to change.' }] });
+    return await transport.call({ ...request, fake: queue.shift() ?? [{ text: 'Nothing else to change.' }] });
   } };
 }
 

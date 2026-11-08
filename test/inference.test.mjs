@@ -278,9 +278,9 @@ test('AC2: scripted Ask records an S corp classification with a receipt and exac
   const { db, ctx } = await store(t);
   const text = 'Example Studio is my S corp';
   const transport = createEngine({ mode: 'fake' });
-  const engine = { mode: 'live', isOn: () => true, call: request => request.purpose === 'title'
+  const engine = { mode: 'live', isOn: () => true, call: async request => request.purpose === 'title'
     ? Promise.resolve({ text: 'Business classification', toolResults: [] })
-    : transport.call({ ...request, fake: [{ toolCalls: [{ name: 'answer', args: {
+    : await transport.call({ ...request, fake: [{ toolCalls: [{ name: 'answer', args: {
       operation: 'fact', key: 'business.entities', value: [{ name: 'Example Studio', type: 's_corp' }], evidence: text,
     } }] }, { text: 'Your business classification is saved.' }] }) };
   const root = householdOf(db).root;
@@ -361,9 +361,9 @@ test('AC6/AC8: a paid-off mortgage memory overrides stale positive loan data thr
   assert.ok(projection.years.every(y => y.spending.value === base.total.value && !y.changes.some(c => c.kind === 'mortgage')));
 
   const calls = [], transport = createEngine({ mode: 'fake' });
-  const engine = { mode: 'live', isOn: () => true, call: request => {
+  const engine = { mode: 'live', isOn: () => true, call: async request => {
     calls.push(request);
-    return transport.call({ ...request, fake: [{ toolCalls: [{ name: 'spending', args: { operation: 'obligations', obligations: ['mortgage'] } }] },
+    return await transport.call({ ...request, fake: [{ toolCalls: [{ name: 'spending', args: { operation: 'obligations', obligations: ['mortgage'] } }] },
       { text: 'Your mortgage is paid off. There is no mortgage obligation or future mortgage payoff to project. Other debt payments are not a mortgage payment.' }] });
   } };
   const reply = await createLiveAnswerer({ engine, root: householdOf(db).root, services: { ...householdOf(db).services, engine } })
@@ -453,9 +453,9 @@ test('AC15-AC19: one missing-data Ask proposal records owner S corp, spouse LLC 
     { name: 'Spouse partnership', type: 'partnership', owner: 'spouse', status: 'final_year', finalYear: 2026 },
   ];
   const transport = createEngine({ mode: 'fake' });
-  const engine = { mode: 'live', isOn: () => true, call: request => request.purpose === 'title'
+  const engine = { mode: 'live', isOn: () => true, call: async request => request.purpose === 'title'
     ? Promise.resolve({ text: 'Household businesses', toolResults: [] })
-    : transport.call({ ...request, fake: [
+    : await transport.call({ ...request, fake: [
       { toolCalls: [{ name: 'household', args: { operation: 'fact_shapes' } }, { name: 'household', args: { operation: 'summary' } }] },
       { toolCalls: [{ name: 'answer', args: { operation: 'fact', key: 'business.entities', value, evidence: text, propose: true } }] },
       { text: 'Record your S corp linked to business checking, your spouse’s single-member LLC taxed on Schedule C, and the partnership’s final year? Confirm below. Tell Fathom if the LLC has multiple members or a corporate tax election.' },

@@ -26,7 +26,7 @@ const list = (query, key) => {
 async function read(ctx, fn) {
   const clock = await resolveClock(ctx.db, ctx.config && ctx.config.clock);
   try {
-    return fn(ctx.query || {}, clock);
+    return await fn(ctx.query || {}, clock);
   } catch (e) {
     if (e instanceof PnlError) throw new HttpError(e.code === 'unknown_entity' ? 404 : 400, e.message, undefined, e.code);
     throw e;

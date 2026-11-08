@@ -22,7 +22,7 @@ test('credential files must be private and nonempty and errors do not echo conte
 
 test('live requires explicit credential and never uses an ambient account', async () => {
   const engine = createEngine({ mode: 'live' });
-  await assert.rejects(engine.call({ purpose: 'chat', messages: [{ role: 'user', content: 'Hello' }], system: '', maxTokens: 32 }), /credential/);
+  await assert.rejects(await engine.call({ purpose: 'chat', messages: [{ role: 'user', content: 'Hello' }], system: '', maxTokens: 32 }), /credential/);
   const options = sdkOptions({ credential: { type: 'api-key', value: 'synthetic-placeholder' }, configDir: 'synthetic-config', system: 'stable', maxTokens: 42, model: 'claude-opus-5-5' });
   assert.equal(options.env.ANTHROPIC_API_KEY, 'synthetic-placeholder');
   assert.equal(options.env.CLAUDE_CODE_OAUTH_TOKEN, undefined);
@@ -40,7 +40,7 @@ test('live requires explicit credential and never uses an ambient account', asyn
 
 test('only explicit API-key credentials are accepted', async () => {
   const engine = createEngine({ mode: 'live', credential: { type: 'oauth', value: 'synthetic-placeholder' } });
-  await assert.rejects(engine.call({ purpose: 'chat', messages: [{ role: 'user', content: 'Hello' }], system: '', maxTokens: 32 }), /credential/);
+  await assert.rejects(await engine.call({ purpose: 'chat', messages: [{ role: 'user', content: 'Hello' }], system: '', maxTokens: 32 }), /credential/);
 });
 
 test('transcript JSON retains forged role markers inside caller and tool content', () => {

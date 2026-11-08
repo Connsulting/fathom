@@ -124,7 +124,7 @@ test('migration 019 backfills demo seed recs from the demo scenario, with no ove
 
 test('migration 019 leaves statuses, defs, tasks, events, planner and advisor rows unchanged', async () => {
   for (const make of [plannerStore, demoStore]) {
-    const db = make();
+    const db = await make();
     const before = await snapshot(db);
     assert.ok(before.recs.some(r => r.status === 'hidden') && before.recs.some(r => r.status === 'waiting'), 'precondition: varied statuses');
     await migrate(db);
@@ -153,9 +153,9 @@ test('migration 019 applies once; a second migrate does nothing', async () => {
 test('migration 019 CHECKs the owner and override and defaults new rows', async () => {
   const db = await plannerStore();
   await migrate(db);
-  await assert.rejects(async () => await db.prepare("UPDATE recs SET owner = 'nobody' WHERE id = 'va529'").run(), /CHECK/);
-  await assert.rejects(async () => await db.prepare("UPDATE recs SET owner = 'Spouse' WHERE id = 'va529'").run(), /CHECK/);
-  await assert.rejects(async () => await db.prepare("UPDATE recs SET owner_override = 2 WHERE id = 'va529'").run(), /CHECK/);
+  await assert.rejects(async () => await db.prepare("UPDATE recs SET owner = 'nobody' WHERE id = 'va529'").run(), /constraint_check/);
+  await assert.rejects(async () => await db.prepare("UPDATE recs SET owner = 'Spouse' WHERE id = 'va529'").run(), /constraint_check/);
+  await assert.rejects(async () => await db.prepare("UPDATE recs SET owner_override = 2 WHERE id = 'va529'").run(), /constraint_check/);
   for (const o of ['you', 'spouse', 'both', 'advisor', 'automatic']) {
     await assert.doesNotReject(async () => await db.prepare('UPDATE recs SET owner = ?, owner_override = 1 WHERE id = ?').run(o, 'va529'), o);
   }

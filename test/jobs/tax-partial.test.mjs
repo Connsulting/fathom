@@ -147,9 +147,9 @@ test('AC5: scripted Ask records YTD with a receipt, removes the partial mark, an
   const words = 'My YTD gross at Cedar Labs is $30,000 as of 2026-10-31.';
   const args = { operation: 'fact', key: 'income.payrollYtd', value: { 'Cedar Labs': { asOf: '2026-10-31', ytdGross: 30000 } }, evidence: words };
   const transport = createEngine({ mode: 'fake' });
-  const engine = { mode: 'live', isOn: () => true, call: request => request.purpose === 'title'
+  const engine = { mode: 'live', isOn: () => true, call: async request => request.purpose === 'title'
     ? Promise.resolve({ text: 'Payroll update', toolResults: [] })
-    : transport.call({ ...request, fake: [{ toolCalls: [{ name: 'answer', args }] }, { text: 'Your payroll amount is saved.' }] }) };
+    : await transport.call({ ...request, fake: [{ toolCalls: [{ name: 'answer', args }] }, { text: 'Your payroll amount is saved.' }] }) };
   const home = householdOf(db);
   const answerer = createLiveAnswerer({ engine, root: home.root, services: { ...home.services, engine, config: { dataDir: home.root } } });
   const out = await threadCreate({ db, config: { clock: now }, identity: { id: 'person-a' }, scheduler: { runNow: async () => planRun(db) }, answerer, body: { text: words } });

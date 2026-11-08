@@ -479,7 +479,7 @@ export function createFakeSimplefin({ today = () => new Date().toISOString().sli
     if (u.pathname === '/simplefin/accounts' && (init.method ?? 'GET') === 'GET') {
       const auth = String(init.headers?.authorization ?? '');
       if (auth !== 'Basic ' + Buffer.from(`demo:${FAKE_PASS}`).toString('base64')) return respond(403, 'Forbidden');
-      return respond(200, JSON.stringify(fakeAccountSet(today())));
+      return respond(200, JSON.stringify(fakeAccountSet(await today())));
     }
     return respond(404, 'Not found');
   };
