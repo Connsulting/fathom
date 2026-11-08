@@ -11,6 +11,7 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import scenario from './scenario.mjs';
+import { resolveTokens } from '../src/shared/tokens.mjs';
 import { buildLedger, isoFromLabel } from './ledger.mjs';
 import { getSetting, setSetting, listTables, tx, cents } from '../src/store/db.mjs';
 import { addDays, defaultPicks, BUILTIN_SOURCES, DEFAULT_CAP_USD } from '../src/scenario/build.mjs';
@@ -229,6 +230,10 @@ export function seedDemo(db) {
     const fact = db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
                              VALUES (?, ?, 'you', ?, 1, ?, ?, ?, ?)`);
     for (const [key, value] of Object.entries(FACTS)) fact.run(key, JSON.stringify(value), clock, ...prov(`facts:${key}`), now);
+
+    const businessEntities = Object.fromEntries(S.accounts.filter(a => a.kind === 'business')
+      .map(a => [a.id, resolveTokens(S, a.owner, false)]));
+    fact.run('accounts.businessEntity', JSON.stringify(businessEntities), clock, ...prov('facts:accounts.businessEntity'), now);
 
     const ledger = buildLedger({
       accounts: S.accounts,
