@@ -8,8 +8,8 @@
 
 import { asciiMinus } from './format.mjs';
 
-const SSN = /(?<!\d)\d{3}[-_ \t\u2010-\u2015\u2212]+\d{2}[-_ \t\u2010-\u2015\u2212]+\d{4}(?!\d)/g;
-const EIN = /(?<!\d)\d{2}[-_ \t\u2010-\u2015\u2212]+\d{7}(?!\d)/g;
+const SSN = /(?<![A-Za-z\d])\d{3}[-_ \t\u2010-\u2015\u2212]+\d{2}[-_ \t\u2010-\u2015\u2212]+\d{4}(?![A-Za-z\d])/g;
+const EIN = /(?<![A-Za-z\d])\d{2}[-_ \t\u2010-\u2015\u2212]+\d{7}(?![A-Za-z\d])/g;
 const TAX_LABEL = String.raw`(?:SSN|ITIN|EIN|TIN|tax(?:payer)?[ _-]*(?:id(?:entification)?|identifier|number)|social[ _-]+security|individual[ _-]+taxpayer[ _-]+identification|employer[ _-]+identification)(?:[ _-]*number)?`;
 const TAX_FIELD = new RegExp(`^${TAX_LABEL}$`, 'i');
 const LABELED_TAX_ID = new RegExp(String.raw`((?<![a-z\d])${TAX_LABEL}[ \t"'\\:=#_-]*)(\d{9})(?!\d)`, 'gi');
