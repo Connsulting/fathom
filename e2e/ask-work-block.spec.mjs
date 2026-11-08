@@ -1,8 +1,8 @@
 // The work block on Ask answers, at desktop and 390px (every title carries @mobile). While an answer
 // is in flight a block row ("Working…", "N steps") sits above the streamed text: open while nothing
 // streams, collapsed once text streams, and every text streamed in a tool round moves into the block
-// as a note instead of vanishing. A first attempt the number check replaces (most of its figures
-// unchecked) is never kept: one "Revised to remove N unchecked figures" step shows before its text
+// as a note instead of vanishing. A first attempt the answer check replaces is never kept:
+// one "Revised to remove N unchecked figures" step shows before its text
 // clears, so nothing leaves the screen without a step saying why. The
 // finished message keeps the block ("Worked for Ns", "N steps"), collapsed by default, stored with
 // the message so a reload shows the same notes and steps.

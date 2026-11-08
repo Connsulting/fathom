@@ -5,8 +5,9 @@ import { loadCategoryInputs } from '../categories/store.mjs';
 //
 // buildSuggestions(db, {clock?, goals?}) -> {clock, suggestions: [record], figures: {key: figure}}
 //   figures are keyed suggest.<goalId>.<name> (target, monthlySpend, annualSpend, monthlySavings,
-//   current, room.<part>). Settings 'goals.suggestions' = {<goalId>: {dismissed: fingerprint|null,
-//   withdrawalRate?}} holds dismissals and the per-goal withdrawal rate.
+//   current, room.<part>). Settings 'goals.suggestions' = {<goalId>: {declined: true}} holds the
+//   suggestions the owner undid (src/goals/write.mjs adopts the rest). The withdrawal rate is the
+//   pack default unless a remembered preference names one (rememberedWithdrawalRate).
 
 import { finite } from '../calc/pace.mjs';
 import { getSetting, parseJson as parse } from '../store/db.mjs';
@@ -24,10 +25,19 @@ export const SUGGEST_SETTING = 'goals.suggestions';
 
 const isoDay = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null;
 
-// A stored per-goal withdrawal rate inside the allowed range, else the default.
-export function withdrawalRateOf(entry) {
-  const r = entry?.withdrawalRate;
-  return finite(r) && r >= TARGET_PARAMETERS.withdrawalRateMin && r <= TARGET_PARAMETERS.withdrawalRateMax ? r : TARGET_PARAMETERS.withdrawalRate;
+// The withdrawal rate the owner told Ask to remember, else the default. The newest remembered
+// preference that names a withdrawal rate with a percent inside the allowed range wins; the number
+// is the owner's own words, never a model figure.
+const RATE_AFTER = /withdrawal rate\D{0,40}?(\d+(?:\.\d+)?)\s*%/i;
+const RATE_BEFORE = /(\d+(?:\.\d+)?)\s*%[^.%\d]{0,30}?withdrawal rate/i;
+export function rememberedWithdrawalRate(db) {
+  const rows = db.prepare('SELECT text FROM preferences ORDER BY updated_at DESC, created_at DESC, id').all();
+  for (const { text } of rows) {
+    const m = RATE_AFTER.exec(text) || RATE_BEFORE.exec(text);
+    const r = m ? Math.round(Number(m[1]) * 100) / 10000 : NaN;
+    if (finite(r) && r >= TARGET_PARAMETERS.withdrawalRateMin && r <= TARGET_PARAMETERS.withdrawalRateMax) return r;
+  }
+  return TARGET_PARAMETERS.withdrawalRate;
 }
 
 // Goals that get a record: owner goals, not archived, not done, with no finite target.
@@ -86,24 +96,25 @@ export function buildSuggestions(db, { clock: override, goals } = {}) {
   const cash = lazy(() => holdingsTotal(holdings(db, accounts, CASH_KINDS, clock)));
   const invested = lazy(() => holdingsTotal(holdings(db, accounts, INVESTMENT_KINDS, clock)));
   const rooms = lazy(() => currentRooms(db, clock));
+  const withdrawalRate = lazy(() => rememberedWithdrawalRate(db));
 
   for (const goal of list) {
     const entry = settings && typeof settings === 'object' ? settings[goal.id] : null;
-    const { rec, figures } = suggestionFor({ goal, entry, clock, spending, cash, invested, rooms });
+    const { rec, figures } = suggestionFor({ goal, entry, clock, spending, cash, invested, rooms, withdrawalRate });
     out.suggestions.push(rec);
     Object.assign(out.figures, figures);
   }
   return out;
 }
 
-function suggestionFor({ goal, entry, clock, spending, cash, invested, rooms }) {
+function suggestionFor({ goal, entry, clock, spending, cash, invested, rooms, withdrawalRate: rateOf }) {
   const { kind, reason } = goalKind(goal);
   const horizon = horizonOf(goal.horizon);
   const key = name => `suggest.${goal.id}.${name}`;
   const rec = {
     goalId: goal.id, title: goal.title ?? '', kind, state: 'question', targetDate: null, dateSource: null,
     horizonLabel: horizonLabelOf(horizon), track: null, trackLabel: null, accept: null, figures: {}, window: null,
-    params: {}, editable: [], covered: false, why: '', missing: reason ? [reason] : [], ask: null, fingerprint: '',
+    params: {}, covered: false, why: '', missing: reason ? [reason] : [], ask: null, fingerprint: '',
   };
   const figs = {};
   const inputs = {};
@@ -113,7 +124,7 @@ function suggestionFor({ goal, entry, clock, spending, cash, invested, rooms }) 
   if (kind === 'cushion' || kind === 'independence') {
     const sp = spending();
     const holding = kind === 'cushion' ? cash() : invested();
-    const withdrawalRate = withdrawalRateOf(entry);
+    const withdrawalRate = rateOf();
     rec.params = kind === 'cushion' ? { cushionMonths: TARGET_PARAMETERS.cushionMonths }
       : { withdrawalRate, realReturn: TARGET_PARAMETERS.realReturn };
     rec.window = sp.window;
@@ -136,7 +147,6 @@ function suggestionFor({ goal, entry, clock, spending, cash, invested, rooms }) 
         state: 'suggested', targetDate: plan.targetDate, dateSource: plan.dateSource, track,
         trackLabel: holding.held.map(h => h.name || h.id).join(', '), covered: plan.covered, why: plan.why,
         accept: { target: plan.target, targetDate: plan.targetDate, track: { accounts: [...track.accounts] } },
-        editable: kind === 'independence' ? ['withdrawalRate'] : [],
       });
       inputs.target = plan.target;
     }
@@ -169,6 +179,6 @@ function suggestionFor({ goal, entry, clock, spending, cash, invested, rooms }) 
     inputs, window: rec.window, track: rec.track ? [...rec.track.accounts].sort() : null, rooms: roomKeys,
     targetDate: rec.targetDate, year: clock.slice(0, 4),
   });
-  if (entry && typeof entry.dismissed === 'string' && entry.dismissed === rec.fingerprint) rec.state = 'dismissed';
+  if (entry && entry.declined === true) rec.state = 'declined';
   return { rec, figures: figs };
 }

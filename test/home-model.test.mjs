@@ -530,13 +530,13 @@ test('homeModel cards carry their suggestion record or null, and pending counts 
 
 const headline = (m, pace) => homeHeadline({ cards: m.cards, pace, pending: m.pending, due: m.due, filter: m.filter });
 
-test('homeHeadline verdict: any goal with a target says covered or how many things need you, and bulk needs two pending', () => {
+test('homeHeadline verdict: any goal with a target says covered or how many things need you', () => {
   const goals = [goal('t'), goal('a'), goal('b')];
   const pace = paceOf([pg('t', 'on pace', { timeGap: 'On pace' }), pg('a', 'no target'), pg('b', 'no target')], { headline: 'Pace headline' });
   const two = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: [sugg('a'), sugg('b')] });
-  assert.deepEqual(headline(two, pace), { title: 'You are covered through Dec 31', verdict: 'covered', needs: 0, bulk: true });
+  assert.deepEqual(headline(two, pace), { title: 'You are covered through Dec 31', verdict: 'covered', needs: 0 });
   const one = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: [sugg('a'), sugg('b', 'question')] });
-  assert.deepEqual(headline(one, pace), { title: 'You are covered through Dec 31', verdict: 'covered', needs: 0, bulk: false });
+  assert.deepEqual(headline(one, pace), { title: 'You are covered through Dec 31', verdict: 'covered', needs: 0 });
 });
 
 test('homeHeadline verdict counts the goal actions due before Dec 31 for the filter, never housekeeping or later ones', () => {
@@ -544,7 +544,7 @@ test('homeHeadline verdict counts the goal actions due before Dec 31 for the fil
   const pace = paceOf([pg('t', 'behind', { timeGap: '2 months behind' })]);
   const recs = [rec('r1', { serves: ['t'], days: 10 }), rec('r2', { serves: ['t'], days: 20, owner: 'spouse' }), rec('hk', { days: 5 }), rec('late', { serves: ['t'], days: 400 })];
   const both = homeModel({ goals, pace, recs, filter: 'both', clock: CLOCK });
-  assert.deepEqual(headline(both, pace), { title: '2 things need you before Dec 31', verdict: 'needs', needs: 2, bulk: false });
+  assert.deepEqual(headline(both, pace), { title: '2 things need you before Dec 31', verdict: 'needs', needs: 2 });
   const me = homeModel({ goals, pace, recs, filter: 'me', clock: CLOCK });
   assert.equal(headline(me, pace).title, '1 thing needs you before Dec 31');
   const spouse = homeModel({ goals, pace, recs: recs.filter((r) => r.id !== 'r1'), filter: 'spouse', clock: CLOCK });
@@ -570,19 +570,19 @@ test('homeHeadline: no targets and pending suggestions say how many goals have a
   const pace = paceOf([pg('a', 'no target'), pg('b', 'no target'), pg('c', 'no target')], { headline: 'No goals with targets' });
   const two = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: [sugg('a'), sugg('b'), sugg('c', 'question')] });
   assert.equal(pendingCount(two.pending), 2);
-  assert.deepEqual(headline(two, pace), { title: 'Suggested targets for 2 goals', bulk: true });
+  assert.deepEqual(headline(two, pace), { title: 'Suggested targets for 2 goals' });
   const one = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: [sugg('a'), sugg('b', 'question'), sugg('c', 'dismissed')] });
   assert.equal(pendingCount(one.pending), 1);
-  assert.deepEqual(headline(one, pace), { title: 'Suggested targets for 1 goal', bulk: false });
+  assert.deepEqual(headline(one, pace), { title: 'Suggested targets for 1 goal' });
 });
 
 test('homeHeadline: questions or dismissals only say how many goals need a target', () => {
   const goals = [goal('a'), goal('b'), goal('c')];
   const pace = paceOf([pg('a', 'no target'), pg('b', 'no target'), pg('c', 'no target')], { headline: 'No goals with targets' });
   const asks = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: [sugg('a', 'question'), sugg('b', 'question'), sugg('c', 'question')] });
-  assert.deepEqual(headline(asks, pace), { title: '3 goals need a target', bulk: false });
+  assert.deepEqual(headline(asks, pace), { title: '3 goals need a target' });
   const mixed = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: [sugg('a', 'question'), sugg('b', 'dismissed'), sugg('c', 'dismissed')] });
-  assert.deepEqual(headline(mixed, pace), { title: '3 goals need a target', bulk: false });
+  assert.deepEqual(headline(mixed, pace), { title: '3 goals need a target' });
   // Seed goals carry no records at all and still count.
   const bare = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: [] });
   assert.equal(headline(bare, pace).title, '3 goals need a target');
