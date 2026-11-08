@@ -142,3 +142,19 @@ test('Ask saves a definition only after explicit confirmation and the receipt of
   await callTool('undo', { operation: 'undo', id: receipt.id }, context(db));
   assert.deepEqual(snapshot(db), { definitions: [], preferences: [] });
 });
+
+test('remembered tradeoff choices, forget and Undo follow the live preference rows', async () => {
+  const { buildScenario } = await import('../src/scenario/build.mjs');
+  const db = await store(), choice = 'Keep cash flexible';
+  const ctx = { ...context(db), ownerText: choice };
+  const position = () => buildScenario(db).curve.find(axis => axis.id === 'tax_cash').value;
+  const baseline = position();
+  const remembered = await callTool('update_preferences', { operation: 'remember', text: choice, evidence: choice }, ctx);
+  assert.equal(position(), 1);
+  const forgotten = await callTool('update_preferences', { operation: 'forget', id: remembered.preference.id }, ctx);
+  assert.equal(position(), baseline);
+  await callTool('undo', { operation: 'undo', id: forgotten.receipt.id }, ctx);
+  assert.equal(position(), 1);
+  await callTool('undo', { operation: 'undo', id: remembered.receipt.id }, ctx);
+  assert.equal(position(), baseline);
+});
