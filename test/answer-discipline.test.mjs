@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createEvalStore } from '../evals/harness.mjs';
 import { createEngine } from '../src/engine/index.mjs';
-import { createLiveAnswerer, PRODUCT_RULES, ANSWER_STYLE } from '../src/api/answerer.mjs';
+import { createLiveAnswerer, buildChatPrompt, ANSWER_STYLE } from '../src/api/answerer.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
 import { gradeFigures, gradeLength } from '../evals/graders.mjs';
 import { ANSWER_MAX_WORDS } from '../src/shared/answer-contract.mjs';
@@ -51,7 +51,7 @@ test('an explicit request for more detail keeps the length exception', async t =
   assert.equal(text, LONG);
 });
 
-test('a spelled-out figure triggers correction even when its value was returned', async t => {
+test('a spelled-out figure triggers correction', async t => {
   const { calls, text } = await ask(t, [[{ toolCalls: [READ] }, { text: 'Cash is about one hundred seventy three dollars.' }], [{ text: CLEAN }]]);
   assert.equal(calls.length, 2);
   assert.equal(text, CLEAN);
@@ -65,7 +65,7 @@ test('a self-computed sum triggers correction and the delivered sum is sourced t
   assert.match(calls[1].messages.at(-1).content, /get every derived figure from the calculate tool/i);
   assert.equal(text, draft);
   assert.ok(reply.provenance.tools.some(r => r.name === 'calculate' && !r.isError));
-  assert.ok(reply.provenance.literals.some(l => l.text === '$262.67' && /calculation/i.test(l.source)));
+  assert.ok(reply.provenance.literals.some(l => l.text === '$262.67' && l.source === 'calculated figures'));
   assert.deepEqual(reply.provenance.discipline.violations, []);
 });
 
@@ -93,9 +93,10 @@ test('a clean first draft makes exactly one call', async t => {
 });
 
 test('the figure rules are stated once and the existing word-limit sentence remains', () => {
-  assert.match(PRODUCT_RULES, /write every figure as digits/i);
-  assert.match(PRODUCT_RULES, /derived figures.*calculate/i);
-  assert.match(PRODUCT_RULES, /no figure without a tool source/i);
+  const { system } = buildChatPrompt({ summary: {}, question: 'Describe the plan.' });
+  assert.equal([...system.matchAll(/write every figure as digits/gi)].length, 1);
+  assert.match(system, /derived figures.*calculate/i);
+  assert.match(system, /no figure without a tool source/i);
   assert.match(ANSWER_STYLE, /Keep the whole reply under 150 words unless the owner asks for more detail\./);
 });
 
@@ -103,6 +104,9 @@ test('the shared implementation preserves the graders and exposes kind-only diag
   const shared = await import('../src/shared/answer-discipline.mjs');
   assert.equal(shared.gradeFigures, gradeFigures);
   assert.equal(shared.gradeLength, gradeLength);
+  assert.deepEqual(shared.checkAnswerDiscipline('Cash is one hundred seventy three dollars.', [
+    { name: 'read', args: {}, result: { balance: 173 } },
+  ]).violations, ['figures.spelled_out']);
   const grade = shared.checkAnswerDiscipline(`${LONG} Combined cash is $262.67.`, [
     { name: 'read', args: {}, result: { balances: [173.41, 89.26] } },
   ]);

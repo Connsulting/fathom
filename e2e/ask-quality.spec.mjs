@@ -1,6 +1,6 @@
 // AQ1 AC6: one answer per Ask turn. On demo data a new question carrying one owner amount (the fake
 // engine echoes it next to the household summary count, which grounds) gets exactly one Fathom
-// answer: the amount sits in place as a neutral unchecked figure, there is no regeneration, the
+// answer: the amount triggers one correction and remains neutral if it persists, the
 // finished work block reads "Worked for Ns" with steps only, no draft note or "Earlier draft" text,
 // and the answer is not repeated inside the block. While it streams, the streamed text never
 // leaves the screen without a step saying why. Runs at desktop and at 390x844 (@mobile).
@@ -102,8 +102,8 @@ test('@mobile @aq-ac6 an echoed owner amount gets one answer, a finished work bl
   const { messages } = await res.json();
   expect(messages.map((m) => m.role)).toEqual(['me', 'fathom']);
   const stored = messages[1];
-  expect(stored.provenance.grounding.retried).toBe(false);
-  expect(stored.provenance.grounding.revised).toBeUndefined();
+  expect(stored.provenance.grounding.retried).toBe(true);
+  expect(stored.provenance.grounding.revised).toBe(1);
   expect(stored.provenance.grounding.unverified).toEqual([AMOUNT]);
 
   // The echoed amount is a neutral unchecked figure in place.
@@ -127,7 +127,7 @@ test('@mobile @aq-ac6 an echoed owner amount gets one answer, a finished work bl
   await expect(items.locator('li.step').first()).toBeVisible();
   await expect(page.locator('li.note.draft')).toHaveCount(0);
   await expect(page.getByText('Earlier draft')).toHaveCount(0);
-  await expect(items.locator('li.step', { hasText: REVISED })).toHaveCount(0);
+  await expect(items.locator('li.step', { hasText: REVISED })).toHaveCount(1);
 
   // The answer is not repeated inside the block.
   const said = norm(await answer.locator('.h-msg-b').textContent());
@@ -137,12 +137,11 @@ test('@mobile @aq-ac6 an echoed owner amount gets one answer, a finished work bl
   expect(workItems.some((x) => x.draft)).toBe(false);
   expect(workItems.some((x) => x.k === 'note' && norm(x.text) === said)).toBe(false);
 
-  // Live: the answer streamed and nothing streamed left the screen silently; with one unchecked
-  // figure nothing was cleared at all.
+  // The correction accounts for the replaced streamed answer.
   const { snaps } = await page.evaluate(() => window.__aqLog);
   expect(snaps.some((s) => s.pend && s.stream), 'the answer streamed').toBe(true);
   expect(snaps.some((s) => s.notes.some((n) => n.draft)), 'no draft note while in flight').toBe(false);
-  expect(expectNoSilentClear(snaps), 'no streamed text was cleared').toBe(0);
+  expect(expectNoSilentClear(snaps), 'one correction replaces the streamed text').toBe(1);
 
   // At phone width the page does not scroll sideways.
   const vw = page.viewportSize().width;

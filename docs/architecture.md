@@ -1729,11 +1729,14 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    date, description"); other tool literals carry a plain label, never the tool name. A date that
    matches a date in a same-turn tool row or in the context data is sourced to it (a stated year
    must match). Every remaining violation, dates included, is stored in place as
-   `<span class="fx-checking fx-unchecked" title="Not checked against your data">`. Only when two
-   or more figures and more than half of the answer's figures (dates excluded) are unchecked is
-   the answer regenerated once, with a corrective user turn; the stream and the work block then
-   show one step "Revised to remove N unchecked figures" before the reset, never the earlier
-   draft, and `provenance.grounding.revised` is N. If that call fails, the answer is the matching
+   `<span class="fx-checking fx-unchecked" title="Not checked against your data">`. Ask and the eval
+   grader share figure and word-count checks in `src/shared/answer-discipline.mjs`. Any violation
+   triggers one corrective user turn: shorten an over-limit answer unless the owner requested
+   detail, write figures as digits, get derived figures from calculate, and use exact tool values.
+   The stream and work block show "Revised to remove N unchecked figures" before the reset when
+   figures are unchecked, or "Revised to follow the answer rules" otherwise, never the earlier
+   draft. `provenance.grounding.revised` is N when nonzero. The corrected answer is delivered even
+   if violations remain, with kinds only in `provenance.discipline.violations`. If that call fails, the answer is the matching
    notice (engine off, over the cap, model error), never the first ungrounded text; the spend the
    engine recorded for each completed round stays in the ledger. Answers stored before this rule
    keep their `.fx-unverified` spans and draft notes.

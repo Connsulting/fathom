@@ -2,8 +2,7 @@
 // between tool calls is not part of the answer: the engine returns the final round's text and the
 // interim texts apart, streams an `interim` event before that round's tools, and the answerer
 // stores the steps and notes as provenance.work = { ms, items }. The scripted fake question
-// "Show your work" exercises the whole path. A regeneration (two or more unchecked figures, more
-// than half of them) streams one "Revised to remove N unchecked figures" progress step, then a plain
+// "Show your work" exercises the whole path. A regeneration for any discipline violation streams one "Revised to remove N unchecked figures" progress step, then a plain
 // { type: 'reset' }, and stores that one step; the replaced first attempt is never kept as a draft
 // note. Every fixture is synthetic.
 
@@ -249,20 +248,22 @@ test('a regeneration stores one revision step and no draft note, and streams the
   assert.deepEqual(liveItems(seen), reply.provenance.work.items);
 });
 
-test('a single unchecked amount streams no reset and stores no revision step', async t => {
+test('a single unchecked amount streams a reset and stores one revision step', async t => {
   const s = await demoStore(t);
   const seen = [];
   const { reply, requests } = await askScripted(s, [
     [{ text: 'Let me look.', toolCalls: [{ name: 'accounts', args: { operation: 'list', } }] }, { text: 'You owe $987,654 this year.' }],
-    [{ text: 'must not run' }],
+    [{ text: 'The household plan is available.' }],
   ], { onEvent: e => seen.push(e) });
-  assert.equal(requests.length, 1);
-  assert.equal(reply.provenance.grounding.retried, false);
-  assert.equal(seen.some(e => e.type === 'reset'), false);
+  assert.equal(requests.length, 2);
+  assert.equal(reply.provenance.grounding.retried, true);
+  assert.equal(seen.filter(e => e.type === 'reset').length, 1);
   assert.deepEqual(reply.provenance.work.items, [
     step(PROGRESS_START),
     note('Let me look.'),
     step(progressLabel('accounts')),
+    step(PROGRESS_GROUNDING),
+    step('Revised to remove 1 unchecked figure'),
     step(PROGRESS_GROUNDING),
   ]);
 });
