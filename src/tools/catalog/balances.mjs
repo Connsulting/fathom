@@ -13,7 +13,8 @@ export const accountIds = { type: 'array', items: { type: 'string' }, maxItems: 
 export const uniqueGaps = gaps => [...new Map(gaps.map(g => [`${g.code}:${g.message}`, g])).values()];
 export function selectedAccounts(db, ids) {
   const rows = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
-  if (ids === undefined) return rows;
+  // Archived accounts are history: out of the default (current) set, still readable by id.
+  if (ids === undefined) return rows.filter(a => !a.archived_at);
   for (const id of ids) if (!rows.some(a => a.id === id)) throw new ToolError('not_found', 'No such account');
   return rows.filter(a => ids.includes(a.id));
 }

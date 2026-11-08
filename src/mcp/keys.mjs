@@ -21,6 +21,7 @@ export const SCOPE_INFO = Object.freeze([
   { id: 'write:imports', label: 'Import documents', access: 'Import files and retry or build from imported documents.' },
   { id: 'write:jobs', label: 'Run jobs', access: 'Run planning, sync, freshness and guess jobs now.' },
   { id: 'write:decisions', label: 'Change decisions', access: 'Pick and decide war-game options and reopen decisions.' },
+  { id: 'write:sources', label: 'Manage data sources', access: 'Archive or restore accounts, remove imported files, merge duplicate accounts, and undo your changes.' },
 ]);
 export const SCOPES = Object.freeze(SCOPE_INFO.map(s => s.id));
 
@@ -51,9 +52,11 @@ export function hashKey(secret, serverSecret) {
   return createHmac('sha256', serverSecret).update(secret).digest('hex');
 }
 
+export const isMcpTool = tool => !tool.askOnly;
+
 // Registry entries a key with `scopes` may see and call.
 export function toolsForScopes(scopes, registry = tools) {
-  return registry.flatMap(t => {
+  return registry.filter(isMcpTool).flatMap(t => {
     const allowed = t.operations.filter(o => operationScopes(o).some(scope => scopes.includes(scope)));
     if (!allowed.length) return [];
     return [{ ...t, inputSchema: { ...t.inputSchema, properties: { ...t.inputSchema.properties, operation: { ...t.inputSchema.properties.operation, enum: allowed.map(o => o.name) } } } }];

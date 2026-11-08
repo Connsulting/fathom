@@ -9,6 +9,7 @@ export const headers = [
   ['goals', 'read', 'Household goals and their pace.', 'Looking at your goals', 'your goals'],
   ['recommendations', 'read', 'Recommendations in the plan.', 'Looking at your plan', 'your plan'],
   ['knowledge', 'read', 'Sourced tax and planning guidance.', 'Checking your knowledge packs', 'knowledge packs'],
+  ['show', 'read', 'Show results from this answer as a chart, table, comparison or timeline.', 'Drawing a chart', 'your answer'],
   ['calculate', 'read', 'Call calculate for every sum, difference, ratio or change. Write every figure as digits.', 'Working out the numbers', 'calculated figures'],
   ['update_account', 'write', 'Update account details.', 'Updating your account', 'account changes'],
   ['categorize', 'write', 'Update transaction categories and merchant rules.', 'Updating categories', 'category changes'],
@@ -17,9 +18,11 @@ export const headers = [
   ['advisor_review', 'write', 'Manage advisor reviews.', 'Updating advisor review', 'advisor review changes'],
   ['update_goal', 'write', 'Create or update a goal.', 'Saving your goal', 'goal changes'],
   ['update_preferences', 'write', 'Remember household preferences.', 'Remembering your preference', 'your preferences'],
+  ['sources', 'write', 'Archive accounts, remove imported files and merge duplicate accounts.', 'Updating your sources', 'source changes'],
   ['refresh', 'write', 'Refresh household data and plans.', 'Refreshing your data', 'data refresh'],
   ['undo', 'write', 'Undo an earlier change by receipt.', 'Undoing your change', 'undone change'],
 ].map(([name, kind, purpose, progress, source]) => ({ name, kind, purpose, progress, source,
+  ...(name === 'show' ? { askOnly: true } : {}),
   firstOperation: ({ household: 'summary', accounts: 'list', transactions: 'search', spending: 'total', business: 'pnl', tax: 'estimate', retirement: 'target', goals: 'list', recommendations: 'list', knowledge: 'packs' })[name] }));
 
 export const operationScopes = op => op.scopes || [op.scope];

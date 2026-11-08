@@ -23,8 +23,11 @@ export function createRegistryServer(registry = [], { purpose, ctx } = {}) {
     ctx = { ...ctx, evidenceMessageId: ctx.db.prepare('SELECT coalesce(max(id), 0) AS id FROM messages WHERE conversation_key = ?').get(ctx.conversationKey).id };
   }
   const results = [];
+  const shared = ctx?.turnResults?.() ?? results;
+  ctx = { ...ctx, turnResults: () => shared };
+  const record = result => { results.push(result); if (shared !== results) shared.push(result); };
   const reject = (name, args, error) => {
-    results.push({ name, args: structuredClone(args), isError: true, result: { error } });
+    record({ name, args: structuredClone(args), isError: true, result: { error } });
     return { isError: true, content: [{ type: 'text', text: redactTaxIdentifiers(error) }] };
   };
   const invoke = async (name, args) => {
@@ -44,7 +47,7 @@ export function createRegistryServer(registry = [], { purpose, ctx } = {}) {
     try {
       const result = await found.entry.handler(args, ctx);
       const text = JSON.stringify(result ?? null);
-      results.push({ name, args: structuredClone(args), result: JSON.parse(text) });
+      record({ name, args: structuredClone(args), result: JSON.parse(text) });
       return { content: [{ type: 'text', text: JSON.stringify(redactProviderText(JSON.parse(text))) }] };
     } catch (err) {
       return reject(name, args, err?.name === 'ToolError' || err?.name === 'FactAnswerError' ? err.message : 'Tool execution failed');

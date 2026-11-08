@@ -38,6 +38,8 @@ export const PARITY_EXCLUDED = Object.freeze({
   "POST /api/keys": "API keys",
   "POST /api/keys/:id/revoke": "API keys",
   "GET /api/mcp": "API keys",
+  "GET /api/email/subscriptions": "outbound email",
+  "POST /api/email/subscriptions": "outbound email",
   "GET /api/email": "outbound email",
   "POST /api/email/test": "outbound email",
   "POST /api/email/brief": "outbound email",

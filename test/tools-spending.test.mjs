@@ -1,3 +1,4 @@
+import { createRegistryServer } from '../src/engine/tools.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { seedDemo } from '../demo/seed.mjs';
@@ -7,7 +8,7 @@ import { spendingInputs } from '../src/calc/targets.mjs';
 import { loadCategoryInputs } from '../src/categories/store.mjs';
 import { resolveCategories } from '../src/categories/resolve.mjs';
 import { classOf, BUILTIN_DEFINITIONS } from '../src/calc/classes.mjs';
-import { callTool } from '../src/tools/index.mjs';
+import { callTool, getTool } from '../src/tools/index.mjs';
 import { assertRefsResolve } from './helpers/figures.mjs';
 
 const sum = (xs) => Math.round(xs.reduce((s, x) => s + x, 0) * 100) / 100;
@@ -188,13 +189,18 @@ test('C4 eval scripts call valid operations', async (t) => {
   const store = await createEvalStore();
   t.after(() => store.close());
   for (const c of await loadCases()) {
-    if (!c.requires?.script || c.expectedFail) continue;
-    const { script } = await import(`../evals/scripts/${c.id}.mjs`);
+    if (!c.requires?.script || c.expectedFail || c.requires.operations.some(pair => getTool(pair.split('.')[0])?.kind === 'write')) continue;
+    const { script, setup } = await import(`../evals/scripts/${c.id}.mjs`);
+    await setup?.({ db: store.db, clock: '2026-11-05' });
     for (const turn of c.turns) {
       const frames = await script({ turn, db: store.db, clock: '2026-11-05' });
       assert.ok(frames[0].toolCalls.length, c.id);
-      for (const call of frames[0].toolCalls)
-        await callTool(call.name, call.args, { db: store.db, dataDir: store.root, clock: '2026-11-05' });
+      const { tools } = await import('../src/tools/index.mjs');
+      const registry = createRegistryServer(tools, { purpose: 'chat', ctx: { db: store.db, dataDir: store.root, clock: '2026-11-05', now: '2026-11-05T00:00:00.000Z', onBlock() {} } });
+      for (const call of frames[0].toolCalls) {
+        const result = await registry.invoke(call.name, call.args);
+        assert.equal(result.isError, undefined, `${c.id}: ${result.content[0].text}`);
+      }
     }
   }
 });

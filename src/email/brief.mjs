@@ -129,9 +129,9 @@ function summaryParts(text, figs) {
 
 // Deep link into the app. Routes follow the app's hash router: #/brief (Year), #/confirm,
 // #/add (Files) and #/rec/<id>. Null without a base.
-export function appLink(base, route, id) {
+export function appLink(base, route, id, householdId = null) {
   if (!base) return null;
-  return `${base}/#/${route}${id != null ? `/${encodeURIComponent(id)}` : ''}`;
+  return `${base}/${householdId ? `?household=${encodeURIComponent(householdId)}` : ''}#/${route}${id != null ? `/${encodeURIComponent(id)}` : ''}`;
 }
 
 // Quick checks take about five seconds each, at least a minute (same rule as the Year banner).
@@ -140,7 +140,7 @@ const confirmMinutes = (n) => Math.max(1, Math.ceil((n * 5) / 60));
 // Urgency of a needs-you row: soon (window within URGENT_DAYS), later, or info (no window).
 export const urgencyOf = (days) => (days == null ? 'info' : days <= URGENT_DAYS ? 'soon' : 'later');
 
-export function buildBrief(db, { clock, publicUrl = null } = {}) {
+export function buildBrief(db, { clock, publicUrl = null, householdId = null } = {}) {
   const sc = buildScenario(db, { clock });
   const clk = sc.meta.clock;
   const reg = figureRegistry(sc);
@@ -165,7 +165,7 @@ export function buildBrief(db, { clock, publicUrl = null } = {}) {
       days,
       urgency: urgencyOf(days),
       cta: data ? 'Add files' : 'Open',
-      url: data ? appLink(base, 'add') : appLink(base, 'rec', r.id),
+      url: data ? appLink(base, 'add', undefined, householdId) : appLink(base, 'rec', r.id, householdId),
     };
   });
 
@@ -181,7 +181,7 @@ export function buildBrief(db, { clock, publicUrl = null } = {}) {
   const freshness = {
     dataThrough: sc.meta.dataThrough || '',
     total: sources.length,
-    stale: sources.filter((s) => s.state === 'stale').map((s) => ({ label: s.label, ageDays: s.ageDays, asOf: s.asOf })),
+    stale: sources.filter((s) => s.state === 'stale').map((s) => ({ label: s.name || s.label, ageDays: s.ageDays, asOf: s.asOf })),
   };
 
   const spend = {
@@ -197,12 +197,12 @@ export function buildBrief(db, { clock, publicUrl = null } = {}) {
   let tax = null;
   if (est && paid.every(Boolean) && est.v > 0 && ![est, ...paid].some((f) => f.unavailable)) {
     const sum = paid[0].v + paid[1].v;
-    tax = { pct: Math.max(0, Math.min(100, Math.round((sum / est.v) * 100))), keys: [paid[0].key, paid[1].key, est.key], url: appLink(base, 'brief') };
+    tax = { pct: Math.max(0, Math.min(100, Math.round((sum / est.v) * 100))), keys: [paid[0].key, paid[1].key, est.key], url: appLink(base, 'brief', undefined, householdId) };
   }
   const first = deadlines[0];
-  const next = first ? { date: first.date, days: first.days, title: first.title, url: appLink(base, first.recId ? 'rec' : 'brief', first.recId || undefined) } : null;
+  const next = first ? { date: first.date, days: first.days, title: first.title, url: appLink(base, first.recId ? 'rec' : 'brief', first.recId || undefined, householdId) } : null;
   const pending = Number(ingest.pending) || 0;
-  const confirm = pending > 0 ? { count: pending, minutes: confirmMinutes(pending), url: appLink(base, 'confirm') } : null;
+  const confirm = pending > 0 ? { count: pending, minutes: confirmMinutes(pending), url: appLink(base, 'confirm', undefined, householdId) } : null;
 
   return {
     clock: clk,
@@ -214,7 +214,7 @@ export function buildBrief(db, { clock, publicUrl = null } = {}) {
     freshness,
     spend,
     tiles: { tax, next, confirm },
-    links: { open: appLink(base, 'brief'), confirm: appLink(base, 'confirm'), add: appLink(base, 'add') },
+    links: { open: appLink(base, 'brief', undefined, householdId), confirm: appLink(base, 'confirm', undefined, householdId), add: appLink(base, 'add', undefined, householdId) },
     base,
     figures: reg.list,
   };
@@ -511,8 +511,8 @@ export function renderBrief(model, summary) {
   return { subject, text: T.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n', html };
 }
 
-export async function composeBrief(db, { clock, publicUrl = null, engine = null } = {}) {
-  const model = buildBrief(db, { clock, publicUrl });
+export async function composeBrief(db, { clock, publicUrl = null, engine = null, householdId = null } = {}) {
+  const model = buildBrief(db, { clock, publicUrl, householdId });
   const summary = await briefSummary(model, { engine });
   return { ...renderBrief(model, summary), summarySrc: summary.src, costUsd: summary.costUsd, model };
 }

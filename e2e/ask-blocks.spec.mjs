@@ -302,3 +302,32 @@ test.describe('ask blocks', () => {
     await noSidewaysScroll(page);
   });
 });
+
+test('real builder table persists and renders in the Ask panel without response rewrites', async ({ request, page }) => {
+  await resetDemo(request);
+  const response = await request.post('/api/threads', { data: { text: 'Show recent transactions in a table.' } });
+  expect(response.status()).toBe(200);
+  const body = await response.json();
+  const block = body.message.provenance.blocks[0];
+  expect(block.op).toBe('table');
+  expect(block.snapshot.rows.length).toBeGreaterThan(0);
+  expect(body.message.text).not.toContain('{b:');
+  await page.addInitScript(([k, id]) => {
+    window.localStorage.setItem(k, JSON.stringify({ open: true, width: 400, threadId: id, chips: [], page: 'home/' }));
+  }, [STORE_KEY, body.thread.id]);
+  await gotoRoute(page, 'home');
+  const table = blk(panel(page), block);
+  await expect(table).toBeVisible();
+  await expect(table.locator('tbody tr')).toHaveCount(block.snapshot.rows.length);
+  await expect(table.locator('th[scope="col"]')).toHaveText(block.snapshot.columns.map(c => c.label));
+  const amount = table.locator('tbody tr').first().locator('.fx-fig');
+  await expect(amount).toBeVisible();
+  const key = await amount.getAttribute('data-fig');
+  const stored = await page.evaluate(k => window.Fathom.api.fig(k), key);
+  expect(stored.v).toBe(block.snapshot.rows[0].cells.at(-1).value);
+  await amount.click();
+  await expect(page.locator('.fx-pop')).toBeVisible();
+  await expect(page.locator('.fx-pop')).toContainText(block.snapshot.rows[0].cells.at(-1).row.description);
+  await page.reload();
+  await expect(blk(panel(page), block)).toBeVisible();
+});

@@ -13,6 +13,8 @@ import { writeSyntheticPack, ALWAYS } from './packs.mjs';
 export { toolText };
 export const mcp = (baseUrl, key, method, params = {}, headers = {}) => mcpPost(baseUrl, { auth: key ? `Bearer ${key}` : undefined, method, params, headers });
 
+export const refreshImportFixture = household => ({ operation: 'import_file', name: `Synthetic ${household.canary} notes.md`, mime: 'text/markdown', text: `# ${household.canary}\n\nKeep answers short.` });
+
 export async function mcpHouseholds() {
   const root = await tempDir('fathom-mt06-');
   let server;

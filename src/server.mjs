@@ -32,7 +32,7 @@ import { createHandler } from './api/router.mjs';
 import { createAuthService } from './auth/service.mjs';
 import { createKeyService } from './mcp/keys.mjs';
 import { createMcpHandler } from './mcp/index.mjs';
-import { createTransport } from './email/transport.mjs';
+import { createEnrollmentTransport } from './email/transport.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 import { backfillMergedIdentity } from './ingest/account-merge.mjs';
 import { assertSyntheticStore, createPublicDemoHandler } from './public-demo/runtime.mjs';
@@ -175,7 +175,7 @@ export async function startServer(config = loadConfig(), { engineOptions = {} } 
   };
   let server;
   try {
-    const transport = createTransport(config, { outboxDir: join(config.dataDir, 'outbox') });
+    const transport = createEnrollmentTransport(config, { outboxDir: join(config.dataDir, 'outbox') });
     const auth = createAuthService({ platform, config, transport, secrets });
     // Live mode: every household's pre-MT-05 spend is carried before any household is admitted.
     if (config.engine === 'live') carryAllHouseholds(platform, { dataDir: config.dataDir, now: (engineOptions.fundingNow ?? Date.now)() });

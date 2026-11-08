@@ -7,13 +7,10 @@
 // never carry an email body in history, the credential or a full address (the recipient is
 // masked by emailStatus). The router logs errors on these routes as a code only.
 
-import { emailStatus } from '../email/transport.mjs';
 import { sendEmail, listSends } from '../email/send.mjs';
 import { composeBrief } from '../email/brief.mjs';
 import { simpleDarkEmail } from '../email/palette.mjs';
-import { SchedulerError, ownerTimezone } from '../jobs/scheduler.mjs';
-import { PLAN_JOB_ID } from '../jobs/planner.mjs';
-import { getSetting } from '../store/db.mjs';
+import { SchedulerError, ownerTimezone, runManualJob, SCHEDULER_STATUS, SCHEDULER_MESSAGE } from '../jobs/scheduler.mjs';
 import { scenarioOf } from './handlers.mjs';
 import { HttpError } from './http.mjs';
 
@@ -24,15 +21,7 @@ const TEST_SUBJECT = 'Fathom test email';
 const TEST_TEXT = 'This is a test email from Fathom. Email delivery is working.';
 const TEST_HTML = simpleDarkEmail({ title: TEST_SUBJECT, paragraphs: [TEST_TEXT] });
 
-const SCHEDULER_STATUS = { unknown_job: 404, running: 409, locked: 409, paused: 409 };
-const SCHEDULER_MESSAGE = {
-  unknown_job: 'no such job',
-  running: 'that job is already running',
-  locked: 'another scheduler holds the job lock',
-  paused: 'outbound jobs are paused',
-};
-
-const brief = (ctx, engine = ctx.engine) => composeBrief(ctx.db, { clock: (ctx.config && ctx.config.clock) || null, publicUrl: (ctx.config && ctx.config.publicUrl) || null, engine });
+const brief = (ctx, engine = ctx.engine) => composeBrief(ctx.db, { clock: (ctx.config && ctx.config.clock) || null, publicUrl: (ctx.config && ctx.config.publicUrl) || null, engine, householdId: ctx.household.householdId });
 
 function transportOf(ctx) {
   if (!ctx.transport) throw new HttpError(503, 'email transport unavailable');
@@ -42,7 +31,7 @@ function transportOf(ctx) {
 const history = ctx => listSends(ctx.db, { limit: HISTORY_LIMIT });
 
 export async function getEmail(ctx) {
-  const status = await emailStatus(ctx.config);
+  const status = await ctx.household.emailRecipients.status();
   // The preview uses the template summary only (engine: null): opening the Email screen must never
   // make a model call. Sends keep the runtime engine.
   const b = await brief(ctx, null);
@@ -84,12 +73,10 @@ export function listJobs(ctx) {
 // the store is left unchanged (scheduled and ingest plan runs on a demo store record skipped).
 export async function runJob(ctx) {
   const { id } = ctx.params;
-  if (id === PLAN_JOB_ID && getSetting(ctx.db, 'mode', null) === 'demo') throw new HttpError(409, 'planning runs on real stores only');
   const s = ctx.scheduler;
-  if (!s) throw new HttpError(503, 'scheduler unavailable');
   let run;
   try {
-    run = await s.runNow(id);
+    run = await runManualJob(ctx.db, s, id);
   } catch (err) {
     if (err instanceof SchedulerError && Object.hasOwn(SCHEDULER_STATUS, err.code)) {
       throw new HttpError(SCHEDULER_STATUS[err.code], SCHEDULER_MESSAGE[err.code]);
@@ -97,4 +84,19 @@ export async function runJob(ctx) {
     throw err;
   }
   return { scenario: scenarioOf(ctx), run: run ?? null, jobs: jobsBody(ctx).jobs };
+}
+
+export async function getSubscriptions(ctx) {
+  return { subscriptions: await ctx.household.emailRecipients.list() };
+}
+
+export async function setSubscriptions(ctx) {
+  try {
+    if (!ctx.body || Object.keys(ctx.body).some(k => k !== 'subscriptions')) throw { code: 'bad_subscriptions' };
+    ctx.household.emailRecipients.update(ctx.body.subscriptions, ctx.identity?.id ?? null);
+  } catch (err) {
+    if (err?.code === 'bad_subscriptions') throw new HttpError(400, 'subscriptions must name verified household members and boolean preferences');
+    throw err;
+  }
+  return getSubscriptions(ctx);
 }
