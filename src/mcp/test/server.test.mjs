@@ -302,3 +302,15 @@ test('operation scopes narrow listed enums and reject step before invalid argume
   assert.equal(denied.isError, true);
   assert.ok(denied.content[0].text.startsWith('Permission denied: act_on_recommendation.step needs the write:steps scope'));
 });
+
+test('show is neither listed nor callable and its rules are absent from MCP instructions', async () => {
+  const { SCOPES } = await import('../keys.mjs');
+  const key = await createKey(s.baseUrl, 'All scopes', SCOPES);
+  seenKeys.push(key.key);
+  const listed = await mcpPost(s.baseUrl, { auth: bearer(key.key), method: 'tools/list' });
+  assert.ok(!rpcResult(listed).tools.some(t => t.name === 'show'));
+  const called = await callToolRpc(s.baseUrl, key.key, 'show', { operation: 'table' });
+  assert.equal(rpcResult(called).isError, true);
+  const initialized = await mcpPost(s.baseUrl, { auth: bearer(key.key), method: 'initialize', params: initializeParams() });
+  assert.doesNotMatch(rpcResult(initialized).instructions, /show\.(?:chart|table|compare|timeline)|call `?show|\{b:/);
+});

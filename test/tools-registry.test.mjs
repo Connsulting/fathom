@@ -7,6 +7,7 @@ import { toolsForScopes, SCOPES } from '../src/mcp/keys.mjs';
 import { createRegistryServer } from '../src/engine/tools.mjs';
 
 const expected = {
+  show: ['chart', 'table', 'compare', 'timeline'],
   household: ['summary', 'facts', 'fact_shapes', 'figures', 'deadlines', 'health'],
   accounts: ['list', 'holdings', 'detail', 'net_worth'], tax: ['estimate', 'room'], transactions: ['search'], business: ['pnl', 'rows'],
   spending: ['total', 'compare', 'definitions', 'cash_flow', 'recurring'],
@@ -36,7 +37,7 @@ test('only the declared operation tools register, with no old aliases', () => {
     assert.ok(tool.operations.length <= 8 || tool.name === 'calculate');
     assert.ok(tool.operations.every(o => o.route && Array.isArray(o.routes) && o.summary.length <= 140));
     assert.ok(tool.operations.every(o => (tool.kind === 'read') === (o.scope === 'read')));
-    if (tool.kind === 'read' && tool.name !== 'calculate') assert.deepEqual(tool.operations[0].required, []);
+    if (tool.kind === 'read' && tool.name !== 'calculate' && !tool.askOnly) assert.deepEqual(tool.operations[0].required, []);
   }
   for (const name of oldNames) assert.equal(getTool(name), null);
   assert.doesNotThrow(() => createRegistryServer(tools, { purpose: 'chat' }));
@@ -120,4 +121,16 @@ test('C4 declares spending and business API intent coverage for the parity gate'
   assert.deepEqual(parity['GET /api/spending/rows'], ['transactions.search']);
   assert.deepEqual(parity['GET /api/pnl'], ['business.pnl']);
   assert.deepEqual(parity['GET /api/pnl/rows'], ['business.rows']);
+});
+
+ test('Ask-only first operations may require arguments and the Ask budget stays bounded', t => {
+  const header = [{ name: 'example', kind: 'read', purpose: 'Example.', askOnly: true }];
+  const op = { tool: 'example', name: 'draw', scope: 'read', summary: 'Draw.', route: 'Draw', routes: [], params: { source: { type: 'string' } }, required: ['source'], handler: () => null };
+  assert.equal(buildRegistry([{ operations: [op] }], header).tools.length, 1);
+  assert.throws(() => buildRegistry([{ operations: [op] }], [{ ...header[0], askOnly: false }]), /requires arguments/);
+  const offered = tools.filter(t => !t.mcpOnly).map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
+  const chars = JSON.stringify(offered).length;
+  t.diagnostic(`ask-catalog=${chars} ask-instructions=${instructions.length}`);
+  assert.ok(chars < 30000); assert.ok(instructions.length < 8000);
+  assert.ok(instructions.includes('show')); assert.equal(getTool('show').askOnly, true);
 });
