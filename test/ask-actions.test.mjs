@@ -41,6 +41,7 @@ test('fact tool uses owner evidence, shared validation, provenance, replanning a
 test('unknown keys, invalid shapes, invented values and missing identity refuse before writing', async () => {
   const db = await s.store();
   const ctx = context(db);
+  const receiptCount = db.prepare('SELECT count(*) n FROM action_receipts').get().n;
   for (const args of [
     { ...factArgs, key: 'household.typo' },
     { ...factArgs, value: '2027-02-30' },
@@ -48,7 +49,7 @@ test('unknown keys, invalid shapes, invented values and missing identity refuse 
     { ...factArgs, evidence: 'invented statement' },
   ]) await assert.rejects(callTool('answer', { operation: 'fact', ...args }, ctx));
   await assert.rejects(callTool('answer', factArgs, { ...ctx, actorId: null }), /signed.in/);
-  assert.equal(db.prepare('SELECT count(*) n FROM action_receipts').get().n, 0);
+  assert.equal(db.prepare('SELECT count(*) n FROM action_receipts').get().n, receiptCount);
   await callTool('answer', factArgs, ctx);
   assert.equal(getFacts(db)[factArgs.key], factArgs.value);
 });
@@ -89,6 +90,7 @@ test('SEC2: identifier and date evidence refuses facts and goals without writes 
   db.prepare('DELETE FROM figures').run();
   db.prepare('DELETE FROM goals').run();
   const ctx = context(db);
+  const receiptCount = db.prepare('SELECT count(*) n FROM action_receipts').get().n;
   for (const [ownerText, value, evidence = ownerText] of [
     ['Create a savings goal for the account ending in 4821. Ask me for its target.', 4821],
     ['Create a savings goal for the card ending with 4821. Ask me for its target.', 4821],
@@ -111,7 +113,7 @@ test('SEC2: identifier and date evidence refuses facts and goals without writes 
     await assert.rejects(callTool('answer', { operation: 'fact', key: 'tax.vaItemizedEstimate', value, evidence }, ctx), /value:.*stated/);
     assert.equal(db.prepare('SELECT count(*) AS n FROM facts').get().n, 0);
     assert.equal(db.prepare('SELECT count(*) AS n FROM goals').get().n, 0);
-    assert.equal(db.prepare('SELECT count(*) AS n FROM action_receipts').get().n, 0);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM action_receipts').get().n, receiptCount);
   }
   ctx.ownerText = 'For account ending in 4821, create a savings target of $4,821 due September 17, 2028.';
   const saved = await callTool('update_goal', { operation: 'create', title: 'Savings', target: 4821, targetDate: '2028-09-17' }, ctx);

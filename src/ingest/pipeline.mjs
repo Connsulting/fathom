@@ -238,7 +238,7 @@ export function persistImport(db, fileId, file, plan, opts) {
   for (const row of accountRows) row.accountId ??= connected(row) ?? accountIdOf(accountIdentity(row));
   const accountIds = [...new Set(accountRows.map((r) => r.accountId))];
   const single = accountIds.length === 1 ? accountIds[0] : null;
-  const sourceId = `ing:${plan.parser}:${single ?? 'all'}`;
+  const sourceId = `ing:${plan.parser}:${plan.sourceGroup ? plan.sourceGroup + ':' : ''}${single ?? 'all'}`;
   const singleName = single ? accountName(accountRows.find((r) => r.accountId === single).account) : null;
   ctx.sourceId = sourceId;
   ctx.asOf = period.to ?? now.slice(0, 10);

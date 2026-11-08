@@ -91,3 +91,17 @@ test('model rows and standard exports retain the same semantic posting identity'
     assert.equal(x.db.prepare('SELECT count(*) n FROM transactions').get().n, 1);
   } finally { x.close(); }
 });
+
+test('source groups retain financial freshness when an unrelated note is approved', async () => {
+  const { importProposedRows } = await import('../helpers/import-proposal-fixture.mjs');
+  const { sourceStates } = await import('../../src/ingest/coverage.mjs');
+  const x = await setup();
+  try {
+    await importProposedRows(x,[{ target: 'balance', basis: 'closing', datePrecision: 'day', fields: { accountId: 'account-synthetic', asOf: '2032-03-01', amount: 100 } }]);
+    const source = x.db.prepare("SELECT * FROM sources WHERE kind='balances'").get();
+    await importProposedRows(x,[],{ marker: 'Synthetic explanatory note' });
+    assert.deepEqual(x.db.prepare('SELECT * FROM sources WHERE id=?').get(source.id),source);
+    assert.equal(sourceStates(x.db,'2032-03-10').sources.get(source.id).state,'fresh');
+    assert.equal(x.db.prepare("SELECT count(*) n FROM sources WHERE substr(id,1,4)='ing:'").get().n,2);
+  } finally { x.close(); }
+});

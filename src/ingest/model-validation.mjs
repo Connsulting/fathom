@@ -5,7 +5,7 @@ import { resolveField } from './model-source.mjs';
 import { prepareSourceActions, applySourceActions } from './model-updates.mjs';
 import { relativeDateEvidence } from '../actions/evidence.mjs';
 import { persistImport, accountIdentity } from './pipeline.mjs';
-import { toRows, validateExtraction, periodOf } from './extract.mjs';
+import { toRows, validateExtraction, periodOf, sourceKindOf, labelOf } from './extract.mjs';
 import { isoDate, number, cents } from './format.mjs';
 
 export const importEffect = validation => Object.fromEntries(['valid', 'errors', 'rows', 'counts', 'bindings', 'identities', 'questions', 'summary', 'actions', 'notes'].map(key => [key, validation[key] ?? null]));
@@ -33,7 +33,14 @@ export function importPlan(rows, { reinterpret = false } = {}) {
     const group = row.kind === 'pnl_line' ? { table: 'pnl_lines', entity: row.entity, period } : { table: 'tax_payments', slot, period };
     return [JSON.stringify(group), { ...group, complete: true, authority: row.date ?? `${row.period}-01` }];
   })).values()];
-  return { reinterpret, coverage, capabilities: { positions: true, targetCoverage: true }, status: 'imported', parser: 'model-import', label: 'Reviewed import', sourceKind: 'model_import',
+  const targets = [...new Set(rows.map(r => r.kind))].sort();
+  const documents = [...new Set(rows.filter(r => r.kind === 'document').map(r => r.docType))].sort();
+  const financial = targets.filter(k => ['transaction','balance','position','pnl_line','tax_payment'].includes(k));
+  const sourceKind = documents.length === 1 ? sourceKindOf(documents[0]) : financial.length === 1
+    ? { transaction: 'bank_csv', balance: 'balances', position: 'brokerage_positions', pnl_line: 'pnl_workbook', tax_payment: 'tax_payments' }[financial[0]] : financial.length ? 'model_import' : 'notes';
+  const sourceGroup = [...financial, ...documents.map(type => `document-${type}`)].join('+') || 'updates';
+  const label = documents.length === 1 ? labelOf(documents[0]) : 'Reviewed import';
+  return { reinterpret, coverage, sourceGroup, capabilities: { positions: true, targetCoverage: true }, status: 'imported', parser: 'model-import', label, sourceKind,
     parsed: { rows, warnings: [], period: { from: dates[0] ?? null, to: dates.at(-1) ?? null } } };
 }
 

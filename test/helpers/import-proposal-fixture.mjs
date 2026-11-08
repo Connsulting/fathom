@@ -29,7 +29,7 @@ export async function importProposedRows(store, rows, { name = 'synthetic.xlsx',
   createAuthStore(store.platform).setPlatformSetting('instance_model_cap_usd', 50);
   const engine = createRuntimeEngine({ db: store.db, config: { engine: 'fake' }, allowed: () => store.household.outbound.enabled('engine') });
   const household = { ...store.household, engine };
-  const ctx = { db: store.db, household, actorId: 'actor-synthetic', now, ownerText: 'yes', scopes: ['write:imports', 'write:facts', 'write:goals', 'write:steps', 'write:recs'] };
+  const ctx = { db: store.db, household, scheduler: { trigger() {} }, actorId: 'actor-synthetic', now, ownerText: 'yes', scopes: ['write:imports', 'write:facts', 'write:goals', 'write:steps', 'write:recs'] };
   await ingestFile(store.db, { name, bytes, mime: XLSX_MIME }, { ...ctx, household: { ...household, engine: { isOn: () => false } } });
   const staged = stageImport(ctx, { source, proposal: { proposalId: randomUUID(), version: 1, fileId, sha256: source.sha256, interpreterVersion: 'synthetic', mappingId: null, mappingVersion: null, rows: targets, coverage, completeness: 'complete' } });
   if (!approve || staged.status !== 'needs_confirmation') return { fileId, ...staged };

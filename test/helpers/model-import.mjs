@@ -12,7 +12,7 @@ export const recipe = () => ({ schemaVersion: 1, currency: 'USD', tables: [{ she
 export async function fixture(options = {}) {
   const store = await realStore(options);
   store.db.prepare("INSERT INTO accounts (id,name,inst,kind,owner,identity) VALUES ('account-synthetic','Synthetic account','Example bank','cash','you','synthetic-account')").run();
-  const ctx = { db: store.db, household: store.household, actorId: 'actor-synthetic', scopes: ['write:imports'], now: NOW, ownerText: 'yes' };
+  const ctx = { db: store.db, household: store.household, scheduler: { trigger() {} }, actorId: 'actor-synthetic', scopes: ['write:imports'], now: NOW, ownerText: 'yes' };
   async function source(text = 'Account,Date,Amount USD,Description\naccount-synthetic,2032-03-02,-12.25,Synthetic purchase\naccount-synthetic,2032-03-03,2.25,Synthetic refund\nTotal,,-10.00,Control total\n', format = 'csv') {
     const file = { fileId: 'f-' + randomUUID(), format, name: 'synthetic.' + format, bytes: Buffer.from(text) };
     const indexed = await indexSource(file);

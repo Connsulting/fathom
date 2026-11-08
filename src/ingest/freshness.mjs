@@ -18,6 +18,7 @@ import { merchantDisplayName, plainEvidence } from '../categories/display.mjs';
 const MONTHLY = Object.freeze({ label: 'monthly', staleAfterDays: 45 });
 
 export const CADENCE = Object.freeze({
+  model_import: MONTHLY,
   bank_csv: MONTHLY,
   card_csv: MONTHLY,
   aggregator_csv: MONTHLY,
