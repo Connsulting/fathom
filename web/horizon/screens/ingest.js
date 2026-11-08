@@ -725,7 +725,9 @@ export function ingestScreens(h) {
       : btn('Undo', `data-decided-undo="${esc(id)}"${st.undoing[id] ? ' disabled' : ''}`, 'ghost');
     const ev = evidenceText(d.evidence).trim();
     const repeatsLabel = ev.replace(/[.!?]+$/, '').trim().toLowerCase() === CAT_LABEL.toLowerCase();
-    const why = t ? `${CAT_LABEL}.${ev && !repeatsLabel ? ` ${ev}` : ''}` : ev;
+    const reason = ev.replace(new RegExp(`^${CAT_LABEL}[:.]`, 'i'), '').trim();
+    const detail = reason !== ev ? reason.charAt(0).toUpperCase() + reason.slice(1) : reason;
+    const why = t ? `${CAT_LABEL}.${detail && !repeatsLabel ? ` ${detail}` : ''}` : ev;
     const amount = t ? cash(t.amount) : '';
     const when = t ? dateText(t.date) : '';
     const side = amount || when ? `<div class="h-decided-s">${amount ? `<span class="h-decided-amt">${esc(amount)}</span>` : ''}${when ? `<span>${esc(when)}</span>` : ''}</div>` : '';
