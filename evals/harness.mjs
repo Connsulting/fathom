@@ -6,6 +6,7 @@ import { seedDemo } from '../demo/seed.mjs';
 import { createEngine, loadCredential, BudgetExceededError, ModelAccountingError } from '../src/engine/index.mjs';
 import { createSpendLedger } from '../src/engine/runtime.mjs';
 import { modelFor } from '../src/engine/pricing.mjs';
+import { figureViolationKinds as figureCheckNames } from '../src/shared/answer-discipline.mjs';
 import { ANSWER_MAX_WORDS } from '../src/shared/answer-contract.mjs';
 import { estimateEvalCost } from './reservation.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
@@ -197,7 +198,7 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
         result.turns.push({ question: turn.question, rubric: turn.rubric, delivered, tools: calls, required,
           figures: numeric, expected: expectedGrade, length, refusal, prohibited, failingChecks, failedDrafts, attempts: gradedAttempts,
           blockedBy: gapOnly ? missing.filter(pair => turn.required.some(r => `${r.name}.${r.operation}` === pair)) : [],
-          grounding: response.message?.provenance?.grounding ?? null, historyMessages: Math.max(0, ...requestLengths), ok });
+          grounding: response.message?.provenance?.grounding ?? null, discipline: response.message?.provenance?.discipline ?? null, historyMessages: Math.max(0, ...requestLengths), ok });
         if (ledger.state.stopped) { result.status = `${ledger.state.stopped}-stopped`; break; }
         if (!ok && !gapOnly) result.status = 'fail';
         else if (result.status !== 'fail' && gapOnly) result.status = 'xfail';
@@ -227,11 +228,6 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
     if (outDir) await writeScorecard(outDir, scorecard);
     return scorecard;
   } finally { await store.close(); }
-}
-function figureCheckNames(grade) {
-  return [['unsourced', 'unsourced'], ['selfComputed', 'self-computed'], ['rounded', 'rounded'],
-    ['spelledOut', 'spelled_out'], ['contextOnly', 'context-only']]
-    .filter(([key]) => grade[key]?.length).map(([, name]) => `figures.${name}`);
 }
 export async function writeScorecard(dir, scorecard) {
   await mkdir(dir, { recursive: true });

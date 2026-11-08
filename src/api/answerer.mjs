@@ -26,8 +26,8 @@ import { listPreferences } from '../actions/preferences.mjs';
 // <date>, <description>"), and a date in the prose matching a same-turn row date is a literal
 // with that row's label (other unsourced dates are unchecked, see groundAnswer). An unchecked figure stays in place, wrapped
 // in a neutral .fx-checking .fx-unchecked span titled "Not checked against your data". The answer
-// is regenerated once, with a corrective turn, only when two or more of its figures and more than
-// half of them are unchecked; what is still unchecked after that is neutralized the same way.
+// is regenerated once for any answer-discipline violation; what is still unchecked after that
+// is neutralized the same way, and remaining discipline kinds are recorded in provenance.
 // renderAnswer escapes everything except valid tokens and the spans it adds.
 // Every grounding source (the household summary, the conversation context, pack entry bodies and
 // each tool result) goes through one evidence sanitizer: identifier, label and citation keys are
@@ -92,17 +92,17 @@ import { stripSources, listMarkerSpans, markdownBlocks } from '../shared/answer-
 import { resolveRefs } from './context-refs.mjs';
 import { DEMO_LIMIT_MESSAGE } from '../public-demo/control.mjs';
 import { ANSWER_MAX_WORDS } from '../shared/answer-contract.mjs';
+import { checkAnswerDiscipline } from '../shared/answer-discipline.mjs';
 
 export const PRODUCT_RULES = [
   'You are Fathom, a year-round financial co-pilot for one household of independent professionals.',
   'You are advisory only: you explain and recommend. You never file taxes, never move money or change any account, and never select individual securities.',
-  'Never state a number you did not take from a tool result, the household summary, the conversation context or a knowledge pack entry.',
   'Write stored figures as {f:key} tokens using returned figure keys, never as typed amounts.',
   'Never write a Sources, References or Citations line and never cite sources in your prose: the app shows the sources it used under every answer.',
   'Call tools before you write the answer, and do not narrate tool use.',
   'Do the read-only lookups needed to answer fully before replying. Check every relevant account, including all 529s and checking for transfers. Never ask permission to read household data.',
   'Answer in short paragraphs separated by blank lines. You may use bullet lists (lines starting with "- "), numbered lists (lines starting with "1. ") and **bold**; use no other markdown (no headings, links or tables) and no HTML.',
-  'The conversation context may list references: items the owner pointed at on screen, as kind and id, each with the tools that read it. Read them with those tools; never guess what they hold and never state a number about them that a tool did not return.',
+  'The conversation context may list references: items the owner pointed at on screen, as kind and id, each with the tools that read it. Read them with those tools; never guess what they hold.',
 ].join('\n');
 
 // ---------------------------------------------------------------- answer style and spending guide
@@ -129,16 +129,22 @@ export const NOTICES = Object.freeze({
 export const PROPOSE_RULE = 'When you suggest a change the owner has not asked for, call the write tool with propose: true in the same turn instead of asking them to reply yes. Nothing is saved until they confirm.';
 
 const UNCHECKED_OPEN = '<span class="fx-checking fx-unchecked" title="Not checked against your data">';
-// Regenerate only when at least REGEN_MIN figures and more than REGEN_SHARE of all figures are unchecked.
-const REGEN_MIN = 2;
-const REGEN_SHARE = 0.5;
 const HISTORY_LIMIT = 20;
 const MAX_TOKENS = 1024;
 // Any brace pair that looks like a scenario token; valid ones also need a safe key.
 const TOKEN_LIKE = /\{(fk|f|l|p|n):([^{}]*)\}/g;
 const SAFE_KEY = /^[A-Za-z0-9_.-]+$/;
-const CORRECTIVE = 'Some numbers in that answer are not in the tool results or the household data: {list}. ' +
-  'Answer again using only numbers from tool results or the provided data, and write stored figures as {f:key} tokens from household.figures.';
+function correctiveTurn(kinds) {
+  const corrections = [];
+  if (kinds.includes('length')) corrections.push(`Shorten the whole reply to ${ANSWER_MAX_WORDS} words or fewer.`);
+  if (kinds.includes('figures.spelled_out')) corrections.push('Write every figure as digits.');
+  if (kinds.includes('figures.self-computed')) corrections.push('Get every derived figure from the calculate tool.');
+  if (kinds.includes('figures.rounded')) corrections.push('Use the exact figure returned by a tool, without rounding it yourself.');
+  if (kinds.some(k => k === 'figures.unsourced' || k === 'figures.context-only'))
+    corrections.push('Drop any figure no tool returned, or call a tool to source it.');
+  return 'Answer again to correct these violations: ' + corrections.join(' ') +
+    ' Write stored figures as {f:key} tokens from household.figures.';
+}
 
 // ---------------------------------------------------------------- prompt assembly
 
@@ -540,7 +546,7 @@ export const PROGRESS_START = getTool('household').progress;
 export const PROGRESS_GROUNDING = 'Checking every number against your data';
 const PROGRESS_OTHER = 'Looking at your data';
 // The one step a regeneration shows, before the replaced text clears.
-const revisedLabel = n => `Revised to remove ${n} unchecked figure${n === 1 ? '' : 's'}`;
+const revisedLabel = n => n ? `Revised to remove ${n} unchecked figure${n === 1 ? '' : 's'}` : 'Revised to follow the answer rules';
 
 export const progressLabel = name => (getTool(name)?.progress || PROGRESS_OTHER);
 
@@ -665,8 +671,7 @@ export function createLiveAnswerer({ engine, packs, root, onRead } = {}) {
     return result;
   };
 
-  // One grounded model answer: call, ground, regenerate once with a corrective turn when most
-  // figures are unchecked (needsRevision), render.
+  // One grounded model answer with at most one corrective call through the same engine.
   async function run({ db, scenario, now, question, context, history, baseRefs, references = [], fakeArgs, actions = false, onEvent, actionContext = null }) {
     if (!engine.isOn()) return offNotice(engine);
     const t0 = performance.now();
@@ -713,13 +718,16 @@ export function createLiveAnswerer({ engine, packs, root, onRead } = {}) {
     };
     const ground = async (res, toolResults) => groundAnswer(textOf(res),
       { scenario, toolResults, data, dataLabels, accountLabels: await labelsFor(toolResults) });
-    // Regenerate only when REGEN_MIN or more figures and more than REGEN_SHARE of all figures are
-    // unchecked. Figures: violations, grounded number literals and valid figure tokens, dates excluded.
-    const needsRevision = (res, g) => {
-      const tokens = [...textOf(res).matchAll(TOKEN_LIKE)].filter(m => m[1] !== 'n' && tokenValid(scenario, m[1], m[2])).length;
-      const unchecked = g.violations.filter(v => !v.date).length;
-      const figures = unchecked + g.literals.filter(l => !l.date).length + tokens;
-      return unchecked >= REGEN_MIN && unchecked / figures > REGEN_SHARE;
+    const figures = Object.fromEntries(Object.entries(scenario.fig || {}).map(([key, f]) => [key, f.v]));
+    const sourceReads = [{ name: 'household', args: { operation: 'summary' }, result: summary },
+      ...(context?.recommendation ? [{ name: 'recommendations', args: { operation: 'detail', id: context.recommendation.id }, result: context.recommendation }] : [])];
+    const moreDetail = /\b(?:(?:more|greater) detail|in detail|detailed (?:answer|explanation|breakdown)|(?:explain|walk me through) (?:it |this )?(?:fully|thoroughly|step by step))\b/i.test(question);
+    const disciplineOf = (res, toolResults, g) => {
+      const check = checkAnswerDiscipline(textOf(res), [...sourceReads, ...toolResults],
+        { figures, contextNumbers: Object.values(figures).filter(Number.isFinite), moreDetail });
+      if (g.violations.some(v => !v.date) && !check.violations.some(k => k.startsWith('figures.')))
+        check.violations.push('figures.unsourced');
+      return check;
     };
 
     const actionReply = reply => actionContext?.turnId ? { ...reply, provenance: { ...reply.provenance, actionTurn: actionContext.turnId } } : reply;
@@ -731,20 +739,22 @@ export function createLiveAnswerer({ engine, packs, root, onRead } = {}) {
     let chosen = first;
     let toolResults = resultsOf(first);
     let grounding = await ground(first, toolResults);
+    let discipline = disciplineOf(first, toolResults, grounding);
     let revised = 0;
+    let retried = false;
     let costUsd = first.costUsd || 0;
-    if (needsRevision(first, grounding)) {
+    if (discipline.violations.length) {
       // The step streams before the reset, so the cleared text has a stated reason.
       revised = grounding.violations.filter(v => !v.date).length;
+      retried = true;
       stream.progress(revisedLabel(revised));
       stream.reset();
       work.step(revisedLabel(revised));
-      const list = grounding.violations.map(v => v.text).join(', ');
       const earlier = resultsOf(first).map(r => ({ name: r.name, args: r.args ?? {}, result: r.result ?? null,
         ...(r.isError ? { isError: true } : {}) }));
       const evidence = earlier.length ? `\n\nTool results from your first attempt (still available as evidence):\n${JSON.stringify(earlier)}` : '';
       const retry = { ...request, tools: request.tools.filter(t => t.kind === 'read'), messages: [...request.messages, { role: 'assistant', content: first.text },
-        { role: 'user', content: CORRECTIVE.replace('{list}', () => list) + evidence }] };
+        { role: 'user', content: correctiveTurn(discipline.violations) + evidence }] };
       try {
         const second = await engine.call(retry);
         stream.progress(PROGRESS_GROUNDING);
@@ -754,6 +764,7 @@ export function createLiveAnswerer({ engine, packs, root, onRead } = {}) {
         chosen = second;
         toolResults = [...resultsOf(first), ...resultsOf(second)];
         grounding = await ground(second, toolResults);
+        discipline = disciplineOf(second, toolResults, grounding);
       } catch (e) {
         // Never the first, ungrounded answer: the engine recorded each completed round's spend.
         return actionReply(noticeFor(e, engine));
@@ -779,8 +790,9 @@ export function createLiveAnswerer({ engine, packs, root, onRead } = {}) {
           ...(context && Array.isArray(context.entries) ? context.entries.map(e => e.title) : [])]
           .filter(title => lower.includes(title.toLowerCase()))),
         literals: grounding.literals.map(l => ({ text: l.text, source: l.source })),
-        grounding: { ok: grounding.ok, retried: revised > 0, unverified: grounding.violations.map(v => v.text),
+        grounding: { ok: grounding.ok, retried, unverified: grounding.violations.map(v => v.text),
           ...(revised ? { revised } : {}) },
+        discipline: { violations: discipline.violations },
         costUsd: Number(costUsd.toFixed(6)),
         ...(references.length ? { references: references.map(({ kind, id }) => ({ kind, id })) } : {}),
         ...(pendingAction ? { pendingAction } : {}),
