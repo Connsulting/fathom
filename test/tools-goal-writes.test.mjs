@@ -110,6 +110,7 @@ test('curve matches the route, merges known axes, rounds and undoes the full set
   const srv = await serveAppFixture({ db: ctx.db, config: ctx.household.config, authenticated: true });
   t.after(() => srv.close());
   assert.equal((await srv.postJson('/api/curve', { positions: { [axis]: 0.735 } })).status, 200);
+  assert.equal((await srv.postJson('/api/curve', { id: [axis], value: 0.5 })).status, 400);
   assert.deepEqual(getSetting(ctx.db, 'curve.positions'), result.positions);
   for (const positions of [{}, { nonexistent: 0.5 }, { [axis]: 2 }]) {
     await assert.rejects(callTool('update_preferences', { operation: 'curve', positions }, ctx), { code: 'bad_input' });
