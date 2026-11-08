@@ -161,7 +161,8 @@ test('curve positions persist, validate and feed onboarding priorities on a real
   const s = await store(t);
   const sc = buildScenario(s.db, { clock: s.config.clock });
   assert.deepEqual(sc.curve.map(c => c.id), CURVE_AXES.map(a => a.id), 'a real store gets the default axes');
-  assert.ok(sc.curve.every(c => c.value === 0.5));
+  // Every axis sits in the middle except effort, which defaults to "Do not make me think".
+  assert.deepEqual(Object.fromEntries(sc.curve.map(c => [c.id, c.value])), { tax_cash: 0.5, ret_life: 0.5, effort: 1, human: 0.5 });
   assert.deepEqual(sc.onboarding.priorities.map(p => p.id), CURVE_AXES.map(a => a.id));
   assert.equal(sc.onboarding.priorities[0].label, 'Pay less tax this year vs Keep cash flexible');
 

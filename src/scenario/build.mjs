@@ -522,8 +522,16 @@ export function loadGoals(db, { fig = {}, accounts = [] } = {}) {
     delete g.progress;
     const tKey = `goal.${r.id}.target`;
     const cKey = `goal.${r.id}.current`;
+    // A target Fathom set (src/goals/write.mjs adoptSuggestions) keeps the calculator's provenance
+    // and says so; the goal carries adopted {at} for its Undo.
+    delete g.adopted;
     if (typeof def.target === 'number' && Number.isFinite(def.target)) {
-      fig[tKey] = { v: def.target, src: 'goal-target', kind: 't', label: 'Goal target' };
+      const a = def.adopted && typeof def.adopted === 'object' ? def.adopted : null;
+      const f = a && a.figure && typeof a.figure === 'object' ? a.figure : null;
+      fig[tKey] = a
+        ? { ...(f || {}), v: def.target, src: 'calc:targets', kind: f?.kind || 'e', label: 'Goal target', notes: ['Fathom set this target.', ...(Array.isArray(f?.notes) ? f.notes : [])] }
+        : { v: def.target, src: 'goal-target', kind: 't', label: 'Goal target' };
+      if (a) g.adopted = { at: a.at ?? null };
     }
     const tr = def.track;
     let cur = null;
