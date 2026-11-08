@@ -33,7 +33,7 @@ function eligible(item) {
   }
   return item.options?.length > 1 && item.options.every(o => typeof o.id === 'string');
 }
-function queueRecQuestions(db, now) {
+function queueRecQuestions(db, now, create) {
   const open = new Map();
   for (const row of db.prepare("SELECT id,def FROM recs WHERE status IN ('proposed','doing','waiting','snoozed') ORDER BY id").all()) {
     for (const key of parseJson(row.def, {}).question?.keys ?? []) {
@@ -50,6 +50,7 @@ function queueRecQuestions(db, now) {
       db.prepare("UPDATE confirm_items SET status='pending', answer=NULL, answered_at=NULL WHERE id=?").run(item.id);
     }
   }
+  if (!create) return;
   for (const [key, { shape, recId }] of open) {
     if (db.prepare('SELECT 1 FROM facts WHERE key=?').get(key)) continue;
     // A single durable item per fact keeps Undo suppression across replanning and rec changes.
@@ -115,7 +116,6 @@ export async function resolvePending(db, engine, { now = new Date().toISOString(
   let answered = autoResolve(db, { now }).answered.length;
   let batches = 0, items = 0, stopped = null, returnedCost = 0;
   answered += (await guessCategories(db, null, { now })).applied ?? 0;
-  queueRecQuestions(db, now);
   for (const item of pendingItems(db)) {
     if (!eligible(item) || declined(db, item.id)) continue;
     const hit = deterministicGuess(db, item, cardDetail(db, item));
@@ -131,6 +131,7 @@ export async function resolvePending(db, engine, { now = new Date().toISOString(
     if (!engine?.isOn() || getSetting(db, 'engine', { on: true })?.on === false) return 'engine_off';
     return null;
   };
+  queueRecQuestions(db, now, admission() === null);
   if (categorize && !admission()) {
     const out = await categorize({ maxCostUsd: Math.max(0, runCap() - cost()), admit: admission });
     answered += out.applied ?? 0;
