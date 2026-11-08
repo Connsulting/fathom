@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { ADVISOR_KEYS } from '../src/facts/derive.mjs';
 import { CONFIRM_TASKS, ANSWER_SHAPES, questionFor } from '../src/jobs/triggers/common.mjs';
 import { triggers, evaluateTriggers } from '../src/jobs/triggers/index.mjs';
 import { writeProse } from '../src/jobs/planner/prose.mjs';
@@ -10,6 +11,7 @@ test('every confirm task has a declared, usable answer shape', () => {
   for (const key of Object.keys(CONFIRM_TASKS)) {
     assert.ok(ANSWER_SHAPES[key], key);
     const q = questionFor([key], { accounts, facts: {}, names: {} });
+    if (ADVISOR_KEYS.has(key)) { assert.equal(q.fields.length, 0, key); continue; }
     assert.ok(q.fields.length, key);
     for (const f of q.fields) assert.ok(['boolean', 'number', 'date', 'choice'].includes(f.type), key);
   }
