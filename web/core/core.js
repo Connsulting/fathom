@@ -79,7 +79,7 @@ import { signInTarget } from '../auth/return-path.js';
 //    GETs /api/spending/rows (same shape as pnlRows). All four register the response's figures and sources like
 //    api.accountTransactions and never touch the scenario or the error line. A figure's optional
 //    detail list ({ k, v } plain text) is shown as rows in the figure popover.
-//  - api.accountMask(id, mask), api.accountOwner(id, { owner } | { undo }), api.accountKind(id, { kind } |
+//  - api.accountMask(id, mask | { undo }), api.accountOwner(id, { owner } | { undo }), api.accountKind(id, { kind } |
 //    { undo }) and api.accountMerge(id, withId) resolve { data } (the reply, scenario applied) or
 //    { error, status } without the error line. api.accountMergeCandidates(id) resolves { items } or null.
 //  - api.packEntry(packId, entryId) GETs one pack entry and resolves { id, title, body, cites } or
@@ -1077,9 +1077,11 @@ function sendAccountEdit(path, body) {
 const accountPath = (id, tail) => '/api/accounts/' + encodeURIComponent(id) + '/' + tail;
 const noAccount = () => done({ error: 'No account was given.', status: 0 });
 
-// The account's last 4 digits (exactly four, checked again on the server).
+// The account's last 4 digits (exactly four, checked again on the server), or { undo: before } from
+// an earlier reply.
 function accountMask(id, mask) {
   if (id == null || id === '') return noAccount();
+  if (mask && typeof mask === 'object') return sendAccountEdit(accountPath(id, 'mask'), mask);
   return sendAccountEdit(accountPath(id, 'mask'), { mask: String(mask ?? '') });
 }
 
