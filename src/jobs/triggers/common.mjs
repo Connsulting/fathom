@@ -7,10 +7,15 @@ import { esc } from '../../shared/tokens.mjs';
 import { personOwner } from '../../shared/rec-links.mjs';
 import { accountLabel } from '../../shared/account-label.mjs';
 import { isCollegeAccount } from '../../shared/account-kinds.mjs';
+import { MIN_BIRTH_YEAR, MAX_DEPENDENTS } from '../../shared/ages.mjs';
+import { VIRGINIA_PLAN_QUESTION, activeInference } from '../../shared/va529-plan.mjs';
 
 // Data-derived text (entity and account names) as stored rec HTML: escaped, braces included, so it
 // can never carry markup or a scenario token.
 export const dataText = v => esc(v).replace(/\{/g, '&#123;').replace(/\}/g, '&#125;');
+
+// Recs whose title and summary list their items even when every item is a question on the card.
+export const LISTED_RECS = Object.freeze(new Set(['missing-data']));
 
 export const isTrue = fact => ({ fact, op: 'eq', value: true });
 export const absentOrFalse = fact => ({ any: [{ not: { fact, op: 'exists' } }, { fact, op: 'eq', value: false }] });
@@ -38,10 +43,13 @@ export function mineOf(ctx, keys, { actualOnly = false } = {}) {
 
 const GENERIC_TASKS = ['Review the figures behind this on the plan', 'Mark it done once it is handled', 'Ask a follow-up question if anything looks off'];
 
+// Tasks are text, or {t, link} when the step is done on another page: link names where ('upload',
+// 'confirm', 'ask' or 'accounts').
 export function padTasks(list) {
-  const tasks = [...new Set(list.filter(Boolean))].slice(0, 6);
-  for (const t of GENERIC_TASKS) if (tasks.length < 3 && !tasks.includes(t)) tasks.push(t);
-  return tasks.map(t => ({ t }));
+  const seen = new Set();
+  const tasks = list.filter(Boolean).map(x => (typeof x === 'string' ? { t: x } : x)).filter(x => (seen.has(x.t) ? false : (seen.add(x.t), true))).slice(0, 6);
+  for (const t of GENERIC_TASKS) if (tasks.length < 3 && !seen.has(t)) { seen.add(t); tasks.push({ t }); }
+  return tasks;
 }
 
 export const CONFIRM_TASKS = Object.freeze({
@@ -51,9 +59,8 @@ export const CONFIRM_TASKS = Object.freeze({
   'benefits.hsaCoverage': 'Tell us whether the HSA plan covers just you or your family',
   'business.salaryRange': 'Ask your advisor for a reasonable salary range and enter it',
   'business.cashBasis': 'Confirm the business keeps its books on a cash basis',
-  'household.ownerAge': 'Tell us your age',
-  'household.spouseAge': "Tell us your spouse's age",
-  'accounts.va529': 'Tell us which college savings accounts are Virginia plans, whether the owner is seventy or older, and any carryforward',
+  'household.birthYears': 'Tell us the year you were born, and your spouse if you file jointly',
+  'accounts.va529': 'Tell us which college savings accounts are Virginia plans, and any carryforward',
   'business.onlyEmployee': 'Tell us whether you own the whole business and it has no employees, your spouse included',
   'retirement.priorYearFicaWages': "Tell us last year's Social Security wages from your business",
   'retirement.planOffersRoth': 'Tell us whether your plan offers Roth deferrals',
@@ -65,21 +72,32 @@ export const CONFIRM_TASKS = Object.freeze({
 
 const yesNo = label => ({ type: 'boolean', label });
 const dollars = label => ({ type: 'number', unit: 'USD', min: 0, label });
-const age = label => ({ type: 'number', unit: 'years', min: 0, max: 120, integer: true, label });
+const birthYear = label => ({ type: 'number', unit: 'year', min: MIN_BIRTH_YEAR, max: 2200, integer: true, label });
 
 export const ANSWER_SHAPES = Object.freeze({
+  'pnl.ledgers': { scope: 'household', type: 'map', label: 'Which imported ledgers are spending or businesses?', values: {
+    type: 'object', fields: { kind: { type: 'choice', ownerInterpreted: true, label: 'What does this ledger track?', choices: [{ value: 'spending', label: 'Spending ledger' }, { value: 'business', label: 'Business' }] } },
+  } },
   'retirement.planTermsConfirmed': { scope: 'household', ...yesNo('Has your advisor confirmed your retirement plan terms and eligibility?') },
   'retirement.aggregationConfirmed': { scope: 'household', ...yesNo('Has your advisor confirmed no related business shares your plan limits?') },
   'benefits.hsaEligible': { scope: 'household', ...yesNo('Is your health plan HSA eligible for the whole year?') },
   'benefits.hsaCoverage': { scope: 'household', type: 'choice', label: 'Who does your HSA health plan cover?', choices: [{ value: 'self', label: 'Just you' }, { value: 'family', label: 'Family' }] },
   'business.salaryRange': { scope: 'household', type: 'object', fields: { min: { ...dollars('What is the lowest annual salary your advisor considers reasonable?'), exclusiveMin: 0 }, max: { ...dollars('What is the highest annual salary your advisor considers reasonable?'), exclusiveMin: 0 } } },
   'business.cashBasis': { scope: 'household', ...yesNo('Does your business keep its books on a cash basis?') },
-  'household.ownerAge': { scope: 'household', ...age('How old are you at the end of the planning tax year?') },
-  'household.spouseAge': { scope: 'household', ...age('How old is your spouse at the end of the planning tax year?') },
+  // One source of every age (70 or older, catch-up at 50, RMD age). Only owner and, when filing
+  // jointly, spouse get a form field; dependents are recorded from free text in Ask.
+  'household.birthYears': { scope: 'household', type: 'object', label: 'The years you, your spouse and your dependents were born', fields: {
+    owner: birthYear('What year were you born?'),
+    spouse: { ...birthYear('What year was your spouse born?'), optional: true, requires: { fact: 'household.filingStatus', value: 'mfj' } },
+    dependents: { type: 'years', optional: true, ask: false, min: MIN_BIRTH_YEAR, max: 2200, maxItems: MAX_DEPENDENTS, label: 'What years were your dependents born?' },
+  } },
   'accounts.va529': { scope: 'account', accountKind: '529', type: 'object', fields: {
-    virginiaPlan: yesNo('Is {account} a Virginia plan?'),
-    ownerAge70Plus: { ...yesNo('Is the owner of {account} age 70 or older?'), when: { virginiaPlan: true } },
+    virginiaPlan: yesNo(VIRGINIA_PLAN_QUESTION),
     carryforward: { ...dollars('How much unused Virginia deduction carries forward to this year for {account}?'), when: { virginiaPlan: true } },
+  } },
+  // Undo of an inferred virginiaPlan answer: the account goes back to asking.
+  'accounts.va529Inference': { scope: 'account', accountKind: '529', type: 'object', fields: {
+    undone: yesNo('Did you undo the Virginia plan answer inferred from the institution?'),
   } },
   'business.onlyEmployee': { scope: 'household', ...yesNo('Do you own the whole business with no employees, including your spouse?') },
   'retirement.priorYearFicaWages': { scope: 'person', ...dollars('How much did {person} receive in Social Security wages from the plan sponsor last year?') },
@@ -97,29 +115,52 @@ export function answerShape(key) {
 
 export const acceptsAnswerAccount = (shape, account) => shape.accountKind === '529' ? isCollegeAccount(account) : account.kind === shape.accountKind;
 
+// A form field is asked unless its shape part says otherwise: ask: false (recorded from free text
+// only) or requires: {fact, value} (a spouse field only when filing jointly).
+const asked = (def, facts) => def.ask !== false && (!def.requires || facts[def.requires.fact] === def.requires.value);
+
+// The question a rec asks: one field per unanswered or answered part, each carrying its saved value.
+// A Virginia plan field with no saved answer takes the answer inferred from the account's
+// institution (`inferred` holds the evidence and the account, for Undo). `answered` is true when
+// every active field holds a value, so the rec shows Answered instead of the questions.
 export function questionFor(keys, { accounts = [], facts = {}, names = {}, people } = {}) {
   const fields = [];
   const unique = [...new Set(keys)];
   for (const key of unique) {
     const shape = answerShape(key);
     const groups = shape.scope === 'account'
-      ? accounts.filter(a => acceptsAnswerAccount(shape, a)).map(a => ({ path: [a.id], account: accountLabel({ ...a, householdNames: names }) }))
+      ? accounts.filter(a => acceptsAnswerAccount(shape, a)).map(a => ({ path: [a.id], account: accountLabel({ ...a, householdNames: names }), record: a }))
       : shape.scope === 'person'
         ? (people || (facts['household.filingStatus'] === 'mfj' ? ['owner', 'spouse'] : ['owner'])).map(p => ({ path: [p], person: p === 'owner' ? 'you' : 'your spouse' }))
         : [{ path: [] }];
     for (const group of groups) {
-      const parts = shape.type === 'object' ? Object.entries(shape.fields) : [['', shape]];
+      const parts = shape.type === 'object' ? Object.entries(shape.fields).filter(([, def]) => asked(def, facts)) : [['', shape]];
       for (const [part, def] of parts) {
         const path = [...group.path, ...(part ? [part] : [])];
-        const value = path.reduce((v, p) => v && typeof v === 'object' && Object.hasOwn(v, p) ? v[p] : undefined, facts[key]);
+        let value = path.reduce((v, p) => v && typeof v === 'object' && Object.hasOwn(v, p) ? v[p] : undefined, facts[key]);
+        const inference = key === 'accounts.va529' && part === 'virginiaPlan' && value === undefined ? activeInference(group.record, facts) : null;
+        if (inference) value = inference.value;
         const label = def.label.replaceAll('{account}', group.account || '').replaceAll('{person}', group.person || 'you');
-        fields.push({ ...def, key, path, id: JSON.stringify([key, ...path]), label, ...(value !== undefined ? { value } : {}), ...(def.when ? { when: { path: [...group.path, Object.keys(def.when)[0]], value: Object.values(def.when)[0] } } : {}) });
+        fields.push({
+          ...def, key, path, id: JSON.stringify([key, ...path]), label, ...(group.account ? { group: group.account } : {}),
+          ...(value !== undefined ? { value } : {}),
+          ...(inference ? { inferred: { accountId: group.record.id, evidence: inference.evidence } } : {}),
+          ...(def.when ? { when: { path: [...group.path, Object.keys(def.when)[0]], value: Object.values(def.when)[0] } } : {}),
+        });
       }
     }
   }
+  const byId = new Map(fields.map(f => [f.id, f]));
+  const active = f => !f.when || byId.get(JSON.stringify([f.key, ...f.when.path]))?.value === f.when.value;
+  const answered = fields.length > 0 && fields.filter(active).every(f => f.value !== undefined);
   const labels = unique.includes('accounts.va529') ? accounts.filter(isCollegeAccount).map(a => accountLabel({ ...a, householdNames: names })) : [];
-  const summary = labels.length ? `For ${labels.map(dataText).join(', ')}, tell us whether it is a Virginia plan. For each Virginia plan, enter the owner age answer and unused deduction carryforward.` : 'Save these answers to update your plan automatically.';
-  return { keys: unique, ...(people ? { people } : {}), title: fields[0]?.label || 'Answer the questions for your plan', summary, fields };
+  const years = unique.includes('household.birthYears') ? ' Tell us your birth year, and your spouse\'s when you file jointly; every age comes from it.' : '';
+  const summary = labels.length
+    ? `For ${labels.map(dataText).join(', ')}, tell us whether it is Virginia's own 529 program. For each Virginia plan, enter the unused deduction carryforward.${years}`
+    : years ? years.trim() : 'Save these answers to update your plan automatically.';
+  const first = fields[0];
+  const title = first ? (first.group ? `${first.group}: ${first.label}` : first.label) : 'Answer the questions for your plan';
+  return { keys: unique, ...(people ? { people } : {}), title, summary, answered, fields };
 }
 
 export const confirmTask = key => (answerShape(key), CONFIRM_TASKS[key]);

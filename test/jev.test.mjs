@@ -66,6 +66,46 @@ test('timeout is bounded, charged, and a later valid request remains live',async
   assert.equal((await jev.choose(questions())).length,1); assert.ok(jev.stats().costUsd>0);
 });
 
+test('a cost-derived token cap attempts every question that fits the run budget',async t=>{
+  let attempted=0;
+  const jev=await createJev({...setup(t),transport:async(_,o)=>{
+    const body=JSON.parse(o.body), data=response(body);
+    attempted+=Object.keys(body.questions).length;
+    data.usage.input_tokens=Buffer.byteLength(o.body)+1024*Object.keys(body.questions).length+4096;
+    return Response.json(data);
+  }});
+  const n=300;
+  assert.equal((await jev.choose(Array.from({length:n},()=>questions()[0]))).length,n);
+  assert.equal(attempted,n);
+  assert.ok(jev.stats().costUsd<=.05);
+});
+
+test('outbound pause is rechecked before each batch and retry, then resume permits dispatch',async t=>{
+  let enabled=true,calls=0;
+  const jev=await createJev({...setup(t),batchSize:1,admit:()=>enabled?null:'engine_paused',transport:async(_,o)=>{
+    calls++;enabled=false;return Response.json(response(JSON.parse(o.body)));
+  }});
+  await assert.rejects(jev.choose([...questions(),...questions()]),/engine_paused/);
+  assert.equal(calls,1);
+  enabled=true;
+  assert.equal((await jev.choose(questions())).length,1);
+  enabled=false;
+  await assert.rejects(jev.choose(questions()),/engine_paused/);
+  assert.equal(calls,2);
+});
+
+test('a pause during a failed attempt prevents its retry and resume remains live',async t=>{
+  let enabled=true,calls=0;
+  const jev=await createJev({...setup(t),admit:()=>enabled?null:'engine_paused',sleep:async()=>{},transport:async(_,o)=>{
+    calls++;
+    if(calls===1) {enabled=false;return new Response('',{status:503});}
+    return Response.json(response(JSON.parse(o.body)));
+  }});
+  await assert.rejects(jev.choose(questions()),/engine_paused/);assert.equal(calls,1);
+  enabled=true;assert.equal((await jev.choose(questions())).length,1);assert.equal(calls,2);
+});
+
+
 test('admission runs before every dispatch, retries included, and a refusal sends nothing',async t=>{
   const {keyFile}=setup(t); let calls=0, refusal=null; const entries=[];
   const jev=await createJev({keyFile,admit:()=>refusal,sleep:async()=>{},ledger:{record:e=>entries.push(e),monthSpendUsd:()=>0},

@@ -36,6 +36,7 @@ import * as eh from './email-handlers.mjs';
 import * as sf from './simplefin-handlers.mjs';
 import * as yh from './yearend-handlers.mjs';
 import * as gh from './goals.mjs';
+import * as tour from './tour-handlers.mjs';
 import * as accts from './accounts.mjs';
 import * as ad from './account-detail.mjs';
 import * as pl from './pnl-handlers.mjs';
@@ -67,6 +68,7 @@ const TABLE = [
   { method: 'POST', path: '/api/operator/households', handler: authHandlers.provisionHousehold, quiet: true, operator: true },
   { method: 'GET', path: '/api/scenario', handler: h.getScenario },
   { method: 'GET', path: '/api/pace', handler: gh.getPace },
+  { method: 'POST', path: '/api/tour/seen', handler: tour.tourSeen },
   { method: 'GET', path: '/api/identity', handler: h.getIdentity, session: true },
   { method: 'POST', path: '/api/recs/:id/action', handler: h.recAction },
   { method: 'POST', path: '/api/actions/:id/undo', handler: h.actionUndo },
