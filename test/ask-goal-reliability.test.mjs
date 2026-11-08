@@ -186,6 +186,29 @@ test('AC4: a stored amount must match exactly rather than round to a proposed ta
   assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: 97361.49 })).isError);
 });
 
+test('SEC2: stored notes and sourced proposals keep identifier context for numeric evidence', async t => {
+  const { db, ctx, registry } = await setup(t);
+  db.prepare('DELETE FROM facts').run();
+  db.prepare('DELETE FROM goals').run();
+  db.prepare('DELETE FROM figures').run();
+  storedGoal(db, 'Account ending in 4821, due 2028-09-17.');
+  const receipts = () => db.prepare('SELECT count(*) AS n FROM action_receipts').get().n;
+  for (const target of [4821, 2028, 9, 17]) {
+    const out = await registry().invoke('update_goal', { operation: 'create', title: 'Savings', target });
+    assert.equal(out.isError, true, String(target));
+    assert.equal(receipts(), 0);
+  }
+  const text = 'Create a savings goal for account ending in 4821?';
+  message(db, text, { literals: [{ text: '4821', source: 'account summary' }] });
+  ctx.ownerText = 'yes';
+  const rejected = await registry().invoke('update_goal', { operation: 'create', title: 'Savings', target: 4821 });
+  assert.equal(rejected.isError, true);
+  assert.equal(receipts(), 0);
+  const accepted = await registry().invoke('update_goal', { operation: 'create', title: 'Savings', target: 8000 });
+  assert.ok(!accepted.isError, accepted.content[0].text);
+  assert.equal(receipts(), 1);
+});
+
 test('AC4: the merged goal model keeps evidence for ranges, floors and contribution details', async t => {
   const { db, registry } = await setup(t);
   const account = db.prepare('SELECT id FROM accounts LIMIT 1').get().id;
