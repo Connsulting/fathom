@@ -12,6 +12,10 @@
 // declined (undid an auto answer) are never answered again.
 
 import { parseJson } from '../store/db.mjs';
+import { getFacts } from '../store/facts.mjs';
+import { loadPlanningData, resolveEntities } from '../jobs/planner/data.mjs';
+import { sameEmployer, docPayer, docRecipient, employerKeyOf } from '../jobs/planner/payroll.mjs';
+import { kindOf } from './account-match.mjs';
 import { accountNaming } from '../accounts/naming.mjs';
 import {
   pendingItems, getItem, recordAutoAnswer, autoInfo, normalizeName, ConfirmError, KIND_OPTIONS,
@@ -52,7 +56,9 @@ export function autoResolve(db, { now } = {}) {
 
 function decide(db, item) {
   if (item.kind === 'near_duplicate') return crossFormatDuplicate(db, item);
-  if (item.kind === 'account_kind') return sharedMask(db, item);
+  if (item.kind === 'account_kind') return accountKind(db, item);
+  if (item.kind === 'employer_relation') return employerRelation(db, item);
+  if (['employer_recipient', 'document_recipient'].includes(item.kind)) return payrollRecipient(db, item);
   if (item.kind !== 'account_owner') return null;
   const byHolder = holderMatch(db, item);
   if (byHolder?.ambiguous) return null;
@@ -225,4 +231,61 @@ function sharedMask(db, item) {
     option, rule: 'shared_mask',
     evidence: evidence(db, text, supports.filter((s) => s.itemId != null).map((s) => s.itemId), { accountId: account.id, mask: account.mask, accounts: supports.map((s) => s.account.id) }),
   };
+}
+
+function accountKind(db, item) {
+  const account = accountOf(db, item.subject);
+  const option = account && kindOf(account.name);
+  const shared = sharedMask(db, item);
+  if (!option || !validOption(item, option)) return shared;
+  if (shared) return shared.option === option ? shared : null;
+  return { option, rule: 'account_name', evidence: evidence(db,
+    `The account is named "${account.name}"${account.inst ? ` at ${account.inst}` : ''}.`, [], { accountId: account.id }) };
+}
+
+function employerRelation(db, item) {
+  const name = item.context.employer;
+  if (!normalizeName(name)) return null;
+  const facts = getFacts(db), data = loadPlanningData(db, new Date().toISOString().slice(0, 10));
+  const entities = resolveEntities(data, facts).filter(e => e.classified);
+  const matches = entities.filter(e => sameEmployer(data, e.name, name));
+  const learned = db.prepare("SELECT id,subject,answer,context FROM confirm_items WHERE kind='employer_relation' AND status='answered' AND answer IN ('household','outside')")
+    .all().filter(r => !restsOn(db, r.id, item.id) && sameEmployer(data, parseJson(r.context, {}).employer, name));
+  const choices = new Set(learned.map(r => r.answer));
+  if (matches.length === 1) choices.add('household');
+  if (matches.length > 1 || choices.size > 1) return null;
+  if (!choices.size) return null;
+  const [option] = choices;
+  return { option, rule: 'employer_match', evidence: evidence(db,
+    matches.length ? `The employer "${name}" matches your business "${matches[0].name}" or its saved alias.`
+      : `You already identified "${name}" as ${option === 'outside' ? 'an outside employer' : 'your own business'}.`,
+    learned.map(r => r.id), { employer: name, entities: matches.map(e => e.name) }) };
+}
+
+function payrollRecipient(db, item) {
+  const data = loadPlanningData(db, new Date().toISOString().slice(0, 10));
+  const docs = data.documents.filter(d => ['w2', 'paystub'].includes(d.docType)).filter(d => item.kind === 'employer_recipient'
+    ? employerKeyOf(d.fields.employerName) === item.subject
+    : (!item.fileId || d.fileId === item.fileId) && String(item.subject).startsWith(docPayer(d) + ':'));
+  if (!docs.length) return null;
+  const members = factMembers(db);
+  const recipients = docs.map(doc => {
+    const name = normalizeName(doc.fields.employeeName);
+    const matches = name ? members.filter(m => normalizeName(m.name) === name) : [];
+    const linked = docRecipient(data, doc);
+    if (linked.blocked) return null;
+    const stored = linked.person;
+    if (matches.length === 1) return stored && stored !== matches[0].option ? null : matches[0].option;
+    if (name) return null;
+    return stored ?? null;
+  });
+  if (recipients.some(r => !r) || new Set(recipients).size !== 1) return null;
+  const option = recipients[0];
+  if (!validOption(item, option)) return null;
+  const basis = data.confirm.filter(i => i.status === 'answered' && ['employer_recipient', 'document_recipient'].includes(i.kind)
+    && !restsOn(db, i.id, item.id) && docs.some(d => i.kind === 'employer_recipient'
+      ? i.subject === employerKeyOf(d.fields.employerName) : i.subject === `${docPayer(d)}:doc:${d.fileId}`)).map(i => i.id);
+  return { option, rule: 'payroll_recipient', evidence: evidence(db,
+    `The payroll documents name ${option === 'owner' ? 'you' : 'your spouse'} as the recipient, matching your household names or saved payroll links.`,
+    basis, { documents: docs.map(d => d.id) }) };
 }

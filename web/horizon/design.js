@@ -20,6 +20,7 @@ import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
 import * as serviceStatus from './screens/service-status.js';
 import * as recAnswers from './screens/rec-answers.js';
+import { gapControl } from '../core/gap-control.js';
 import * as recBlocker from './screens/rec-blocker.js';
 import * as recSteps from './screens/rec-steps.js';
 import * as accountScreen from './screens/account.js';
@@ -1198,7 +1199,7 @@ function notBuiltRows() {
   const nb = api.s.wargame?.notBuilt || {};
   return ['salary', 'deferral'].filter((k) => nb[k] && typeof nb[k].text === 'string').map((k) => {
     const answers = nb[k].unlock === 'answers';
-    const link = answers
+    const link = nb[k].fix ? gapControl(nb[k].fix, esc) : answers
       ? `<a href="${href('confirm')}" data-go="confirm" class="h-btn ghost">Open Confirm</a>`
       : `<a href="${href('add')}" data-go="add" class="h-btn ghost">Add files</a>`;
     return `<article class="h-dec unbuilt" data-not-built="${esc(k)}"><div class="h-dec-b"><p>${esc(nb[k].text)}</p></div><div class="h-acts">${link}</div></article>`;

@@ -5,6 +5,7 @@ import { accountDetail } from '../../api/account-detail.mjs';
 import { ACCOUNT_TREATMENT } from '../../calc/treatment.mjs';
 import { envelope } from '../../calc/figure.mjs';
 import { parseJson } from '../../store/db.mjs';
+import { getFacts } from '../../store/facts.mjs';
 import { clockOf, plainDeep } from './figures.mjs';
 import { tokenScope } from '../../scenario/build.mjs';
 import { ToolError } from '../errors.mjs';
@@ -46,7 +47,7 @@ export function bounded(result) {
 function netWorth(args, ctx) {
   const clock = clockOf(ctx), labels = trendLabels(ctx.db), scope = tokenScope(ctx.db);
   const plain = value => plainDeep(scope, value);
-  const plans = parseJson(ctx.db.prepare("SELECT value FROM facts WHERE key='accounts.planType'").get()?.value, {}) || {};
+  const plans = getFacts(ctx.db)['accounts.planType'] || {};
   const groupBy = args.groupBy || 'part';
   const rows = selectedAccounts(ctx.db, args.accounts).filter(a => args.includeBusiness !== false || groupOfKind(a.kind) !== 'Business');
   const missing = [];

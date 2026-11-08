@@ -3,6 +3,7 @@ import { aggregate, compare, cashFlow, bindFigures, boundResult } from '../../ca
 import { recurring } from '../../calc/recurring.mjs';
 import { resolveDefinition, spendingDefinitions } from '../../spending/definitions.mjs';
 import { BUCKETS } from '../../categories/resolve.mjs';
+import { withInferredRecFacts } from '../../store/facts.mjs';
 import { ToolError } from '../errors.mjs';
 import { loadPlanningData } from '../../jobs/planner/data.mjs';
 import { personalSummaryInput } from '../../spending/summaries.mjs';
@@ -72,7 +73,8 @@ export function readInput(ctx) {
   );
   const data = loadPlanningData(ctx.db, clock);
   const input = data.categoryInput;
-  return { ...input, clock, facts, personalSummaries: personalSummaryInput(data, facts, input) };
+  const effectiveFacts = withInferredRecFacts(facts);
+  return { ...input, clock, facts: effectiveFacts, personalSummaries: personalSummaryInput(data, effectiveFacts, input) };
 }
 function op(name, params, summary, route, handler) {
   return {
