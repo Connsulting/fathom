@@ -8,7 +8,7 @@ import { markItem } from '../../api/yearend-handlers.mjs';
 import { taxYearFor } from '../../yearend/expected.mjs';
 import { requireActor, registerReceiptKind, saveReceipt, replanAction } from '../../actions/receipts.mjs';
 import { requireEvidence } from '../../actions/evidence.mjs';
-import { answerShape } from '../../jobs/triggers/common.mjs';
+import { ANSWER_SHAPES, answerShape } from '../../jobs/triggers/common.mjs';
 import { clockOf, plainDeep } from './figures.mjs';
 import { tokenScope } from '../../scenario/build.mjs';
 import { ToolError } from '../errors.mjs';
@@ -79,7 +79,10 @@ function confirmWrite(operation,args,ctx){
 }
 async function recQuestions(args,ctx){
   const actorId=requireActor(ctx),receipts=[];
-  for(const a of args.answers)requireEvidence(ctx,a.value,{evidence:args.evidence,shape:answerShape(a.key),argument:a.key});
+  for (const answer of args.answers) {
+    if (!Object.hasOwn(ANSWER_SHAPES, answer.key)) throw new ToolError('bad_input', 'Recommendation answer key is not supported.');
+    requireEvidence(ctx,answer.value,{evidence:args.evidence,shape:answerShape(answer.key),argument:answer.key});
+  }
   const fields=['key','value','src','as_of','confirmed','file_id','parser','locator'];
   const select=row=>row?Object.fromEntries(fields.map(k=>[k,row[k]])):null;
   await saveRecAnswers(ctx,{recId:args.recId,answers:args.answers},{now:nowOf(ctx),channel:ctx.channel==='mcp'?'mcp':'ask',actorId,replan:async()=>{},onWrite(before,after){
