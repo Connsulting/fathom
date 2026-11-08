@@ -50,6 +50,8 @@ export const PARITY_EXCLUDED = Object.freeze({
   "GET /api/yearend/packet": "file download",
   "GET /api/household/outbound": "administration",
   "POST /api/household/outbound": "administration",
+  "POST /api/household/backups": "administration",
+  "GET /api/household/backups/:id/status": "administration",
 });
 
 export const PARITY_PENDING = Object.freeze({

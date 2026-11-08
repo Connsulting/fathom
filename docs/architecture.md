@@ -32,8 +32,9 @@ its own jobs, and keeps every piece of state on the `/data` volume.
 8. The in-process scheduler (`src/jobs/scheduler.mjs`) runs `plan`, `brief-email`,
    `deadline-alerts`, `freshness`, `trash-purge`, `confirm-guess` and `simplefin-sync`. Mail leaves
    through `src/email/` on the configured transport.
-9. `/data` holds `fathom.sqlite`, the vault's `files/`, the Your plans pack and the key secret.
-   Backing it up is the operator's job; the app has no backup job of its own.
+9. `/data` holds `platform.sqlite` and each registered household's store, vault, private packs and
+   outbox. The fixed backup runner handles admin requests using the operator's destination and
+   separate encryption key. Whole-volume disaster recovery remains an operator responsibility.
 
 This is the architecture every build item works against. The first part is frozen: change it only
 by agreement across items. The rest describes the running app and is updated as items land.
@@ -388,7 +389,9 @@ secrets are read there.
 | Key | Default | Meaning |
 |---|---|---|
 | `FATHOM_DATA` | `./data` (gitignored) | Data directory; holds `platform.sqlite` and `households/<id>/` (see Household runtimes). |
-| `FATHOM_BACKUP_KEY_FILE` | unset | Path to a private file holding a 32-byte key. Read only by `scripts/migrate-platform.mjs` and `scripts/source-snapshot.mjs`, which encrypt source snapshots with it; the server never reads it. |
+| `FATHOM_BACKUP_KEY_FILE` | unset | Path to a private file holding a separate 32-byte backup encryption key. Used by offline migrations, source snapshots and the fixed household backup/restore runner. Missing or invalid keys refuse backup operations. |
+| `FATHOM_BACKUP_DESTINATION` | unset | Absolute path to an existing private directory for encrypted household bundles. Users cannot supply or inspect paths or keys. Backups remain unavailable until both destination and key are configured. |
+| `FATHOM_BACKUP_RETENTION_DAYS` | `7` | Retention recorded for new bundles and rollback generations, an integer from 1 to 3650. Expiry permits explicit operator deletion; the runner never deletes retained data automatically. |
 | `FATHOM_PLATFORM_KEY_FILE` | unset | Path to a private file holding the 32-byte platform key that wraps household data keys (`loadPlatformKey`, `platformKeyFromEnv` in `src/platform/backup-key.mjs`). Real mode uploads, advisor packets and SimpleFIN connections refuse without it. |
 | `FATHOM_MCP_SECRET_FILE` | unset | Path to a private file holding 64 hex characters, the HMAC secret for MCP keys. Real mode key routes refuse without it. |
 | `FATHOM_PORT` | `8080` | HTTP port. |
@@ -969,6 +972,8 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/onboarding/notes` | `{text}` | `{scenario, file, understood}`. Saves the Tell us note as a notes document through the ingest pipeline (see Onboarding below). 400 for a missing, empty or control-character text, 413 over 30000 bytes, 409 without a data key on a real store, 422 when the note could not be stored. The text never appears in an error, a log or the database. |
 | `GET /api/household/outbound` | | `{outbound: {jobs, email, simplefin, engine}}`, each `{enabled, effective, reason}`. `enabled` is the stored pause flag, `effective` whether that work would run, `reason` null when effective, else `paused`, `not_configured`, `recipient_unverified`, `not_connected`, `credential_unavailable`, `funding_unavailable` or `funding_exhausted`. Members. |
 | `POST /api/household/outbound` | `{jobs?, email?, simplefin?, engine?}` booleans | As GET. Admins. Omitted kinds keep their value; anything else is 400 and nothing changes. One audited transaction. |
+| `POST /api/household/backups` | `{}` | Admin only. Queues its own household and returns `{operationId, status: 'queued'}`. Selectors, paths and keys are rejected. Configuration failures or an existing operation return 409 before queuing. |
+| `GET /api/household/backups/:id/status` | | Admin only, including while its backup temporarily suspends financial work. Own operation only; foreign or missing ids return 404. `{operationId, status, code, fileCount, byteCount}` contains fixed codes and counts, no paths or payloads. |
 | `POST /api/demo/reset` | `{}` | `{scenario}`. Rebuilds the demo store and removes stored uploads (`files/*.bin` under the household root); 404 unless the store is a demo store. Deletes this household's rows from the platform `api_keys` table; the MCP secret file survives. |
 | `GET /api/keys` | | `{keys: [{id, name, scopes, createdAt, lastUsedAt, revokedAt}]}` ordered by creation; never a key or hash. A member sees the keys they created; an admin sees every key, including keys with no creator. A demo store lists every key. |
 | `POST /api/keys` | `{name, scopes?: ('read' or 'write:recs')[]}` | `{key, record, keys}`. The only time the key is shown. Name trimmed, 1 to 80 characters, no control characters; scopes always include `read`; else 400. Any signed-in user may create one; the creator comes from the session, never the body. |
@@ -1156,6 +1161,36 @@ Startup and the offline migration.
    builds a data directory for the previous release from a snapshot and the current directory,
    leaving the current one untouched. It is valid only until the new release has taken writes,
    because the previous release does not see them.
+
+Household backups and restore.
+
+Platform migration 008 adds `household_backup_operations`, a durable journal containing household
+ids, roots, generations, bundle hashes, counts, fixed codes and retention deadlines. It also
+records an instance id so a bundle cannot transfer identities to another instance. No financial
+payload enters the platform. The fixed runner serializes queued admin backups, temporarily
+suspends only that household, cancels its streams and drains requests and jobs before taking a
+SQLite page backup and copying its frozen vault, private packs and historical outbox. Transient
+work is excluded. Other households continue serving. The entire bundle, including its restricted
+membership and wrapped-key metadata, is encrypted under the separate backup key.
+
+`node scripts/backup-household.mjs --household <id>` invokes that same runner at the OS boundary.
+The offline command requires the target store to be closed; use the admin request API when the
+server is running. `node scripts/restore-household.mjs --household <id> --confirm <id> --bundle
+<file>` replaces that exact registered household on the same instance. Stop the service for the
+operator restore command. Rerun the identical command after interruption, or start the server
+to finish its journal. Recovery blocked after suspension keeps that household unavailable while others serve.
+
+Restore authenticates bundle hashes, schema, identity and every vault object, verifies current
+key availability, checks free space and stages a new private root before suspending the target.
+The root/generation switch, target-key revocation and target-session invalidation commit together.
+Current users, passkeys, memberships, invitations, subscriptions, model allocations, reservations
+and settlements remain in the platform. The new store's spend mirror comes from current platform
+accounting and current uncarried local spend. Historical running jobs become interrupted; the
+restored connection requires reconfirmation. Jobs, email, SimpleFIN and model calls stay paused
+until an admin explicitly resumes them through the outbound controls. Historical outbox files
+are never replayed. The old generation remains as rollback data for the recorded retention,
+default seven days; deletion after expiry is explicit operator policy. This supplements the
+operator's whole-volume backup and does not supply cross-instance identity recovery.
 
 Passkeys.
 
