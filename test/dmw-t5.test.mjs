@@ -176,6 +176,56 @@ test('AC2: the evidence guard refuses a value the quote does not state, and a qu
   });
 });
 
+const PLAIN_NOTE = { fileId: 8, name: 'plain-notes.md', text: 'My salary range from the advisor is 90000 to 120000.' };
+// Like a real model, this script can only copy the masked quote it was sent.
+const maskedSalaryProposal = value => payload => {
+  const row = ownerRows(payload).find(r => r.quote?.includes('salary range'));
+  return row ? { answers: [], proposals: [{ key: 'business.salaryRange', value, quote: row.quote, refs: [row.ref] }] } : [];
+};
+
+test('AC2: a salary range written as plain numbers survives masking and becomes a Use it card', async () => {
+  await store(async db => {
+    salaryRec(db);
+    const engine = model(db, maskedSalaryProposal({ min: 90000, max: 120000 }));
+    await resolvePending(db, engine, { ...options, notes: [PLAIN_NOTE] });
+    assert.equal(engine.calls.length, 1);
+    const row = ownerRows(engine.payloads[0]).find(r => r.quote?.includes('salary range'));
+    assert.ok(row, 'the model saw the note sentence');
+    assert.ok(row.quote.includes('X0000'), `the payload quote is masked: ${row.quote}`);
+    assert.ok(!row.quote.includes('90000'), 'the model never saw the raw run');
+    const items = statedItems(db);
+    assert.equal(items.length, 1, 'one Confirm card');
+    const item = getItem(db, items[0].id);
+    assert.deepEqual(item.context.value, { min: 90000, max: 120000 });
+    for (const text of [item.question, item.context.quote]) {
+      assert.ok(text.includes('90000 to 120000'), `the owner's real words: ${text}`);
+      assert.ok(!text.includes('X0000'), `no masked run: ${text}`);
+    }
+  });
+  await store(async db => {
+    salaryRec(db);
+    const engine = model(db, maskedSalaryProposal({ min: 80000, max: 120000 }));
+    await resolvePending(db, engine, { ...options, notes: [PLAIN_NOTE] });
+    assert.equal(engine.calls.length, 1, 'the proposal reached the guard (liveness)');
+    assert.equal(statedItems(db).length, 0, 'a value the real words do not state creates nothing');
+  });
+});
+
+test('AC1: an advisor yes/no question listed only under advisorQuestions is answered from a memory', () => store(async db => {
+  const key = 'retirement.planTermsConfirmed';
+  rec(db, { id: 'synthetic-advisor', advisorQuestions: [key] }, 'waiting');
+  const text = 'Our advisor confirmed the retirement plan terms and our eligibility.';
+  const ref = `preferences:${remember(db, text)}`;
+  const engine = model(db, payload => payload.items.filter(i => i.kind === 'resolver_fact' && (i.context?.key === key || i.subject === key))
+    .map(i => ({ item: i.id, option: 'true', basis: 'owner_said', refs: [ref] })));
+  await resolvePending(db, engine, options);
+  const item = db.prepare("SELECT id FROM confirm_items WHERE kind='resolver_fact' AND subject=?").get(key);
+  assert.ok(item, 'the advisor question is queued as a resolver_fact item');
+  assert.equal(getItem(db, item.id).status, 'answered');
+  assert.equal(getFacts(db)[key], true);
+  assert.ok(autoInfo(db, item.id).evidence.text.includes('Your memory says "Our advisor confirmed'), autoInfo(db, item.id).evidence.text);
+}));
+
 /* ---------------------------------------------------------------- AC3 */
 
 const CLOCK = '2026-11-05';
