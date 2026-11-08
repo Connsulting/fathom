@@ -8,7 +8,7 @@ import { createRegistryServer } from '../src/engine/tools.mjs';
 
 const expected = {
   household: ['summary', 'facts', 'fact_shapes', 'figures', 'deadlines', 'health', 'confirm_items'],
-  accounts: ['list', 'holdings', 'detail', 'net_worth', 'merge_candidates'], tax: ['estimate', 'room'], transactions: ['search'], business: ['pnl', 'rows'],
+  accounts: ['list', 'holdings', 'detail', 'net_worth', 'merge_candidates', 'sources'], sources: ['archive_account', 'remove_file', 'merge_accounts'], tax: ['estimate', 'room'], transactions: ['search'], business: ['pnl', 'rows'],
   spending: ['total', 'compare', 'definitions', 'cash_flow', 'recurring'],
   goals: ['list', 'pace'], recommendations: ['list', 'detail', 'advisor', 'wargame'],
   knowledge: ['packs', 'search', 'entry'], answer: ['fact', 'rec_questions', 'confirm', 'reopen', 'yearend_mark'],

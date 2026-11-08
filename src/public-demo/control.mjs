@@ -20,6 +20,7 @@ const ALLOWED = new Set([
   'GET /api/pnl', 'GET /api/pnl/rows', 'GET /api/spending', 'GET /api/spending/rows',
   'POST /api/accounts/:id/mask', 'POST /api/accounts/:id/owner', 'POST /api/accounts/:id/kind',
   'GET /api/accounts/:id/merge-candidates', 'POST /api/accounts/:id/merge',
+  'POST /api/accounts/:id/archive', 'GET /api/sources',
   'GET /api/goals/suggestions', 'POST /api/goals', 'POST /api/goals/:id',
   'POST /api/goals/:id/archive', 'POST /api/goals/:id/delete', 'POST /api/goals/:id/suggestion',
   'POST /api/curve', 'POST /api/onboarding', 'POST /api/demo/reset',

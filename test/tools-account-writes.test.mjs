@@ -91,3 +91,16 @@ for (const confirmation of ['yes','Confirmed']) test(`a stored Ask merge proposa
   await assert.rejects(undo({...ctx,scopes:['write:confirm']},out),{code:'forbidden'});
   await undo(ctx,out);assert.ok(s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get(ids.own));
 });
+
+test('source-operation proposals retain the merged catalog scope and durable Undo',async t=>{
+ const {claimProposal,executeProposal}=await import('../src/actions/proposals.mjs');
+ const s=await realStore();t.after(()=>s.close());account(s);
+ const key='ask:abc123def456',ctx={...context(s),channel:'ask',conversationKey:key,scopes:['write:sources']};
+ s.db.prepare('INSERT INTO conversations (key,created_at,last_at) VALUES (?,?,?)').run(key,NOW,NOW);
+ let pending;await proposalTools(tools).find(t=>t.name==='sources').handler({operation:'archive_account',id:'manual',propose:true},{...ctx,onProposal:p=>{pending=p;}});
+ assert.equal(row(s).archived_at,null);
+ const id=Number(s.db.prepare("INSERT INTO messages (conversation_key,role,text,ts,provenance) VALUES (?,'fathom','Archive this account?',?,?)").run(key,NOW,JSON.stringify({pendingAction:pending})).lastInsertRowid);
+ const claim=claimProposal(s.db,{key,id,decision:'confirm',scopes:ctx.scopes,at:NOW});assert.equal(claim.status,'confirmed');
+ const out=await executeProposal(claim.pending,ctx);assert.ok(row(s).archived_at);assert.equal(out.receipt.scope,'write:sources');
+ await undo(ctx,out);assert.equal(row(s).archived_at,null);
+});

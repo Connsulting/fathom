@@ -210,7 +210,7 @@ test.describe('demo build', () => {
     await expect(page.locator('.h-ob-rail circle.done')).toHaveCount(RAIL.length);
   });
 
-  test('starters and own goals become goals with no target, on Home and on Goals', { tag: ['@ob-ac2', '@mobile'] }, async ({ page, request, hasTouch }) => {
+  test('starters and own goals become goals, with only the targets Fathom sets, on Home and on Goals', { tag: ['@ob-ac2', '@mobile'] }, async ({ page, request, hasTouch }) => {
     await deleteAllGoals(request);
     await gotoRoute(page, 'home');
     const block = goalsStart(page);
@@ -286,15 +286,17 @@ test.describe('demo build', () => {
       expect(Object.hasOwn(b, 'targetDate'), `${b.title} sends no targetDate`).toBe(false);
     }
 
-    // Stored as owner goals with no target.
+    // Stored as owner goals. The client sends no target; any target a goal has, Fathom set from its
+    // calculator (the cushion starter on the demo data), never the owner by accident.
     const sc = await fetchScenario(request);
     expect(sc.goals.map((g) => g.title).sort()).toEqual(expected.map((e) => e.title).sort());
     for (const e of expected) {
       const g = sc.goals.find((x) => x.title === e.title);
-      expect(g).toMatchObject({ origin: 'owner', archived: false, note: e.note, horizon: e.horizon, target: null, targetDate: null });
+      expect(g).toMatchObject({ origin: 'owner', archived: false, note: e.note, horizon: e.horizon });
+      expect(Boolean(g.adopted), `${e.title}: a target only when Fathom set it`).toBe(Number.isFinite(g.target));
     }
 
-    // Home redraws with them: each goal with no target is its own card, with no quiet row.
+    // Home redraws with them: each goal is its own card, with no quiet row.
     // Match on the card title: a question's why text can name another goal's words.
     const homeGoal = (title) => page.locator('section.h-home article.h-gcard[data-goal-card]')
       .filter({ has: page.locator('.h-gcard-t', { hasText: new RegExp(`^${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`) }) });
