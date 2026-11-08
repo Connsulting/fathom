@@ -90,6 +90,7 @@ Invalid or nonpositive values refuse startup. An IP request limit returns HTTP 4
 | POST | `/api/threads/:id/trash` | Visitor sandbox |
 | POST | `/api/threads/:id/restore` | Visitor sandbox |
 | POST | `/api/threads/:id/delete` | Visitor sandbox |
+| POST | `/api/threads/:id/proposals/:messageId` | Off, HTTP 403 |
 | GET | `/api/accounts/:id` | Visitor sandbox |
 | GET | `/api/accounts/:id/transactions` | Visitor sandbox |
 | GET | `/api/pnl` | Visitor sandbox |

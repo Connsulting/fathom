@@ -44,8 +44,9 @@ test.describe('Decide explains a war game that could not be built', () => {
   });
 
   test('the salary war game card says it needs an S corp and links to Add files', async ({ page }) => {
-    await page.goto(`${base}/#/wargame`);
+    await page.goto(`${base}/#/plan`);
     await expect(page.locator('header.h-top')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Decisions', exact: true })).toBeVisible();
     const card = page.locator('article.h-dec.unbuilt[data-not-built="salary"]');
     await expect(card).toBeVisible();
     await expect(card.locator('p')).toHaveText('Salary war game needs an S corp with profit on file.');

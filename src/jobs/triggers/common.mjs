@@ -2,6 +2,7 @@
 // confirm-form text and task padding. Template text here follows the prose rule: no digits outside
 // tokens and no number words; dates are written as month and day.
 
+import { ADVISOR_KEYS } from '../../facts/derive.mjs';
 import { isIsoDate } from '../../scenario/build.mjs';
 import { esc } from '../../shared/tokens.mjs';
 import { personOwner } from '../../shared/rec-links.mjs';
@@ -75,6 +76,12 @@ const dollars = label => ({ type: 'number', unit: 'USD', min: 0, label });
 const birthYear = label => ({ type: 'number', unit: 'year', min: MIN_BIRTH_YEAR, max: 2200, integer: true, label });
 
 export const ANSWER_SHAPES = Object.freeze({
+  'household.filingStatusDefault': { scope: 'household', ...yesNo('Undo the joint filing assumption?') },
+  'business.cashBasisDefault': { scope: 'household', ...yesNo('Undo the cash-basis assumption?') },
+  'accounts.va529CarryforwardDefault': { scope: 'account', accountKind: '529', type: 'object', fields: { undone: yesNo('Undo the carryforward assumption?') } },
+  'pnl.ledgers': { scope: 'household', type: 'map', label: 'Which imported ledgers are spending or businesses?', values: {
+    type: 'object', fields: { kind: { type: 'choice', ownerInterpreted: true, label: 'What does this ledger track?', choices: [{ value: 'spending', label: 'Spending ledger' }, { value: 'business', label: 'Business' }] } },
+  } },
   'retirement.planTermsConfirmed': { scope: 'household', ...yesNo('Has your advisor confirmed your retirement plan terms and eligibility?') },
   'retirement.aggregationConfirmed': { scope: 'household', ...yesNo('Has your advisor confirmed no related business shares your plan limits?') },
   'benefits.hsaEligible': { scope: 'household', ...yesNo('Is your health plan HSA eligible for the whole year?') },
@@ -122,7 +129,7 @@ const asked = (def, facts) => def.ask !== false && (!def.requires || facts[def.r
 // every active field holds a value, so the rec shows Answered instead of the questions.
 export function questionFor(keys, { accounts = [], facts = {}, names = {}, people } = {}) {
   const fields = [];
-  const unique = [...new Set(keys)];
+  const unique = [...new Set(keys)].filter(key => !ADVISOR_KEYS.has(key));
   for (const key of unique) {
     const shape = answerShape(key);
     const groups = shape.scope === 'account'
@@ -137,6 +144,8 @@ export function questionFor(keys, { accounts = [], facts = {}, names = {}, peopl
         let value = path.reduce((v, p) => v && typeof v === 'object' && Object.hasOwn(v, p) ? v[p] : undefined, facts[key]);
         const inference = key === 'accounts.va529' && part === 'virginiaPlan' && value === undefined ? activeInference(group.record, facts) : null;
         if (inference) value = inference.value;
+        if (key === 'accounts.va529' && part === 'carryforward' && value === undefined
+          && facts['accounts.va529CarryforwardDefault']?.[group.path[0]]?.undone !== true) value = facts['accounts.va529Carryforward']?.[group.path[0]];
         const label = def.label.replaceAll('{account}', group.account || '').replaceAll('{person}', group.person || 'you');
         fields.push({
           ...def, key, path, id: JSON.stringify([key, ...path]), label, ...(group.account ? { group: group.account } : {}),
