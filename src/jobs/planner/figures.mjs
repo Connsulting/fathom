@@ -747,7 +747,7 @@ function soloRoomFigures(out, { data, owner, person, corp, compensation, age, co
   const v = env.value;
   const steps = [...env.steps];
   if (kind === 'self-employed') steps.push({ label: 'No wages from the plan sponsor; the Roth catch-up rule does not apply', formula: 'self-employed participant', value: 0 });
-  else if (priorWages != null) steps.push({ label: "Last year's Social Security wages from the plan sponsor", formula: 'prior-year W-2 Social Security wages, or your stated amount', value: priorWages });
+  else if (priorWages != null) steps.push({ label: "Last year's Social Security wages from the plan sponsor", formula: 'prior-year W-2 Social Security wages, P&L officer salary inference, or your stated amount', value: priorWages });
   const loc = extra => ({ calc: 'solo401kRoom', person, inputs: env.inputs, steps, assumptions: [PLAN_TERMS, ...compCodes, ...extra] });
   if (mode === 'unknown') {
     // C5: until last year's sponsor wages are known the catch-up may be pre-tax, Roth or (affected,

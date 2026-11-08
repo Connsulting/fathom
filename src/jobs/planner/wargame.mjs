@@ -10,6 +10,7 @@
 import { payrollTax, solo401kRoom, TAX_2026 } from '../../calc/index.mjs';
 import { cents } from '../../store/db.mjs';
 import { sameName, monthOf, yearOf, sum } from './data.mjs';
+import { notesFor } from './assumptions.mjs';
 import { stepsOf, planInputs, RETIREMENT_BLOCKS } from './household.mjs';
 
 const PLAN_TERMS = 'plan_terms_confirmed';
@@ -69,6 +70,11 @@ export function notBuiltReason(name, code, entities = []) {
     const names = [...new Set(entities.map(e => e.displayName || e.name))];
     return { code, text: `Salary war game needs you to identify the S corp among ${names.join(', ') || 'the imported ledgers'}.`, unlock: 'answers' };
   }
+  if (name === 'salary' && code === 'business.salaryRange') return {
+    code, text: "Salary war game needs your advisor's reasonable salary range.", unlock: 'answers',
+    fix: { screen: 'ask', key: 'business.salaryRange', label: 'Enter salary range',
+      prompt: 'Record the annual salary range my advisor considers reasonable. Ask me for its minimum and maximum.' },
+  };
   const known = (NEEDS[name] || {})[code];
   const [needs, unlock] = known
     || (String(code).includes('.') ? ['needs a household answer it does not have yet.', 'answers']
@@ -91,7 +97,7 @@ function salaryGame(data, out, ctx) {
   const range = owner['business.salaryRange'];
   const valid = range && typeof range === 'object' && Number.isFinite(range.min) && Number.isFinite(range.max) && range.min > 0 && range.max > 0;
   // R3-3: unknown outside deferrals leave every point's room unknown (IRC 402(g)(1)).
-  const missing = [...(valid ? [] : ['business.salaryRange']), ...retireMissing, ...(ageOf(corp.person) == null ? [ageKey(corp.person)] : []),
+  const missing = [...(valid ? [] : ['business.salaryRange']), ...(ageOf(corp.person) == null ? [ageKey(corp.person)] : []),
     ...(c.outsideKnown ? [] : ['retirement.otherPlanDeferrals'])];
   if (missing.length) { out.info.confirm.salary = missing; return invalid(missing[0]); }
   // E7, E8, E10: each point carries three bases. The axis is cash salary (Medicare wages: payroll
@@ -166,18 +172,25 @@ function salaryGame(data, out, ctx) {
   if (!ref) return invalid('inputs_changed');
   if (ref.blocked) return invalid(blockedCode(ref.blocked));
 
+  const pending = [
+    ...(retireMissing.includes('retirement.planTermsConfirmed') ? ['plan_terms_pending'] : []),
+    ...(retireMissing.includes('retirement.aggregationConfirmed') ? ['plan_aggregation_pending'] : []),
+  ];
+  const otherAssumed = Object.hasOwn(owner['retirement.otherPlanDeferralsInferred'] || {}, corp.person);
+  const assumptions = [...(pending.length ? pending : [PLAN_TERMS]), ...(otherAssumed ? ['other_plan_deferrals_zero'] : [])];
   const content = [];
   for (const p of points) {
     const id = pointId(p.s);
     const y = cents(p.total - ref.total);
-    const inputs = { salary: p.s, profitBeforeSalary: P, filingStatus: f, age };
-    const loc = steps => ({ calc: 'salaryPoint', inputs, steps, assumptions: [PLAN_TERMS] });
+    const inputs = { salary: p.s, profitBeforeSalary: P, filingStatus: f, age,
+      priorYearSponsorWages: priorWages, otherPlanDeferrals: owner['retirement.otherPlanDeferrals']?.[corp.person] };
+    const loc = steps => ({ calc: 'salaryPoint', inputs, steps, assumptions });
     put(out, `wg.salary.${id}.salary`, p.s, 'Salary point: salary', loc([{ label: 'Salary', formula: 'grid point inside the approved range', value: p.s }]));
     put(out, `wg.salary.${id}.payroll`, p.payrollNet, 'Salary point: payroll tax', loc(stepsOf('Payroll tax', p.pay)));
     put(out, `wg.salary.${id}.dist`, p.K, 'Salary point: distributions', loc(p.steps.slice(0, p.pay.steps.length + 1)));
     put(out, `wg.salary.${id}.tax`, p.total, 'Salary point: total tax', loc(p.steps));
     const roomSteps = [...stepsOf('Solo 401(k) room', p.room), ...(p.roth > 0 ? [{ label: 'Roth catch-up room left out', formula: 'catch-up that must be Roth', value: p.roth }] : [])];
-    put(out, `wg.salary.${id}.x`, p.x, 'Salary point: pre-tax retirement room', { ...loc(roomSteps), calc: 'solo401kRoom', assumptions: [PLAN_TERMS, ...rothCodes] });
+    put(out, `wg.salary.${id}.x`, p.x, 'Salary point: pre-tax retirement room', { ...loc(roomSteps), calc: 'solo401kRoom', assumptions: [...assumptions, ...rothCodes] });
     if (p.roth > 0) put(out, `wg.salary.${id}.roth`, p.roth, 'Salary point: Roth catch-up room', { ...loc(stepsOf('Solo 401(k) room', p.room)), calc: 'solo401kRoom' });
     put(out, `wg.salary.${id}.y`, y, 'Salary point: tax change', loc([...p.steps.map(s => ({ ...s, label: `Point: ${s.label}` })),
       ...ref.steps.map(s => ({ ...s, label: `Reference: ${s.label}` })), { label: 'Tax change', formula: 'total tax at the point - total tax at the reference salary', value: y }]));
@@ -210,7 +223,7 @@ function salaryGame(data, out, ctx) {
     xLabel: 'Pre-tax retirement room',
     yLabel: inRange ? 'Tax change vs your current salary' : 'Tax change vs the middle of the range',
     points: content,
-    takeaway: takeaway + rothNote,
+    takeaway: [takeaway + rothNote, ...notesFor([...pending, ...(otherAssumed ? ['other_plan_deferrals_zero'] : [])])].join(' '),
   };
 }
 
