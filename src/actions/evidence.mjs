@@ -39,12 +39,14 @@ function stated(value, text, shape) {
     return value ? yes && !no : no && !yes;
   }
   if (shape?.type === 'choice') {
+    if (shape.ownerInterpreted === true && typeof value === 'string') return shape.choices.some(c => c.value === value);
     const escape = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const matches = shape.choices.filter(c => [c.value, c.label].some(label => new RegExp(`\\b${escape(label)}\\b`, 'i').test(text)));
     return matches.length === 1 && matches[0].value === value;
   }
   if (typeof value === 'string') return /^\d{4}-\d{2}-\d{2}$/.test(value)
     ? dates(text).includes(value) : text.toLowerCase().includes(value.toLowerCase());
+  if (shape?.type === 'map' && value && typeof value === 'object') return Object.entries(value).every(([k, v]) => text.toLowerCase().includes(k.toLowerCase()) && stated(v, text, shape.values));
   if (value && typeof value === 'object') return Object.entries(value).every(([k, v]) => stated(v, text, shape?.fields?.[k]));
   return false;
 }

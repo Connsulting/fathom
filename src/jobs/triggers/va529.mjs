@@ -21,7 +21,9 @@ export function evaluate(ctx) {
   if (!ctx.year) return null;
   const info = ctx.info.va529 || { accounts: 0, missing: [], age70: [], eligible: 0 };
   if (!info.accounts) return null;
-  if (info.missing.length) return { confirm: ['accounts.va529'], grounding: ['va529.contrib.ytd'] };
+  // Plan and carryforward answers per account; one birth-year answer for every age rule.
+  const confirm = [...(info.answersMissing ?? info.missing).length ? ['accounts.va529'] : [], ...(info.ageMissing || []).length ? ['household.birthYears'] : []];
+  if (confirm.length) return { confirm, grounding: ['va529.contrib.ytd'] };
   if (!info.eligible) return null;
   if (ctx.info.blocked.length) return { blocked: ctx.info.blocked[0] };
   if (ctx.info.vaBlocked) return { blocked: ctx.info.vaBlocked };
@@ -58,7 +60,7 @@ export function build(ctx, hit) {
 export function template(ctx, hit) {
   if (hit.confirm) {
     return {
-      summary: 'Tell us which college savings accounts are Virginia plans you own, whether the owner is seventy or older, and any carryforward, and we will size the deduction left this year.',
+      summary: 'Tell us which college savings accounts are Virginia plans you own, and any carryforward, and we will size the deduction left this year. Your age comes from your birth year.',
       why: [
         'Virginia deducts contributions per account up to {l:va529Cap} a year, but only for Virginia plans owned by the household.',
         'An owner who is seventy or older deducts the full amount, and any carryforward changes what is left, so Virginia tax waits for these answers.',

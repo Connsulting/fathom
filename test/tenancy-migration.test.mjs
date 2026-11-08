@@ -151,7 +151,10 @@ describe('a complete migration preserves the household', T, () => {
     const published = join(fx.dataDir, 'households', fx.householdId, 'fathom.sqlite');
     assert.ok(existsSync(published), 'households/<id>/fathom.sqlite');
     const after = tableDigests(published, digestRules(expected.maxMigration));
-    assert.deepEqual(Object.keys(after).sort(), expected.tables.filter(t => t !== 'api_keys').sort(), 'api_keys is the only table gone');
+    const added = ['import_batches', 'import_proposals'];
+    assert.deepEqual(Object.keys(after).sort(), [...expected.tables.filter(t => t !== 'api_keys'), ...added].sort(),
+      'only api_keys is removed and the model-import tables are added');
+    for (const table of added) assert.equal(after[table].count, 0, `${table} starts empty`);
     for (const t of expected.tables) {
       if (t === 'api_keys') continue;
       assert.deepEqual(after[t], expected.digests[t], `${t}: digest`);

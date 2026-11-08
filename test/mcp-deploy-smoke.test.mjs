@@ -59,6 +59,7 @@ test('mcp-key creates a read-only key and mcp-smoke passes against the server', 
     assert.ok(rows.some(l => l.startsWith('tools/list pass ')));
     assert.ok(rows.some(l => l.startsWith('household.summary pass ')));
     assert.ok(rows.some(l => l.startsWith('act_on_recommendation.status pass ')));
+    assert.ok(!rows.some(l => l.startsWith('calculate.')), 'calculate needs operands, so the smoke skips it');
     for (const row of rows) assert.match(row, /^[a-z0-9_/.]+ (pass|fail) \d+$/);
   } finally {
     await s.stop();

@@ -129,6 +129,7 @@ const TABLE_RULES = Object.freeze({
   simplefin_connection: { omit: ['access_blob'] },
   preferences: { omit: ['origin', 'conversation_key'] },
   spend_ledger: { omit: ['round_id'] },
+  column_mappings: { omit: ['schema_version', 'mapping_version', 'approval_status', 'approved_by', 'approved_at', 'structural_context'] },
 });
 
 // { count, sha256 } of a table, every row carrying its rowid (as __rowid) when the table has one.
