@@ -29,7 +29,7 @@ export function importPlan(rows, { reinterpret = false } = {}) {
   const coverage = [...new Map(rows.filter(r => ['pnl_line', 'tax_payment'].includes(r.kind)).map(row => {
     const period = row.period ?? row.date.slice(0, 7), slot = `tax:${row.taxYear ?? row.sheetYear}:${normalize(row.jurisdiction).replace(/[^a-z0-9]/g, '')}:${normalize(row.payer).replace(/[^a-z0-9]/g, '')}`;
     const group = row.kind === 'pnl_line' ? { table: 'pnl_lines', entity: row.entity, period } : { table: 'tax_payments', slot, period };
-    return [JSON.stringify(group), { ...group, complete: true, authority: dates.at(-1) ?? null }];
+    return [JSON.stringify(group), { ...group, complete: true, authority: row.date ?? `${row.period}-01` }];
   })).values()];
   return { reinterpret, coverage, capabilities: { positions: true }, status: 'imported', parser: 'model-import', label: 'Reviewed import', sourceKind: 'model_import',
     parsed: { rows, warnings: [], period: { from: dates[0] ?? null, to: dates.at(-1) ?? null } } };
@@ -96,7 +96,7 @@ export function validateImport(ctx, proposal, source) {
       name: f.name ?? null, price: f.price ?? null, costBasis: f.costBasis ?? null });
     else if (row.target === 'pnl') {
       if (!PERIOD.test(f.period) || !['cash', 'accrual', 'unknown'].includes(f.basis)) errors.push('pnl_context_unresolved');
-      const entity = ctx.db.prepare('SELECT entity FROM entity_aliases WHERE alias = ?').get(normalize(f.entity))?.entity;
+      const entity = ctx.db.prepare('SELECT entity FROM entity_aliases WHERE alias = ?').get(normalize(f.entity).replace(/[^a-z0-9]/g, ''))?.entity;
       if (!entity) errors.push('entity_unresolved');
       else bindings.push(`entity:${entity}`);
       rows.push({ ...base, kind: 'pnl_line', entity, period: f.period, category: String(f.category), amount });

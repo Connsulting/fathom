@@ -19,7 +19,8 @@ export function importChanges(db, before, after) {
 registerReceiptKind('model_import', { restore(ctx, { before, after, receipt, checkOnly }) {
   for (const scope of after.scopes) requireScope(ctx, scope);
   const conflict = () => { throw new ToolError('conflict', 'This import changed or a later change depends on it.'); };
-  const batch = ctx.db.prepare('SELECT * FROM import_batches WHERE receipt_id=?').get(receipt.id);
+  const group = ctx.db.prepare("SELECT id,after_state FROM action_receipts WHERE kind='receipt_group' AND undone_at IS NULL").all().find(r => JSON.parse(r.after_state).childIds.includes(receipt.id));
+  const batch = ctx.db.prepare('SELECT * FROM import_batches WHERE receipt_id=?').get(group?.id ?? receipt.id);
   if (!batch || batch.status !== 'committed') conflict();
   for (const change of after.changes) {
     if (!TABLES.includes(change.table) || !isDeepStrictEqual(keys(ctx.db, change.table), change.pk)) conflict();

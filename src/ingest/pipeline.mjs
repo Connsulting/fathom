@@ -542,8 +542,10 @@ function closingBalances(rows) {
 
 const periodTo = (db, fileId) => db.prepare('SELECT period_to FROM files WHERE id = ?').get(fileId)?.period_to ?? null;
 // Newer or equal file period (unknown oldest) holds authority over a revision slot.
-function newerOrEqual(db, incomingTo, existingFileId) {
-  const existingTo = existingFileId ? periodTo(db, existingFileId) : null;
+function newerOrEqual(db, incomingTo, existingFileId, group = null) {
+  const coverage = existingFileId && group ? parseJson(db.prepare('SELECT coverage FROM files WHERE id=?').get(existingFileId)?.coverage, []) : [];
+  const held = coverage.find(g => g.table === group?.table && g.period === group?.period && g.entity === group?.entity && g.slot === group?.slot);
+  const existingTo = held?.authority ?? (existingFileId ? periodTo(db, existingFileId) : null);
   if (existingTo == null) return true;
   return incomingTo != null && incomingTo >= existingTo;
 }
@@ -602,6 +604,7 @@ function putPosition(ctx, row, parser, locator) {
   }
 }
 
+const aliasMap = db => new Map(db.prepare('SELECT alias,entity FROM entity_aliases').all().map(row => [row.alias,row.entity]));
 const pnlSlot = (entity, period) => `pnl:${normalizeName(entity)}:${period.slice(0, 4)}`;
 
 function putPnl(ctx, row, parser, locator) {
@@ -610,6 +613,7 @@ function putPnl(ctx, row, parser, locator) {
   ctx.keys.add(key);
   const amount = cents(row.amount);
   const stored = db.prepare('SELECT * FROM pnl_lines WHERE dedupe_key = ?').get(key);
+  const group = ctx.coverage.find(g => g.table === 'pnl_lines' && g.entity === row.entity && g.period === row.period);
   if (!stored) {
     db.prepare('INSERT INTO pnl_lines (entity, period, category, amount, file_id, parser, locator, dedupe_key, source_slot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(row.entity, row.period, row.category, amount, fileId, parser, locator, key, pnlSlot(row.entity, row.period));
@@ -617,7 +621,7 @@ function putPnl(ctx, row, parser, locator) {
   } else if (moneyEq(stored.amount, amount)) {
     if (stored.file_id !== fileId) archive(db, 'pnl_lines', { ...stored, file_id: fileId, parser, locator }, { by: stored.file_id, reason: 'duplicate_observation', now });
     counts.duplicates += 1;
-  } else if (!newerOrEqual(db, periodTo(db, fileId), stored.file_id)) {
+  } else if (!newerOrEqual(db, group?.authority ?? periodTo(db, fileId), stored.file_id, group)) {
     counts.incomplete += 1;
   } else {
     archive(db, 'pnl_lines', { ...stored }, { by: fileId, reason: 'revised', now });
@@ -664,13 +668,14 @@ function putTax(ctx, row, parser, locator) {
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(shaped.jurisdiction, shaped.tax_year, shaped.date, amount, shaped.kind, fileId, parser, locator, rowKey, slot, rowPayer, shaped.date_precision, shaped.tax_year_basis, recipient).lastInsertRowid);
   const stored = db.prepare('SELECT * FROM tax_payments WHERE dedupe_key = ?').get(key);
+  const group = ctx.coverage.find(g => g.table === 'tax_payments' && g.slot === slot && g.period === row.date.slice(0, 7));
   if (!stored) {
     const id = insert(payer, key);
     bump(ctx, 'tax_payment');
     if (summarizes) tally(ctx, askSlotConflict(db, db.prepare('SELECT * FROM tax_payments WHERE id = ?').get(id), { now }));
   } else if (moneyEq(stored.amount, amount)) {
     counts.duplicates += 1;
-  } else if (!newerOrEqual(db, periodTo(db, fileId), stored.file_id)) {
+  } else if (!newerOrEqual(db, group?.authority ?? periodTo(db, fileId), stored.file_id, group)) {
     counts.incomplete += 1;
   } else if (summarizes) {
     // K1: a document's withholding of a known recipient with another amount is a conflict, never a
@@ -717,7 +722,7 @@ function supersede(ctx, coverage) {
       ? db.prepare('SELECT * FROM pnl_lines WHERE lower(entity)=? AND period=?').all(group.entity.toLowerCase(), group.period)
       : db.prepare('SELECT * FROM tax_payments WHERE source_slot=? AND substr(date,1,7)=?').all(group.slot, group.period);
     for (const row of rows) {
-      if (ctx.keys.has(row.dedupe_key) || !newerOrEqual(db, group.authority, row.file_id)) continue;
+      if (ctx.keys.has(row.dedupe_key) || !newerOrEqual(db, group.authority, row.file_id, group)) continue;
       archive(db, group.table, { ...row }, { by: fileId, reason: 'removed', now });
       db.prepare(`DELETE FROM ${group.table} WHERE id=?`).run(row.id); counts.superseded++;
     }

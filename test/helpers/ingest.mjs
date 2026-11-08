@@ -167,7 +167,7 @@ export async function realStore({ engine = 'off' } = {}) {
     ...store,
     config,
     household,
-    opts: (eng, extra = {}) => ({ engine: eng, config, now: NOW, household, ...extra }),
+    opts: (eng, extra = {}) => ({ actorId: 'actor-synthetic', engine: eng, config, now: NOW, household, ...extra }),
     close() {
       store.close();
       rmSync(store.dataDir, { recursive: true, force: true });

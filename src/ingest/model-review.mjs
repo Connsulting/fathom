@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { tx, parseJson } from '../store/db.mjs';
 import { ToolError } from '../tools/errors.mjs';
-import { requireActor, saveReceipt } from '../actions/receipts.mjs';
+import { requireActor, saveReceipt, groupReceipts } from '../actions/receipts.mjs';
 import { requireImportReviewEvidence } from '../actions/evidence.mjs';
 import { indexSource } from './model-source.mjs';
 import { openVault, readStoredFile } from './vault.mjs';
@@ -143,6 +143,7 @@ function commit(ctx, row, proposal, source, file, review, validation, { automati
   if (diff.length) stale(diff);
   if (!validation.valid || row.status !== 'needs_confirmation') throw new ToolError('bad_input', 'Resolve the proposal validation issues first.');
   const snapshot = importSnapshot(db);
+  scopes(ctx, proposal);
   const before = { proposalId: row.id, version: row.version, status: row.status, mappingApproved: Boolean(proposal.mappingId && db.prepare("SELECT 1 FROM column_mappings WHERE signature=? AND approval_status='approved'").get(proposal.mappingId)) };
   const result = persistImport(db, source.fileId, file, importPlan(structuredClone(validation.rows), { reinterpret: review.reinterpret }), { now }).result;
   if (review.reinterpret) db.prepare("UPDATE import_proposals SET status='superseded' WHERE file_id=? AND status='imported'").run(source.fileId);
@@ -163,11 +164,19 @@ function commit(ctx, row, proposal, source, file, review, validation, { automati
   if (automatic) db.prepare('UPDATE column_mappings SET uses=uses+1 WHERE signature=?').run(proposal.mappingId);
   db.prepare("UPDATE import_proposals SET status='imported',actor_id=?,approval_evidence=?,approved_at=?,updated_at=? WHERE id=? AND version=?")
     .run(actor, evidence, now, now, row.id, row.version);
-  const receipt = saveReceipt({ ...ctx, now }, { scope: 'write:imports', kind: 'model_import', id: row.id, label: 'Reviewed import', before,
-    after: { status: 'imported', counts: result.counts, scopes: ['write:imports'], changes: importChanges(db, snapshot, importSnapshot(db)),
+  const afterSnapshot = importSnapshot(db);
+  const factReceipts = snapshot.facts.flatMap(old => {
+    const current = afterSnapshot.facts.find(r => r.key === old.key);
+    const child = saveReceipt({ ...ctx, now }, { scope: 'write:facts', kind: 'fact', id: old.key, label: 'Imported fact', before: old, after: current ?? null });
+    return child ? [child] : [];
+  });
+  for (const current of afterSnapshot.facts.filter(r => !snapshot.facts.some(old => old.key === r.key))) factReceipts.push(saveReceipt({ ...ctx, now }, { scope: 'write:facts', kind: 'fact', id: current.key, label: 'Imported fact', before: null, after: current }));
+  const batchReceipt = saveReceipt({ ...ctx, now }, { scope: 'write:imports', kind: 'model_import', id: row.id, label: 'Reviewed import', before,
+    after: { status: 'imported', counts: result.counts, scopes: ['write:imports'], changes: importChanges(db, snapshot, afterSnapshot).filter(c => c.table !== 'facts'),
       mapping: proposal.mappingId ? { id: proposal.mappingId, version: proposal.mappingVersion } : null } });
+  const receipt = factReceipts.length ? groupReceipts({ ...ctx, now }, [batchReceipt, ...factReceipts], { id: row.id, label: 'Reviewed import' }) : batchReceipt;
   db.prepare(`INSERT INTO import_batches (id,proposal_id,proposal_version,file_id,status,before_state,after_state,receipt_id,created_at)
-    VALUES (?,?,?,?,'committed',?,?,?,?)`).run(randomUUID(), row.id, row.version, row.file_id, JSON.stringify(review.effect), JSON.stringify(effect), receipt?.id ?? null, now);
+    VALUES (?,?,?,?,'committed',?,?,?,?)`).run(randomUUID(), row.id, row.version, row.file_id, JSON.stringify({ effect: review.effect, changes: importChanges(db, snapshot, afterSnapshot) }), JSON.stringify(effect), receipt?.id ?? null, now);
   return { proposalId: row.id, version: row.version, status: 'imported', counts: result.counts, receipt, confirmationRequired: false };
 }
 

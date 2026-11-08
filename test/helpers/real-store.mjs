@@ -32,6 +32,7 @@ import { ingestFile } from '../../src/ingest/pipeline.mjs';
 import { answer, pendingItems } from '../../src/ingest/confirm.mjs';
 import { nameKey } from '../../src/ingest/extract.mjs';
 import { createEngine } from '../../src/engine/index.mjs';
+import { importProposedRows } from './import-proposal-fixture.mjs';
 import { writeXlsx, XLSX_MIME } from './xlsx.mjs';
 import { secretsFor, servedStore } from './server.mjs';
 
@@ -213,7 +214,10 @@ function answerAccounts(db, hints) {
 // {hints, taxYear: 'tax_year' | 'payment_year' | null}. Throws when ingest does not import it.
 export async function addFile(db, file, { answers = {} } = {}) {
   const c = ctxOf(db);
-  const out = await ingestFile(db, file, { engine: engineOf('off'), config: c.config, household: c.household, now: stampOf(db) });
+  if (file.proposalRows) for (const row of file.proposalRows.filter(r => r.target === 'pnl')) db.prepare('INSERT OR IGNORE INTO entity_aliases(alias,entity,created_at) VALUES (?,?,?)').run(row.fields.entity.toLowerCase().replace(/[^a-z0-9]/g, ''), row.fields.entity, stampOf(db));
+  const out = file.proposalRows
+    ? await importProposedRows({ db, ...c }, file.proposalRows, { name: file.name, now: stampOf(db) })
+    : await ingestFile(db, file, { actorId: 'actor-synthetic', engine: engineOf('off'), config: c.config, household: c.household, now: stampOf(db) });
   if (out.status !== 'imported') throw new Error(`synthetic file ${file.name} was not imported (${out.status})`);
   if (answers.hints) answerAccounts(db, answers.hints);
   if (answers.taxYear) answerPending(db, 'tax_year', answers.taxYear);
@@ -235,12 +239,7 @@ export async function addPayroll(db, entry) {
   const c = ctxOf(db);
   const { docType, fields } = entry;
   c.seq += 1;
-  const file = {
-    name: `synthetic-${docType}-${c.seq}.txt`, mime: 'text/plain',
-    bytes: new TextEncoder().encode(`Synthetic ${docType} statement number ${c.seq} for a test household.\n`),
-  };
-  const engine = engineOf('fake', [[{ docType, taxYear: DOC_TAX_YEAR(docType, fields), confidence: 0.95 }], [{ confidence: 0.95, ...fields }]]);
-  const out = await ingestFile(db, file, { engine, config: c.config, household: c.household, now: stampOf(db) });
+  const out = await importProposedRows({ db, ...c }, [{ target: 'document', docType, fields }], { name: `synthetic-${docType}-${c.seq}.xlsx`, marker: `Synthetic source ${c.seq}`, now: stampOf(db) });
   if (out.status !== 'imported') throw new Error(`synthetic ${docType} was not imported (${out.status})`);
   const employer = fields.employerName;
   const key = employer !== undefined ? nameKey(employer) : null;
@@ -330,7 +329,13 @@ export function pnlWorkbook(entities, extra = [], { year = TAX_YEAR, months = MO
       sheets.push({ name: `${e.name} Expenses`, rows: expenses });
     }
   }
-  return { name: 'Business P&L 2026.xlsx', mime: XLSX_MIME, bytes: writeXlsx(sheets) };
+  const proposalRows = [];
+  for (const e of entities) for (let m = 1; m <= months; m++) {
+    const line = (category, amount) => ({ target: 'pnl', purpose: 'business', fields: { entity: e.name, period: `${year}-${pad(m)}`, category, amount, basis: 'cash' } });
+    if (e.income) proposalRows.push(line('Income', e.income));
+    for (const [category, amount] of Object.entries(e.expenses || {}).concat(extra.filter(x => x.entity === e.name).map(x => [x.category, x.monthly]))) proposalRows.push(line(category, -amount));
+  }
+  return { name: 'Business P&L 2026.xlsx', mime: XLSX_MIME, bytes: writeXlsx(sheets), proposalRows };
 }
 
 export function taxPaymentsWorkbook({ year = TAX_YEAR, fed = SYNTH.fedPaid, state = SYNTH.statePaid, months = SYNTH.paidMonths } = {}) {
@@ -339,7 +344,9 @@ export function taxPaymentsWorkbook({ year = TAX_YEAR, fed = SYNTH.fedPaid, stat
     const paid = months.includes(i + 1);
     rows.push([label, paid ? fed : null, paid ? state : null]);
   });
-  return { name: 'Estimated taxes.xlsx', mime: XLSX_MIME, bytes: writeXlsx([{ name: String(year), rows }]) };
+  const proposalRows = months.flatMap(m => [['federal', fed], ['state', state]].map(([jurisdiction, amount]) => ({ target: 'tax_payment', kind: 'estimate', status: 'paid', datePrecision: 'month',
+    fields: { jurisdiction, payer: 'Owner', recipient: 'you', amount, taxYear: year, taxYearBasis: 'sheet_label', paymentDate: `${year}-${pad(m)}-${lastDay(year, m)}` } })));
+  return { name: 'Estimated taxes.xlsx', mime: XLSX_MIME, bytes: writeXlsx([{ name: String(year), rows }]), proposalRows };
 }
 
 const CHASE_HEADER = ['Details', 'Posting Date', 'Description', 'Amount', 'Type', 'Balance', 'Check or Slip #'];
