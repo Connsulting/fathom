@@ -72,11 +72,7 @@ export function proposalBasis(db, tool, scopes, args = {}) {
       content(['meta', 'names', 'law', 'pct', 'advisor', 'wargame']);
     }
   }
-  if (tool === 'update_goal' && (args.action !== undefined || args.withdrawalRate !== undefined)) {
-    settings(['goals.suggestions']);
-    for (const [table, order] of [['accounts', 'id'], ['balances', 'account_id, date'], ['positions', 'id'], ['transactions', 'id'],
-      ['transaction_category_corrections', 'transaction_id'], ['category_merchant_rules', 'merchant']]) rows(table, order);
-  }
+  if (tool === 'update_goal' && args.action === 'undo') settings(['goals.suggestions']);
   if (tool === 'update_preferences' && args.positions) {
     settings(['curve.positions']);
     content(['curve', 'onboarding']);

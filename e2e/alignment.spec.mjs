@@ -345,10 +345,14 @@ test.describe('switcher rows are vertically centered', { tag: '@al-ac4' }, () =>
 
 test.describe('optional markers sit on the label line', { tag: '@al-ac5' }, () => {
   for (const vp of [DESKTOP, PHONE]) {
-    test(`New goal form at ${vp.width}px`, async ({ page }) => {
+    test(`Goal edit form at ${vp.width}px`, async ({ page }) => {
       await page.setViewportSize(vp);
+      // A new goal is one sentence; the optional fields live in a goal's edit view.
+      const res = await page.request.post('/api/goals', { headers: { 'content-type': 'application/json' }, data: { title: 'A synthetic alignment goal' } });
+      expect(res.status()).toBe(200);
+      const { goal } = await res.json();
       await gotoRoute(page, 'goals');
-      await page.getByRole('button', { name: 'Goal', exact: true }).click();
+      await page.locator(`article.h-goal[data-goal-id="${goal.id}"]`).getByRole('button', { name: 'Edit', exact: true }).click();
       const form = page.locator('form.h-gform');
       await expect(form).toBeVisible();
       const marks = await form.locator('.h-opt').count();

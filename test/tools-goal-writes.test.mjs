@@ -4,10 +4,11 @@ import { scratch, householdOf } from './helpers/real-store.mjs';
 import { serveAppFixture } from './helpers/server.mjs';
 import { callTool, getTool } from '../src/tools/index.mjs';
 import { proposalTools, proposalBasis } from '../src/actions/proposals.mjs';
-import { createGoal } from '../src/goals/write.mjs';
+import { createGoal, adoptSuggestions } from '../src/goals/write.mjs';
 import { getSetting, setSetting } from '../src/store/db.mjs';
 import { CURVE_AXES } from '../src/shared/goals.mjs';
 import { createEngine } from '../src/engine/index.mjs';
+import { loadCurve, loadContent, buildScenario } from '../src/scenario/build.mjs';
 
 const S = scratch('fathom-goal-writes-');
 after(() => S.cleanup());
@@ -24,7 +25,9 @@ const undo = (ctx, result) => callTool('undo', result.undo.args, ctx);
 
 test('archive matches HTTP and Undo preserves completion and all goal fields', async t => {
   const ctx = await store();
-  const row = add(ctx, { title: 'Kitchen remodel', target: 12000, status: 'done' });
+  const row = add(ctx, { title: 'Kitchen remodel', target: 12000 });
+  ctx.db.prepare('UPDATE goals SET done_at = ? WHERE id = ?').run(NOW, row.id);
+  row.done_at = NOW;
   const result = await call(ctx, 'archive', { id: row.id });
   assert.deepEqual(result.goal, { id: row.id, archived: true });
   await undo(ctx, result);
@@ -59,49 +62,45 @@ test('delete restores every column and refuses a later row or a seed goal', asyn
   assert.equal(ctx.db.prepare('SELECT * FROM goals WHERE id = ?').get(row.id), undefined);
 });
 
-test('suggestions match HTTP; dismiss, restore and sourced rates undo settings', async t => {
+test('suggestion Undo matches HTTP, restores prior values and remains declined across adoption passes', async t => {
   const ctx = await store();
   const row = add(ctx);
+  assert.ok(JSON.parse(row.def).adopted);
   const srv = await serveAppFixture({ db: ctx.db, config: ctx.household.config, authenticated: true });
   t.after(() => srv.close());
   const list = await callTool('goals', { operation: 'suggestions' }, ctx);
-  const route = await srv.request({ path: '/api/goals/suggestions' });
-  assert.equal(route.status, 200);
-  assert.deepEqual(list, route.json);
-  assert.ok(list.suggestions.some(g => g.goalId === row.id));
-  const dismissed = await call(ctx, 'suggestion', { id: row.id, action: 'dismiss' });
-  assert.equal(dismissed.suggestion.dismissed, true);
-  const restored = await call(ctx, 'suggestion', { id: row.id, action: 'restore' });
-  assert.equal(restored.suggestion.dismissed, false);
-  await undo(ctx, restored);
-  assert.ok(getSetting(ctx.db, 'goals.suggestions')[row.id].dismissed);
-  await undo(ctx, dismissed);
+  assert.deepEqual(list, (await srv.request({ path: '/api/goals/suggestions' })).json);
+  const result = await call(ctx, 'suggestion', { id: row.id, action: 'undo' });
+  assert.deepEqual(result.suggestion, { goalId: row.id, adopted: false, declined: true });
+  const declined = JSON.parse(ctx.db.prepare('SELECT def FROM goals WHERE id = ?').get(row.id).def);
+  assert.equal(declined.target ?? null, null);
+  assert.equal(declined.adopted ?? null, null);
+  assert.equal(getSetting(ctx.db, 'goals.suggestions')[row.id].declined, true);
+  adoptSuggestions(ctx.db, { now: NOW, clock: CLOCK });
+  assert.equal(JSON.parse(ctx.db.prepare('SELECT def FROM goals WHERE id = ?').get(row.id).def).target ?? null, null);
+  await undo(ctx, result);
+  assert.deepEqual(ctx.db.prepare('SELECT * FROM goals WHERE id = ?').get(row.id), row);
   assert.equal(getSetting(ctx.db, 'goals.suggestions', null), null);
-  const rate = await call(ctx, 'suggestion', { id: row.id, withdrawalRate: { value: 0.035, source: 'owner', evidence: '3.5 percent' } });
-  assert.equal(rate.suggestion.withdrawalRate, 0.035);
-  await undo(ctx, rate);
-  assert.equal(getSetting(ctx.db, 'goals.suggestions', null), null);
-  assert.equal((await srv.postJson(`/api/goals/${row.id}/suggestion`, { withdrawalRate: 0.035 })).status, 200);
-  assert.equal(getSetting(ctx.db, 'goals.suggestions')[row.id].withdrawalRate, 0.035);
+  const route = await srv.postJson(`/api/goals/${row.id}/suggestion`, { action: 'undo' });
+  assert.equal(route.status, 200, route.text);
+  assert.equal(getSetting(ctx.db, 'goals.suggestions')[row.id].declined, true);
+  assert.deepEqual(JSON.parse(ctx.db.prepare('SELECT def FROM goals WHERE id = ?').get(row.id).def), declined);
 });
 
-test('suggestion validation refuses ambiguous, fabricated, unavailable and out of range changes', async () => {
+test('suggestion operations refuse removed inputs and goals with no Fathom-set target', async () => {
   const ctx = await store();
   const row = add(ctx);
-  for (const args of [{}, { action: 'dismiss', withdrawalRate: { value: 0.04, source: 'default' } },
-    { withdrawalRate: { value: 0.07, source: 'owner', evidence: '7 percent' } },
-    { withdrawalRate: { value: 0.035, source: 'owner', evidence: '4 percent' } }]) {
+  for (const args of [{}, { action: 'dismiss' }, { action: 'restore' }, { withdrawalRate: { value: 0.035, source: 'owner' } }]) {
     await assert.rejects(call(ctx, 'suggestion', { id: row.id, ...args }), { code: 'bad_input' });
   }
-  await assert.rejects(call({ ...ctx, channel: 'ask' }, 'suggestion', { id: row.id, withdrawalRate: { value: 0.035, source: 'owner', evidence: '3.5 percent' } }),
-    { code: 'bad_input' }, 'Ask needs owner statements');
-  const valid = { ...ctx, channel: 'ask', ownerStatements: () => ['Use 3.5 percent for this goal.'] };
-  await call(valid, 'suggestion', { id: row.id, withdrawalRate: { value: 0.035, source: 'owner', evidence: '3.5 percent' } });
   const target = add(ctx, { target: 1000 });
-  await assert.rejects(call(ctx, 'suggestion', { id: target.id, action: 'dismiss' }), { code: 'conflict' });
+  await assert.rejects(call(ctx, 'suggestion', { id: target.id, action: 'undo' }), { code: 'conflict' });
+  const result = await call(ctx, 'suggestion', { id: row.id, action: 'undo' });
+  ctx.db.prepare("UPDATE goals SET updated_at = 'later' WHERE id = ?").run(row.id);
+  await assert.rejects(undo(ctx, result), { code: 'conflict' });
 });
 
-test('curve matches the route, merges known axes, rounds and undoes the full setting', async t => {
+test('curve writes remembered positions, matches HTTP and undoes without a second store', async t => {
   const ctx = await store();
   const axis = CURVE_AXES[0].id;
   const result = await callTool('update_preferences', { operation: 'curve', positions: { [axis]: 0.735 } }, ctx);
@@ -112,7 +111,11 @@ test('curve matches the route, merges known axes, rounds and undoes the full set
   t.after(() => srv.close());
   assert.equal((await srv.postJson('/api/curve', { positions: { [axis]: 0.735 } })).status, 200);
   assert.equal((await srv.postJson('/api/curve', { id: [axis], value: 0.5 })).status, 400);
-  assert.deepEqual(getSetting(ctx.db, 'curve.positions'), result.positions);
+  const actual = Object.fromEntries(loadCurve(ctx.db, loadContent(ctx.db)).map(a => [a.id, a.value]));
+  assert.deepEqual(actual, result.positions);
+  assert.equal(getSetting(ctx.db, 'curve.positions', null), null);
+  assert.ok(ctx.db.prepare('SELECT text FROM preferences').all().some(p => p.text.includes(CURVE_AXES[0].right)));
+  assert.equal(buildScenario(ctx.db, { clock: CLOCK }).onboarding.priorities.find(p => p.id === axis).value, 0.74);
   for (const positions of [{}, { nonexistent: 0.5 }, { [axis]: 2 }]) {
     await assert.rejects(callTool('update_preferences', { operation: 'curve', positions }, ctx), { code: 'bad_input' });
   }
@@ -123,19 +126,51 @@ test('goal proposal basis covers settings and suggestions inputs, and proposals 
   const row = add(ctx);
   let pending;
   const tool = proposalTools([getTool('update_goal')])[0];
-  await tool.handler({ operation: 'suggestion', id: row.id, action: 'dismiss', propose: true }, { ...ctx, onProposal: p => { pending = p; } });
+  await tool.handler({ operation: 'suggestion', id: row.id, action: 'undo', propose: true }, { ...ctx, onProposal: p => { pending = p; } });
   assert.equal(getSetting(ctx.db, 'goals.suggestions', null), null);
   setSetting(ctx.db, 'ask.titleRejects', { unparsable: 1 });
   setSetting(ctx.db, 'ask.titleRetried.ask:0123456789ab', true);
   assert.equal(proposalBasis(ctx.db, pending.tool, pending.scopes, pending.args), pending.basis);
-  setSetting(ctx.db, 'goals.suggestions', { [row.id]: { dismissed: 'later' } });
+  setSetting(ctx.db, 'goals.suggestions', { [row.id]: { declined: true } });
   assert.notEqual(proposalBasis(ctx.db, pending.tool, pending.scopes, pending.args), pending.basis);
   const basis = () => proposalBasis(ctx.db, 'update_preferences', ['write:preferences'], { positions: { [CURVE_AXES[0].id]: 0.7 } });
   const before = basis();
   setSetting(ctx.db, 'ask.titleRejects', { unparsable: 2 });
   assert.equal(basis(), before);
-  setSetting(ctx.db, 'curve.positions', { [CURVE_AXES[0].id]: 0.2 });
+  ctx.db.prepare("INSERT INTO preferences (id, text, actor_id, created_at, updated_at) VALUES ('curve-prior', 'Keep cash flexible', 'owner-test', ?, ?)").run(NOW, NOW);
   assert.notEqual(basis(), before);
+});
+
+test('curve changes override remembered ends, preserve negation handling and Undo restores the earlier memory', async () => {
+  const ctx = await store();
+  const axis = CURVE_AXES[0];
+  const value = () => loadCurve(ctx.db, loadContent(ctx.db)).find(a => a.id === axis.id).value;
+  const insert = ctx.db.prepare('INSERT INTO preferences (id, text, actor_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)');
+  insert.run('prior', axis.left, ctx.actorId, NOW, NOW);
+  assert.equal(value(), 0);
+  const result = await callTool('update_preferences', { operation: 'curve', positions: { [axis.id]: 0.63 } }, ctx);
+  assert.equal(value(), 0.63);
+  insert.run('negated', `I do not want ${axis.right}`, ctx.actorId, NOW, NOW);
+  assert.equal(value(), 0.63);
+  await undo(ctx, result);
+  assert.equal(value(), 0);
+  assert.ok(ctx.db.prepare("SELECT 1 FROM preferences WHERE id = 'prior'").get());
+  assert.ok(ctx.db.prepare("SELECT 1 FROM preferences WHERE id = 'negated'").get());
+  assert.equal(getSetting(ctx.db, 'curve.positions', null), null);
+});
+
+test('curve writes validate the whole batch and honor the shared preference limit', async () => {
+  const ctx = await store();
+  const axis = CURVE_AXES[0].id;
+  await assert.rejects(callTool('update_preferences', { operation: 'curve', positions: { [axis]: 0.2, nonexistent: 0.5 } }, ctx), { code: 'bad_input' });
+  assert.equal(ctx.db.prepare('SELECT count(*) n FROM preferences').get().n, 0);
+  const insert = ctx.db.prepare('INSERT INTO preferences (id, text, actor_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)');
+  for (let i = 0; i < 100; i++) insert.run(`pref-${i}`, 'Synthetic preference', ctx.actorId, NOW, NOW);
+  await assert.rejects(callTool('update_preferences', { operation: 'curve', positions: { [axis]: 0.2 } }, ctx), { code: 'bad_input' });
+  assert.equal(ctx.db.prepare('SELECT count(*) n FROM preferences').get().n, 100);
+  ctx.db.prepare("DELETE FROM preferences WHERE id = 'pref-0'").run();
+  const result = await callTool('update_preferences', { operation: 'curve', positions: { [axis]: 0.2 } }, ctx);
+  assert.equal(result.positions[axis], 0.2);
 });
 
 test('a thread-title settings write between an archive proposal and HTTP confirmation does not make it stale', async t => {

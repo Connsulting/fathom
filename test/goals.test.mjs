@@ -161,7 +161,8 @@ test('curve positions persist, validate and feed onboarding priorities on a real
   const s = await store(t);
   const sc = buildScenario(s.db, { clock: s.config.clock });
   assert.deepEqual(sc.curve.map(c => c.id), CURVE_AXES.map(a => a.id), 'a real store gets the default axes');
-  assert.ok(sc.curve.every(c => c.value === 0.5));
+  // Every axis sits in the middle except effort, which defaults to "Do not make me think".
+  assert.deepEqual(Object.fromEntries(sc.curve.map(c => [c.id, c.value])), { tax_cash: 0.5, ret_life: 0.5, effort: 1, human: 0.5 });
   assert.deepEqual(sc.onboarding.priorities.map(p => p.id), CURVE_AXES.map(a => a.id));
   assert.equal(sc.onboarding.priorities[0].label, 'Pay less tax this year vs Keep cash flexible');
 
@@ -169,7 +170,9 @@ test('curve positions persist, validate and feed onboarding priorities on a real
   assert.equal(r.scenario.curve.find(c => c.id === 'tax_cash').value, 0.23);
   assert.equal(r.scenario.onboarding.priorities.find(p => p.id === 'tax_cash').value, 0.23, 'one setting feeds both');
   curveSet(s.ctx({ positions: { effort: 1, human: 0 } }));
-  assert.deepEqual(getSetting(s.db, 'curve.positions', null), { tax_cash: 0.23, effort: 1, human: 0 });
+  assert.equal(getSetting(s.db, 'curve.positions', null), null);
+  const fresh = buildScenario(s.db, { clock: s.config.clock });
+  assert.deepEqual(Object.fromEntries(fresh.curve.filter(a => ['tax_cash', 'effort', 'human'].includes(a.id)).map(a => [a.id, a.value])), { tax_cash: 0.23, effort: 1, human: 0 });
   rejects(() => curveSet(s.ctx({ id: 'nope', value: 0.5 })), 400, /unknown/);
   rejects(() => curveSet(s.ctx({ id: 'effort', value: 1.5 })), 400, /0 to 1/);
   rejects(() => curveSet(s.ctx({ id: 'effort', value: '0.5' })), 400, /0 to 1/);

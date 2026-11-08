@@ -354,7 +354,6 @@ test('cushion: six months of spending rounded up to the next hundred, tracking p
   assert.equal(rec.targetDate, '2027-11-30');
   assert.equal(rec.covered, false);
   assert.deepEqual(rec.accept, { target: 18100, targetDate: '2027-11-30', track: rec.track });
-  assert.deepEqual(rec.editable, []);
   assert.equal(rec.params.cushionMonths, 6);
   assert.equal(rec.ask, null);
   assert.deepEqual(rec.missing, []);
@@ -406,7 +405,6 @@ test('independence: annual spending over the withdrawal rate, rounded up to the 
   assert.equal(target.locator.parameters.withdrawalRate, 0.04);
   assert.equal(target.locator.parameters.realReturn, 0.04);
   assert.equal(rec.params.withdrawalRate, 0.04);
-  assert.ok(rec.editable.includes('withdrawalRate'));
   // Brokerage positions summed and the IRA balance; the Roth has no value and the HSA is excluded.
   assert.deepEqual([...rec.track.accounts].sort(), ['brk', 'ret']);
   assert.equal(figOf(r, rec, 'current').v, 500000);
@@ -418,12 +416,16 @@ test('independence: annual spending over the withdrawal rate, rounded up to the 
   assert.deepEqual(rec.accept, { target: 902000, targetDate: rec.targetDate, track: rec.track });
 });
 
-test('independence: a per-goal withdrawal rate from settings changes the target', async t => {
+test('independence: a remembered withdrawal rate changes the target; the newest valid one wins', async t => {
   const db = await store(t);
   household(db);
   putGoal(db, 'free', { title: 'Work less, on our terms', horizon: '3-10y' });
   assert.equal(SUGGEST_SETTING, 'goals.suggestions');
-  setSetting(db, SUGGEST_SETTING, { free: { withdrawalRate: 0.035 } });
+  const remember = (id, text, at) => db.prepare("INSERT INTO preferences (id, text, actor_id, created_at, updated_at) VALUES (?, ?, 'owner', ?, ?)").run(id, text, at, at);
+  remember('a', 'Plan on a 3% withdrawal rate', '2026-10-01T00:00:00.000Z');
+  remember('b', 'Use a withdrawal rate of 3.5%', '2026-10-02T00:00:00.000Z');
+  remember('c', 'Withdrawal rate 9%, which is out of range', '2026-10-03T00:00:00.000Z');
+  remember('d', 'Keep cash flexible', '2026-10-04T00:00:00.000Z');
   const r = build(db);
   const rec = recOf(r, 'free');
   assert.equal(rec.params.withdrawalRate, 0.035);
@@ -564,41 +566,23 @@ test('a store with no accounts asks on every starter goal', async t => {
 
 // ---------------------------------------------------------------- dismissal
 
-test('a dismissal holds until the goal text or an input changes', async t => {
+test('a declined suggestion stays declined when the goal text or an input changes', async t => {
   const db = await store(t);
   household(db);
   putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
-  const dismiss = () => setSetting(db, SUGGEST_SETTING, { cushion: { dismissed: recOf(build(db), 'cushion').fingerprint } });
-
-  dismiss();
+  setSetting(db, SUGGEST_SETTING, { cushion: { declined: true } });
   let rec = recOf(build(db), 'cushion');
-  assert.equal(rec.state, 'dismissed');
-  assert.equal(rec.accept.target, 18100, 'a dismissed record keeps the suggestion it hides');
+  assert.equal(rec.state, 'declined');
+  assert.equal(rec.accept.target, 18100, 'a declined record keeps the suggestion it hides');
   assert.ok(rec.figures.target);
 
   editGoal(db, 'cushion', { title: 'Our cash cushion' });
-  assert.equal(recOf(build(db), 'cushion').state, 'suggested', 'a new title revives it');
-
-  dismiss();
-  assert.equal(recOf(build(db), 'cushion').state, 'dismissed');
+  assert.equal(recOf(build(db), 'cushion').state, 'declined', 'a new title does not revive it');
   txn(db, 'chk', '2026-05-20', -120, 'Hardware store');
-  rec = recOf(build(db), 'cushion');
-  assert.equal(rec.state, 'suggested', 'a new transaction changes spending and revives it');
-  assert.equal(rec.window.months, 6);
+  assert.equal(recOf(build(db), 'cushion').state, 'declined', 'new spending does not revive it');
 
-  dismiss();
-  assert.equal(recOf(build(db), 'cushion').state, 'dismissed');
-  // Replace the savings account with another holding the same balance: same cash, other account.
-  db.prepare("DELETE FROM balances WHERE account_id = 'sav'").run();
-  db.prepare("DELETE FROM accounts WHERE id = 'sav'").run();
-  account(db, 'sav2', 'savings', 'Second savings');
-  balance(db, 'sav2', '2026-10-31', 5000);
-  rec = recOf(build(db), 'cushion');
-  assert.equal(figOf(build(db), rec, 'current').v, 7000);
-  assert.equal(rec.state, 'suggested', 'a different tracked account revives it');
-
-  // Entries for goals that do not exist are ignored.
-  setSetting(db, SUGGEST_SETTING, { gone: { dismissed: rec.fingerprint }, cushion: { dismissed: null } });
+  // Entries for goals that do not exist, and old dismissal entries, are ignored.
+  setSetting(db, SUGGEST_SETTING, { gone: { declined: true }, cushion: { dismissed: rec.fingerprint } });
   assert.equal(recOf(build(db), 'cushion').state, 'suggested');
 });
 
