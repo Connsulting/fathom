@@ -3,7 +3,7 @@
 // existing control that can act on it. Read-only: it never writes the store.
 //
 // serviceStatus({ db, outbound, engine, scheduler, now }) ->
-//   { jobs: { <jobId>: svc }, email: svc, engine: svc, simplefin: svc, attention: svc | null }
+//   { jobs: { <jobId>: svc }, email: svc, engine: svc, simplefin: svc, imports: svc, attention: svc | null }
 // svc = { key, label, state, code, cause, lastSuccessAt, nextAttemptAt, since, control, go, running?, warnings? }
 //   state: healthy | retrying | paused | needs_you. code: the reason or error code (null when
 //   healthy). cause: a plain sentence (null when healthy). since: start of the non-healthy streak.
@@ -12,10 +12,13 @@
 // outbound: { jobs, email, simplefin, engine } booleans; an absent kind counts as enabled.
 // engine: the household engine or null (status() in try/catch). scheduler: anything with a
 //   read-only schedule() -> [{ id, nextAt, retryMs }]; jobs are omitted when it is null.
-// attention: the first service (engine, simplefin, email, then jobs in JOBS order) that needs the
-//   owner now, or has been retrying for more than a day; else null.
+// imports: the unresolved uploaded files (src/ingest/file-status.mjs), with files: their count.
+//   Retrying while Fathom resumes them all ('pending', or failed with a `retry:` note), else needs_you.
+// attention: the first service (engine, simplefin, email, imports, then jobs in JOBS order) that
+//   needs the owner now, or has been retrying for more than a day; else null.
 
 import { JOBS, isTransient } from './scheduler.mjs';
+import { UNRESOLVED } from '../ingest/file-status.mjs';
 
 export { isTransient };
 
@@ -239,6 +242,23 @@ function emailService(db, flags, jobs) {
   return { ...base, state: v.state, code, cause: CAUSES[code] || v.cause, since: iso(since), control, nextAttemptAt };
 }
 
+const files = (n) => `${n} ${n === 1 ? 'file' : 'files'}`;
+
+function importsService(db) {
+  const base = { key: 'imports', label: 'Imports', go: 'add', lastSuccessAt: null, nextAttemptAt: null, control: null, files: 0 };
+  const last = db.prepare("SELECT max(uploaded_at) AS at FROM files WHERE status = 'imported' AND removed_at IS NULL AND stored_path IS NOT NULL").get();
+  base.lastSuccessAt = iso(last?.at);
+  const rows = db.prepare(`SELECT status, note, uploaded_at FROM files WHERE removed_at IS NULL AND stored_path IS NOT NULL
+                           AND status IN (${UNRESOLVED.map(() => '?').join(', ')})`).all(...UNRESOLVED);
+  if (!rows.length) return healthy(base);
+  const fathom = (r) => r.status === 'pending' || (r.status === 'failed' && String(r.note ?? '').startsWith('retry:'));
+  const owner = rows.filter((r) => !fathom(r)).length;
+  const n = rows.length;
+  const since = minIso(...rows.map((r) => r.uploaded_at));
+  if (owner) return { ...base, files: n, state: 'needs_you', code: 'files_need_you', cause: `${files(owner)} ${owner === 1 ? 'needs' : 'need'} you on Files.`, since };
+  return { ...base, files: n, state: 'retrying', code: 'files_resuming', cause: `${files(n)} ${n === 1 ? 'resumes' : 'resume'} automatically.`, since };
+}
+
 function needsAttention(svc, now) {
   if (!svc) return false;
   if (svc.state === 'needs_you') return true;
@@ -263,8 +283,9 @@ export function serviceStatus({ db, outbound = {}, engine = null, scheduler = nu
     email: emailService(db, flags, jobs),
     engine: engineSvc,
     simplefin: simplefinService(db, flags, jobs['simplefin-sync']),
+    imports: importsService(db),
   };
-  const order = [out.engine, out.simplefin, out.email, ...JOBS.map((j) => jobs[j.id])];
+  const order = [out.engine, out.simplefin, out.email, out.imports, ...JOBS.map((j) => jobs[j.id])];
   out.attention = order.find((s) => needsAttention(s, at)) ?? null;
   return out;
 }

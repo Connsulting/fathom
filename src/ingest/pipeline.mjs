@@ -19,10 +19,14 @@ import { storeFile, readStoredFile, openVault } from './vault.mjs';
 import { recordSource } from './freshness.mjs';
 import { autoResolve } from './auto.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
+import { UNRESOLVED } from './file-status.mjs';
+import { isTransient } from '../jobs/transient.mjs';
 
 export const WAITING = Object.freeze(['waiting_for_engine', 'budget_exhausted', 'needs_confirmation', 'needs_clarification', 'needs_source_text']);
 export const STATUSES = Object.freeze(['imported', 'duplicate', ...WAITING, 'unsupported', 'too_large', 'failed']);
-const RETRYABLE = [...WAITING, 'needs_mapping', 'needs_extraction'];
+const RETRYABLE = [...WAITING, 'needs_mapping', 'needs_extraction', 'failed'];
+// Statuses an identical re-upload routes again under the same file id, never answered as stored.
+const REROUTE = ['pending', 'failed'];
 
 export class IngestError extends Error {
   constructor(status, code) {
@@ -34,6 +38,7 @@ export class IngestError extends Error {
 }
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const WARNING_ROWS = 5;
 const emptyCounts = () => ({ rows: {}, duplicates: 0, crossFormat: 0, revised: 0, superseded: 0, incomplete: 0, warnings: 0, warningCodes: {}, queued: 0 });
 const baseName = (name) => String(name ?? '').split(/[\\/]/).pop().slice(0, 255) || 'upload';
 const toBytes = (bytes) => (bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes ?? []));
@@ -86,10 +91,12 @@ function resolveAfterImport(db, opts) {
   }
 }
 
-// file = {name, bytes, mime}. Returns {fileId, name, status, sourceKind, parser, counts, duplicateOf?}.
+// file = {name, bytes, mime}. Returns {fileId, name, status, sourceKind, parser, counts, duplicateOf?, reasonCode?}.
 // household.inFlight holds the file ids this household is storing or routing now. A 'pending' row
-// whose id is not there was left by an interrupted run and may be routed again. Checked and added
-// synchronously, before any await.
+// whose id is not there was left by an interrupted run, and a 'failed' row is retried: both are
+// routed again. A prior row in another unresolved status answers that status with duplicateOf (and
+// its stored reasonCode), so the client shows its cause; only an imported or removed prior is
+// 'duplicate'. Checked and added synchronously, before any await.
 export async function ingestFile(db, file, opts = {}) {
   const { inFlight } = householdOf(db, opts);
   db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
@@ -97,14 +104,18 @@ export async function ingestFile(db, file, opts = {}) {
   const bytes = toBytes(file.bytes);
   const name = baseName(file.name);
   const hash = sha256(bytes);
-  const prior = db.prepare('SELECT id, source_kind, parser, status FROM files WHERE sha256 = ?').get(hash);
+  const prior = db.prepare('SELECT id, source_kind, parser, status, note, counts, removed_at FROM files WHERE sha256 = ?').get(hash);
   const fileId = prior?.id ?? 'f-' + hash.slice(0, 24);
-  if (inFlight.has(fileId) || (prior && prior.status !== 'pending')) {
-    return { fileId, name, status: 'duplicate', sourceKind: prior?.source_kind ?? null, parser: prior?.parser ?? null, counts: emptyCounts(), duplicateOf: fileId };
+  const answer = (status, extra = {}) => ({ fileId, name, status, sourceKind: prior?.source_kind ?? null, parser: prior?.parser ?? null, counts: emptyCounts(), duplicateOf: fileId, ...extra });
+  if (inFlight.has(fileId) || (prior && (prior.removed_at || !REROUTE.includes(prior.status)))) {
+    if (prior && !prior.removed_at && !inFlight.has(fileId) && UNRESOLVED.includes(prior.status)) {
+      return answer(prior.status, { counts: parseJson(prior.counts, null) ?? emptyCounts(), reasonCode: prior.note ?? null });
+    }
+    return answer('duplicate');
   }
   inFlight.add(fileId);
   try {
-    // An interrupted 'pending' file already has its encrypted bytes and row; the upload's bytes match by hash.
+    // An interrupted 'pending' or a 'failed' file already has its encrypted bytes and row; the upload's bytes match by hash.
     if (!prior) {
       const vault = await openVault(opts.household);
       const storedPath = await storeFile({ vault, id: fileId, bytes, purpose: 'upload' });
@@ -117,8 +128,8 @@ export async function ingestFile(db, file, opts = {}) {
   }
 }
 
-// Re-run routing for a file waiting on a mapping or the engine, or left 'pending' by an
-// interrupted run, under the same file id.
+// Re-run routing for a file waiting on a mapping or the engine, a failed file, or one left 'pending'
+// by an interrupted run, under the same file id.
 export async function retryFile(db, fileId, opts = {}) {
   const { inFlight } = householdOf(db, opts);
   const row = db.prepare('SELECT * FROM files WHERE id = ?').get(String(fileId ?? ''));
@@ -136,6 +147,27 @@ export async function retryFile(db, fileId, opts = {}) {
   } finally {
     inFlight.delete(row.id);
   }
+}
+
+// The scheduler's resume pass: every live file left 'pending' by an interrupted run, and every
+// failed file marked for one automatic retry, is routed again from its stored bytes, oldest first.
+// Files this household is routing now are skipped. A refusal or error logs a safe class and the
+// pass goes on. Returns { resumed: [{ fileId, status }] }, one entry per attempted file.
+export async function resumeImports(db, opts = {}) {
+  const { inFlight } = householdOf(db, opts);
+  const rows = db.prepare(`SELECT id, status FROM files WHERE removed_at IS NULL AND stored_path IS NOT NULL
+                           AND (status = 'pending' OR (status = 'failed' AND note LIKE 'retry:%')) ORDER BY uploaded_at, rowid`).all();
+  const resumed = [];
+  for (const row of rows) {
+    if (inFlight.has(row.id)) continue;
+    try {
+      const out = await retryFile(db, row.id, { ...opts, mode: 'retry', autoRetried: row.status === 'failed' });
+      resumed.push({ fileId: row.id, status: out.status });
+    } catch (error) {
+      console.error('fathom: import resume failed', failureClass(error));
+    }
+  }
+  return { resumed };
 }
 
 export async function retryIncompletePaystubs(db, { household, engine, now, taxYear }) {
@@ -178,17 +210,28 @@ async function route(db, fileId, file, opts) {
     } else out = tx(db, () => persistImport(db, fileId, file, plan, opts));
   } catch (error) {
     if (error instanceof LimitError) return tooLarge(db, fileId, file);
-    console.error('fathom: ingest failed', error?.code ?? error?.name ?? 'error');
-    db.prepare("UPDATE files SET status = 'failed' WHERE id = ?").run(fileId);
-    return { fileId, name: file.name, status: 'failed', sourceKind: null, parser: null, counts: emptyCounts() };
+    const cls = failureClass(error);
+    console.error('fathom: ingest failed', cls);
+    // A transient class is retried once by the scheduler's resume pass (`retry:` marks it); the retry's own failure is left for the owner.
+    const note = isTransient(cls) && !opts.autoRetried ? `retry:${cls}` : cls;
+    db.prepare("UPDATE files SET status = 'failed', note = ? WHERE id = ?").run(note, fileId);
+    return { fileId, name: file.name, status: 'failed', sourceKind: null, parser: null, counts: emptyCounts(), reasonCode: note };
   }
-  // The rows are committed. A pack refresh failure must not relabel the file as failed: a re-upload
-  // of the same bytes is a duplicate, so the wrong status would stick. The next fact change or
-  // startup refreshes packs again.
+  // The rows are committed. A pack refresh failure must not relabel the file as failed: a retry
+  // would route rows that are already stored. The next fact change or startup refreshes packs again.
   if (out.factsChanged) {
     try { refreshPackState(db, { dataDir: opts.household.root, now: opts.now }); } catch (error) { console.error('fathom: pack refresh failed', error?.name ?? 'error'); }
   }
   return out.result;
+}
+
+// A failure's safe class, never its message: store_locked for SQLite busy or locked, else the
+// error's code or name when it is an identifier, else 'error'.
+const SAFE_CLASS = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+function failureClass(error) {
+  const errcode = Number.isInteger(error?.errcode) ? error.errcode & 0xff : null;
+  if (errcode === 5 || errcode === 6 || /database is (locked|busy)|SQLITE_BUSY|SQLITE_LOCKED/i.test(String(error?.message ?? ''))) return 'store_locked';
+  return [error?.code, error?.name].find((v) => typeof v === 'string' && SAFE_CLASS.test(v)) ?? 'error';
 }
 
 // D1: an input past a parse limit (format.LIMITS) is recorded, not parsed. Its encrypted bytes stay
@@ -224,10 +267,23 @@ export function persistImport(db, fileId, file, plan, opts) {
   const counts = emptyCounts();
   if (plan.extractPath) counts.extractPath = plan.extractPath;
   const ctx = { db, fileId, now, counts, parser: plan.parser ?? null, mirror: plan.mirror ?? 'manual', factsChanged: false, keys: new Set(), emptySnapshots: new Map() };
+  // Per code: the count, the first WARNING_ROWS ascending row numbers (warningRows) and how many
+  // more rows there are (warningMore, omitted when none). A warning without a row adds no row.
+  const rowsOf = new Map();
   const warn = (list) => {
     for (const w of list ?? []) {
       counts.warnings += 1;
       counts.warningCodes[w.code] = (counts.warningCodes[w.code] ?? 0) + 1;
+      const row = w.locator?.row;
+      if (Number.isInteger(row) && row >= 1) {
+        if (!rowsOf.has(w.code)) rowsOf.set(w.code, new Set());
+        rowsOf.get(w.code).add(row);
+      }
+    }
+    for (const [code, set] of rowsOf) {
+      const sorted = [...set].sort((x, y) => x - y);
+      (counts.warningRows ??= {})[code] = sorted.slice(0, WARNING_ROWS);
+      if (sorted.length > WARNING_ROWS) (counts.warningMore ??= {})[code] = sorted.length - WARNING_ROWS;
     }
   };
   const parsed = plan.parsed;

@@ -13,6 +13,7 @@ import { dedupeKey } from './dedupe.mjs';
 import { cents } from './format.mjs';
 import { captureChanges, revertChanges, touches } from './undo.mjs';
 import { accountNaming } from '../accounts/naming.mjs';
+import { factName } from '../shared/event-labels.mjs';
 
 function confirmTransaction(db, fn) {
   if (!db.isTransaction) return tx(db, fn);
@@ -811,6 +812,16 @@ function applyEmployerRecipient(db, item, optionId, { now }) {
   for (const [payer, fileId] of payers) askDocument(db, { employerKey: item.subject, employer: item.context.employer ?? '', payer, fileId, now });
 }
 
+// A fact key in plain words: its frozen name ('home state', 'S corp income'), else the key's last
+// segment split into lowercase words ('self employment net').
+function factLabel(key) {
+  const name = factName(key);
+  if (name) return /^[A-Z][a-z]/.test(name) ? name[0].toLowerCase() + name.slice(1) : name;
+  return String(key).split('.').pop().replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/_/g, ' ').toLowerCase().trim();
+}
+const factValue = (value) => (typeof value === 'string' ? value : typeof value === 'boolean' ? (value ? 'Yes' : 'No')
+  : typeof value === 'number' ? String(value) : canonicalJson(value));
+
 // Write one extracted fact under the fact-check rules (R5). The subject names the logical source,
 // the key and the canonical value. An answered no skips the fact; an answered yes confirms it; a
 // written value closes pending checks on other values of the key; a low-confidence write asks.
@@ -837,7 +848,7 @@ export function recordFact(db, { key, value, confidence = 1, sourceId = null, fi
       queued = true;
     } else {
       queued = Boolean(ask(db, {
-        kind: 'fact_check', subject, question: `An import says ${key} is ${json}. Is that right?`, options: FACT_CHECK_OPTIONS, context, fileId, now,
+        kind: 'fact_check', subject, question: `An import says ${factLabel(key)} is ${factValue(value)}. Is that right?`, options: FACT_CHECK_OPTIONS, context, fileId, now,
       }).queued);
     }
   }

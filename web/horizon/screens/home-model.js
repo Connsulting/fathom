@@ -322,19 +322,17 @@ export function healthLine({ pace, ingest, accounts, metaDataThrough } = {}) {
   const staleAccounts = staleAccountIds(arr(accounts)).length;
   const staleGoals = included(pace).filter((g) => g.stale).length;
   const pending = Math.max(0, Number(ingest?.pending) || 0);
-  const failed = arr(ingest?.files).filter((x) => x?.status === 'failed').length;
   const rows = [{ text: dataLabel, tone: 'ok' }];
   if (staleAccounts > 0) rows.push({ text: `${plural(staleAccounts, 'account')} stale`, tone: 'bad' });
   else if (staleGoals > 0) rows.push({ text: `pace data stale for ${plural(staleGoals, 'goal')}`, tone: 'bad' });
   if (pending > 0) rows.push({ text: `${plural(pending, 'question')} to confirm`, tone: 'ask' });
-  if (failed > 0) rows.push({ text: `${plural(failed, 'file')} failed`, tone: 'bad' });
   // Owner-only items: what Fathom cannot do itself. Stale pace alone is not one; the data date covers it.
+  // Unresolved files are the Imports service line's (services.attention), not counted here.
   const owner = [];
   if (pending > 0) owner.push({ key: 'confirm', text: `${plural(pending, 'question')} to confirm`, go: 'confirm' });
   if (staleAccounts > 0) owner.push({ key: 'accounts', text: `${plural(staleAccounts, 'account')} stale`, go: 'money' });
-  if (failed > 0) owner.push({ key: 'files', text: `${plural(failed, 'file')} failed`, go: 'add' });
   return {
-    dataThrough, dataLabel, staleAccounts, staleGoals, pending, failed, stale: staleAccounts + staleGoals > 0, parts: rows.map((r) => r.text), rows,
+    dataThrough, dataLabel, staleAccounts, staleGoals, pending, stale: staleAccounts + staleGoals > 0, parts: rows.map((r) => r.text), rows,
     line: dataLabel, owner, needs: owner.length, needsLabel: owner.length ? `Fathom needs ${plural(owner.length, 'thing')}` : null, needsGo: owner[0]?.go ?? null
   };
 }
