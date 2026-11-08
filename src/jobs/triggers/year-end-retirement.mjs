@@ -9,9 +9,12 @@ import {
   isTrue, mineOf, padTasks, confirmTasks, salaryProjKey, salaryKey, positive,
   firstYearStatus, deferralDeadline, deadlineWindow, soloPlanOwner,
 } from './common.mjs';
+import { blockedFor, TRIGGER_INPUTS } from '../../shared/rec-inputs.mjs';
 
 export const id = 'year-end-retirement';
 export const domain = 'retirement';
+// Inputs the action reads (src/shared/rec-inputs.mjs): the household tax run sizes the room; catch-up room follows birth years.
+export const inputs = TRIGGER_INPUTS['year-end-retirement'];
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['retirement', 'tax']);
 export const owner = 'you';
@@ -32,7 +35,8 @@ export function window(ctx) {
 }
 
 export function evaluate(ctx) {
-  if (ctx.info.blocked.length) return { blocked: ctx.info.blocked[0] };
+  const held = blockedFor(ctx, { inputs });
+  if (held) return { blocked: held };
   const confirmed = [salaryKey(ctx)].filter(Boolean);
   if (ctx.info.confirm.retirement) return { confirm: ctx.info.confirm.retirement, grounding: confirmed };
   // The solo 401(k) room this rec rests on could not be computed: missing data, not a closed

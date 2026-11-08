@@ -1,9 +1,12 @@
 // Invoice deferral: moving December invoices into January (S13, R16).
 
 import { isTrue, mineOf, padTasks, confirmTasks, keyMatching, modelPersonOwner } from './common.mjs';
+import { blockedFor, TRIGGER_INPUTS } from '../../shared/rec-inputs.mjs';
 
 export const id = 'invoice-deferral';
 export const domain = 'business';
+// Inputs the action reads (src/shared/rec-inputs.mjs): the deferral war game reruns household and Virginia tax.
+export const inputs = TRIGGER_INPUTS['invoice-deferral'];
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['tax']);
 export const owner = 'you';
@@ -20,7 +23,8 @@ export function window(ctx) {
 }
 
 export function evaluate(ctx) {
-  if (ctx.info.blocked.length) return { blocked: ctx.info.blocked[0] };
+  const held = blockedFor(ctx, { inputs });
+  if (held) return { blocked: held };
   // The war game needs Virginia tax too; a Virginia gap is missing data, not a closed condition (S12).
   if (ctx.info.vaBlocked) return { blocked: ctx.info.vaBlocked };
   if (ctx.model.deferral) {

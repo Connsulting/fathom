@@ -1,7 +1,8 @@
 import { undoDefault } from './derive.mjs';
 import { tx, parseJson } from '../store/db.mjs';
 import { upsertFact, getFacts } from '../store/facts.mjs';
-import { answerShape, acceptsAnswerAccount } from '../jobs/triggers/common.mjs';
+import { answerShape, acceptsAnswerAccount, questionAnswered } from '../jobs/triggers/common.mjs';
+import { inferMortgage } from '../calc/mortgage-inference.mjs';
 import { normalizeName } from '../ingest/confirm.mjs';
 import { isoDate } from '../ingest/format.mjs';
 
@@ -111,6 +112,7 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
     if (a.key === 'household.birthYears' && [value.owner, value.spouse, ...(value.dependents || [])].some(y => y > Number(date.slice(0, 4)))) fail();
     return { key: a.key, value };
   });
+  const receipts = [];
   const write = () => {
     const src = channel === 'resolver' ? `resolver:${date}:${writes.map(w => w.key).join(',')}`
       : channel ? `${channel}:${date}` : `answer:${date}`;
@@ -123,19 +125,33 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
         upsertFact(db, { ...w, src, asOf: date, confirmed: true, now, provenance: { parser: channel || 'answer', locator: { note: label,
           ...(actorId ? { actorId } : {}), ...(recId ? { recId } : {}), ...(sourceEvidence ? { sourceSpan: sourceEvidence.span } : {}) } } });
       }
-      onWrite?.(before, db.prepare('SELECT * FROM facts WHERE key = ?').get(w.key));
+      const receipt = onWrite?.(before, db.prepare('SELECT * FROM facts WHERE key = ?').get(w.key));
+      if (receipt?.id) receipts.push(receipt.id);
     }
     if (recId) {
       const row = db.prepare('SELECT status, def FROM recs WHERE id = ?').get(recId);
-      if (row && parseJson(row.def, {}).question?.primary) {
-        db.prepare("UPDATE recs SET status = 'proposed', waiting_on = NULL, wake = NULL, updated_at = ? WHERE id = ?").run(now, recId);
-        db.prepare("INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, 'answer', NULL, ?, 'proposed', 'ui')").run(recId, now, row.status);
+      const question = row ? parseJson(row.def, {}).question : null;
+      if (question?.primary) {
+        // An answered question rec is done (RQ2); a partial answer leaves it open. The event keeps
+        // the receipts this answer wrote, which are its Undo.
+        const to = answeredNow(db, question, date) ? 'done' : 'proposed';
+        db.prepare('UPDATE recs SET status = ?, waiting_on = NULL, wake = NULL, updated_at = ? WHERE id = ?').run(to, now, recId);
+        db.prepare("INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, 'answer', ?, ?, ?, 'ui')")
+          .run(recId, now, receipts.length ? JSON.stringify(receipts) : null, row.status, to);
       }
     }
   };
   if (db.isTransaction) write();
   else tx(db, write);
   return { keys: writes.map(w => w.key) };
+}
+
+// The stored question over the facts on file now, as the scenario rebuilds it.
+function answeredNow(db, question, date) {
+  const facts = getFacts(db);
+  const mortgage = question.keys?.includes('obligations.mortgage') ? inferMortgage(db, date, facts['obligations.mortgage']) : undefined;
+  if (mortgage?.present) facts['obligations.mortgage'] = mortgage.values;
+  return questionAnswered(question, { facts, accounts: db.prepare('SELECT * FROM accounts').all(), mortgage });
 }
 
 export async function answerFacts(db, answers, { replan, ...options } = {}) {

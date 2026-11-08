@@ -1,9 +1,12 @@
 // HSA room: contribution room left for the year, due by the federal filing date (R6, S4).
 
 import { isTrue, mineOf, padTasks, confirmTasks, positive } from './common.mjs';
+import { TRIGGER_INPUTS } from '../../shared/rec-inputs.mjs';
 
 export const id = 'hsa-room';
 export const domain = 'retirement';
+// Inputs the action reads (src/shared/rec-inputs.mjs): HSA deferrals on file, the catch-up age, and the filing status that decides whose employer HSA contributions count.
+export const inputs = TRIGGER_INPUTS['hsa-room'];
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['health', 'retirement', 'tax']);
 export const owner = 'you';

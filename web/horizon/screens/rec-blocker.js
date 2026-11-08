@@ -1,8 +1,9 @@
 import { gapControl } from '../../core/gap-control.js';
 import { advisorWaitsHtml } from './unlocks.js';
 // What a waiting recommendation is waiting on, in plain words, with the action that clears it and a
-// link to where it is done. The planner stores the blocker on the rec while it waits; it is gone
-// the moment the rec is no longer blocked. Pure markup: the click handling lives in design.js.
+// link to where it is done, and the estimate gaps on inputs the rec reads, one line each. The
+// planner stores the blocker on the rec while it waits; it is gone the moment the rec is no longer
+// blocked. Pure markup: the click handling lives in design.js.
 
 let H;
 export const bind = kit => { H = kit; };
@@ -22,10 +23,12 @@ export function html(r, surface) {
   // optional estimate improvements.
   const advisor = r.status === 'waiting' && r.waitingOn === 'advisor' && r.advisorWaits?.length
     ? advisorWaitsHtml(r.advisorWaits, H).replace('class="h-blocker ', `class="h-blocker h-blocker-${H.esc(surface)} `) : '';
-  if (r.gaps?.length) return advisor + `<div class="h-blocker h-blocker-${H.esc(surface)}" role="note"><b>Optional estimate improvements</b>${r.gaps.map(g => `<p>${H.esc(g.message)} ${gapControl(g.action, H.esc)}</p>`).join('')}</div>`;
-  if (advisor) return advisor;
-  if (r.status !== 'waiting' || !r.blocker) return '';
   const { esc } = H;
-  const b = r.blocker;
-  return `<div class="h-blocker h-blocker-${esc(surface)}" role="note"><b>Waiting on</b><p>${esc(b.text)}</p><p class="h-blocker-do">${esc(b.task)}</p>${b.fix ? gapControl(b.fix, esc) : linkHtml(r.id, b.link)}</div>`;
+  const box = body => `<div class="h-blocker h-blocker-${esc(surface)}" role="note">${body}</div>`;
+  // A data hold shows only while the rec waits on it and not on the advisor.
+  const b = r.status === 'waiting' && !advisor ? r.blocker : null;
+  const waiting = b ? box(`<b>Waiting on</b><p>${esc(b.text)}</p><p class="h-blocker-do">${esc(b.task)}</p>${b.fix ? gapControl(b.fix, esc) : linkHtml(r.id, b.link)}`) : '';
+  // Each gap on an input this rec reads is one line naming its fix; the full list lives on Missing data.
+  const gaps = r.gaps?.length ? box(`<b>Optional estimate improvements</b>${r.gaps.map(g => `<p class="h-gap-ref" data-gap-ref="${esc(g.code)}">${esc(g.message)} ${gapControl(g.action, esc)}</p>`).join('')}`) : '';
+  return advisor + waiting + gaps;
 }

@@ -9,9 +9,12 @@ import { addDays } from '../planner/data.mjs';
 import { confirmItemFor } from '../../shared/rec-steps.mjs';
 import { staleAccountIds } from '../../../web/core/account-freshness.js';
 import { dataText, confirmTask, ANSWER_SHAPES, questionFor } from './common.mjs';
+import { TRIGGER_INPUTS } from '../../shared/rec-inputs.mjs';
 
 export const id = 'missing-data';
 export const domain = 'data';
+// Missing data lists every gap and hold itself, so it declares no inputs of its own.
+export const inputs = TRIGGER_INPUTS['missing-data'];
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze([]);
 export const owner = 'you';

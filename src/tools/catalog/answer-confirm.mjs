@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { tx, parseJson } from '../../store/db.mjs';
 import { saveConfirmAnswers, saveConfirmReopen, afterAnswer } from '../../api/ingest-handlers.mjs';
 import { getItem, reopenItems, answerItems, reviseItem } from '../../ingest/confirm.mjs';
-import { saveRecAnswers } from '../../api/fact-answers.mjs';
+import { saveRecAnswers, saveAnswerReceipt } from '../../api/fact-answers.mjs';
 import { markItem } from '../../api/yearend-handlers.mjs';
 import { taxYearFor } from '../../yearend/expected.mjs';
 import { requireActor, registerReceiptKind, saveReceipt, replanAction } from '../../actions/receipts.mjs';
@@ -84,11 +84,10 @@ async function recQuestions(args,ctx){
     if (!Object.hasOwn(ANSWER_SHAPES, answer.key)) throw new ToolError('bad_input', 'Recommendation answer key is not supported.');
     requireEvidence(ctx,answer.value,{evidence:args.evidence,shape:answerShape(answer.key),argument:answer.key});
   }
-  const fields=['key','value','src','as_of','confirmed','file_id','parser','locator'];
-  const select=row=>row?Object.fromEntries(fields.map(k=>[k,row[k]])):null;
   await saveRecAnswers(ctx,{recId:args.recId,answers:args.answers},{now:nowOf(ctx),channel:ctx.channel==='mcp'?'mcp':'ask',actorId,replan:async()=>{},onWrite(before,after){
-    const receipt=saveReceipt(ctx,{scope:'write:facts',kind:'fact',id:after.key,label:'Recommendation answer',before:select(before),after:select(after),from:parseJson(before?.value,null),to:parseJson(after.value,null)});
+    const receipt=saveAnswerReceipt(ctx,before,after);
     if(receipt)receipts.push(receipt);
+    return receipt;
   }}).catch(err => { throw domainError(err); });
   let planningPending=false;
   for(const receipt of receipts)ctx.onReceipt?.(receipt);

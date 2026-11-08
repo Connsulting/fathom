@@ -169,7 +169,7 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     writeFigures(db, computed.figures, now);
     const changes = applyRecs(db, results, {
       clock, now, runId, prose, packOverride: id => overrides[id] ?? null, warn: code => warnings.add(code), prefs,
-      stepEnv: { facts: merged.values, accounts: accountRows, open: openData, payments: observedPayments(db) },
+      stepEnv: { facts: merged.values, accounts: accountRows, open: openData, mortgage: recFacts.mortgage, payments: observedPayments(db) },
     });
     for (const r of results.filter(r => r.state === 'hit')) {
       const id = r.trigger.id;

@@ -227,6 +227,20 @@ export function questionFor(keys, { accounts = [], facts = {}, names = {}, peopl
   return { keys: unique, ...(people ? { people } : {}), title, summary, answered, fields };
 }
 
+// Whether a stored primary question is fully answered by the facts on file now (RQ2): the rec's
+// own question, rebuilt over the current facts and accounts the way the scenario rebuilds it. A
+// question with a key that no longer has an answer shape is not answered.
+export function questionAnswered(question, { facts = {}, accounts = [], mortgage } = {}) {
+  if (!question?.primary || !Array.isArray(question.keys)) return false;
+  const keys = mortgage?.status === 'paid_off' ? question.keys.filter(key => key !== 'obligations.mortgage') : question.keys;
+  if (!keys.length) return false;
+  try {
+    return questionFor(keys, { accounts, facts, names: facts['household.names'], people: question.people, mortgage }).answered === true;
+  } catch {
+    return false;
+  }
+}
+
 export const confirmTask = key => (answerShape(key), CONFIRM_TASKS[key]);
 
 export function confirmTasks(keys) {

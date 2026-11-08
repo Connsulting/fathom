@@ -3,6 +3,8 @@
 // not closed, and evaluate(ctx) returns hit vars. evaluate may also return {blocked: reason} when a
 // figure it needs could not be computed, and a null evaluation after one of the trigger's
 // calculators threw is blocked as calc_failed; missing-data runs last and lists those reasons.
+// Each trigger declares the inputs its action reads (src/shared/rec-inputs.mjs): it is held only
+// by a code on those inputs, and its rec carries only the gaps on them.
 //
 // evaluateCatalog(ctx) -> [{trigger, state: 'hit'|'blocked'|'none', hit?, reason?, closed?}]
 // evaluateTriggers(ctx) -> hits only: [{trigger, rec, window, grounding, packId, vars}]
@@ -24,6 +26,7 @@ import * as dependentCareFsa from './dependent-care-fsa.mjs';
 import * as newChild from './new-child.mjs';
 import * as missingData from './missing-data.mjs';
 import { questionFor, dataText, LISTED_RECS } from './common.mjs';
+import { gapsFor } from '../../shared/rec-inputs.mjs';
 
 export const triggers = Object.freeze([
   fedQ4, vaQ4, yearEndRetirement, solo401kSetup, scorpSalary, invoiceDeferral, hsaRoom, va529,
@@ -54,7 +57,6 @@ function recOf(ctx, t, hit, window) {
   const allQuestions = hit.confirm || hit.questions || (hit.catchUpPending ? [hit.catchUpPending] : []);
   const advisorQuestions = allQuestions.filter(key => ADVISOR_KEYS.has(key));
   const questions = allQuestions.filter(key => !ADVISOR_KEYS.has(key));
-  if (t.id !== 'missing-data' && (['tax', 'giving', 'retirement', 'business'].includes(t.domain) || t.id === 'va529') && ctx.info.gaps?.length) rec.gaps = ctx.info.gaps;
   if (ctx.assumptions?.length) rec.assumptions = ctx.assumptions;
   if (advisorQuestions.length) {
     rec.advisorQuestions = advisorQuestions;
@@ -71,6 +73,12 @@ function recOf(ctx, t, hit, window) {
       rec.title = dataText(rec.question.title);
       rec.tasks = [];
     }
+  }
+  // Gaps ride only on a rec that reads the gapped input (RQ2). A primary question reads only its
+  // question keys, and missing-data lists every gap itself.
+  if (t.id !== 'missing-data' && !rec.question?.primary) {
+    const gaps = gapsFor(t, ctx.info.gaps);
+    if (gaps.length) rec.gaps = gaps;
   }
   return rec;
 }

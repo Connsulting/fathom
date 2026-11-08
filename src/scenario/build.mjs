@@ -28,6 +28,7 @@ import { questionFor, dataText, LISTED_RECS } from '../jobs/triggers/common.mjs'
 import { getFacts } from '../store/facts.mjs';
 import { inferMortgage } from '../calc/mortgage-inference.mjs';
 import { deriveSteps } from '../shared/rec-steps.mjs';
+import { gapsFor, TRIGGER_INPUTS } from '../shared/rec-inputs.mjs';
 import { advisorWait } from '../shared/advisor-waits.mjs';
 import { ADVISOR_KEYS } from '../facts/derive.mjs';
 import { observedPayments } from '../ingest/transaction-payments.mjs';
@@ -218,6 +219,14 @@ export function recFromRow(row, clock, env = {}) {
     tasks: deriveSteps(def.tasks, done, { ...env, marks: env.marks?.get(row.id) }),
   };
   if (row.wake != null) rec.wake = row.wake; else delete rec.wake;
+  // Gaps show only where they apply (RQ2), also on rows stored before the planner scoped them: a
+  // primary question reads only its question, and a trigger's rec only the gaps on its inputs.
+  if (rec.gaps) {
+    const inputs = Object.hasOwn(TRIGGER_INPUTS, row.id) ? TRIGGER_INPUTS[row.id] : null;
+    const gaps = def.question?.primary ? [] : inputs ? gapsFor({ inputs }, rec.gaps) : rec.gaps;
+    if (gaps.length) rec.gaps = gaps;
+    else delete rec.gaps;
+  }
   if (row.waiting_on != null) rec.waitingOn = row.waiting_on; else delete rec.waitingOn;
   rec.owner = row.owner;
   rec.ownerOverride = row.owner_override === 1;
@@ -243,6 +252,18 @@ export function loadRecs(db, clock) {
   // A rec waiting on the planner names its blocker (stored with the last run, gone once it is unblocked).
   const blockers = parse(db.prepare("SELECT value FROM content WHERE key = 'rec.blockers'").get()?.value, null) || {};
   for (const r of recs) if (r.status === 'waiting' && Object.hasOwn(blockers, r.id)) r.blocker = blockers[r.id];
+  // A rec done by its answer carries the live receipts of its latest answer: its Undo (RQ2).
+  const lastStatus = db.prepare('SELECT action, to_status FROM rec_events WHERE rec_id = ? AND from_status IS NOT to_status ORDER BY id DESC LIMIT 1');
+  const lastAnswer = db.prepare("SELECT arg FROM rec_events WHERE rec_id = ? AND action = 'answer' ORDER BY id DESC LIMIT 1");
+  const live = db.prepare('SELECT id FROM action_receipts WHERE id = ? AND undone_at IS NULL');
+  for (const r of recs) {
+    if (r.status !== 'done') continue;
+    const last = lastStatus.get(r.id);
+    if (!last || last.to_status !== 'done' || !['answer', 'answered'].includes(last.action)) continue;
+    const ids = parse(lastAnswer.get(r.id)?.arg, null);
+    const receipts = Array.isArray(ids) ? ids.filter(id => typeof id === 'string' && live.get(id)) : [];
+    if (receipts.length) r.answerReceipts = receipts;
+  }
   // H3: a rec waiting on the advisor names each answer it needs and the control that records it.
   for (const r of recs) if (Array.isArray(r.advisorQuestions) && r.advisorQuestions.length) r.advisorWaits = r.advisorQuestions.filter(k => ADVISOR_KEYS.has(k)).map(advisorWait);
   for (const r of recs) if (r.question) {

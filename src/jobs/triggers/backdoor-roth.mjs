@@ -1,9 +1,12 @@
 // Backdoor Roth: income above the Roth phase-out, with the pro-rata status per person (R9, S9).
 
 import { isTrue, mineOf, padTasks } from './common.mjs';
+import { blockedFor, TRIGGER_INPUTS } from '../../shared/rec-inputs.mjs';
 
 export const id = 'backdoor-roth';
 export const domain = 'retirement';
+// Inputs the action reads (src/shared/rec-inputs.mjs): agi.est and room.ira.* from the household tax run; IRA catch-up room follows birth years.
+export const inputs = TRIGGER_INPUTS['backdoor-roth'];
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['retirement']);
 export const owner = 'you';
@@ -28,7 +31,8 @@ export function window(ctx) {
 }
 
 export function evaluate(ctx) {
-  if (ctx.info.blocked.length) return { blocked: ctx.info.blocked[0] };
+  const held = blockedFor(ctx, { inputs });
+  if (held) return { blocked: held };
   const ira = ctx.info.ira || {};
   const persons = ctx.info.persons || ['owner'];
   const noBalance = ira.noBalance || {};

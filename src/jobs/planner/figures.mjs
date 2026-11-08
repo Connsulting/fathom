@@ -1,4 +1,5 @@
 import { taxGap, rankGaps } from '../../shared/tax-gaps.mjs';
+import { figureInputs, inputsOf } from '../../shared/rec-inputs.mjs';
 // Figures: every amount the planner shows, computed by deterministic code from the data and the
 // merged facts, each with a kind (a actual, p projected, e estimate, m model output), a source and
 // a locator (data rows, or the calculator inputs and steps). Labels carry no digits.
@@ -836,10 +837,13 @@ function finish(out) {
   for (const f of Object.values(out.figures)) {
     if (!/^(agi\.|tax\.|sh\.|room\.|wg\.|va529\.(deduction|taxSaved)|inc\.ytd\.(w2|total))/.test(f.key)) continue;
     const dependent = !/^(tax\.[^.]+\.(paid|withheld)|sh\.fed\.priorTarget)$/.test(f.key);
-    const applicable = dependent ? gaps : gaps.filter(g => g.figureKeys?.includes(f.key));
+    // RQ2: a dependent figure carries only the gaps on inputs it is computed from (room.hsa never
+    // carries a wage gap); the household lists in info stay whole for missing-data.
+    const inputs = figureInputs(f.key);
+    const applicable = dependent ? gaps.filter(g => inputsOf(g.code).some(i => inputs.includes(i))) : gaps.filter(g => g.figureKeys?.includes(f.key));
     f.locator = { ...f.locator, completeness: applicable.length ? `estimate with ${applicable.length} gap${applicable.length === 1 ? '' : 's'}` : 'complete',
-      partial: applicable.length > 0, rough: dependent && out.info.rough, gaps: applicable,
-      payroll: dependent ? out.info.payroll : [], notes: [...applicable.map(g => g.message), ...(f.locator.notes || [])].slice(0, 5) };
+      partial: applicable.length > 0, rough: dependent && applicable.some(g => g.rough), gaps: applicable,
+      payroll: dependent && inputs.includes('income') ? out.info.payroll : [], notes: [...applicable.map(g => g.message), ...(f.locator.notes || [])].slice(0, 5) };
     if (applicable.length) f.label += applicable.some(g => g.rough) ? ' (rough partial estimate)' : ' (partial estimate)';
   }
   return { tax: out.tax || null, figures: out.figures, sources: out.sources, model: out.model, warnings: [...out.warnings].sort(), info: out.info };

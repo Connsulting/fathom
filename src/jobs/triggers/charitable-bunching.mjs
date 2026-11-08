@@ -1,9 +1,12 @@
 // Charitable bunching: give two years of gifts in one year to clear the standard deduction.
 
 import { isTrue, mineOf, padTasks, yearOf, positive } from './common.mjs';
+import { TRIGGER_INPUTS } from '../../shared/rec-inputs.mjs';
 
 export const id = 'charitable-bunching';
 export const domain = 'giving';
+// Inputs the action reads (src/shared/rec-inputs.mjs): recorded gifts (giving.trailing, giving.twoYear, giving.ytd) against the standard deduction for the filing status; no income figure.
+export const inputs = TRIGGER_INPUTS['charitable-bunching'];
 // Goal kinds this rec serves (resolved to open goals at read time) and its default action owner.
 export const goalKinds = Object.freeze(['giving', 'tax']);
 export const owner = 'both';

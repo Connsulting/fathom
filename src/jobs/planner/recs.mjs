@@ -11,6 +11,7 @@ import { parseJson } from '../../store/db.mjs';
 import { dayLabel } from './data.mjs';
 import { servesGoals, recTopics } from '../../shared/goals.mjs';
 import { withClearedSteps, checkCleared } from '../../shared/rec-steps.mjs';
+import { questionAnswered } from '../triggers/common.mjs';
 
 const ACTIVE = ['proposed', 'doing', 'waiting', 'snoozed'];
 const BLOCKABLE = ['proposed', 'doing'];
@@ -34,6 +35,11 @@ export function buildDef(hit, fields) {
 function lastStatusEvent(db, recId) {
   return db.prepare('SELECT * FROM rec_events WHERE rec_id = ? AND from_status IS NOT to_status ORDER BY id DESC LIMIT 1').get(recId) || null;
 }
+
+// RQ2: a rec is done by its answer when its last status change completed an answered question
+// (the owner's answer, or the planner finding it answered).
+const ANSWER_DONE = new Set(['answer', 'answered']);
+const doneByAnswer = last => !!last && ANSWER_DONE.has(last.action) && last.to_status === 'done';
 
 // The owner's lean for a rec, from the tradeoff curve (0 left end, 1 right end): a retirement rec
 // gains when the owner leans to max retirement room (ret_life below 0.5), a tax rec when they lean
@@ -83,6 +89,15 @@ export function applyRecs(db, results, ctx) {
     if (outcome !== 'unchanged') domains.add(domain);
   };
   const overridden = packId => packId != null && packOverride(packId) === 0;
+  // A stored def's primary question is answered by the facts this run planned over.
+  const answered = def => !!ctx.stepEnv && questionAnswered(def.question, ctx.stepEnv);
+  // Open, or waiting on the planner's own block: a status the planner may complete for an answer.
+  const completable = row => {
+    if (BLOCKABLE.includes(row.status)) return true;
+    if (row.status !== 'waiting') return false;
+    const last = lastStatusEvent(db, row.id);
+    return !!last && last.actor === 'planner' && last.action === 'block';
+  };
 
   for (const res of results) {
     const t = res.trigger;
@@ -146,6 +161,13 @@ export function applyRecs(db, results, ctx) {
           waitingOn = null;
         }
       }
+      // RQ2: a rec done by its answer reopens when the trigger now asks for something else (an
+      // action, or a question not yet answered), so new work is never hidden under Done.
+      if (status === 'done' && doneByAnswer(lastStatusEvent(db, id)) && !answered(def)) {
+        events.push(['reopen', null, status, 'proposed']);
+        status = 'proposed';
+        waitingOn = null;
+      }
       const oldDef = parseJson(rr.def, {});
       const oldDone = parseJson(rr.tasks_done, []);
       const doneByText = new Map((Array.isArray(oldDef.tasks) ? oldDef.tasks : []).map((x, i) => [x && x.t, !!oldDone[i]]));
@@ -170,6 +192,23 @@ export function applyRecs(db, results, ctx) {
       continue;
     }
     if (!pr || pr.retired_at) continue;
+    // RQ2: a question rec whose question is answered is done, whether its trigger is now held or
+    // no longer applies; it never waits on a hold and is never dismissed for being answered.
+    const storedDef = parseJson(rr.def, {});
+    if (completable(rr) && answered(storedDef)) {
+      // A row stored before RQ2 may carry the household gap list; an answered question reads none.
+      const answeredDef = { ...storedDef };
+      delete answeredDef.gaps;
+      db.prepare("UPDATE recs SET status = 'done', waiting_on = NULL, wake = NULL, def = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(answeredDef), now, id);
+      record(id, 'answered', null, rr.status, 'done');
+      if (res.state === 'blocked') db.prepare('UPDATE planner_recs SET held_from = NULL, last_run = ? WHERE rec_id = ?').run(runId, id);
+      else {
+        db.prepare('UPDATE planner_recs SET retired_at = ?, retired_reason = ?, retired_from = ?, held_from = NULL, last_run = ? WHERE rec_id = ?')
+          .run(clock, 'The question was answered.', rr.status, runId, id);
+      }
+      mark(id, res.state === 'blocked' ? 'updated' : 'retired', t.domain);
+      continue;
+    }
     if (res.state === 'blocked') {
       if (BLOCKABLE.includes(rr.status)) {
         db.prepare("UPDATE recs SET status = 'waiting', waiting_on = 'data', updated_at = ? WHERE id = ?").run(now, id);
