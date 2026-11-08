@@ -4,15 +4,10 @@
 // the three meters with reason text instead of zeros, the freshness note and the way back Home.
 // Expected values come from GET /api/scenario (its pace block) at test time.
 
-import { test, expect, resetDemo, gotoRoute, fetchScenario, expectPopoverSource, bareDollarNodes } from './helpers.mjs';
+import { test, expect, resetDemo, gotoRoute, fetchScenario, expectPopoverSource, bareDollarNodes, HOME_VERDICT } from './helpers.mjs';
 
 const fmtDay = (iso) => new Date(iso + 'T00:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
-const METERS = [
-  ['retirement', 'Retirement room used, closes Dec 31'],
-  ['tax', 'Tax reserved vs owed'],
-  ['income', 'Income vs plan']
-];
 
 // The charts the board draws: household savings when its series exists, else each goal series.
 function charts(pace) {
@@ -131,24 +126,14 @@ test.describe('pace board', () => {
     await expectPopoverSource(page, s.src['calc:pace'].label);
   });
 
-  test('the three meters show reason text, never a zero, when their inputs are missing', { tag: ['@ac3'] }, async ({ page, request }) => {
+  test('with no meter inputs the This year panel is hidden, never a row of reasons or zeros', { tag: ['@ac3'] }, async ({ page, request }) => {
     const { pace } = await fetchScenario(request);
-    await gotoRoute(page, 'pace');
-    const meters = page.locator('div.h-meters div.h-meter[data-meter]');
-    await expect(meters).toHaveCount(3);
-    expect(await meters.evaluateAll((els) => els.map((e) => e.getAttribute('data-meter')))).toEqual(METERS.map(([k]) => k));
-    for (const [k, label] of METERS) {
-      const m = page.locator(`div.h-meter[data-meter="${k}"]`);
-      await expect(m).toContainText(label);
-      if (pace.meters[k].meter) continue;
-      const none = m.locator('p.h-meter-none');
-      await expect(none, `${k} reason`).toHaveCount(1);
-      await expect(none).toHaveText(/\S/);
-      const text = await m.innerText();
-      expect(text, `${k} shows no zero`).not.toMatch(/(^|[^0-9.])0%|\$0(?![0-9.,])/);
-      await expect(m.locator('.fx-fig'), `${k} shows no figure`).toHaveCount(0);
-    }
     expect(Object.values(pace.meters).every((x) => x.meter == null), 'the demo meters have no inputs').toBe(true);
+    await gotoRoute(page, 'pace');
+    await expect(page.locator('section.h-pace')).toBeVisible();
+    await expect(page.locator('div.h-meters')).toHaveCount(0);
+    await expect(page.locator('div.h-meter[data-meter]')).toHaveCount(0);
+    await expect(page.locator('section.h-pace')).not.toContainText('This year');
   });
 
   test('a meter with inputs shows used of limit as pace figures', { tag: ['@ac3', '@ac6'] }, async ({ page, request }) => {
@@ -172,7 +157,9 @@ test.describe('pace board', () => {
     await expect(m.locator('p.h-meter-none')).toHaveCount(0);
     await expect(m.locator('.fx-fig[data-fig="pace.meters.tax.meter.used"]')).toHaveCount(1);
     await expect(m.locator('.fx-fig[data-fig="pace.meters.tax.meter.limit"]')).toHaveCount(1);
-    await expect(page.locator('div.h-meter[data-meter="retirement"] p.h-meter-none')).toHaveCount(1);
+    // Only the meter with figures shows; the ones without inputs are left out.
+    await expect(page.locator('div.h-meters div.h-meter[data-meter]')).toHaveCount(1);
+    await expect(page.locator('div.h-meter[data-meter="retirement"]')).toHaveCount(0);
   });
 
   test('without any series the board says why instead of drawing an empty chart', { tag: ['@ac3'] }, async ({ page }) => {
@@ -197,13 +184,12 @@ test.describe('pace board', () => {
     if (ends.some((d) => d.slice(0, 7) < pace.clock.slice(0, 7))) await expect(board(page)).toContainText('Later months are projected.');
   });
 
-  test('the back link returns Home', { tag: ['@ac3', '@mobile'] }, async ({ page, request }) => {
-    const { pace } = await fetchScenario(request);
+  test('the back link returns Home', { tag: ['@ac3', '@mobile'] }, async ({ page }) => {
     await gotoRoute(page, 'pace');
     const back = page.locator('a.h-back[data-go="home"]');
     await expect(back).toContainText('Home');
     await back.click();
     await expect(page).toHaveURL(/#\/home$/);
-    await expect(page.locator('h1.h-home-h')).toHaveText(pace.rollup.headline);
+    await expect(page.locator('h1.h-home-h')).toHaveText(HOME_VERDICT);
   });
 });
