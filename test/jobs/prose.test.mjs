@@ -260,3 +260,17 @@ describe('model prose', () => {
     assert.equal(recRow(db, 'hsa-room').def.summary, VALID.summary, 'unaffected prose kept');
   });
 });
+
+test('precision improvements never reuse or accept prose that says tax estimates are on hold', async () => {
+  const { writeProse } = await import('../../src/jobs/planner/prose.mjs');
+  const fields = { summary: 'The estimates are on hold.', why: [], qa: [] };
+  const draft = { summary: 'These optional improvements sharpen your estimates.', why: [], qa: [] };
+  const hit = { rec: { id: 'missing-data', title: 'Improve precision', mine: [] }, trigger: { id: 'missing-data', template: () => draft }, grounding: [], vars: {} };
+  const ctx = { fig: {}, names: {} };
+  const engine = { async call() { return { text: JSON.stringify(fields), grounding: { ok: true } }; } };
+  const first = await writeProse(hit, ctx, { engine });
+  assert.equal(first.fields.summary, draft.summary);
+  const second = await writeProse(hit, ctx, { engine, stored: { hash: first.hash, src: 'model', def: fields } });
+  assert.equal(second.fields.summary, draft.summary);
+  assert.equal(second.kept, false);
+});

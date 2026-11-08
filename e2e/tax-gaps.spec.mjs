@@ -51,7 +51,7 @@ test.describe('tax precision gaps on a synthetic household', () => {
     await expect(page.locator('.h-dlg')).toContainText('Optional estimate improvements');
     await expect(page.locator('.h-dlg')).toContainText('Cedar Labs');
     await page.locator('.h-dlg .fx-fig').first().click();
-    await expect(page.locator('.fx-pop')).toContainText(/estimate with \d+ gaps/);
+    await expect(page.locator('.fx-pop')).toContainText(/estimate with \d+ gaps?/);
     await expect(page.locator('.fx-pop')).toContainText('Cedar Labs');
     await page.screenshot({ path: test.info().outputPath('tax-gap-provenance.png'), fullPage: true });
     await page.locator('.fx-pop').getByRole('button', { name: 'Enter year-to-date pay' }).click();

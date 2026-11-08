@@ -204,7 +204,7 @@ test('every former payroll and income block produces federal and state estimates
     for (const key of ['tax.fed.proj', 'tax.va.proj']) {
       assert.ok(Number.isFinite(computed.figures[key]?.v), key);
       assert.ok(computed.figures[key].locator.gaps.some(g => g.code === gap.code), key);
-      assert.match(computed.figures[key].locator.completeness, /^estimate with \d+ gaps$/);
+      assert.match(computed.figures[key].locator.completeness, /^estimate with \d+ gaps?$/);
     }
     assert.ok(gap.message && gap.action.label);
     assert.ok(['upload', 'ask'].includes(gap.action.screen));

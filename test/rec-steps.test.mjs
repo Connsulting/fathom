@@ -108,7 +108,7 @@ test('no rec renders a free checkbox: open steps carry a control, done ones say 
     for (const [i, t] of (r.tasks || []).entries()) {
       const li = html.split('<li').find(x => x.includes(`data-step="${i}"`));
       assert.ok(li, `${r.id} step ${i} is rendered`);
-      if (t.auto && !t.done) assert.match(li, /data-upload-open|data-step-answer|data-go=|data-ask-next/, `${r.id} step ${i} has its control`);
+      if (t.auto && !t.done) assert.match(li, /data-upload-open|data-step-answer|data-go=|data-ask-next|data-tax-gap-fix/, `${r.id} step ${i} has its control`);
       if (!t.auto && !t.done) assert.match(li, /data-act="task"[^>]*>I did this</, `${r.id} step ${i} offers I did this`);
       if (!t.auto && t.done) assert.match(li, /data-act="task"[^>]*>Undo</, `${r.id} step ${i} offers Undo`);
       if (t.auto) assert.doesNotMatch(li, /data-act="task"/, `${r.id} step ${i} is product-managed`);

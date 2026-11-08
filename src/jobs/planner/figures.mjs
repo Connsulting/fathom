@@ -779,7 +779,7 @@ function finish(out) {
     if (!/^(agi\.|tax\.|sh\.|room\.|wg\.|va529\.(deduction|taxSaved)|inc\.ytd\.(w2|total))/.test(f.key)) continue;
     const dependent = !/^(tax\.[^.]+\.(paid|withheld)|sh\.fed\.priorTarget)$/.test(f.key);
     const applicable = dependent ? gaps : [];
-    f.locator = { ...f.locator, completeness: applicable.length ? `estimate with ${applicable.length} gaps` : 'complete',
+    f.locator = { ...f.locator, completeness: applicable.length ? `estimate with ${applicable.length} gap${applicable.length === 1 ? '' : 's'}` : 'complete',
       partial: applicable.length > 0, rough: dependent && out.info.rough, gaps: applicable,
       payroll: dependent ? out.info.payroll : [], notes: [...applicable.map(g => g.message), ...(f.locator.notes || [])].slice(0, 5) };
     if (applicable.length) f.label += out.info.rough ? ' (rough partial estimate)' : ' (partial estimate)';
