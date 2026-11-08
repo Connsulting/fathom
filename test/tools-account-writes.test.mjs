@@ -23,7 +23,7 @@ for (const [operation,params,field,value] of [
   const ctx=context(s), before=await row(s);
   const result=await callTool('update_account',{operation,id:'manual',...params},ctx);
   const handler={rename:api.accountRename,mask:api.accountMask,owner:api.accountOwner,kind:api.accountKind}[operation];
-  handler({...ctx,params:{id:'route'},body:params});
+  await handler({...ctx,params:{id:'route'},body:params});
   assert.equal((await row(s))[field],value);assert.equal((await row(s,'route'))[field],value);
   assert.equal(result.account.id,'manual');assert.equal(result.receipt.scope,'write:accounts');assert.equal(result.undo.available,true);
   await undo(ctx,result);assert.equal((await row(s))[field],before[field]);

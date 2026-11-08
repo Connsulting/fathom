@@ -40,8 +40,8 @@ test('HTTP connect, sync, matching, watermark, dedupe and disconnect isolate col
   try {
     fx = await twoHouseholds({ extra: { FATHOM_SIMPLEFIN_ALLOWED_HOSTS: 'bridge.example.test', FATHOM_CLOCK: '2026-11-01' } });
     for (const hh of [fx.A, fx.B]) {
-      await fx.ctx(hh.id).scheduler.tick();
-      await fx.ctx(hh.id).db.prepare(`INSERT INTO accounts (id, inst, mask, name, kind, mirror) VALUES ('colliding-imported-id', 'Synthetic Bank', '1234', 'Imported checking', 'checking', 'manual')`).run();
+      await (await fx.ctx(hh.id)).scheduler.tick();
+      await (await fx.ctx(hh.id)).db.prepare(`INSERT INTO accounts (id, inst, mask, name, kind, mirror) VALUES ('colliding-imported-id', 'Synthetic Bank', '1234', 'Imported checking', 'checking', 'manual')`).run();
       assert.equal((await hh.client.postJson('/api/household/outbound', { jobs: true, simplefin: true })).status, 200);
       const connected = await hh.client.postJson('/api/simplefin/connect', { token: token(`claim/${hh === fx.A ? 'alpha' : 'bravo'}`) });
       assert.equal(connected.status, 200, connected.text);

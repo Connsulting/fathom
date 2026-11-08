@@ -336,7 +336,7 @@ describe('admission refuses a round whose bound exceeds either remaining budget'
     const done = await first;
     assert.ok(!(done instanceof Error), String(done?.stack));
     // Liveness: once A settles below its bound, B fits.
-    await two.ctx(B).engine.call(CALL);
+    await (await two.ctx(B)).engine.call(CALL);
     assert.equal(emulator.requests.length, 2);
     const [rowB] = await roundsOf(two.platform, B);
     assert.equal(rowB.state, 'settled');
@@ -445,7 +445,7 @@ describe('crashes and unknown costs keep their reservation', T, () => {
 
     // The other household keeps its unreserved credit.
     const from = emulator.requests.length;
-    await two.ctx(B).engine.call(CALL);
+    await (await two.ctx(B)).engine.call(CALL);
     assert.equal(emulator.requests.length, from + 1);
 
     await emulator.close();
@@ -511,7 +511,7 @@ describe('crashes and unknown costs keep their reservation', T, () => {
     const [failed] = await roundsOf(two.platform, B);
     assert.equal(failed.state, 'settled');
     assert.equal(failed.cost_usd, 0);
-    const res = await two.ctx(B).engine.call(confirm);
+    const res = await (await two.ctx(B)).engine.call(confirm);
     assert.equal(res.text, 'Synthetic answer with no figures.');
     assert.equal((await roundsOf(two.platform, B)).length, 2);
   }));
@@ -531,7 +531,7 @@ describe('crashes and unknown costs keep their reservation', T, () => {
     const side = await two.side(A);
     await assert.rejects(side.engine.call(CALL), refused('ModelAccountingError', 'accounting_hold'));
     assert.equal(emulator.requests.length, 1);
-    await two.ctx(B).engine.call(CALL);
+    await (await two.ctx(B)).engine.call(CALL);
     assert.equal(emulator.requests.length, 2, 'the other household still calls');
   }));
 });
@@ -542,7 +542,7 @@ describe('funding months and legacy spend', T, () => {
   const CALL = { purpose: 'chat', messages: QUESTION, maxTokens: 64 };
 
   test('the funding month comes from fundingNow, not FATHOM_CLOCK', T, async () => withLive({ fundingNow: () => Date.parse('2027-03-15T12:00:00.000Z') }, async ({ two, A }) => {
-    await two.ctx(A).engine.call(CALL);
+    await (await two.ctx(A)).engine.call(CALL);
     const [row] = await roundsOf(two.platform, A);
     assert.equal(row.month, '2027-03');
   }));
@@ -553,7 +553,7 @@ describe('funding months and legacy spend', T, () => {
     try {
       two = await liveTwoHouseholds({ emulator, engineOptions: { testTransport: { baseURL: emulator.baseURL } }, extra: { FATHOM_CLOCK: '2025-01-15' } });
       const at = month();
-      await two.ctx(two.A.id).engine.call(CALL);
+      await (await two.ctx(two.A.id)).engine.call(CALL);
       const [row] = await roundsOf(two.platform, two.A.id);
       assert.ok([at, month()].includes(row.month), `${row.month} is the actual month`);
       assert.notEqual(row.month, '2025-01');
@@ -576,8 +576,8 @@ describe('funding months and legacy spend', T, () => {
     assert.equal(emulator.requests.length, 0);
 
     await budget.setAllocation(two.platform, A, 2);
-    await two.ctx(A).engine.call(CALL);
-    await two.ctx(A).engine.call(CALL);
+    await (await two.ctx(A)).engine.call(CALL);
+    await (await two.ctx(A)).engine.call(CALL);
     assert.equal(emulator.requests.length, 2);
     const carries = await carriesOf(two.platform, A);
     assert.equal(carries.length, 1, 'one carry row for the month');
@@ -600,11 +600,11 @@ describe('funding months and legacy spend', T, () => {
     for (const id of [A, B]) await budget.setAllocation(two.platform, id, cap);
     await legacy((await two.ctx(A)).db, L);
     emulator.script([{ usage }]);
-    await two.ctx(A).engine.call(CALL);
+    await (await two.ctx(A)).engine.call(CALL);
     await assert.rejects((await two.ctx(B)).engine.call(CALL), err => err instanceof E.BudgetExceededError);
     assert.equal(emulator.requests.length, 1, 'B dispatched nothing');
     await budget.setInstanceCap(two.platform, 3);
-    await two.ctx(B).engine.call(CALL);
+    await (await two.ctx(B)).engine.call(CALL);
     assert.equal(emulator.requests.length, 2, 'with more instance credit B is admitted');
   }));
 
@@ -636,7 +636,7 @@ describe('funding months and legacy spend', T, () => {
       assert.equal((await roundsOf(two.platform, B)).length, 0, 'no round recorded for the refusal');
 
       // Liveness: a bound under the remaining instance credit is admitted.
-      await two.ctx(B).engine.call(CALL);
+      await (await two.ctx(B)).engine.call(CALL);
       assert.equal(emulator.requests.length, 1, 'the small round is admitted');
       // Idempotent: a second construction records no second carry.
       await two.side(A);
@@ -689,7 +689,7 @@ describe('node scripts/model-budget.mjs counts every household\'s legacy spend',
       const A = two.A.id;
       await two.platform.prepare("DELETE FROM model_rounds WHERE household_id = ? AND kind = 'carry'").run(A);
       const ts = new Date().toISOString();
-      await two.ctx(A).db.prepare('INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens) VALUES (?, ?, ?, ?, ?, ?)')
+      await (await two.ctx(A)).db.prepare('INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens) VALUES (?, ?, ?, ?, ?, ?)')
         .run(ts, ts.slice(0, 7), 'chat', 9, 'claude-opus-5-5', '{}');
       assert.equal((await roundsOf(two.platform, A)).length, 0, 'precondition: A never reserved');
       const run = (...args) => runCommand(process.execPath, ['scripts/model-budget.mjs', ...args], { env: { FATHOM_DATA: two.dataDir } });
@@ -720,7 +720,7 @@ describe('node scripts/model-budget.mjs counts every household\'s legacy spend',
       const A = two.A.id;
       await two.platform.prepare("DELETE FROM model_rounds WHERE household_id = ? AND kind = 'carry'").run(A);
       const ts = new Date().toISOString();
-      await two.ctx(A).db.prepare('INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens) VALUES (?, ?, ?, ?, ?, ?)')
+      await (await two.ctx(A)).db.prepare('INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens) VALUES (?, ?, ?, ?, ?, ?)')
         .run(ts, ts.slice(0, 7), 'chat', 9, 'claude-opus-5-5', '{}');
       await two.platform.prepare("UPDATE households SET status = 'suspended' WHERE id = ?").run(A);
       const run = (...args) => runCommand(process.execPath, ['scripts/model-budget.mjs', ...args], { env: { FATHOM_DATA: two.dataDir } });
@@ -805,9 +805,9 @@ describe('node scripts/model-budget.mjs', T, () => {
     assert.equal(rows[0].outcome, 'ok');
     ok(await run('--household', A, '--allocation-usd', '12.35'), 'model-budget: unchanged');
     assert.equal((await audits('model.allocation')).length, 1);
-    await two.ctx(A).engine.call(CALL);
+    await (await two.ctx(A)).engine.call(CALL);
     assert.equal(emulator.requests.length, 1, 'the funded household is admitted');
-    assert.equal((await two.ctx(A).engine.status()).capUsd, 12.35);
+    assert.equal((await (await two.ctx(A)).engine.status()).capUsd, 12.35);
   });
 
   test('an allocation above the instance cap is refused and changes nothing', async () => {

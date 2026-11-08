@@ -85,7 +85,7 @@ test('each household\'s model requests carry only its own stored context', T, as
 
   // The engine boundary itself: a direct call of one household never sees the other's data.
   const from = emulator.requests.length;
-  await two.ctx(two.B.id).engine.call({ purpose: 'confirm', messages: [{ role: 'user', content: `Synthetic ${CANARY.B} confirm` }], maxTokens: 32 });
+  await (await two.ctx(two.B.id)).engine.call({ purpose: 'confirm', messages: [{ role: 'user', content: `Synthetic ${CANARY.B} confirm` }], maxTokens: 32 });
   const body = JSON.stringify(emulator.requests[from].body);
   assert.ok(body.includes(CANARY.B) && !body.includes(CANARY.A));
 }));
@@ -109,7 +109,7 @@ test('a held household refuses while the other keeps answering and settling on u
   // B is unaffected: it answers over HTTP and through its engine, and its rounds settle.
   const answered = await ask(two.B.client, 'Synthetic bravo question');
   assert.ok(!answered.notice, 'B still answers');
-  await two.ctx(B).engine.call(CALL);
+  await (await two.ctx(B)).engine.call(CALL);
   const rowsB = await roundsOf(two.platform, B);
   assert.ok(rowsB.length >= 2);
   for (const row of rowsB) assert.equal(row.state, 'settled');

@@ -90,7 +90,7 @@ async function heldRound(two, emulator, id) {
 describe('node scripts/reconcile-spend.mjs', T, () => {
   test('refuses bad receipt references, bad costs, unknown and foreign rounds, and changes nothing', T, async () => withLive({}, async ({ two, emulator, A, B }) => {
     const held = await heldRound(two, emulator, A);
-    await two.ctx(B).engine.call(CALL);
+    await (await two.ctx(B)).engine.call(CALL);
     const [settledB] = await roundsOf(two.platform, B);
     assert.equal(settledB.state, 'settled');
     const good = { household: A, round: held.id, cost: '0.01', receipt: RECEIPT };
@@ -168,7 +168,7 @@ describe('node scripts/reconcile-spend.mjs', T, () => {
     assert.equal(emulator.requests.length, sent, 'the held household dispatches nothing');
 
     // Other households keep using unreserved credit.
-    await two.ctx(B).engine.call(CALL);
+    await (await two.ctx(B)).engine.call(CALL);
     assert.equal(emulator.requests.length, sent + 1);
 
     // A round whose provider usage exceeded its bound is refused the same way.
