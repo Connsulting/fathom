@@ -17,8 +17,9 @@ export const serverInfo = (env = process.env) => ({ name: 'fathom', version: ser
 const errorResult = text => ({ isError: true, content: [{ type: 'text', text }] });
 
 // A Server answering tools/list and tools/call for `scopes`, running tools with `ctx`.
-export function createToolServer({ scopes, ctx, authorize }) {
+export function createToolServer({ scopes, ctx, authorize, runTool }) {
   if (typeof authorize !== 'function') throw new TypeError('createToolServer needs authorization');
+  if (typeof runTool !== 'function') throw new TypeError('createToolServer needs a tool lifetime');
   const offered = toolsForScopes(scopes);
   const server = new Server(serverInfo(), { capabilities: { tools: {} }, instructions: mcpInstructions });
 
@@ -44,7 +45,7 @@ export function createToolServer({ scopes, ctx, authorize }) {
       return errorResult(`Permission denied: ${name}.${operation} needs ${needed}, which this key does not have.`);
     }
     try {
-      const result = await callTool(name, request.params.arguments ?? {}, { ...ctx, scopes });
+      const result = await runTool(() => callTool(name, request.params.arguments ?? {}, { ...ctx, scopes }));
       return { content: [{ type: 'text', text: JSON.stringify(result ?? null) }] };
     } catch (err) {
       if (err instanceof ToolError) return errorResult(err.message);

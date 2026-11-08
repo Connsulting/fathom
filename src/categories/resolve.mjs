@@ -99,7 +99,7 @@ export function createHistoryIndex({transactions,corrections=[],sourceRules=[]})
   return words;
 }
 
-export function historyExamples(t,input,index=createHistoryIndex(input)) {
+export function historyExamples(t,input,index=createHistoryIndex(input),limit=6) {
   const merchant=normalizeMerchant(t.description), words=tokensOf(t.description), candidates=new Map();
   for(const word of words) for(const sample of index.get(word) ?? []) {
     if(sample.id===t.id || sample.date>=t.date || Math.sign(sample.amount)!==Math.sign(t.amount)) continue;
@@ -111,13 +111,19 @@ export function historyExamples(t,input,index=createHistoryIndex(input)) {
     const score=(merchant===sample.merchant?8:0)+3*similarity+(t.account_id===sample.account_id?1:0)
       +1/(1+Math.abs(amountBand(t.amount)-amountBand(sample.amount)));
     return {...sample,score};
-  }).sort((a,b)=>b.score-a.score || b.date.localeCompare(a.date) || b.id-a.id).slice(0,6);
+  }).sort((a,b)=>b.score-a.score || b.date.localeCompare(a.date) || b.id-a.id).slice(0,limit);
 }
 
 // At least three of the nearest six must all agree, with exact merchant, account, sign and adjacent amount bands.
 export function historyDecision(t,input,index,examples=historyExamples(t,input,index)) {
   if(examples.length<3 || examples.some(s=>s.merchant!==normalizeMerchant(t.description) || s.account_id!==t.account_id
     || Math.abs(amountBand(t.amount)-amountBand(s.amount))>1 || s.category!==examples[0].category || s.bucket!==examples[0].bucket)) return null;
+  const guess=input.guesses?.find(g=>g.transaction_id===t.id)?.category;
+  if(guess && guess!==examples[0].category) return null;
+  const ownerLabels=new Set((input.corrections??[]).filter(c=>!c.auto).map(c=>c.transaction_id));
+  const kinds=new Map((input.accounts??[]).map(a=>[a.id,a.kind]));
+  if(historyExamples(t,input,index,Infinity).some(s=>ownerLabels.has(s.id) && s.merchant===normalizeMerchant(t.description)
+    && kinds.get(s.account_id)===kinds.get(t.account_id) && (s.category!==examples[0].category || s.bucket!==examples[0].bucket))) return null;
   return {category:examples[0].category,bucket:examples[0].bucket,evidence:{
     text:categoryEvidence(`Fathom's categorization: your last ${examples.length} from ${t.description} were ${examples[0].category}.`),
     transactionIds:examples.map(s=>s.id),stage:'history'}};
@@ -131,7 +137,7 @@ export function resolveCategories({ transactions, accounts, corrections = [], me
   const merchants = new Map(merchantRules.map(r=>[r.merchant,r]));
   const sources = new Map(sourceRules.map(r=>[JSON.stringify([r.parser,r.category]),r]));
 
-  const input={transactions,corrections,sourceRules}, history=createHistoryIndex(input), declined=new Set(rows.filter(t=>t.category_declined).map(t=>t.id));
+  const input={transactions,accounts,corrections,sourceRules,guesses}, history=createHistoryIndex(input), declined=new Set(rows.filter(t=>t.category_declined).map(t=>t.id));
   const result = new Map();
   const set = (t, category, bucket, layer, evidence = {}) => result.set(t.id, {category,bucket,layer,evidence});
   for (const t of rows) {
@@ -153,9 +159,9 @@ export function resolveCategories({ transactions, accounts, corrections = [], me
     const finish = (category,bucket,layer,evidence) => set(t,unknown ? imported.category : category,bucket,layer,{...evidence,...(unknown ? {imported} : {})});
     const auto=automatic.get(t.id), learned=!auto && !declined.has(t.id) ? historyDecision(t,input,history) : null;
     if(auto) finish(auto.category,auto.bucket,'guess',{transactionId:t.id,...auto.auto});
-    else if(!declined.has(t.id) && learned) finish(learned.category,learned.bucket,'merchant',learned.evidence);
     else if(!declined.has(t.id) && (out.has(t.id) || incoming.has(t.id) || cardPayment(t,byId,accounts)))
       finish('Internal Transfers','transfer','structural',{transactionId:t.id,stage:'rules',text:"Fathom's categorization: a payment on your card or a matching transfer between your accounts is not spending."});
+    else if(!declined.has(t.id) && learned) finish(learned.category,learned.bucket,'merchant',learned.evidence);
     else if(!declined.has(t.id) && processorDeposit(t,byId.get(t.account_id)))
       finish('Income','income','structural',{transactionId:t.id,stage:'rules',text:"Fathom's categorization: a payment processor or payroll deposit into your business account is income."});
     else finish('Uncategorized',t.amount>0 ? 'income' : 'household','uncategorized',{transactionId:t.id});

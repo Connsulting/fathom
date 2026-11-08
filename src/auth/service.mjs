@@ -54,10 +54,22 @@ export function createAuthService({ platform, config, transport, secrets = null,
     return {
       id: user.id, email: user.email, login: user.email, name: user.email,
       householdId: current ? current.householdId : null, role: active ? current.role : null,
-      operator: store.isOperator(user.id), memberships,
+      operator: store.isOperator(user.id), memberships, contextVersion: user.contextVersion ?? null,
     };
   }
   const identityOfUser = id => identityFor(store.getUser(id));
+  // The identity of a session token's user, with that session's household and context version.
+  const identityOfSession = token => identityFor(store.session(token));
+  // Listeners told the session key (sha256 of the session token) whose household context ended:
+  // a switch or a sign-out. The router ends that session's streams.
+  const contextListeners = new Set();
+  function contextEnded(raw) {
+    if (!validHandle(raw)) return;
+    const key = digest(raw);
+    for (const listener of contextListeners) {
+      try { listener(key); } catch { /* a listener never blocks the change */ }
+    }
+  }
   // True when the identity holds an active membership in its own household and that household is active.
   function servedMember(identity) {
     if (!identity || typeof identity.householdId !== 'string' || !identity.role) return false;
@@ -176,6 +188,12 @@ export function createAuthService({ platform, config, transport, secrets = null,
   return {
     store, demo, requireUser, servedMember, servedAdmin, creatorActive,
     sweep: () => store.sweep(),
+    // The request's session key (sha256 of its session token), or null.
+    sessionKey(req) {
+      const raw = currentSession(req);
+      return validHandle(raw) ? digest(raw) : null;
+    },
+    onContextEnded(listener) { contextListeners.add(listener); return () => contextListeners.delete(listener); },
     identity: req => demo ? null : identityFor(currentUser(req)),
     session({ req }) { return { identity: demo ? null : identityFor(currentUser(req)), demo }; },
     async registerOptions({ req, res, body }) {
@@ -250,7 +268,8 @@ export function createAuthService({ platform, config, transport, secrets = null,
           store.revokeSession(currentSession(req));
           session = store.createSession(fresh.user.id);
         }
-        return { identity: identityOfUser(fresh.user.id), session };
+        const sessionUser = store.session(session ? session.token : currentSession(req));
+        return { identity: sessionUser?.id === fresh.user.id ? identityFor(sessionUser) : identityOfUser(fresh.user.id), session };
       });
       if (result.session) setCookie(res, SESSION_COOKIE, result.session, now());
       await sendSecurityNotices(result.identity, context.purpose);
@@ -291,7 +310,8 @@ export function createAuthService({ platform, config, transport, secrets = null,
           || current.created_at !== credential.created_at || !Buffer.from(current.public_key).equals(Buffer.from(credential.public_key))) throw badVerification();
         db.prepare('UPDATE passkeys SET counter = ? WHERE id = ?').run(verified.authenticationInfo.newCounter, credential.id);
         store.revokeSession(currentSession(req));
-        return { session: store.createSession(user.id), identity: identityOfUser(user.id) };
+        const session = store.createSession(user.id);
+        return { session, identity: identityOfSession(session.token) };
       });
       setCookie(res, SESSION_COOKIE, result.session, now());
       return { identity: result.identity };
@@ -317,6 +337,7 @@ export function createAuthService({ platform, config, transport, secrets = null,
         store.clearAddPasskey(user.id);
         store.revokeChallenge(ceremony);
       });
+      contextEnded(session);
       setCookie(res, SESSION_COOKIE, null);
       setCookie(res, CEREMONY_COOKIE, null);
       return { signedOut: true };
@@ -372,6 +393,19 @@ export function createAuthService({ platform, config, transport, secrets = null,
       if (store.person(hh, params.id)?.status !== 'active'
         || !store.revokePasskey(params.id, params.keyId, { actorId: admin.id, householdId: hh })) throw new HttpError(404, 'no such passkey');
       return { passkeys: store.listPasskeys(params.id) };
+    },
+    // Select the session's household (docs/multi-tenancy.md, Active household and switching): only
+    // an active membership in an active household, else the generic 403. Rotates the session's
+    // context version, so every tab still asserting the old one is refused, and ends this session's
+    // streams. Returns the new identity and { id, name, role } of the household.
+    switchHousehold({ req, body }) {
+      requireUser(req);
+      rate(req, 'ceremony');
+      if (typeof body.householdId !== 'string' || !body.householdId) throw new HttpError(400, 'householdId must be a household id');
+      const raw = currentSession(req);
+      const household = store.switchHousehold(raw, body.householdId);
+      contextEnded(raw);
+      return { identity: identityOfSession(raw), household };
     },
     // A signed-in user joins a household through an invitation to their own address.
     acceptInvitation({ req, body }) {

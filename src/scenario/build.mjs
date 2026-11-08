@@ -1,6 +1,7 @@
 import { listMemories } from '../actions/preferences.mjs';
 import { expectedChildWindow } from '../shared/child-window.mjs';
 import { receiptMessages } from '../actions/receipts.mjs';
+import { withDescriptions } from '../actions/describe.mjs';
 // Store to scenario: assembles the CONTRACT.md scenario object from the store, with live state
 // merged in, plus the `live` key (see docs/architecture.md). Pure reads; never writes.
 //
@@ -25,6 +26,7 @@ import { buildSuggestions } from '../suggest/build.mjs';
 import { buildTrend, groupOfKind, TREND_SRC } from '../accounts/trend.mjs';
 import { questionFor, dataText, LISTED_RECS } from '../jobs/triggers/common.mjs';
 import { getFacts } from '../store/facts.mjs';
+import { inferMortgage } from '../calc/mortgage-inference.mjs';
 import { deriveSteps } from '../shared/rec-steps.mjs';
 
 const DAY = 86400000;
@@ -212,8 +214,11 @@ export function recFromRow(row, clock, env = {}) {
 // Each rec's `advisor` field comes from the advisor tables (src/advisor), never from its def.
 export function loadRecs(db, clock) {
   const facts = getFacts(db);
+  const mortgage = inferMortgage(db, clock, facts['obligations.mortgage']);
+  if (mortgage.present) facts['obligations.mortgage'] = mortgage.values;
   const accounts = withLabelHints(db, db.prepare('SELECT * FROM accounts').all());
   const env = stepEnvOf(db);
+  env.facts = facts;
   const recs = db.prepare('SELECT * FROM recs ORDER BY sort, id').all().map(r => recFromRow(r, clock, env));
   if (getSetting(db, 'mode', null) === 'demo') {
     const window = expectedChildWindow(facts);
@@ -224,7 +229,12 @@ export function loadRecs(db, clock) {
   const blockers = parse(db.prepare("SELECT value FROM content WHERE key = 'rec.blockers'").get()?.value, null) || {};
   for (const r of recs) if (r.status === 'waiting' && Object.hasOwn(blockers, r.id)) r.blocker = blockers[r.id];
   for (const r of recs) if (r.question) {
-    r.question = { ...questionFor(r.question.keys, { accounts, facts, names: facts['household.names'], people: r.question.people }), primary: r.question.primary };
+    if (mortgage.status === 'paid_off') {
+      r.question.keys = r.question.keys.filter(key => key !== 'obligations.mortgage');
+      r.tasks = r.tasks.filter(t => t.fact !== 'obligations.mortgage');
+      if (!r.question.keys.length) { delete r.question; continue; }
+    }
+    r.question = { ...questionFor(r.question.keys, { accounts, facts, names: facts['household.names'], people: r.question.people, mortgage }), primary: r.question.primary };
     if (r.question.primary && !LISTED_RECS.has(r.id)) {
       r.title = dataText(r.question.title);
       r.summary = r.question.summary;
@@ -283,7 +293,7 @@ export function loadConversations(db) {
   for (const m of db.prepare('SELECT * FROM messages ORDER BY id').all()) {
     (out[m.conversation_key] || (out[m.conversation_key] = [])).push(messageOut(m));
   }
-  for (const [key, messages] of Object.entries(out)) receiptMessages(db, key, messages);
+  for (const [key, messages] of Object.entries(out)) withDescriptions(db, receiptMessages(db, key, messages));
   return out;
 }
 

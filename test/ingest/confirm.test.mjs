@@ -1,3 +1,4 @@
+import { seedHistoricalRows, seedHistoricalDocument, historicalNorthwindRows, historicalTaxRows } from '../helpers/historical-import.mjs';
 // AC6 (with plan revisions R4, R5, R9): imports queue short confirm questions (owner, kind,
 // entity alias, tax year, fact check, near duplicate; employer_relation is covered in
 // extract.test.mjs); answers apply deterministically, are remembered so an equivalent re-import asks
@@ -108,7 +109,7 @@ describe('account questions', () => {
 
 describe('entity alias', () => {
   test('an expense-only entity named differently from the income entity queues an alias question', () => withStore(async (s) => {
-    const r = await P.ingestFile(s.db, northwindFile(), s.opts(await offEngine()));
+    const r = await seedHistoricalRows(s, northwindFile(), historicalNorthwindRows(200), { parser: 'pnl-workbook', sourceKind: 'pnl_workbook', period: { from: '2032-04-01', to: '2032-04-30' } });
     assert.equal(r.status, 'imported');
     const alias = items(s.db, 'entity_alias');
     assert.equal(alias.length, 1);
@@ -120,7 +121,7 @@ describe('entity alias', () => {
 
   test('choosing the canonical entity merges alias rows (amounts summed, cells kept) and is remembered', () => withStore(async (s) => {
     const off = await offEngine();
-    await P.ingestFile(s.db, northwindFile(), s.opts(off));
+    await seedHistoricalRows(s, northwindFile(), historicalNorthwindRows(200), { parser: 'pnl-workbook', sourceKind: 'pnl_workbook', period: { from: '2032-04-01', to: '2032-04-30' } });
     const alias = itemOf(s.db, 'entity_alias');
     C.answer(s.db, alias.id, 'entity:Northwind Design', { now: NOW });
 
@@ -136,7 +137,7 @@ describe('entity alias', () => {
     assert.equal(merged.length, 1);
     assert.deepEqual(all(s.db, 'SELECT entity FROM entity_aliases').map((a) => a.entity), ['Northwind Design']);
 
-    const again = await P.ingestFile(s.db, northwindFile({ travel: 250 }, 'northwind-pnl-v2.xlsx'), s.opts(off));
+    const again = await seedHistoricalRows(s, northwindFile({ travel: 250 }, 'northwind-pnl-v2.xlsx'), historicalNorthwindRows(250), { parser: 'pnl-workbook', sourceKind: 'pnl_workbook', period: { from: '2032-04-01', to: '2032-04-30' } });
     assert.equal(again.status, 'imported');
     assert.equal(items(s.db, 'entity_alias').length, 1, 'no new alias question');
     assert.equal(pending(s.db).length, 0);
@@ -148,11 +149,11 @@ describe('entity alias', () => {
 
   test('choosing a separate entity keeps the rows apart and records no alias', () => withStore(async (s) => {
     const off = await offEngine();
-    await P.ingestFile(s.db, northwindFile(), s.opts(off));
+    await seedHistoricalRows(s, northwindFile(), historicalNorthwindRows(200), { parser: 'pnl-workbook', sourceKind: 'pnl_workbook', period: { from: '2032-04-01', to: '2032-04-30' } });
     C.answer(s.db, itemOf(s.db, 'entity_alias').id, 'separate', { now: NOW });
     assert.equal(count(s.db, 'entity_aliases'), 0);
     assert.deepEqual(all(s.db, "SELECT category, amount FROM pnl_lines WHERE entity = 'Northwind' ORDER BY category").map((l) => [l.category, l.amount]), [['Software', -100], ['Travel', -200]]);
-    await P.ingestFile(s.db, northwindFile({ travel: 250 }, 'northwind-pnl-v2.xlsx'), s.opts(off));
+    await seedHistoricalRows(s, northwindFile({ travel: 250 }, 'northwind-pnl-v2.xlsx'), historicalNorthwindRows(250), { parser: 'pnl-workbook', sourceKind: 'pnl_workbook', period: { from: '2032-04-01', to: '2032-04-30' } });
     assert.equal(items(s.db, 'entity_alias').length, 1, 'the separate answer is remembered');
     assert.equal(one(s.db, "SELECT amount FROM pnl_lines WHERE entity = 'Northwind' AND category = 'Travel'").amount, -250);
   }));
@@ -165,7 +166,7 @@ describe('tax year', () => {
 
   test('payment year shifts January to the prior tax year, tax year keeps it, and both are remembered', () => withStore(async (s) => {
     const off = await offEngine();
-    await P.ingestFile(s.db, fixture('tax-payments.xlsx'), s.opts(off));
+    await seedHistoricalRows(s, fixture('tax-payments.xlsx'), historicalTaxRows(false), { parser: 'tax-payments', sourceKind: 'tax_payments', period: { from: '2031-12-31', to: '2032-03-31' } });
     const qs = items(s.db, 'tax_year');
     const q2032 = qs.filter((q) => yearOf(q) === '2032');
     const q2031 = qs.filter((q) => yearOf(q) === '2031');
@@ -187,7 +188,7 @@ describe('tax year', () => {
     for (const q of q2031) C.answer(s.db, q.id, 'tax_year', { now: NOW });
     assert.ok(all(s.db, "SELECT * FROM tax_payments WHERE date LIKE '2031-%'").every((t) => t.tax_year_basis === 'confirmed_tax_year' && t.tax_year === 2031));
 
-    const revised = await P.ingestFile(s.db, fixture('tax-payments-revised.xlsx'), s.opts(off));
+    const revised = await seedHistoricalRows(s, fixture('tax-payments-revised.xlsx'), historicalTaxRows(true), { parser: 'tax-payments', sourceKind: 'tax_payments', period: { from: '2031-12-31', to: '2032-03-31' } });
     assert.equal(revised.counts.revised, 1);
     assert.equal(items(s.db, 'tax_year').length, qs.length, 'no new tax-year questions');
     assert.equal(pending(s.db).length, 0);
@@ -214,7 +215,7 @@ describe('fact check', () => {
   const bySubject = (db, end) => C.listItems(db, { status: 'all' }).find((i) => i.kind === 'fact_check' && i.subject.endsWith(end));
 
   test('subjects name source, key and value; yes confirms the fact, no removes it', () => withStore(async (s) => {
-    const r = await P.ingestFile(s.db, fixture('notes.md'), s.opts(await fakeEngine([[NOTES_A]])));
+    const r = await seedHistoricalDocument(s, fixture('notes.md'), [[NOTES_A]]);
     const sid = sourceOf(s.db, r.fileId);
     assert.deepEqual(items(s.db, 'fact_check').map((c) => c.subject).sort(), [`${sid}|household.dependents|2`, `${sid}|household.state|"CO"`]);
     const dep = bySubject(s.db, '|household.dependents|2');
@@ -229,10 +230,10 @@ describe('fact check', () => {
   }));
 
   test('answers are remembered: equivalent content in other bytes asks nothing and keeps a rejected fact out', () => withStore(async (s) => {
-    const a = await P.ingestFile(s.db, fixture('notes.md'), s.opts(await fakeEngine([[NOTES_A]])));
+    const a = await seedHistoricalDocument(s, fixture('notes.md'), [[NOTES_A]]);
     C.answer(s.db, bySubject(s.db, '|household.state|"CO"').id, 'no', { now: NOW });
     C.answer(s.db, bySubject(s.db, '|household.dependents|2').id, 'yes', { now: NOW });
-    const b = await P.ingestFile(s.db, laterNotes(), s.opts(await fakeEngine([[NOTES_A]])));
+    const b = await seedHistoricalDocument(s, laterNotes(), [[NOTES_A]]);
     assert.equal(b.status, 'imported');
     assert.notEqual(b.fileId, a.fileId);
     assert.equal(sourceOf(s.db, b.fileId), sourceOf(s.db, a.fileId), 'same logical source');
@@ -243,9 +244,9 @@ describe('fact check', () => {
   }));
 
   test('a newer import with another value closes the older question as superseded; answering it is stale', () => withStore(async (s) => {
-    await P.ingestFile(s.db, fixture('notes.md'), s.opts(await fakeEngine([[NOTES_A]])));
+    await seedHistoricalDocument(s, fixture('notes.md'), [[NOTES_A]]);
     const older = bySubject(s.db, '|household.state|"CO"');
-    await P.ingestFile(s.db, laterNotes(), s.opts(await fakeEngine([[NOTES_B]])));
+    await seedHistoricalDocument(s, laterNotes(), [[NOTES_B]]);
     assert.equal(F.getFacts(s.db)['household.state'], 'NM');
     const closed = bySubject(s.db, '|household.state|"CO"');
     assert.equal(closed.answer, 'superseded');
@@ -257,7 +258,7 @@ describe('fact check', () => {
   }));
 
   test('a pending question whose value differs from a confirmed fact is stale; a current one is answerable', () => withStore(async (s) => {
-    const r = await P.ingestFile(s.db, fixture('notes.md'), s.opts(await fakeEngine([[NOTES_A]])));
+    const r = await seedHistoricalDocument(s, fixture('notes.md'), [[NOTES_A]]);
     F.upsertFact(s.db, { key: 'household.state', value: 'NM', src: 'you', asOf: '2032-03-10', confirmed: true });
     const st = bySubject(s.db, '|household.state|"CO"');
     assert.equal(st.status, 'pending');
@@ -285,7 +286,7 @@ describe('fact check', () => {
   }));
 
   test('HTTP: a stale answer is 409 through the real router', () => withStore(async (s) => {
-    await P.ingestFile(s.db, fixture('notes.md'), s.opts(await fakeEngine([[NOTES_A]])));
+    await seedHistoricalDocument(s, fixture('notes.md'), [[NOTES_A]]);
     F.upsertFact(s.db, { key: 'household.state', value: 'NM', src: 'you', asOf: '2032-03-10', confirmed: true });
     const st = bySubject(s.db, '|household.state|"CO"');
     const server = await serveAppFixture({ authenticated: true, db: s.db, config: s.config, engine: await offEngine() });
@@ -338,7 +339,7 @@ describe('near duplicate', () => {
     await P.ingestFile(s.db, aggregatorFile('near-b.csv', [nearLater]), s.opts(off));
     C.answer(s.db, itemOf(s.db, 'near_duplicate').id, 'different', { now: NOW });
     assert.equal(count(s.db, 'transactions'), 2);
-    assert.equal(count(s.db, 'superseded_rows'), 0);
+    assert.equal(count(s.db, 'superseded_rows', "reason != 'duplicate_cross_format'"), 0);
   }));
 
   // D3: a same-day, same-amount row from another file of one bank format with a different
@@ -375,7 +376,7 @@ describe('near duplicate', () => {
     assert.equal(again.counts.duplicates, 1);
     assert.equal(count(s.db, 'transactions'), 3);
     assert.equal(items(s.db, 'near_duplicate').length, 1, 'no new question');
-    assert.equal(count(s.db, 'superseded_rows'), 0);
+    assert.equal(count(s.db, 'superseded_rows', "reason != 'duplicate_cross_format'"), 0);
   }));
 
   test('rows more than 3 days apart or from the same file are not near duplicates', () => withStore(async (s) => {

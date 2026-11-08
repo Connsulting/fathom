@@ -194,7 +194,7 @@ describe('ingest triggers the plan job (in-process router, fake scheduler)', () 
 
   test('imported upload and successful retry trigger plan and confirm-guess once each; nothing imported triggers nothing', T, async () => {
     const st = await realStore();
-    const { headerSignature } = await src('src/ingest/mapping.mjs');
+    const signature = 'synthetic-unapproved-layout';
     const scheduler = fakeScheduler();
     const transport = { name: 'capture', async send() { return { id: 'unused' }; } };
     const server = await serveAppFixture({ authenticated: true, db: st.db, config: st.config, engine: await offEngine(), scheduler, transport });
@@ -207,20 +207,20 @@ describe('ingest triggers the plan job (in-process router, fake scheduler)', () 
       const waiting = await upload(server, [textFile('novel-export.csv', novelCsv(), 'text/csv')]);
       assert.equal(waiting.status, 200);
       const file = waiting.json.files[0];
-      assert.equal(file.status, 'needs_mapping');
+      assert.equal(file.status, 'waiting_for_engine');
       assert.equal(scheduler.calls.length, 3, 'an upload that imports nothing does not trigger');
 
       const stillWaiting = await server.postJson(`/api/files/${file.fileId}/retry`, {});
       assert.equal(stillWaiting.status, 200);
-      assert.equal(stillWaiting.json.file.status, 'needs_mapping');
+      assert.equal(stillWaiting.json.file.status, 'waiting_for_engine');
       assert.equal(scheduler.calls.length, 3, 'an unsuccessful retry does not trigger');
 
       st.db.prepare("INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES (?, ?, 'test', '2032-03-10T12:00:00.000Z', 0)")
-        .run(headerSignature(HEADERS), JSON.stringify(MAPPING));
+        .run(signature, JSON.stringify(MAPPING));
       const done = await server.postJson(`/api/files/${file.fileId}/retry`, {});
       assert.equal(done.status, 200);
-      assert.equal(done.json.file.status, 'imported');
-      assert.deepEqual(sorted(scheduler.calls.slice(3)), AFTER_IMPORT, 'a successful retry triggers plan, freshness and confirm-guess');
+      assert.equal(done.json.file.status, 'waiting_for_engine');
+      assert.equal(scheduler.calls.length, 3, 'an unapproved mapping does not import or trigger jobs');
     } finally {
       await server.close();
       st.close();

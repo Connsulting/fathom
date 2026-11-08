@@ -32,8 +32,9 @@ its own jobs, and keeps every piece of state on the `/data` volume.
 8. The in-process scheduler (`src/jobs/scheduler.mjs`) runs `plan`, `brief-email`,
    `deadline-alerts`, `freshness`, `trash-purge`, `confirm-guess` and `simplefin-sync`. Mail leaves
    through `src/email/` on the configured transport.
-9. `/data` holds `fathom.sqlite`, the vault's `files/`, the Your plans pack and the key secret.
-   Backing it up is the operator's job; the app has no backup job of its own.
+9. `/data` holds `platform.sqlite` and each registered household's store, vault, private packs and
+   outbox. The fixed backup runner handles admin requests using the operator's destination and
+   separate encryption key. Whole-volume disaster recovery remains an operator responsibility.
 
 This is the architecture every build item works against. The first part is frozen: change it only
 by agreement across items. The rest describes the running app and is updated as items land.
@@ -232,7 +233,7 @@ at `$FATHOM_DATA/packs/your-plans/` in the same format.
 parse(file) -> {rows, warnings, period: {from, to}}}` where `file = {name, bytes: Uint8Array, mime}`.
 
 `sourceKind` is one of `bank_csv`, `card_csv`, `aggregator_csv`, `brokerage_positions`,
-`pnl_workbook`, `tax_payments`, `balances`, `paystub`, `tax_doc`, `statement`, `notes`, `other`.
+`pnl_workbook`, `tax_payments`, `balances`, `paystub`, `tax_doc`, `statement`, `notes`, `other`, `model_import`.
 
 Row kinds:
 
@@ -388,7 +389,9 @@ secrets are read there.
 | Key | Default | Meaning |
 |---|---|---|
 | `FATHOM_DATA` | `./data` (gitignored) | Data directory; holds `platform.sqlite` and `households/<id>/` (see Household runtimes). |
-| `FATHOM_BACKUP_KEY_FILE` | unset | Path to a private file holding a 32-byte key. Read only by `scripts/migrate-platform.mjs` and `scripts/source-snapshot.mjs`, which encrypt source snapshots with it; the server never reads it. |
+| `FATHOM_BACKUP_KEY_FILE` | unset | Path to a private file holding a separate 32-byte backup encryption key. Used by offline migrations, source snapshots and the fixed household backup/restore runner. Missing or invalid keys refuse backup operations. |
+| `FATHOM_BACKUP_DESTINATION` | unset | Absolute path to an existing private directory for encrypted household bundles. Users cannot supply or inspect paths or keys. Backups remain unavailable until both destination and key are configured. |
+| `FATHOM_BACKUP_RETENTION_DAYS` | `7` | Retention recorded for new bundles and rollback generations, an integer from 1 to 3650. Expiry permits explicit operator deletion; the runner never deletes retained data automatically. |
 | `FATHOM_PLATFORM_KEY_FILE` | unset | Path to a private file holding the 32-byte platform key that wraps household data keys (`loadPlatformKey`, `platformKeyFromEnv` in `src/platform/backup-key.mjs`). Real mode uploads, advisor packets and SimpleFIN connections refuse without it. |
 | `FATHOM_MCP_SECRET_FILE` | unset | Path to a private file holding 64 hex characters, the HMAC secret for MCP keys. Real mode key routes refuse without it. |
 | `FATHOM_PORT` | `8080` | HTTP port. |
@@ -842,21 +845,9 @@ signs no one in.
 
 Tell us. The text is saved by `POST /api/onboarding/notes` (`src/api/onboarding-handlers.mjs`) as a
 file named `Setup notes <date>.md` (type `text/markdown`) through `ingestFile`, exactly the path of
-an uploaded notes file: the bytes are stored encrypted in the vault, the notes parser writes the
-`notes` document row (a reference, never the text), and with the engine on `extractDocument` reads
-the redacted text, writes facts with provenance (`file_id`, parser `extract-notes`, locator) and
-goal documents, and asks a `fact_check` Confirm card for a fact below the confidence floor. With
-the engine off only the parser's deterministic path runs: the note is stored and the file waits
-with status `needs_extraction` (retried from Confirm, Waiting files, once the engine is on);
-nothing is extracted and nothing is invented. The same text saved twice is a `duplicate`. A
-successful import triggers the plan and confirm-guess jobs, like an upload. The response carries
-`understood` from `understoodOf` (`src/onboarding/heard.mjs`):
-`{fileId, status, engineOn, waiting, facts: [{key, label, value, confirmed}], goals: [{title, when}], asked}`,
-the stored rows that file wrote and the open questions it raised; the page shows it after the
-save. A returning owner reaches onboarding again as Setup in Settings (real stores only): the route
-`#/onboarding` is allowed on a real store after first run, lands on step 1 (Goals) with the existing
-goals preselected, shows Back to the app, and finishing returns to the brief. Setup only adds: it
-never deletes goals, notes or files.
+an uploaded notes file: the bytes are stored encrypted in the vault and linked to a
+proposal linked to encrypted source bytes. The engine produces cited fields and shared
+actions; source-grounded validation and explicit current-version approval precede writes.
 
 Confirm ("Here is what we heard"). `live.heard` is `deriveHeard(db, {clock})`: stored facts (filing
 status, state, dependents and ages, expecting a child, income types, benefits, giving), entities
@@ -896,7 +887,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 |---|---|---|
 | `GET /healthz` | | `{ok: true, schema: <latest migration id>}` |
 | `GET /api/scenario` | | the scenario with `live` |
-| `GET /api/identity` | | `{identity: {id, email, name, login, householdId, role, operator, memberships} or null}`. The signed-in user (`name` and `login` are the email). `householdId` is the opaque id of the session's household (null without an active membership there), `role` that membership's role while the household is active (else null), `operator` the instance operator flag, `memberships` the user's own `[{householdId, role}]`. Needs a session only, no membership. Always `null` on a demo store. Every other non-public `/api` route needs an active membership in the served household: 403 `{error: 'household membership required'}` otherwise. |
+| `GET /api/identity` | | `{identity: {id, email, name, login, householdId, role, operator, memberships} or null}`. The signed-in user (`name` and `login` are the email). `householdId` is the opaque id of the session's household (null without an active membership there), `role` that membership's role while the household is active (else null), `operator` the instance operator flag, `memberships` the user's own `[{householdId, role, name}]` (`name` the household's display name or null), `contextVersion` the session's household context version. Needs a session only, no membership. Always `null` on a demo store. Every other non-public `/api` route needs an active membership in the served household: 403 `{error: 'household membership required'}` otherwise. |
 | `GET /signin` | | Public page: `web/auth/index.html` (sign in with a passkey, email recovery link). Loads only `/auth/auth.js`, `/auth/return-path.js`, `/auth/auth.css` and `/favicon.svg`; never the scenario. |
 | `GET /enroll` | | Public page: the same file. Reads the token from the `#` fragment of an emailed link, removes it from history at once, and creates a passkey. |
 | `GET /account` | | Signed-in page: the same file. Passkeys (add, revoke), emailing an add-a-device link, and sign out. |
@@ -917,6 +908,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/admin/users/:id/remove` | `{}` | 200. Deletes the user with their passkeys, sessions, tokens and the MCP keys they created. 409 for the last enrolled admin. Admins only. |
 | `POST /api/admin/users/:id/passkeys/:keyId/revoke` | `{}` | 200. Deletes that passkey and every session of its user; their MCP keys stay live. Admins only. Every admin action resolves the target inside the admin's household first and answers 404 for anyone else, before any change. |
 | `POST /api/auth/invitations/accept` | `{token}` | `{identity}`. A signed-in user joins the invitation's household with the invitation's role (a body role is ignored). 410 for an unknown, expired, consumed or revoked link; 403 when the invitation is for another address (nothing changes). Session required. |
+| `POST /api/auth/household` | `{householdId}` | `{identity, household: {id, name, role}}`. Selects the session's household: only an active membership in an active household (the same generic 403 `household membership required` for any other id), 400 without a string id, 401 signed out. Rotates the session's context version, so every tab still asserting the old one gets 409 `household_context_stale`, and ends the session's open answer streams with a 409 error event. Rate limited like the sign-in ceremony. |
 | `POST /api/operator/households` | `{displayName, adminEmail}` | `{household: {id, status: 'provisioning'}}` and an admin invitation emailed to `adminEmail`. Instance operators only (403 otherwise); no membership needed. 409 `{error, code: 'multi_household_gated'}` while the platform setting `multi_household_enabled` is off and a non-deleted real household exists (provisioning included); demo instances are exempt. |
 | `POST /api/recs/:id/start-over` | `{}` | `{scenario}`. Detaches every thread asked from the rec that is still attached (sets `recDetachedAt` to the app clock time), so the rec dialog opens a fresh composer; an already detached thread keeps its time. Threads, messages, titles, archive and trash are untouched. 404 unknown or hidden rec. |
 | `POST /api/recs/:id/action` | `{action: start, snooze, dismiss, complete, reopen, task or owner, arg?}` | `{scenario}`. `task` toggles task `arg`; `snooze` takes a wake label (default "Next month"); `owner` sets the action owner to `arg` (one of `you`, `spouse`, `both`, `advisor`, `automatic`, case sensitive) with `owner_override = 1`, status unchanged. 400 bad action, task index or owner, 404 unknown or hidden rec. Writes `rec_events` (actor `ui`; for `owner` action `owner`, arg the owner, from and to the current status). |
@@ -927,8 +919,8 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/packs/:id/toggle` | `{}` | `{scenario, status, note}`. Turning a pack on lifts its hidden recs to proposed; turning it off hides again only the recs it lifted that no other active pack powers. `note` is "Recommendations update on the next planning run." |
 | `POST /api/packs/:id/whatif` | `{}` | `{scenario}`. Marks the pack exploring and appends the pack's what-if prompt and a live answer (with provenance) once to `pack:<id>`. A manifest-backed pack's prompt is literal text, stored escaped like free text (`whatIfOwnerText`); an illustrative demo prompt keeps its token form; a notice reply (engine off, over the cap, model error) is appended once and does not mark it done. |
 | `GET /api/packs/:id/entries/:entryId` | | `{entry: {id, title, body, cites}}` for an entry of a manifest-backed pack row, from the loaded packs; 404 otherwise. |
-| `POST /api/engine` | `{on: boolean}` | `{scenario}`; 400 when `on` is not boolean. |
-| `POST /api/engine/cap` | `{usd}` | `{scenario}`. `usd` a finite number from 0 to 10000, rounded to cents and stored as `settings.cap`; anything else 400. |
+| `POST /api/engine` | `{on: boolean}` | `{scenario}`; 400 when `on` is not boolean. Admins only on a real store. |
+| `POST /api/engine/cap` | `{usd}` | `{scenario}`. `usd` a finite number from 0 to 10000, rounded to cents and stored as `settings.cap`; anything else 400. Admins only on a real store. |
 | `POST /api/ask` | `{key: an Ask thread key 'ask:<id>' or 'pack:<id>', questionId? or text?}` | `{scenario, message}`. `key` is required (400 without it); any other key, a rec id included, is 400 (ask from a rec through `POST /api/threads` with `recId`). Exactly one of `questionId` or `text`; empty text, both or neither are 400; unknown question or conversation 404; a thread in Trash 409. Appends the owner's message and the live answer with its provenance, or a notice; asking in an archived thread unarchives it, and a thread due a name is named before the response. New threads come only from `POST /api/threads`. With `Accept: text/event-stream` progress streams as Server-Sent Events and the answer arrives once in `final`: `start` `{key}`, then `progress` `{label}` (a fixed plain label per tool) and `interim` `{text}` (a tool round's working text, shown as a work-block note and kept only as a provenance.work note, never grounded), then `final` with the JSON body above, or `error` `{status, error}`. Validation errors before the first event are ordinary JSON errors. |
 | `GET /api/threads` | | `{active, archived, trash}`, each a list of thread JSON newest `lastAt` first. Purges old trash first. |
 | `POST /api/threads` | `{}`, `{text}` or `{questionId}` (an Ask starter id); or `{recId, text}` or `{recId, questionId}` | `{scenario, thread, message?}`. Creates a thread; with a question it also asks it (validated like `POST /api/ask`; a starter's fixed text is the question) and returns the reply as `message`. Unknown starter 404. With `recId` the thread is asked from that rec: 404 unknown or hidden rec, 400 without a question, `questionId` a `rec.qa` index, id or exact question (404 unknown); the row is written before the answer so the answerer sees the rec context, and a failed or empty answer deletes it again. Streams like `POST /api/ask` on request. |
@@ -969,14 +961,16 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/onboarding/notes` | `{text}` | `{scenario, file, understood}`. Saves the Tell us note as a notes document through the ingest pipeline (see Onboarding below). 400 for a missing, empty or control-character text, 413 over 30000 bytes, 409 without a data key on a real store, 422 when the note could not be stored. The text never appears in an error, a log or the database. |
 | `GET /api/household/outbound` | | `{outbound: {jobs, email, simplefin, engine}}`, each `{enabled, effective, reason}`. `enabled` is the stored pause flag, `effective` whether that work would run, `reason` null when effective, else `paused`, `not_configured`, `recipient_unverified`, `not_connected`, `credential_unavailable`, `funding_unavailable` or `funding_exhausted`. Members. |
 | `POST /api/household/outbound` | `{jobs?, email?, simplefin?, engine?}` booleans | As GET. Admins. Omitted kinds keep their value; anything else is 400 and nothing changes. One audited transaction. |
+| `POST /api/household/backups` | `{}` | Admin only. Queues its own household and returns `{operationId, status: 'queued'}`. Selectors, paths and keys are rejected. Configuration failures or an existing operation return 409 before queuing. |
+| `GET /api/household/backups/:id/status` | | Admin only, including while its backup temporarily suspends financial work. Own operation only; foreign or missing ids return 404. `{operationId, status, code, fileCount, byteCount}` contains fixed codes and counts, no paths or payloads. |
 | `POST /api/demo/reset` | `{}` | `{scenario}`. Rebuilds the demo store and removes stored uploads (`files/*.bin` under the household root); 404 unless the store is a demo store. Deletes this household's rows from the platform `api_keys` table; the MCP secret file survives. |
 | `GET /api/keys` | | `{keys: [{id, name, scopes, createdAt, lastUsedAt, revokedAt}]}` ordered by creation; never a key or hash. A member sees the keys they created; an admin sees every key, including keys with no creator. A demo store lists every key. |
 | `POST /api/keys` | `{name, scopes?: ('read' or 'write:recs')[]}` | `{key, record, keys}`. The only time the key is shown. Name trimmed, 1 to 80 characters, no control characters; scopes always include `read`; else 400. Any signed-in user may create one; the creator comes from the session, never the body. |
 | `POST /api/keys/:id/revoke` | `{}` | `{record, keys}`. Sets `revokedAt` once (a second revoke keeps it); 404 unknown id. A member may revoke only keys they created (403 otherwise); an admin may revoke any. |
 | `GET /api/mcp` | | `{url, publicUrlSet, tools: [{name, description, scope}], scopes: [{id, label, access}]}`. `url` is the `FATHOM_PUBLIC_URL` origin with `/mcp` appended. |
-| `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`, `unsupported`, `too_large` (past a parse limit, see Ingest) or `failed`. 400 no files or malformed body, 409 a real household without `FATHOM_PLATFORM_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
+| `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `waiting_for_engine`, `waiting_for_engine`, `unsupported`, `too_large` (past a parse limit, see Ingest) or `failed`. 400 no files or malformed body, 409 a real household without `FATHOM_PLATFORM_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
 | `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first; removed files are omitted and a list over 256 KB is shortened with `truncated: true`. |
-| `POST /api/files/:id/retry` | `{}` | `{scenario, file: result}`. Routes a `needs_mapping` or `needs_extraction` file again under the same id; 404 unknown file, 409 a file that is not waiting. |
+| `POST /api/files/:id/retry` | `{}` | `{scenario, file: result}`. Routes a `waiting_for_engine` or `waiting_for_engine` file again under the same id; 404 unknown file, 409 a file that is not waiting. |
 | `POST /api/import-proposals/:proposalId/review` | `{version, decision, evidence}` | Internal staged import review. `approve` validates current owner evidence, source and stored state before committing; `correct` queues a new version. Requires `write:imports` and underlying action scopes. Stale proposals return 409 `proposal_stale` with a deterministic diff. Upload routing is unchanged pending the model-import cutover. |
 | `POST /api/files/:id/remove` | `{}` | `{scenario, receipt}`. Deletes an uploaded file's transactions (with their category rows), balances, positions, P&L lines, tax payments, facts, held facts and documents and its pending questions, drops figures read from it and recomputes each fed account's balance figure, archives an account left with no rows that no live bank connection feeds, and sets `files.removed_at`. The captured change log is stored in `source_changes` under the receipt id; `POST /api/actions/:id/undo` replays it and refuses (409) when a touched row changed since. 404 unknown, 409 already removed, 400 for a file with no stored bytes. Same code as `sources.remove_file`; off on the public demo. |
 | `GET /api/confirm` | | `{items: [pending confirm items]}`. |
@@ -1137,6 +1131,23 @@ Memberships and invitations.
 3. `POST /api/operator/households` creates a household in `provisioning` and emails its first admin
    an invitation. While `multi_household_enabled` is off and a non-deleted real household exists,
    it answers 409 `multi_household_gated`; demo instances are exempt.
+4. Household context (MT-09). A session has one household and a context version. A new session
+   enters the user's only membership; with several it has none (financial routes 403) until
+   `POST /api/auth/household` selects one, which rotates the version. On a real store every
+   household-scoped route (financial, admin and backup control) needs the assertion headers
+   `X-Fathom-Household` and `X-Fathom-Context-Version` (GET and HEAD may use the query
+   parameters `household` and `contextVersion` instead, for download links). They are checked
+   against the session after the 401/403 checks, before the body is read and again after it, and
+   in each model round: missing or different is 409 `household_context_stale`; repeated, partial,
+   malformed or conflicting, or a query assertion on a POST, is 400 `household_context_invalid`.
+   Responses carry the captured `X-Fathom-Household` and `X-Fathom-Context-Version`. A switch or
+   sign-out ends that session's answer streams with a 409 error event
+   (`src/api/household-context.mjs`), and every stream event and final body is sent only while
+   the session still holds that context, so a removal or passkey revocation mid-request ends the
+   stream with a 401 error event instead. A deep link's fragment is kept only when its household
+   is the current one. The web client sends the assertion on every request, drops
+   a response for a context it left, reloads after a switch and keys its per-household browser
+   storage by user and household. Engine on/off and cap are admin routes.
 
 Startup and the offline migration.
 
@@ -1156,6 +1167,36 @@ Startup and the offline migration.
    builds a data directory for the previous release from a snapshot and the current directory,
    leaving the current one untouched. It is valid only until the new release has taken writes,
    because the previous release does not see them.
+
+Household backups and restore.
+
+Platform migration 008 adds `household_backup_operations`, a durable journal containing household
+ids, roots, generations, bundle hashes, counts, fixed codes and retention deadlines. It also
+records an instance id so a bundle cannot transfer identities to another instance. No financial
+payload enters the platform. The fixed runner serializes queued admin backups, temporarily
+suspends only that household, cancels its streams and drains requests and jobs before taking a
+SQLite page backup and copying its frozen vault, private packs and historical outbox. Transient
+work is excluded. Other households continue serving. The entire bundle, including its restricted
+membership and wrapped-key metadata, is encrypted under the separate backup key.
+
+`node scripts/backup-household.mjs --household <id>` invokes that same runner at the OS boundary.
+The offline command requires the target store to be closed; use the admin request API when the
+server is running. `node scripts/restore-household.mjs --household <id> --confirm <id> --bundle
+<file>` replaces that exact registered household on the same instance. Stop the service for the
+operator restore command. Rerun the identical command after interruption, or start the server
+to finish its journal. Recovery blocked after suspension keeps that household unavailable while others serve.
+
+Restore authenticates bundle hashes, schema, identity and every vault object, verifies current
+key availability, checks free space and stages a new private root before suspending the target.
+The root/generation switch, target-key revocation and target-session invalidation commit together.
+Current users, passkeys, memberships, invitations, subscriptions, model allocations, reservations
+and settlements remain in the platform. The new store's spend mirror comes from current platform
+accounting and current uncarried local spend. Historical running jobs become interrupted; the
+restored connection requires reconfirmation. Jobs, email, SimpleFIN and model calls stay paused
+until an admin explicitly resumes them through the outbound controls. Historical outbox files
+are never replayed. The old generation remains as rollback data for the recorded retention,
+default seven days; deletion after expiry is explicit operator policy. This supplements the
+operator's whole-volume backup and does not supply cross-instance identity recovery.
 
 Passkeys.
 
@@ -1910,12 +1951,11 @@ and anything ambiguous becomes a short question in the confirm queue.
 
 1. File id is `f-` plus the first 24 hex characters of the content SHA-256. Identical bytes are a
    `duplicate` of the stored file (`duplicateOf`), and nothing is imported again.
-2. The encrypted bytes are stored first, then a `files` row, then the file is routed: a known
-   parser (`pickParser`), else an unknown table (`readTable` then `mapTabular`), else a PDF or
-   UTF-8 text (`extractDocument`), else `unsupported`. Markdown notes keep the notes parser's
-   document as a reference to the encrypted file (`fields: {ref: fileId, sha256, chars, lines}`,
-   never the text) and are then extracted as `notes` from the decrypted bytes (on retry, from the
-   vault).
+2. The encrypted bytes are stored first, then a `files` row. The three standard
+   institution parsers and SimpleFIN retain deterministic ingestion. Every other
+   supported file is indexed and routed through `prepareImport`, source-grounded
+   validation and actor-bound proposal approval. Approved compatible layouts apply
+   locally. Text-layer PDFs use cited spans; raw scans wait as `needs_source_text`.
    Parsing is bounded by `src/ingest/format.mjs` `LIMITS` (200000 rows, 512 columns, 2000000
    cells, 32768 characters per cell; CSV sniffing reads only the header within 64 KiB).
    Workbooks use `XLSX_LIMITS` for cells (250000 worksheet cells, shared strings and rich-text
@@ -1985,31 +2025,27 @@ directory, never a symlink) at `files/<id>.bin`. `src/platform/vault-convert.mjs
 instance offline into a validated bundle at `<root>/work/vault-<operationId>`, published by one
 rename; it only reads the legacy store and files. The server uses it for every stored object.
 
-### Mapping unknown tables
+### Reviewed model imports
 
-`src/ingest/mapping.mjs`: a CSV or workbook sheet with no parser is identified by
-`header_signature` (SHA-256 of its normalized headers). A stored `column_mappings` row is applied
-by code with no model call; otherwise the engine proposes a mapping from the headers and at most 5
-redacted rows, which is validated (`MAPPING_SCHEMA`, every column present, required columns per
-target) before it is stored and applied. With the engine off or an invalid proposal the file is
-`needs_mapping` and can be retried.
+`model-source.mjs` indexes bounded cells and text spans. `model-parse.mjs` obtains
+referenced proposals under durable file budgets. `model-validation.mjs` computes
+values, validates identity and coverage, and previews common persistence and actions.
+`model-review.mjs` requires actor-bound approval of the current version. Approved
+compatible declarative layouts in `model-layout.mjs` can apply locally with no engine
+call. New interpretations wait as `needs_confirmation` or `needs_clarification`;
+unavailable engines wait as `waiting_for_engine`, exhausted limits as
+`budget_exhausted`, and image-only or unreadable PDFs as `needs_source_text`.
 
-### Extraction with redaction
+`extract.mjs` retains document schemas and deterministic document adapters. It has
+no model transport or raw scan dispatch. Historical labels remain readable without
+retaining executable custom parsers. Facts and expected updates reuse shared actions;
+grouped Undo preflights the actor and every represented write scope.
 
-`src/ingest/extract.mjs` classifies a document (`DOC_TYPES`) and extracts it with a per-type JSON
-Schema that never asks for SSNs, EINs, full account numbers, names of people or addresses. Text
-is redacted first (`src/ingest/redact.mjs`): SSN and EIN patterns are masked, money-shaped
-numbers become opaque references that code resolves back, and every other digit run longer than
-4 keeps only its last 4 digits. A PDF's text layer is read first by `src/ingest/pdftext.mjs`
-`pdfText(bytes) -> {status, text, pages}` (pdfjs-dist in a `worker_threads` Worker with bounded
-heaps, a 20 s timeout, a 2 MB text cap and its output discarded; never rejects). `text` (any
-text with a letter) is redacted and sent as text (`pdf_text_layer`); `image_only` (no text on
-any page) is sent as a document (`pdf_document`); `incomplete` (over 50 pages, timeout, cap or
-out of memory) and `failed` (a parse error) wait as `needs_extraction` with note
-`pdf_unreadable`, and nothing is sent (`pdf_withheld`). Extracted values become rows by
-deterministic code; facts below 0.8 confidence wait for a `fact_check`, and employer-dependent
-facts wait in `held_facts` until the employer relation is known. With the engine off the file is
-`needs_extraction`.
+`retryFile` accepts an explicit `mode` of `retry` or `reinterpret`. Reinterpretation
+stages a fresh version from retained bytes, leaving active rows until approval.
+Validated target groups hold period authority over omission removals. Shared batch
+Undo restores revisions and removals only when every affected after-state still
+matches, and retains encrypted files, audit records and model cost.
 
 ### Confirm queue
 

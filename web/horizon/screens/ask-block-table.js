@@ -17,8 +17,9 @@ function sortKey(cell) {
   if (!isObj(cell)) return null;
   if (cell.t === 'fig') return isObj(cell.fig) && cell.fig.value != null ? cell.fig.value : null;
   if (cell.t === 'row') return cell.value ?? null;
-  // A text cell may carry its own sort key (a chart's x order, a timeline's ISO date).
-  if (cell.t === 'text') return cell.sort ?? (typeof cell.text === 'string' ? cell.text : null);
+  // A text cell may carry its own sort key (a chart's x order, a timeline's ISO date); a bank
+  // description sorts by the name it shows.
+  if (cell.t === 'text') return cell.sort ?? (typeof cell.name === 'string' && cell.name ? cell.name : typeof cell.text === 'string' ? cell.text : null);
   return null;
 }
 
@@ -41,9 +42,10 @@ export function sortRows(rows, sort) {
   return list.map((x) => x.r);
 }
 
-// The text a filter matches: text cells and a row number's description and account.
+// The text a filter matches: text cells and a row number's description and account, the readable
+// name and the raw bank text both.
 function rowText(r) {
-  return arr(r.cells).map((c) => (!isObj(c) ? '' : c.t === 'text' ? c.text : c.t === 'row' && isObj(c.row) ? `${c.row.description || ''} ${c.row.account || ''}` : ''))
+  return arr(r.cells).map((c) => (!isObj(c) ? '' : c.t === 'text' ? `${c.text ?? ''} ${c.name || ''} ${typeof c.raw === 'string' ? c.raw : ''}` : c.t === 'row' && isObj(c.row) ? `${c.row.name || ''} ${c.row.description || ''} ${c.row.account || ''}` : ''))
     .join(' ').toLowerCase();
 }
 
@@ -56,7 +58,8 @@ const sortOf = (snapshot, state) => state.sort || (isObj(snapshot.sort) && Numbe
 
 function cellHtml(c, ctx) {
   if (!isObj(c)) return '';
-  if (c.t === 'text') return ctx.esc(c.text);
+  // A bank description shows its readable name, the raw text on hover.
+  if (c.t === 'text') return typeof c.name === 'string' && c.name && c.name !== (typeof c.raw === 'string' ? c.raw : c.text) ? `<span title="${ctx.esc(typeof c.raw === 'string' ? c.raw : c.text)}">${ctx.esc(c.name)}</span>` : ctx.esc(c.text);
   if (c.t === 'fig' || c.t === 'row' || (c.t === 'none' && c.fig)) return ctx.fig(c);
   if (c.t === 'none') return '<span class="h-blk-na">Unavailable</span>';
   return '';
@@ -85,7 +88,7 @@ export function render(snapshot, ctx) {
     const buttons = drills.map(({ i }) => `<button type="button" class="h-btn ghost" aria-expanded="${state.drill === `${index}-${i}`}" data-blk-ctl="${esc(ctx.ctl(`drill-${index}-${i}`))}">Show rows${drills.length > 1 ? `: ${esc(cols[i].label)}` : ''}</button>`).join('');
     const expanded = drills.find(({ i }) => state.drill === `${index}-${i}`);
     const detail = expanded ? `<tr><td colspan="${cols.length}"><section role="region" aria-label="Rows behind this figure"><h4 tabindex="-1" data-blk-drill-heading>Rows behind this figure</h4><p>Block figure ${cellHtml(r.cells[expanded.i], ctx)}</p>${state.drillData
-      ? `<p>Rows sum ${ctx.rowFigure ? ctx.rowFigure(state.drillData.sum) : ''}</p><ul>${arr(state.drillData.items).map(item => `<li>${esc(item.date)} ${esc(item.account)} ${esc(item.description)} ${ctx.rowFigure ? ctx.rowFigure(item.fig) : ''}</li>`).join('')}</ul>`
+      ? `<p>Rows sum ${ctx.rowFigure ? ctx.rowFigure(state.drillData.sum) : ''}</p><ul>${arr(state.drillData.items).map(item => `<li>${esc(item.date)} ${esc(item.account)} ${item.name && item.description && item.name !== item.description ? `<span title="${esc(item.description)}">${esc(item.name)}</span>` : esc(item.name || item.description)} ${ctx.rowFigure ? ctx.rowFigure(item.fig) : ''}</li>`).join('')}</ul>`
       : `<p role="status">${state.drillError ? 'Rows could not be loaded.' : 'Loading rows'}</p>`}</section></td></tr>` : '';
     return `<tr>${cols.map((c, i) => {
     const num = c.type !== 'text';

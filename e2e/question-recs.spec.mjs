@@ -10,13 +10,13 @@ import { dataName } from './data-dir.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { createAuthStore } from '../src/auth/store.mjs';
 
-let app, session, origin, dataDir, store;
+let app, session, origin, dataDir, store, householdId;
 const supplied = !!(process.env.BASE_URL || process.env.FATHOM_SMOKE_BASE_URL);
 const ownLocal = process.env.QRECS_LOCAL === '1';
 const clock = '2026-11-05';
 
 async function post(path, body) {
-  const r = await fetch(origin + path, { method: 'POST', headers: { Cookie: `__Host-fathom-session=${session.token}`, Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const r = await fetch(origin + path, { method: 'POST', headers: { Cookie: `__Host-fathom-session=${session.token}`, Origin: origin, 'Content-Type': 'application/json', 'X-Fathom-Household': householdId, 'X-Fathom-Context-Version': '1' }, body: JSON.stringify(body) });
   return { status: r.status, body: await r.json() };
 }
 
@@ -46,6 +46,7 @@ test.describe('answerable questions on the synthetic planning household', () => 
     auth.consumeInvitation(token, user.id);
     auth.markEnrolled(user.id);
     session = auth.createSession(user.id);
+    householdId = auth.servedHousehold().id;
     // The served household's own store, through the server's runtime registry.
     store = app.runtimes.get(auth.servedHousehold().id).db;
   });

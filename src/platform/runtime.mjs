@@ -255,6 +255,8 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
   const dispatcher = createJobDispatcher();
   const entries = new Map(); // householdId -> { context, generation }
   const refs = new Map(); // context -> active acquires
+  const drains = new Map();
+  const streams = new Map();
   const stale = new Set(); // contexts replaced by a newer generation, closed once released
   let started = false;
   let closed = false;
@@ -315,17 +317,36 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
       if (!identity || typeof identity.householdId !== 'string' || !identity.role) return null;
       return get(identity.householdId);
     },
-    acquire(context) {
+    acquire(context, cancelStream = null) {
       refs.set(context, (refs.get(context) ?? 0) + 1);
+      if (cancelStream) {
+        if (!streams.has(context)) streams.set(context, new Set());
+        streams.get(context).add(cancelStream);
+      }
       return context;
     },
-    release(context) {
+    release(context, cancelStream = null) {
+      if (cancelStream) streams.get(context)?.delete(cancelStream);
       const n = (refs.get(context) ?? 0) - 1;
       if (n > 0) refs.set(context, n);
       else {
         refs.delete(context);
+        streams.delete(context);
+        drains.get(context)?.();
+        drains.delete(context);
         if (stale.has(context)) retire(context);
       }
+    },
+    async quiesce(householdId) {
+      const entry = entries.get(householdId);
+      if (!entry) return;
+      const context = entry.context;
+      for (const cancel of streams.get(context) ?? []) cancel();
+      const requests = (refs.get(context) ?? 0) > 0 ? new Promise(done => drains.set(context, done)) : Promise.resolve();
+      await Promise.all([requests, context.scheduler?.stop()]);
+      await context.scheduler?.idle();
+      entries.delete(householdId);
+      await context.close();
     },
     list() {
       return servable.all().map(r => r.id);

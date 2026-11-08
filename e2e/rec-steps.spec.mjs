@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { mkdirSync, rmSync, existsSync } from 'node:fs';
 import { resolve, basename, dirname } from 'node:path';
 import { createServer } from 'node:net';
-import { buildRealStore } from '../test/helpers/real-store.mjs';
+import { buildRealStore, addPayroll, paystubDoc } from '../test/helpers/real-store.mjs';
 import { secretEnv, secretsFor } from '../test/helpers/server.mjs';
 import { planRun } from '../test/helpers/plan.mjs';
 import { startServer } from '../src/server.mjs';
@@ -13,7 +13,7 @@ import { createAuthStore } from '../src/auth/store.mjs';
 // The missing-data rec on a synthetic single filer late in the year: its filing status is unset
 // and its sources are stale, so the rec lists one answer step and its upload steps. Every step is
 // product-managed: inline controls, no checkboxes, and the answer step completes itself.
-let app, session, origin, dataDir, confirmId;
+let app, session, origin, dataDir, confirmId, confirmQuestion;
 const supplied = !!(process.env.BASE_URL || process.env.FATHOM_SMOKE_BASE_URL);
 const clock = '2026-12-28';
 const variant = { facts: { 'household.filingStatus': undefined, 'household.birthYears': { owner: 1984 }, 'household.names': undefined } };
@@ -30,11 +30,12 @@ test.describe('product-managed steps on the missing-data rec', () => {
     const db = await buildRealStore(dataDir, { clock, variant });
     ask(db, { kind: 'fact_check', subject: 'unrelated-synthetic-check', question: 'An unrelated synthetic question',
       options: FACT_CHECK_OPTIONS, context: { key: 'synthetic.unrelated', value: true }, now: clock });
-    for (const category of ['Medical', 'Shopping', 'Groceries', 'HSA', 'Dining']) {
-      db.prepare('INSERT INTO pnl_lines (entity, period, category, amount) VALUES (?, ?, ?, ?)').run('Synthetic spending ledger', '2026-10', category, -100);
-    }
+    await addPayroll(db, paystubDoc({ person: 'owner', employerName: 'Sample Outside Employer',
+      payDate: '2026-12-15', ytdGross: 60000, federalWithholding: 6000 }));
     await planRun(db, { now: clock, dataDir });
-    confirmId = db.prepare("SELECT id FROM confirm_items WHERE kind = 'fact_check' AND context LIKE '%ledger-confirm%' AND status = 'pending'").get().id;
+    const check = db.prepare("SELECT id, question FROM confirm_items WHERE kind = 'employer_relation' AND status = 'pending'").get();
+    confirmId = check.id;
+    confirmQuestion = check.question;
     db.prepare("UPDATE recs SET status = CASE WHEN id = 'missing-data' THEN 'proposed' ELSE 'dismissed' END").run();
     db.close();
     const socket = createServer();
@@ -112,7 +113,7 @@ test.describe('product-managed steps on the missing-data rec', () => {
     await expect(page).toHaveURL(`${origin}/#/confirm/${confirmId}`);
     const card = page.locator('.h-deck-card.cur');
     await expect(card).toHaveAttribute('data-item', String(confirmId));
-    await expect(card).toContainText('Confirm these are spending ledgers.');
+    await expect(card).toContainText(confirmQuestion);
     await page.reload();
     await expect(page.locator('.h-deck-card.cur')).toHaveAttribute('data-item', String(confirmId));
     await page.goto(`${origin}/#/confirm/999999`);

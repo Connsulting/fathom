@@ -25,7 +25,8 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { readStoreMode, DB_FILE } from '../store/db.mjs';
-import { PLATFORM_FILE, LOCK_FILE, householdRootRel, openPlatform, servedHousehold, storeIdentity } from './db.mjs';
+import { PLATFORM_FILE, LOCK_FILE, openPlatform, servedHousehold, storeIdentity } from './db.mjs';
+import { checkHouseholdRoot } from './runtime.mjs';
 import { LOCK_FILE as TENANCY_LOCK_FILE } from './migrate-tenancy.mjs';
 
 export class StartupError extends Error {
@@ -135,8 +136,8 @@ export function openReadOnlyHousehold({ dataDir }, householdId) {
     platform = new DatabaseSync(platformFile, { readOnly: true });
     platform.exec('PRAGMA query_only = ON');
     const row = platform.prepare('SELECT status, mode, storage_root FROM households WHERE id = ?').get(householdId);
-    if (!row || row.status !== 'active' || row.storage_root !== householdRootRel(householdId)) throw refuse('household_unavailable');
-    const file = join(dataDir, row.storage_root, DB_FILE);
+    if (!row || row.status !== 'active' || !row.storage_root) throw refuse('household_unavailable');
+    const file = join(checkHouseholdRoot(dataDir, row.storage_root), DB_FILE);
     if (!existsSync(file)) throw refuse('store_missing');
     db = new DatabaseSync(file, { readOnly: true });
     db.exec('PRAGMA query_only = ON');

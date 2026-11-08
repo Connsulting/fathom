@@ -12,14 +12,14 @@ export const recipe = () => ({ schemaVersion: 1, currency: 'USD', tables: [{ she
 export async function fixture(options = {}) {
   const store = await realStore(options);
   store.db.prepare("INSERT INTO accounts (id,name,inst,kind,owner,identity) VALUES ('account-synthetic','Synthetic account','Example bank','cash','you','synthetic-account')").run();
-  const ctx = { db: store.db, household: store.household, actorId: 'actor-synthetic', scopes: ['write:imports'], now: NOW, ownerText: 'yes' };
+  const ctx = { db: store.db, household: store.household, scheduler: { trigger() {} }, actorId: 'actor-synthetic', scopes: ['write:imports'], now: NOW, ownerText: 'yes' };
   async function source(text = 'Account,Date,Amount USD,Description\naccount-synthetic,2032-03-02,-12.25,Synthetic purchase\naccount-synthetic,2032-03-03,2.25,Synthetic refund\nTotal,,-10.00,Control total\n', format = 'csv') {
     const file = { fileId: 'f-' + randomUUID(), format, name: 'synthetic.' + format, bytes: Buffer.from(text) };
     const indexed = await indexSource(file);
     const vault = await openVault(store.household);
     const path = await storeFile({ vault, id: file.fileId, bytes: file.bytes, purpose: 'upload' });
     store.db.prepare('INSERT INTO files (id,name,sha256,size,mime,uploaded_at,stored_path,status) VALUES (?,?,?,?,?,?,?,?)')
-      .run(file.fileId, file.name, indexed.sha256, file.bytes.length, format === 'csv' ? 'text/csv' : 'text/plain', NOW, path, 'needs_mapping');
+      .run(file.fileId, file.name, indexed.sha256, file.bytes.length, format === 'csv' ? 'text/csv' : 'text/plain', NOW, path, 'waiting_for_engine');
     return indexed;
   }
   return { ...store, ctx, source };

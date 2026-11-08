@@ -4119,6 +4119,129 @@
       ]
     },
     {
+      "id": "auto-block-monthly-trend",
+      "family": "spending",
+      "requires": {
+        "operations": [
+          "spending.total"
+        ],
+        "script": true
+      },
+      "turns": [
+        {
+          "question": "How has our monthly spending changed this year?",
+          "required": [
+            {
+              "name": "spending",
+              "operation": "total",
+              "predicates": [
+                {
+                  "path": "groupBy",
+                  "op": "eq",
+                  "value": "month"
+                },
+                {
+                  "path": "window",
+                  "op": "eq",
+                  "value": "ytd"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "rubric": "Answer from the monthly read without calling show; Fathom appends the monthly chart itself."
+        }
+      ],
+      "blocks": [
+        {
+          "op": "chart",
+          "kind": "bar"
+        }
+      ]
+    },
+    {
+      "id": "auto-block-category-breakdown",
+      "family": "spending",
+      "requires": {
+        "operations": [
+          "spending.total"
+        ],
+        "script": true
+      },
+      "turns": [
+        {
+          "question": "Where did our money go this year, by category?",
+          "required": [
+            {
+              "name": "spending",
+              "operation": "total",
+              "predicates": [
+                {
+                  "path": "groupBy",
+                  "op": "eq",
+                  "value": "category"
+                },
+                {
+                  "path": "window",
+                  "op": "eq",
+                  "value": "ytd"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "rubric": "Answer from the category read without calling show; Fathom appends the category table itself."
+        }
+      ],
+      "blocks": [
+        {
+          "op": "table"
+        }
+      ]
+    },
+    {
+      "id": "auto-block-projection",
+      "family": "spending",
+      "requires": {
+        "operations": [
+          "spending.projection"
+        ],
+        "script": true
+      },
+      "turns": [
+        {
+          "question": "How will our yearly spending change over the coming years?",
+          "required": [
+            {
+              "name": "spending",
+              "operation": "projection",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "rubric": "Answer from the projection read without calling show; Fathom appends the yearly chart itself."
+        }
+      ],
+      "blocks": [
+        {
+          "op": "chart",
+          "kind": "line"
+        }
+      ]
+    },
+    {
       "id": "block-top-merchants",
       "family": "spending",
       "requires": {

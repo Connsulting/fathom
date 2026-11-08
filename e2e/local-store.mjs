@@ -61,7 +61,8 @@ export function householdRootDir(dataDir) {
 
 // Trusted financial-test fixture only. Auth ceremonies are exercised in identity.spec.mjs.
 // A real instance reads the synthetic instance secrets of secretsFor(dataDir), the same ones the
-// test store helpers built its data key with. Returns the app plus url, headers, storeFile and
+// test store helpers built its data key with. Returns the app plus url, headers (cookie, Origin and
+// the household context assertion), contextHeaders (the assertion alone), storeFile and
 // authenticate(context).
 export async function startEnrolledServer({ dataDir, clock } = {}) {
   refuseSuppliedTarget();
@@ -90,9 +91,11 @@ export async function startEnrolledServer({ dataDir, clock } = {}) {
     // Accounts live in the platform DB beside the store; the server created or opened it.
     const platform = openDb(join(dataDir, PLATFORM_FILE));
     let session;
+    let householdId;
     try {
       const store = createAuthStore(platform);
       const household = store.servedHousehold();
+      householdId = household.id;
       const { user, token } = store.invite(household.id, 'owner@example.test', { role: 'admin' });
       store.consumeInvitation(token, user.id);
       store.markEnrolled(user.id);
@@ -102,7 +105,9 @@ export async function startEnrolledServer({ dataDir, clock } = {}) {
       ...app,
       url,
       storeFile: householdStoreFile(dataDir),
-      headers: { Cookie: `__Host-fathom-session=${session.token}`, Origin: url },
+      // The household context assertion the web client sends (a new session is at version 1).
+      contextHeaders: { 'X-Fathom-Household': householdId, 'X-Fathom-Context-Version': '1' },
+      headers: { Cookie: `__Host-fathom-session=${session.token}`, Origin: url, 'X-Fathom-Household': householdId, 'X-Fathom-Context-Version': '1' },
       async authenticate(context) {
         await context.addCookies([{
           name: '__Host-fathom-session', value: session.token,

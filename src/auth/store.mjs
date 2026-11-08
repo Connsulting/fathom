@@ -213,9 +213,9 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
       return projectUser(db.prepare('SELECT * FROM users WHERE email = ?').get(canonical));
     },
     activeMemberships(userId) {
-      return db.prepare(`SELECT m.household_id, m.role FROM household_memberships m JOIN households h ON h.id = m.household_id
+      return db.prepare(`SELECT m.household_id, m.role, h.display_name FROM household_memberships m JOIN households h ON h.id = m.household_id
         WHERE m.user_id = ? AND m.status = 'active' AND h.status != 'deleted' ORDER BY m.created_at, m.household_id`)
-        .all(userId).map(row => ({ householdId: row.household_id, role: row.role }));
+        .all(userId).map(row => ({ householdId: row.household_id, role: row.role, name: row.display_name ?? null }));
     },
     // Enrolled admins with an active membership in the household (for security notices).
     householdAdmins(householdId) { return enrolledAdmins(householdId).map(projectUser); },
@@ -413,12 +413,27 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
       });
     },
     // The session's user, plus the household the session works in (sessionHouseholdId, null when
-    // none was bound), or null.
+    // none was bound) and its context version (rotated by every switch), or null.
     session(raw) {
       if (!validHandle(raw)) return null;
-      const row = db.prepare(`SELECT u.*, s.household_id AS session_household_id FROM auth_sessions s JOIN users u ON u.id = s.user_id
+      const row = db.prepare(`SELECT u.*, s.household_id AS session_household_id, s.context_version FROM auth_sessions s JOIN users u ON u.id = s.user_id
         WHERE s.hash = ? AND s.expires_at > ? AND u.enrolled_at IS NOT NULL`).get(digest(raw), now());
-      return row ? { ...projectUser(row), sessionHouseholdId: row.session_household_id } : null;
+      return row ? { ...projectUser(row), sessionHouseholdId: row.session_household_id, contextVersion: row.context_version } : null;
+    },
+    // Select the session's household: only an active membership in an active household. Binds it
+    // and rotates the context version in one write; anything else is the generic 403 with nothing
+    // changed. Returns { id, name, role } of the selected household.
+    switchHousehold(raw, householdId) {
+      return transaction(() => {
+        const user = store.session(raw);
+        if (!user) throw new HttpError(401, 'unauthorized');
+        const row = typeof householdId === 'string' ? db.prepare(`SELECT h.id, h.display_name, m.role FROM household_memberships m
+          JOIN households h ON h.id = m.household_id
+          WHERE m.user_id = ? AND m.household_id = ? AND m.status = 'active' AND h.status = 'active'`).get(user.id, householdId) : null;
+        if (!row) throw new HttpError(403, 'household membership required');
+        db.prepare('UPDATE auth_sessions SET household_id = ?, context_version = context_version + 1 WHERE hash = ?').run(row.id, digest(raw));
+        return { id: row.id, name: row.display_name ?? null, role: row.role };
+      });
     },
     sessionSignedInAt(raw) {
       if (!validHandle(raw)) return null;

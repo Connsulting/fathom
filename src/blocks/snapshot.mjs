@@ -3,17 +3,22 @@ import { isDeepStrictEqual } from 'node:util';
 import { at, isFigure, resolve, rowNumber } from './paths.mjs';
 import { columnLabel, sourceLabel, fieldLabel, figureLabel, itemLabel, dateText } from './labels.mjs';
 import { drillQuery } from './drill.mjs';
+import { transactionDisplayName } from '../categories/display.mjs';
 
+// An input figure keeps its own fields but not its nested provenance, so a block of derived
+// figures (a projection's years) stays within the block size cap.
+const shallow = v => v && typeof v === 'object' && !Array.isArray(v) && Object.hasOwn(v, 'provenance')
+  ? Object.fromEntries(Object.entries(v).filter(([k]) => k !== 'provenance')) : v;
 function provenanceOf(provenance) {
   const out = {};
   for (const key of ['calc', 'formula', 'sources', 'accounts', 'assumptions', 'packRefs'])
     if (provenance[key] !== undefined) out[key] = structuredClone(provenance[key]);
   const more = { steps: 0, inputs: 0 };
   for (const key of ['steps', 'inputs']) {
-    const value = provenance[key];
-    if (Array.isArray(value)) { out[key] = structuredClone(value.slice(0, 20)); more[key] = Math.max(0, value.length - 20); }
+    const value = provenance[key], keep = key === 'inputs' ? shallow : v => v;
+    if (Array.isArray(value)) { out[key] = structuredClone(value.slice(0, 20).map(keep)); more[key] = Math.max(0, value.length - 20); }
     else if (value && typeof value === 'object') {
-      const entries = Object.entries(value); out[key] = structuredClone(Object.fromEntries(entries.slice(0, 20))); more[key] = Math.max(0, entries.length - 20);
+      const entries = Object.entries(value); out[key] = structuredClone(Object.fromEntries(entries.slice(0, 20).map(([k, v]) => [k, keep(v)]))); more[key] = Math.max(0, entries.length - 20);
     }
   }
   if (more.steps || more.inputs) out.more = more;
@@ -25,12 +30,17 @@ function figure(fig, ref, field) {
   for (const key of ['window', 'quote', 'direction']) if (fig[key] !== undefined) out[key] = structuredClone(fig[key]);
   return out;
 }
+// A bank description keeps its raw text (checks compare it) and gains the readable name beside it.
+const named = (text) => (typeof text === 'string' ? { name: transactionDisplayName(text) } : {});
 function cell(item, ref, field, accountLabels) {
   const value = at(item, field);
   if (isFigure(value)) return { t: 'fig', fig: figure(value, ref, field) };
   if (rowNumber(ref, field)) return { t: 'row', value, unit: 'usd', row: {
-    account: item.account?.label ?? accountLabels.get(item.accountId) ?? null, date: item.date ?? null, description: item.description ?? null } };
-  return { t: 'text', text: value };
+    account: item.account?.label ?? accountLabels.get(item.accountId) ?? null, date: item.date ?? null, description: item.description ?? null, ...named(item.description) } };
+  const description = field === 'description' || String(field).endsWith('.description');
+  // A transaction's merchant is its normalized description; its name and raw text come from the description.
+  const merchant = field === 'merchant' && typeof item?.description === 'string';
+  return { t: 'text', text: typeof value === 'number' ? String(value) : value, ...(description ? named(value) : merchant ? { ...named(item.description), raw: item.description } : {}) };
 }
 function pointFigure(item, ref, field, accountLabels) {
   const value = at(item, field);
@@ -43,6 +53,13 @@ function pointFigure(item, ref, field, accountLabels) {
     gaps: [], provenance: { sources: [row.row] }, source: sourceLabel(ref) };
 }
 const xKey = value => JSON.stringify(isFigure(value) ? value.value : value);
+// Date-like x values (YYYY, YYYY-MM, YYYY-MM-DD or integer years) run chronologically; other x keep result order.
+const xValue = (item, x) => { const v = at(item, x); return isFigure(v) ? v.value : v; };
+const dateLike = v => Number.isInteger(v) || typeof v === 'string' && /^\d{4}(?:-\d{2}(?:-\d{2})?)?$/.test(v);
+function chronological(items, x) {
+  return items.every(item => dateLike(xValue(item, x)))
+    ? [...items].sort((a, b) => String(xValue(a, x)).localeCompare(String(xValue(b, x)))) : items;
+}
 function drillSource(ref, results) {
   if (ref.tool !== 'business' || !/^entities\.\d+\.groups$/.test(ref.path)) return ref;
   const entity = resolve({ ...ref, path: ref.path.replace(/\.groups$/, '.entity.key') }, results);
@@ -60,13 +77,14 @@ function chart(spec, results, accountLabels) {
         x: pointFigure(item, drillSource(spec.source, results), spec.x, accountLabels), y: pointFigure(ys[i], drillSource(ref, results), series.path, accountLabels),
         frontier: item.frontier === true, current: item.current === true })) };
   }
+  const ordered = chronological(items, spec.x);
   return { title: spec.title ?? sourceLabel(spec.source), kind: spec.kind, stacked: spec.stacked ?? false,
-    x: items.map(item => { const v = at(item, spec.x); return { text: dateText(isFigure(v) ? v.value : v) }; }),
+    x: ordered.map(item => ({ text: dateText(xValue(item, spec.x)) })),
     series: spec.series.map(s => {
       const ref = s.source || spec.source, rows = resolve(ref, results);
       const byX = new Map(rows.map(item => [xKey(at(item, spec.x)), item]));
       return { label: columnLabel(rows, ref, s.path), unit: pointFigure(rows[0], ref, s.path, accountLabels).unit,
-        points: items.map(item => { const matched = byX.get(xKey(at(item, spec.x))); return matched ? pointFigure(matched, drillSource(ref, results), s.path, accountLabels) : null; }) };
+        points: ordered.map(item => { const matched = byX.get(xKey(at(item, spec.x))); return matched ? pointFigure(matched, drillSource(ref, results), s.path, accountLabels) : null; }) };
     }) };
 }
 function table(spec, results, accountLabels) {

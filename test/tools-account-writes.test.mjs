@@ -58,7 +58,7 @@ test('merge requires confirmation and later owner evidence, then restores moved 
 });
 
 test('all account operations deny a read key before validating arguments',async()=>{
-  const server=createToolServer({scopes:['read'],authorize:()=>true,ctx:{}});
+  const server=createToolServer({scopes:['read'],authorize:()=>true,ctx:{},runTool:fn=>fn()});
   for(const operation of ['rename','mask','owner','kind','merge']){
     const r=await server._requestHandlers.get('tools/call')({method:'tools/call',params:{name:'update_account',arguments:{operation}}},{});assert.equal(r.isError,true);assert.match(r.content[0].text,/Permission denied.*write:accounts/);
   }
@@ -118,4 +118,31 @@ for (const [operation,params] of [
  assert.equal(basis(),pending.basis);
  s.db.prepare("UPDATE accounts SET display_name='Target reserve' WHERE id='manual'").run();
  assert.notEqual(basis(),pending.basis);
+});
+
+
+test('merge proposals ignore unrelated transactions and retain both accounts and moved rows',async t=>{
+ const s=await realStore();t.after(()=>s.close());const ids=await seedDuplicate(s,{sure:true});account(s,'unrelated');
+ const args={id:ids.keep,withId:ids.own,confirm:true,evidence:'yes, merge these accounts'};
+ const basis=()=>proposalBasis(s.db,'update_account',['write:accounts'],args), before=basis();
+ s.db.prepare("INSERT INTO transactions(account_id,date,amount,description) VALUES ('unrelated','2032-03-01',-10,'Unrelated posting')").run();
+ s.db.prepare("INSERT INTO transactions(account_id,date,amount,description) VALUES (?,'2032-03-01',-999,'Unrelated survivor posting')").run(ids.keep);
+ assert.equal(basis(),before);
+ for(const id of [ids.keep,ids.own]){
+  s.db.exec('SAVEPOINT target_change');
+  s.db.prepare("UPDATE accounts SET display_name='Changed' WHERE id=?").run(id);
+  assert.notEqual(basis(),before);
+  s.db.exec('ROLLBACK TO target_change');s.db.exec('RELEASE target_change');
+ }
+ s.db.prepare('UPDATE transactions SET amount=amount-1 WHERE account_id=?').run(ids.own);
+ assert.notEqual(basis(),before);
+});
+
+
+test('a completed merge makes its outstanding proposal stale without throwing',async t=>{
+ const s=await realStore();t.after(()=>s.close());const ids=await seedDuplicate(s,{sure:true});
+ const args={id:ids.keep,withId:ids.own,confirm:true,evidence:'yes, merge these accounts'};
+ const before=proposalBasis(s.db,'update_account',['write:accounts'],args);
+ await callTool('update_account',{operation:'merge',...args},context(s));
+ assert.notEqual(proposalBasis(s.db,'update_account',['write:accounts'],args),before);
 });

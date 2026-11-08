@@ -133,7 +133,7 @@ test('G9: a live server opens a missing credential once at startup and never aga
     const res = await fetch(`${s.baseUrl}/api/files`, { method: 'POST', body: fd });
     const body = await res.json();
     assert.equal(res.status, 200, JSON.stringify(body).slice(0, 300));
-    assert.equal(body.files[0].status, 'needs_extraction', 'the extraction call fails');
+    assert.equal(body.files[0].status, 'waiting_for_engine', 'the extraction call fails');
   };
   try {
     assert.equal(opens(), 1, 'opened once at startup');

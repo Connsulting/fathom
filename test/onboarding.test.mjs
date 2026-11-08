@@ -32,7 +32,7 @@ const NOTES_OUT = {
   goals: [{ title: 'Build a cash reserve', when: '2033', confidence: 0.9 }],
 };
 
-const ctxOf = (s, engine, body, household = s.household) => ({ household, db: s.db, config: s.config, engine, scheduler: null, body });
+const ctxOf = (s, engine, body, household = s.household) => ({ actorId: 'actor-synthetic', household, db: s.db, config: s.config, engine, scheduler: null, body });
 
 async function withStore(fn) {
   const s = await realStore();
@@ -40,54 +40,28 @@ async function withStore(fn) {
 }
 
 describe('Tell us note save path', () => {
-  test('the note goes through ingest: encrypted file, notes document, facts with provenance, a Confirm card for the ambiguous one', () => withStore(async (s) => {
+  test('a saved note retains encrypted bytes and waits for source-grounded approval before any facts', () => withStore(async s => {
     const engine = await recordingEngine([[NOTES_OUT]]);
     const out = await O.saveNotes(ctxOf(s, engine, { text: NOTE }));
-
-    assert.equal(out.file.status, 'imported');
-    assert.equal(out.file.parser, 'notes');
-    const row = one(s.db, 'SELECT * FROM files WHERE id = ?', out.file.fileId);
+    assert.equal(out.file.status, 'waiting_for_engine');
+    assert.equal(out.file.parser, 'model-import');
+    const row = one(s.db, 'SELECT * FROM files WHERE id=?', out.file.fileId);
     assert.match(row.name, /^Setup notes \d{4}-\d{2}-\d{2}\.md$/);
-    assert.equal(row.source_kind, 'notes');
-    assert.ok(row.stored_path, 'the encrypted bytes are in the vault');
-    const stored = readFileSync(join(s.root, row.stored_path));
-    assert.ok(!stored.includes(Buffer.from('Virginia')), 'stored bytes are encrypted');
-    assert.equal(count(s.db, 'documents', "doc_type = 'notes' AND file_id = ?", out.file.fileId), 1);
-    assert.ok(!JSON.stringify(all(s.db, 'SELECT fields FROM documents')).includes('Virginia'), 'no plaintext note in the documents table');
-
-    // The engine saw the note through the redacting extraction path, as for an uploaded file.
-    assert.equal(engine.extracts.length, 1, 'extraction only, no classify call');
-    assert.ok(engine.extracts[0].document.text.includes('Virginia'));
-
-    // Facts carry file provenance; the 0.6 confidence one is stored unconfirmed and asked.
-    const facts = all(s.db, 'SELECT key, value, confirmed, file_id, parser FROM facts ORDER BY key');
-    assert.deepEqual(facts.map((f) => f.key), ['household.dependents', 'household.filingStatus', 'household.state']);
-    for (const f of facts) {
-      assert.equal(f.file_id, out.file.fileId);
-      assert.equal(f.parser, 'extract-notes');
-      assert.equal(f.confirmed, 0);
-    }
-    const asked = C.pendingItems(s.db).filter((i) => i.kind === 'fact_check');
-    assert.equal(asked.length, 1);
-    assert.equal(asked[0].context.key, 'household.dependents');
-
-    // Understood: the stored rows of that file, plus the goal and the open question.
-    assert.equal(out.understood.status, 'imported');
-    assert.equal(out.understood.waiting, false);
-    assert.deepEqual(out.understood.facts.map((f) => [f.label, f.value]), [
-      ['Dependents', '2'], ['Filing status', 'Married filing jointly'], ['State', 'VA'],
-    ]);
-    assert.deepEqual(out.understood.goals, [{ title: 'Build a cash reserve', when: '2033' }]);
-    assert.equal(out.understood.asked, 1);
-    assert.equal(out.scenario.live.heard.pending, 1);
+    assert.ok(!readFileSync(join(s.root,row.stored_path)).includes(Buffer.from('Virginia')));
+    assert.equal(count(s.db,'documents'), 0);
+    assert.equal(count(s.db,'facts'), 0);
+    assert.equal(engine.extracts.length, 0);
+    assert.equal(out.understood.waiting, true);
+    assert.deepEqual(out.understood.facts, []);
+    assert.equal(out.scenario.live.heard.empty, true);
   }));
 
   test('engine off: the parser stores the note and it waits; nothing is read and nothing is invented', () => withStore(async (s) => {
     const out = await O.saveNotes(ctxOf(s, await offEngine(), { text: NOTE }));
-    assert.equal(out.file.status, 'needs_extraction');
-    assert.equal(count(s.db, 'documents', "doc_type = 'notes'"), 1);
+    assert.equal(out.file.status, 'waiting_for_engine');
+    assert.equal(count(s.db, 'documents', "doc_type = 'notes'"), 0);
     assert.equal(count(s.db, 'facts'), 0);
-    assert.deepEqual(out.understood, { fileId: out.file.fileId, status: 'needs_extraction', engineOn: false, waiting: true, facts: [], goals: [], asked: 0 });
+    assert.deepEqual(out.understood, { fileId: out.file.fileId, status: 'waiting_for_engine', engineOn: false, waiting: true, facts: [], goals: [], asked: 0 });
     assert.equal(out.scenario.live.heard.empty, true);
   }));
 
@@ -106,10 +80,9 @@ describe('Tell us note save path', () => {
     await O.saveNotes(ctxOf(s, engine, { text: NOTE }));
     const more = await O.saveNotes(ctxOf(s, engine, { text: 'I also take a salary from my S corporation.' }));
     assert.equal(count(s.db, 'files'), 2);
-    assert.deepEqual(more.understood.facts.map((f) => [f.label, f.value]), [['S corporation income', 'Yes']]);
-    const sections = more.scenario.live.heard.sections;
-    assert.ok(sections.some((sec) => sec.id === 'income' && sec.items.some((i) => i.key === 'income.sCorp')));
-    assert.ok(sections.some((sec) => sec.id === 'household' && sec.items.some((i) => i.key === 'household.state')), 'the first note is still heard');
+    assert.deepEqual(more.understood.facts, []);
+    assert.equal(more.understood.waiting, true);
+    assert.equal(count(s.db,'facts'), 0);
   }));
 
   test('bad input is refused with a fixed message and nothing is stored', () => withStore(async (s) => {
@@ -222,10 +195,10 @@ describe('what we heard (deriveHeard)', () => {
   }));
 });
 
-describe('the notes parser still sniffs the saved name', () => {
-  test('an .md file with text/markdown routes to the notes parser', async () => {
+describe('notes use proposals', () => {
+  test('an .md file is outside the standard parser registry', async () => {
     const R = await src('src/ingest/registry.mjs');
     const f = textFile('Setup notes 2026-11-05.md', 'hello\n', 'text/markdown');
-    assert.equal(R.pickParser(f).id, 'notes');
+    assert.equal(R.pickParser(f), null);
   });
 });

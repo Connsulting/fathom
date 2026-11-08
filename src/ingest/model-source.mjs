@@ -11,6 +11,17 @@ const identifiers = /\b\d{3}-\d{2}-\d{4}\b|\b\d{2}-\d{7}\b|\b\d{5,}\b|\b(?:beare
 const escape = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const opaque = n => { let s = ''; do { s = String.fromCharCode(97 + n % 26) + s; n = Math.floor(n / 26) - 1; } while (n >= 0); return `@q${s}@`; };
 
+export function sourceFormat(file) {
+  if (/\.pdf$/i.test(file.name ?? '') || /application\/pdf/i.test(file.mime ?? '') || Buffer.from(file.bytes.subarray(0, 5)).toString() === '%PDF-') return 'pdf';
+  if (/\.xlsx$/i.test(file.name ?? '') || file.bytes[0] === 0x50 && file.bytes[1] === 0x4b) return 'xlsx';
+  if (/\.tsv$/i.test(file.name ?? '') || /tab-separated/i.test(file.mime ?? '')) return 'tsv';
+  if (/\.csv$/i.test(file.name ?? '') || /csv/i.test(file.mime ?? '')) return 'csv';
+  try {
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(file.bytes);
+    return /[\x00-\x08\x0B\x0E-\x1F\x7F]/.test(text) ? null : 'text';
+  } catch { return null; }
+}
+
 export async function indexSource(file, privacy = {}) {
   if (!(file.bytes instanceof Uint8Array) || !file.fileId) throw new TypeError('Source bytes and file id required');
   if (file.bytes.length > 20 * 1024 * 1024) throw new LimitError();

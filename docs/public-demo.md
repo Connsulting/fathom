@@ -62,9 +62,12 @@ Invalid or nonpositive values refuse startup. An IP request limit returns HTTP 4
 | POST | `/api/admin/users/:id/remove` | Off, HTTP 403 |
 | POST | `/api/admin/users/:id/passkeys/:keyId/revoke` | Off, HTTP 403 |
 | POST | `/api/auth/invitations/accept` | Off, HTTP 403 |
+| POST | `/api/auth/household` | Off, HTTP 403 |
 | POST | `/api/operator/households` | Off, HTTP 403 |
 | GET | `/api/household/outbound` | Off, HTTP 403 |
 | POST | `/api/household/outbound` | Off, HTTP 403 |
+| POST | `/api/household/backups` | Off, HTTP 403 |
+| GET | `/api/household/backups/:id/status` | Off, HTTP 403 |
 | GET | `/api/scenario` | Visitor sandbox |
 | GET | `/api/pace` | Visitor sandbox |
 | POST | `/api/tour/seen` | Off, HTTP 403 |

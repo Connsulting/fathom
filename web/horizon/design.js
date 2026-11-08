@@ -161,6 +161,7 @@ function advisorText(r) {
 function icon(name) {
   const p = {
     check: '<path d="M3.5 8.5l3 3 6-7"/>',
+    house: '<path d="M2.75 7.25L8 2.75l5.25 4.5M4.25 6v7.25h7.5V6"/>',
     x: '<path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/>',
     clock: '<circle cx="8" cy="8" r="5.5"/><path d="M8 5v3.2l2 1.3"/>',
     arrow: '<path d="M3 8h10M9 4l4 4-4 4"/>',
@@ -425,7 +426,19 @@ function whoLine() {
   if (!id) return '';
   const who = id.email || id.login || id.name;
   const role = id.role === 'admin' ? 'Household admin' : id.role === 'member' ? 'Household member' : '';
-  return `<div class="h-who">Signed in as ${esc(who)}${role ? `<span>${role}</span>` : ''}</div>`;
+  // With several households, name the one this page shows.
+  const hh = api.households?.().length > 1 ? api.household?.() : null;
+  const where = hh ? `${role ? `${role} of ` : ''}${esc(hh.name)}` : role;
+  return `<div class="h-who">Signed in as ${esc(who)}${where ? `<span>${where}</span>` : ''}</div>`;
+}
+
+// The household picker: only for a user with more than one household. A native select, so the
+// phone gets its own picker; changing it switches the session and reloads the page.
+function householdPicker() {
+  const list = api.households?.() || [];
+  if (list.length < 2) return '';
+  const opts = list.map((h) => `<option value="${esc(h.id)}"${h.current ? ' selected' : ''}>${esc(h.name)}</option>`).join('');
+  return `<label class="h-hh" title="Household">${icon('house')}<select data-hh-switch aria-label="Household">${opts}</select></label>`;
 }
 
 // The route the tabs read: the page under a dialog (rec, account, P&L rows) when one is open.
@@ -471,7 +484,7 @@ function shell(inner) {
   return `<header class="h-top"><div class="h-top-in">
     <a class="h-mark" href="${href('home')}" data-go="home" aria-label="${esc(api.s.meta.product || 'Fathom')}">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></a>
     <div class="h-navbar"><nav class="h-nav" aria-label="Main">${tabLinks(tab)}</nav></div>
-    <div class="h-top-act"><button type="button" class="h-search-btn" data-keys="switcher" aria-label="Search" title="Search (Ctrl+K)">${icon('search')}</button>${gearLink(tab)}</div>
+    <div class="h-top-act">${householdPicker()}<button type="button" class="h-search-btn" data-keys="switcher" aria-label="Search" title="Search (Ctrl+K)">${icon('search')}</button>${gearLink(tab)}</div>
   </div></header>${api.s.live.publicDemo ? '<div class="h-demo-marker" role="note">Demo with sample data</div>' : ''}${off}<main class="h-main">${subNav(tab, r.name)}${inner}</main>${tabBar(tab)}`;
 }
 
@@ -1648,11 +1661,13 @@ function goalInput(t, { commit = false } = {}) {
 function spark([key, sr]) {
   const pts = arr(sr.points);
   if (pts.length < 2) return '';
-  const W = 260, H = 56, P = 4;
+  // The svg stretches to its box (preserveAspectRatio none), so it holds only the line; the x
+  // labels are HTML below it, where text keeps its own proportions.
+  const W = 260, H = 46, P = 4;
   const vs = pts.map((p) => p.v);
   const lo = Math.min(...vs), hi = Math.max(...vs);
   const sx = (i) => P + (i / (pts.length - 1)) * (W - P * 2);
-  const sy = (v) => P + (1 - (v - lo) / ((hi - lo) || 1)) * (H - P * 2 - 10);
+  const sy = (v) => P + (1 - (v - lo) / ((hi - lo) || 1)) * (H - P * 2);
   const lastA = pts.map((p) => p.kind).lastIndexOf('a');
   const a = pts.slice(0, lastA + 1).map((p, i) => `${sx(i)},${sy(p.v)}`).join(' ');
   const pr = lastA >= 0 ? pts.slice(lastA).map((p, i) => `${sx(i + lastA)},${sy(p.v)}`).join(' ') : pts.map((p, i) => `${sx(i)},${sy(p.v)}`).join(' ');
@@ -1660,8 +1675,8 @@ function spark([key, sr]) {
   // A series built from uploaded accounts carries imported text: plain text, no tokens or markup.
   return `<div class="h-spark" data-series="${esc(key)}"><div class="h-spark-h"><span>${sr.imported ? esc(sr.label) : T(sr.label)}</span><b>${figHtml(`series.${key}.${pts.length - 1}`, { k: true })}</b></div>
     <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">${a ? `<polyline class="a" points="${a}"/>` : ''}${pr && lastA < pts.length - 1 ? `<polyline class="p" points="${pr}"/>` : ''}
-    ${lastA >= 0 ? `<circle class="pt" cx="${sx(lastA)}" cy="${sy(pts[lastA].v)}" r="2.5"/>` : ''}
-    <text x="${P}" y="${H - 1}">${X(pts[0].x)}</text><text x="${W - P}" y="${H - 1}" text-anchor="end">${X(last.x)}</text></svg></div>`;
+    ${lastA >= 0 ? `<circle class="pt" cx="${sx(lastA)}" cy="${sy(pts[lastA].v)}" r="2.5"/>` : ''}</svg>
+    <div class="h-spark-x"><span>${X(pts[0].x)}</span><span>${X(last.x)}</span></div></div>`;
 }
 
 // The account mirror: balances by kind, trend, connections, files and sources, on the Money
@@ -1836,8 +1851,9 @@ function pOnboarding(step) {
     ];
     const b = ui.build;
     body = `<h1>${b >= lines.length ? 'Your year is ready' : 'Building your year'}</h1>
-      <div class="h-build"><svg viewBox="0 0 600 40" preserveAspectRatio="none" aria-hidden="true"><line class="bg" x1="0" x2="600" y1="20" y2="20"/><line class="fg" x1="0" x2="${(b / lines.length) * 600}" y1="20" y2="20"/>
-      ${MON.map((m, i) => `<line class="tk" x1="${i * 50 + 25}" x2="${i * 50 + 25}" y1="14" y2="26"/><text x="${i * 50 + 25}" y="40" text-anchor="middle">${m}</text>`).join('')}</svg></div>
+      <div class="h-build"><svg viewBox="0 0 600 20" preserveAspectRatio="none" aria-hidden="true"><line class="bg" x1="0" x2="600" y1="10" y2="10"/><line class="fg" x1="0" x2="${(b / lines.length) * 600}" y1="10" y2="10"/>
+      ${MON.map((_, i) => `<line class="tk" x1="${i * 50 + 25}" x2="${i * 50 + 25}" y1="4" y2="16"/>`).join('')}</svg>
+      <div class="h-build-x" aria-hidden="true">${MON.map((m, i) => `<span style="left:${((i * 50 + 25) / 600) * 100}%">${m}</span>`).join('')}</div></div>
       <ul class="h-build-l">${lines.map((l, i) => `<li class="${i < b ? 'done' : i === b ? 'cur' : ''}"><i>${i < b ? icon('check') : ''}</i>${l}</li>`).join('')}</ul>
       <div class="h-ob-nav">${back}${b >= lines.length ? btn(`${api.demo() === 'fresh' ? 'Open my first brief' : 'Back to my brief'}${icon('arrow')}`, 'data-onboard="6"', 'pri') : ''}</div>`;
     if (b < lines.length && !ui.buildTimer) {
@@ -1846,7 +1862,9 @@ function pOnboarding(step) {
   }
   const who = api.identity?.();
   const exit = api.demo() !== 'fresh' ? goA('home', 'Back to the app', {}, 'h-ob-x') : (who ? `<span class="h-ob-id">Signed in as ${esc(who.name || who.login)}</span>` : '');
-  return `<div class="h-ob"><div class="h-ob-top"><span class="h-mark">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></span>${exit}</div>${rail}<div class="h-ob-card">${body}</div></div>`;
+  // With several households, onboarding names and switches the household it sets up.
+  const picker = householdPicker();
+  return `<div class="h-ob"><div class="h-ob-top">${picker ? `<span class="h-ob-hh">${picker}</span>` : ''}<span class="h-mark">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></span>${exit}</div>${rail}<div class="h-ob-card">${body}</div></div>`;
 }
 
 // The Goals step on a Home with no open goals (where 'home', primary Save goals). Onboarding no
@@ -2434,6 +2452,17 @@ function onInput(e) {
 // Committed changes: a goal form select or checkbox, and a released curve or priority slider
 // (saved to the store, so both feed the planner and chat).
 function onChange(e) {
+  if (e.target?.matches?.('select[data-hh-switch]')) {
+    const sel = e.target;
+    const now = api.household?.();
+    sel.disabled = true;
+    api.switchHousehold(sel.value).then((ok) => {
+      if (ok) return;
+      sel.disabled = false;
+      if (now) sel.value = now.id;
+    });
+    return;
+  }
   if (SCREENS.some((s) => s.onChange?.(e))) return;
   if (recAnswers.onChange(e)) return;
   const t = e.target;

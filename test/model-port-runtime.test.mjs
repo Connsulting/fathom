@@ -118,7 +118,7 @@ test('product engine screen uses neutral labels while the ledger retains provide
     .run(new Date().toISOString(), new Date().toISOString().slice(0,7),'chat',.001,'synthetic-provider-model','{}');
   const scenario = buildScenario(db);
   const esc = s => String(s??'').replaceAll('&','&amp;').replaceAll('<','&lt;');
-  bindEngineScreen({ api:{s:scenario,engineOn:()=>true},arr:v=>Array.isArray(v)?v:[],T:esc,esc,figHtml:()=>'',shell:s=>s,
+  bindEngineScreen({ api:{s:scenario,engineOn:()=>true,canAdmin:()=>true},arr:v=>Array.isArray(v)?v:[],T:esc,esc,figHtml:()=>'',shell:s=>s,
     section:(_title,body)=>body,pageHead:()=>'' });
   const html = renderEngineScreen();
   assert.ok(html.includes('Configured')); assert.ok(html.includes('Model service'));

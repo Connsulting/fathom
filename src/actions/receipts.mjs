@@ -162,6 +162,7 @@ export function restoreReceiptGroup(ctx, { after, receipt, checkOnly = false }) 
       ctx.db.prepare("UPDATE import_batches SET status='undone',undone_at=? WHERE receipt_id=?")
         .run(new Date(ctx.now ?? Date.now()).toISOString(), receipt.id);
       ctx.db.prepare("UPDATE import_proposals SET status='rejected' WHERE (id,version) IN (SELECT proposal_id,proposal_version FROM import_batches WHERE receipt_id=?)").run(receipt.id);
+      if (!rows.some(row => row.kind === 'model_import')) ctx.db.prepare("UPDATE files SET status='waiting_for_engine' WHERE id IN (SELECT file_id FROM import_batches WHERE receipt_id=?)").run(receipt.id);
     }
   }
 }
@@ -180,7 +181,7 @@ export async function undoAction(ctx, id, scope) {
     receipt = restoreReceipt(ctx, id, scope);
 
   });
-  if (scopes.includes('write:facts') || decisionChanged) await replanAction(ctx, receipt);
+  if (scopes.includes('write:facts') || scope === 'write:imports' || decisionChanged) await replanAction(ctx, receipt);
   else if (scope === 'write:sources') ctx.queuePlan?.();
   if (scope === 'write:preferences') {
     const { adoptSuggestions } = await import('../goals/write.mjs');

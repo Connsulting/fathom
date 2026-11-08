@@ -112,7 +112,7 @@ test('a waiting file shows on Accounts with Retry, without any pending question'
   const res = await uploaded;
   expect(res.status()).toBe(200);
   const body = await res.json();
-  expect(body.files.map((f) => f.status)).toEqual(['needs_mapping']);
+  expect(body.files.map((f) => f.status)).toEqual(['waiting_for_engine']);
   expect(body.pending).toBe(before.length);
   const file = body.files[0];
   expect(await pendingIds(request)).toEqual(before);
@@ -124,7 +124,7 @@ test('a waiting file shows on Accounts with Retry, without any pending question'
   const retry = page.locator(`[data-retry="${file.fileId}"]`);
   await expect(retry).toBeVisible();
   await expect(page.getByText('novel-export.csv').first()).toBeVisible();
-  await expect(page.getByText('Needs a mapping').first()).toBeVisible();
+  await expect(page.getByText('Waiting for the engine').first()).toBeVisible();
 
   const retried = page.waitForResponse((r) => new URL(r.url()).pathname === `/api/files/${file.fileId}/retry`);
   await retry.click();

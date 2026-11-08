@@ -24,6 +24,13 @@ export function goHint(route) {
 }
 
 const RECENT_KEY = 'fathom.qs.recent';
+// Keyed by user and household on a real store (api.storageScope), so another person or household
+// never opens this one's thread or context; a demo store keeps the plain key.
+const scopedKey = (base) => {
+  let scope = '';
+  try { scope = window.Fathom?.api?.storageScope?.() || ''; } catch (e) { scope = ''; }
+  return scope ? `${base}:${scope}` : base;
+};
 const KEY_RE = /^[a-z]+:[A-Za-z0-9_.-]+$/;
 const RECENT_MAX = 8;
 const RECENT_SHOWN = 5;
@@ -58,7 +65,7 @@ function textOf(html) {
 
 function readRecents() {
   try {
-    const v = JSON.parse(window.localStorage.getItem(RECENT_KEY) || '[]');
+    const v = JSON.parse(window.localStorage.getItem(scopedKey(RECENT_KEY)) || '[]');
     return Array.isArray(v) ? v.filter((k) => typeof k === 'string' && KEY_RE.test(k)) : [];
   } catch (e) {
     return [];
@@ -69,7 +76,7 @@ function writeRecent(key) {
   if (!KEY_RE.test(key)) return;
   try {
     const next = [key, ...readRecents().filter((k) => k !== key)].slice(0, RECENT_MAX);
-    window.localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+    window.localStorage.setItem(scopedKey(RECENT_KEY), JSON.stringify(next));
   } catch (e) { /* storage unavailable: recents are a convenience */ }
 }
 

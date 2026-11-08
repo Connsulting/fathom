@@ -44,3 +44,15 @@ test('a fragment route or a same-origin path returns there, and hostile targets 
   assert.equal(safeHash('https://evil.example'), null);
   assert.equal(safeHash('#/nope'), null);
 });
+
+test('a deep link\'s household target survives sign-in, and a malformed one is dropped (MT-09)', () => {
+  const hh = 'hh-0f1e2d3c-4b5a-4968-8776-655443322110';
+  assert.equal(signInLocation(`/?household=${hh}`), `/signin?household=${hh}`);
+  assert.equal(signInLocation(`/plan?household=${hh}`), '/signin?next=' + encodeURIComponent('/plan') + `&household=${hh}`);
+  assert.equal(signInLocation('/?household=../evil'), '/signin');
+  assert.equal(signInTarget('/', '#/confirm/7', hh), `/signin?household=${hh}#/confirm/7`);
+  assert.equal(signInTarget('/', '#/plan', 'a b'), '/signin#/plan');
+  assert.equal(afterSignIn({ hash: '#/confirm/7', href: `http://localhost/signin?household=${hh}#/confirm/7` }), `/?household=${hh}#/confirm/7`);
+  assert.equal(afterSignIn({ hash: '', href: `http://localhost/signin?household=${hh}` }), `/?household=${hh}#/home`);
+  assert.equal(afterSignIn({ hash: '#/plan', href: 'http://localhost/signin?household=%2F%2Fevil.example#/plan' }), '/#/plan');
+});

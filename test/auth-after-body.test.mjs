@@ -5,7 +5,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config.mjs';
 import { createAuthStore } from '../src/auth/store.mjs';
-import { SERVER_TIMEOUT, createSessionFixture, serveAppFixture, tempInstance, request } from './helpers/server.mjs';
+import { SERVER_TIMEOUT, createSessionFixture, serveAppFixture, tempInstance, request, contextHeaders } from './helpers/server.mjs';
 import { aggregatorCsv } from './helpers/ingest.mjs';
 
 const TEXT = 'Prefer a simple household plan.';
@@ -33,7 +33,7 @@ function withhold(t, f, kind, payload) {
   return new Promise((resolve, reject) => {
     const headers = { expect: '100-continue', 'content-length': Buffer.byteLength(payload), origin: url.origin };
     if (kind === 'mcp') Object.assign(headers, { authorization: `Bearer ${f.key.key}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-06-18' });
-    else Object.assign(headers, { cookie: f.session.cookie, 'content-type': kind === 'upload' ? `multipart/form-data; boundary=${boundary}` : 'application/json' });
+    else Object.assign(headers, { cookie: f.session.cookie, ...contextHeaders(f.session), 'content-type': kind === 'upload' ? `multipart/form-data; boundary=${boundary}` : 'application/json' });
     const path = kind === 'mcp' ? '/mcp' : kind === 'upload' ? '/api/files' : '/api/preferences';
     let complete;
     const response = new Promise((yes, no) => { complete = { yes, no }; });
@@ -108,14 +108,15 @@ for (const kind of ['json', 'upload']) {
       const pending = await withhold(t, f, kind, kind === 'upload' ? UPLOAD : JSON.stringify({ text: TEXT }));
       const before = { changes: changes(f), vault: vaultFiles(f), jobs: jobs(f) };
       mutate(f, reason);
-      const fresh = await request(f.app.baseUrl, { path: '/api/scenario', headers: { cookie: f.session.cookie } });
+      const fresh = await request(f.app.baseUrl, { path: '/api/scenario', headers: { cookie: f.session.cookie, ...contextHeaders(f.session) } });
       if (reason === 'household change') {
         const session = await request(f.app.baseUrl, { path: '/api/auth/session', headers: { cookie: f.session.cookie } });
         assert.equal(session.status, 200);
         assert.equal(session.json.identity.householdId, 'synthetic-other-household');
         assert.equal(session.json.identity.role, 'member');
       }
-      const status = reason === 'session revocation' ? 401 : 403;
+      // A household change leaves the request's asserted context stale (MT-09): 409 before any effect.
+      const status = reason === 'session revocation' ? 401 : reason === 'household change' ? 409 : 403;
       refuse(fresh, status);
       refuse(await pending.finish(), status);
       assert.equal(changes(f), before.changes);

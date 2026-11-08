@@ -2,6 +2,8 @@
 // A fragment route (#/plan) is kept by the browser across a Location that has no fragment.
 // A same-origin path may also arrive in the sign-in page's next query parameter.
 // Anything else, including an absolute URL, a protocol-relative URL, or a backslash trick, is Home.
+// A deep link's household target (?household=<id>, docs/multi-tenancy.md) travels through sign-in
+// as the household parameter, so the app still asks before opening another household.
 
 export const APP_ROUTES = Object.freeze([
   'onboarding', 'home', 'pace', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
@@ -44,25 +46,38 @@ export function safePath(raw) {
   return value;
 }
 
+// An opaque household id from a deep link, or null.
+export function safeHousehold(raw) {
+  return typeof raw === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(raw) ? raw : null;
+}
+
 // Server and client both build this. The fragment is appended so a caller that already has it
 // can set location in one step. A server redirect omits the fragment; the browser keeps it.
-export function signInTarget(pathname, hash) {
+export function signInTarget(pathname, hash, household = null) {
   const path = safePath(pathname) || '/';
   const kept = safeHash(hash);
   const params = new URLSearchParams();
   if (path !== '/' && path !== '/signin') params.set('next', path);
+  const target = safeHousehold(household);
+  if (target) params.set('household', target);
   const query = params.toString();
   return '/signin' + (query ? '?' + query : '') + (kept || '');
 }
 
 export function afterSignIn(locationLike) {
-  const hash = safeHash(locationLike && locationLike.hash);
-  if (hash) return '/' + hash;
   let next = null;
+  let household = null;
   const href = locationLike && typeof locationLike.href === 'string' ? locationLike.href : '';
   if (href) {
-    try { next = new URL(href).searchParams.get('next'); } catch { next = null; }
+    try {
+      const params = new URL(href).searchParams;
+      next = params.get('next');
+      household = safeHousehold(params.get('household'));
+    } catch { next = null; }
   }
+  const hash = safeHash(locationLike && locationLike.hash);
+  if (household) return '/?household=' + household + (hash || '#/home');
+  if (hash) return '/' + hash;
   const path = safePath(next || '');
   if (path && path !== '/signin') return path;
   return '/#/home';

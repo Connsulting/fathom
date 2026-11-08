@@ -13,11 +13,12 @@ import { cardDetail } from './context.mjs';
 import { bestGuess } from './bestguess.mjs';
 import { sourceStates } from './coverage.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
-import { merchantDisplayName, plainEvidence } from '../categories/display.mjs';
+import { transactionDisplayName, plainEvidence } from '../categories/display.mjs';
 
 const MONTHLY = Object.freeze({ label: 'monthly', staleAfterDays: 45 });
 
 export const CADENCE = Object.freeze({
+  model_import: MONTHLY,
   bank_csv: MONTHLY,
   card_csv: MONTHLY,
   aggregator_csv: MONTHLY,
@@ -100,7 +101,7 @@ export function recordSource(db, { id, label, kind, asOf, now } = {}) {
 }
 
 export function listImportedFiles(db) {
-  const result = { files: db.prepare('SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files WHERE removed_at IS NULL ORDER BY uploaded_at DESC, rowid DESC').all().map(fileOf) };
+  const result = { files: db.prepare('SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files WHERE removed_at IS NULL ORDER BY uploaded_at DESC, rowid DESC').all().map(row => fileWithProposal(db,row)) };
   while (Buffer.byteLength(JSON.stringify(result)) > 256 * 1024 && result.files.length) {
     result.files.splice(Math.floor(result.files.length / 2));
     result.truncated = true;
@@ -108,7 +109,61 @@ export function listImportedFiles(db) {
   return result;
 }
 
-// A files row as the API returns it.
+const words = key => String(key).replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/_/g, ' ').toLowerCase();
+const shown = v => (Array.isArray(v) ? v.map(shown).join(', ') : v && typeof v === 'object'
+  ? Object.entries(v).map(([k, x]) => `${words(k)} ${shown(x)}`).join(', ') : String(v));
+const defOf = (db, table, id) => parseJson(db.prepare(`SELECT def FROM ${table} WHERE id=?`).get(id)?.def, {}) ?? {};
+
+// One note action as the owner approves it: stored proposal values and the current target rows.
+// An expected payment stays structured (the presented row and its resolved relative date).
+function noteAction(db, action, presented) {
+  const args = action?.args ?? {};
+  if (action?.tool === 'answer' && action.operation === 'expected_transaction') {
+    const e = presented?.expectedTransaction ?? args, rel = e.dateEvidence ?? null;
+    return { kind: 'expected', subject: e.subject ?? null, direction: e.direction ?? null, dueDate: e.dueDate ?? null, datePrecision: e.datePrecision ?? null,
+      amount: Number.isFinite(e.amount) ? e.amount : null, phrase: rel?.phrase ?? null, timezone: rel?.phrase ? rel.timezone ?? null : null };
+  }
+  if (action?.tool === 'act_on_recommendation') {
+    const rec = defOf(db, 'recs', args.id), title = rec.title ?? args.id;
+    if (action.operation === 'step') {
+      const task = rec.tasks?.[args.index];
+      return { text: `${(typeof task === 'string' ? task : task?.t) ?? `${title} step ${args.index + 1}`} ${args.checked ? 'marked done' : 'reopened'}` };
+    }
+    return { text: action.operation === 'owner' ? `${title} owner set to ${shown(args.owner)}` : `${title} set to ${words(args.status)}` };
+  }
+  if (action?.tool === 'answer') return { text: `${String(presented?.label ?? words(args.key)).replace('{person}', 'each person')}: ${shown(args.value)}` };
+  if (action?.tool === 'update_goal') {
+    const { id, ...fields } = args, title = action.operation === 'edit' ? defOf(db, 'goals', id).title ?? 'Goal' : args.title ?? 'Goal';
+    const changes = Object.keys(fields).map(k => (['title', 'target', 'targetDate'].includes(k) ? `${words(k)} ${shown(fields[k])}` : words(k)));
+    return { text: `${action.operation === 'edit' ? `${title} goal` : `new goal ${title}`}: ${changes.join(', ')}` };
+  }
+  return { text: String(presented?.label ?? words(action?.operation ?? 'change')) };
+}
+
+// A files row as the API returns it; `reasonCode` is the stored reason for a waiting status.
+function fileWithProposal(db, row) {
+  const file = { ...fileOf(row), ...(row.note !== undefined ? { reasonCode: row.note ?? null } : {}) };
+  const proposal = db.prepare('SELECT id,version,status,reason_code,review_state,proposal FROM import_proposals WHERE file_id=? ORDER BY version DESC,rowid DESC LIMIT 1').get(row.id);
+  if (!proposal) return file;
+  const review = parseJson(proposal.review_state, {}) ?? {};
+  const presentation = review.presentation ?? {};
+  const batch = db.prepare('SELECT receipt_id FROM import_batches WHERE proposal_id=? AND proposal_version=?').get(proposal.id,proposal.version);
+  const kind = review.kind === 'actions' ? 'actions' : 'import';
+  const list = (value, max) => (Array.isArray(value) ? value.slice(0, max) : []);
+  // Each header column of the approved structure with the layout field reading it (null when unused).
+  const tables = review.layout?.tables ?? [];
+  const columns = kind === 'import' ? list(review.structural?.headers, 50).flatMap((h, i) => list(h?.columns, 50).map(c => ({ ordinal: c.ordinal, label: String(c.label ?? ''),
+    field: Object.entries(tables[i]?.fields ?? {}).find(([, s]) => Array.isArray(s?.columns) && s.columns.includes(c.ordinal))?.[0] ?? null }))).slice(0, 50) : [];
+  const presented = list(presentation.actions, 20);
+  const actions = kind === 'actions' ? list(parseJson(proposal.proposal, {})?.actions, 20).map((a, i) => noteAction(db, a, presented[i])) : [];
+  return { ...file, proposal: { id: proposal.id, version: proposal.version, status: proposal.status, reasonCode: proposal.reason_code,
+    summary: presentation.summary ?? null, counts: presentation.counts ?? null, receiptId: batch?.receipt_id ?? null,
+    kind, delta: list(presentation.delta, 20), errors: list(presentation.errors, 10),
+    question: typeof presentation.question === 'string' ? presentation.question : null, actions,
+    notes: Array.isArray(presentation.notes) ? presentation.notes.length : 0,
+    permission: Array.isArray(presentation.permission?.scopes) ? presentation.permission.scopes : null, columns } };
+}
+
 export function fileOf(row) {
   return {
     id: row.id,
@@ -138,13 +193,13 @@ const GROUPED = new Set(['account_owner', 'account_kind']);
 const rankOf = (kind) => RANK[kind] ?? 5;
 const balanceSize = (item) => Math.abs(item.detail?.account?.balance?.amount ?? 0);
 
-// The transaction a category question is about, as the Confirm screen shows it: a clean merchant
-// name, the raw bank text (behind a toggle), signed amount, ISO date and account. null for any
+// The transaction a category question is about, as the Confirm screen shows it: a readable name
+// (structured bank text read first, else the clean merchant name), the raw bank text (behind a toggle), signed amount, ISO date and account. null for any
 // other kind of question.
 function txnOf(kind, context) {
   if (kind !== 'transaction_category') return null;
   const c = context && typeof context === 'object' ? context : {};
-  return { name: merchantDisplayName(c.description), raw: String(c.description ?? ''), amount: c.amount ?? null, date: c.date ?? null, account: String(c.account ?? '') };
+  return { name: transactionDisplayName(c.description), raw: String(c.description ?? ''), amount: c.amount ?? null, date: c.date ?? null, account: String(c.account ?? '') };
 }
 // Category evidence is shown to a person: no vendor name, model id or percentage.
 const evidenceFor = (kind, text) => (kind === 'transaction_category' ? plainEvidence(text) : String(text ?? ''));
@@ -314,12 +369,12 @@ export function ingestState(db, { clock } = {}) {
   queueCategoryChecks(db,{clock:at});
   const items = pendingWithGuesses(db);
   // Uploaded files always have stored bytes; the demo seed's provenance row does not.
-  const files = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files
+  const files = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at, note FROM files
                             WHERE stored_path IS NOT NULL AND removed_at IS NULL ORDER BY uploaded_at DESC, rowid DESC LIMIT ?`)
-    .all(FILES_LIMIT).map(fileOf);
-  const waiting = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files
-                              WHERE stored_path IS NOT NULL AND removed_at IS NULL AND status IN ('needs_mapping', 'needs_extraction')
-                              ORDER BY uploaded_at DESC, rowid DESC`).all().map(fileOf);
+    .all(FILES_LIMIT).map(row => fileWithProposal(db,row));
+  const waiting = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at, note FROM files
+                              WHERE stored_path IS NOT NULL AND removed_at IS NULL AND status IN ('needs_mapping', 'needs_extraction', 'waiting_for_engine', 'budget_exhausted', 'needs_confirmation', 'needs_clarification', 'needs_source_text')
+                              ORDER BY uploaded_at DESC, rowid DESC`).all().map(row => fileWithProposal(db,row));
 
   const states = sourceStates(db, at);
   const sources = sourceList(db, at, states);

@@ -24,7 +24,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, re
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync, backup } from 'node:sqlite';
-import { ROOT, src, tempDir, freePort, migrateLegacyStore, runCommand, sessionClient } from './server.mjs';
+import { ROOT, src, tempDir, freePort, migrateLegacyStore, runCommand, sessionClient, contextHeaders } from './server.mjs';
 import { buildLegacyStore, fileHashes } from './tenancy.mjs';
 import { aggregatorCsv } from './ingest.mjs';
 import { writeSyntheticPack } from './packs.mjs';
@@ -160,7 +160,7 @@ export async function getBytes(baseUrl, path, headers = {}) {
 export async function uploadFiles(baseUrl, session, files) {
   const fd = new FormData();
   for (const f of files) fd.append('files', new Blob([f.bytes], { type: f.type || 'text/csv' }), f.name);
-  const headers = session ? { cookie: session.cookie, origin: new URL(baseUrl).origin } : {};
+  const headers = session ? { cookie: session.cookie, origin: new URL(baseUrl).origin, ...contextHeaders(session) } : {};
   const res = await fetch(`${baseUrl}/api/files`, { method: 'POST', headers, body: fd });
   const text = await res.text();
   let json = null;
@@ -402,7 +402,7 @@ async function populateLegacy(dataDir, legacyKey) {
 
   const uploads = [
     { id: null, name: 'synthetic-checking.csv', mime: 'text/csv', bytes: csvBytes(), kind: 'aggregator_csv', parser: 'aggregator', status: 'imported' },
-    { id: null, name: 'synthetic-plan-note.md', mime: 'text/markdown', bytes: noteBytes(), kind: 'notes', parser: 'notes', status: 'needs_extraction' },
+    { id: null, name: 'synthetic-plan-note.md', mime: 'text/markdown', bytes: noteBytes(), kind: 'model_import', parser: 'model-import', status: 'waiting_for_engine' },
   ];
   for (const u of uploads) u.id = fileIdOf(u.bytes);
   const packet = { id: `advpkt-${randomBytes(8).toString('hex')}`, bytes: Buffer.from(PACKET_HTML) };

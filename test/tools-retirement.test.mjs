@@ -141,3 +141,18 @@ test('C6 scripted questions run through Ask with validated calls, grounding and 
     assert.ok(turn.tools.some(t=>t.name==='retirement'),c.id);
   }
 });
+
+
+test('target keeps independencePlan rounding at a fractional-cent boundary', async t => {
+  const s = await setup(t);
+  const spending = await s.call('total', { ...custom, annualize: true });
+  const withdrawalRate = spending.total.value / 150000.001;
+  const sp = spendingInputs(readInput(s.ctx));
+  const plan = independencePlan({ spending: { ...sp, annualSpend: spending.total.value },
+    invested: { total: 10000, held: [], left: [] }, horizon: 'now', clock: s.ctx.clock, withdrawalRate });
+  const out = await s.retirement('target', { spending: spending.total.ref, withdrawalRate: rate(withdrawalRate) });
+  assert.equal(plan.target, 150000);
+  assert.equal(out.target.value, plan.target);
+  assert.equal(out.months.value, plan.months);
+  assert.equal(out.projectedDate.value, plan.targetDate);
+});

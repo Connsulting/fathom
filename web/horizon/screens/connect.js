@@ -25,7 +25,7 @@ function blank() {
 /* ---------- data ---------- */
 
 async function getJson(path) {
-  const res = await fetch(path, { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
+  const res = await window.Fathom.api.fetch(path, { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
   let data = null;
   try { data = await res.json(); } catch { data = null; }
   if (!res.ok) throw new Error((data && typeof data.error === 'string' && data.error) || `The server answered ${res.status}.`);
@@ -35,7 +35,7 @@ async function getJson(path) {
 async function postJson(path, body) {
   let res;
   try {
-    res = await fetch(path, {
+    res = await window.Fathom.api.fetch(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify(body || {}),

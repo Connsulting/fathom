@@ -464,3 +464,77 @@ test('niceTicks keeps design.js scale marks', () => {
   assert.deepEqual(niceTicks(-120, 480, 4), [-200, 0, 200, 400, 600]);
   assert.deepEqual(niceTicks(0.095, 0.207, 4), [0.05, 0.1, 0.15, 0.2, 0.25]);
 });
+
+// UI3 AC2: a transaction row's figure is labeled with the readable name, and its popover keeps the
+// bank's raw text as a detail line; a row whose name is its description adds nothing.
+test('a transaction row figure keeps the raw bank text beside its readable name', () => {
+  const raw = 'ORIG CO NAME:EXAMPLE PAYROLL CO ENTRY DESCR:NET SEC:CCD';
+  const row = (description, name) => ({ t: 'row', value: -10, unit: 'usd', row: { account: 'Checking', date: '2032-03-01', description, name } });
+  const block = { id: 'bt', op: 'table', after: 1, spec: {}, calls: [], snapshot: { title: 'Rows', columns: [{ label: 'Amount', type: 'row' }],
+    rows: [{ cells: [row(raw, 'Example Payroll payroll (net)')] }, { cells: [row('Grocery market', 'Grocery market')] }] } };
+  registered = new Map();
+  messageBodyHtml(msg([block]));
+  const figs = [...registered.values()];
+  const named = figs.find((f) => f.label === 'Example Payroll payroll (net)');
+  assert.ok(named, 'the readable name labels the figure');
+  assert.deepEqual(named.detail, [{ k: 'Bank text', v: raw }], 'the raw bank text stays in the popover');
+  const plain = figs.find((f) => f.label === 'Grocery market');
+  assert.equal(plain.detail, undefined, 'no detail line when the name is the description');
+});
+
+// UI3 AC2: the rows behind a figure ("Show rows") show the readable name with the raw bank text on hover.
+test('drill rows show the readable name and keep the raw bank text as its title', async () => {
+  const { render } = await import('../web/horizon/screens/ask-block-table.js');
+  const raw = 'SQ *SAMPLE COFFEE #0412';
+  const snapshot = { title: 'Spending', columns: [{ label: 'Spent', unit: 'usd', type: 'fig' }],
+    rows: [{ cells: [{ t: 'fig', drill: { tool: 'spending' }, fig: { value: 12, unit: 'usd', label: 'Coffee', kind: 'm', asOf: '2032-03-01', gaps: [], provenance: {}, source: 'Spending' } }] }] };
+  const items = [
+    { date: '2032-03-01', account: 'Card', description: raw, name: 'Sample Coffee', fig: null },
+    { date: '2032-03-02', account: 'Card', description: 'Grocery market', name: 'Grocery market', fig: null },
+  ];
+  const ctx = { esc, key: 'm:b', ctl: (x) => x, fig: () => '', rowFigure: () => '',
+    state: { sort: null, filter: '', all: false, drill: '0-0', drillData: { sum: null, items } } };
+  const html = render(snapshot, ctx);
+  assert.ok(html.includes(`<span title="${esc(raw)}">Sample Coffee</span>`), 'the name carries the raw text as its title');
+  assert.ok(html.includes(' Grocery market '), 'a name equal to its description is shown once, plainly');
+  assert.ok(!html.includes('title="Grocery market"'));
+});
+
+// UI3 AC2: a compare block's description cell shows the readable name with the raw text on hover.
+test('compare cells show a description\'s readable name and keep the raw bank text as its title', async () => {
+  const { render } = await import('../web/horizon/screens/ask-block-compare.js');
+  const raw = 'ORIG CO NAME:GUSTO CO ENTRY DESCR:NET SEC:CCD';
+  const snapshot = { title: 'Two rows', fields: [{ label: 'Description' }], options: [
+    { label: 'First', cells: [{ t: 'text', text: raw, name: 'Gusto payroll (net)' }] },
+    { label: 'Second', cells: [{ t: 'text', text: 'Grocery market', name: 'Grocery market' }] }] };
+  const html = render(snapshot, { esc, key: 'm:c', ctl: (x) => x, fig: () => '' });
+  assert.ok(html.includes(`<span title="${esc(raw)}">Gusto payroll (net)</span>`), 'the name shows with the raw text as its title');
+  assert.ok(html.includes('<dd>Grocery market</dd>'), 'a name equal to its text is shown plainly');
+});
+
+// UI3 AC2: a merchant cell carries the raw bank text separately; hover and the row filter use it.
+test('a merchant cell shows its name, keeps the raw bank text on hover and matches it in the filter', async () => {
+  const { render, filterRows } = await import('../web/horizon/screens/ask-block-table.js');
+  const raw = 'OUTGOING WIRE TRANSFER A/C: SAMPLE TRADING LLC REF: SYN0042';
+  const cell = { t: 'text', text: 'outgoing wire transfer a c sample trading llc ref', name: 'Wire to Sample Trading', raw };
+  const snapshot = { title: 'Rows', columns: [{ label: 'Merchant', type: 'text' }], rows: [{ cells: [cell] }, { cells: [{ t: 'text', text: 'grocery market' }] }] };
+  const html = render(snapshot, { esc, key: 'm:m', ctl: (x) => x, fig: () => '', state: { sort: null, filter: '', all: false } });
+  assert.ok(html.includes(`<span title="${esc(raw)}">Wire to Sample Trading</span>`), 'the raw bank text is the hover title');
+  assert.deepEqual(filterRows(snapshot.rows, 'SYN0042').map((r) => r.cells[0].name), ['Wire to Sample Trading'], 'the filter matches the raw reference');
+});
+
+// UI3 AC2: the hover compares the name with the raw bank text, not the normalized merchant, so a raw
+// reference survives even when the name equals the merchant text.
+test('a merchant cell whose name equals its merchant text still shows the raw bank text on hover', async () => {
+  const { render } = await import('../web/horizon/screens/ask-block-table.js');
+  const { render: compare } = await import('../web/horizon/screens/ask-block-compare.js');
+  const raw = 'SAMPLE CAFE #0412';
+  const cell = { t: 'text', text: 'Sample Cafe', name: 'Sample Cafe', raw };
+  const want = `<span title="${esc(raw)}">Sample Cafe</span>`;
+  const table = render({ title: 'Rows', columns: [{ label: 'Merchant', type: 'text' }], rows: [{ cells: [cell] }] },
+    { esc, key: 'm:r', ctl: (x) => x, fig: () => '', state: { sort: null, filter: '', all: false } });
+  assert.ok(table.includes(want), 'table');
+  const cmp = compare({ title: 'Two', fields: [{ label: 'Merchant' }], options: [{ label: 'A', cells: [cell] }, { label: 'B', cells: [cell] }] },
+    { esc, key: 'm:r', ctl: (x) => x, fig: () => '' });
+  assert.ok(cmp.includes(want), 'compare');
+});

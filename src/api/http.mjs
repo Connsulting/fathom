@@ -57,7 +57,7 @@ export function sendError(res, err) {
 // Server-Sent Events for a streaming route. Headers go out with the first event, so an error
 // thrown before any event is still an ordinary JSON error. send({ type, ...data }) writes one event
 // named by type; finish(out) writes the 'final' event (the JSON body the route returns) and ends;
-// fail(err) writes an 'error' event ({ status, error }) and ends. A client that disconnects stops
+// fail(err) writes an 'error' event ({ status, error, code when the error has one }) and ends. A client that disconnects stops
 // receiving events; the handler runs to completion, so the answer is still stored. A comment line
 // every 15 seconds keeps idle proxies from closing the stream.
 export const wantsEventStream = req => /\btext\/event-stream\b/i.test(String(req.headers.accept || ''));
@@ -95,7 +95,8 @@ export function createEventStream(req, res, { heartbeatMs = 15000 } = {}) {
     finish(out) { write('final', out); end(); },
     fail(err) {
       const status = err instanceof HttpError ? err.status : 500;
-      write('error', { status, error: err instanceof HttpError ? err.message : 'internal error' });
+      write('error', { status, error: err instanceof HttpError ? err.message : 'internal error',
+        ...(err instanceof HttpError && typeof err.code === 'string' ? { code: err.code } : {}) });
       end();
     },
   };

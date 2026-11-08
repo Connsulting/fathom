@@ -3,6 +3,7 @@ import { tokenScope, loadLinkedRecs, loadContent, housekeepingCount } from '../.
 import { parseJson as parse } from '../../store/db.mjs';
 import { needsYou, verdictLevel } from '../../shared/rules.mjs';
 import { ANSWER_SHAPES, answerShape } from '../../jobs/triggers/common.mjs';
+import { inferMortgage } from '../../calc/mortgage-inference.mjs';
 const visible = recs => recs.filter(r => r.status !== 'hidden');
 const DATE = '^\\d{4}-\\d{2}-\\d{2}$';
 function where(conds) { const used = conds.filter(c => c[1] !== undefined); return { clause: used.length ? ' WHERE ' + used.map(c => c[0]).join(' AND ') : '', params: used.map(c => c[1]) }; }
@@ -23,8 +24,11 @@ export const operations = [
       const facts = {};
       for (const f of ctx.db.prepare('SELECT key, value FROM facts ORDER BY key').all()) facts[f.key] = parse(f.value, f.value);
       const meta = loadContent(ctx.db).meta || {};
+      const mortgage = inferMortgage(ctx.db, clock, facts['obligations.mortgage']);
+      if (mortgage.status === 'paid_off') facts['obligations.mortgage'] = mortgage.values;
       return {
         facts,
+        mortgage: { status: mortgage.status, ...(mortgage.message ? { message: mortgage.message } : {}), provenance: { sources: mortgage.sources } },
         verdictLevel: verdictLevel(recs),
         needsYouCount: needsYou(recs).length,
         statusCounts,

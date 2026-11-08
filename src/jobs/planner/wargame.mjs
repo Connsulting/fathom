@@ -20,6 +20,7 @@ export function buildWargames(data, out, ctx) {
   const model = {};
   const salary = salaryGame(data, out, ctx);
   if (salary) model.salary = salary;
+  else if (out.info.wargameInvalid.salary === 'inputs_changed' && ctx.facts?.['income.sCorp'] === true && !ctx.entities.some(e => e.type === 's_corp') && data.pnl.length) out.info.wargameInvalid.salary = 'scorp_identity_missing';
   const deferral = deferralGame(data, out, ctx);
   if (deferral) model.deferral = deferral;
   return model;
@@ -47,7 +48,7 @@ const GAME_NAME = Object.freeze({ salary: 'Salary war game', deferral: 'Invoice 
 const NEEDS = Object.freeze({
   salary: {
     inputs_changed: ['needs an S corp with profit on file.', 'files'],
-    'business.salaryRange': ['needs the salary range you would consider paying yourself.', 'answers'],
+    'business.salaryRange': ["needs your advisor's reasonable salary range.", 'answers'],
     'retirement.otherPlanDeferrals': ['needs your deferrals to other workplace plans this year.', 'answers'],
     'retirement.priorYearFicaWages': ["needs last year's Social Security wages from your business.", 'files'],
     w2_plan_compensation_unknown: ['needs a W-2 from your business that shows box twelve.', 'files'],
@@ -58,7 +59,16 @@ const NEEDS = Object.freeze({
   },
 });
 
-export function notBuiltReason(name, code) {
+export function notBuiltReason(name, code, entities = []) {
+  if (String(code).startsWith('entity_unclassified:')) {
+    const entity = entities.find(e => e.slug === code.slice('entity_unclassified:'.length));
+    if (entity?.needsName) return { code, text: `Salary war game needs the business name for ${entity.displayName}.`, unlock: 'answers' };
+    return { code, text: `${GAME_NAME[name]} needs you to classify ${entity?.displayName || entity?.name || 'the imported business'} as an S corp, sole proprietorship, partnership, personal spending, or not yours.`, unlock: 'answers' };
+  }
+  if (name === 'salary' && code === 'scorp_identity_missing') {
+    const names = [...new Set(entities.map(e => e.displayName || e.name))];
+    return { code, text: `Salary war game needs you to identify the S corp among ${names.join(', ') || 'the imported ledgers'}.`, unlock: 'answers' };
+  }
   const known = (NEEDS[name] || {})[code];
   const [needs, unlock] = known
     || (String(code).includes('.') ? ['needs a household answer it does not have yet.', 'answers']

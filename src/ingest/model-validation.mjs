@@ -2,10 +2,14 @@ import { createHash } from 'node:crypto';
 import { validateProposal } from './model-contract.mjs';
 import { parseInterpretation } from './model-parse.mjs';
 import { resolveField } from './model-source.mjs';
-import { persistImport } from './pipeline.mjs';
+import { prepareSourceActions, applySourceActions } from './model-updates.mjs';
+import { relativeDateEvidence } from '../actions/evidence.mjs';
+import { persistImport, accountIdentity } from './pipeline.mjs';
+import { toRows, validateExtraction, periodOf, sourceKindOf, labelOf } from './extract.mjs';
 import { isoDate, number, cents } from './format.mjs';
+import { dedupeKey } from './dedupe.mjs';
 
-export const importEffect = validation => Object.fromEntries(['valid', 'errors', 'rows', 'counts', 'bindings', 'identities', 'questions', 'summary'].map(key => [key, validation[key] ?? null]));
+export const importEffect = validation => Object.fromEntries(['valid', 'errors', 'rows', 'counts', 'bindings', 'identities', 'questions', 'summary', 'actions', 'notes'].map(key => [key, validation[key] ?? null]));
 const collect = (value, out = []) => {
   if (value?.refs && value.transform) out.push(...value.refs);
   else if (value && typeof value === 'object') Object.values(value).forEach(v => collect(v, out));
@@ -23,15 +27,36 @@ function accountFor(db, value) {
   return matches.length === 1 ? matches[0] : null;
 }
 
-export function importPlan(rows) {
-  const dates = rows.map(r => r.date ?? r.asOf ?? (r.period ? r.period + '-01' : null)).filter(Boolean).sort();
-  return { status: 'imported', parser: 'model-import', label: 'Reviewed import', sourceKind: 'model_import',
+export function importPlan(rows, { reinterpret = false } = {}) {
+  const monthEnd = period => new Date(Date.UTC(Number(period.slice(0,4)), Number(period.slice(5,7)), 0)).toISOString().slice(0,10);
+  const rowDate = row => row.date ?? row.asOf ?? (row.period ? monthEnd(row.period) : null);
+  const dates = rows.map(rowDate).filter(Boolean).sort();
+  const horizons = new Map();
+  const family = row => row.kind === 'pnl_line' ? `pnl:${normalize(row.entity)}:${row.period.slice(0,4)}`
+    : `tax:${row.taxYear ?? row.sheetYear}:${normalize(row.jurisdiction).replace(/[^a-z0-9]/g, '')}:${normalize(row.payer).replace(/[^a-z0-9]/g, '')}`;
+  for (const row of rows.filter(r => ['pnl_line','tax_payment'].includes(r.kind))) {
+    const key = family(row), date = rowDate(row);
+    if (!horizons.has(key) || date > horizons.get(key)) horizons.set(key,date);
+  }
+  const coverage = [...new Map(rows.filter(r => ['pnl_line', 'tax_payment'].includes(r.kind)).map(row => {
+    const period = row.period ?? row.date.slice(0, 7), slot = `tax:${row.taxYear ?? row.sheetYear}:${normalize(row.jurisdiction).replace(/[^a-z0-9]/g, '')}:${normalize(row.payer).replace(/[^a-z0-9]/g, '')}`;
+    const group = row.kind === 'pnl_line' ? { table: 'pnl_lines', entity: row.entity, period } : { table: 'tax_payments', slot, period };
+    return [JSON.stringify(group), { ...group, complete: true, authority: horizons.get(family(row)) }];
+  })).values()];
+  const targets = [...new Set(rows.map(r => r.kind))].sort();
+  const documents = [...new Set(rows.filter(r => r.kind === 'document').map(r => r.docType))].sort();
+  const financial = targets.filter(k => ['transaction','balance','position','pnl_line','tax_payment'].includes(k));
+  const sourceKind = documents.length === 1 ? sourceKindOf(documents[0]) : financial.length === 1
+    ? { transaction: 'bank_csv', balance: 'balances', position: 'brokerage_positions', pnl_line: 'pnl_workbook', tax_payment: 'tax_payments' }[financial[0]] : financial.length ? 'model_import' : 'notes';
+  const sourceGroup = [...financial, ...documents.map(type => `document-${type}`)].join('+') || 'updates';
+  const label = documents.length === 1 ? labelOf(documents[0]) : 'Reviewed import';
+  return { reinterpret, coverage, sourceGroup, capabilities: { positions: true, targetCoverage: true }, status: 'imported', parser: 'model-import', label, sourceKind,
     parsed: { rows, warnings: [], period: { from: dates[0] ?? null, to: dates.at(-1) ?? null } } };
 }
 
 export function validateImport(ctx, proposal, source) {
   const checked = validateProposal(proposal, source);
-  const errors = [...checked.errors], rows = [], bindings = [], identities = [];
+  const errors = [...checked.errors], rows = [], bindings = [], identities = [], actions = [], notes = [];
   const fail = reason => ({ valid: false, errors: [...new Set([...errors, reason])], rows, bindings, identities, counts: null, summary: null });
   if (!checked.valid) return fail('invalid_proposal');
   if (source.status !== 'indexed') return fail('needs_source_text');
@@ -76,7 +101,7 @@ export function validateImport(ctx, proposal, source) {
       }
     }
     const base = { locator, ...(account ? { accountId: account.id, account: { inst: account.inst, mask: account.mask, name: account.name },
-      ...(account.identity?.startsWith('simplefin:') ? { identity: account.identity } : {}) } : {}) };
+      ...(account.identity && account.identity !== accountIdentity({ account: { inst: account.inst, mask: account.mask, name: account.name } }) ? { identity: account.identity } : {}) } : {}) };
     const amount = f.amount;
     if (Object.hasOwn(f, 'amount') && (typeof amount !== 'number' || !Number.isFinite(amount))) errors.push('invalid_amount');
     const date = f.postedDate ?? f.asOf ?? f.paymentDate;
@@ -90,15 +115,47 @@ export function validateImport(ctx, proposal, source) {
       name: f.name ?? null, price: f.price ?? null, costBasis: f.costBasis ?? null });
     else if (row.target === 'pnl') {
       if (!PERIOD.test(f.period) || !['cash', 'accrual', 'unknown'].includes(f.basis)) errors.push('pnl_context_unresolved');
-      const entity = ctx.db.prepare('SELECT entity FROM entity_aliases WHERE alias = ?').get(normalize(f.entity))?.entity;
+      const matches = [...new Set(ctx.db.prepare('SELECT alias,entity FROM entity_aliases').all().filter(r => normalize(r.alias).replace(/[^a-z0-9]/g, '') === normalize(f.entity).replace(/[^a-z0-9]/g, '')).map(r => r.entity))];
+      const entity = matches.length === 1 ? matches[0] : null;
       if (!entity) errors.push('entity_unresolved');
       else bindings.push(`entity:${entity}`);
       rows.push({ ...base, kind: 'pnl_line', entity, period: f.period, category: String(f.category), amount });
     } else if (row.target === 'tax_payment') {
       if (row.status !== 'paid' || !Number.isInteger(Number(f.taxYear)) || Number(f.taxYear) < 1900 || Number(f.taxYear) > 2200 ||
         !f.taxYearBasis || !['you', 'spouse', 'joint'].includes(f.recipient) || row.datePrecision === 'unknown') errors.push('tax_context_unresolved');
-      rows.push({ ...base, kind: 'tax_payment', jurisdiction: String(f.jurisdiction), payer: String(f.payer), recipient: f.recipient,
-        amount, taxYear: Number(f.taxYear), sheetYear: Number(f.taxYear), taxYearBasis: String(f.taxYearBasis), date: f.paymentDate, datePrecision: row.datePrecision, paymentKind: row.kind });
+      const payment = { ...base, kind: 'tax_payment', jurisdiction: String(f.jurisdiction), payer: String(f.payer), recipient: f.recipient === 'you' ? 'owner' : f.recipient,
+        amount, taxYear: Number(f.taxYear), sheetYear: Number(f.taxYear), taxYearBasis: String(f.taxYearBasis), date: f.paymentDate, datePrecision: row.datePrecision, paymentKind: row.kind };
+      if (day(payment.date)) {
+        const key = dedupeKey(payment), kind = value => value === 'paid' ? 'estimate' : value;
+        const stored = ctx.db.prepare('SELECT kind FROM tax_payments WHERE dedupe_key=?').get(key);
+        if ((stored && kind(stored.kind) !== row.kind) || rows.some(prior => prior.kind === 'tax_payment' && day(prior.date) && dedupeKey(prior) === key && kind(prior.paymentKind) !== row.kind)) errors.push('tax_payment_kind_conflict');
+      }
+      rows.push(payment);
+    } else if (row.target === 'document') {
+      if (!validateExtraction(row.docType, f)) errors.push('invalid_document');
+      else {
+        const entities = ctx.db.prepare('SELECT entity AS name FROM pnl_lines UNION SELECT entity AS name FROM entity_aliases').all().map(r => r.name);
+        const converted = toRows(row.docType, { ...f, confidence: 1 }, { fileId: source.fileId, households: { entities }, warnings: [] });
+        const period = periodOf(row.docType, f);
+        rows.push(...converted.map(r => ({ ...r, locator: { ...locator, document: row.docType, ...(r.locator?.field ? { field: r.locator.field } : {}) },
+          ...(r.kind === 'document' ? { asOf: period.to } : {}) })));
+      }
+    } else if (row.target === 'account_metadata') {
+      if (!accountFor(ctx.db, f.accountId)) errors.push('account_unresolved');
+      else rows.push({ ...base, kind: 'account_metadata', accountId: f.accountId, account: { inst: f.institution, mask: f.mask, kind: f.kind, holder: f.holder, name: f.alias } });
+    } else if (['fact', 'expected_transaction'].includes(row.target) && source.format === 'text' && source.bytes.length <= 4000) {
+      const span = { fileId: source.fileId, sha256: source.sha256, byteStart: 0, byteEnd: source.bytes.length };
+      const evidence = new TextDecoder('utf-8', { fatal: true }).decode(source.bytes);
+      let args = row.target === 'fact' ? { key: row.key, value: f.value, evidence } : { subject: f.subject, dueDate: f.dueDate,
+        amount: f.amount ?? null, accountId: f.accountId ?? null, direction: row.direction, datePrecision: row.datePrecision, evidence };
+      try {
+        if (row.target === 'expected_transaction' && /^next /i.test(f.dueDate)) {
+          const derived = relativeDateEvidence({ ...ctx, sourceEvidence: { source, span, actorId: ctx.actorId, capturedAt: ctx.capturedAt ?? null } }, f.dueDate);
+          args = { ...args, dueDate: derived.date, relativeDate: f.dueDate };
+        }
+        const prepared = prepareSourceActions(ctx, source, [{ tool: 'answer', operation: row.target === 'fact' ? 'fact' : 'expected_transaction', args, span }]);
+        actions.push(...prepared.accepted); notes.push(...prepared.notes);
+      } catch (error) { errors.push(error.code ?? 'invalid_action'); }
     } else errors.push('action_adapter_required');
   }
   const controls = proposal.controls ?? [], controlled = new Set(controls.flatMap(c => c.field.refs));
@@ -138,12 +195,13 @@ export function validateImport(ctx, proposal, source) {
   let counts, questions;
   ctx.db.exec('SAVEPOINT import_preview');
   try {
-    counts = persistImport(ctx.db, source.fileId, { name: 'Reviewed import', bytes: source.bytes }, importPlan(structuredClone(persisted)), { now: new Date(typeof ctx.now === 'function' ? ctx.now() : ctx.now ?? Date.now()).toISOString() }).result.counts;
+    counts = persistImport(ctx.db, source.fileId, { name: 'Reviewed import', bytes: source.bytes }, importPlan(structuredClone(persisted), { reinterpret: ctx.reinterpret }), { now: new Date(typeof ctx.now === 'function' ? ctx.now() : ctx.now ?? Date.now()).toISOString() }).result.counts;
+    if (actions.length) applySourceActions({ ...ctx, scopes: undefined }, source, actions, ctx.capturedAt ?? null, null);
     questions = ctx.db.prepare('SELECT kind,subject,question,options,context,status FROM confirm_items WHERE file_id=? ORDER BY kind,subject').all(source.fileId).map(row => ({ ...row }));
   } catch { errors.push('persistence_refused'); }
   finally { ctx.db.exec('ROLLBACK TO import_preview'); ctx.db.exec('RELEASE import_preview'); }
   if (errors.length) return fail('validation_failed');
-  return { valid: true, errors: [], rows: persisted, bindings: [...new Set(bindings)].sort(), identities, questions, counts,
+  return { valid: true, errors: [], actions, notes, rows: persisted, bindings: [...new Set(bindings)].sort(), identities, questions, counts,
     summary: { rows: proposal.rows.length, amount: parsed.resolved.reduce((n, row) => n + toCents(row.fields.amount ?? 0), 0) / 100,
       totalStatus: controls.length ? 'totals_match' : 'no_sheet_total', totalMessage: controls.length ? 'Totals match the sheet' : 'No sheet total to check' } };
 }

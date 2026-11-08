@@ -14,6 +14,7 @@ import { reasonText } from '../triggers/missing-data.mjs';
 import { buildSeries } from './series.mjs';
 import { factEventTitle } from '../../shared/event-labels.mjs';
 import { notBuiltReason } from './wargame.mjs';
+import { ledgerDisplayName } from '../../pnl/ledgers.mjs';
 
 export const SRC = 'planner';
 export const NEUTRAL_NAMES = Object.freeze({
@@ -86,7 +87,8 @@ export function writeBrief(db, ctx, { hits }) {
   // data would unlock it (recomputed every run).
   delete wargame.notBuilt;
   const notBuilt = {};
-  for (const name of ['salary', 'deferral']) if (!wargame[name] && invalid[name]) notBuilt[name] = notBuiltReason(name, invalid[name]);
+  const reasonEntities = [...ctx.entities, ...ctx.data.pnl.map(l => ({ name: ledgerDisplayName(l) }))];
+  for (const name of ['salary', 'deferral']) if (!wargame[name] && invalid[name]) notBuilt[name] = notBuiltReason(name, invalid[name], reasonEntities);
   if (Object.keys(notBuilt).length) wargame.notBuilt = notBuilt;
   upsertContent(db, 'wargame', wargame, now);
 

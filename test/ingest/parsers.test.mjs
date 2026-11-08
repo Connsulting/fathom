@@ -13,11 +13,6 @@ const cases = [
   ['aggregator.csv', 'aggregator'],
   ['Chase7766_Activity_20320305.csv', 'chase-activity'],
   ['positions.csv', 'brokerage-positions'],
-  ['business-pnl.xlsx', 'pnl-workbook'],
-  ['tax-payments.xlsx', 'tax-payments'],
-  ['month-end-balances.csv', 'balances'],
-  ['account-map.csv', 'account-map'],
-  ['notes.md', 'notes'],
 ];
 
 for (const [name, id] of cases) {
@@ -145,121 +140,6 @@ test('pending activity may appear in the brokerage symbol column', () => {
   assert.ok(result.warnings.some((w) => w.code === 'pending_activity'));
 });
 
-test('P&L aggregates actual detailed sheets by entity, category and month', () => {
-  const { rows, warnings } = run('business-pnl.xlsx');
-  assert.equal(rows.length, 3);
-  assert.deepEqual(rows.map((row) => row.kind), ['pnl_line', 'pnl_line', 'pnl_line']);
-  assert.equal(rows.find((row) => row.entity === 'Example Studio' && row.category === 'Income').amount, 400);
-  assert.equal(rows.find((row) => row.category === 'Office supplies').amount, -35);
-  assert.equal(rows.find((row) => row.entity === 'Example Shop').amount, 175.25);
-  assert.ok(rows.every((row) => row.locator.cells.length > 0));
-  assert.ok(warnings.some((w) => w.code === 'formula_without_cache'));
-  assert.ok(warnings.some((w) => w.code === 'invalid_pnl_row'));
-});
-
-test('paired income and expense sheets normalize to the same entity', () => {
-  const { rows } = run('business-pnl-paired.xlsx');
-  const income = rows.find((row) => row.category === 'Income' && row.amount === 400);
-  const expense = rows.find((row) => row.category === 'Office supplies');
-  assert.equal(income.entity, 'Example Studio');
-  assert.equal(expense.entity, income.entity);
-  assert.equal(expense.amount, -35);
-  assert.equal(income.locator.sheet, 'Example Studio - (Actual Income)');
-  assert.equal(expense.locator.sheet, '[Example Studio: Expenses]');
-});
-
-test('monthly tax matrix keeps both payers, ignores safe-harbor totals and records precision', () => {
-  const { rows, warnings } = run('tax-payments.xlsx');
-  assert.equal(rows.length, 10);
-  assert.ok(rows.every((row) => row.kind === 'tax_payment' && row.paymentKind === 'paid'));
-  assert.ok(rows.every((row) => row.datePrecision === 'month'));
-  assert.equal(rows.find((row) => row.locator.cell === 'C5').date, '2032-02-29');
-  assert.equal(rows.find((row) => row.locator.cell === 'C6').amount, 425);
-  assert.equal(rows.find((row) => row.locator.cell === 'E6').amount, -10);
-  assert.equal(rows.filter((row) => row.taxYear === 2031).length, 2);
-  assert.ok(warnings.some((w) => w.code === 'month_precision'));
-  assert.ok(warnings.some((w) => w.code === 'invalid_tax_payment'));
-  const payment = rows.find((row) => row.payer === 'Owner');
-  assert.notEqual(dedupeKey(payment), dedupeKey({ ...payment, payer: 'Spouse' }));
-});
-
-test('January tax rows retain sheet years and mark both year interpretations as assumptions', () => {
-  const { rows, warnings } = run('tax-payments.xlsx');
-  const january = rows.filter((row) => row.date === '2032-01-31');
-  assert.equal(january.length, 4);
-  for (const row of january) {
-    assert.equal(row.sheetYear, 2032);
-    assert.equal(row.taxYearBasis, 'sheet_label');
-    assert.equal(row.dateBasis, 'sheet_label');
-    assert.ok(warnings.some((w) => w.code === 'tax_year_assumed' && w.locator.cell === row.locator.cell));
-  }
-});
-
-test('revised P&L and tax workbook cells retain slot identity across reimports', () => {
-  for (const [originalName, revisedName, category, cell, before, after] of [
-    ['business-pnl.xlsx', 'business-pnl-revised.xlsx', 'Office supplies', null, -35, -50],
-    ['tax-payments.xlsx', 'tax-payments-revised.xlsx', null, 'C5', 225, 250],
-  ]) {
-    const original = run(originalName).rows;
-    const revised = run(revisedName).rows;
-    const matches = (row) => category ? row.category === category : row.locator.cell === cell && row.sheetYear === 2032;
-    const oldRow = original.find(matches), newRow = revised.find(matches);
-    assert.equal(oldRow.amount, before);
-    assert.equal(newRow.amount, after);
-    assert.equal(dedupeKey(oldRow), dedupeKey(newRow));
-    const current = new Map([...original, ...revised].map((row) => [dedupeKey(row), row]));
-    assert.equal(current.size, original.length);
-    assert.equal(current.get(dedupeKey(oldRow)).amount, after);
-  }
-});
-
-test('Excel date epochs and cached formulas produce grounded monthly figures', () => {
-  for (const name of ['pnl-epoch-1900.xlsx', 'pnl-epoch-1904.xlsx']) {
-    const { rows, warnings } = run(name);
-    assert.equal(rows.length, 2);
-    assert.equal(rows[0].period, '2032-02');
-    assert.equal(rows[0].amount, 400);
-    assert.equal(rows[1].period, '2032-03');
-    assert.equal(rows[1].amount, 125.25);
-    assert.equal(warnings.length, 0);
-  }
-});
-
-test('invalid XML and corrupt archives fall back, while valid workbooks remain live', () => {
-  for (const name of ['invalid-xml.xlsx', 'corrupt-archive.xlsx']) {
-    const file = fixture(name);
-    assert.equal(pickParser(file), null);
-    for (const id of ['pnl-workbook', 'tax-payments']) {
-      const result = parsers.find((parser) => parser.id === id).parse(file);
-      assert.deepEqual(result.rows, []);
-      assert.equal(result.warnings[0].code, 'malformed_workbook');
-    }
-  }
-  assert.equal(pickParser(fixture('business-pnl.xlsx')).id, 'pnl-workbook');
-});
-
-test('balances use actual month end including leap years and expose account metadata', () => {
-  const balances = run('month-end-balances.csv');
-  assert.equal(balances.rows.length, 2);
-  assert.equal(balances.rows[0].date, '2032-02-29');
-  assert.equal(balances.rows[0].account.name, 'daily');
-  assert.equal(balances.warnings.length, 2);
-  const metadata = run('account-map.csv');
-  assert.equal(metadata.rows.length, 2);
-  assert.equal(metadata.rows[0].kind, 'document');
-  assert.equal(metadata.rows[0].docType, 'account_metadata');
-  assert.deepEqual(metadata.rows[0].fields, { account: { inst: '', mask: '', name: 'daily', kind: 'checking' }, source: 'direct_export' });
-  assert.equal(metadata.warnings.length, 1);
-});
-
-test('notes retain text as a document without extracting financial facts', () => {
-  const file = fixture('notes.md');
-  const { rows, period, warnings } = pickParser(file).parse(file);
-  assert.deepEqual(rows, [{ kind: 'document', docType: 'notes', fields: { text: new TextDecoder().decode(file.bytes) }, locator: { row: 1 } }]);
-  assert.deepEqual(period, { from: null, to: null });
-  assert.deepEqual(warnings, []);
-});
-
 test('registry declines PDFs, unknowns, broken workbooks, and extension-only claims', () => {
   for (const file of [textFile('paystub.pdf', '%PDF-1.7'), textFile('trick.md', '%PDF-1.7'), textFile('export.csv', 'x,y\na,b'), textFile('business-pnl.xlsx', 'not a zip'), textFile('tax-payments.xlsx', ''), textFile('notes.md', '\0binary')]) {
     assert.equal(pickParser(file), null);
@@ -343,57 +223,6 @@ test('dedupe supports every row kind, ignores locators, and canonicalizes docume
   assert.throws(() => dedupeKey({ kind: 'unknown' }), /Unsupported row kind/);
 });
 
-test('an uncached formula in a tax Month cell warns invalid_tax_month with its locator', () => {
-  const head = [[null, 'Federal', null, 'State'], ['Month', 'Owner Paid', 'Spouse Paid', 'Owner Paid', 'Spouse Paid']];
-  const file = { name: 'tax-month.xlsx', bytes: new Uint8Array(writeXlsx([{ name: '2032', rows: [...head, ['January', 100, 50, 30, 20], [{ formula: 'A2' }, 120, 60, null, null]] }])) };
-  const { rows, warnings } = pickParser(file).parse(file);
-  assert.equal(rows.length, 4, 'the readable month still parses');
-  const warn = warnings.find((w) => w.code === 'invalid_tax_month');
-  assert.ok(warn, 'invalid_tax_month warning present');
-  assert.deepEqual(warn.locator, { sheet: '2032', cell: 'A4' });
-});
-
-// Review finding F8: a Month label that is blank or not a month name, with populated Paid cells,
-// must warn invalid_tax_month. Summary-row labels stay silent.
-{
-  const taxSheet = (labelCell, name) => {
-    const head = [[null, 'Federal', null, 'State'], ['Month', 'Owner Paid', 'Spouse Paid', 'Owner Paid', 'Spouse Paid']];
-    const file = { name, bytes: new Uint8Array(writeXlsx([{ name: '2032', rows: [...head, ['January', 100, 50, 30, 20], [labelCell, 120, 60, null, null]] }])) };
-    return pickParser(file).parse(file);
-  };
-
-  test('a tax Month label that is not a month name warns invalid_tax_month with its locator', () => {
-    const { rows, warnings } = taxSheet('not a month', 'tax-month-text.xlsx');
-    assert.equal(rows.length, 4, 'the readable month still parses');
-    const warn = warnings.filter((w) => w.code === 'invalid_tax_month');
-    assert.equal(warn.length, 1);
-    assert.deepEqual(warn[0].locator, { sheet: '2032', cell: 'A4' });
-  });
-
-  test('a blank tax Month label with populated Paid cells warns invalid_tax_month at the Month column address', () => {
-    for (const blank of [null, '']) {
-      const { rows, warnings } = taxSheet(blank, 'tax-month-blank.xlsx');
-      assert.equal(rows.length, 4);
-      const warn = warnings.filter((w) => w.code === 'invalid_tax_month');
-      assert.equal(warn.length, 1, `blank ${JSON.stringify(blank)}`);
-      assert.deepEqual(warn[0].locator, { sheet: '2032', cell: 'A4' });
-    }
-  });
-
-  test('a Total summary row in a tax sheet is skipped silently', () => {
-    const { rows, warnings } = taxSheet('Total', 'tax-month-total.xlsx');
-    assert.equal(rows.length, 4);
-    assert.equal(warnings.filter((w) => w.code === 'invalid_tax_month').length, 0);
-  });
-
-  test('the tax fixtures produce no invalid_tax_month warning', () => {
-    for (const name of ['tax-payments.xlsx', 'tax-payments-revised.xlsx']) {
-      assert.equal(run(name).warnings.filter((w) => w.code === 'invalid_tax_month').length, 0, name);
-    }
-  });
-}
-
-// D7: a Unicode minus form before an amount parses as negative in CSV and workbook cells.
 test('format.number and a bank CSV read Unicode minus forms as negative', async () => {
   const { number } = await import('../../src/ingest/format.mjs');
   for (const m of ['\u2212', '\u2012', '\u2013', '\u2014', '\uFE63', '\uFF0D']) {
@@ -406,13 +235,4 @@ test('format.number and a bank CSV read Unicode minus forms as negative', async 
   const parsed = pickParser(file).parse(file);
   assert.deepEqual(parsed.warnings, []);
   assert.deepEqual(parsed.rows.map((r) => [r.kind, r.amount]), [['transaction', -42.35], ['balance', -957.65]]);
-});
-
-test('a workbook text amount with a Unicode minus reads as negative', () => {
-  const file = { name: 'minus-pnl.xlsx', bytes: new Uint8Array(writeXlsx([
-    { name: 'Example Studio Income', rows: [['Payment Date', 'Payment Amount'], ['2032-02-10', '\u2212400.00']] },
-  ])) };
-  const parsed = pickParser(file).parse(file);
-  assert.deepEqual(parsed.warnings, []);
-  assert.deepEqual(parsed.rows.map((r) => [r.kind, r.category, r.amount]), [['pnl_line', 'Income', -400]]);
 });

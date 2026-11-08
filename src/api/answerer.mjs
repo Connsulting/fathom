@@ -70,6 +70,8 @@ import { listPreferences } from '../actions/preferences.mjs';
 // bullet and numbered lists and bold, over the escaped text. List blocks come back complete
 // (<ul>/<ol>); every other block is paragraph inner HTML.
 //
+// provenance.blocks: blocks drawn by show carry origin 'model'. When none was drawn and the final text
+// does not lead with a refusal, up to two automatic blocks (origin 'auto') come from the turn's reads.
 // Ask threads can write through scoped registry tools; receipts and Undo are durable product data.
 // With a signed-in owner every offered write tool also takes propose: true (src/actions/proposals.mjs):
 // the operation is recorded, not run, and the reply carries it as provenance.pendingAction (never
@@ -78,6 +80,7 @@ import { listPreferences } from '../actions/preferences.mjs';
 
 import { droppedBlock } from '../tools/catalog/show.mjs';
 import { placeBlocks } from '../shared/answer-text.mjs';
+import { autoBlocks } from '../blocks/auto.mjs';
 import { callTool, tools as REGISTRY, getTool, instructions, ToolError } from '../tools/index.mjs';
 import { proposalTools } from '../actions/proposals.mjs';
 import { buildScenario, clockNow } from '../scenario/build.mjs';
@@ -94,6 +97,9 @@ import { resolveRefs } from './context-refs.mjs';
 import { DEMO_LIMIT_MESSAGE } from '../public-demo/control.mjs';
 import { ANSWER_MAX_WORDS } from '../shared/answer-contract.mjs';
 import { checkAnswerDiscipline } from '../shared/answer-discipline.mjs';
+
+// A final text that leads with a refusal gets no automatic block.
+const REFUSAL = /^[\s*_#>"'“]*(?:(?:sorry|unfortunately|i['’]m sorry|i am sorry)[,.!]?\s+)?(?:I|Fathom)(?:\s+|['’])(?:can['’]?t|cannot|can not|won['’]?t|will not|(?:am|m|is) (?:not able|unable)|(?:don['’]?t|do not|doesn['’]?t|does not) have)\b/i;
 
 export const PRODUCT_RULES = [
   'You are Fathom, a year-round financial co-pilot for one household of independent professionals.',
@@ -806,6 +812,9 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
     }
 
     const recReads = toolResults.filter(r => !r.isError && r.name === 'recommendations' && r.args?.operation === 'detail').map(r => r.args && r.args.id);
+    // No drawn block and no refusal: Fathom draws from this turn's reads itself (src/blocks/auto.mjs).
+    if (!blocks.length && !REFUSAL.test(stripSources(chosen.text))) blocks.push(...autoBlocks(turnResults,
+      { now, ids: [...String(chosen.text ?? '').matchAll(/\{b:([^{}]*)\}/g)].map(m => m[1]) }));
     const placement = placeBlocks(stripSources(chosen.text), blocks);
     const text = placement.text;
     const blockNotes = toolResults.filter(r => r.name === 'show' && (r.isError || r.result?.status === 'dropped'))

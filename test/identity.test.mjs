@@ -141,7 +141,8 @@ describe('real HTTP session gate', () => {
     const { householdId } = member.fixture;
     assert.equal(typeof householdId, 'string');
     assert.ok(householdId.length > 0);
-    const identity = { id, email, householdId, role: 'member', name: email, login: email, operator: false, memberships: [{ householdId, role: 'member' }] };
+    const identity = { id, email, householdId, role: 'member', name: email, login: email, operator: false,
+      memberships: [{ householdId, role: 'member', name: null }], contextVersion: 1 };
     assert.deepEqual((await member.request({ path: '/api/identity' })).json, { identity });
     const session = await member.request({ path: '/api/auth/session' });
     assert.deepEqual(session.json, { identity, demo: false });

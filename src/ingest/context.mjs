@@ -1,4 +1,5 @@
 import { categoryDetail } from '../categories/store.mjs';
+import { transactionDisplayName } from '../categories/display.mjs';
 // Card context for confirm questions: what the owner needs on the card to answer it, read from
 // stored rows only. Every figure carries its file (or SimpleFIN) and date. Account numbers never
 // appear beyond the stored 4-digit mask, and SimpleFIN account ids never appear at all.
@@ -18,7 +19,6 @@ import { accountNaming } from '../accounts/naming.mjs';
 import { cents } from './format.mjs';
 import { normalizeName } from './confirm.mjs';
 import { parsers } from './registry.mjs';
-import { id as MAPPED_ID, label as MAPPED_LABEL } from './mapping.mjs';
 import { labelOf } from './extract.mjs';
 
 export const ACCOUNT_FIELDS = Object.freeze(['institution', 'mask', 'holder', 'owner', 'kind', 'balance', 'from', 'to', 'files']);
@@ -37,9 +37,11 @@ export function parserLabel(parser) {
   if (typeof parser !== 'string' || !parser) return null;
   const known = parsers.find((p) => p.id === parser);
   if (known) return known.label;
-  if (parser === MAPPED_ID) return MAPPED_LABEL;
+  const historical = { 'pnl-workbook': 'Business P&L', 'tax-payments': 'Tax payments', 'balances': 'Balances', 'account-map': 'Account metadata', 'notes': 'Notes', 'model-import': 'Reviewed import' };
+  if (historical[parser]) return historical[parser];
+  if (parser === 'mapped') return 'Mapped export';
   if (parser.startsWith('extract-')) return labelOf(parser.slice('extract-'.length));
-  return null;
+  return 'Historical import';
 }
 
 // {id, name, parser} of a stored file, or null.
@@ -66,7 +68,7 @@ function accountView(db, id) {
     ORDER BY uploaded_at, rowid`).all(id).map((f) => ({ id: f.id, name: f.name }));
   const recent = db.prepare(`SELECT t.date, t.amount, t.description, f.name AS file_name FROM transactions t
                              LEFT JOIN files f ON f.id = t.file_id WHERE t.account_id = ? ORDER BY t.date DESC, t.id DESC LIMIT ?`)
-    .all(id, RECENT).map((r) => ({ date: r.date, amount: num(r.amount), description: r.description ?? '', fileName: r.file_name ?? null }));
+    .all(id, RECENT).map((r) => ({ date: r.date, amount: num(r.amount), description: r.description ?? '', name: transactionDisplayName(r.description ?? ''), fileName: r.file_name ?? null }));
   return {
     id: a.id,
     institution: a.inst || null,
@@ -157,6 +159,7 @@ function nearDuplicateDetail(db, item) {
       date: row?.date ?? null,
       amount: num(row?.amount),
       description: row?.description ?? null,
+      name: typeof row?.description === 'string' ? transactionDisplayName(row.description) : null,
       account: row ? accountName.get(row.account_id)?.name ?? null : null,
       file: row ? fileName(db, row.file_id) : null,
     };
@@ -229,7 +232,8 @@ function accountMatchDetail(db, item) {
   };
   const snapshot = {
     recent: (Array.isArray(snap.recent) ? snap.recent : []).slice(0, RECENT)
-      .map((r) => ({ date: r?.date ?? null, amount: num(r?.amount), description: r?.description ?? null })),
+      .map((r) => ({ date: r?.date ?? null, amount: num(r?.amount), description: r?.description ?? null,
+        name: typeof r?.description === 'string' ? transactionDisplayName(r.description) : null })),
     balanceDate: snap.balanceDate ?? null,
   };
   return { ...compare(MATCH_FIELDS, [imported, bridge]), account: v, sameName: v ? sameNameViews(db, v) : [], snapshot };

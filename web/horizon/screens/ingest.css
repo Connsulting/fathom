@@ -36,6 +36,16 @@
 .d-horizon .h-ing-f p { color: var(--mu); font-size: 12.5px; margin-top: 2px; }
 .d-horizon .h-ing-files li > .h-btn { flex: none; height: 28px; }
 
+/* import review: summary, source columns, Looks right and a correction in plain words */
+.d-horizon .h-ing-f p[data-proposal-summary], .d-horizon .h-ing-f p[data-proposal-delta], .d-horizon .h-ing-f p[data-proposal-question] { color: var(--tx2); font-size: 13px; margin-top: 6px; overflow-wrap: anywhere; }
+.d-horizon .h-ing-f > .h-btn, .d-horizon .h-ing-f > .h-ing-ctl { margin-top: 8px; }
+.d-horizon .h-ing-f .h-btn { height: 32px; }
+.d-horizon .h-ing-files .h-ing-cols { margin: 2px 0 4px; padding-left: 20px; }
+.d-horizon .h-ing-files .h-ing-cols li { display: list-item; padding: 2px 0; border: 0; font-size: 12.5px; color: var(--mu); overflow-wrap: anywhere; }
+.d-horizon .h-ing-review { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; min-width: 0; }
+.d-horizon .h-ing-review textarea { flex: 1 1 100%; width: 100%; min-width: 0; box-sizing: border-box; background: var(--bg); color: var(--tx); border: 1px solid var(--line2); border-radius: 8px; font: inherit; font-size: 14.5px; padding: 9px 12px; resize: vertical; line-height: 1.5; color-scheme: dark; }
+.d-horizon .h-ing-review textarea:focus { outline: none; border-color: var(--ac); }
+
 /* freshness chip and account last data line */
 .d-horizon .h-fresh {
   display: inline-flex; align-items: center; gap: 6px; padding: 1px 8px; border-radius: 999px;

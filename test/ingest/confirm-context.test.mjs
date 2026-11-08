@@ -1,3 +1,4 @@
+import { seedHistoricalRows, seedHistoricalDocument, historicalNorthwindRows, historicalTaxRows } from '../helpers/historical-import.mjs';
 // AC1 (plan feat-confirm-context, Interfaces): every confirm card carries the context needed to
 // answer it. cardDetail gives an account view (institution, mask, holder, files, range, row counts,
 // latest balance and recent rows with their file) with its same-named accounts and the fields that
@@ -69,8 +70,8 @@ describe('account cards', () => {
       amount: 5551.96, date: '2026-10-14', fileId: chase, fileName: CHASE_FILE, basis: 'balance', sources: [{ fileId: chase, fileName: CHASE_FILE }],
     });
     assert.equal(v.recent.length, 3);
-    assert.deepEqual(v.recent[0], { date: '2026-10-14', amount: -8.75, description: 'SQ *CORNER CF', fileName: CHASE_FILE });
-    assert.deepEqual(v.recent[1], { date: '2026-10-12', amount: -8.75, description: 'Corner Cafe', fileName: AGG_FILE });
+    assert.deepEqual(v.recent[0], { date: '2026-10-14', amount: -8.75, description: 'SQ *CORNER CF', name: 'Corner Cf', fileName: CHASE_FILE });
+    assert.deepEqual(v.recent[1], { date: '2026-10-12', amount: -8.75, description: 'Corner Cafe', name: 'Corner Cafe', fileName: AGG_FILE });
     for (let i = 1; i < v.recent.length; i++) assert.ok(v.recent[i - 1].date >= v.recent[i].date, 'newest first');
     assert.ok(v.recent.every((r) => [AGG_FILE, CHASE_FILE].includes(r.fileName)));
   }));
@@ -174,7 +175,7 @@ describe('compare cards', () => {
   };
   const importW2 = async (s, copy, extracted) => {
     const file = textFile(`w2-${copy}-2032.txt`, `Synthetic wage and tax statement for 2032, copy ${copy}`, 'text/plain');
-    const r = await P.ingestFile(s.db, file, s.opts(await fakeEngine([[{ docType: 'w2', taxYear: 2032, confidence: 0.9 }], [extracted]])));
+    const r = await seedHistoricalDocument(s, file, [[{ docType: 'w2', taxYear: 2032, confidence: 0.9 }], [extracted]]);
     assert.equal(r.status, 'imported');
     return file.name;
   };
@@ -272,7 +273,7 @@ describe('compare cards', () => {
 
     const stored = JSON.parse(one(s.db, 'SELECT snapshot FROM simplefin_snapshots WHERE sf_key = ?', sfKey).snapshot);
     assert.deepEqual(d.snapshot, {
-      recent: stored.recent.slice(0, 3).map((r) => ({ date: r.date, amount: Number(r.amount), description: r.description })),
+      recent: stored.recent.slice(0, 3).map((r) => ({ date: r.date, amount: Number(r.amount), description: r.description, name: r.description })),
       balanceDate: stored.balanceDate,
     });
     assert.equal(d.snapshot.recent.length, 1, 'the fake bridge checking has one posting');
@@ -302,7 +303,7 @@ describe('values cards', () => {
 
   test('fact_check names its file, the fact key and the imported value', () => withStore(async (s) => {
     const facts = [{ key: 'household.state', value: 'CO', confidence: 0.6 }];
-    const r = await P.ingestFile(s.db, fixture('notes.md'), s.opts(await fakeEngine([[{ facts, goals: [] }]])));
+    const r = await seedHistoricalDocument(s, fixture('notes.md'), [[{ facts, goals: [] }]]);
     const { d } = valuesOf(s.db, 'fact_check');
     assert.deepEqual(d.file, { id: r.fileId, name: 'notes.md' });
     const text = JSON.stringify(d.values);
@@ -310,14 +311,14 @@ describe('values cards', () => {
   }));
 
   test('tax_year names its file and the sheet year', () => withStore(async (s) => {
-    const r = await P.ingestFile(s.db, fixture('tax-payments.xlsx'), s.opts(await offEngine()));
+    const r = await seedHistoricalRows(s, fixture('tax-payments.xlsx'), historicalTaxRows(false), { parser: 'tax-payments', sourceKind: 'tax_payments', period: { from: '2031-12-31', to: '2032-03-31' } });
     const { item, d } = valuesOf(s.db, 'tax_year');
     assert.deepEqual(d.file, { id: r.fileId, name: 'tax-payments.xlsx' });
     assert.ok(JSON.stringify(d.values).includes(String(item.context.sheetYear)));
   }));
 
   test('entity_alias names its file and the alias', () => withStore(async (s) => {
-    const r = await P.ingestFile(s.db, northwindFile(), s.opts(await offEngine()));
+    const r = await seedHistoricalRows(s, northwindFile(), historicalNorthwindRows(200), { parser: 'pnl-workbook', sourceKind: 'pnl_workbook', period: { from: '2032-04-01', to: '2032-04-30' } });
     const { d } = valuesOf(s.db, 'entity_alias');
     assert.deepEqual(d.file, { id: r.fileId, name: 'northwind-pnl.xlsx' });
     assert.ok(JSON.stringify(d.values).includes('Northwind'));
@@ -332,7 +333,6 @@ describe('holder columns', () => {
   before(async () => {
     AGG = await src('src/ingest/parsers/aggregator.mjs');
     POS = await src('src/ingest/parsers/brokerage-positions.mjs');
-    M = await src('src/ingest/mapping.mjs');
     D = await src('src/ingest/dedupe.mjs');
   });
 
@@ -370,18 +370,5 @@ describe('holder columns', () => {
     assert.equal(D.dedupeKey(withHolder), D.dedupeKey(without));
   });
 
-  test('a mapping maps accountHolder to the account holder; dedupe keys are unchanged', () => {
-    const csvText = 'posted on,memo text,value usd,acct ref,bank label,held by\n2032-03-02,SYNTH ROW,-1.25,000123456789,Example Credit Union,Avery Example\n';
-    const file = textFile('novel-holder.csv', csvText, 'text/csv');
-    const table = M.readTable(file);
-    const base = { target: 'transaction', date: 'posted on', amount: 'value usd', description: 'memo text', accountNumber: 'acct ref', institution: 'bank label', amountSign: 'as_is', dateOrder: 'ymd' };
-    const mapping = { ...base, accountHolder: 'held by' };
-    assert.ok(Object.hasOwn(M.MAPPING_SCHEMA.properties, 'accountHolder'));
-    assert.deepEqual(M.validateMapping(mapping, table.headers), { ok: true, errors: [] });
-    const [mapped] = M.applyMapping(mapping, table, file).rows;
-    assert.equal(mapped.account.holder, 'Avery Example');
-    const [plain] = M.applyMapping(base, table, file).rows;
-    assert.equal(plain.account.holder, undefined);
-    assert.equal(D.dedupeKey(mapped), D.dedupeKey(plain));
-  });
+
 });

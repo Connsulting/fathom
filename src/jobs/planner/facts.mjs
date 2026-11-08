@@ -39,7 +39,7 @@ export function trailingCharitable(data) {
 export function deriveFacts(data, { entities }) {
   const out = {};
   const year = data.year;
-  const entityRows = e => [...(e.docId != null ? [ev('documents', e.docId, e.fileId)] : []), ...e.lines.map(l => ev('pnl_lines', l.id, l.file_id))];
+  const entityRows = e => [...(e.docId != null ? [ev('documents', e.docId, e.fileId)] : []), ...e.lines.map(l => ev(l.sourceTable || 'pnl_lines', l.id, l.file_id))];
   const typed = types => entities.filter(e => e.classified && types.includes(e.type));
   const docs = (types, test = () => true) => data.documents.filter(d => types.includes(d.docType) && test(d));
   const householdEntity = name => entities.some(e => sameEmployer(data, e.name, name));

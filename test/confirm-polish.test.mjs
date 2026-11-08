@@ -170,6 +170,28 @@ test('Decided for you is one calm row per decision and collapses past a handful'
   assert.match(html, /Show fewer/);
 });
 
+for (const evidence of ["Fathom's categorization", "Fathom's categorization.", { text: " Fathom's categorization " }]) {
+  test(`a decided categorization shows its source once for ${JSON.stringify(evidence)}`, () => {
+    const { screens } = harness([], [decidedRow(1, { evidence })]);
+    const row = text(screens.decidedSection());
+    assert.equal((row.match(/Fathom's categorization/g) || []).length, 1);
+  });
+}
+
+for (const [evidence, expected] of [
+  ["Fathom's categorization: your last 3 from Sample Shop were Groceries.", "Your last 3 from Sample Shop were Groceries."],
+  ["Fathom's categorization: a payment on your card or a matching transfer between your accounts is not spending.", "A payment on your card or a matching transfer between your accounts is not spending."],
+  ["fathom's CATEGORIZATION. a payment processor or payroll deposit into your business account is income.", "A payment processor or payroll deposit into your business account is income."],
+  ['this distinct evidence keeps its original wording.', 'this distinct evidence keeps its original wording.'],
+]) {
+  test(`a decided categorization preserves its reason without a repeated source: ${evidence}`, () => {
+    const { screens } = harness([], [decidedRow(1, { evidence })]);
+    const row = text(screens.decidedSection());
+    assert.equal((row.match(/Fathom's categorization/gi) || []).length, 1);
+    assert.ok(row.includes(`Fathom's categorization. ${expected}`));
+  });
+}
+
 test('a short Decided for you list shows every row and no toggle', () => {
   const { screens } = harness([], [decidedRow(1), decidedRow(2)]);
   const html = screens.confirmPage(true);
@@ -217,6 +239,7 @@ test('real server state renders without a vendor name or a percentage', async (t
   const done = state.decided.find((d) => d.kind === 'transaction_category');
   assert.ok(done, 'an applied categorization is decided');
   assert.equal(done.txn.name, 'Example Utility Co');
+  assert.equal(done.evidence, "Fathom's categorization", 'the server sends the source once');
   for (const g of [card.guess?.evidence, card.guess?.reason, done.evidence]) {
     assert.doesNotMatch(String(g ?? ''), VENDOR);
     assert.doesNotMatch(String(g ?? ''), /%/);
@@ -224,6 +247,8 @@ test('real server state renders without a vendor name or a percentage', async (t
 
   const { screens } = harness(state.items, state.decided);
   const page = text(screens.confirmPage(true));
+  const decided = text(screens.decidedSection().match(new RegExp(`<li [^>]*data-decided="${done.id}"[\\s\\S]*?<\\/li>`))[0]);
+  assert.equal((decided.match(/Fathom's categorization/g) || []).length, 1);
   assert.match(page, /Fathom's categorization/);
   assert.match(page, /Example Utility Co/);
   assert.doesNotMatch(page, VENDOR);

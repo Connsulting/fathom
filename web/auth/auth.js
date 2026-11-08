@@ -117,8 +117,14 @@ function setBusy(el, on) {
 
 // Same-origin JSON. A browser sends Origin on every POST, which the server requires on a real
 // store. Resolves the body; rejects with err.status (0 when the server could not be reached).
+// Household administration acts on the session's household: those calls assert the household and
+// context version this page loaded with, so a switch in another tab is refused (409) here.
 async function call(method, path, body) {
   const init = { method, headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' };
+  if (path.startsWith('/api/admin/') && me && me.householdId && me.contextVersion) {
+    init.headers['X-Fathom-Household'] = me.householdId;
+    init.headers['X-Fathom-Context-Version'] = String(me.contextVersion);
+  }
   if (method !== 'GET') {
     init.headers['content-type'] = 'application/json';
     init.body = JSON.stringify(body || {});
@@ -289,6 +295,7 @@ function explain(err, ctx) {
   if (s === 401) return 'Your session ended. Sign in again.';
   if (s === 403) return 'Only household admins can do that.';
   if (s === 404) return 'That is not available here.';
+  if (s === 409 && err.code === 'household_context_stale') return 'The household changed in another tab. Reload this page to continue; nothing was changed.';
   if (s === 409) return ctx === 'admin' ? 'A household needs at least one enrolled admin. Make someone else an admin first.' : (sentence(err.message) || 'That conflicts with the current state. Reload and try again.');
   if (s === 410) return 'This link has expired or was already used.';
   if (s === 429) return 'Too many attempts. Wait a few minutes, then try again.';
@@ -523,7 +530,7 @@ function signinView() {
 function deadLinkView() {
   root.innerHTML = narrow(`<h1>This link no longer works</h1>
     <p class="au-lede">It has expired or was already used. Invitation, recovery and add-a-device links work once, for 20 minutes.</p>
-    ${note('info', 'New to this household: ask a household admin to send a new invitation. Already have an account: request a recovery link from the sign-in page. Add-a-device link: request a new one from Account on a signed-in device.')}
+    ${note('info', 'New to this household: ask a household admin to send a new invitation. Invited to another household with an account you already have: sign in first, then open the link again. Lost your passkey: request a recovery link from the sign-in page. Add-a-device link: request a new one from Account on a signed-in device.')}
     <div class="au-form"><a class="au-btn pri wide" href="/signin">Go to sign in</a></div>`);
 }
 
@@ -548,7 +555,37 @@ function enrollView() {
       </div>
       <button type="submit" class="au-btn pri wide">${icon('key')}Create passkey</button>
       <p class="au-msg" data-msg="enroll" role="status" aria-live="polite"></p>
-    </form>`, 'The link works once, within 20 minutes of being sent. Keep this tab open until the passkey is saved.');
+    </form>
+    <div data-slot="join"></div>`, 'The link works once, within 20 minutes of being sent. Keep this tab open until the passkey is saved.');
+  // A signed-in browser can accept an invitation to another household for its own account,
+  // without a new passkey (POST /api/auth/invitations/accept). Nothing about the invitation is shown.
+  loadSession().then((s) => {
+    if (leaving || !s.identity) return;
+    const slot = root.querySelector('[data-slot="join"]');
+    if (!slot) return;
+    slot.innerHTML = `<div class="au-form">${note('info', `You are signed in as <b>${esc(s.identity.email)}</b>. If this invitation is for that account, join the household with the passkey you already have.`)}
+      <button type="button" class="au-btn wide" data-act="join">Join the household</button>
+      <p class="au-msg" data-msg="join" role="status" aria-live="polite"></p></div>`;
+  }).catch(() => { /* creating a passkey still works */ });
+}
+
+async function joinHousehold(btn) {
+  if (busy || !enrollToken) return;
+  busy = 'join';
+  setBusy(btn, true);
+  say('join', '', 'Joining.');
+  try {
+    await call('POST', '/api/auth/invitations/accept', { token: enrollToken });
+    enrollToken = null;
+    say('join', 'ok', 'Joined. Opening Fathom.');
+    leave('/');
+  } catch (err) {
+    if (err && err.status === 410) { enrollToken = null; deadLinkView(); return; }
+    say('join', 'err', err && err.status === 403 ? 'This invitation is for another account. Sign in with that account, or ask the admin to invite this address.' : explain(err, 'join'));
+  } finally {
+    busy = '';
+    if (!leaving) setBusy(btn, false);
+  }
 }
 
 async function enroll(form) {
@@ -836,8 +873,12 @@ async function adminView() {
   if (!s.identity) { leave(signInTarget(PATH, window.location.hash), 'expired'); return; }
   me = s.identity;
   if (me.role !== 'admin') { deniedView(); return; }
+  // With several households, name the one this page administers.
+  const mine = Array.isArray(me.memberships) ? me.memberships : [];
+  const current = mine.length > 1 ? mine.find((m) => m && m.householdId === me.householdId) : null;
+  const heading = current ? `Household: ${esc(current.name || 'Household ' + (mine.indexOf(current) + 1))}` : 'Household';
   root.innerHTML = frame('admin', `
-    <div class="au-ph"><h1>Household</h1>
+    <div class="au-ph"><h1>${heading}</h1>
       <p class="au-lede">Everyone here shares one household: the same accounts, plan, files and recommendations. Admins also invite people, change roles and remove access.</p></div>
     <section class="au-sec" aria-labelledby="au-inv-h">
       <div class="au-sec-h"><h2 id="au-inv-h">Invite someone</h2></div>
@@ -1010,6 +1051,7 @@ root.addEventListener('click', (e) => {
   if (act === 'recover') recover(el);
   else if (act === 'reload') window.location.reload();
   else if (act === 'revoke') revokeOwn(el);
+  else if (act === 'join') joinHousehold(el);
   else if (act === 'signout') signOut(el);
   else if (act === 'device-link') requestDeviceLink(el);
   else if (act === 'resend') resend(el);

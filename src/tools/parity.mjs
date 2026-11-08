@@ -16,6 +16,7 @@ export const PARITY_EXCLUDED = Object.freeze({
   "POST /api/admin/users/:id/remove": "administration",
   "POST /api/admin/users/:id/passkeys/:keyId/revoke": "administration",
   "POST /api/auth/invitations/accept": "administration",
+  "POST /api/auth/household": "administration",
   "POST /api/operator/households": "administration",
   "GET /api/identity": "identity and sessions",
   "POST /api/packs/:id/whatif": "conversation chrome",
@@ -50,6 +51,8 @@ export const PARITY_EXCLUDED = Object.freeze({
   "GET /api/yearend/packet": "file download",
   "GET /api/household/outbound": "administration",
   "POST /api/household/outbound": "administration",
+  "POST /api/household/backups": "administration",
+  "GET /api/household/backups/:id/status": "administration",
 });
 
 export const PARITY_PENDING = Object.freeze({
