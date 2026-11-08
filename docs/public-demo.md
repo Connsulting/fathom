@@ -120,6 +120,7 @@ Invalid or nonpositive values refuse startup. An IP request limit returns HTTP 4
 | POST | `/api/files` | Off, HTTP 403 |
 | GET | `/api/files` | Off, HTTP 403 |
 | POST | `/api/files/:id/retry` | Off, HTTP 403 |
+| POST | `/api/import-proposals/:proposalId/review` | Off, HTTP 403 |
 | GET | `/api/confirm` | Visitor sandbox |
 | POST | `/api/confirm/list` | Visitor sandbox |
 | POST | `/api/confirm/answers` | Visitor sandbox |
