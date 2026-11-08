@@ -42,7 +42,7 @@ test('each registered MCP tool executes with only its bearer household context',
         answer: { operation: 'fact', key: 'household.expectedDate', value: '2027-03-19', evidence: 'Set the expected date to 2027-03-19' },
         business: { operation: 'pnl' }, calculate: { operation: 'sum', operands: [{ ref: { tool: 'accounts', args: { operation: 'net_worth' }, path: 'total' } }], label: 'Synthetic balance' },
         goals: { operation: 'list' }, household: { operation: 'summary' }, knowledge: { operation: 'packs' },
-        recommendations: { operation: 'list' }, spending: { operation: 'total' }, tax: { operation: 'estimate' }, transactions: { operation: 'search' },
+        recommendations: { operation: 'list' }, retirement: own.retirement, spending: { operation: 'total' }, tax: { operation: 'estimate' }, transactions: { operation: 'search' },
         update_goal: { operation: 'create', title: 'Synthetic reserve' },
         update_preferences: { operation: 'remember', text: 'Prefer a steady reserve', evidence: 'Prefer a steady reserve' },
       };
@@ -54,7 +54,11 @@ test('each registered MCP tool executes with only its bearer household context',
       assert.deepEqual(Object.keys(samples).sort(), tools.map(t => t.name).sort(), 'every tool needs a successful household fixture');
       for (const tool of tools) {
         const response = await f.call(own, tool.name, samples[tool.name], { cookie: other.admin.cookie });
-        result(response);
+        const data = result(response);
+        if (tool.name === 'retirement') {
+          assert.equal(data.figure.value, own.retirementBalance);
+          assert.ok(toolText(response).includes(own.canary));
+        }
         assert.ok(!toolText(response).includes(other.canary), tool.name);
       }
       assert.equal(digest(other.db), before, 'no foreign writes or receipts');
