@@ -88,7 +88,7 @@ export function render(snapshot, ctx) {
     const buttons = drills.map(({ i }) => `<button type="button" class="h-btn ghost" aria-expanded="${state.drill === `${index}-${i}`}" data-blk-ctl="${esc(ctx.ctl(`drill-${index}-${i}`))}">Show rows${drills.length > 1 ? `: ${esc(cols[i].label)}` : ''}</button>`).join('');
     const expanded = drills.find(({ i }) => state.drill === `${index}-${i}`);
     const detail = expanded ? `<tr><td colspan="${cols.length}"><section role="region" aria-label="Rows behind this figure"><h4 tabindex="-1" data-blk-drill-heading>Rows behind this figure</h4><p>Block figure ${cellHtml(r.cells[expanded.i], ctx)}</p>${state.drillData
-      ? `<p>Rows sum ${ctx.rowFigure ? ctx.rowFigure(state.drillData.sum) : ''}</p><ul>${arr(state.drillData.items).map(item => `<li>${esc(item.date)} ${esc(item.account)} ${esc(item.name || item.description)} ${ctx.rowFigure ? ctx.rowFigure(item.fig) : ''}</li>`).join('')}</ul>`
+      ? `<p>Rows sum ${ctx.rowFigure ? ctx.rowFigure(state.drillData.sum) : ''}</p><ul>${arr(state.drillData.items).map(item => `<li>${esc(item.date)} ${esc(item.account)} ${item.name && item.description && item.name !== item.description ? `<span title="${esc(item.description)}">${esc(item.name)}</span>` : esc(item.name || item.description)} ${ctx.rowFigure ? ctx.rowFigure(item.fig) : ''}</li>`).join('')}</ul>`
       : `<p role="status">${state.drillError ? 'Rows could not be loaded.' : 'Loading rows'}</p>`}</section></td></tr>` : '';
     return `<tr>${cols.map((c, i) => {
     const num = c.type !== 'text';

@@ -481,3 +481,21 @@ test('a transaction row figure keeps the raw bank text beside its readable name'
   const plain = figs.find((f) => f.label === 'Grocery market');
   assert.equal(plain.detail, undefined, 'no detail line when the name is the description');
 });
+
+// UI3 AC2: the rows behind a figure ("Show rows") show the readable name with the raw bank text on hover.
+test('drill rows show the readable name and keep the raw bank text as its title', async () => {
+  const { render } = await import('../web/horizon/screens/ask-block-table.js');
+  const raw = 'SQ *SAMPLE COFFEE #0412';
+  const snapshot = { title: 'Spending', columns: [{ label: 'Spent', unit: 'usd', type: 'fig' }],
+    rows: [{ cells: [{ t: 'fig', drill: { tool: 'spending' }, fig: { value: 12, unit: 'usd', label: 'Coffee', kind: 'm', asOf: '2032-03-01', gaps: [], provenance: {}, source: 'Spending' } }] }] };
+  const items = [
+    { date: '2032-03-01', account: 'Card', description: raw, name: 'Sample Coffee', fig: null },
+    { date: '2032-03-02', account: 'Card', description: 'Grocery market', name: 'Grocery market', fig: null },
+  ];
+  const ctx = { esc, key: 'm:b', ctl: (x) => x, fig: () => '', rowFigure: () => '',
+    state: { sort: null, filter: '', all: false, drill: '0-0', drillData: { sum: null, items } } };
+  const html = render(snapshot, ctx);
+  assert.ok(html.includes(`<span title="${esc(raw)}">Sample Coffee</span>`), 'the name carries the raw text as its title');
+  assert.ok(html.includes(' Grocery market '), 'a name equal to its description is shown once, plainly');
+  assert.ok(!html.includes('title="Grocery market"'));
+});

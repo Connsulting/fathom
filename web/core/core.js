@@ -1019,7 +1019,7 @@ async function accountTransactions(id, opts) {
 }
 
 // Ask block figures (web/horizon/screens/ask-blocks.js): { key: { value, unit, label, kind, asOf,
-// source, gaps, provenance, quote? } } kept beside the scenario's under their blk: keys, each with
+// source, gaps, provenance, quote?, detail? } } kept beside the scenario's under their blk: keys, each with
 // its own source entry, so api.fig and the popover read them like any other figure.
 function registerFigures(map) {
   if (!map || typeof map !== 'object') return;
@@ -1030,7 +1030,9 @@ function registerFigures(map) {
     // Assumptions the figure was computed under read as the popover's Assumes rows.
     const notes = arr(provenance.assumptions).map(a => (a && typeof a.stated === 'string' ? a.stated : '')).filter(Boolean);
     extraFig.set(k, { v: e.value ?? null, unit: typeof e.unit === 'string' ? e.unit : 'usd', label: e.label || '', kind: e.kind || 'e', src,
-      gaps: arr(e.gaps), provenance, ...(notes.length ? { notes } : {}), ...(e.stale ? { stale: true } : {}) });
+      gaps: arr(e.gaps), provenance, ...(notes.length ? { notes } : {}), ...(e.stale ? { stale: true } : {}),
+      // Plain { k, v } lines the popover lists, such as a transaction's raw bank text.
+      ...(Array.isArray(e.detail) && e.detail.length ? { detail: e.detail } : {}) });
     extraSrc.set(src, { label: e.source || '', asOf: e.asOf || '' });
   }
 }
