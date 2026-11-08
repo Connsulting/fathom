@@ -86,16 +86,23 @@ test('one known failed round can retry but no further retry dispatches', async (
   } finally { x.db.close(); }
 });
 
-test('pause after an admitted round blocks subsequent dispatch and leaves all financial tables untouched', async () => {
+test('context changes after an admitted round retain the local proposal and block subsequent dispatch', async () => {
+  for (const change of ['pause', 'unfund', 'stale']) {
   const x = setup();
   try {
     const call = x.engine.call;
-    x.engine.call = async request => { const result = await call(request); x.pause(); return result; };
-    assert.equal((await interpretFile({ ctx: x.ctx, file, fake: [script] })).status, 'waiting_for_engine');
+    x.engine.call = async request => { const result = await call(request); x[change](); return result; };
+    const retained = await interpretFile({ ctx: x.ctx, file, fake: [script] });
+    assert.equal(retained.status, 'waiting_for_engine');
+    assert.equal(retained.reasonCode, 'context_changed');
+    assert.equal(retained.valid, true);
+    assert.deepEqual(retained.proposal.rows, []);
+    assert.equal(retained.proposal.fileId, file.fileId);
     assert.equal((await interpretFile({ ctx: x.ctx, file, fake: [script], retry: true })).status, 'waiting_for_engine');
     assert.equal(fileSpend(x.db, file.fileId).calls, 1);
     for (const table of ['transactions', 'balances', 'pnl_lines', 'tax_payments', 'import_proposals']) assert.equal(x.db.prepare(`SELECT count(*) n FROM ${table}`).get().n, 0);
   } finally { x.db.close(); }
+  }
 });
 
 test('household names are scrubbed at dispatch and the request carries only bounded reference inputs', async () => {

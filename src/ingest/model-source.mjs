@@ -72,7 +72,7 @@ export async function indexSource(file, privacy = {}) {
         const groups = new Map();
         for (const id of ids) {
           const r = source.refs[id];
-          const disposition = ['empty', 'error'].includes(r.valueType) ? r.valueType : r.formula && !r.cached ? 'uncached_formula' : r.hidden ? 'hidden' : 'unresolved';
+          const disposition = r.formula && !r.cached ? 'uncached_formula' : ['empty', 'error'].includes(r.valueType) ? r.valueType : r.hidden ? 'hidden' : 'unresolved';
           if (!groups.has(disposition)) groups.set(disposition, []);
           groups.get(disposition).push(id);
         }

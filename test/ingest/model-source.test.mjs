@@ -21,6 +21,7 @@ test('indexes all sheets, hidden cells, cached formulas, merged anchors and both
     assert.equal(resolveField(source, field([id(1, 'B1')])), 0);
     assert.equal(resolveField(source, field([id(0, 'A3')])), 50);
     assert.throws(() => resolveField(source, field([id(0, 'B3')])));
+    assert.equal(Object.values(source.inventory).find(region => region.refs.includes(id(0, 'B3'))).disposition, 'uncached_formula');
     assert.throws(() => resolveField(source, field([id(1, 'A2')])));
     assert.equal(Object.keys(source.inventory).length, source.regions.length);
     assert.ok(Object.values(source.inventory).every(r => r.disposition));

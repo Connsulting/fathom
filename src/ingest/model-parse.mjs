@@ -129,8 +129,8 @@ async function interpretBound({ ctx, file, fake, retry = false, limits: override
       maxTokens: remainingOutput, fake, beforeDispatch: reserve,
       budget: requestBudget });
     settle(result.accounting, false);
-    if (!live()) return code('waiting_for_engine', 'context_changed');
     const parsed = parseInterpretation(result.text, source);
+    if (!live()) return { ...code('waiting_for_engine', 'context_changed'), ...parsed, source };
     if (!parsed.valid) return { ...code('needs_clarification', 'invalid_interpretation'), errors: parsed.errors };
     return { ...code(parsed.proposal.completeness === 'complete' ? 'needs_confirmation' : 'needs_clarification', parsed.proposal.completeness === 'complete' ? 'proposal_validated' : 'unresolved_coverage'), ...parsed, source };
   } catch (error) {
