@@ -18,8 +18,8 @@
 //    latest, after engine.status() (which syncs final platform rounds).
 // 3. setInstanceCap, setAllocation and committedUsd may be sync or async; the tests await them.
 // 4. A refused reservation writes no model_rounds row of kind 'round'.
-// 5. Migration 005 consists of new tables plus the allocation seed, so dropping its tables and its
-//    schema_migrations row reproduces a schema-004 platform.
+// 5. Migration 005 consists of new tables plus the allocation seed; replay only that migration,
+//    retaining the records for unrelated later platform migrations.
 // 6. An HTTP error response from the model is a known zero-cost round (settled at 0), as
 //    messagesRound treats it today.
 
@@ -873,11 +873,11 @@ test('migration 005 seeds existing households from the hand-set instance cap; a 
     const A = two.A.id;
     const B = two.B.id;
     await two.server.close();
-    // Roll the platform back to schema 004 carrying the hand-set setting production has.
+    // Replay migration 005 carrying the hand-set setting production has.
     withSqlite(join(two.dataDir, 'platform.sqlite'), db => {
       db.exec('DROP TABLE IF EXISTS model_rounds');
       db.exec('DROP TABLE IF EXISTS household_model_budgets');
-      db.prepare('DELETE FROM schema_migrations WHERE id >= 5').run();
+      db.prepare('DELETE FROM schema_migrations WHERE id = 5').run();
       db.prepare(`INSERT INTO platform_settings (key, value, updated_at) VALUES ('instance_model_cap_usd', '200', ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).run(Date.now());
     });
