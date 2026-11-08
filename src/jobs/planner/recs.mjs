@@ -10,6 +10,7 @@
 import { parseJson } from '../../store/db.mjs';
 import { dayLabel } from './data.mjs';
 import { servesGoals, recTopics } from '../../shared/goals.mjs';
+import { withClearedSteps } from '../../shared/rec-steps.mjs';
 
 const ACTIVE = ['proposed', 'doing', 'waiting', 'snoozed'];
 const BLOCKABLE = ['proposed', 'doing'];
@@ -95,6 +96,7 @@ export function applyRecs(db, results, ctx) {
       const hit = res.hit;
       const p = prose[id];
       const def = buildDef(hit, p.fields);
+      if (rr && ctx.stepEnv) def.tasks = withClearedSteps(def.tasks, parseJson(rr.def, {}).tasks, ctx.stepEnv);
       const defText = JSON.stringify(def);
       const goalKinds = JSON.stringify(hit.rec.goalKinds);
       const recOwner = hit.rec.owner;
