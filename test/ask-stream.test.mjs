@@ -177,7 +177,7 @@ test('a regeneration streams its revision step, then a plain reset, before the n
   const wrapped = { ...engine, mode: engine.mode, isOn: () => engine.isOn(), call: req => engine.call({ ...req,
     fake: n++ === 0 ? [{ text: 'You owe $987,654 this year and $876,543 next year.' }] : [{ toolCalls: [{ name: 'household', args: { operation: 'summary', } }] }, { text: 'Nothing to add.' }] }) };
   const seen = [];
-  const reply = await createLiveAnswerer({ engine: wrapped, packs, root }).answer({ db: s.db, key: 'ask:0123456789ab', text: 'How much?', onEvent: e => seen.push(e) });
+  const reply = await createLiveAnswerer({ engine: wrapped, packs, root, services: { engine: wrapped, config: { dataDir: root } } }).answer({ db: s.db, key: 'ask:0123456789ab', text: 'How much?', onEvent: e => seen.push(e) });
   assert.equal(reply.provenance.grounding.retried, true);
   const types = seen.map(e => e.type);
   const reset = types.indexOf('reset');
@@ -190,7 +190,8 @@ test('a regeneration streams its revision step, then a plain reset, before the n
   for (const e of seen.filter(x => x.type === 'text')) assert.doesNotMatch(e.text, /</);
   // Engine off keeps today's notice and streams nothing.
   const off = [];
-  const offReply = await createLiveAnswerer({ engine: { ...wrapped, isOn: () => false, mode: 'fake' }, packs, root })
+  const offEngine = { ...wrapped, isOn: () => false, mode: 'fake' };
+  const offReply = await createLiveAnswerer({ engine: offEngine, packs, root, services: { engine: offEngine, config: { dataDir: root } } })
     .answer({ db: s.db, key: 'ask:0123456789ab', text: 'How much?', onEvent: e => off.push(e) });
   assert.equal(offReply.notice, true);
   assert.deepEqual(off, []);
