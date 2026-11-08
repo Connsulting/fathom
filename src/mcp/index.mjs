@@ -9,6 +9,8 @@ import { HttpError, sendJson, sendError, readJsonBody } from '../api/http.mjs';
 import { isAllowedHost, isAllowedOrigin } from './guard.mjs';
 import { createToolServer } from './server.mjs';
 import { revalidateRequest } from '../api/identity.mjs';
+import { runWithPrincipal } from '../platform/model-budget.mjs';
+import { packDirsFor } from '../tools/index.mjs';
 
 export const MCP_BODY_LIMIT = 1024 * 1024;
 
@@ -71,19 +73,29 @@ export function createMcpHandler({ keys, runtimes, config }) {
     }
 
     keys.touch(record.id);
+    const principal = { check() {
+      const fresh = authenticate(req, keys);
+      return Boolean(fresh) && fresh.id === record.id && fresh.householdId === record.householdId
+        && fresh.scopes.length === record.scopes.length && fresh.scopes.every(scope => record.scopes.includes(scope))
+        && household.isCurrent();
+    } };
     const scheduler = household.scheduler;
     const ctx = { db: household.db, now: new Date(), dataDir: household.root, clock: config.clock, household,
+      config: household.config, packs: household.packs, engine: household.engine, answerer: household.answerer,
+      packDirs: packDirsFor(household.root),
       channel: 'mcp', actorId: record.userId || `key:${record.id}`, scopes: record.scopes,
       replan: scheduler ? () => scheduler.runNow('plan') : null, queuePlan: () => scheduler?.soon?.('plan', 'ingest') };
-    const server = createToolServer({ scopes: record.scopes, ctx });
+    const server = createToolServer({ scopes: record.scopes, ctx, authorize: () => principal.check() });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {
       transport.close().catch(() => {});
       server.close().catch(() => {});
     });
     try {
-      await server.connect(transport);
-      await transport.handleRequest(req, res, body);
+      await runWithPrincipal(principal, async () => {
+        await server.connect(transport);
+        await transport.handleRequest(req, res, body);
+      });
     } catch (err) {
       console.error(`mcp: request failed (${err && err.name ? err.name : 'Error'})`);
       if (!res.headersSent) sendJson(res, 500, { error: 'internal error' });

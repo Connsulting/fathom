@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mcpHouseholds, mcp, result } from './helpers/tenancy-mcp.mjs';
+import { DatabaseSync } from 'node:sqlite';
+import { readFileSync, readdirSync } from 'node:fs';
+import { PLATFORM_MIGRATIONS_DIR } from '../src/platform/db.mjs';
+import { createKeyService, hashKey } from '../src/mcp/keys.mjs';
+import { join } from 'node:path';
+import { runCommand } from './helpers/server.mjs';
 
 async function live(f, key) {
   const response = await mcp(f.baseUrl, key.key, 'tools/list');
@@ -87,4 +93,53 @@ test('platform enforces immutable household and creator bindings', async () => {
     await live(f, f.A.key);
     await live(f, f.B.key);
   } finally { await f.close(); }
+});
+
+test('one creators keys in two households stay independent when one membership is removed', async () => {
+  const f = await mcpHouseholds();
+  try {
+    const invitation = f.store.invite(f.B.id, 'member@example.test', { role: 'member' });
+    assert.equal((await f.member.client.post('/api/auth/invitations/accept', { token: invitation.token })).status, 200);
+    const own = await f.create(f.A, f.member.client);
+    const issued = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--household', f.B.id, '--owner', 'member@example.test', '--name', 'Synthetic second membership key'], { env: f.env });
+    assert.equal(issued.code, 0, issued.stderr);
+    const other = { key: issued.stdout.trim() };
+    await live(f, own);
+    await live(f, other);
+    assert.equal((await f.A.admin.client.post(`/api/admin/users/${f.member.userId}/remove`)).status, 200);
+    await denied(f, own);
+    await live(f, other);
+    await live(f, f.B.key);
+  } finally { await f.close(); }
+});
+
+test('platform migration binds existing hashes and preserves account and passkey schemas', () => {
+  const db = new DatabaseSync(':memory:');
+  try {
+    db.exec('PRAGMA foreign_keys = ON');
+    for (const name of readdirSync(PLATFORM_MIGRATIONS_DIR).filter(n => /^00[1-5]-.*\.sql$/.test(n)).sort()) db.exec(readFileSync(join(PLATFORM_MIGRATIONS_DIR, name), 'utf8'));
+    db.exec(`INSERT INTO households (id, status, mode, created_at, updated_at, generation) VALUES ('alpha', 'active', 'real', 1, 1, 8), ('bravo', 'active', 'demo', 1, 1, 2);
+      INSERT INTO users (id, email, user_handle, created_at) VALUES ('creator', 'creator@example.test', 'synthetic-handle', 1);
+      INSERT INTO household_memberships (user_id, household_id, role, status, version, created_at, updated_at) VALUES ('creator', 'alpha', 'member', 'active', 7, 1, 1);`);
+    const before = db.prepare("SELECT name, sql FROM sqlite_master WHERE name IN ('users', 'passkeys') ORDER BY name").all();
+    const secret = Buffer.alloc(32, 9);
+    const token = 'fathom_' + 'A'.repeat(43);
+    const insert = db.prepare("INSERT INTO api_keys (id, household_id, user_id, name, key_hash, scopes, created_at) VALUES (?, ?, ?, 'Synthetic key', ?, '[\"read\"]', '2026-11-05')");
+    insert.run('owned', 'alpha', 'creator', hashKey(token, secret));
+    insert.run('unbound', 'alpha', null, 'b'.repeat(64));
+    insert.run('demo', 'bravo', null, 'c'.repeat(64));
+    db.exec(readFileSync(join(PLATFORM_MIGRATIONS_DIR, '006-mcp-key-binding.sql'), 'utf8'));
+    const row = db.prepare("SELECT * FROM api_keys WHERE id = 'owned'").get();
+    assert.equal(row.household_generation, 8);
+    assert.equal(row.membership_version, 7);
+    assert.equal(row.key_hash, hashKey(token, secret));
+    const keys = createKeyService({ platform: db, secret: () => secret, creatorActive: () => true });
+    assert.equal(keys.verify(token).id, 'owned');
+    assert.ok(db.prepare("SELECT revoked_at FROM api_keys WHERE id = 'unbound'").get().revoked_at);
+    assert.equal(db.prepare("SELECT revoked_at FROM api_keys WHERE id = 'demo'").get().revoked_at, null);
+    assert.throws(() => keys.create({ householdId: 'alpha', name: 'Unbound real key' }), { code: 'forbidden' });
+    const fresh = keys.create({ householdId: 'alpha', userId: 'creator', name: 'Bound real key' });
+    assert.equal(keys.verify(fresh.key).id, fresh.record.id);
+    assert.deepEqual(db.prepare("SELECT name, sql FROM sqlite_master WHERE name IN ('users', 'passkeys') ORDER BY name").all(), before);
+  } finally { db.close(); }
 });

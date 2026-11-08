@@ -61,7 +61,7 @@ export async function mcpHouseholds() {
       hh.key = await create(hh);
     }
     const call = async (hh, name, args, extra = {}) => mcp(baseUrl, hh.key.key, 'tools/call', { name, arguments: args }, extra);
-    return { A, B, member, platform, store, app, baseUrl, create, call, enroll,
+    return { A, B, member, platform, store, app, baseUrl, create, call, enroll, env: server.env,
       async close() { await server.close(); rmSync(root, { recursive: true, force: true }); } };
   } catch (err) {
     await server?.close();
