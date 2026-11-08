@@ -4257,7 +4257,34 @@
             {
               "name": "retirement",
               "operation": "target",
-              "predicates": []
+              "predicates": [
+                {
+                  "path": "realReturn.value",
+                  "op": "eq",
+                  "value": 0.03
+                },
+                {
+                  "path": "realReturn.source",
+                  "op": "eq",
+                  "value": "owner"
+                }
+              ]
+            },
+            {
+              "name": "retirement",
+              "operation": "target",
+              "predicates": [
+                {
+                  "path": "realReturn.value",
+                  "op": "eq",
+                  "value": 0.04
+                },
+                {
+                  "path": "realReturn.source",
+                  "op": "eq",
+                  "value": "owner"
+                }
+              ]
             },
             {
               "name": "show",
