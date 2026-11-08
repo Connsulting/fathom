@@ -67,6 +67,11 @@ test('target covers each projection status and explicit selectors exclude busine
   s.account('company-investment','taxable','Business');
   s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run('company-investment','2026-10-31',9000000);
   assert.equal((await s.retirement('target')).investedNow.value,0);
+  const businessOnly = await s.retirement('target',{invested:{accounts:['company-investment']}});
+  assert.equal(businessOnly.investedNow.value,0);
+  assert.ok(businessOnly.gaps.some(g=>g.code==='outside_household_ledger'));
+  assert.ok(businessOnly.gaps.some(g=>/No investment accounts match/.test(g.message)));
+  assert.equal((await s.retirement('target',{invested:{accounts:['investments']}})).investedNow.value,0);
 });
 
 test('growth solves balance, months and monthly using shared deterministic calculators', async t => {

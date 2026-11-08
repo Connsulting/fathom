@@ -80,6 +80,14 @@ test('Roth qualification uses the later age and five-year dates, naming missing 
   assert.equal(known.rows[0].treatment,'roth_ira');
   assert.equal(known.rows[0].qualifiedFrom.value,'2031-01-01');
   await assertRefsResolve(known,s.ctx);
+  s.fact('accounts.rothFirstContributionYear',{roth:2000});
+  s.fact('household.ownerBirthDate','1970-08-31');
+  const monthEnd = await s.afterTax({accounts:['roth']});
+  assert.equal(monthEnd.rows[0].qualifiedFrom.value,'2030-02-28');
+  s.fact('household.ownerBirthDate','1964-08-31');
+  const leap = await s.afterTax({accounts:['roth']});
+  assert.equal(leap.rows[0].qualifiedFrom.value,'2024-02-29');
+  await assertRefsResolve(leap,s.ctx);
 });
 
 test('HSA presents both purposes, with age-dependent additional tax and missing-age gaps',async t => {
