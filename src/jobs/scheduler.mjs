@@ -573,7 +573,7 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
           const closed = categories.stopped ? { guessed: 0 } : await guessClosedOptions(ctx.db, categorizer, { now: ctx.now });
           return { applied: categories.applied, stopped: categories.stopped ?? closed.stopped };
         },
-        replan: () => runPlanning(ctx.db, null, { now: ctx.clock, packDirs, runId: ctx.jobRunId }),
+        replan: () => { ctx.triggerJob('plan'); },
       });
       if (!out.answered && !out.batches && !out.costUsd) return { status: 'skipped', note: { pending: out.pending } };
       return { costUsd: out.costUsd,
