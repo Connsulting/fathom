@@ -80,8 +80,9 @@ export function build(ctx, hit) {
     tasks: padTasks([
       ...withRoom.map(p => `Make a nondeductible traditional IRA contribution for ${PERSON[p.person].obj}`),
       ...basisOnly.map(p => `Convert ${PERSON[p.person].your} existing after-tax IRA basis to Roth, with the pro-rata rule in mind`),
-      ...(unknown ? ['Tell us whose IRA each traditional IRA account is'] : []),
-      ...noBalance.map(p => `Confirm the current balance of ${PERSON[p.person].your} traditional, SEP and SIMPLE IRA accounts`),
+      // Verifiable: each clears once the planner no longer finds the gap (rec-steps.mjs).
+      ...(unknown ? [{ t: 'Tell us whose IRA each traditional IRA account is', kind: 'answer', code: 'ira_owner_unknown', link: 'accounts' }] : []),
+      ...noBalance.map(p => ({ t: `Confirm the current balance of ${PERSON[p.person].your} traditional, SEP and SIMPLE IRA accounts`, kind: 'upload', code: `ira_balance_missing:${p.person}`, noun: 'a current IRA balance', link: 'upload' })),
       ...blocked.map(p => `Move ${PERSON[p.person].your} pre-tax IRA balance into a workplace plan before converting`),
       ...(withRoom.length ? ['Convert it to Roth once it settles'] : []),
       'File Form 8606 with the return',

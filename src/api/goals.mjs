@@ -5,25 +5,29 @@
 //                               ...the kind fields (src/shared/goals.mjs KIND_FIELDS)}  -> {scenario, goal}
 // POST /api/goals/:id          the same fields, any subset; status done marks a goal done,
 //                               open reopens it, archived archives it                -> {scenario, goal}
-// POST /api/goals/:id/archive  {archived?: boolean, default true}                   -> {scenario, goal}
+// POST /api/goals/:id/archive  {archived?: boolean, default true}; restoring reopens -> {scenario, goal}
 // POST /api/goals/:id/delete   {}                                                   -> {scenario}
 // POST /api/curve              {id, value} or {positions: {id: value}}              -> {scenario}
 // GET  /api/goals/suggestions                                                     -> {clock, suggestions}
-// POST /api/goals/:id/suggestion  {action: 'dismiss'|'restore'} or {withdrawalRate}  -> {scenario}
+// POST /api/goals/:id/suggestion  {action: 'undo'}: undo a target Fathom set, declining it  -> {scenario}
+//
+// Every goal write runs the adoption pass for that goal (src/goals/write.mjs): a goal with no
+// target gets the calculator's, recorded as set by Fathom.
 //
 // Owner goal text is stored as typed (trimmed) and rendered escaped, never token-resolved. A seed
 // goal (the demo's) can be archived or deleted, not edited: its text carries scenario tokens.
 
-import { createGoal, updateGoal } from '../goals/write.mjs';
+import { createGoal, updateGoal, adoptSuggestions, undoAdoption } from '../goals/write.mjs';
 import { ToolError } from '../tools/errors.mjs';
-import { getSetting, setSetting, tx, parseJson as parse } from '../store/db.mjs';
+import { getSetting, setSetting } from '../store/db.mjs';
 import { HttpError } from './http.mjs';
 import { scenarioOf } from './handlers.mjs';
-import { clockNow, loadContent, loadCurve, loadFigures } from '../scenario/build.mjs';
-import { buildSuggestions, SUGGEST_SETTING } from '../suggest/build.mjs';
-import { TARGET_PARAMETERS } from '../calc/targets.mjs';
+import { clockNow, loadContent, loadCurve } from '../scenario/build.mjs';
+import { buildSuggestions } from '../suggest/build.mjs';
 
 const stamp = ctx => clockNow(ctx.db, ctx.config && ctx.config.clock);
+const adopt = ctx => adoptSuggestions(ctx.db, { now: stamp(ctx), clock: ctx.config && ctx.config.clock });
+const toolHttp = e => new HttpError(e.code === 'not_found' ? 404 : e.code === 'conflict' ? 409 : 400, e.message);
 
 function goalRow(db, id) {
   const row = typeof id === 'string' ? db.prepare('SELECT * FROM goals WHERE id = ?').get(id) : null;
@@ -35,18 +39,18 @@ const goalOut = (scenario, id) => scenario.goals.find(g => g.id === id) || null;
 
 export function goalCreate(ctx) {
   try {
-    const row = createGoal(ctx.db, ctx.body, { now: stamp(ctx) });
+    const row = createGoal(ctx.db, ctx.body, { now: stamp(ctx), clock: ctx.config && ctx.config.clock });
     const scenario = scenarioOf(ctx);
     return { scenario, goal: goalOut(scenario, row.id) };
-  } catch (e) { if (e instanceof ToolError) throw new HttpError(e.code === 'not_found' ? 404 : e.code === 'conflict' ? 409 : 400, e.message); throw e; }
+  } catch (e) { if (e instanceof ToolError) throw toolHttp(e); throw e; }
 }
 
 export function goalUpdate(ctx) {
   try {
-    const row = updateGoal(ctx.db, ctx.params.id, ctx.body, { now: stamp(ctx) });
+    const row = updateGoal(ctx.db, ctx.params.id, ctx.body, { now: stamp(ctx), clock: ctx.config && ctx.config.clock });
     const scenario = scenarioOf(ctx);
     return { scenario, goal: goalOut(scenario, row.id) };
-  } catch (e) { if (e instanceof ToolError) throw new HttpError(e.code === 'not_found' ? 404 : e.code === 'conflict' ? 409 : 400, e.message); throw e; }
+  } catch (e) { if (e instanceof ToolError) throw toolHttp(e); throw e; }
 }
 
 export function goalArchive(ctx) {
@@ -55,7 +59,10 @@ export function goalArchive(ctx) {
   const { archived = true } = ctx.body;
   if (typeof archived !== 'boolean') throw new HttpError(400, 'archived must be true or false');
   const now = stamp(ctx);
-  db.prepare('UPDATE goals SET archived_at = ?, updated_at = ? WHERE id = ?').run(archived ? row.archived_at || now : null, now, row.id);
+  // Restoring reopens: a done goal archived itself, so bringing it back clears done too.
+  if (archived) db.prepare('UPDATE goals SET archived_at = ?, updated_at = ? WHERE id = ?').run(row.archived_at || now, now, row.id);
+  else db.prepare('UPDATE goals SET archived_at = NULL, done_at = NULL, updated_at = ? WHERE id = ?').run(now, row.id);
+  if (!archived) adopt(ctx);
   const scenario = scenarioOf(ctx);
   return { scenario, goal: goalOut(scenario, row.id) };
 }
@@ -99,33 +106,14 @@ export function goalSuggestions(ctx) {
   return { clock, suggestions };
 }
 
-// Dismiss or restore a goal's suggestion, or set its withdrawal rate. A dismissal stores the
-// record's fingerprint, so a change to the goal text or the inputs brings the suggestion back.
+// Undo a target Fathom set: the goal's earlier values come back and the suggestion is declined,
+// so no later pass adopts it again.
 export function goalSuggestion(ctx) {
-  const { db } = ctx;
-  const row = goalRow(db, ctx.params.id);
-  if (row.origin !== 'owner') throw new HttpError(409, 'this goal came with the demo and has no suggested target');
+  const row = goalRow(ctx.db, ctx.params.id);
   const body = ctx.body;
-  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'send an action or a withdrawal rate');
-  const hasAction = Object.hasOwn(body, 'action');
-  const hasRate = Object.hasOwn(body, 'withdrawalRate');
-  if (hasAction === hasRate) throw new HttpError(400, 'send either an action or a withdrawal rate');
-  if (hasAction && !['dismiss', 'restore'].includes(body.action)) throw new HttpError(400, 'action must be dismiss or restore');
-  const { withdrawalRateMin: min, withdrawalRateMax: max } = TARGET_PARAMETERS;
-  if (hasRate && (typeof body.withdrawalRate !== 'number' || !Number.isFinite(body.withdrawalRate) || body.withdrawalRate < min || body.withdrawalRate > max)) {
-    throw new HttpError(400, `withdrawalRate must be a number from ${min} to ${max}`);
+  if (!body || typeof body !== 'object' || Array.isArray(body) || body.action !== 'undo' || Object.keys(body).length !== 1) {
+    throw new HttpError(400, "send {action: 'undo'}");
   }
-  const record = buildSuggestions(db, { clock: ctx.config && ctx.config.clock }).suggestions.find(s => s.goalId === row.id);
-  if (!record) throw new HttpError(409, 'this goal has a target or is not active, so it has no suggestion');
-  if (hasRate && record.kind !== 'independence') throw new HttpError(400, 'only a work-optional goal has a withdrawal rate');
-  const stored = getSetting(db, SUGGEST_SETTING, null);
-  const ids = new Set(db.prepare('SELECT id FROM goals').all().map(r => r.id));
-  const next = Object.fromEntries(Object.entries(stored && typeof stored === 'object' ? stored : {}).filter(([id]) => ids.has(id)));
-  const entry = { dismissed: null, ...(next[row.id] || {}) };
-  if (body.action === 'dismiss') entry.dismissed = record.fingerprint;
-  else if (body.action === 'restore') entry.dismissed = null;
-  else entry.withdrawalRate = Math.round(body.withdrawalRate * 10000) / 10000;
-  next[row.id] = entry;
-  setSetting(db, SUGGEST_SETTING, next);
+  try { undoAdoption(ctx.db, row.id, { now: stamp(ctx) }); } catch (e) { if (e instanceof ToolError) throw toolHttp(e); throw e; }
   return { scenario: scenarioOf(ctx) };
 }
