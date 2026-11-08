@@ -41,7 +41,7 @@ registerReceiptKind('account_merge', { restore(ctx,{before,after}) {
 function mergeEvidence(args,ctx) {
   if (args.confirm !== true || !isExplicitYes(args.evidence)) throw new ToolError('bad_input','Merge needs confirm: true and the owner\'s explicit confirming words.');
   if (ctx.channel === 'mcp') return;
-  requireEvidence(ctx,true,{evidence:args.evidence,argument:'merge confirmation'});
+  requireEvidence(ctx,args.evidence,{evidence:args.evidence,argument:'merge confirmation'});
   if (!ctx.conversationKey || !ctx.actorId) throw new ToolError('bad_input','Show the merge candidates first, then ask the owner to confirm in a later message.');
   const rows=ctx.db.prepare('SELECT id,role,text,provenance FROM messages WHERE conversation_key=? AND id<=? ORDER BY id DESC').all(ctx.conversationKey,ctx.evidenceMessageId ?? Number.MAX_SAFE_INTEGER);
   const previous=rows.find(r=>r.role==='fathom');

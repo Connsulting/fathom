@@ -8,6 +8,9 @@
 // goals table (a value may come from another goal's note); plus every goal, every fact and every
 // figure value. A changed basis makes the proposal stale.
 
+import { queueCategoryChecks } from '../categories/store.mjs';
+import { resolveClock } from '../scenario/build.mjs';
+import { queueAccountPairs } from '../ingest/account-merge.mjs';
 import { createHash } from 'node:crypto';
 import { parseJson as parse, tx } from '../store/db.mjs';
 import { ToolError } from '../tools/errors.mjs';
@@ -95,6 +98,10 @@ async function propose(tool, args, ctx) {
   if (missing) throw new ToolError('forbidden', `Permission denied: ${tool.name}.${op.name} needs ${missing}.`);
   const { operation, ...params } = input;
   await op.preflight?.(params, ctx);
+  if (scopes.some(scope => DOMAIN_TABLES[scope])) {
+    queueAccountPairs(ctx.db);
+    queueCategoryChecks(ctx.db, { clock: resolveClock(ctx.db, ctx.clock ?? ctx.services?.config?.clock ?? ctx.config?.clock) });
+  }
   ctx.onProposal({ tool: tool.name, operation, args: params, scopes, basis: proposalBasis(ctx.db, tool.name, scopes, params) });
   // No argument values in the result: a tool result is grounding evidence, and a proposal must
   // never source its own amounts or dates.

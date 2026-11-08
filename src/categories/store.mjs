@@ -130,7 +130,7 @@ export function setTransactionCategory(db, transactionId, category, { now } = {}
 }
 export function setMerchantRule(db, merchant, category, { now } = {}) {
   merchant=normalizeMerchant(merchant);
-  if(!merchant || merchant.length>200) throw new ConfirmError('bad_option');
+  if(!merchant) throw new ConfirmError('bad_option');
   const bucket=bucketForCategory(db,category);
   db.prepare(`INSERT INTO category_merchant_rules VALUES (?,?,?,?) ON CONFLICT(merchant)
     DO UPDATE SET category=excluded.category,bucket=excluded.bucket,updated_at=excluded.updated_at`).run(merchant,category,bucket,nowOf(now));
