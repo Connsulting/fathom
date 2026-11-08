@@ -18,6 +18,7 @@ import { ingestScreens } from './screens/ingest.js';
 import { emailScreen } from './screens/email.js';
 import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
+import * as serviceStatus from './screens/service-status.js';
 import * as recAnswers from './screens/rec-answers.js';
 import * as recBlocker from './screens/rec-blocker.js';
 import * as recSteps from './screens/rec-steps.js';
@@ -761,7 +762,7 @@ function pHome() {
   const m = homeModelNow();
   // No open goals: Home is the Goals step (kept while its save runs), with the data-health line.
   if (!m.cards.length || ui.goalsBusy === 'home') {
-    return shell(`<section class="h-home h-home-gs">${goalsStartHtml('home')}${dhealthHtml(homeHealth())}</section>`);
+    return shell(`<section class="h-home h-home-gs">${goalsStartHtml('home')}${dhealthHtml(homeHealth())}${serviceStatus.homeServiceHtml(api.s.live?.services)}</section>`);
   }
   // The owner filter, when not Both, is part of what the page shows.
   if (ui.owner === 'me' || ui.owner === 'spouse') askPanel.pageContext({ owner: ui.owner });
@@ -773,7 +774,7 @@ function pHome() {
   const head = `<div class="h-home-head"><div class="h-home-k">${T(api.s.meta.clockLabel)}</div>`
     + `<a class="h-hchip ${hc.tone}" href="${href('pace')}" data-go="pace">${esc(hc.label)}${icon('arrow')}</a>`
     + `<h1 class="h-home-h">${esc(hd.title)}</h1>`
-    + `${dhealthHtml(homeHealth())}</div>`;
+    + `${dhealthHtml(homeHealth())}${serviceStatus.homeServiceHtml(api.s.live?.services)}</div>`;
   const cards = `<div class="h-gcards">${m.cards.map(goalCardHome).join('')}</div>`;
   const goalsH = `<div class="h-home-sec"><h2>Goals</h2>${goA('goals', 'All goals')}</div>`;
   const rest = `${goalsH}${cards}${hkHtml(m.housekeeping)}`;
@@ -2160,7 +2161,7 @@ function draw() {
     case 'packs': html = packsScreen.render(r.params?.id); break;
     case 'yearend': html = yearendScreen.render(); break;
     case 'connect': html = connect.render(connectH); break;
-    case 'engine': html = engineScreen.render(); break;
+    case 'engine': html = engineScreen.render(routeChanged); break;
     case 'email': html = pEmail(routeChanged); break;
     case 'settings': html = pSettings(); break;
     case 'memories': html = memoriesScreen.render(); break;
@@ -2555,13 +2556,15 @@ function trapTab(e) {
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
-const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, recBlocker, recSteps, accountScreen, trendScreen, pnlScreen, tour, memoriesScreen];
+const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, serviceStatus, advisorScreen, yearendScreen, simplefin, recAnswers, recBlocker, recSteps, accountScreen, trendScreen, pnlScreen, tour, memoriesScreen];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(), composeLabel,
   esc, T, X, arr, plural, icon, btn, goA, href, shell, section, pageHead, thread, composer, figHtml, recById, snoozeLabel,
   openRec, openAccount, closeRec, decisionList, statusText, routeNow, visibleRecs, spark, niceTicks,
   sfStatus: () => simplefin.status(),
+  // A service control acted: the Email screen re-reads its own data (GET /api/email and /api/jobs).
+  serviceChanged: () => { if (routeNow().name === 'email') email?.reload?.(); },
   // Ask everywhere: the shared "+", the composer chip row, a question's references, thread
   // adoption by the panel, the Ask page's Open in panel button, and the panel itself.
   addBtn, ctxChipsHtml: () => askPanel.chipsHtml(), askRefs: (host) => askPanel.refs(host),

@@ -1,12 +1,15 @@
 /* Horizon Email screen: transport status with the masked recipient, Send test email and Send brief
    now, the brief preview in a sandboxed iframe (srcdoc only, never a URL), the send history and
    the scheduled jobs with Run now. Data comes from GET /api/email and GET /api/jobs, not the
-   scenario. Server text is plain text and always goes through esc(), never token resolution. */
+   scenario. Server text is plain text and always goes through esc(), never token resolution.
+   Email and its two jobs show their service status (GET /api/jobs services) when not healthy. */
+
+import { statusHtml } from './service-status.js';
 
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const KIND = { test: 'Test', brief: 'Brief', alert: 'Alert' };
 const SEND = { sent: 'Sent', failed: 'Failed' };
-const RUN = { running: 'Running', ok: 'Done', skipped: 'Skipped', error: 'Failed' };
+const RUN = { running: 'Running', ok: 'Done', skipped: 'Skipped', error: 'Failed', interrupted: 'Interrupted' };
 const STATE = { dev: 'Development', configured: 'Configured', missing_config: 'Not configured', missing_credential: 'Credential missing' };
 const TRIGGER = { scheduled: 'scheduled', manual: 'manual', ingest: 'after an import' };
 const FAIL = {
@@ -105,6 +108,14 @@ export function emailScreen(h) {
     </div>`;
   }
 
+  // Email, brief-email and deadline-alerts, each only when it is not healthy.
+  function servicesBlock() {
+    const sv = st.jobs?.services;
+    if (!sv) return '';
+    const list = [sv.email, sv.jobs?.['brief-email'], sv.jobs?.['deadline-alerts']].filter((x) => x && x.state !== 'healthy');
+    return list.length ? `<div class="h-svc-list" data-email-svc>${list.map(statusHtml).join('')}</div>` : '';
+  }
+
   function preview() {
     const p = st.email?.preview;
     if (!p) return '';
@@ -161,7 +172,7 @@ export function emailScreen(h) {
   function page(fresh) {
     if ((fresh || (!st.email && !st.error)) && !st.loading) load();
     let inner;
-    if (st.email) inner = `${statusBlock()}${st.error ? `<p class="h-em-err" role="alert">${esc(st.error)}</p>` : ''}
+    if (st.email) inner = `${statusBlock()}${servicesBlock()}${st.error ? `<p class="h-em-err" role="alert">${esc(st.error)}</p>` : ''}
       <div class="h-cols"><div class="h-col-main">${preview()}</div><div class="h-col-side">${historyTable()}</div></div>${jobsTable()}`;
     else if (st.error) inner = `<p class="h-em-err" role="alert">${esc(st.error)}</p>${btn('Try again', 'data-email-reload="1"')}`;
     else inner = '<p class="h-mute">Loading.</p>';
@@ -206,5 +217,5 @@ export function emailScreen(h) {
     return true;
   }
 
-  return { page, handleClick };
+  return { page, handleClick, reload: load };
 }

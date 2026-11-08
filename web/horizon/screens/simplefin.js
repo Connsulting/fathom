@@ -5,6 +5,8 @@
    cleared on success and never written to storage, the URL or the console. Rendered on the
    Accounts screen and the onboarding Tell us step; design.js delegates events here. */
 
+import { statusHtml } from './service-status.js';
+
 let H = null;
 export function bind(kit) { H = kit; }
 
@@ -27,10 +29,19 @@ const PROBLEM = {
   bad_response: 'The last sync got a reply Fathom could not read. It tries again on the next sync.'
 };
 
+// SimpleFIN sync waits on the household's jobs flag and its SimpleFIN flag (`services` is
+// scenario.live.services).
+// Controls this block already shows (Sync now, and the reconnect form), so the status card does
+// not repeat them.
+const BLOCK_CONTROLS = new Set(['sync_now', 'reconnect']);
+
+const syncPaused = (services) => services?.simplefin?.state === 'paused' || services?.jobs?.['simplefin-sync']?.state === 'paused';
+
 // The warning line for a failed last sync. A network failure names the next scheduled sync, taken
-// from the Engine job list (`jobs` is api.s.engine.jobs).
-export function problemText(code, jobs) {
+// from the Engine job list (`jobs` is api.s.engine.jobs), unless sync is paused.
+export function problemText(code, jobs, services) {
   if (code === 'network') {
+    if (syncPaused(services)) return 'The SimpleFIN bridge did not answer in time. Sync is paused, so Fathom will not retry until it is resumed.';
     const next = (Array.isArray(jobs) ? jobs : []).find((j) => j && j.id === 'simplefin-sync')?.next;
     return `The SimpleFIN bridge did not answer in time. Fathom tries again on the next scheduled sync${next ? `, ${next}` : ''}.`;
   }
@@ -58,11 +69,17 @@ export function block() {
   const { esc, btn, icon, plural, goA } = H;
   const sf = state();
   if (!sf.connected) return `<div class="h-sf" data-sf-box>${form(sf, false)}</div>`;
-  const problem = sf.errorCode ? problemText(sf.errorCode, H.api.s?.engine?.jobs) : '';
+  const services = H.api.s?.live?.services || null;
+  // The status block, when shown, says what the warning line would, with its control. The
+  // connection comes first; with a healthy connection, a sync job that is not healthy shows.
+  const unwell = (x) => (x && x.state !== 'healthy' ? x : null);
+  const svc = unwell(services?.simplefin) || unwell(services?.jobs?.['simplefin-sync']);
+  const problem = !svc && sf.errorCode ? problemText(sf.errorCode, H.api.s?.engine?.jobs, services) : '';
   const msgs = Array.isArray(sf.messages) ? sf.messages : [];
   return `<div class="h-sf on" data-sf-box data-sf-connected>
       <p class="h-sf-st">${icon('check')}<span><b>Connected to SimpleFIN</b>, ${plural(Number(sf.accounts) || 0, 'account')}, last sync ${esc(when(sf.lastSyncAt))}</span></p>
       ${S.notice ? `<p class="h-sf-sync" data-sf-sync>${esc(S.notice)}</p>` : ''}
+      ${svc ? statusHtml(svc, { control: !BLOCK_CONTROLS.has(svc.control?.id) }) : ''}
       ${problem ? `<p class="h-sf-warn" role="alert">${esc(problem)}</p>` : ''}
       ${msgs.length ? `<ul class="h-sf-msgs">${msgs.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}
       ${sf.pendingMatches ? `<p class="h-mute sm">${plural(sf.pendingMatches, 'connected account')} ${sf.pendingMatches === 1 ? 'needs' : 'need'} an answer first: is it an account you already imported? ${goA('confirm', 'Answer in Confirm')}</p>` : ''}

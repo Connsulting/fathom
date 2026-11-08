@@ -278,3 +278,13 @@
 @media (prefers-reduced-motion: reduce) {
   .d-horizon article.h-next, .d-horizon details.h-hk summary .h-i { transition: none; }
 }
+
+/* ---------- background service line ---------- */
+/* At most one line, under the data line, when a background service needs the owner. */
+.d-horizon .h-svc-line { margin-top: 8px; font-size: 14px; }
+.d-horizon .h-svc-line a {
+  display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 4px 12px; border-radius: 999px;
+  border: 1px solid #f0a58f; color: #f0a58f; font-size: 13px; font-weight: 500; line-height: 1.35;
+}
+.d-horizon .h-svc-line a::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+.d-horizon .h-svc-line a:hover { filter: brightness(1.15); }

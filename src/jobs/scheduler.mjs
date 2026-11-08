@@ -10,7 +10,10 @@ import { guessCategories } from '../categories/guess.mjs';
 //    1st at 07:00, deadline-alerts daily 07:00, trash-purge daily 03:00, freshness Monday 06:00, confirm-guess daily 03:00); the due key is the latest
 //    period whose start is at or before now. config.clock fixes the local date at 12:00.
 // 2. One attempt per (job_id, period_key): the job_runs insert claims it and the unique index
-//    refuses a second claim, so a failed run is not retried that period. A tick runs only the
+//    refuses a second claim. A period run that failed with a transient error class (isTransient) or
+//    was interrupted gets one retry, its own claim under key `<period_key>+retry` with trigger
+//    `retry`, on the first tick at or after finished_at + retryMs (default 15 minutes). A `+retry`
+//    run, a skipped run and any other failure are not retried that period. A tick runs only the
 //    latest due period of each job, so catch-up after downtime is one run, never a backfill.
 //    Manual, ingest and confirm runs use `manual:<iso ts>`, `ingest:<iso ts>` and `confirm:<iso ts>` keys.
 // 3. The single-row job_lock lease gates every run: taken when free or expired on every tick and
@@ -19,7 +22,7 @@ import { guessCategories } from '../categories/guess.mjs';
 // 4. A job runs at most once at a time in this process (runNow of a running job is `running`; a
 //    trigger during a run is remembered and coalesced into one rerun after it), and
 //    ticks never overlap. A handler that throws never stops the scheduler.
-// 5. job_runs rows record status (ok, skipped, error), duration, trigger, cost and a counts-only
+// 5. job_runs rows record status (ok, skipped, error, interrupted), duration, trigger, cost and a counts-only
 //    note (numbers and booleans, top level or one object deep); error_class is an identifier (the
 //    error's code, else its class name), never a message. Logs are only
 //    `fathom: job <id> <status> [error_class]`, plus one info-level lock refusal per job and household.
@@ -43,6 +46,13 @@ import { guessCategories } from '../categories/guess.mjs';
 //    config, engine and transport, all of that one household.
 // 12. Registry schedulers share round-robin admission: one handler per household and two for the
 //    instance. Queued runs recheck admission and the lease before claiming a local job_runs row.
+// 13. Interrupted recovery: once a tick holds the lease, every `running` row that is not one of
+//    this process's in-flight runs was left by a holder that died (holding the lease proves no
+//    other holder is running), so it is marked `interrupted` (finished_at now, error_class
+//    `interrupted`) and logged `fathom: job <id> interrupted`; rule 2 then retries it. A running
+//    row under another holder's live lease is left alone: the lease take fails and nothing runs.
+// 14. schedule() is read-only: [{ id, nextAt, retryMs }] for handled jobs, no store writes. SQLite
+//    busy and locked errors (errcode 5 or 6) are recorded as error_class `store_locked`.
 
 import { getSetting } from '../store/db.mjs';
 import { createJobDispatcher } from './dispatch.mjs';
@@ -62,6 +72,16 @@ const DAY = 86400000;
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const TRIGGERS = new Set(['manual', 'ingest', 'confirm', 'decide', 'resolve']);
+const RETRY_MS = 15 * 60000;
+
+// Error classes worth one automatic retry: network, rate limit, store lock and timeout failures.
+const TRANSIENT = new Set(['simplefin_network', 'simplefin_bad_response', 'email_network', 'email_rate_limited', 'store_locked', 'TimeoutError', 'AbortError']);
+const TRANSIENT_RE = /timeout|network|ETIMEDOUT|ECONNRESET|ECONNREFUSED|EAI_AGAIN/i;
+export function isTransient(errorClass) {
+  return typeof errorClass === 'string' && errorClass !== '' && (TRANSIENT.has(errorClass) || TRANSIENT_RE.test(errorClass));
+}
+// Resolver stop causes the confirm-guess note records under stoppedBy (src/resolve/index.mjs).
+const STOP_CAUSES = new Set(['engine_paused', 'engine_off', 'funding_unavailable', 'budget']);
 
 export const JOBS = Object.freeze([
   { id: 'plan', name: 'Nightly plan refresh', cadence: 'Daily, 2:00 AM', does: 'Re-plan recommendations and deadlines from the latest data.', schedule: Object.freeze({ every: 'day', hour: 2 }) },
@@ -217,6 +237,7 @@ function countsNote(note) {
 }
 
 function errorClassOf(e) {
+  if (e && Number.isInteger(e.errcode) && ((e.errcode & 0xff) === 5 || (e.errcode & 0xff) === 6)) return 'store_locked';
   if (e && typeof e.code === 'string' && IDENT.test(e.code)) return e.code;
   const name = e && e.constructor && e.constructor.name;
   return typeof name === 'string' && IDENT.test(name) ? name : 'Error';
@@ -228,7 +249,7 @@ const isUniqueViolation = (e) => e && (e.errcode === 2067 || e.errcode === 1555 
 
 export function createScheduler({
   db, config = {}, engine = null, handlers = {}, transport = null, dispatcher = createJobDispatcher(), now = () => new Date(), allowed = () => true, household = () => null,
-  tickMs = 60000, leaseMs = 300000, drainMs = 30000, debounceMs = 30000, holder = `fathom-${process.pid}`, log = console,
+  tickMs = 60000, leaseMs = 300000, drainMs = 30000, debounceMs = 30000, retryMs = RETRY_MS, holder = `fathom-${process.pid}`, log = console,
 } = {}) {
   if (!db) throw new TypeError('A store is required');
   if (typeof allowed !== 'function' || typeof household !== 'function') throw new TypeError('Invalid scheduler admission');
@@ -236,6 +257,8 @@ export function createScheduler({
   const byId = new Map(handled.map((j) => [j.id, j]));
   const fixed = config && isIsoDate(config.clock) ? config.clock : null;
   const running = new Set();
+  // job_runs ids this process claimed and has not finished (rule 13).
+  const inFlight = new Set();
   const lockRefusals = new Map();
   // Triggers that arrived while their job was running: jobId -> reason, coalesced to one rerun.
   const pending = new Map();
@@ -263,6 +286,9 @@ export function createScheduler({
     finish: db.prepare('UPDATE job_runs SET status = ?, finished_at = ?, duration_ms = ?, error_class = ?, cost_usd = ?, note = ? WHERE id = ?'),
     run: db.prepare('SELECT * FROM job_runs WHERE id = ?'),
     last: db.prepare('SELECT * FROM job_runs WHERE job_id = ? ORDER BY id DESC LIMIT 1'),
+    period: db.prepare('SELECT * FROM job_runs WHERE job_id = ? AND period_key = ?'),
+    stale: db.prepare("SELECT id, job_id FROM job_runs WHERE status = 'running'"),
+    interrupt: db.prepare("UPDATE job_runs SET status = 'interrupted', finished_at = ?, error_class = 'interrupted' WHERE id = ? AND status = 'running'"),
     runs: db.prepare('SELECT * FROM job_runs ORDER BY id DESC LIMIT ?'),
   };
 
@@ -345,6 +371,7 @@ export function createScheduler({
       if (isUniqueViolation(e)) return null;
       throw e;
     }
+    inFlight.add(id);
     if (!renewer && !stopping) {
       renewer = setInterval(renew, Math.max(1, Math.floor(leaseMs / 3)));
       renewer.unref?.();
@@ -366,7 +393,9 @@ export function createScheduler({
       errorClass = errorClassOf(e);
       if (Number.isFinite(e && e.costUsd) && e.costUsd >= 0) cost = e.costUsd;
     }
-    q.finish.run(status, at().toISOString(), Math.max(0, Math.round(performance.now() - started)), errorClass, cost, note, id);
+    try {
+      q.finish.run(status, at().toISOString(), Math.max(0, Math.round(performance.now() - started)), errorClass, cost, note, id);
+    } finally { inFlight.delete(id); }
     log.log(`fathom: job ${job.id} ${status}${errorClass ? ` ${errorClass}` : ''}`);
     try { ensureJobs(); } catch { /* labels refresh on the next tick */ }
     const result = runOut(q.run.get(id));
@@ -382,18 +411,39 @@ export function createScheduler({
       for (const job of handled) if (!running.has(job.id)) lockRefused(job.id);
       return;
     }
+    recoverInterrupted(t);
     const zone = tz();
     for (const job of handled) {
       if (stopping) break;
       if (running.has(job.id)) continue;
       try {
-        await execute(job, { key: periodKey(job.schedule, partsAt(t, zone)), trigger: 'scheduled', t, zone });
+        const key = periodKey(job.schedule, partsAt(t, zone));
+        const run = await execute(job, { key, trigger: 'scheduled', t, zone });
+        if (run === null && retryDue(job, key, t)) await execute(job, { key: `${key}+retry`, trigger: 'retry', t, zone });
       } catch (e) {
         if (e instanceof SchedulerError && e.code === 'paused') break;
         if (e instanceof SchedulerError && e.code === 'locked') continue;
         log.log(`fathom: job ${job.id} error store`);
       }
     }
+  }
+
+  // Rule 13: called only while this tick holds the lease.
+  function recoverInterrupted(t) {
+    for (const r of q.stale.all()) {
+      if (inFlight.has(r.id)) continue;
+      if (q.interrupt.run(t.toISOString(), r.id).changes) log.log(`fathom: job ${r.job_id} interrupted`);
+    }
+  }
+
+  // Rule 2: the period's claimed run failed transiently or was interrupted, has no retry yet and
+  // finished at least retryMs ago.
+  function retryDue(job, key, t) {
+    const row = q.period.get(job.id, key);
+    if (!row || !(row.status === 'interrupted' || (row.status === 'error' && isTransient(row.error_class)))) return false;
+    if (q.period.get(job.id, `${key}+retry`)) return false;
+    const done = Date.parse(row.finished_at ?? '');
+    return Number.isFinite(done) && done + retryMs <= t.getTime();
   }
 
   function tick() {
@@ -485,6 +535,12 @@ export function createScheduler({
       try { q.release.run(holder); } catch { /* store already closed */ }
     },
     idle() { return Promise.allSettled([...active]); },
+    // Rule 14: read-only.
+    schedule() {
+      const t = at();
+      const zone = tz();
+      return handled.map((j) => ({ id: j.id, nextAt: nextRunAt(j.schedule, t, zone, fixed).toISOString(), retryMs }));
+    },
     jobs() {
       const t = at();
       const zone = tz();
@@ -537,7 +593,10 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
         now: ctx.clock, packDirs: defaultPackDirs(ctx.household.root), runId: ctx.jobRunId,
       });
       ctx.db.prepare('UPDATE action_receipts SET planning_pending = 0 WHERE planning_pending = 1').run();
-      return { costUsd: planning.costUsd, note: planning.counts, planning };
+      const warned = [...new Set(Array.isArray(planning.warnings) ? planning.warnings : [])].filter((c) => typeof c === 'string' && IDENT.test(c));
+      for (const c of warned) console.warn(`fathom: plan warning ${c}`);
+      const note = warned.length ? { ...planning.counts, warned: Object.fromEntries(warned.map((c) => [c, true])) } : planning.counts;
+      return { costUsd: planning.costUsd, note, planning };
     },
     async 'brief-email'(ctx) {
       const brief = await composeBrief(ctx.db, { clock: ctx.clock, publicUrl, engine: ctx.engine, householdId: ctx.household.householdId });
@@ -591,7 +650,8 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
       });
       if (!out.answered && !out.batches && !out.costUsd) return { status: 'skipped', note: { pending: out.pending } };
       return { costUsd: out.costUsd,
-        note: { batches: out.batches, items: out.items, guessed: out.answered, stopped: Boolean(out.stopped) } };
+        note: { batches: out.batches, items: out.items, guessed: out.answered, stopped: Boolean(out.stopped),
+          ...(STOP_CAUSES.has(out.stopped) ? { stoppedBy: { [out.stopped]: true } } : {}) } };
     },
   };
 }
