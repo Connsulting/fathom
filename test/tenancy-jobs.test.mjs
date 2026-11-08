@@ -171,3 +171,34 @@ test('SimpleFIN sync queues local planning and freshness without holding its han
     await registry.close(); instance.close(); rmSync(instance.dataDir, { recursive: true, force: true });
   }
 });
+
+test('resolver answers queue a separate local plan claim after releasing the household slot', { timeout: 15000 }, async () => {
+  const { ask, KIND_OPTIONS } = await import('../src/ingest/confirm.mjs');
+  const instance = await tempInstance();
+  const other = 'hh_synthetic_resolver';
+  instance.platform.prepare("INSERT INTO households (id, status, mode, created_at, updated_at) VALUES (?, 'active', 'real', 1, 1)").run(other);
+  createHouseholdStorage({ platform: instance.platform, dataDir: instance.dataDir, householdId: other, mode: 'real', secrets: instance.secrets, enabled: true });
+  const registry = createRuntimeRegistry({ platform: instance.platform, config: {
+    dataDir: instance.dataDir, engine: 'off', clock: '2026-11-05', emailTransport: 'dev',
+  }, secrets: instance.secrets });
+  try {
+    const a = registry.get(instance.householdId); const b = registry.get(other);
+    const seedQuestion = ctx => {
+      ctx.db.prepare('INSERT INTO accounts (id,name,inst,mask) VALUES (?,?,?,?)').run('synthetic-checking', 'Synthetic checking', 'Example Bank', '1234');
+      return ask(ctx.db, { kind: 'account_kind', subject: 'synthetic-checking', question: 'What kind of account is this?', options: KIND_OPTIONS, now: '2026-11-05T12:00:00Z' }).id;
+    };
+    const own = seedQuestion(a); const foreign = seedQuestion(b);
+    const resolved = await a.scheduler.runNow('confirm-guess');
+    assert.equal(resolved.status, 'ok', resolved.errorClass);
+    assert.equal(a.db.prepare('SELECT status FROM confirm_items WHERE id = ?').get(own).status, 'answered');
+    for (let i = 0; i < 30; i++) await turn();
+    const planned = a.scheduler.runs().find(r => r.jobId === 'plan');
+    assert.ok(planned, 'resolver queues a plan through its scheduler');
+    assert.equal(planned.status, 'ok', planned.errorClass);
+    assert.notEqual(planned.id, resolved.id);
+    assert.equal(b.db.prepare('SELECT status FROM confirm_items WHERE id = ?').get(foreign).status, 'pending');
+    assert.equal(b.scheduler.runs().length, 0);
+  } finally {
+    await registry.close(); instance.close(); rmSync(instance.dataDir, { recursive: true, force: true });
+  }
+});
