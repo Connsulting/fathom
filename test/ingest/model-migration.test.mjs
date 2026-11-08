@@ -62,7 +62,7 @@ test('household-local proposal versions, batches and mapping approval cannot cro
 test('review metadata upgrade preserves populated proposal, mapping and financial rows', () => {
   const db = legacy();
   try {
-    migrate(db, { through: 31 });
+    migrate(db, { through: 32 });
     db.prepare(`INSERT INTO import_proposals (id,version,file_id,source_sha256,status,proposal,interpreter_version,created_at,updated_at)
       VALUES ('proposal-synthetic',1,'f-synthetic',?,'needs_confirmation','{}','1',?,?)`).run('a'.repeat(64), now, now);
     const oldProposal = db.prepare('SELECT * FROM import_proposals').get();
