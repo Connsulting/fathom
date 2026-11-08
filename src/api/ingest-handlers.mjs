@@ -8,10 +8,10 @@ import { queueAccountPairs } from '../ingest/account-merge.mjs';
 
 import { getSetting } from '../store/db.mjs';
 import { openVault, VaultError } from '../ingest/vault.mjs';
-import { ingestFiles, retryFile as retryIngest } from '../ingest/pipeline.mjs';
+import { ingestFiles, retryFile as retryIngest, triggerJob, triggerPlan, triggerGuesses, triggerFreshness } from '../ingest/pipeline.mjs';
 import { answerItem, answerItems, reviseItem, reopenItem, reopenItems, finalReason, getItem, pendingItems, listItems, ConfirmError } from '../ingest/confirm.mjs';
 import { autoResolve } from '../ingest/auto.mjs';
-import { fileOf } from '../ingest/freshness.mjs';
+import { listImportedFiles } from '../ingest/freshness.mjs';
 import { refreshPackState } from '../packs/state.mjs';
 import { HttpError } from './http.mjs';
 import { scenarioOf } from './scenario.mjs';
@@ -52,22 +52,7 @@ export async function householdVault(ctx) {
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const safeCode = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && IDENT.test(v)) || 'unknown';
 
-// Fire and forget: a trigger failure logs a code and never fails the request.
-function triggerJob(ctx, jobId) {
-  const scheduler = schedulerOf(ctx);
-  if (!scheduler) return;
-  const failed = err => console.error(`fathom: ${jobId} trigger failed`, safeCode(err));
-  try {
-    const p = scheduler.trigger(jobId, 'ingest');
-    if (p && typeof p.then === 'function') p.then(null, failed);
-  } catch (err) {
-    failed(err);
-  }
-}
-export const triggerPlan = ctx => triggerJob(ctx, 'plan');
-export const triggerGuesses = ctx => triggerJob(ctx, 'confirm-guess');
-export const triggerFreshness = ctx => triggerJob(ctx, 'freshness');
-
+export { triggerPlan, triggerGuesses, triggerFreshness } from '../ingest/pipeline.mjs';
 export const ingestOpts = ctx => ({ household: ctx.household, engine: ctx.engine, config: ctx.config, now: nowIso() });
 
 export async function uploadFiles(ctx) {
@@ -88,10 +73,7 @@ export async function uploadFiles(ctx) {
   return { scenario, files: results, pending: scenario.live.ingest.pending };
 }
 
-export function listFiles(ctx) {
-  const rows = ctx.db.prepare('SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files WHERE removed_at IS NULL ORDER BY uploaded_at DESC, rowid DESC').all();
-  return { files: rows.map(fileOf) };
-}
+export const listFiles = ctx => listImportedFiles(ctx.db);
 
 export async function retryFile(ctx) {
   const { id } = ctx.params;

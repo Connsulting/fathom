@@ -39,7 +39,7 @@ export function isPlainConfirmation(text) {
 export const allowedScopes = scopes => (Array.isArray(scopes) ? WRITE_SCOPES.filter(s => scopes.includes(s)) : [...WRITE_SCOPES]);
 
 const TABLES = { 'write:goals': ['goals', 'id'], 'write:facts': ['facts', 'key'], 'write:recs': ['recs', 'id'],
-  'write:steps': ['recs', 'id'], 'write:preferences': ['preferences', 'id'] };
+  'write:steps': ['recs', 'id'], 'write:preferences': ['preferences', 'id'], 'write:imports': ['files', 'id'], 'write:jobs': ['jobs', 'id'] };
 
 const DOMAIN_TABLES = {
   'write:sources': ['accounts','files','transactions','balances','positions','pnl_lines','tax_payments','documents','held_facts','entity_aliases','sources','source_changes','confirm_items','confirm_undo','ingest_epoch','transaction_category_corrections','transaction_category_imports','transaction_category_guesses'],
@@ -57,6 +57,19 @@ export function proposalBasis(db, tool, scopes, args = {}) {
       continue;
     }
     const [table, pk] = TABLES[scope];
+    if (scope === 'write:preferences') {
+      parts.push(['preferences', db.prepare('SELECT * FROM preferences ORDER BY id').all()]);
+      parts.push(['spending_definitions', db.prepare('SELECT * FROM spending_definitions ORDER BY id').all()]);
+      parts.push(['packs_state', db.prepare('SELECT * FROM packs_state ORDER BY id').all()]);
+      parts.push(['recs', db.prepare('SELECT id, status, updated_at FROM recs ORDER BY id').all()]);
+      continue;
+    }
+    if (scope === 'write:imports' || scope === 'write:jobs') {
+      parts.push(['files', db.prepare('SELECT * FROM files ORDER BY id').all()]);
+      parts.push(['settings', db.prepare('SELECT * FROM settings ORDER BY key').all()]);
+      parts.push(['job_runs', db.prepare('SELECT * FROM job_runs ORDER BY id').all()]);
+      continue;
+    }
     if (table === 'goals') continue;
     const target = args[pk] ?? args.id ?? args.key;
     parts.push([table, target !== undefined
