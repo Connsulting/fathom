@@ -63,7 +63,7 @@ test('members manage their own keys, admins manage all keys, and session ownersh
     const legacy = await create(server, 'Existing household key');
     await platformOf(server, db => {
       assert.equal(db.prepare('SELECT user_id FROM api_keys WHERE id = ?').get(own.record.id).user_id, alice.fixture.user.id);
-      db.prepare('UPDATE api_keys SET user_id = NULL WHERE id = ?').run(legacy.record.id);
+      assert.throws(() => db.prepare('UPDATE api_keys SET user_id = NULL WHERE id = ?').run(legacy.record.id));
     });
     const listed = await alice.request({ path: '/api/keys' });
     assert.equal(listed.status, 200);
@@ -87,15 +87,14 @@ test('members manage their own keys, admins manage all keys, and session ownersh
   } finally { await server.stop(); }
 });
 
-test('removing a user invalidates sessions and their bearer keys immediately, preserving other and ownerless keys', T, async () => {
+test('removing a user invalidates sessions and their bearer keys immediately, preserving other creators keys', T, async () => {
   const server = await spawnAuthenticatedServer({ env: REAL });
   try {
     const removed = await userClient(server, 'removed@example.test');
     const retained = await userClient(server, 'retained@example.test');
     const own = await create(removed, 'Removed user key');
     const other = await create(retained, 'Retained user key');
-    const legacy = await create(server, 'Existing ownerless key');
-    await platformOf(server, db => db.prepare('UPDATE api_keys SET user_id = NULL WHERE id = ?').run(legacy.record.id));
+    const legacy = await create(server, 'Admin key');
     await working(server, own.key);
     await working(server, other.key);
     await working(server, legacy.key);
@@ -110,7 +109,7 @@ test('removing a user invalidates sessions and their bearer keys immediately, pr
   } finally { await server.stop(); }
 });
 
-test('demotion keeps financial MCP permissions while revoking administrative session permission', T, async () => {
+test('demotion invalidates the old MCP key and permits a fresh member key', T, async () => {
   const server = await spawnAuthenticatedServer({ env: REAL });
   try {
     const promoted = await userClient(server, 'second-admin@example.test', 'admin');
@@ -118,22 +117,21 @@ test('demotion keeps financial MCP permissions while revoking administrative ses
     assert.equal((await promoted.request({ path: '/api/admin/users' })).status, 200);
     assert.equal((await server.postJson(`/api/admin/users/${promoted.fixture.user.id}/role`, { role: 'member' })).status, 200);
     assert.equal((await promoted.request({ path: '/api/admin/users' })).status, 403);
-    const tools = rpcResult(await mcpPost(server.baseUrl, { auth: bearer(key.key), method: 'tools/list' })).tools;
+    await denied(server, key.key);
+    const fresh = await create(promoted, 'Fresh member key', { scopes: ['write:recs'] });
+    const tools = rpcResult(await mcpPost(server.baseUrl, { auth: bearer(fresh.key), method: 'tools/list' })).tools;
     assert.ok(tools.some(tool => tool.name === 'act_on_recommendation'));
-    await working(server, key.key);
+    await working(server, fresh.key);
     assert.equal((await promoted.request({ path: '/api/scenario' })).status, 200);
   } finally { await server.stop(); }
 });
 
-// Contradiction 1: api_keys lost the users foreign key, so verification itself refuses a key whose
-// creator is no longer an active member of the served household, even when no delete removed it.
-test('a creator-owned key stops verifying once its creator has no active membership, while ownerless keys stay admin-manageable', T, async () => {
+test('a retained key refuses an inactive creator while another creators key stays admin-manageable', T, async () => {
   const server = await spawnAuthenticatedServer({ env: REAL });
   try {
     const member = await userClient(server, 'lapsed@example.test');
     const own = await create(member, 'Lapsed member key');
-    const legacy = await create(server, 'Existing ownerless key');
-    await platformOf(server, db => db.prepare('UPDATE api_keys SET user_id = NULL WHERE id = ?').run(legacy.record.id));
+    const legacy = await create(server, 'Admin key');
     await working(server, own.key);
     await working(server, legacy.key);
     await platformOf(server, platform => platform.prepare("UPDATE household_memberships SET status = 'removed' WHERE user_id = ?").run(member.fixture.user.id));
@@ -142,7 +140,7 @@ test('a creator-owned key stops verifying once its creator has no active members
     await working(server, legacy.key);
     const all = await server.request({ path: '/api/keys' });
     assert.equal(all.status, 200);
-    assert.ok(all.json.keys.some(record => record.id === legacy.record.id), 'admins still list the ownerless key');
+    assert.ok(all.json.keys.some(record => record.id === legacy.record.id), 'admins still list their key');
     assert.equal((await server.postJson(`/api/keys/${legacy.record.id}/revoke`)).status, 200);
     await denied(server, legacy.key);
   } finally { await server.stop(); }
