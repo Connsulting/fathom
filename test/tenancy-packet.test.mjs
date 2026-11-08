@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHook, executionAsyncId } from 'node:async_hooks';
+import { createHook } from 'node:async_hooks';
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { twoHouseholds, enrollSession } from './helpers/tenancy-runtime.mjs';

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tempDir } from '../test/helpers/server.mjs';
 import { startRuntime, writeInstanceKeys } from '../test/helpers/tenancy-runtime.mjs';
@@ -21,7 +21,10 @@ export async function isolationFixture({ engine = 'fake', extra = {}, engineOpti
   const keys = writeInstanceKeys(join(root, 'keys'));
   let server;
   try {
-    server = await startRuntime({ dataDir, keys, engine, extra, engineOptions });
+    mkdirSync(join(root, 'backups'), { mode: 0o700 });
+    server = await startRuntime({ dataDir, keys, engine, extra: {
+      FATHOM_BACKUP_KEY_FILE: keys.backupKeyFile, FATHOM_BACKUP_DESTINATION: join(root, 'backups'), ...extra,
+    }, engineOptions });
     const { app, baseUrl } = server;
     const store = createAuthStore(app.platform);
     const mail = () => {
@@ -74,8 +77,10 @@ export async function isolationFixture({ engine = 'fake', extra = {}, engineOpti
     operator.client = signed.client;
     operator.identity = ok(signed.verify).identity;
     for (const hh of [A, B]) {
-      hh.ctx = app.runtimes.get(hh.id);
-      hh.db = hh.ctx.db;
+      Object.defineProperties(hh, {
+        ctx: { get: () => app.runtimes.get(hh.id) },
+        db: { get: () => hh.ctx.db },
+      });
     }
     return { root, dataDir, keys, app, baseUrl, store, platform: app.platform, server, A, B, dual, operator,
       mail, mailedToken, enroll, invite,

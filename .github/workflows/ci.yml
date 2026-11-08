@@ -38,6 +38,8 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run e2e
+      - name: signed-in real-session activation smoke
+        run: node test/tenancy-activation.test.mjs
       - name: signed-out real-mode auth smoke
         run: |
           set -euo pipefail

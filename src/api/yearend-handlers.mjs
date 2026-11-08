@@ -48,5 +48,10 @@ export async function downloadPacket(ctx) {
     if (e instanceof VaultError) throw new HttpError(409, e.message);
     throw e;
   }
-  await streamPacket(ctx.res, packet);
+  try {
+    ctx.assertResponseContext();
+    await streamPacket(ctx.res, packet);
+  } finally {
+    await packet.cleanup();
+  }
 }

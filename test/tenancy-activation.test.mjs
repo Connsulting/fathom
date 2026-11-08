@@ -7,6 +7,7 @@ import { createInstance, openPlatform, PLATFORM_MIGRATIONS_DIR } from '../src/pl
 import { openDb, migrate } from '../src/store/db.mjs';
 import { createAuthStore } from '../src/auth/store.mjs';
 import { isolationFixture, ok } from '../test-isolation/fixture.mjs';
+import { startRuntime } from './helpers/tenancy-runtime.mjs';
 
 test('release migration 009 enables explicit provisioning on old and fresh platforms only', async () => {
   const root = await tempDir('fathom-activation-');
@@ -27,6 +28,19 @@ test('release migration 009 enables explicit provisioning on old and fresh platf
     assert.equal(fresh.platform.prepare('SELECT count(*) n FROM households').get().n, 1);
     fresh.db.close(); fresh.platform.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('demo starts and resets with generated synthetic secrets and no mounted key or session', async () => {
+  const root = await tempDir('fathom-secret-free-');
+  let server;
+  try {
+    server = await startRuntime({ dataDir: join(root, 'data'), engine: 'fake', extra: { FATHOM_DEMO: '1' } });
+    const { request, postJson } = await import('./helpers/server.mjs');
+    const scenario = await request(server.baseUrl, { path: '/api/scenario' });
+    assert.equal(scenario.status, 200);
+    assert.equal((await postJson(server.baseUrl, '/api/demo/reset', {})).status, 200);
+    assert.equal(server.app.platform.prepare('SELECT count(*) n FROM households').get().n, 1);
+  } finally { await server?.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
 test('real-session smoke provisions only by operator action and serves independent households', { timeout: 120000 }, async () => {
