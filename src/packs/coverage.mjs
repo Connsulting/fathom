@@ -27,3 +27,15 @@ export function saveLoadFailure(db, failed) {
     setSetting(db, 'yourPlans.loadFailure', issues);
   }
 }
+
+export function coveredPacks(db, packs) {
+  const gaps = planCoverage(db).filter(issue => issue.stage !== 'pack-load');
+  if (!gaps.length) return packs;
+  return packs.map(pack => {
+    if (pack.id !== 'your-plans') return pack;
+    const entries = pack.entries.filter(entry => !gaps.some(issue =>
+      (!issue.section || entry.title === issue.section) && entry.cites.some(cite =>
+        cite.url.startsWith(`https://your-plans.invalid/${encodeURIComponent(issue.fileId ?? issue.name)}?page=`))));
+    return { ...pack, entries, covers: entries.map(entry => entry.title) };
+  });
+}

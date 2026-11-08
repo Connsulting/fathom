@@ -28,7 +28,7 @@ import { REPO_PACKS_DIR, refreshPackState } from './state.mjs';
 import { getFacts } from '../store/facts.mjs';
 import { getSetting, parseJson, tx } from '../store/db.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
-import { planCoverage, saveLoadFailure } from './coverage.mjs';
+import { planCoverage, saveLoadFailure, coveredPacks } from './coverage.mjs';
 
 const YOUR_PLANS_WARNING = 'The Your plans pack could not be loaded and was skipped. Rebuild it from the Packs screen.';
 
@@ -119,15 +119,7 @@ export function createLivePacks(db, { dataDir } = {}) {
       saveLoadFailure(db, result.warnings.length > 0 || (!!getSetting(db, 'yourPlans', null) && !packs.some(p => p.id === 'your-plans')));
       seen = fingerprint();
     }
-    const gaps = planCoverage(db).filter(issue => issue.stage !== 'pack-load');
-    if (!gaps.length) return packs;
-    return packs.map(pack => {
-      if (pack.id !== 'your-plans') return pack;
-      const entries = pack.entries.filter(entry => !gaps.some(issue =>
-        (!issue.section || entry.title === issue.section) && entry.cites.some(cite =>
-          cite.url.startsWith(`https://your-plans.invalid/${encodeURIComponent(issue.fileId ?? issue.name)}?page=`))));
-      return { ...pack, entries, covers: entries.map(entry => entry.title) };
-    });
+    return coveredPacks(db, packs);
   }
 
   function backing(rowId, def) {
