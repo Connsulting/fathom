@@ -56,7 +56,7 @@ const rows = () => t.platform.prepare('SELECT * FROM api_keys ORDER BY created_a
 describe('constants and scopes', () => {
   test('prefix and scope list', () => {
     assert.equal(KEY_PREFIX, 'fathom_');
-    assert.deepEqual([...SCOPES], ['read', 'write:recs', 'write:preferences', 'write:facts', 'write:steps', 'write:goals']);
+    assert.deepEqual([...SCOPES], ['read', 'write:recs', 'write:preferences', 'write:facts', 'write:steps', 'write:goals', 'write:sources']);
   });
 
   test('normalizeScopes: empty means read, read always included, ordered and deduplicated', () => {
