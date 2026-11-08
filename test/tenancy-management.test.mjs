@@ -266,7 +266,7 @@ describe('context assertions', () => {
     assert.equal(query.status, 200, 'GET may assert through the query');
     // Missing, wrong household, wrong version: 409 stale, nothing written.
     for (const [label, headers] of [
-      ['missing', {}],
+      ['missing', { 'x-fathom-household': undefined, 'x-fathom-context-version': undefined }],
       ['foreign household', { 'x-fathom-household': f.B, 'x-fathom-context-version': '1' }],
       ['another version', { 'x-fathom-household': f.A, 'x-fathom-context-version': '3' }],
       ['newer version', { 'x-fathom-household': f.A, 'x-fathom-context-version': '2' }],

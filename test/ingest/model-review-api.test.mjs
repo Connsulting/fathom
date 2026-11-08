@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { once } from 'node:events';
 import { fixture, recipe } from '../helpers/model-import.mjs';
-import { createSessionFixture } from '../helpers/server.mjs';
+import { createSessionFixture, contextHeaders } from '../helpers/server.mjs';
 import { applyLayout } from '../../src/ingest/model-layout.mjs';
 import { stageUpdate } from '../../src/ingest/model-updates.mjs';
 import { stageImport, reviewImport } from '../../src/ingest/model-review.mjs';
@@ -24,7 +24,7 @@ test('authenticated HTTP review guards, exact owner statement, versions, foreign
   const base = 'http://127.0.0.1:' + server.address().port;
   async function post(id, body, headers = {}) {
     const response = await fetch(base + '/api/import-proposals/' + id + '/review', { method: 'POST',
-      headers: { 'content-type': 'application/json', cookie: session.cookie, origin: config.publicUrl, ...headers }, body: JSON.stringify(body) });
+      headers: { 'content-type': 'application/json', cookie: session.cookie, origin: config.publicUrl, ...contextHeaders(session), ...headers }, body: JSON.stringify(body) });
     return { status: response.status, body: await response.json() };
   }
   try {
@@ -58,7 +58,7 @@ test('authenticated HTTP review guards, exact owner statement, versions, foreign
     assert.equal(committed.status, 200, JSON.stringify(committed.body));
     assert.equal(x.db.prepare('SELECT count(*) n FROM expected_transactions').get().n, 1);
     const undo = await fetch(base + '/api/actions/' + committed.body.receipt.id + '/undo', { method: 'POST', headers: {
-      'content-type': 'application/json', cookie: session.cookie, origin: config.publicUrl }, body: '{}' });
+      'content-type': 'application/json', cookie: session.cookie, origin: config.publicUrl, ...contextHeaders(session) }, body: '{}' });
     assert.equal(undo.status, 200, await undo.text());
     assert.equal(x.db.prepare('SELECT count(*) n FROM expected_transactions').get().n, 0);
     assert.equal(x.db.prepare('SELECT count(*) n FROM files WHERE id=?').get(note.fileId).n, 1);

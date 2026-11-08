@@ -24,7 +24,7 @@ import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, re
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DatabaseSync, backup } from 'node:sqlite';
-import { ROOT, src, tempDir, freePort, migrateLegacyStore, runCommand, sessionClient } from './server.mjs';
+import { ROOT, src, tempDir, freePort, migrateLegacyStore, runCommand, sessionClient, contextHeaders } from './server.mjs';
 import { buildLegacyStore, fileHashes } from './tenancy.mjs';
 import { aggregatorCsv } from './ingest.mjs';
 import { writeSyntheticPack } from './packs.mjs';
@@ -160,7 +160,7 @@ export async function getBytes(baseUrl, path, headers = {}) {
 export async function uploadFiles(baseUrl, session, files) {
   const fd = new FormData();
   for (const f of files) fd.append('files', new Blob([f.bytes], { type: f.type || 'text/csv' }), f.name);
-  const headers = session ? { cookie: session.cookie, origin: new URL(baseUrl).origin } : {};
+  const headers = session ? { cookie: session.cookie, origin: new URL(baseUrl).origin, ...contextHeaders(session) } : {};
   const res = await fetch(`${baseUrl}/api/files`, { method: 'POST', headers, body: fd });
   const text = await res.text();
   let json = null;

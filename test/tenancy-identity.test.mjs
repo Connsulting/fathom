@@ -229,7 +229,7 @@ describe('offline migration of a schema 020 real store (AC1, AC3)', () => {
     assert.equal(admin.verify.status, 200, admin.verify.text);
     const email = fx.admin.email;
     assert.deepEqual(admin.verify.json.identity, { id: fx.admin.id, email, login: email, name: email, householdId, role: 'admin',
-      operator: false, memberships: [{ householdId, role: 'admin' }] });
+      operator: false, memberships: [{ householdId, role: 'admin', name: null }], contextVersion: 1 });
     assert.ok(admin.client.session() && admin.client.session() !== fx.admin.session);
     assert.equal((await admin.client.get('/api/scenario')).status, 200);
     const member = await signIn(base, fx.member.device, fx.member.credentialId);
@@ -539,12 +539,12 @@ describe('household membership on a real instance (AC1)', () => {
     assert.equal(r.status, 200);
     const email = admin.email;
     const identity = { id: admin.id, email, login: email, name: email, householdId: hh, role: 'admin', operator: false,
-      memberships: [{ householdId: hh, role: 'admin' }] };
+      memberships: [{ householdId: hh, role: 'admin', name: null }], contextVersion: 1 };
     assert.deepEqual(r.json, { identity });
     assert.deepEqual((await as(admin).get('/api/auth/session')).json, { identity, demo: false });
     const m = await as(member).get('/api/identity');
     assert.deepEqual(pick(m.json.identity, ['householdId', 'role', 'operator', 'memberships']),
-      { householdId: hh, role: 'member', operator: false, memberships: [{ householdId: hh, role: 'member' }] });
+      { householdId: hh, role: 'member', operator: false, memberships: [{ householdId: hh, role: 'member', name: null }] });
   });
 
   test('inviting an active member is refused 409; inviting a new address succeeds', T, async () => {
@@ -594,7 +594,7 @@ describe('household membership on a real instance (AC1)', () => {
 
     const accepted = await sessionBrowser(base, joinerSession).post('/api/auth/invitations/accept', { token: invitation.token, role: 'admin' });
     assert.equal(accepted.status, 200, accepted.text);
-    assert.deepEqual(accepted.json.identity.memberships, [{ householdId: hh, role: 'member' }]);
+    assert.deepEqual(accepted.json.identity.memberships, [{ householdId: hh, role: 'member', name: null }]);
     assert.deepEqual(pick(membership(joiner.id), ['role', 'status']), { role: 'member', status: 'active' }, 'a body role is ignored');
     assert.equal((await sessionBrowser(base, joinerSession).get('/api/scenario')).status, 200);
 
@@ -644,7 +644,7 @@ describe('household membership on a real instance (AC1)', () => {
     assert.equal(who.status, 200);
     const email = operator.email;
     assert.deepEqual(who.json.identity, { id: operator.id, email, login: email, name: email, householdId: null, role: null,
-      operator: true, memberships: [] });
+      operator: true, memberships: [], contextVersion: 1 });
     for (const path of ['/api/scenario', '/api/keys', '/api/files', '/api/threads', '/api/pace']) {
       const r = await o.get(path);
       assert.equal(r.status, 403, path);
