@@ -99,12 +99,19 @@ test('scheduled Jev work uses the configured key independently of the general en
         probabilities:Object.fromEntries(names.map(c=>[c,c==='Groceries'?.9:.1/(names.length-1)]))}];
     }))});
   };
-  const {defaultHandlers}=await import('../src/jobs/scheduler.mjs');
+  const {defaultHandlers,createScheduler}=await import('../src/jobs/scheduler.mjs');
   // The household's outbound engine pause and missing instance funding each stop Jev before any
   // request; with both admitted Jev runs.
   const household=(engine,funded=true)=>({outbound:{enabled:kind=>kind==='engine'?engine:true},funded:()=>funded});
   const calls=[];const answer=globalThis.fetch;globalThis.fetch=async(...a)=>{calls.push(a);return answer(...a);};
-  const job=ctx=>defaultHandlers({})['confirm-guess']({db,now:'2032-11-05T00:00:00Z',config:{engine:'live',typesafeKeyFile:keyFile},engine:{isOn:()=>false},...ctx});
+  const job=async ctx=>{
+    const handlers=defaultHandlers({});
+    const scheduler=createScheduler({db,config:{engine:'live',typesafeKeyFile:keyFile,clock:'2032-11-05'},
+      engine:{isOn:()=>true,call(){assert.fail('no unresolved household model question');}},
+      handlers:{'confirm-guess':handlers['confirm-guess']},household:()=>ctx.household,
+      now:()=>new Date('2032-11-05T00:00:00Z'),log:{log(){}}});
+    try{return await scheduler.runNow('confirm-guess');}finally{await scheduler.stop();}
+  };
   await job({household:household(false)});
   assert.equal(calls.length,0,'a paused household sends Jev nothing');
   await job({household:household(true,false)});
