@@ -80,3 +80,32 @@ for (const stage of ['source-read', 'extraction', 'grounding', 'pack-load']) {
     assert.ok(!answer.paragraphs.some(p => p.includes('does not use')));
   });
 }
+
+test('a failed rebuild excludes older document knowledge, and an explicitly disabled pack stays silent', async t => {
+  const s = await fixture(t);
+  const { db, household, runtime } = s;
+  await buildYourPlans({ db, household, engine: runtime, clock: CLOCK });
+  const packs = createLivePacks(db, { dataDir: household.root });
+  packs.refresh();
+  assert.equal(packs.entry('your-plans', '01-dental-coverage').title, 'Dental coverage');
+  await buildYourPlans({ db, household, engine: scripted(runtime, 'extraction'), clock: CLOCK });
+  assert.equal(packs.entry('your-plans', '01-dental-coverage'), null, 'an older successful build cannot silently supply a failed document');
+  db.prepare("UPDATE packs_state SET active = 0 WHERE id = 'your-plans'").run();
+  const engine = scripted(runtime);
+  const answerer = createLiveAnswerer({ engine, packs, root: household.root, services: { engine, household, config: s.config } });
+  const reply = await answerer.answer({ db, key: 'ask:0123456789ab', text: 'What are our choices?' });
+  assert.ok(!reply.paragraphs.some(p => p.includes('does not use')));
+  assert.ok(!reply.provenance.packIds.includes('your-plans'));
+});
+
+test('a pack removed from disk is disclosed, and a corrected rebuild clears the persisted load failure', async t => {
+  const s = await fixture(t);
+  const { db, household, runtime } = s;
+  await buildYourPlans({ db, household, engine: runtime, clock: CLOCK });
+  const packs = createLivePacks(db, { dataDir: household.root });
+  packs.refresh();
+  rmSync(yourPlansDir(household.root), { recursive: true });
+  assert.ok(buildScenario(db, { packs }).live.yourPlans.coverage.some(issue => issue.stage === 'pack-load'));
+  await buildYourPlans({ db, household, engine: runtime, clock: CLOCK });
+  assert.deepEqual(buildScenario(db, { packs }).live.yourPlans.coverage, []);
+});

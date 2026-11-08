@@ -281,8 +281,8 @@ export async function yourPlansBuild(ctx) {
     throw e;
   }
   if (result.written) refreshLivePacks(ctx.db, { dataDir: ctx.household.root });
-  const { written, entries, sources, warnings, dropped } = result;
-  return { scenario: scenarioOf(ctx), result: { written, entries, sources, warnings, dropped } };
+  const { written, entries, sources, warnings, dropped, coverage } = result;
+  return { scenario: scenarioOf(ctx), result: { written, entries, sources, warnings, dropped, coverage } };
 }
 
 // The question in an ask body: exactly one of questionId (a string or an integer) and text (a

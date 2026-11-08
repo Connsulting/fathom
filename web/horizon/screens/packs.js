@@ -192,6 +192,13 @@ function metaHtml(p) {
   return `<div class="h-meta">${parts.join('')}</div>`;
 }
 
+function coverageHtml(issues) {
+  const yp = H.api.s.live?.yourPlans || {};
+  return H.arr(issues).map((issue) => `<div class="h-pack-gap" role="status"><p>${lit(issue.explanation)}</p><div class="h-acts">${issue.action === 'rebuild' && ypCandidates(yp).length
+    ? `<button type="button" class="h-btn" data-yp-rebuild${S.yp.building ? ' disabled' : ''}>Rebuild pack</button>`
+    : H.goA('add', 'Replace document', {}, 'h-btn')}</div></div>`).join('');
+}
+
 function packPage(p) {
   const { api, T, arr, esc, icon, btn, goA, href, shell, section, thread, composer, recById } = H;
   const on = p.status === 'active';
@@ -218,6 +225,7 @@ function packPage(p) {
     <a class="h-back" href="${href('packs')}" data-go="packs">${icon('back')}Packs</a>
     <div class="h-rec-head"><div class="h-kicker">Knowledge pack<span>${st}</span></div><h1>${nameOf(p)}</h1><p class="h-lede">${mt(p, packLine(p))}</p>
     ${metaHtml(p)}</div>
+    ${coverageHtml(p.coverage)}
     ${on ? `<div class="h-acts big">${btn('Turn off', `data-packtoggle="${esc(p.id)}"`, 'ghost')}</div>` : explored ? '' : `<div class="h-acts big">${btn('What if', `data-whatif="${esc(p.id)}"`, '')}${turnOn}</div>`}
     ${toggled ? `<p class="h-pack-note">${icon('clock')}<span>${TOGGLE_NOTE}</span></p>` : ''}
     <div class="h-cols rec"><div class="h-col-main">
@@ -239,6 +247,7 @@ function packCard(p) {
   return `<article class="h-pack ${esc(p.status)}">
     <div class="h-pack-h"><a href="${href('packs', { id: p.id })}" data-go="packs" data-id="${esc(p.id)}"><b>${nameOf(p)}</b></a><span class="h-pack-st">${on ? '<i></i>' : ''}${st}</span></div>
     <p>${mt(p, packLine(p))}</p>
+    ${coverageHtml(p.coverage)}
     ${arr(p.covers).length ? `<p class="h-mute sm">Covers ${arr(p.covers).map((c) => mt(p, c)).join(', ')}</p>` : ''}
     <div class="h-meta"><span>${plural(p.entries || 0, 'entry', 'entries')}</span>${p.curator ? `<span>${mt(p, p.curator)}</span>` : ''}${p.updated ? `<span>Updated ${mt(p, p.updated)}</span>` : ''}${on ? `<span>Powers ${plural(recs.length, 'item')}</span>` : ''}</div>
     <div class="h-acts">${on ? goA('packs', `Open${icon('arrow')}`, { id: p.id }, 'h-more') : btn('What if', `data-whatif="${esc(p.id)}"`, '')}</div>
@@ -304,6 +313,7 @@ function yourPlansCard(packs) {
   const body = `<div class="h-card h-yp"${S.yp.building ? ' aria-busy="true"' : ''}>
     <p class="h-yp-lede">Build a private pack from your own plan and benefits documents. Answers cite the file and page. Plan and benefits documents on file are always read; tick any other file to include it.</p>
     ${files}
+    ${coverageHtml(yp.coverage)}
     <div class="h-acts"><button type="button" class="h-btn pri" data-yp-build${S.yp.building || !(list.some((c) => c.source) || list.some(isPicked)) ? ' disabled' : ''}>Build Your plans pack</button>${S.yp.building ? '<span class="h-mute sm">Reading your documents</span>' : ''}</div>
     ${resultLine(S.yp.result)}${builtLine}
   </div>`;
@@ -345,11 +355,13 @@ export function render(id) {
 
 /* ---------- events ---------- */
 
-function build() {
+function build(retry = false) {
   const { api } = H;
   if (S.yp.building || typeof api.buildYourPlans !== 'function') return;
   const list = ypCandidates(api.s.live?.yourPlans || {});
-  const ids = list.filter((c) => !c.fixed && isPicked(c)).map((c) => c.id);
+  const yp = api.s.live?.yourPlans || {};
+  const retryIds = [...H.arr(yp.built?.fileIds), ...H.arr(yp.coverage).map(issue => issue.fileId)].filter(Boolean);
+  const ids = [...new Set([...list.filter((c) => !c.fixed && isPicked(c)).map((c) => c.id), ...(retry ? retryIds.filter(id => list.some(c => c.id === id)) : [])])];
   S.yp.building = true;
   S.yp.result = null;
   H.draw();
@@ -362,10 +374,13 @@ function build() {
 
 // Returns true when the click was handled here.
 export function onClick(e) {
-  const t = e.target.closest && e.target.closest('[data-entry][data-pack],[data-yp-build]');
+  const t = e.target.closest && e.target.closest('[data-entry][data-pack],[data-yp-build],[data-yp-rebuild]');
   if (!t || !H.root || !H.root.contains(t)) return false;
   e.preventDefault();
-  if (t.hasAttribute('data-yp-build')) { if (!t.disabled) build(); return true; }
+  if (t.hasAttribute('data-yp-build') || t.hasAttribute('data-yp-rebuild')) {
+    if (!t.disabled) build(t.hasAttribute('data-yp-rebuild'));
+    return true;
+  }
   toggleEntry(t.getAttribute('data-pack'), t.getAttribute('data-entry'));
   return true;
 }
