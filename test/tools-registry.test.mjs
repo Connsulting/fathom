@@ -51,6 +51,17 @@ test('loader rejects duplicate operations, conflicting schemas and invalid scope
   assert.throws(() => buildRegistry([{ operations: [{ ...op, scope: 'write:recs' }] }], header), /scope/i);
 });
 
+test('write results preserve explicit unavailable Undo and default a missing Undo', async () => {
+  const header = [{ name: 'example', kind: 'write', purpose: 'Example.', progress: 'Writing', source: 'example' }];
+  const unavailable = { available: false, reason: 'A stored record cannot be undone.' };
+  const op = { tool: 'example', name: 'save', scope: 'write:recs', summary: 'Save.', route: 'Save example',
+    params: {}, required: [], routes: [], handler: () => ({ receipt: { id: 'receipt' }, undo: unavailable }) };
+  const invoke = operation => buildRegistry([{ operations: [operation] }], header).tools[0].handler({ operation: 'save' }, {});
+  assert.deepEqual((await invoke(op)).undo, unavailable);
+  assert.deepEqual((await invoke({ ...op, handler: () => ({ receipt: { id: 'receipt' } }) })).undo,
+    { available: true, tool: 'undo', args: { operation: 'undo', id: 'receipt' } });
+});
+
 test('operation-local validation names the operation through direct and Ask boundaries', async () => {
   const server = createRegistryServer(tools, { purpose: 'chat' });
   for (const args of [{ operation: 'missing' }, { operation: 'summary', keys: [] }, { operation: 'summary', constructor: {} }]) {
