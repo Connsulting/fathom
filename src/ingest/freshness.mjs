@@ -99,7 +99,12 @@ export function recordSource(db, { id, label, kind, asOf, now } = {}) {
 }
 
 export function listImportedFiles(db) {
-  return { files: db.prepare('SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files ORDER BY uploaded_at DESC, rowid DESC').all().map(fileOf) };
+  const result = { files: db.prepare('SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files ORDER BY uploaded_at DESC, rowid DESC').all().map(fileOf) };
+  while (Buffer.byteLength(JSON.stringify(result)) > 256 * 1024 && result.files.length) {
+    result.files.splice(Math.floor(result.files.length / 2));
+    result.truncated = true;
+  }
+  return result;
 }
 
 // A files row as the API returns it.

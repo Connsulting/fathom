@@ -224,3 +224,40 @@ test('refresh receipt rendering omits Undo while ordinary reversible receipts ke
     assert.doesNotMatch(html({ ...receipt, undo: { available: false, reason: 'This refresh cannot be undone here.' } }), /data-undo-action/);
   } finally { hook.deregister(); }
 });
+
+test('MCP rebuild completes inline and all allowed jobs use the household scheduler', async () => {
+  const ctx = await setup();
+  const inner = createEngine({ mode: 'fake' });
+  ctx.services.engine = { isOn: () => true, extract: req => inner.extract({ ...req,
+    fake: [{ text: JSON.stringify({ rows: req.schema?.properties?.title ? fakeExtractRows(req.document.text) : [{ facts: [], goals: [] }] }), costUsd: 0 }] }) };
+  const rpc = await client(ctx);
+  try {
+    const imported = await rpc.call('refresh', { operation: 'import_file', ...note });
+    assert.equal(imported.file.status, 'imported');
+    const built = await rpc.call('refresh', { operation: 'build_your_plans', fileIds: [imported.file.id] });
+    assert.equal(built.status, 'built');
+    assert.equal(built.written, true);
+    assert.equal(built.receipt.after.written, true);
+    assert.equal(built.undo.available, false);
+    for (const job of ['plan', 'simplefin-sync', 'freshness', 'confirm-guess']) {
+      const result = await rpc.call('refresh', { operation: 'run_job', job });
+      assert.equal(result.run.id, `run-${job}`);
+      assert.equal(result.run.status, 'ok');
+      assert.equal(result.receipt.scope, 'write:jobs');
+      assert.equal(result.undo.available, false);
+    }
+  } finally { await rpc.close(); }
+});
+
+test('large import lists keep newest rows within the tool result bound and preserve API parity', async () => {
+  const ctx = await setup();
+  const insert = ctx.db.prepare('INSERT INTO files(id,name,uploaded_at,status) VALUES (?,?,?,?)');
+  ctx.db.exec('BEGIN');
+  for (let i = 0; i < 1500; i++) insert.run(`file-${i}`, 'Synthetic file ' + 'x'.repeat(180), now, 'imported');
+  ctx.db.exec('COMMIT');
+  const result = await callTool('household', { operation: 'imports' }, ctx);
+  assert.equal(result.truncated, true);
+  assert.equal(result.files[0].id, 'file-1499');
+  assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 256 * 1024);
+  assert.deepEqual(result, listFiles(api(ctx)));
+});

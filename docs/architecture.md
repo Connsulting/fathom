@@ -957,7 +957,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/keys/:id/revoke` | `{}` | `{record, keys}`. Sets `revokedAt` once (a second revoke keeps it); 404 unknown id. A member may revoke only keys they created (403 otherwise); an admin may revoke any. |
 | `GET /api/mcp` | | `{url, publicUrlSet, tools: [{name, description, scope}], scopes: [{id, label, access}]}`. `url` is the `FATHOM_PUBLIC_URL` origin with `/mcp` appended. |
 | `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`, `unsupported`, `too_large` (past a parse limit, see Ingest) or `failed`. 400 no files or malformed body, 409 a real household without `FATHOM_PLATFORM_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
-| `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first. |
+| `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first; a list over 256 KB is shortened with `truncated: true`. |
 | `POST /api/files/:id/retry` | `{}` | `{scenario, file: result}`. Routes a `needs_mapping` or `needs_extraction` file again under the same id; 404 unknown file, 409 a file that is not waiting. |
 | `GET /api/confirm` | | `{items: [pending confirm items]}`. |
 | `POST /api/confirm/list` | `{status?: pending (default), answered or all}` | `{items}`; 400 for another status. |
