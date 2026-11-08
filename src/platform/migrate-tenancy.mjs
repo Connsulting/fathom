@@ -522,11 +522,14 @@ function platformKeys(platform, journal, rows) {
   const revokedAt = new Date(journal.startedAt).toISOString();
   return rows.map(r => {
     const owner = r.user_id != null && userExists.get(r.user_id) ? r.user_id : (admins.length === 1 ? admins[0] : null);
-    const unbound = owner === null && r.revoked_at == null;
+    const member = owner === null ? null : platform.prepare('SELECT version, status FROM household_memberships WHERE household_id = ? AND user_id = ?').get(journal.householdId, owner);
+    const unbound = (owner === null || member?.status !== 'active') && r.revoked_at == null;
     return {
       id: r.id, household_id: journal.householdId, user_id: owner, name: r.name, key_hash: r.key_hash, scopes: r.scopes,
       created_at: r.created_at, last_used_at: r.last_used_at ?? null,
-      revoked_at: unbound ? revokedAt : (r.revoked_at ?? null), revoked_code: unbound ? 'migration_no_creator' : null,
+      revoked_at: unbound ? revokedAt : (r.revoked_at ?? null), revoked_code: unbound ? (owner === null ? 'migration_no_creator' : 'migration_inactive_creator') : null,
+      household_generation: 1,
+      membership_version: member?.version ?? null,
     };
   });
 }
@@ -548,7 +551,7 @@ function checkPasskeys(platform, journal) {
   if (now.count !== was.count || now.ids !== was.ids || now.rows !== was.rows) throw refuse('passkeys_changed');
 }
 
-const KEY_COLUMNS = ['id', 'household_id', 'user_id', 'name', 'key_hash', 'scopes', 'created_at', 'last_used_at', 'revoked_at', 'revoked_code'];
+const KEY_COLUMNS = ['id', 'household_id', 'user_id', 'name', 'key_hash', 'scopes', 'created_at', 'last_used_at', 'revoked_at', 'revoked_code', 'household_generation', 'membership_version'];
 
 function publishManifest(ctx) {
   const { platform, source, journal } = ctx;

@@ -1,13 +1,20 @@
-// Item 20: goals and the tradeoff curve are owner-editable data. On the demo build, at desktop and
-// 390px: add a goal through the inline form (and with N), edit it, archive and restore it, delete
-// it; curve sliders persist across a reload; onboarding Priorities save to the same positions; an
-// "add a goal" ask shows a save card that adds the goal; a rec shows the goal it serves.
+// Goals without forms (SX3), on the demo build at desktop and 390px: a new goal is one sentence
+// that Ask saves, Fathom sets its target with Undo, and there is no rate input or curve slider;
+// Archive and Delete live in the edit view and a done goal archives itself; onboarding Priorities
+// still save the curve positions; a rec shows the goal it serves.
 
 import { test, expect, resetDemo, gotoRoute, expectH1, openRecFromPage, recDialog, askOnAsk, plain, S } from './helpers.mjs';
 
 const TAGS = { tag: ['@mobile'] };
 
 const goalCard = (page, title) => page.locator('article.h-goal', { has: page.locator('.h-goal-h b', { hasText: title }) });
+
+// Open the archived goals list unless it is already open (the page remembers it).
+async function openArchived(page) {
+  const det = page.locator('details.h-garch');
+  await expect(det).toHaveCount(1);
+  if (!(await det.evaluate((d) => d.open))) await det.locator('summary').click();
+}
 
 async function gotoGoals(page) {
   await gotoRoute(page, 'goals');
@@ -31,76 +38,90 @@ async function forceOnboarding(page) {
 test.describe('goals', TAGS, () => {
   test.beforeEach(async ({ request }) => { await resetDemo(request); });
 
-  test('add, edit, archive, restore and delete a goal', async ({ page }, info) => {
+  test('a new goal is one sentence: Ask saves it and Fathom sets its target, with Undo', async ({ page }, info) => {
     await gotoGoals(page);
     await page.getByRole('button', { name: 'Goal', exact: true }).click();
     const form = page.locator('form.h-gform');
     await expect(form).toBeVisible();
-    // Title is required.
-    await form.getByRole('button', { name: 'Save goal' }).click();
-    await expect(form.locator('.h-gerr')).toHaveText('Write the goal in your own words.');
+    // One sentence and nothing else to decide.
+    await expect(form.locator('input, select, textarea')).toHaveCount(1);
+    await expect(form.getByLabel('Your goal, in one sentence')).toBeVisible();
+    await page.screenshot({ path: info.outputPath('goals-new-sentence.png'), fullPage: true });
+    await form.getByRole('button', { name: 'Add goal' }).click();
+    await expect(form.locator('.h-gerr')).toHaveText('Write the goal in one sentence.');
 
-    const title = 'A cabin by the lake <b>{f:portfolio}</b>';
-    await form.getByLabel('Your goal, in your own words').fill(title);
-    await form.getByLabel(/A short note/).fill('Somewhere quiet.');
-    await form.getByRole('button', { name: 'Next few years' }).click();
-    await form.getByLabel(/Target amount/).fill('250000');
-    await form.getByLabel(/Target date/).fill('2029-06-30');
-    await form.getByLabel(/Track with/).selectOption('accounts');
-    const firstAcct = form.locator('.h-gacct input[type=checkbox]').first();
-    await firstAcct.check();
-    const post = saved(page, '/api/goals');
-    await form.getByRole('button', { name: 'Save goal' }).click();
-    await post;
-    await expect(form).toHaveCount(0);
+    await form.getByLabel('Your goal, in one sentence').fill('A cash cushion for the next few years');
+    await form.getByRole('button', { name: 'Add goal' }).click();
+    await expect(page).toHaveURL(/#\/ask/);
+    const receipt = page.locator('.h-action-receipt');
+    await expect(receipt).toContainText('A cash cushion for the next few years');
+    await expect(receipt.getByRole('button', { name: 'Undo' })).toBeVisible();
 
-    const card = goalCard(page, 'A cabin by the lake');
+    await gotoGoals(page);
+    const card = goalCard(page, 'A cash cushion for the next few years');
     await expect(card).toHaveCount(1);
-    // Owner text renders literally: no markup, no token.
-    await expect(card.locator('.h-goal-h b')).toHaveText(title);
-    await expect(card.locator('.h-goal-h b b, .h-goal-h b .fx-fig')).toHaveCount(0);
-    await expect(page.locator('.h-gcol', { hasText: 'Next few years' }).first().locator('article.h-goal', { hasText: 'A cabin by the lake' })).toHaveCount(1);
-    await expect(card).toContainText('By Jun 2029');
-    // Both a tracked value and a target: a bar, with the target's provenance "you".
-    await expect(card.locator('.h-prog svg')).toHaveCount(1);
+    await expect(page.locator('.h-gcol', { hasText: 'Next few years' }).first().locator('article.h-goal', { hasText: 'A cash cushion for the next few years' })).toHaveCount(1);
+    // Fathom set the target: it says so, with Undo, and no rate input or curve slider anywhere.
+    await expect(card.locator('p.h-gset')).toHaveText('Fathom set this target. Undo');
+    await expect(page.locator('input[data-sugg-rate], input[data-curve], input[type="range"]')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /^(Accept|Accept all|Dismiss)$/ })).toHaveCount(0);
+    const id = await card.getAttribute('data-goal-id');
     await page.waitForLoadState('networkidle');
     const source = page.locator('.fx-pop .fx-pop-row', { hasText: 'Source' }).locator('.fx-pop-v');
     await expect(async () => {
-      if (!(await page.locator('.fx-pop').count())) await card.locator('.h-prog .fx-fig').last().click();
-      await expect(source).toHaveText('You typed this', { timeout: 1000 });
+      if (!(await page.locator('.fx-pop').count())) await card.locator(`.fx-fig[data-fig="goal.${id}.target"]`).first().click();
+      await expect(source).toHaveText('Suggested target calculator', { timeout: 1000 });
     }).toPass({ timeout: 10_000 });
     await page.keyboard.press('Escape');
-    await page.screenshot({ path: info.outputPath('goals-added.png'), fullPage: true });
+    await page.screenshot({ path: info.outputPath('goals-adopted.png'), fullPage: true });
 
-    // Edit: drop the target, so the card asks for one.
-    await card.getByRole('button', { name: 'Edit' }).click();
-    await expect(form.getByLabel('Your goal, in your own words')).toHaveValue(title);
-    await form.getByLabel(/Target amount/).fill('');
-    const put = saved(page, '/api/goals/' + (await card.getAttribute('data-goal-id')));
-    await form.getByRole('button', { name: 'Save changes' }).click();
-    await put;
-    // No supported kind fits this goal, so instead of a suggested number it asks for one.
-    await expect(card.locator('.h-sugg.ask')).toContainText('What amount would make this real?');
-    await expect(card.locator('.h-prog svg')).toHaveCount(0);
-
-    // Persisted across a reload.
+    // Undo takes the target back and it stays gone.
+    const undo = saved(page, `/api/goals/${id}/suggestion`);
+    await card.locator('p.h-gset').getByRole('button', { name: 'Undo' }).click();
+    await undo;
+    await expect(card.locator('p.h-gset')).toHaveCount(0);
+    await expect(card.locator('p.h-gnone')).toContainText('No target yet.');
     await page.reload();
-    await expect(goalCard(page, 'A cabin by the lake')).toHaveCount(1);
+    await expect(goalCard(page, 'A cash cushion for the next few years').locator('p.h-gset')).toHaveCount(0);
+  });
 
-    // Archive moves it under the archived disclosure; restore brings it back.
-    await goalCard(page, 'A cabin by the lake').getByRole('button', { name: 'Archive' }).click();
+  test('Archive and Delete live in the edit view; a done goal archives itself', async ({ page, request }) => {
+    const res = await request.post('/api/goals', { headers: { 'content-type': 'application/json' }, data: { title: 'A cabin by the lake <b>{f:portfolio}</b>', horizon: '1-3y' } });
+    expect(res.status()).toBe(200);
+    const title = 'A cabin by the lake';
+    await gotoGoals(page);
+    const card = goalCard(page, title);
+    // Owner text renders literally: no markup, no token.
+    await expect(card.locator('.h-goal-h b')).toHaveText('A cabin by the lake <b>{f:portfolio}</b>');
+    await expect(card.getByRole('button', { name: 'Archive' })).toHaveCount(0);
+    await expect(card.getByRole('button', { name: 'Delete' })).toHaveCount(0);
+
+    // Archive from the edit view; restore from the archived list.
+    await card.getByRole('button', { name: 'Edit', exact: true }).click();
+    const form = page.locator('form.h-gform');
+    await expect(form.getByRole('heading', { name: 'Edit goal' })).toBeVisible();
+    await form.getByRole('button', { name: 'Archive' }).click();
+    await expect(form).toHaveCount(0);
     const arch = page.locator('details.h-garch');
     await expect(arch.locator('summary')).toHaveText('1 archived goal');
-    await arch.locator('summary').click();
+    await openArchived(page);
     await arch.getByRole('button', { name: 'Restore' }).click();
     await expect(page.locator('details.h-garch')).toHaveCount(0);
 
-    // Delete asks first.
-    const again = goalCard(page, 'A cabin by the lake');
-    await again.getByRole('button', { name: 'Delete' }).click();
-    await expect(again).toContainText('Delete for good?');
-    await again.getByRole('button', { name: 'Delete', exact: true }).click();
-    await expect(goalCard(page, 'A cabin by the lake')).toHaveCount(0);
+    // Mark done archives it; it reads Done there, and Reopen brings it back.
+    await goalCard(page, title).getByRole('button', { name: 'Mark done' }).click();
+    await expect(page.locator('details.h-garch summary')).toHaveText('1 archived goal');
+    await openArchived(page);
+    await expect(goalCard(page, title).locator('.h-goal-h span')).toHaveText('Done');
+    await page.locator('details.h-garch').getByRole('button', { name: 'Reopen' }).click();
+    await expect(page.locator('details.h-garch')).toHaveCount(0);
+
+    // Delete asks first, in the edit view.
+    await goalCard(page, title).getByRole('button', { name: 'Edit', exact: true }).click();
+    await form.getByRole('button', { name: 'Delete' }).click();
+    await expect(form).toContainText('Delete for good?');
+    await form.getByRole('button', { name: 'Delete', exact: true }).click();
+    await expect(goalCard(page, title)).toHaveCount(0);
   });
 
   test('N on Goals and the switcher action open the new goal form', async ({ page }) => {
@@ -119,17 +140,6 @@ test.describe('goals', TAGS, () => {
     await expect(page.locator('form.h-gform')).toBeVisible();
   });
 
-  test('curve sliders persist across a reload', async ({ page }) => {
-    await gotoGoals(page);
-    const slider = page.locator('input[data-curve="ret_life"]');
-    await slider.scrollIntoViewIfNeeded();
-    const post = saved(page, '/api/curve');
-    await slider.fill('82');
-    await post;
-    await page.reload();
-    await expect(page.locator('input[data-curve="ret_life"]')).toHaveValue('82');
-  });
-
   test('onboarding Priorities save the owner positions', async ({ page }) => {
     await forceOnboarding(page);
     await page.goto('/#/onboarding/2');
@@ -140,8 +150,11 @@ test.describe('goals', TAGS, () => {
     await post;
     await page.unroute('**/api/**');
     await page.reload();
+    // Goals has no curve sliders; the saved position feeds the planner.
+    const sc = await (await page.request.get('/api/scenario')).json();
+    expect(sc.curve.find((c) => c.id === 'tax_cash').value).toBe(0.15);
     await gotoGoals(page);
-    await expect(page.locator('input[data-curve="tax_cash"]')).toHaveValue('15');
+    await expect(page.locator('input[data-curve]')).toHaveCount(0);
   });
 
   test('@mobile @ax-ac1 add a goal in Ask saves it with a receipt', async ({ page }) => {

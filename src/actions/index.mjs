@@ -82,7 +82,8 @@ export function changeGoal(args, ctx, editing = false) {
     requireEvidence(ctx, value, { stored, argument: path.join('.'), household: true });
   }
   let receipt = null;
-  const opts = { now: new Date(ctx.now ?? Date.now()).toISOString(), onWrite(before, after) {
+  // createGoal and updateGoal set Fathom's target before onWrite, so the receipt's after state has it.
+  const opts = { now: new Date(ctx.now ?? Date.now()).toISOString(), clock: ctx.config?.clock, onWrite(before, after) {
     receipt = saveReceipt(ctx, { scope: 'write:goals', kind: 'goal', id: after.id, label: 'Goal',
       before: select(before, GOAL_FIELDS), after: select(after, GOAL_FIELDS), from: goalValue(before), to: goalValue(after) });
   } };
