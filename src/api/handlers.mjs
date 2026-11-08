@@ -338,11 +338,12 @@ const streaming = async ctx => ({
   queuePlan: ctx.scheduler ? () => ctx.scheduler.soon?.('plan', 'ingest') : null,
 });
 
-// Stores the owner message and the reply in `key`; `before` runs first inside the transaction.
+// Stores the owner message and the reply in `key`; `before(txCtx)` runs first inside the transaction
+// and must use the context it receives.
 async function storeTurn(ctx, key, mine, reply, before) {
   return await txWith(ctx, async (ctx) => {
     if ((await receiptsFor(ctx.db, key)).length) await ensureActionConversation(ctx.db, key, await stamp(ctx), ctx.body.recId);
-    if (before) await before();
+    if (before) await before(ctx);
     const actorId = ctx.identity?.id || (await getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null);
     const ownerInput = typeof ctx.body.text === 'string' && ctx.body.questionId == null && actorId
       ? { ownerInput: { actorId } } : null;
@@ -389,7 +390,7 @@ export async function ask(ctx) {
     text: hasQ ? undefined : clean, clock: ctx.config && ctx.config.clock, refs, ...await streaming(ctx) });
   if (!reply) throw new HttpError(404, `no question ${questionId}`);
   // A thread may have been trashed or deleted while the model answered; asking unarchives it.
-  const id = await storeTurn(ctx, key, mine, reply, thread ? async () => {
+  const id = await storeTurn(ctx, key, mine, reply, thread ? async ({ db }) => {
     await openThreadRow(db, key);
     await db.prepare('UPDATE conversations SET archived_at = NULL WHERE key = ?').run(key);
   } : null);
@@ -443,7 +444,7 @@ async function decideProposal(ctx, key, id, decision, ownerText) {
     reply = await need(ctx, 'answerer').answer({ db, key, text: ownerText, clock: ctx.config && ctx.config.clock, ...await streaming(turn), staleNote: note });
     if (!reply) throw new HttpError(404, 'no answer');
   }
-  const replyId = await storeTurn(turn, key, escapeUserText(ownerText), reply, async () => {
+  const replyId = await storeTurn(turn, key, escapeUserText(ownerText), reply, async ({ db }) => {
     await openThreadRow(db, key);
     await db.prepare('UPDATE conversations SET archived_at = NULL WHERE key = ?').run(key);
   });
@@ -519,7 +520,7 @@ export async function threadCreate(ctx) {
   streamStart(ctx, key);
   const reply = await need(ctx, 'answerer').answer({ db, key, text: question, clock: ctx.config && ctx.config.clock, refs, ...await streaming(ctx) });
   if (!reply) throw new HttpError(404, 'no answer');
-  const id = await storeTurn(ctx, key, mine, reply, async () => { if (!await db.prepare('SELECT 1 FROM conversations WHERE key = ?').get(key)) await insertThread(db, key, await stamp(ctx)); });
+  const id = await storeTurn(ctx, key, mine, reply, async ({ db }) => { if (!await db.prepare('SELECT 1 FROM conversations WHERE key = ?').get(key)) await insertThread(db, key, await stamp(ctx)); });
   await maybeName(ctx, key);
   const fresh = await scenarioOf(ctx);
   return { scenario: fresh, thread: await threadOrThrow(db, key.slice(4)), message: replyIn(fresh, key, id) };
@@ -557,7 +558,7 @@ async function threadCreateFromRec(ctx, empty, refs) {
     throw e;
   }
   // The thread may have been trashed or deleted while the model answered.
-  const id = await storeTurn(ctx, key, mine, reply, async () => await openThreadRow(db, key));
+  const id = await storeTurn(ctx, key, mine, reply, async ({ db }) => await openThreadRow(db, key));
   await maybeName(ctx, key);
   const fresh = await scenarioOf(ctx);
   return { scenario: fresh, thread: await threadOrThrow(db, key.slice(4)), message: replyIn(fresh, key, id) };
