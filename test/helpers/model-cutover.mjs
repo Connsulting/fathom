@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { createAuthStore } from '../../src/auth/store.mjs';
 import { fixture, recipe } from './model-import.mjs';
 import { indexSource } from '../../src/ingest/model-source.mjs';
 import { applyLayout } from '../../src/ingest/model-layout.mjs';
@@ -7,6 +8,7 @@ import { reviewImport } from '../../src/ingest/model-review.mjs';
 
 export async function setup() {
   const x = await fixture({ engine: 'fake' });
+  createAuthStore(x.platform).setPlatformSetting('instance_model_cap_usd', 50);
   return { ...x, opts: { ...x.ctx, config: x.config } };
 }
 export async function upload(x, text, layout = recipe(), options = {}) {

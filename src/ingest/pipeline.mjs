@@ -12,11 +12,8 @@ import { tx, parseJson } from '../store/db.mjs';
 import { refreshPackState } from '../packs/state.mjs';
 import { pickParser } from './registry.mjs';
 import { identifyAccountRows, dedupeKey } from './dedupe.mjs';
-import { readWorkbook, ledgerHeader, taxHeader } from './workbook.mjs';
-import { entityOf } from './parsers/pnl-workbook.mjs';
 import { header as headerText, cents, institution, isoDate, LimitError } from './format.mjs';
-import { readTable, mapTabular, isZip, sourceKindOf as mappedSourceKind, id as MAPPED_ID, label as MAPPED_LABEL } from './mapping.mjs';
-import { extractDocument, isPdf, plainText, labelOf } from './extract.mjs';
+import { sourceFormat } from './model-source.mjs';
 import {
   ask, recordFact, archive, normalizeName, OWNER_OPTIONS, KIND_OPTIONS, NEAR_DUPLICATE_OPTIONS, EMPLOYER_OPTIONS, taxYearOptions,
   withholdingRecipient, withRecipient, recipientPayer, summarizeSlot, conflictPayer, conflictAsked, askConflict, askSlotConflict,
@@ -26,8 +23,9 @@ import { recordSource } from './freshness.mjs';
 import { autoResolve } from './auto.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
 
-export const STATUSES = Object.freeze(['imported', 'duplicate', 'needs_mapping', 'needs_extraction', 'unsupported', 'too_large', 'failed']);
-const WAITING = ['needs_mapping', 'needs_extraction'];
+export const WAITING = Object.freeze(['waiting_for_engine', 'budget_exhausted', 'needs_confirmation', 'needs_clarification', 'needs_source_text']);
+export const STATUSES = Object.freeze(['imported', 'duplicate', ...WAITING, 'unsupported', 'too_large', 'failed']);
+const RETRYABLE = [...WAITING, 'needs_mapping', 'needs_extraction'];
 
 export class IngestError extends Error {
   constructor(status, code) {
@@ -128,7 +126,8 @@ export async function retryFile(db, fileId, opts = {}) {
   const { inFlight } = householdOf(db, opts);
   const row = db.prepare('SELECT * FROM files WHERE id = ?').get(String(fileId ?? ''));
   if (!row) throw new IngestError(404, 'not_found');
-  if (inFlight.has(row.id) || !(WAITING.includes(row.status) || row.status === 'pending')) throw new IngestError(409, 'not_waiting');
+  if (!['retry', 'reinterpret'].includes(opts.mode ?? 'retry')) throw new IngestError(400, 'invalid_mode');
+  if (row.removed_at || inFlight.has(row.id) || !(opts.mode === 'reinterpret' ? row.status === 'imported' : RETRYABLE.includes(row.status) || row.status === 'pending')) throw new IngestError(409, 'not_waiting');
   inFlight.add(row.id);
   try {
     const vault = await openVault(opts.household);
@@ -146,7 +145,11 @@ async function route(db, fileId, file, opts) {
   let out;
   try {
     const plan = await planFile(db, fileId, file, opts);
-    out = tx(db, () => persistImport(db, fileId, file, plan, opts));
+    if (plan.proposalResult) {
+      const result = plan.proposalResult;
+      if (result.status !== 'imported') db.prepare('UPDATE files SET status=?,parser=?,source_kind=?,note=? WHERE id=?').run(result.status, 'model-import', 'model_import', result.reasonCode ?? null, fileId);
+      out = { result: { fileId, name: file.name, parser: 'model-import', sourceKind: 'model_import', counts: emptyCounts(), ...result } };
+    } else out = tx(db, () => persistImport(db, fileId, file, plan, opts));
   } catch (error) {
     if (error instanceof LimitError) return tooLarge(db, fileId, file);
     console.error('fathom: ingest failed', error?.code ?? error?.name ?? 'error');
@@ -171,55 +174,15 @@ function tooLarge(db, fileId, file) {
 }
 
 // D2: a note is stored as a reference to its encrypted file, never as text.
-function noteReference(fileId, bytes, text) {
-  const body = String(text ?? '');
-  const lines = body ? body.split(/\r\n|\r|\n/).length - (/(\r\n|\r|\n)$/.test(body) ? 1 : 0) : 0;
-  return { ref: fileId, sha256: sha256(bytes), chars: body.length, lines };
-}
-
-function householdEntities(db) {
-  return db.prepare(`SELECT entity AS name FROM pnl_lines UNION SELECT entity FROM entity_aliases
-                     UNION SELECT name FROM accounts WHERE kind = 'business' AND name IS NOT NULL`).all().map((r) => r.name);
-}
-
-// The async half: parse, map or extract. Returns what persist() needs.
 async function planFile(db, fileId, file, opts) {
-  const { engine, now } = opts;
   if (!file.bytes.length) return { status: 'unsupported', warnings: [{ code: 'empty_file', locator: {} }] };
-  const parser = opts.parser ?? pickParser(file);
-  if (parser) {
-    const parsed = parser.parse(file);
-    let status = 'imported';
-    let extractPath;
-    if (parser.id === 'notes') {
-      for (const row of parsed.rows) {
-        if (row.kind === 'document' && row.docType === 'notes') row.fields = noteReference(fileId, file.bytes, row.fields?.text);
-      }
-      const ex = await extractDocument(engine, file, { docType: 'notes', households: { entities: householdEntities(db) }, fileId });
-      extractPath = ex.extractPath;
-      if (ex.status === 'imported') {
-        parsed.rows.push(...ex.rows.map((r) => ({ ...r, parser: 'extract-notes' })));
-        parsed.warnings.push(...ex.warnings);
-      } else status = 'needs_extraction';
-    }
-    return { status, parser: parser.id, label: parser.label, sourceKind: parser.sourceKind, mirror: parser.mirror ?? 'manual', parsed, extractPath };
-  }
-  const table = readTable(file);
-  if (table) {
-    const mapped = await mapTabular(db, engine, file, { now });
-    if (mapped.status !== 'imported') return { status: 'needs_mapping', headerSignature: mapped.signature };
-    return { status: 'imported', parser: MAPPED_ID, label: MAPPED_LABEL, sourceKind: mappedSourceKind(mapped.mapping), parsed: mapped.result, headerSignature: mapped.signature };
-  }
-  if (isZip(file.bytes) || /\.xlsx$/i.test(file.name ?? '')) return { status: 'unsupported', warnings: [{ code: 'unsupported_workbook', locator: {} }] };
-  if (isPdf(file) || plainText(file) !== null) {
-    const ex = await extractDocument(engine, file, { households: { entities: householdEntities(db) }, fileId });
-    if (ex.status !== 'imported') return { status: 'needs_extraction', extractPath: ex.extractPath, note: ex.reason === 'pdf_unreadable' ? 'pdf_unreadable' : null };
-    return {
-      status: 'imported', parser: `extract-${ex.docType}`, label: labelOf(ex.docType), sourceKind: ex.sourceKind,
-      parsed: { rows: ex.rows, warnings: ex.warnings, period: ex.period }, extractPath: ex.extractPath,
-    };
-  }
-  return { status: 'unsupported', warnings: [{ code: 'unsupported_format', locator: {} }] };
+  const parser = opts.mode === 'reinterpret' ? null : opts.parser ?? pickParser(file);
+  if (parser) return { status: 'imported', parser: parser.id, label: parser.label, sourceKind: parser.sourceKind,
+    mirror: parser.mirror ?? 'manual', parsed: parser.parse(file), capabilities: { positions: parser.id === 'brokerage-positions' } };
+  const format = sourceFormat(file);
+  if (!format) return { status: 'unsupported', warnings: [{ code: 'unsupported_format', locator: {} }] };
+  const { prepareImport } = await import('./model-review.mjs');
+  return { proposalResult: await prepareImport({ ...opts, db }, { file: { ...file, fileId, format }, fake: opts.fake, reinterpret: opts.mode === 'reinterpret' }) };
 }
 
 // The sync half, inside one transaction.
@@ -246,6 +209,16 @@ export function persistImport(db, fileId, file, plan, opts) {
   };
   if (!parsed) return finish(plan.status);
 
+  if (plan.reinterpret) {
+    for (const table of ['transactions', 'balances', 'positions', 'pnl_lines', 'tax_payments', 'documents']) {
+      for (const row of db.prepare(`SELECT * FROM ${table} WHERE file_id=?`).all(fileId)) {
+        archive(db, table, { ...row }, { by: fileId, reason: 'reinterpreted', now });
+        if (table === 'transactions') for (const dependent of ['transaction_category_imports', 'transaction_category_corrections', 'transaction_category_guesses']) db.prepare(`DELETE FROM ${dependent} WHERE transaction_id=?`).run(row.id);
+        db.prepare(`DELETE FROM ${table} WHERE id=?`).run(row.id);
+      }
+    }
+  }
+
   identifyAccountRows(parsed, file);
   warn(parsed.warnings);
   const period = parsed.period ?? { from: null, to: null };
@@ -261,13 +234,9 @@ export function persistImport(db, fileId, file, plan, opts) {
   ctx.sourceId = sourceId;
   ctx.asOf = period.to ?? now.slice(0, 10);
 
-  const pnlRows = plan.parser === 'pnl-workbook' ? regroupPnl(db, parsed.rows.filter((r) => r.kind === 'pnl_line')) : null;
-  let coverage = null;
-  if (plan.parser === 'pnl-workbook') {
-    coverage = pnlCoverage(db, file, pnlRows);
-    if (!pnlRows.length) warn([{ code: 'empty_workbook', locator: {} }]);
-  } else if (plan.parser === 'tax-payments') coverage = taxCoverage(file);
-  ctx.incomplete = incompleteParts(db, file, plan.parser, parsed.warnings);
+  const coverage = plan.coverage ?? [];
+  ctx.coverage = coverage;
+  ctx.incomplete = { pnl: () => false, tax: new Set() };
 
   db.prepare(`UPDATE files SET parser = ?, source_kind = ?, source_id = ?, header_signature = coalesce(?, header_signature),
               period_from = ?, period_to = ?, coverage = ? WHERE id = ?`)
@@ -276,7 +245,7 @@ export function persistImport(db, fileId, file, plan, opts) {
 
   upsertAccounts(ctx, accountRows);
 
-  const rows = pnlRows ? [...parsed.rows.filter((r) => r.kind !== 'pnl_line'), ...pnlRows] : parsed.rows;
+  const rows = parsed.rows;
   const balances = closingBalances(rows);
   const holds = new Map();
   ctx.categoryRows = new Map();
@@ -293,7 +262,7 @@ export function persistImport(db, fileId, file, plan, opts) {
       case 'balance': if (balances.has(row)) putBalance(ctx, row, parser, locator); break;
       case 'position': putPosition(ctx, row, parser, locator); break;
       case 'pnl_line': putPnl(ctx, row, parser, locator); break;
-      case 'tax_payment': putTax(ctx, row, parser, locator, plan.parser === 'tax-payments'); break;
+      case 'tax_payment': putTax(ctx, row, parser, locator); break;
       case 'document': putDocument(ctx, row, parser, locator); break;
       case 'fact':
         if (row.hold) {
@@ -307,9 +276,9 @@ export function persistImport(db, fileId, file, plan, opts) {
   }
 
   if (coverage?.length) supersede(ctx, coverage);
-  removeOmittedPositions(ctx, rows, parsed.warnings);
-  askEntityAliases(ctx, pnlRows ?? []);
-  if (plan.parser === 'tax-payments') askTaxYears(ctx, rows);
+  if (plan.capabilities?.positions) removeOmittedPositions(ctx, rows, parsed.warnings);
+  askEntityAliases(ctx, rows.filter(r => r.kind === 'pnl_line'));
+  askTaxYears(ctx, rows);
   for (const [employerKey, employerName] of holds) {
     const named = employerName ? `Is ${employerName}` : 'Is this employer';
     tally(ctx, ask(db, {
@@ -503,7 +472,7 @@ function putTransaction(ctx, row, parser, locator) {
     const survivor=survivorKey && db.prepare('SELECT id FROM transactions WHERE dedupe_key=?').get(survivorKey);
     if (survivor) recordCategoryImport(ctx,survivor.id,values,key);
     if (found.match === 'cross_words') counts.crossFormat += 1;
-    if (found.match !== 'same') {
+    if (found.match !== 'same' || found.observation.file_id !== fileId) {
       archive(db, 'transactions', { ...values, dedupe_key: key, normalized_description: normalizeName(row.description) },
         { by: found.observation.file_id ?? null, reason: 'duplicate_cross_format', now, survivorKey });
     }
@@ -633,24 +602,6 @@ function putPosition(ctx, row, parser, locator) {
   }
 }
 
-// P&L rows: entity mapped through entity_aliases, then regrouped (summed, cells concatenated).
-function aliasMap(db) {
-  return new Map(db.prepare('SELECT alias, entity FROM entity_aliases').all().map((a) => [a.alias, a.entity]));
-}
-function regroupPnl(db, rows) {
-  const aliases = aliasMap(db);
-  const groups = new Map();
-  for (const r of rows) {
-    const entity = aliases.get(normalizeName(r.entity)) ?? r.entity;
-    const key = JSON.stringify([normalizeName(entity), r.period, normalizeName(r.category)]);
-    const cells = r.locator?.cells ?? (r.locator?.cell ? [r.locator.cell] : []);
-    if (!groups.has(key)) groups.set(key, { ...r, entity, amount: 0, locator: { ...r.locator, cells: [] }, sourceEntity: r.entity });
-    const g = groups.get(key);
-    g.amount = cents(g.amount + r.amount);
-    g.locator.cells.push(...cells);
-  }
-  return [...groups.values()];
-}
 const pnlSlot = (entity, period) => `pnl:${normalizeName(entity)}:${period.slice(0, 4)}`;
 
 function putPnl(ctx, row, parser, locator) {
@@ -664,8 +615,9 @@ function putPnl(ctx, row, parser, locator) {
       .run(row.entity, row.period, row.category, amount, fileId, parser, locator, key, pnlSlot(row.entity, row.period));
     bump(ctx, 'pnl_line');
   } else if (moneyEq(stored.amount, amount)) {
+    if (stored.file_id !== fileId) archive(db, 'pnl_lines', { ...stored, file_id: fileId, parser, locator }, { by: stored.file_id, reason: 'duplicate_observation', now });
     counts.duplicates += 1;
-  } else if (ctx.incomplete.pnl(row.entity, row.category, row.period)) {
+  } else if (!newerOrEqual(db, periodTo(db, fileId), stored.file_id)) {
     counts.incomplete += 1;
   } else {
     archive(db, 'pnl_lines', { ...stored }, { by: fileId, reason: 'revised', now });
@@ -674,12 +626,12 @@ function putPnl(ctx, row, parser, locator) {
   }
 }
 
-function putTax(ctx, row, parser, locator, workbook) {
+function putTax(ctx, row, parser, locator) {
   const { db, fileId, counts, now } = ctx;
-  let slot = workbook ? `tax:${row.sheetYear}:${normalizeName(row.jurisdiction)}:${normalizeName(row.payer)}` : (row.sourceSlot ?? null);
-  let recipient = workbook ? null : (row.recipient ?? null);
+  let slot = row.sourceSlot ?? `tax:${row.taxYear ?? row.sheetYear}:${normalizeName(row.jurisdiction)}:${normalizeName(row.payer)}`;
+  let recipient = row.recipient ?? null;
   let payer = row.payer ?? null;
-  if (!workbook && slot?.startsWith('wh:')) {
+  if (slot?.startsWith('wh:')) {
     // D4 with G4 and H1: every withholding document (paystub, W-2, 1099) belongs to a recipient;
     // remembered answers decide it at import. The payer identity carries the document while the
     // recipient is unknown.
@@ -718,7 +670,7 @@ function putTax(ctx, row, parser, locator, workbook) {
     if (summarizes) tally(ctx, askSlotConflict(db, db.prepare('SELECT * FROM tax_payments WHERE id = ?').get(id), { now }));
   } else if (moneyEq(stored.amount, amount)) {
     counts.duplicates += 1;
-  } else if (slot && ctx.incomplete.tax.has(slot)) {
+  } else if (!newerOrEqual(db, periodTo(db, fileId), stored.file_id)) {
     counts.incomplete += 1;
   } else if (summarizes) {
     // K1: a document's withholding of a known recipient with another amount is a conflict, never a
@@ -757,108 +709,17 @@ function putFact(ctx, row, parser) {
   if (r.written && r.changed) { bump(ctx, 'fact'); ctx.factsChanged = true; } else if (r.written) ctx.counts.duplicates += 1;
 }
 
-// Coverage (R4, R11). P&L: a sheet's entity crossed with the years of that entity's rows in this
-// file; an entity with no rows covers a year only when every row in the file falls in that year;
-// no rows at all covers nothing.
-function pnlCoverage(db, file, pnlRows) {
-  if (!pnlRows.length) return [];
-  const aliases = aliasMap(db);
-  const years = new Map();
-  for (const r of pnlRows) {
-    const e = normalizeName(r.entity);
-    if (!years.has(e)) years.set(e, new Set());
-    years.get(e).add(r.period.slice(0, 4));
-  }
-  const allYears = new Set(pnlRows.map((r) => r.period.slice(0, 4)));
-  const slots = new Set();
-  for (const sheet of readWorkbook(file).sheets) {
-    if (!ledgerHeader(sheet)) continue;
-    const raw = entityOf(sheet.name);
-    const entity = normalizeName(aliases.get(normalizeName(raw)) ?? raw);
-    if (!entity) continue;
-    const own = years.get(entity);
-    if (own?.size) for (const y of own) slots.add(`pnl:${entity}:${y}`);
-    else if (allYears.size === 1) slots.add(`pnl:${entity}:${[...allYears][0]}`);
-  }
-  return [...slots].sort();
-}
-
-// Tax: every year-named sheet with a tax header covers each Paid column's jurisdiction and payer.
-function taxCoverage(file) {
-  const slots = new Set();
-  for (const sheet of readWorkbook(file).sheets) for (const slot of taxSheetSlots(sheet).values()) slots.add(slot);
-  return [...slots].sort();
-}
-
-// A tax sheet's Paid columns mapped to their slots (empty without a tax header).
-function taxSheetSlots(sheet) {
-  const order = (column) => [...column].reduce((v, ch) => v * 26 + ch.charCodeAt(0) - 64, 0);
-  const slots = new Map();
-  const found = taxHeader(sheet);
-  if (!found) return slots;
-  for (const [column, cell] of sheet.rows[found.index].cells) {
-    if (!/\bpaid$/.test(headerText(cell.value))) continue;
-    const group = found.groups.filter((g) => order(g.column) <= order(column)).at(-1);
-    if (!group) continue;
-    const payer = String(cell.value).trim().replace(/\s+paid$/i, '');
-    slots.set(column, `tax:${Number(sheet.name)}:${normalizeName(group.jurisdiction)}:${normalizeName(payer)}`);
-  }
-  return slots;
-}
-
-// What this file parsed only partly (F1): an unreadable amount cell must not remove or revise
-// stored rows it may have fed. P&L: the warned row's entity (through entity_aliases), category and
-// month; an unreadable date widens it to every month and an empty category to every category.
-// Tax: the warned cell's Paid column slot, or every Paid slot of its sheet when the column is not
-// a known Paid column or the warning is an unreadable Month label (invalid_tax_month).
-// Returns { pnl(entity, category, period) -> bool, tax: Set of slots }.
-const PARTIAL_CODES = new Set(['formula_without_cache', 'invalid_pnl_row', 'invalid_tax_payment', 'invalid_tax_month']);
-function incompleteParts(db, file, parser, warnings) {
-  const pnl = [], tax = new Set();
-  const parts = { tax, pnl: (entity, category, period) => pnl.some((m) => m.entity === normalizeName(entity)
-    && (m.category == null || m.category === normalizeName(category)) && (m.period == null || m.period === period)) };
-  const warned = (warnings ?? []).filter((w) => PARTIAL_CODES.has(w.code) && w.locator?.sheet != null);
-  if (!warned.length || (parser !== 'pnl-workbook' && parser !== 'tax-payments')) return parts;
-  const workbook = readWorkbook(file);
-  const sheets = new Map(workbook.sheets.map((sheet) => [sheet.name, sheet]));
-  const aliases = aliasMap(db);
-  for (const w of warned) {
-    const sheet = sheets.get(w.locator.sheet);
-    const [, column, rowNumber] = String(w.locator.cell ?? '').match(/^([A-Z]+)(\d+)$/) ?? [];
-    if (parser === 'tax-payments') {
-      const sheetSlots = sheet ? taxSheetSlots(sheet) : new Map();
-      if (w.code !== 'invalid_tax_month' && sheetSlots.has(column)) tax.add(sheetSlots.get(column));
-      else for (const slot of sheetSlots.values()) tax.add(slot);
-      continue;
-    }
-    const raw = entityOf(w.locator.sheet);
-    const entity = normalizeName(aliases.get(normalizeName(raw)) ?? raw);
-    if (!entity) continue;
-    const found = sheet && ledgerHeader(sheet);
-    const row = found && sheet.rows.find((r) => r.number === Number(rowNumber));
-    if (!row) { pnl.push({ entity, category: null, period: null }); continue; }
-    const income = found.columns.has('payment date');
-    const date = isoDate(row.cells.get(found.columns.get(income ? 'payment date' : 'date'))?.value, workbook.date1904);
-    const category = income ? 'Income' : String(row.cells.get(found.columns.get('category'))?.value ?? '').trim();
-    pnl.push({ entity, category: category ? normalizeName(category) : null, period: date ? date.slice(0, 7) : null });
-  }
-  return parts;
-}
-
-// Rows of a covered slot from other files whose key this file lacks are archived and removed,
-// except rows this file parsed only partly (incompleteParts).
 function supersede(ctx, coverage) {
   const { db, fileId, counts, now } = ctx;
-  for (const [table, prefix] of [['pnl_lines', 'pnl:'], ['tax_payments', 'tax:']]) {
-    const remove = db.prepare(`DELETE FROM ${table} WHERE id = ?`);
-    for (const slot of coverage.filter((s) => s.startsWith(prefix) && !ctx.incomplete.tax.has(s))) {
-      for (const r of db.prepare(`SELECT * FROM ${table} WHERE source_slot = ? AND (file_id IS NULL OR file_id != ?) ORDER BY id`).all(slot, fileId)) {
-        if (ctx.keys.has(r.dedupe_key)) continue;
-        if (table === 'pnl_lines' && ctx.incomplete.pnl(r.entity, r.category, r.period)) continue;
-        archive(db, table, { ...r }, { by: fileId, reason: 'removed', now });
-        remove.run(r.id);
-        counts.superseded += 1;
-      }
+  for (const group of coverage) {
+    if (!group.complete || !['pnl_lines', 'tax_payments'].includes(group.table)) continue;
+    const rows = group.table === 'pnl_lines'
+      ? db.prepare('SELECT * FROM pnl_lines WHERE lower(entity)=? AND period=?').all(group.entity.toLowerCase(), group.period)
+      : db.prepare('SELECT * FROM tax_payments WHERE source_slot=? AND substr(date,1,7)=?').all(group.slot, group.period);
+    for (const row of rows) {
+      if (ctx.keys.has(row.dedupe_key) || !newerOrEqual(db, group.authority, row.file_id)) continue;
+      archive(db, group.table, { ...row }, { by: fileId, reason: 'removed', now });
+      db.prepare(`DELETE FROM ${group.table} WHERE id=?`).run(row.id); counts.superseded++;
     }
   }
 }
@@ -870,13 +731,11 @@ function supersede(ctx, coverage) {
 // snapshot only when its extraction carried a holdings list (a snapshot row; an empty list is a
 // complete empty snapshot). A complete snapshot archives (reason removed) and removes the stored
 // positions of that account and date it no longer lists, where it holds period authority.
-const SNAPSHOT_PARSERS = new Set(['brokerage-positions', 'extract-statement']);
 const SNAPSHOT_HARMLESS = new Set(['pending_activity', 'invalid_cost_basis']);
 // The account id a warning names ({inst, mask} when the parser knew the mask), or null.
 const warnedAccountId = (w) => (w.account ? accountIdOf(accountIdentity({ account: w.account })) : null);
 function removeOmittedPositions(ctx, rows, warnings) {
   const { db, fileId, counts, now } = ctx;
-  if (!SNAPSHOT_PARSERS.has(ctx.parser)) return;
   const incomplete = new Set();
   for (const w of warnings ?? []) {
     if (SNAPSHOT_HARMLESS.has(w.code)) continue;

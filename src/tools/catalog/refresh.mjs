@@ -38,7 +38,7 @@ async function execute(name, args, ctx) {
   try {
     if (name === 'import_file' || name === 'retry_import') {
       await openVault(api.household);
-      const opts = { household: api.household, engine: api.engine, config: api.config, now: new Date(ctx.now ?? Date.now()).toISOString() };
+      const opts = { ...ctx, household: api.household, mode: args.mode ?? 'retry', engine: api.engine, config: api.config, now: new Date(ctx.now ?? Date.now()).toISOString() };
       const file = name === 'import_file'
         ? (await ingestFiles(ctx.db, [{ name: args.name, mime: args.mime, bytes: content(args) }], opts)).results[0]
         : await retryFile(ctx.db, args.fileId, opts);
@@ -99,7 +99,7 @@ const string = { type: 'string', minLength: 1 };
 const definitions = [
   ['import_file', 'write:imports', 'Import base64 file content or pasted text.', 'Import a file or pasted note', ['POST /api/files', 'POST /api/onboarding/notes'],
     { name: { ...string, maxLength: 200 }, mime: string, text: string, contentBase64: string }, ['name', 'mime']],
-  ['retry_import', 'write:imports', 'Retry an import waiting on mapping or extraction.', 'Retry an imported file', ['POST /api/files/:id/retry'], { fileId: string }, ['fileId']],
+  ['retry_import', 'write:imports', 'Retry or reinterpret a saved import.', 'Retry an imported file', ['POST /api/files/:id/retry'], { fileId: string, mode: { type: 'string', enum: ['retry', 'reinterpret'] } }, ['fileId']],
   ['build_your_plans', 'write:imports', 'Rebuild Your plans from imported documents.', 'Rebuild the Your plans pack', ['POST /api/your-plans/build'],
     { fileIds: { type: 'array', items: { ...string, maxLength: 200 }, maxItems: 50 } }, []],
   ['run_job', 'write:jobs', 'Run planning, bank sync, freshness or Confirm guessing now.', 'Refresh data or recompute the plan', ['POST /api/jobs/:id/run'], { job: { type: 'string', enum: jobs } }, ['job']],

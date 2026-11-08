@@ -186,40 +186,6 @@ export function sampleText(table) {
   return [line(table.headers), ...table.rows.slice(0, SAMPLE_ROWS).map((r) => line(r.values))].join('\n');
 }
 
-// The engine's mapping for this table, or null when the engine is off, fails or proposes an
-// invalid mapping.
-export async function proposeMapping(engine, table) {
-  try {
-    const rows = await engine.extract({ document: { type: 'text', text: sampleText(table) }, schema: MAPPING_SCHEMA, system: SYSTEM, maxTokens: 512 });
-    const mapping = Array.isArray(rows) ? rows[0] : null;
-    return mapping && validateMapping(mapping, table.headers).ok ? mapping : null;
-  } catch {
-    return null;
-  }
-}
-
-// Map a table with a stored mapping (no model call) or a new valid proposal (stored for next time).
-// Returns {status: 'imported', result, signature, mapping} or {status: 'needs_mapping', signature}.
-export async function mapTabular(db, engine, file, { now } = {}) {
-  const table = readTable(file);
-  if (!table) return { status: 'needs_mapping', signature: null };
-  const signature = headerSignature(table.headers);
-  const stored = db.prepare('SELECT mapping FROM column_mappings WHERE signature = ?').get(signature);
-  if (stored) {
-    const mapping = parseJson(stored.mapping, null);
-    if (mapping && validateMapping(mapping, table.headers).ok) {
-      db.prepare('UPDATE column_mappings SET uses = uses + 1 WHERE signature = ?').run(signature);
-      return { status: 'imported', result: applyMapping(mapping, table, file), signature, mapping };
-    }
-  }
-  const mapping = await proposeMapping(engine, table);
-  if (!mapping) return { status: 'needs_mapping', signature };
-  db.prepare(`INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES (?, ?, 'engine', ?, 1)
-              ON CONFLICT(signature) DO UPDATE SET mapping = excluded.mapping, src = excluded.src, uses = column_mappings.uses + 1`)
-    .run(signature, JSON.stringify(mapping), now || new Date().toISOString());
-  return { status: 'imported', result: applyMapping(mapping, table, file), signature, mapping };
-}
-
 export function sourceKindOf(mapping) {
   return mapping?.target === 'position' ? 'brokerage_positions' : mapping?.target === 'balance' ? 'balances' : 'bank_csv';
 }

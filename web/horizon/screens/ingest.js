@@ -33,8 +33,13 @@ const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct
 const STATUS = {
   imported: 'Imported',
   duplicate: 'Already imported',
-  needs_mapping: 'Needs a mapping',
-  needs_extraction: 'Needs the engine to read it',
+  waiting_for_engine: 'Waiting for the engine',
+  budget_exhausted: 'Interpretation budget reached',
+  needs_confirmation: 'Ready for review',
+  needs_clarification: 'Needs clarification',
+  needs_source_text: 'Needs readable text',
+  needs_mapping: 'Waiting for interpretation',
+  needs_extraction: 'Waiting for interpretation',
   unsupported: 'Not a supported file',
   too_large: 'Too large to read',
   failed: 'Could not import'

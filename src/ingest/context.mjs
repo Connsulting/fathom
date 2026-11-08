@@ -37,9 +37,11 @@ export function parserLabel(parser) {
   if (typeof parser !== 'string' || !parser) return null;
   const known = parsers.find((p) => p.id === parser);
   if (known) return known.label;
+  const historical = { 'pnl-workbook': 'Business P&L', 'tax-payments': 'Tax payments', 'balances': 'Balances', 'account-map': 'Account metadata', 'notes': 'Notes', 'model-import': 'Reviewed import' };
+  if (historical[parser]) return historical[parser];
   if (parser === MAPPED_ID) return MAPPED_LABEL;
   if (parser.startsWith('extract-')) return labelOf(parser.slice('extract-'.length));
-  return null;
+  return 'Historical import';
 }
 
 // {id, name, parser} of a stored file, or null.

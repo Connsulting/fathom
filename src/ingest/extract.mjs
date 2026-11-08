@@ -1,14 +1,4 @@
-// PDFs and unknown text: one classify call, then one extraction call with a per-type JSON Schema.
-// Text reaches the model through redactForExtraction (identifiers masked, long money amounts
-// swapped for opaque tokens that code resolves back). A PDF whose text layer holds any text
-// (pdftext.mjs) is read the same way; an image-only PDF cannot be redacted and goes as a document,
-// so no schema ever asks for an identifier (SSN, EIN, TIN, account numbers, people's names,
-// addresses). A PDF that cannot be read completely is withheld and never sent. Extracted values
-// become rows only through the deterministic code below, after schema and code validation.
-
 import { createHash } from 'node:crypto';
-import { redactForExtraction } from './redact.mjs';
-import { pdfText } from './pdftext.mjs';
 import { isoDate, number, cents, institution, text as decodeText } from './format.mjs';
 import { normalizeName } from './confirm.mjs';
 
@@ -97,13 +87,6 @@ export const sourceKindOf = (docType) => SOURCE_KIND[docType] ?? 'other';
 
 const LABELS = { paystub: 'Paystub', w2: 'W-2', '1099-int': '1099-INT', '1099-div': '1099-DIV', '1099-b': '1099-B', '1099-nec': '1099-NEC', '1099-misc': '1099-MISC', k1: 'K-1', form1040: 'Form 1040', statement: 'Account statement', plan: 'Plan summary', notes: 'Markdown notes', other: 'Document' };
 export const labelOf = (docType) => LABELS[docType] ?? 'Document';
-
-const CLASSIFY_SYSTEM = 'Classify this household financial document. Choose the closest docType; use other when none fits. '
-  + 'Give the tax year only when the document states one. Some numbers are masked or replaced by tokens like #A1# on purpose.';
-const extractSystem = (docType) => `Extract the fields of this ${labelOf(docType)} exactly as the document states them. `
-  + 'Leave out any field the document does not state; never guess. Use ISO dates (YYYY-MM-DD). '
-  + 'Where an amount appears as a token like #A1#, return the token string itself for that amount. '
-  + 'Business names only: never return a person\'s name, an address or an identifying number.';
 
 // First 12 hex of sha256 of a normalized business name; an absent name hashes 'unknown'.
 export const nameKey = (name) => createHash('sha256').update(normalizeName(name) || 'unknown').digest('hex').slice(0, 12);
@@ -329,71 +312,4 @@ export function plainText(file) {
     const text = decodeText(file);
     return /[\x00-\x08\x0B\x0E-\x1F\x7F]/.test(text) ? null : text;
   } catch { return null; }
-}
-
-const waiting = (reason, extractPath) => ({
-  status: 'needs_extraction', reason, docType: null, rows: [], sourceKind: null, period: { from: null, to: null }, warnings: [], ...(extractPath ? { extractPath } : {}),
-});
-const reasonOf = (error) => (error?.name === 'EngineOffError' ? 'engine_off' : 'engine_error');
-
-const engineOff = (engine) => !engine || (typeof engine.isOn === 'function' && !engine.isOn());
-const redactedText = (text) => {
-  const redacted = redactForExtraction(text);
-  return { document: { type: 'text', text: redacted.text }, refs: redacted.refs };
-};
-
-// Classify (unless opts.docType forces a type), then extract with the type's schema. The path is
-// text (a text file), pdf_text_layer (a PDF with any text, sent as redacted text), pdf_document (an
-// image-only PDF, sent as a document) or pdf_withheld (a PDF read incompletely or not at all: it
-// waits with reason pdf_unreadable and nothing is sent).
-// Returns {status: 'imported', docType, rows, sourceKind, period, warnings, extractPath} or
-// {status: 'needs_extraction', reason: 'engine_off' | 'engine_error' | 'invalid' | 'pdf_unreadable', extractPath?, ...}.
-export async function extractDocument(engine, file, { docType: forced, households = { entities: [] }, fileId = null } = {}) {
-  let document;
-  let refs = {};
-  let extractPath;
-  if (isPdf(file)) {
-    if (engineOff(engine)) return waiting('engine_off');
-    const layer = await pdfText(file.bytes);
-    if (layer.status === 'text') {
-      ({ document, refs } = redactedText(layer.text));
-      extractPath = 'pdf_text_layer';
-    } else if (layer.status === 'image_only') {
-      document = { type: 'pdf', data: file.bytes, pages: layer.pages };
-      extractPath = 'pdf_document';
-    } else return waiting('pdf_unreadable', 'pdf_withheld');
-  } else {
-    const text = plainText(file);
-    if (text === null) return waiting('invalid');
-    ({ document, refs } = redactedText(text));
-    extractPath = 'text';
-  }
-  if (engineOff(engine)) return waiting('engine_off', extractPath);
-  const failed = (reason) => waiting(reason, extractPath);
-  let docType = forced;
-  let classifiedYear;
-  try {
-    if (!docType) {
-      const [c] = await engine.extract({ document, schema: CLASSIFY_SCHEMA, system: CLASSIFY_SYSTEM, maxTokens: 256 });
-      if (!c || !DOC_TYPES.includes(c.docType)) return failed('invalid');
-      docType = c.docType;
-      classifiedYear = c.taxYear;
-    }
-    if (!DOC_TYPES.includes(docType)) return failed('invalid');
-    const warnings = [];
-    if (docType === 'other') {
-      const sha = createHash('sha256').update(file.bytes).digest('hex');
-      const fields = { sha256: sha };
-      return { status: 'imported', docType, rows: [{ kind: 'document', docType: 'other', ...(Number.isInteger(classifiedYear) ? { taxYear: classifiedYear } : {}), fields, locator: { document: 'other' } }],
-        sourceKind: 'other', period: { from: null, to: null }, warnings, extractPath };
-    }
-    const [raw] = await engine.extract({ document, schema: SCHEMAS[docType], system: extractSystem(docType), maxTokens: 4096 });
-    if (!raw) return failed('invalid');
-    const extracted = resolveTokens(raw, refs, warnings);
-    if (!validateExtraction(docType, extracted)) return failed('invalid');
-    const rows = toRows(docType, extracted, { fileId, households, warnings });
-    return { status: 'imported', docType, rows, sourceKind: sourceKindOf(docType), period: periodOf(docType, extracted), warnings, extractPath };
-  } catch (error) {
-    return failed(reasonOf(error));
-  }
 }

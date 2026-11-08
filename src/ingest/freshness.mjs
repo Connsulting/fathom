@@ -318,7 +318,7 @@ export function ingestState(db, { clock } = {}) {
                             WHERE stored_path IS NOT NULL AND removed_at IS NULL ORDER BY uploaded_at DESC, rowid DESC LIMIT ?`)
     .all(FILES_LIMIT).map(fileOf);
   const waiting = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files
-                              WHERE stored_path IS NOT NULL AND removed_at IS NULL AND status IN ('needs_mapping', 'needs_extraction')
+                              WHERE stored_path IS NOT NULL AND removed_at IS NULL AND status IN ('needs_mapping', 'needs_extraction', 'waiting_for_engine', 'budget_exhausted', 'needs_confirmation', 'needs_clarification', 'needs_source_text')
                               ORDER BY uploaded_at DESC, rowid DESC`).all().map(fileOf);
 
   const states = sourceStates(db, at);

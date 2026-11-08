@@ -170,5 +170,5 @@ export function understoodOf(db, file, { engineOn = true } = {}) {
   }
   const asked = db.prepare("SELECT count(*) AS n FROM confirm_items WHERE file_id = ? AND status = 'pending'").get(fileId).n;
   const status = file && file.status ? file.status : 'unknown';
-  return { fileId, status, engineOn: !!engineOn, waiting: status === 'needs_extraction', facts, goals, asked };
+  return { fileId, status, engineOn: !!engineOn, waiting: ['waiting_for_engine', 'budget_exhausted', 'needs_confirmation', 'needs_clarification', 'needs_source_text'].includes(status), facts, goals, asked };
 }

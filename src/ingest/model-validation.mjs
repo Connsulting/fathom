@@ -3,6 +3,7 @@ import { validateProposal } from './model-contract.mjs';
 import { parseInterpretation } from './model-parse.mjs';
 import { resolveField } from './model-source.mjs';
 import { persistImport } from './pipeline.mjs';
+import { toRows, validateExtraction, periodOf } from './extract.mjs';
 import { isoDate, number, cents } from './format.mjs';
 
 export const importEffect = validation => Object.fromEntries(['valid', 'errors', 'rows', 'counts', 'bindings', 'identities', 'questions', 'summary'].map(key => [key, validation[key] ?? null]));
@@ -23,9 +24,14 @@ function accountFor(db, value) {
   return matches.length === 1 ? matches[0] : null;
 }
 
-export function importPlan(rows) {
+export function importPlan(rows, { reinterpret = false } = {}) {
   const dates = rows.map(r => r.date ?? r.asOf ?? (r.period ? r.period + '-01' : null)).filter(Boolean).sort();
-  return { status: 'imported', parser: 'model-import', label: 'Reviewed import', sourceKind: 'model_import',
+  const coverage = [...new Map(rows.filter(r => ['pnl_line', 'tax_payment'].includes(r.kind)).map(row => {
+    const period = row.period ?? row.date.slice(0, 7), slot = `tax:${row.taxYear ?? row.sheetYear}:${normalize(row.jurisdiction).replace(/[^a-z0-9]/g, '')}:${normalize(row.payer).replace(/[^a-z0-9]/g, '')}`;
+    const group = row.kind === 'pnl_line' ? { table: 'pnl_lines', entity: row.entity, period } : { table: 'tax_payments', slot, period };
+    return [JSON.stringify(group), { ...group, complete: true, authority: dates.at(-1) ?? null }];
+  })).values()];
+  return { reinterpret, coverage, capabilities: { positions: true }, status: 'imported', parser: 'model-import', label: 'Reviewed import', sourceKind: 'model_import',
     parsed: { rows, warnings: [], period: { from: dates[0] ?? null, to: dates.at(-1) ?? null } } };
 }
 
@@ -99,6 +105,18 @@ export function validateImport(ctx, proposal, source) {
         !f.taxYearBasis || !['you', 'spouse', 'joint'].includes(f.recipient) || row.datePrecision === 'unknown') errors.push('tax_context_unresolved');
       rows.push({ ...base, kind: 'tax_payment', jurisdiction: String(f.jurisdiction), payer: String(f.payer), recipient: f.recipient,
         amount, taxYear: Number(f.taxYear), sheetYear: Number(f.taxYear), taxYearBasis: String(f.taxYearBasis), date: f.paymentDate, datePrecision: row.datePrecision, paymentKind: row.kind });
+    } else if (row.target === 'document') {
+      if (!validateExtraction(row.docType, f)) errors.push('invalid_document');
+      else {
+        const entities = ctx.db.prepare('SELECT entity AS name FROM pnl_lines UNION SELECT entity AS name FROM entity_aliases').all().map(r => r.name);
+        const converted = toRows(row.docType, f, { fileId: source.fileId, households: { entities }, warnings: [] });
+        const period = periodOf(row.docType, f);
+        rows.push(...converted.map(r => ({ ...r, locator: { ...locator, document: row.docType, ...(r.locator?.field ? { field: r.locator.field } : {}) },
+          ...(r.kind === 'document' ? { asOf: period.to } : {}) })));
+      }
+    } else if (row.target === 'account_metadata') {
+      if (!accountFor(ctx.db, f.accountId)) errors.push('account_unresolved');
+      else rows.push({ ...base, kind: 'account_metadata', accountId: f.accountId, account: { inst: f.institution, mask: f.mask, kind: f.kind, holder: f.holder, name: f.alias } });
     } else errors.push('action_adapter_required');
   }
   const controls = proposal.controls ?? [], controlled = new Set(controls.flatMap(c => c.field.refs));
@@ -138,7 +156,7 @@ export function validateImport(ctx, proposal, source) {
   let counts, questions;
   ctx.db.exec('SAVEPOINT import_preview');
   try {
-    counts = persistImport(ctx.db, source.fileId, { name: 'Reviewed import', bytes: source.bytes }, importPlan(structuredClone(persisted)), { now: new Date(typeof ctx.now === 'function' ? ctx.now() : ctx.now ?? Date.now()).toISOString() }).result.counts;
+    counts = persistImport(ctx.db, source.fileId, { name: 'Reviewed import', bytes: source.bytes }, importPlan(structuredClone(persisted), { reinterpret: ctx.reinterpret }), { now: new Date(typeof ctx.now === 'function' ? ctx.now() : ctx.now ?? Date.now()).toISOString() }).result.counts;
     questions = ctx.db.prepare('SELECT kind,subject,question,options,context,status FROM confirm_items WHERE file_id=? ORDER BY kind,subject').all(source.fileId).map(row => ({ ...row }));
   } catch { errors.push('persistence_refused'); }
   finally { ctx.db.exec('ROLLBACK TO import_preview'); ctx.db.exec('RELEASE import_preview'); }

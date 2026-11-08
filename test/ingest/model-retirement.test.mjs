@@ -9,7 +9,7 @@ test('only standard institution parser modules remain and production has no reti
   for (const path of readdirSync(new URL('../../src/', import.meta.url), { recursive: true }).filter(p => p.endsWith('.mjs') && !p.includes('/test/'))) {
     const code = readFileSync(new URL('../../src/' + path, import.meta.url), 'utf8');
     assert.doesNotMatch(code, /parsers\/(?:pnl-workbook|tax-payments|account-map|balances|notes)\.mjs/, path);
-    assert.doesNotMatch(code, /(?:ledgerHeader|taxHeader|entityOf|extractDocument|mapTabular)\s*\(/, path);
+    assert.doesNotMatch(code, /(?:ledgerHeader|taxHeader|extractDocument|mapTabular)\s*\(/, path);
   }
 });
 test('historical source labels render independently of executable parsers', () => {

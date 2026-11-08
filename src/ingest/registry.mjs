@@ -1,13 +1,7 @@
 import * as aggregator from './parsers/aggregator.mjs';
 import * as chase from './parsers/chase-activity.mjs';
 import * as positions from './parsers/brokerage-positions.mjs';
-import * as pnl from './parsers/pnl-workbook.mjs';
-import * as taxes from './parsers/tax-payments.mjs';
-import * as balances from './parsers/balances.mjs';
-import * as accounts from './parsers/account-map.mjs';
-import * as notes from './parsers/notes.mjs';
-
-export const parsers = Object.freeze([aggregator, chase, positions, pnl, taxes, balances, accounts, notes]);
+export const parsers = Object.freeze([aggregator, chase, positions]);
 export const listParsers = () => [...parsers];
 
 export function pickParser(file, { threshold = 0.75 } = {}) {
