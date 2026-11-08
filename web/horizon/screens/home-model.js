@@ -329,7 +329,7 @@ export function healthLine({ pace, ingest, accounts, metaDataThrough } = {}) {
   // Owner-only items: what Fathom cannot do itself. Stale pace alone is not one; the data date covers it.
   const owner = [];
   if (pending > 0) owner.push({ key: 'confirm', text: `${plural(pending, 'question')} to confirm`, go: 'confirm' });
-  if (staleAccounts > 0) owner.push({ key: 'accounts', text: `${plural(staleAccounts, 'account')} stale`, go: 'accounts' });
+  if (staleAccounts > 0) owner.push({ key: 'accounts', text: `${plural(staleAccounts, 'account')} stale`, go: 'money' });
   if (failed > 0) owner.push({ key: 'files', text: `${plural(failed, 'file')} failed`, go: 'add' });
   return {
     dataThrough, dataLabel, staleAccounts, staleGoals, pending, failed, stale: staleAccounts + staleGoals > 0, parts: rows.map((r) => r.text), rows,

@@ -18,7 +18,7 @@ const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct
 
 // Every main route of the demo, plus a pack and a what-if. Ask is its own full-bleed layout.
 const ROUTES = [
-  'home', 'plan', 'ask', 'wargame', 'wargame/salary', 'wargame/deferral', 'goals', 'money', 'accounts', 'add',
+  'home', 'plan', 'ask', 'wargame', 'wargame/salary', 'wargame/deferral', 'goals', 'money', 'add',
   'confirm', 'advisor', 'packs', 'packs/scorp', 'yearend', 'connect', 'engine', 'email', 'settings'
 ];
 

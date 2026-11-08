@@ -159,7 +159,7 @@ test.describe('AC7: planner on a real store', () => {
 
   test('AC7: no page shows a name from the demo scenario', async ({ page }) => {
     const found = [];
-    for (const route of ['home', 'pace', 'plan', 'wargame', 'wargame/salary', 'wargame/deferral', 'rec/fed-q4-estimate', 'accounts', 'packs']) {
+    for (const route of ['home', 'pace', 'plan', 'wargame', 'wargame/salary', 'wargame/deferral', 'rec/fed-q4-estimate', 'money', 'packs']) {
       await go(page, route);
       await page.waitForLoadState('networkidle');
       const text = await page.locator('body').innerText();

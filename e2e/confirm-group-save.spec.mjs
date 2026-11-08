@@ -54,7 +54,7 @@ async function expectState(request, id, status, answer) {
 }
 
 async function uploadHousehold(page) {
-  await gotoRoute(page, 'accounts');
+  await gotoRoute(page, 'money');
   const uploaded = page.waitForResponse((r) => isPost(r, '/api/files'));
   await page.locator('input[type=file][data-upload]').setInputFiles([AGG, BANK, POS].map(fixture));
   const res = await uploaded;
@@ -362,13 +362,13 @@ for (const [label, size] of SIZES) {
       const left = await seed(page, request, size, (i, all) => i.id === singleOf(all)?.id);
       expect(left).toHaveLength(1);
       await page.reload();
-      await gotoRoute(page, 'accounts');
+      await gotoRoute(page, 'money');
       await page.locator('a[data-go="confirm"]').first().click();
       await expect(page).toHaveURL(/#\/confirm$/);
       await finishDeck(page);
-      await expect(homeBtn(page)).toHaveText('Back to Accounts');
+      await expect(homeBtn(page)).toHaveText('Back to Money');
       await homeBtn(page).click();
-      await expect(page).toHaveURL(/#\/accounts$/);
+      await expect(page).toHaveURL(/#\/money$/);
     });
   });
 }

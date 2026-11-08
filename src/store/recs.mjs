@@ -1,3 +1,4 @@
+import { ACTION_STATUS } from '../shared/rules.mjs';
 // Rec writes shared by the app's rec action path and the MCP tools.
 import { tx, parseJson as parse } from './db.mjs';
 import { OWNERS } from '../shared/rec-links.mjs';
@@ -10,6 +11,17 @@ export function visibleRecRow(db, id) {
   const row = db.prepare('SELECT * FROM recs WHERE id = ?').get(id);
   if (!row || row.status === 'hidden') throw new ToolError('not_found', 'no such recommendation');
   return row;
+}
+
+export function detachRecThreads(db, id, { now, onWrite } = {}) {
+  return tx(db, () => {
+    visibleRecRow(db, id);
+    const before = db.prepare('SELECT key, rec_id, rec_detached_at FROM conversations WHERE rec_id = ? AND rec_detached_at IS NULL ORDER BY key').all(id);
+    db.prepare('UPDATE conversations SET rec_detached_at = ? WHERE rec_id = ? AND rec_detached_at IS NULL').run(now, id);
+    const after = before.map(row => ({ ...row, rec_detached_at: now }));
+    onWrite?.(before, after);
+    return before.length;
+  });
 }
 
 export function writeRec(db, id, kind, value, { now, actor = 'ui', onWrite, eventAction } = {}) {
@@ -55,4 +67,13 @@ export function setRecOwner(db, row, owner, { ts, action, actor }) {
   db.prepare('UPDATE recs SET owner = ?, owner_override = 1, updated_at = ? WHERE id = ?').run(owner, ts, row.id);
   db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, ?, ?, ?, ?, ?)`)
     .run(row.id, ts, action, owner, row.status, row.status, actor);
+}
+
+export function applyStatusAction(db, row, action, arg = null, { now = new Date().toISOString(), actor = 'ui' } = {}) {
+  const status = ACTION_STATUS[action];
+  if (!status) throw new ToolError('bad_input', `unknown action ${action}`);
+  const wake = action === 'snooze' ? arg : (parse(row.def, {}).wake ?? null);
+  db.prepare('UPDATE recs SET status = ?, wake = ?, updated_at = ? WHERE id = ?').run(status, wake, now, row.id);
+  db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+    .run(row.id, now, action, arg == null ? null : String(arg), row.status, status, actor);
 }

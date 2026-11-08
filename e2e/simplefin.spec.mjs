@@ -3,7 +3,7 @@
 // or unknown token, and the bridge serves four made up accounts. Nothing reaches the network.
 //
 // Selectors this spec relies on:
-//   section "Connect accounts" on #/accounts with the form [data-sf-form] (textarea[data-sf-token],
+//   section "Connect accounts" on #/money with the form [data-sf-form] (textarea[data-sf-token],
 //   button "Use the demo token", button "Connect"), then [data-sf-connected] with "Connected to
 //   SimpleFIN, N accounts, last sync <time>", buttons "Sync now" and "Disconnect".
 
@@ -25,7 +25,7 @@ async function connectDemo(page) {
 }
 
 test('connect, sync result, Sync now and Disconnect on the Accounts screen', async ({ page, request }) => {
-  await gotoRoute(page, 'accounts');
+  await gotoRoute(page, 'money');
   await expect(page.locator('form[data-sf-form]')).toBeVisible();
   await connectDemo(page);
   const box = page.locator('[data-sf-connected]');
@@ -59,7 +59,7 @@ test('connect, sync result, Sync now and Disconnect on the Accounts screen', asy
 plainTest('a used setup token shows a clear error and stays disconnected', async ({ page, request }) => {
   plainTest.skip(REMOTE, 'writes to the demo store');
   await resetDemo(request);
-  await gotoRoute(page, 'accounts');
+  await gotoRoute(page, 'money');
   const used = Buffer.from('https://bridge.simplefin.org/simplefin/claim/already-used').toString('base64');
   await page.locator('textarea[data-sf-token]').fill(used);
   await page.locator('form[data-sf-form]').getByRole('button', { name: 'Connect' }).click();
@@ -95,7 +95,7 @@ test('the onboarding Tell us step connects through SimpleFIN and lists imported 
 
 // Layout at phone width for both states; the connect interaction itself is covered above.
 test('the connect block fits a phone screen @mobile', async ({ page, request }) => {
-  await gotoRoute(page, 'accounts');
+  await gotoRoute(page, 'money');
   const form = page.locator('form[data-sf-form]');
   await form.scrollIntoViewIfNeeded();
   await expect(form).toBeVisible();

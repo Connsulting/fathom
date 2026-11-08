@@ -5,7 +5,7 @@
 import { tx } from '../store/db.mjs';
 import { clockNow } from '../scenario/build.mjs';
 import { sendToAdvisor, recordVerdict, setCheckin, AdvisorError, VETO_REASON } from '../advisor/index.mjs';
-import { buildPacketHtml, storePacket, readPacket, contentSources } from '../advisor/packet.mjs';
+import { buildAndStorePacket, readPacket } from '../advisor/packet.mjs';
 import { openVault, VaultError } from '../ingest/vault.mjs';
 import { HttpError } from './http.mjs';
 import { scenarioOf, applyStatusAction } from './handlers.mjs';
@@ -58,19 +58,15 @@ export function saveCheckin(ctx) {
 
 // POST /api/advisor/packets: build the packet for every waiting review and store it encrypted.
 export async function createPacket(ctx) {
-  const s = scenarioOf(ctx);
-  const recIds = s.advisor.pending;
-  if (!recIds.length) throw new HttpError(409, 'nothing is waiting on review');
-  const vault = await householdVault(ctx);
-  const html = buildPacketHtml(s, { generatedOn: s.meta.clock, sources: contentSources(ctx.db) });
-  let id;
+  let result;
   try {
-    id = await storePacket(ctx.db, { vault, html, clock: s.meta.clock, recIds, now: stamp(ctx) });
+    result = await buildAndStorePacket(ctx.db, { scenario: scenarioOf(ctx), now: stamp(ctx), vault: () => householdVault(ctx) });
   } catch (err) {
+    if (err instanceof AdvisorError) throw new HttpError(err.status, err.message);
     if (err instanceof VaultError) throw new HttpError(500, 'the packet could not be stored');
     throw err;
   }
-  return { packetId: id, scenario: scenarioOf(ctx) };
+  return { packetId: result.packetId, scenario: scenarioOf(ctx) };
 }
 
 // GET /api/advisor/packets/:id: the stored packet as an HTML attachment.
