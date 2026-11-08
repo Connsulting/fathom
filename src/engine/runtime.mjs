@@ -30,6 +30,7 @@
 // reservation) throws ModelAccountingError without latching: the platform hold is the authority,
 // so once node scripts/reconcile-spend.mjs settles it the same engine admits the next call.
 
+import { selectionFor } from '../models/config.mjs';
 import { getSetting } from '../store/db.mjs';
 import { createEngine, loadCredential, EngineOffError, ModelAccountingError, ModelCallError } from './index.mjs';
 import { createModelLedger, currentPrincipal, ensureCarry, fundingMonth } from '../platform/model-budget.mjs';
@@ -116,6 +117,8 @@ export function createRuntimeEngine({ db, config = {}, now, allowed = () => true
   let innerCap = null;
   let refused = false;
   let auth = null;
+  const modelCredentials = {};
+  const failedCredentials = new Set();
   let initPromise = null;
   const state = { credentialState: 'none' };
 
@@ -123,24 +126,33 @@ export function createRuntimeEngine({ db, config = {}, now, allowed = () => true
   function init() {
     initPromise ??= (async () => {
       if (mode !== 'live') return;
-      try {
-        auth = await loadCredential(config.claudeCredentialFile);
-        state.credentialState = 'loaded';
-      } catch {
-        state.credentialState = 'failed';
+      const loaded = new Map();
+      for (const purpose of ['chat', 'job', 'confirm', 'extract', 'title', 'categorize']) {
+        const selection = selectionFor(config.modelPorts, purpose);
+        const file = selection.keyFile || (selection.adapter === 'claude' ? config.claudeCredentialFile : selection.adapter === 'jev' ? config.typesafeKeyFile : null);
+        if (!file && !['claude', 'jev'].includes(selection.adapter)) continue;
+        if (!loaded.has(file)) {
+          try { loaded.set(file, await loadCredential(file)); } catch { loaded.set(file, null); }
+        }
+        const value = loaded.get(file);
+        if (value) modelCredentials[purpose] = value;
+        else failedCredentials.add(purpose);
+        if (selection.adapter === 'claude') state.credentialState = value ? 'loaded' : 'failed';
       }
+      auth = modelCredentials.chat ?? null;
+      if (['chat', 'job', 'confirm', 'extract', 'title', 'categorize'].some(p => !failedCredentials.has(p))) state.credentialState = 'loaded';
     })();
     return initPromise;
   }
 
-  async function engine() {
+  async function engine(purpose) {
     if (refused) throw new ModelAccountingError();
     if (!settingOn(db) || allowed() !== true) throw new EngineOffError();
     const cap = capOf(db);
     await init();
-    if (state.credentialState === 'failed') throw new ModelCallError('engine credential unavailable');
+    if (failedCredentials.has(purpose)) throw new ModelCallError('engine credential unavailable');
     if (!inner || cap !== innerCap) {
-      inner = createEngine({ mode, ledger, capUsd: cap, credential: auth ?? undefined, ...(now ? { now } : {}), allowed, funded,
+      inner = createEngine({ mode, ledger, capUsd: cap, credential: auth ?? undefined, modelConfig: config.modelPorts, modelCredentials, ...(now ? { now } : {}), allowed, funded,
         ...(reservations ? { reservations, testTransport } : {}),
         streamDelayMs: mode === 'fake' && Number.isInteger(config.fakeStreamMs) ? config.fakeStreamMs : 0 });
       innerCap = cap;
@@ -148,9 +160,9 @@ export function createRuntimeEngine({ db, config = {}, now, allowed = () => true
     return inner;
   }
 
-  async function guarded(fn) {
+  async function guarded(fn, purpose) {
     try {
-      return await fn(await engine());
+      return await fn(await engine(purpose));
     } catch (error) {
       // Live: a platform hold refuses while it lasts; only a round this engine could not record
       // latches. Fake and off: any accounting failure latches.
@@ -162,6 +174,7 @@ export function createRuntimeEngine({ db, config = {}, now, allowed = () => true
 
   return {
     mode,
+    modelConfig: config.modelPorts,
     init,
     get credentialState() { return state.credentialState; },
     isOn: () => mode !== 'off' && !refused && settingOn(db) && allowed() === true
@@ -176,7 +189,8 @@ export function createRuntimeEngine({ db, config = {}, now, allowed = () => true
       const at = new Date(now ? now() : Date.now());
       return { ...base, capUsd: capOf(db), spentUsd: ledger.monthSpendUsd(at.toISOString().slice(0, 7)) };
     },
-    call: (req) => guarded((e) => e.call(req)),
-    extract: (req) => guarded((e) => e.extract(req)),
+    complete: (req) => guarded((e) => e.call(req), req.purpose),
+    call: (req) => guarded((e) => e.call(req), req.purpose),
+    extract: (req) => guarded((e) => e.extract(req), 'extract'),
   };
 }

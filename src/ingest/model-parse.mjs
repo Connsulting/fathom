@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { indexSource, resolveField } from './model-source.mjs';
 import { PROPOSAL_SCHEMA, FIELD_SCHEMA, validateProposal } from './model-contract.mjs';
-import { estimateUnknownCost, modelFor } from '../engine/pricing.mjs';
+import { estimateCompletion } from '../models/port.mjs';
 import { BudgetExceededError, EngineOffError } from '../engine/index.mjs';
 import { SCHEMAS, FACT_TYPES } from './extract.mjs';
 import { householdNames } from '../categories/guess.mjs';
@@ -93,7 +93,7 @@ async function interpretBound({ ctx, file, fake, retry = false, limits: override
   const remainingOutput = Math.min(limits.outputPerCall, limits.outputTokens - used.outputTokens);
   if (remainingOutput <= 0) return code('budget_exhausted', 'output_limit');
   const messages = [{ role: 'user', content: JSON.stringify(source.envelope) }];
-  const estimate = estimateUnknownCost({ model: modelFor('extract'), maxTokens: remainingOutput, system: SYSTEM, messages, tools: [], schema: INTERPRETATION_SCHEMA });
+  const estimate = estimateCompletion({ purpose: 'extract', maxTokens: remainingOutput, system: SYSTEM, messages, tools: [], schema: INTERPRETATION_SCHEMA }, engine.modelConfig);
   const status = engine.status();
   const allowance = Math.min(limits.costUsd - used.costUsd, status.capUsd - status.spentUsd);
   if (estimate.costUsd > allowance || used.inputTokens + estimate.inputTokens > limits.inputTokens || Date.now() - started >= limits.timeoutMs) return code('budget_exhausted', 'request_does_not_fit');
@@ -111,7 +111,7 @@ async function interpretBound({ ctx, file, fake, retry = false, limits: override
       if (current.pending && !retry || current.calls >= limits.calls || retry && current.retries >= limits.retries ||
         current.costUsd + estimate.costUsd > limits.costUsd || current.inputTokens + estimate.inputTokens > limits.inputTokens || current.outputTokens + remainingOutput > limits.outputTokens) throw new BudgetExceededError();
       db.prepare(`INSERT INTO import_model_spend (file_id,call,source_sha256,correlation_id,model,input_tokens,output_tokens,cost_usd,estimated,retry,status,created_at)
-        VALUES (?,?,?,?,?,?,?,?,1,?,'pending',?)`).run(file.fileId, current.calls + 1, source.sha256, correlationId, modelFor('extract'), estimate.inputTokens, remainingOutput, estimate.costUsd, retry ? 1 : 0, now().toISOString());
+        VALUES (?,?,?,?,?,?,?,?,1,?,'pending',?)`).run(file.fileId, current.calls + 1, source.sha256, correlationId, estimate.model, estimate.inputTokens, remainingOutput, estimate.costUsd, retry ? 1 : 0, now().toISOString());
       db.exec('COMMIT'); reserved = true;
     } catch (error) { db.exec('ROLLBACK'); throw error; }
   }

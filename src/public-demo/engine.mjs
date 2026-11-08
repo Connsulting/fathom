@@ -1,30 +1,14 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { createEngine, loadCredential, BudgetExceededError, ModelCallError } from '../engine/index.mjs';
 import { createSpendLedger } from '../engine/runtime.mjs';
-import { wireMessages, ANTHROPIC_BASE_URL } from '../engine/live.mjs';
-import { PRICING, usageCostUsd } from '../engine/pricing.mjs';
+import { messagesToolRound } from '../engine/live.mjs';
+import { PRICING } from '../engine/pricing.mjs';
 import { DEMO_LIMIT_MESSAGE } from './control.mjs';
 
 export class DemoLimitError extends BudgetExceededError {
   constructor() { super(); this.demoLimit = true; }
 }
 
-export async function publicDemoRound({ credential, system, systemDynamic, messages, tools, maxTokens, model, registry, onEvent }) {
-  const client = new Anthropic({ apiKey: credential.value, authToken: null,
-    baseURL: ANTHROPIC_BASE_URL, maxRetries: 0, timeout: 30000 });
-  const response = await client.messages.create({ model, max_tokens: maxTokens,
-    system: `${system}\n${systemDynamic}`, messages: wireMessages(messages),
-    ...(tools.length ? { tools: tools.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema })) } : {}) });
-  for (const block of response.content) {
-    if (block.type === 'tool_use') {
-      onEvent?.({ type: 'tool', name: block.name });
-      await registry.invoke(block.name, block.input);
-    } else if (block.type === 'text') onEvent?.({ type: 'text', text: block.text });
-  }
-  return { text: response.content.filter(b => b.type === 'text').map(b => b.text).join(''), content: response.content,
-    tokens: response.usage, model, costUsd: usageCostUsd(model, response.usage), toolResults: registry.results,
-    status: response.stop_reason === 'tool_use' ? 'error_max_turns' : 'success', details: {} };
-}
+export const publicDemoRound = request => messagesToolRound({ ...request, timeoutMs: 30000 });
 
 export function createPublicDemoEngine({ db, config, control, visitorId }) {
   const limits = config.publicDemoLimits;

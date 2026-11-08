@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { loadCredential } from '../engine/index.mjs';
 import { redact } from '../ingest/redact.mjs';
+import { createModelPort } from '../models/port.mjs';
 
 export const JEV_MODEL = 'jev-1.14.0';
 export const JEV_INPUT_USD = .042 / 1_000_000;
@@ -30,14 +31,15 @@ export function categoryQuestions(rows, { accounts = [], householdNames = {}, ca
 
 export async function createJev({ keyFile = process.env.FATHOM_TYPESAFE_KEY_FILE, ledger,
   transport = fetch, maxCostUsd = .05, maxTokens = Math.floor(maxCostUsd/JEV_INPUT_USD), monthlyCapUsd = 200,
-  batchSize = 10, timeoutMs = 10_000, retries = 2, sleep = delay, now = () => new Date(), admit = () => null } = {}) {
+  batchSize = 10, timeoutMs = 10_000, retries = 2, sleep = delay, now = () => new Date(), admit = () => null, complete } = {}) {
   if (typeof admit !== 'function') throw fail('jev_bad_options');
-  if (!keyFile || !existsSync(keyFile)) return { isOn:()=>false, stats:()=>({costUsd:0,tokens:0,latenciesMs:[]}) };
-  const credential = await loadCredential(keyFile);
+  if (!complete && (!keyFile || !existsSync(keyFile))) return { isOn:()=>false, stats:()=>({costUsd:0,tokens:0,latenciesMs:[]}) };
+  const credential = complete ? null : await loadCredential(keyFile);
+  const port = complete ? null : createModelPort({ selection: { adapter: 'jev' }, transport, credential });
   for (const n of [maxTokens,maxCostUsd,monthlyCapUsd]) if (!Number.isFinite(n) || n<0) throw fail('jev_bad_budget');
   if (!Number.isInteger(batchSize) || batchSize<1 || batchSize>30 || !Number.isInteger(retries) || retries<0 || retries>3
     || !Number.isFinite(timeoutMs) || timeoutMs<=0) throw fail('jev_bad_options');
-  let tokens=0, costUsd=0;
+  let tokens=0, costUsd=0, model=JEV_MODEL;
   const latenciesMs=[];
   const stats=()=>({tokens,costUsd,latenciesMs:[...latenciesMs]});
   async function request(qs) {
@@ -66,13 +68,30 @@ export async function createJev({ keyFile = process.env.FATHOM_TYPESAFE_KEY_FILE
       try {
         const timeout=new Promise((_,reject)=>{timer=setTimeout(()=>{controller.abort();reject(fail('jev_timeout'));},timeoutMs);});
         data=await Promise.race([(async()=>{
-          response=await transport('https://api.typesafe.ai/v1/systemone',{
-            method:'POST',headers:{Authorization:`Bearer ${credential.value}`,'Content-Type':'application/json'},
-            body:serialized,signal:controller.signal});
-          if (!response.ok) throw fail(response.status===429 || response.status>=500 ? 'jev_retry' : 'jev_http');
-          return response.json();
+          if (complete) {
+            const result = await complete({ purpose: 'categorize', messages: [{ role: 'user', content: 'Choose only from the supplied options.' }],
+              choices: qs, maxTokens: 4096, budget: { maxCostUsd: maxCostUsd - (costUsd - reservedCost), timeoutMs },
+              beforeDispatch: () => { const code = admit(); if (code != null) throw fail(code); } });
+            model = result.model;
+            return { model: JEV_MODEL, answers: Object.fromEntries(result.choices.map((a, i) => [keys[i], { ...a, type: 'choice' }])),
+              usage: { input_tokens: result.accounting?.tokens?.input_tokens, output_tokens: result.accounting?.tokens?.output_tokens },
+              portCostUsd: result.costUsd };
+          }
+          const result = await port.complete({ choices: qs, maxTokens: 4096, timeoutMs });
+          response = result.httpStatus ? { status: result.httpStatus } : null;
+          if (!result.data) throw fail(result.errorCode ?? 'jev_unavailable');
+          return result.data;
         })(),timeout]);
-      } catch {
+      } catch (error) {
+        if (complete) {
+          const charged = error.accounting?.costUsd ?? 0;
+          tokens -= reserve; costUsd += charged - reservedCost;
+          if (attempt<retries && ['rate_limit','unavailable'].includes(error.code) && error.accounting?.estimated===false && charged===0) {
+            await sleep(Math.min(10_000,250*2**attempt));
+            continue;
+          }
+          throw error;
+        }
         ledger?.record({ts:timestamp,purpose:'categorize',costUsd:reservedCost,model:JEV_MODEL,tokens:{input:reserve,estimated:true}});
         if (attempt<retries && (!response || response.status===429 || response.status>=500)) {
           const retryAfter=Number(response?.headers?.get('retry-after'));
@@ -82,10 +101,10 @@ export async function createJev({ keyFile = process.env.FATHOM_TYPESAFE_KEY_FILE
         throw fail('jev_unavailable');
       } finally { clearTimeout(timer); latenciesMs.push(performance.now()-started); }
       const input=data?.usage?.input_tokens, output=data?.usage?.output_tokens;
-      const accounted=Number.isSafeInteger(input) && input>=0 && input<=reserve && Number.isSafeInteger(output) && output>=0;
+      const accounted=Number.isSafeInteger(input) && input>=0 && (complete || input<=reserve) && Number.isSafeInteger(output) && output>=0;
       const actual=accounted ? input : reserve;
-      tokens+=actual-reserve; costUsd+=(actual-reserve)*JEV_INPUT_USD;
-      ledger?.record({ts:timestamp,purpose:'categorize',costUsd:actual*JEV_INPUT_USD,model:JEV_MODEL,
+      tokens+=actual-reserve; costUsd+=complete ? data.portCostUsd-reservedCost : (actual-reserve)*JEV_INPUT_USD;
+      if (!complete) ledger?.record({ts:timestamp,purpose:'categorize',costUsd:actual*JEV_INPUT_USD,model:JEV_MODEL,
         tokens:{input:actual,...(accounted?{output}:{estimated:true})}});
       if (!accounted || data?.model!==JEV_MODEL || !data.answers || Object.keys(data.answers).length!==keys.length) throw fail('jev_bad_response');
       return qs.map((q,i)=>{
@@ -98,7 +117,7 @@ export async function createJev({ keyFile = process.env.FATHOM_TYPESAFE_KEY_FILE
       });
     }
   }
-  return {isOn:()=>true,stats,async choose(questions) {
+  return {isOn:()=>true,stats,get model(){return model;},async choose(questions) {
     for (const q of questions) if (!Array.isArray(q.options) || q.options.length<2 || q.options.length>255
       || new Set(q.options).size!==q.options.length || q.options.some(o=>typeof o!=='string'||!o)) throw fail('jev_bad_options');
     const out=[];

@@ -561,7 +561,7 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
           const cap = getSetting(ctx.db, 'cap', { usd: 200 })?.usd;
           const categorizer = await createJev({ keyFile: ctx.config?.engine === 'off' ? null : ctx.config?.typesafeKeyFile,
             ledger: createSpendLedger(ctx.db), maxCostUsd: Math.min(.05, maxCostUsd),
-            monthlyCapUsd: Number.isFinite(cap) && cap >= 0 ? cap : 0, admit });
+            monthlyCapUsd: Number.isFinite(cap) && cap >= 0 ? cap : 0, admit, complete: ctx.engine?.complete });
           const categories = await guessCategories(ctx.db, categorizer, { now: ctx.now });
           const closed = categories.stopped ? { guessed: 0 } : await guessClosedOptions(ctx.db, categorizer, { now: ctx.now });
           return { applied: categories.applied, stopped: categories.stopped ?? closed.stopped };

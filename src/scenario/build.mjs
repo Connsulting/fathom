@@ -11,7 +11,7 @@ import { receiptMessages } from '../actions/receipts.mjs';
 import { getSetting, cents, parseJson as parse } from '../store/db.mjs';
 import { resolveTokens } from '../shared/tokens.mjs';
 import { ingestState, applyFreshness, householdDataThrough } from '../ingest/freshness.mjs';
-import { MODEL_PURPOSES, modelFor } from '../engine/pricing.mjs';
+import { MODEL_PURPOSES } from '../engine/pricing.mjs';
 import { factEventTitle } from '../shared/event-labels.mjs';
 import { buildYearend } from '../yearend/expected.mjs';
 import { CURVE_AXES, KNOWN_FIGURES, curvePosition, servesGoals, GOAL_KINDS, PRIORITIES, kindOf, isGoalOwner, goalStatusOf } from '../shared/goals.mjs';
@@ -357,7 +357,7 @@ export function loadPacks(db, livePacks = null) {
 export const LEDGER_ROWS = 8;
 export function loadLedger(db) {
   return db.prepare('SELECT id, ts, purpose, model, cost_usd FROM spend_ledger ORDER BY id DESC LIMIT ?').all(LEDGER_ROWS)
-    .map(r => ({ id: r.id, ts: tsLabel(r.ts), purpose: r.purpose, model: r.model, cost: cents(r.cost_usd) }));
+    .map(r => ({ id: r.id, ts: tsLabel(r.ts), purpose: r.purpose, model: r.model === 'fake' ? 'fake' : 'Model service', cost: cents(r.cost_usd) }));
 }
 
 // Your plans inputs: plan and benefits documents, the files a build can read (text or PDF), and
@@ -619,7 +619,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
     id: j.id, name: j.name, cadence: j.cadence || '', last: j.last_label || '', next: j.next_label || '', does: j.does || '', cost: j.cost,
   }));
   // The models the engine runs per purpose, read from the engine's own configuration (not content).
-  const models = MODEL_PURPOSES.map(purpose => ({ purpose, model: modelFor(purpose) }));
+  const models = MODEL_PURPOSES.map(purpose => ({ purpose, model: 'Configured' }));
   const engine = { mode: engineMode, budget: { monthly, used }, chat: section(content, 'engine.chat'), models, jobs, ledger: loadLedger(db) };
 
   deriveFigures(fig, { wargame, series, engine }, { names, law, pct, fig });

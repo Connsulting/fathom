@@ -56,10 +56,10 @@ export async function guessCategories(db, jev, { now, batchSize = 10, maxBatches
       tx(db,()=>{
         for(const [i,t] of rows.entries()) {
           if(current.get(t.id)?.layer!=='uncategorized') continue;
-          const a=answers[i], prediction={category:a.choice,confidence:a.confidence,probabilities:a.probabilities};
+          const a=answers[i], prediction={category:a.choice,confidence:a.confidence,probabilities:a.probabilities,...(jev.model && jev.model!==JEV_MODEL ? {modelPort:true} : {})};
           db.prepare('INSERT INTO transaction_category_guesses VALUES (?,?,?,?) ON CONFLICT(transaction_id) DO UPDATE SET category=excluded.category,model=excluded.model,updated_at=excluded.updated_at')
-            .run(t.id,JSON.stringify(prediction),JEV_MODEL,at);
-          const band=confidenceBand(a.confidence,policy);
+            .run(t.id,JSON.stringify(prediction),jev.model??JEV_MODEL,at);
+          const band=confidenceBand(a.confidence,policy ?? (jev.model && jev.model!==JEV_MODEL ? {autoApply:null,review:0} : undefined));
           if(band==='uncategorized') continue;
           const item=categoryItem(db,choices,t,{category:a.choice},at,prediction);
           if(!item) continue;
