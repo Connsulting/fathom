@@ -90,7 +90,7 @@ export function buildRegistry(modules, toolHeaders = headers) {
     const first = operations.find(o => !o.required.length && o.name === header.firstOperation) || operations.find(o => !o.required.length);
     operations.sort((a, b) => a === first ? -1 : b === first ? 1 : a.name.localeCompare(b.name));
     if (operations.length > 8 && header.name !== 'calculate') throw new TypeError(`Too many operations for ${header.name}`);
-    if (header.kind === 'read' && header.name !== 'calculate' && operations[0].required.length) throw new TypeError(`First read operation requires arguments: ${header.name}`);
+    if (header.kind === 'read' && header.name !== 'calculate' && !header.askOnly && operations[0].required.length) throw new TypeError(`First read operation requires arguments: ${header.name}`);
     const properties = { operation: { type: 'string', enum: operations.map(o => o.name) } };
     for (const op of operations) for (const [key, schema] of Object.entries(op.params)) {
       if (Object.hasOwn(properties, key) && !isDeepStrictEqual(properties[key], schema)) throw new TypeError(`Conflicting parameter schema: ${header.name}.${key}`);
@@ -112,7 +112,7 @@ export function buildRegistry(modules, toolHeaders = headers) {
       const op = validateArgs(args);
       const { operation, ...params } = args;
       const result = await op.handler(params, ctx);
-      if (header.kind === 'write' && result?.receipt) {
+      if (header.kind === 'write' && result?.receipt && !result.undo) {
         result.undo = result.receipt.undone ? { available: false, reason: 'Already undone.' } : { available: true, tool: 'undo', args: { operation: 'undo', id: result.receipt.id } };
       }
       return result;
@@ -120,8 +120,8 @@ export function buildRegistry(modules, toolHeaders = headers) {
   }).sort((a, b) => a.name.localeCompare(b.name));
   for (const route of Object.keys(parity)) parity[route] = [...new Set(parity[route])].sort();
   const rules = [...new Set(modules.flatMap(m => m.rules || []))];
-  const routing = tools.flatMap(t => t.operations.map(o => `${o.route}: ${t.name}.${o.name}`)).join('\n');
-  const instructions = [
+  const routing = tools.filter(t => !t.askOnly).flatMap(t => t.operations.map(o => `${o.route}: ${t.name}.${o.name}`)).join('\n');
+  const mcpInstructions = [
     'Route by question shape. Every call requires operation.', routing,
     'When no tool covers the question, say "Fathom does not have that" and what it does have. No securities selection, live market quotes, money movement or tax filing.',
     'Use write operations only in chat when the owner asked for that change in this conversation. Confirm each change with its receipt and Undo. Never chain unrequested writes. Confirm only when their request is ambiguous.',
@@ -129,7 +129,10 @@ export function buildRegistry(modules, toolHeaders = headers) {
     'Write stored figures as {f:key} tokens returned by household.figures, never typed amounts.',
     ...rules,
   ].join('\n');
-  return { tools, parity, instructions, capabilities: [...new Set(modules.flatMap(m => m.capabilities || []))].sort() };
+  const instructions = [mcpInstructions, ...modules.flatMap(m => m.askRules || []),
+    ...tools.filter(t => t.askOnly).flatMap(t => t.operations.map(o => `${o.route}: ${t.name}.${o.name}`)),
+  ].join('\n');
+  return { tools, parity, instructions, mcpInstructions, capabilities: [...new Set(modules.flatMap(m => m.capabilities || []))].sort() };
 }
 
 const directory = new URL('./catalog/', import.meta.url);
@@ -141,6 +144,7 @@ const registry = buildRegistry(modules);
 export const tools = registry.tools;
 export const parity = registry.parity;
 export const instructions = registry.instructions;
+export const mcpInstructions = registry.mcpInstructions;
 export const CAPABILITIES = registry.capabilities;
 const byName = new Map(tools.map(t => [t.name, t]));
 export function getTool(name) { return byName.get(name) || null; }

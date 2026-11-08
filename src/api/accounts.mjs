@@ -2,14 +2,17 @@
 // Stores the owner's display name. Empty clears it, and the screens fall back to the default label.
 // The imported name, source_id and mirror are left alone.
 
-import { tx, parseJson } from '../store/db.mjs';
+import { tx, getSetting, parseJson } from '../store/db.mjs';
 import { validateDisplayName, accountLabel } from '../shared/account-label.mjs';
 import { HttpError } from './http.mjs';
 import { scenarioOf } from './handlers.mjs';
-import { afterAnswer } from './ingest-handlers.mjs';
+import { afterAnswer, schedulePlan, triggerFreshness } from './ingest-handlers.mjs';
+import { ToolError } from '../tools/errors.mjs';
+import { archiveAccount, removeFile, mergeAccounts } from '../accounts/sources.mjs';
+import { sourcesView } from '../ingest/freshness.mjs';
 import { accountNaming } from '../accounts/naming.mjs';
 import { setAccountAnswer, undoAccountAnswer, OWNER_OPTIONS, KIND_OPTIONS } from '../ingest/confirm.mjs';
-import { queueAccountPairs, mergePlan, manualMerge } from '../ingest/account-merge.mjs';
+import { queueAccountPairs, mergePlan } from '../ingest/account-merge.mjs';
 
 export function accountRename(ctx) {
   const id = ctx.params?.id;
@@ -36,7 +39,14 @@ export function accountRename(ctx) {
 // Recorded as the account's confirm answer (setAccountAnswer), with the same replan as a Confirm answer.
 //
 // GET  /api/accounts/:id/merge-candidates -> {items: [{id, label, inst, kind, mask, lastDataDate, mirror, plan, refused?}]}
-// POST /api/accounts/:id/merge {withId} -> {scenario, survivorId, itemId}; undo is POST /api/confirm/:itemId/reopen.
+// POST /api/accounts/:id/merge {withId} -> {scenario, survivorId, itemId, receipt}; Undo is
+//   POST /api/actions/:receiptId/undo (or POST /api/confirm/:itemId/reopen).
+//
+// Sources (accounts/sources.mjs, the same code as the `sources` tool):
+// GET  /api/sources -> {sources}: each source by real name with range, state, accounts and files.
+// POST /api/accounts/:id/archive {archived?: boolean = true} -> {scenario, receipt} (receipt null when nothing changed)
+// POST /api/files/:id/remove -> {scenario, receipt}
+// Undo is POST /api/actions/:receiptId/undo.
 
 function accountOf(ctx, id = ctx.params?.id) {
   if (typeof id !== 'string' || !id) throw new HttpError(400, 'missing account');
@@ -134,19 +144,42 @@ export function accountMergeCandidates(ctx) {
   return { items };
 }
 
+const HTTP_STATUS = { not_found: 404, conflict: 409, bad_input: 400, forbidden: 403 };
+// A ToolError from the shared source actions as the HTTP error the routes answer.
+function httpOf(e) {
+  return e instanceof ToolError ? new HttpError(HTTP_STATUS[e.code] ?? 400, e.message) : e;
+}
+const actionCtx = (ctx) => ({ db: ctx.db, now: nowIso(), actorId: ctx.identity?.id || (getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null) });
+
 export function accountMerge(ctx) {
-  const row = accountOf(ctx);
-  const withId = bodyOf(ctx).withId;
-  if (typeof withId !== 'string' || !withId) throw new HttpError(400, 'withId must name the other account');
-  if (withId === row.id) throw new HttpError(400, 'an account cannot be merged with itself');
-  accountOf(ctx, withId);
-  const plan = mergePlan(ctx.db, row.id, withId);
-  if (plan.refused) throw new HttpError(409, plan.refused);
-  let survivorId = null;
-  const out = afterAnswer(ctx, () => {
-    const merged = manualMerge(ctx.db, row.id, withId, { now: nowIso() });
-    survivorId = merged.survivorId;
-    return merged;
-  });
-  return { scenario: out.scenario, survivorId, itemId: out.item.id };
+  let res = null;
+  try {
+    const out = afterAnswer(ctx, () => (res = mergeAccounts(actionCtx(ctx), ctx.params?.id, bodyOf(ctx).withId)));
+    return { scenario: out.scenario, survivorId: res.survivorId, itemId: out.item.id, receipt: res.receipt };
+  } catch (e) { throw httpOf(e); }
+}
+
+// After a source action: the plan reruns soon and freshness is recomputed; the reply carries the
+// rebuilt scenario.
+function afterSourceAction(ctx, fn) {
+  let out;
+  try { out = fn(actionCtx(ctx)); } catch (e) { throw httpOf(e); }
+  schedulePlan(ctx);
+  triggerFreshness(ctx);
+  return { scenario: scenarioOf(ctx), receipt: out.receipt };
+}
+
+export function accountArchive(ctx) {
+  const body = bodyOf(ctx);
+  const archived = Object.hasOwn(body, 'archived') ? body.archived : true;
+  if (typeof archived !== 'boolean') throw new HttpError(400, 'archived must be true or false');
+  return afterSourceAction(ctx, (a) => archiveAccount(a, ctx.params?.id, archived));
+}
+
+export function fileRemove(ctx) {
+  return afterSourceAction(ctx, (a) => removeFile(a, ctx.params?.id));
+}
+
+export function sourcesList(ctx) {
+  return { sources: sourcesView(ctx.db) };
 }

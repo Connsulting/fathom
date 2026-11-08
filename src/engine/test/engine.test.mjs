@@ -86,7 +86,9 @@ test('parallel tools all finish in the paid round and chat handlers receive only
   ] });
   assert.equal((await engine.call({ ...request, tools })).toolResults.length, 2);
   assert.ok(contexts.every(ctx => ctx.db === db && ctx.now === now().toISOString()));
-  assert.deepEqual(Object.keys(contexts[0]).sort(), ['db', 'now']);
+  assert.deepEqual(Object.keys(contexts[0]).sort(), ['db', 'now', 'turnResults']);
+  assert.ok(contexts.every(ctx => typeof ctx.turnResults === 'function'));
+  assert.deepEqual(contexts[0].turnResults().map(r => r.name).sort(), ['alpha', 'beta']);
 });
 
 test('chat can invoke a recommendation-status write, while invalid scopes fail before a paid round', async () => {

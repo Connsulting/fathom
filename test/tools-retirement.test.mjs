@@ -125,7 +125,10 @@ test('retirement validates typed inputs and checks owner statements at the Ask b
 
 test('C6 scripted questions run through Ask with validated calls, grounding and no paid engine',async () => {
   const cases=(await loadCases()).filter(c=>c.turns.some(t=>t.required.some(r=>r.name==='retirement' && ['target','growth','after_tax'].includes(r.operation))));
-  assert.equal(cases.length,10);
+  const ids = new Set(cases.map(c=>c.id));
+  for (const id of ['spending-portfolio-withdrawal','q02-independence-target-4pct','q03-gap-and-date',
+    'q23-ten-year-growth','q24-monthly-to-target-by-55','q25-return-3pct-whatif','q26-withdrawal-35pct',
+    'q27-extra-1000-sooner','q28-15m-retirement-vs-brokerage','q33-unrealized-gains-tax']) assert.ok(ids.has(id),id);
   assert.ok(cases.every(c=>!c.expectedFail));
   const result=await runCases({cases});
   assert.equal(result.costUsd,0);

@@ -1140,9 +1140,9 @@ test('R3 A contract: scalar read operations return no sentinel argument outside 
   const listed = await offeredTools(s);
   const offered = listed.flatMap(t => t.operations.map(op => ({ ...t, operation: op.name, inputSchema: { type: 'object', additionalProperties: false, properties: { operation: { type: 'string', enum: [op.name] }, ...op.params }, required: ['operation', ...op.required] } })));
   const structured = ['business', 'spending', 'transactions', 'retirement'];
-  const scalar = offered.filter(tool => !structured.includes(tool.name));
+  const scalar = offered.filter(tool => !tool.askOnly && !structured.includes(tool.name));
   const names = [...new Set(scalar.map(tool => tool.name))];
-  assert.deepEqual(sorted(names), sorted(REGISTRY.filter(x => x.kind === 'read' && !structured.includes(x.name)).map(x => x.name)),
+  assert.deepEqual(sorted(names), sorted(REGISTRY.filter(x => x.kind === 'read' && !x.askOnly && !structured.includes(x.name)).map(x => x.name)),
     'a context without trusted identity offers read tools only');
   const recId = s.db.prepare("SELECT id FROM recs WHERE status != 'hidden' ORDER BY id LIMIT 1").get().id;
   const realPack = s.packs.loaded().find(p => p.id === 's-corp-owner');

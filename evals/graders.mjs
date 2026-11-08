@@ -1,3 +1,6 @@
+import { isDeepStrictEqual } from 'node:util';
+import { buildSnapshot } from '../src/blocks/snapshot.mjs';
+import { validTitle } from '../src/blocks/labels.mjs';
 import { numericFigures } from '../src/shared/answer-discipline.mjs';
 export { numericFigures, evidenceNumbers, gradeFigures, gradeLength, gradeExpected } from '../src/shared/answer-discipline.mjs';
 
@@ -36,4 +39,37 @@ export function gradeThreadTitle(row, fallback) {
   const amountFree = !/[\p{Sc}%]/u.test(title) && !/\p{N}/u.test(title.replace(/\b529\b/g, ''))
     && numericFigures(title).length === 0 && !/\b(?:dollars?|cents?|usd|bucks?|grand)\b/i.test(title);
   return { ok: model && amountFree, title, source, model, amountFree };
+}
+
+export function gradeBlocks(provenance = {}, transcript = [], required = []) {
+  const blocks = provenance?.blocks ?? [];
+  const violations = [];
+  const add = (kind, id) => violations.push({ kind, ...(id ? { id } : {}) });
+  const remaining = [...blocks];
+  for (const need of required) {
+    const i = remaining.findIndex(b => b.op === need.op && (!need.kind || b.snapshot?.kind === need.kind));
+    if (i < 0) add('block_missing'); else remaining.splice(i, 1);
+  }
+  if (required.length && provenance?.blockNotes?.length) add('block_dropped');
+  function literal(value, path = []) {
+    if (path.at(-1) === 'args' && path.at(-2) === 'source') return false;
+    if (typeof value === 'number') return true;
+    return value && typeof value === 'object' && Object.entries(value).some(([k, v]) => literal(v, [...path, k]));
+  }
+  function figures(value, path = '', out = []) {
+    if (!value || typeof value !== 'object') return out;
+    if (Object.hasOwn(value, 'value') && typeof value.unit === 'string') out.push({ path, value: value.value, unit: value.unit });
+    else for (const [key, v] of Object.entries(value)) figures(v, path + '.' + key, out);
+    return out;
+  }
+  for (const block of blocks) {
+    const calls = block.calls ?? [];
+    if (!calls.length || calls.some(c => !transcript.some(t => !t.isError && t.name === c.tool && isDeepStrictEqual(t.args, c.args)))) add('block_unreferenced', block.id);
+    if (literal(block.spec) || block.spec?.title !== undefined && !validTitle(block.spec.title)) add('block_literal', block.id);
+    try {
+      const expected = buildSnapshot(block.op, block.spec, transcript);
+      if (!isDeepStrictEqual(figures(block.snapshot), figures(expected))) add('block_value_mismatch', block.id);
+    } catch { add('block_unreferenced', block.id); }
+  }
+  return { ok: violations.length === 0, violations };
 }

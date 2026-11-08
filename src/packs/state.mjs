@@ -4,6 +4,8 @@
 // whatIf.unlocks) plus the override columns (active, exploring, what_if_*, unhid).
 // Demo stores are left alone: their pack definitions are the seeded scenario.
 
+import { ToolError } from '../tools/errors.mjs';
+import { packStatus } from '../shared/rules.mjs';
 import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -76,4 +78,40 @@ export function refreshPackState(db, { packDirs, dataDir, now } = {}) {
   if (db.isTransaction) run();
   else tx(db, run);
   return { updated, inserted };
+}
+
+export const packIsActive = row => row.active == null ? parseJson(row.def, {}).status === 'active' : !!row.active;
+
+export function packActivationState(db, id) {
+  const pack = db.prepare('SELECT * FROM packs_state WHERE id = ?').get(id);
+  if (!pack) throw new ToolError('not_found', 'No such pack.');
+  const recs = (parseJson(pack.def, {}).recIds ?? []).map(rid => db.prepare('SELECT id, status, updated_at FROM recs WHERE id = ?').get(rid) ?? null);
+  return { pack: { ...pack }, recs: recs.map(r => r ? { ...r } : null) };
+}
+
+export function setPackActive(db, id, active, { now = new Date().toISOString(), actorId = 'ui' } = {}) {
+  if (typeof active !== 'boolean') throw new ToolError('bad_input', 'active must be a boolean.');
+  const run = () => {
+    const before = packActivationState(db, id), row = before.pack, def = parseJson(row.def, {});
+    const wasActive = packIsActive(row);
+    if (active !== wasActive) {
+      const unhid = [];
+      const powered = new Set(db.prepare('SELECT * FROM packs_state WHERE id <> ?').all(id).filter(packIsActive)
+        .flatMap(p => parseJson(p.def, {}).recIds ?? []));
+      for (const rid of active ? def.recIds ?? [] : parseJson(row.unhid, [])) {
+        const rec = db.prepare('SELECT status FROM recs WHERE id = ?').get(rid);
+        const from = active ? 'hidden' : 'proposed', to = active ? 'proposed' : 'hidden';
+        if (rec?.status !== from || (!active && powered.has(rid))) continue;
+        db.prepare('UPDATE recs SET status = ?, updated_at = ? WHERE id = ?').run(to, now, rid);
+        db.prepare('INSERT INTO rec_events(rec_id,ts,action,arg,from_status,to_status,actor) VALUES (?,?,?,?,?,?,?)')
+          .run(rid, now, active ? 'pack_on' : 'pack_off', id, from, to, actorId);
+        if (active) unhid.push(rid);
+      }
+      db.prepare('UPDATE packs_state SET active = ?, unhid = ?, updated_at = ? WHERE id = ?')
+        .run(active ? 1 : 0, JSON.stringify(unhid), now, id);
+    }
+    const after = packActivationState(db, id);
+    return { pack: { id, status: packStatus(def.status, { active, exploring: !!after.pack.exploring }) }, wasActive, before, after };
+  };
+  return db.isTransaction ? run() : tx(db, run);
 }
