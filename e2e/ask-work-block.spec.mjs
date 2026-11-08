@@ -1,9 +1,8 @@
 // The work block on Ask answers, at desktop and 390px (every title carries @mobile). While an answer
-// is in flight a block row ("Working…", "N steps") sits above the streamed text: open while nothing
-// streams, collapsed once text streams, and every text streamed in a tool round moves into the block
-// as a note instead of vanishing. A first attempt the answer check replaces is never kept:
-// one "Revised to remove N unchecked figures" step shows before its text
-// clears, so nothing leaves the screen without a step saying why. The
+// is in flight the pending block is a block row ("Working…", "N steps") and nothing else: no answer
+// text streams (ST2). The block stays open while working unless the owner toggles it, and the text
+// of each tool round arrives in it as a note. A first attempt the answer check replaces is never
+// shown and never kept: one "Revised to remove N unchecked figures" step appears instead. The
 // finished message keeps the block ("Worked for Ns", "N steps"), collapsed by default, stored with
 // the message so a reload shows the same notes and steps.
 //
@@ -134,6 +133,7 @@ async function record(page, scope, holdWhen = null) {
           tag: txt(li.querySelector('.h-work-tag'))
         })) : [],
         stream: txt(pend.querySelector('.h-askx-stream')),
+        area: txt(pend.querySelector('.h-askx-live')),
         oldSteps: !!pend.querySelector('.h-askx-steps, .h-askx-wait')
       };
       const key = JSON.stringify(s);
@@ -155,42 +155,12 @@ async function record(page, scope, holdWhen = null) {
 const wbLog = (page) => page.evaluate(() => window.__wbLog);
 const release = (page) => page.evaluate(() => { window.__wbHold = false; });
 
-// Letters and digits only: a note may render markdown or numbers differently from the stream.
+// Letters and digits only: a note may render markdown or numbers differently from the model text.
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 
-// Interim text is never lost: whenever the streamed text is cleared or replaced, the snapshot that
-// shows it gone (the same mutation callback, after the repaint) has it in an open block's notes.
-function expectNothingLost(snaps) {
-  for (let i = 1; i < snaps.length; i++) {
-    const prev = snaps[i - 1];
-    const cur = snaps[i];
-    if (!prev.pend || !cur.pend) continue;
-    const was = norm(prev.stream);
-    if (!was || norm(cur.stream).startsWith(was)) continue;
-    const ctx = JSON.stringify({ prev, cur });
-    expect(cur.open, `the block reopens when text moves into it: ${ctx}`).toBe('true');
-    expect(norm(cur.notes.map((n) => n.t).join(' ')), `streamed text moved into the block in the same frame: ${ctx}`).toContain(was);
-  }
-}
-
-// A regeneration clears the streamed text without a note, but only once the revision step is in
-// the block: the snapshot that shows the text gone shows the open block with that step. Any other
-// clear is an interim move (expectNothingLost). Returns how many clears were regenerations.
-function expectNoSilentClear(snaps) {
-  let revisions = 0;
-  for (let i = 1; i < snaps.length; i++) {
-    const prev = snaps[i - 1];
-    const cur = snaps[i];
-    if (!prev.pend || !cur.pend) continue;
-    const was = norm(prev.stream);
-    if (!was || norm(cur.stream).startsWith(was)) continue;
-    const ctx = JSON.stringify({ prev, cur });
-    if (norm(cur.notes.map((n) => n.t).join(' ')).includes(was)) continue;
-    expect(cur.open, `the block opens when the streamed text clears: ${ctx}`).toBe('true');
-    expect(cur.steps.some((x) => REVISED.test(x)), `a revision step explains the cleared text: ${ctx}`).toBe(true);
-    revisions++;
-  }
-  return revisions;
+// No answer text ever streams into the pending block (ST2).
+function expectNoStream(snaps) {
+  for (const s of snaps) if (s.pend) expect(s.stream, `no streamed text: ${JSON.stringify(s)}`).toBe('');
 }
 
 // The old pending markup is gone, and every live snapshot shows the block with a live row.
@@ -211,16 +181,12 @@ function expectLiveRows(snaps) {
   }
 }
 
-// The auto rule, before the owner touches the row: open while nothing streams, collapsed while
-// text streams.
-function expectAutoRule(snaps, upTo = snaps.length) {
-  for (const s of snaps.slice(0, upTo)) {
-    if (!s.pend) continue;
-    expect(s.open, JSON.stringify(s)).toBe(s.stream ? 'false' : 'true');
-  }
-  const first = snaps.find((s) => s.pend);
-  expect(first.open, 'open before any text').toBe('true');
-  expect(snaps.slice(0, upTo).some((s) => s.pend && s.stream && s.open === 'false'), 'collapsed while text streamed').toBe(true);
+// Before the owner touches the row the live block is open the whole time: nothing streams to
+// collapse it for.
+function expectOpenWhileWorking(snaps, upTo = snaps.length) {
+  const live = snaps.slice(0, upTo).filter((s) => s.pend);
+  expect(live.length, 'the pending block was recorded').toBeGreaterThan(0);
+  for (const s of live) expect(s.open, JSON.stringify(s)).toBe('true');
 }
 
 /* ---------- page helpers ---------- */
@@ -361,21 +327,16 @@ async function expectPhoneFit(page, work) {
   expect(m.right, ctx).toBeLessThanOrEqual(vw + 1);
 }
 
-// Held in the final round (both notes in, answer text streaming, block collapsed): click and Enter
-// open the block and show steps then notes in order, Space closes it, and focus stays on the row.
+// Held once both notes are in (the block open, nothing streaming): the block shows steps then
+// notes in order; click closes and reopens it, Enter and Space toggle it, and focus stays on the row.
 async function actOnHeldLive(page, scope) {
   await expect.poll(() => page.evaluate(() => !!window.__wbHeld), { timeout: 30_000 }).toBe(true);
   const work = scope.locator('.h-askx-pend .h-work.live');
   const row = work.locator('button.h-work-row[data-work="live"]');
-  await expect(row).toHaveAttribute('aria-expanded', 'false');
-  await expect(work.locator('.h-work-body')).toHaveCount(0);
-  await expect(scope.locator('.h-askx-pend .h-askx-stream')).not.toHaveText('');
-  await expectPhoneFit(page, work);
-
-  await row.click();
   await expect(row).toHaveAttribute('aria-expanded', 'true');
   const body = work.locator('.h-work-body');
   await expect(body).toHaveCount(1);
+  await expect(scope.locator('.h-askx-pend .h-askx-stream')).toHaveCount(0);
   const notes = body.locator('li.note .h-work-note');
   await expect(notes).toHaveText([NOTE1, NOTE2]);
   const kinds = await body.locator('.h-work-items > li').evaluateAll((els) => els.map((li) => (li.classList.contains('note') ? 'note' : 'step')));
@@ -386,30 +347,32 @@ async function actOnHeldLive(page, scope) {
   await row.click();
   await expect(row).toHaveAttribute('aria-expanded', 'false');
   await expect(body).toHaveCount(0);
+  await expectPhoneFit(page, work);
+  await row.click();
+  await expect(row).toHaveAttribute('aria-expanded', 'true');
+  await expect(body).toHaveCount(1);
 
   await row.focus();
   await page.keyboard.press('Enter');
+  await expect(row).toHaveAttribute('aria-expanded', 'false');
+  await expect.poll(() => page.evaluate(() => document.activeElement && document.activeElement.matches('button.h-work-row[data-work="live"]'))).toBe(true);
+  await page.keyboard.press(' ');
   await expect(row).toHaveAttribute('aria-expanded', 'true');
   await expect(work.locator('.h-work-body li.note')).toHaveCount(2);
   await expect.poll(() => page.evaluate(() => document.activeElement && document.activeElement.matches('button.h-work-row[data-work="live"]'))).toBe(true);
-  await page.keyboard.press(' ');
-  await expect(row).toHaveAttribute('aria-expanded', 'false');
-  await expect.poll(() => page.evaluate(() => document.activeElement && document.activeElement.matches('button.h-work-row[data-work="live"]'))).toBe(true);
-  // The owner's choice wins for the rest of the answer: open it and let the answer finish.
-  await page.keyboard.press('Enter');
-  await expect(row).toHaveAttribute('aria-expanded', 'true');
+  // The owner's choice wins for the rest of the answer: leave it open and let the answer finish.
 }
 
 // Notes show only while the block is open, so count the distinct notes seen in earlier snapshots.
-const finalRound = (s, seen) => s.pend && seen.length >= 2 && !!s.stream;
+const bothNotes = (s, seen) => s.pend && seen.length >= 2;
 
 /* ---------- 1: Ask page, new conversation ---------- */
 
-test('@mobile @wb-ac1 @wb-ac2 @wb-ac4 Ask page: the work block shows live, collapses for the answer, keeps every interim text, and stays with the answer after reload', async ({ page, request }) => {
+test('@mobile @wb-ac1 @wb-ac2 @wb-ac4 Ask page: the work block shows live and open, keeps every interim text, and stays with the answer after reload', async ({ page, request }) => {
   test.setTimeout(120_000);
   await installPacer(page);
   await gotoRoute(page, 'ask');
-  await record(page, 'section.h-askx-main', finalRound);
+  await record(page, 'section.h-askx-main', bothNotes);
   await sendOnAsk(page, SHOW);
 
   await actOnHeldLive(page, askMain(page));
@@ -422,14 +385,12 @@ test('@mobile @wb-ac1 @wb-ac2 @wb-ac4 Ask page: the work block shows live, colla
 
   const { snaps, held } = await wbLog(page);
   expectLiveRows(snaps);
-  expectAutoRule(snaps, held);
-  expectNothingLost(snaps);
+  expectOpenWhileWorking(snaps, held);
+  expectNoStream(snaps);
   const seenNotes = [...new Set(snaps.flatMap((s) => s.notes.map((n) => n.t)))];
   expect(seenNotes).toEqual([NOTE1, NOTE2]);
-  // Both interim texts streamed first (in the answer area), then moved into the block.
-  for (const t of [NOTE1, NOTE2]) expect(snaps.some((s) => norm(s.stream).includes(norm(t))), t).toBe(true);
-  // The steps shown live keep their order and the pulse sits on the last one while nothing streams.
-  for (const s of snaps.filter((x) => x.body && x.steps.length && !x.stream)) expect(s.on).toBe(s.steps.length - 1);
+  // The steps shown live keep their order and the pulse sits on the last one.
+  for (const s of snaps.filter((x) => x.body && x.steps.length)) expect(s.on).toBe(s.steps.length - 1);
 
   // Nothing streamed before the final answer remains in the answer.
   const said = norm(await answer.locator('.h-msg-b').textContent());
@@ -456,7 +417,7 @@ test('@mobile @wb-ac1 @wb-ac2 @wb-ac4 rec dialog: the scripted question shows th
   test.setTimeout(120_000);
   await installPacer(page);
   await openRec(page);
-  await record(page, '.h-dlg section.h-conv', finalRound);
+  await record(page, '.h-dlg section.h-conv', bothNotes);
   await sendInDialog(page, SHOW);
 
   await actOnHeldLive(page, conv(page));
@@ -466,8 +427,8 @@ test('@mobile @wb-ac1 @wb-ac2 @wb-ac4 rec dialog: the scripted question shows th
 
   const { snaps, held } = await wbLog(page);
   expectLiveRows(snaps);
-  expectAutoRule(snaps, held);
-  expectNothingLost(snaps);
+  expectOpenWhileWorking(snaps, held);
+  expectNoStream(snaps);
   expect([...new Set(snaps.flatMap((s) => s.notes.map((n) => n.t)))]).toEqual([NOTE1, NOTE2]);
 
   const open = recDialog(page).locator('a.h-conv-open');
@@ -507,9 +468,9 @@ test('@mobile @wb-ac2 @wb-ac4 a plain question shows a work block with steps onl
 
   const { snaps } = await wbLog(page);
   expectLiveRows(snaps);
-  expectAutoRule(snaps);
-  expectNothingLost(snaps);
-  expect(snaps.some((s) => s.notes.length), 'no note rows while it streamed').toBe(false);
+  expectOpenWhileWorking(snaps);
+  expectNoStream(snaps);
+  expect(snaps.some((s) => s.notes.length), 'no note rows while it worked').toBe(false);
   expect(snaps.some((s) => s.steps.includes('Looking at your household'))).toBe(true);
 
   const stored = await lastAnswer(request, id);
@@ -523,9 +484,9 @@ test('@mobile @wb-ac2 @wb-ac4 a plain question shows a work block with steps onl
 
 /* ---------- 4: the regeneration ---------- */
 
-test('@mobile @wb-ac1 @wb-ac2 @wb-ac4 a forced regeneration shows one revision step before the first attempt clears, and keeps no draft', async ({ page, request }) => {
+test('@mobile @wb-ac1 @wb-ac2 @wb-ac4 a forced regeneration shows one revision step, never shows the first attempt, and keeps no draft', async ({ page, request }) => {
   test.setTimeout(120_000);
-  // One event per task, so the reset that clears the first attempt is its own snapshot.
+  // One event per task, so each step is its own snapshot.
   await installPacer(page);
   await gotoRoute(page, 'ask');
   await record(page, 'section.h-askx-main');
@@ -539,13 +500,11 @@ test('@mobile @wb-ac1 @wb-ac2 @wb-ac4 a forced regeneration shows one revision s
 
   const { snaps } = await wbLog(page);
   expectLiveRows(snaps);
-  expectAutoRule(snaps);
-  // The first attempt streamed, then cleared once, with the revision step already in the block.
-  expect(expectNoSilentClear(snaps), 'one regeneration cleared the stream').toBe(1);
-  const at = snaps.findIndex((s, i) => i > 0 && s.pend && snaps[i - 1].pend && norm(snaps[i - 1].stream) && !norm(s.stream));
-  expect(at, 'the stream cleared while the answer was in flight').toBeGreaterThan(0);
-  expect(norm(snaps[at - 1].stream)).toContain('4321');
-  expect(snaps[at].steps).toContain(STEP_REVISED);
+  expectOpenWhileWorking(snaps);
+  expectNoStream(snaps);
+  // The revision step showed in the open block, and the first attempt's amounts never showed.
+  expect(snaps.some((s) => s.pend && s.steps.includes(STEP_REVISED)), 'the revision step showed while in flight').toBe(true);
+  for (const s of snaps) if (s.pend) expect(norm(s.area), `no draft text in the pending block: ${JSON.stringify(s)}`).not.toMatch(/4321|5432/);
   // No draft note, no draft tag, and no retired retry step, at any point.
   expect(snaps.some((s) => s.notes.some((n) => n.draft || n.tag)), 'no draft note while in flight').toBe(false);
   expect(snaps.some((s) => s.steps.includes(STEP_RETRY))).toBe(false);

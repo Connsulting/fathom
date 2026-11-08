@@ -85,7 +85,7 @@ function scripted(runtime, scripts = [], { before } = {}) {
   return { engine, requests, responses };
 }
 
-test('a tool preamble is interim: it streams, moves out with an interim event, and only the answer is stored', async t => {
+test('a tool preamble is interim: it streams as an interim event, no answer text streams, and only the answer is stored', async t => {
   const s = await demoStore(t);
   const seen = [];
   const { engine } = scripted(s.runtime, [[
@@ -95,16 +95,13 @@ test('a tool preamble is interim: it streams, moves out with an interim event, a
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({
     db: s.db, key: THREAD, text: 'What should I keep?', onEvent: e => seen.push(e),
   });
-  const interim = seen.map(e => e.type).lastIndexOf('interim');
-  const streamed = seen.slice(interim + 1).filter(e => e.type === 'text').map(e => e.text).join('');
   assert.equal(seen.some(e => e.type === 'reset'), false);
-  assert.deepEqual(seen[interim], { type: 'interim', text: 'Let me check your figures.' });
-  assert.equal(streamed, 'Keep a reserve.');
+  assert.equal(seen.some(e => e.type === 'text'), false, 'no answer text streams');
+  assert.deepEqual(seen.filter(e => e.type === 'interim'), [{ type: 'interim', text: 'Let me check your figures.' }]);
   assert.deepEqual(reply.paragraphs, ['Keep a reserve.']);
-  assert.equal(reply.paragraphs.join('\n\n'), streamed);
 });
 
-test('superseded SDK frames leave the stream equal to storage', async t => {
+test('superseded SDK frames never reach the stream', async t => {
   const s = await demoStore(t);
   // Fake mode never emits reset, so this runtime streams a refused draft, an engine reset and the
   // replacement by hand, then delegates with no onEvent so only those events reach the listener.
@@ -127,10 +124,7 @@ test('superseded SDK frames leave the stream equal to storage', async t => {
   const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({
     db: s.db, key: THREAD, text: 'What should I keep?', onEvent: e => seen.push(e),
   });
-  const last = seen.map(e => e.type).lastIndexOf('reset');
-  const effective = seen.slice(last + 1).filter(e => e.type === 'text').map(e => e.text).join('');
-  assert.equal(seen.filter(e => e.type === 'reset').length, 1, 'one reset reached the listener');
-  assert.equal(effective, 'Keep a reserve.');
+  assert.deepEqual(seen.filter(e => e.type === 'reset' || e.type === 'text'), [], 'no text or reset reached the listener');
   assert.deepEqual(reply.paragraphs, ['Keep a reserve.']);
 });
 
@@ -167,9 +161,7 @@ async function twoRounds(s, first, second, { fallback = false } = {}) {
   const reply = await createLiveAnswerer({ engine: run.engine, packs: s.packs, root: s.root, services: { engine: run.engine, config: { dataDir: s.root } } }).answer({
     db: s.db, key: THREAD, text: 'What should I keep?', onEvent: e => seen.push(e),
   });
-  const interim = seen.map(e => e.type).lastIndexOf('interim');
-  const streamed = seen.slice(interim + 1).filter(e => e.type === 'text').map(e => e.text).join('');
-  return { reply, stored: run.responses[0].text, streamed, seen };
+  return { reply, stored: run.responses[0].text, seen };
 }
 
 test('an empty final round joins the tool rounds without editing words', async t => {
@@ -192,7 +184,7 @@ test('an empty final round joins the tool rounds without editing words', async t
   assert.equal(figure.stored, 'Set aside $1,200 into savings.');
 });
 
-test('the text streamed after the last interim event equals the stored final-round text', async t => {
+test('no answer text streams; the reply renders the stored final-round text', async t => {
   const s = await demoStore(t);
   const pairs = [
     ['Ready. ', ' Keep a reserve.'],
@@ -205,8 +197,8 @@ test('the text streamed after the last interim event equals the stored final-rou
     assert.equal(run.seen.some(e => e.type === 'reset'), false, `${first} | ${second}: no reset`);
     assert.deepEqual(run.seen.filter(e => e.type === 'interim').map(e => e.text.trim()), [first.trim()], `${first} | ${second}: one interim`);
     assert.equal(run.stored, second, `${first} | ${second}: only the final round is stored`);
-    assert.equal(run.streamed, run.stored, `${first} | ${second}: stream equals storage`);
-    assert.deepEqual(run.reply.paragraphs, markdownBlocks(stripSources(run.streamed)), `${first} | ${second}: reply renders the stream`);
+    assert.equal(run.seen.some(e => e.type === 'text'), false, `${first} | ${second}: no answer text streams`);
+    assert.deepEqual(run.reply.paragraphs, markdownBlocks(stripSources(run.stored)), `${first} | ${second}: reply renders the stored text`);
   }
 });
 

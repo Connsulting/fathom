@@ -226,7 +226,7 @@ test('one sourced and one invented amount: one retry, sourced evidence survives,
 
 /* ---------- (d) any unsupported figure ---------- */
 
-test('two of three figures unsourced regenerates once, shown as one revision step, with a plain reset after it', async t => {
+test('two of three figures unsourced regenerates once, shown as one revision step, with no draft streamed', async t => {
   const s = await cardStore(t);
   const first = `You paid ${ROOF_TEXT}, plus ${INVENTED} and ${INVENTED_2} elsewhere.`;
   const second = `You paid ${ROOF_TEXT} for the roof.`;
@@ -247,13 +247,9 @@ test('two of three figures unsourced regenerates once, shown as one revision ste
   assert.equal(items.some(x => x.k === 'note' && x.text.trim() === first), false, 'the first answer is not a work note');
 
   const at = seen.findIndex(e => e.type === 'progress' && e.label === revised(2));
-  const resets = seen.filter(e => e.type === 'reset');
-  assert.ok(at > seen.findIndex(e => e.type === 'text'), 'the first answer streamed before the revision step');
-  assert.deepEqual(resets, [{ type: 'reset' }], 'one plain reset');
-  assert.ok(seen.indexOf(resets[0]) > at, 'the revision step comes before the reset');
+  assert.ok(at >= 0, 'the revision step streams');
+  assert.equal(seen.some(e => e.type === 'text' || e.type === 'reset'), false, 'no answer text or reset streams');
   assert.equal(seen.some(e => 'draft' in e), false, 'no event carries a draft flag');
-  const after = seen.slice(seen.indexOf(resets[0]) + 1).filter(e => e.type === 'text').map(e => e.text).join('');
-  assert.equal(after, second);
 });
 
 test('even a minority of invented figures triggers correction', async t => {

@@ -2,8 +2,9 @@
 // engine echoes it next to the household summary count, which grounds) gets exactly one Fathom
 // answer: the amount triggers one correction and remains neutral if it persists, the
 // finished work block reads "Worked for Ns" with steps only, no draft note or "Earlier draft" text,
-// and the answer is not repeated inside the block. While it streams, the streamed text never
-// leaves the screen without a step saying why. Runs at desktop and at 390x844 (@mobile).
+// and the answer is not repeated inside the block. While it is in flight no answer text streams
+// (ST2), so the replaced first answer never shows; the revision step does. Runs at desktop and at
+// 390x844 (@mobile).
 
 import { test, expect, resetDemo, gotoRoute, ASK_THREAD_URL, askInput } from './helpers.mjs';
 
@@ -57,25 +58,6 @@ async function recordLive(page) {
     new MutationObserver(look).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['aria-expanded', 'class'] });
     look();
   });
-}
-
-// Every time the streamed text is removed while the answer is pending, the same snapshot shows why
-// in the open block: the text as an interim note, or a revision step. Returns how many removals.
-function expectNoSilentClear(snaps) {
-  let clears = 0;
-  for (let i = 1; i < snaps.length; i++) {
-    const prev = snaps[i - 1];
-    const cur = snaps[i];
-    if (!prev.pend || !cur.pend) continue;
-    const was = norm(prev.stream);
-    if (!was || norm(cur.stream).startsWith(was)) continue;
-    clears++;
-    const ctx = JSON.stringify({ prev, cur });
-    expect(cur.open, `the block is open when streamed text leaves: ${ctx}`).toBe('true');
-    const noted = norm(cur.notes.map((x) => x.t).join(' ')).includes(was);
-    expect(noted || cur.steps.some((x) => REVISED.test(x)), `a note or a step accounts for the removed text: ${ctx}`).toBe(true);
-  }
-  return clears;
 }
 
 test('@mobile @aq-ac6 an echoed owner amount gets one answer, a finished work block with steps only, and the amount unchecked in place', async ({ page, request }) => {
@@ -137,11 +119,11 @@ test('@mobile @aq-ac6 an echoed owner amount gets one answer, a finished work bl
   expect(workItems.some((x) => x.draft)).toBe(false);
   expect(workItems.some((x) => x.k === 'note' && norm(x.text) === said)).toBe(false);
 
-  // The correction accounts for the replaced streamed answer.
+  // The correction shows as a step; the replaced first answer never showed.
   const { snaps } = await page.evaluate(() => window.__aqLog);
-  expect(snaps.some((s) => s.pend && s.stream), 'the answer streamed').toBe(true);
+  expect(snaps.some((s) => s.pend && s.stream), 'no answer text streamed').toBe(false);
   expect(snaps.some((s) => s.notes.some((n) => n.draft)), 'no draft note while in flight').toBe(false);
-  expect(expectNoSilentClear(snaps), 'one correction replaces the streamed text').toBe(1);
+  expect(snaps.some((s) => s.pend && s.steps.some((x) => REVISED.test(x))), 'the revision step showed while in flight').toBe(true);
 
   // At phone width the page does not scroll sideways.
   const vw = page.viewportSize().width;

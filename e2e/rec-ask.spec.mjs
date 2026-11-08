@@ -1,7 +1,7 @@
 // Asking from a recommendation (rec conversations become Ask threads). AC1: a question asked in the
 // rec dialog, typed or from a chip, shows the Ask page's pending block at once inside the dialog's
-// conversation section, streams its progress and text there, then lands as a Fathom message with
-// Sources; the dialog and the Ask page show the same in-flight question in both directions. AC2:
+// conversation section, streams its progress there (no answer text streams), then lands as a
+// Fathom message with Sources; the dialog and the Ask page show the same in-flight question in both directions. AC2:
 // the Ask list row and the thread header carry a context chip naming the rec; the dialog links back
 // with Open in Ask, and Start over detaches the dialog from the thread while the thread stays in Ask.
 // Every title carries AC1 or AC2. The demo's fake engine streams answers in chunks 25 ms apart.
@@ -66,7 +66,7 @@ async function threadList(request) {
 // dialog is watched: with the dialog open over the Ask page both may carry a pending block.
 async function recordDialog(page) {
   await page.evaluate(() => {
-    const log = { order: [], me: null, fathomAtPend: null, steps: [], texts: [], checking: false, verifiedEarly: false };
+    const log = { order: [], me: null, fathomAtPend: null, steps: [], stream: false, verifiedEarly: false };
     window.__recLog = log;
     const look = () => {
       const section = document.querySelector('.h-dlg section.h-conv');
@@ -78,15 +78,10 @@ async function recordDialog(page) {
       }
       const me = pend.querySelector('.h-msg.me.pending');
       if (me && log.me == null) log.me = me.textContent;
-      if (pend.querySelector('.h-askx-live .h-work') && !log.order.includes('steps') && !pend.querySelector('.h-askx-stream')) log.order.push('steps');
+      if (pend.querySelector('.h-askx-live .h-work') && !log.order.includes('steps')) log.order.push('steps');
       for (const li of pend.querySelectorAll('.h-work-items li.step span')) if (!log.steps.includes(li.textContent)) log.steps.push(li.textContent);
-      const st = pend.querySelector('.h-askx-stream');
-      if (!st) return;
-      if (!log.order.includes('text')) log.order.push('text');
-      const t = st.textContent;
-      if (log.texts[log.texts.length - 1] !== t) log.texts.push(t);
-      if (st.querySelector('.fx-checking')) log.checking = true;
-      if (st.querySelector('.fx-src, .fx-fig, .fx-unverified, [data-fig]')) log.verifiedEarly = true;
+      if (pend.querySelector('.h-askx-stream')) log.stream = true;
+      if (pend.querySelector('.h-askx-live .fx-src, .h-askx-live .fx-fig, .h-askx-live .fx-unverified, .h-askx-live [data-fig]')) log.verifiedEarly = true;
     };
     new MutationObserver(look).observe(document.body, { subtree: true, childList: true, characterData: true });
     look();
@@ -111,7 +106,7 @@ async function expectLanded(page, count, timeout = 30_000) {
 
 /* ---------- AC1: pending and streaming in the dialog ---------- */
 
-test('@mobile AC1 a typed question in the rec dialog shows pending at once, streams in the dialog and lands with Sources', async ({ page }) => {
+test('@mobile AC1 a typed question in the rec dialog shows pending at once, streams progress in the dialog and lands with Sources', async ({ page }) => {
   await openRec(page);
   await expect(conv(page).locator('.h-msg')).toHaveCount(0);
   await recordDialog(page);
@@ -122,13 +117,12 @@ test('@mobile AC1 a typed question in the rec dialog shows pending at once, stre
   await expect(conv(page).locator('.h-msg.me.pending')).toHaveCount(0);
 
   const log = await recLog(page);
-  expect(log.order, JSON.stringify(log)).toEqual(['pend', 'steps', 'text']);
+  expect(log.order, JSON.stringify(log)).toEqual(['pend', 'steps']);
   expect(log.fathomAtPend, 'the pending block showed before any answer').toBe(0);
   expect(log.me).toContain(FREE_Q);
-  expect(log.texts.length, 'the text grew over several paints').toBeGreaterThan(2);
-  expect(log.texts[0].length).toBeLessThan(Math.max(...log.texts.map((t) => t.length)));
-  expect(log.checking, 'numbers stream in the checking style').toBe(true);
-  expect(log.verifiedEarly, 'nothing streamed is styled as verified').toBe(false);
+  expect(log.steps.length, JSON.stringify(log)).toBeGreaterThan(0);
+  expect(log.stream, 'no answer text streams').toBe(false);
+  expect(log.verifiedEarly, 'nothing in flight is styled as verified').toBe(false);
   await expect(recDialog(page).locator('.fx-checking')).toHaveCount(0);
 });
 
@@ -146,7 +140,8 @@ test('AC1 a chip question in the rec dialog shows pending, streams, lands, and t
 
   const log = await recLog(page);
   expect(log.order[0]).toBe('pend');
-  expect(log.order, JSON.stringify(log)).toContain('text');
+  expect(log.order, JSON.stringify(log)).toContain('steps');
+  expect(log.stream).toBe(false);
   expect(log.fathomAtPend).toBe(0);
   expect(log.me).toContain(asked);
   expect(log.verifiedEarly).toBe(false);
@@ -164,12 +159,12 @@ test('AC1 with the dialog open over the rec thread on Ask, a question asked in t
 
   await recordDialog(page);
   await askInDialog(page, LONG_Q(300, 1000));
-  await expect(conv(page).locator('.h-askx-pend .h-askx-stream').first()).toBeVisible();
+  await expect(conv(page).locator('.h-askx-pend .h-work.live').first()).toBeVisible();
   await expectLanded(page, 2, 60_000);
   const log = await recLog(page);
-  expect(log.order, JSON.stringify(log.order)).toContain('text');
-  expect(log.texts.length, 'the dialog stream gained text over several paints').toBeGreaterThan(2);
-  expect(log.texts[0].length).toBeLessThan(Math.max(...log.texts.map((t) => t.length)));
+  expect(log.order, JSON.stringify(log.order)).toContain('steps');
+  expect(log.steps.length, 'the dialog showed the progress steps').toBeGreaterThan(0);
+  expect(log.stream).toBe(false);
   expect(log.verifiedEarly).toBe(false);
   const stored = await (await request.get(`/api/threads/${thread.id}`)).json();
   expect(stored.messages.length, 'the dialog question went to the same thread').toBe(4);
@@ -184,7 +179,7 @@ test('AC1 a question asked on the Ask page in a rec thread shows its pending blo
   const input = askInput(page);
   await input.fill(q);
   await input.press('Enter');
-  await expect(page.locator('section.h-askx-main .h-askx-stream').first()).toBeVisible();
+  await expect(page.locator('section.h-askx-main .h-askx-pend .h-work.live').first()).toBeVisible();
 
   await headCtx(page).click();
   await expect(recDialog(page)).toBeVisible();

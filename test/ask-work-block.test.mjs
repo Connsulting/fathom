@@ -2,9 +2,10 @@
 // between tool calls is not part of the answer: the engine returns the final round's text and the
 // interim texts apart, streams an `interim` event before that round's tools, and the answerer
 // stores the steps and notes as provenance.work = { ms, items }. The scripted fake question
-// "Show your work" exercises the whole path. A regeneration for any discipline violation streams one "Revised to remove N unchecked figures" progress step, then a plain
-// { type: 'reset' }, and stores that one step; the replaced first attempt is never kept as a draft
-// note. Every fixture is synthetic.
+// "Show your work" exercises the whole path. The answerer streams progress and interim events only
+// (ST2): no answer text and no reset. A regeneration for any discipline violation streams one
+// "Revised to remove N unchecked figures" progress step and stores that one step; the replaced
+// first attempt is never streamed and never kept as a draft note. Every fixture is synthetic.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -210,12 +211,12 @@ test('provenance.work is the same with and without a stream listener', async t =
   // The answerer forwards interim events with the round text.
   assert.deepEqual(seen.filter(e => e.type === 'interim').map(e => e.text),
     ['Let me start with your accounts. You have $987,654 somewhere.', 'Now your goals.']);
-  const lastInterim = seen.map(e => e.type).lastIndexOf('interim');
-  assert.equal(seen.slice(lastInterim + 1).filter(e => e.type === 'text').map(e => e.text).join(''), 'Keep a reserve.');
+  assert.equal(seen.some(e => e.type === 'text'), false, 'no answer text streams');
   assert.equal(seen.some(e => e.type === 'reset'), false);
+  assert.deepEqual(streamed.reply.paragraphs, ['Keep a reserve.']);
 });
 
-test('a regeneration stores one revision step and no draft note, and streams the step before a plain reset', async t => {
+test('a regeneration stores one revision step and no draft note, and streams the step with no text or reset', async t => {
   const s = await demoStore(t);
   const seen = [];
   const first = 'You owe $987,654 this year and $876,543 next year.';
@@ -238,17 +239,15 @@ test('a regeneration stores one revision step and no draft note, and streams the
   // The corrective turn feeds back the final text only.
   const assistant = requests[1].messages.filter(m => m.role === 'assistant').at(-1);
   assert.equal(assistant.content, first);
-  const resets = seen.filter(e => e.type === 'reset');
-  assert.deepEqual(resets, [{ type: 'reset' }], 'one plain reset, no draft flag');
-  const lastReset = seen.indexOf(resets[0]);
-  const revisedAt = seen.findIndex(e => e.type === 'progress' && e.label === REVISED_2);
-  assert.ok(revisedAt >= 0 && revisedAt < lastReset, 'the revision step streams before the reset');
-  assert.equal(seen.slice(lastReset + 1).filter(e => e.type === 'text').map(e => e.text).join(''), 'Nothing to add.');
+  assert.equal(seen.some(e => e.type === 'reset'), false, 'no reset');
+  assert.equal(seen.some(e => e.type === 'text'), false, 'no answer text, so the first attempt never streams');
+  assert.ok(seen.some(e => e.type === 'progress' && e.label === REVISED_2), 'the revision step streams');
+  assert.doesNotMatch(JSON.stringify(seen), /987,654|876,543|You owe/);
   // The live items equal the stored ones: the replaced text never became a note.
   assert.deepEqual(liveItems(seen), reply.provenance.work.items);
 });
 
-test('a single unchecked amount streams a reset and stores one revision step', async t => {
+test('a single unchecked amount streams no reset and stores one revision step', async t => {
   const s = await demoStore(t);
   const seen = [];
   const { reply, requests } = await askScripted(s, [
@@ -257,7 +256,8 @@ test('a single unchecked amount streams a reset and stores one revision step', a
   ], { onEvent: e => seen.push(e) });
   assert.equal(requests.length, 2);
   assert.equal(reply.provenance.grounding.retried, true);
-  assert.equal(seen.filter(e => e.type === 'reset').length, 1);
+  assert.equal(seen.some(e => e.type === 'reset' || e.type === 'text'), false);
+  assert.ok(seen.some(e => e.type === 'progress' && e.label === 'Revised to remove 1 unchecked figure'));
   assert.deepEqual(reply.provenance.work.items, [
     step(PROGRESS_START),
     note('Let me look.'),
@@ -268,7 +268,7 @@ test('a single unchecked amount streams a reset and stores one revision step', a
   ]);
 });
 
-test('an engine restream reset carries no draft flag', async t => {
+test('an engine restream (text, reset, text) reaches the listener as nothing', async t => {
   const s = await demoStore(t);
   const engine = new Proxy(s.runtime, {
     get(target, key) {
@@ -287,7 +287,8 @@ test('an engine restream reset carries no draft flag', async t => {
   });
   const seen = [];
   await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text: 'What should I keep?', onEvent: e => seen.push(e) });
-  assert.deepEqual(seen.filter(e => e.type === 'reset'), [{ type: 'reset' }]);
+  assert.deepEqual(seen.filter(e => e.type === 'reset' || e.type === 'text'), []);
+  assert.doesNotMatch(JSON.stringify(seen), /Refused draft/);
 });
 
 test('stored work is never capped: a 5000 character note and 60 tool steps stay whole, identical to the live items', async t => {
@@ -389,9 +390,10 @@ function events(text) {
   }));
 }
 
-// Event names with consecutive repeats collapsed (text chunks, several progress labels).
+// Event names with consecutive repeats collapsed (several progress labels). No text event (ST2).
 const shape = evs => evs.map(e => e.name).filter((n, i, all) => i === 0 || n !== all[i - 1]).join(' ');
-const SHAPE = /^start progress text interim (?:progress )?text interim progress text progress final$/;
+// Both notes may arrive back to back (the household step repeats the start step and collapses).
+const SHAPE = /^start progress interim (?:progress interim )?progress final$/;
 
 async function showYourWork(s, body, recStep) {
   const r = await postJson(s.baseUrl, '/api/threads', body, { accept: 'text/event-stream' });
@@ -404,10 +406,8 @@ async function showYourWork(s, body, recStep) {
   assert.ok(labels.includes(recStep), JSON.stringify(labels));
   assert.equal(labels.at(-1), PROGRESS_GROUNDING);
   const final = evs.at(-1).data;
-  const lastInterim = evs.map(e => e.name).lastIndexOf('interim');
-  const answer = evs.slice(lastInterim + 1).filter(e => e.name === 'text').map(e => e.data.text).join('');
-  assert.match(answer, /From your household summary/);
-  assert.doesNotMatch(answer, /Let me start|Now the details/);
+  assert.equal(evs.some(e => e.name === 'text' || e.name === 'reset'), false, 'no answer text streams');
+  assert.match(final.message.text, /From your household summary/);
   assert.doesNotMatch(final.message.text, /Let me start|Now the details/);
 
   const thread = await request(s.baseUrl, { path: `/api/threads/${final.thread.key.slice(4)}` });
