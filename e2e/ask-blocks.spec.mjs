@@ -236,7 +236,10 @@ test.describe('ask blocks', () => {
       const read = ch.locator('.h-blk-read');
       await expect(read).toHaveAttribute('aria-live', 'polite');
       await plot.focus();
+      // Focus can scroll the plot under a resting pointer, which makes a hovered point active;
+      // Home and Up put the first point of the first series back.
       await page.keyboard.press('Home');
+      await page.keyboard.press('ArrowUp');
       await expect(read).toContainText(s.series[0].label);
       await expect(read).toContainText(s.x[0].text);
       await page.keyboard.press('ArrowRight');
