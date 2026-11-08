@@ -1,3 +1,4 @@
+import { blockAction } from './actions.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { at, isFigure, resolve, rowNumber } from './paths.mjs';
 import { columnLabel, sourceLabel, fieldLabel, figureLabel, itemLabel, dateText } from './labels.mjs';
@@ -87,7 +88,8 @@ function compare(spec, results, accountLabels) {
   const refs = spec.options ? spec.options.map(o => o.source) : resolve(spec.source, results).map(() => spec.source);
   const items = spec.options ? refs.map(ref => resolve(ref, results)) : resolve(spec.source, results);
   const labels = spec.options ? assumptionLabels(refs, items, spec.fields) : null;
-  return { title: spec.title ?? sourceLabel(refs[0]), fields: spec.fields.map(field => {
+  const action = blockAction(spec, results);
+  return { ...(action ? { action } : {}), title: spec.title ?? sourceLabel(refs[0]), fields: spec.fields.map(field => {
     const c = cell(items[0], refs[0], field, accountLabels);
     const labels = items.map((item, i) => columnLabel([item], refs[i], field));
     return { label: labels.every(label => label === labels[0]) ? labels[0] : fieldLabel(refs[0], field), ...(c.t === 'fig' ? { unit: c.fig.unit } : c.t === 'row' ? { unit: c.unit } : {}) };

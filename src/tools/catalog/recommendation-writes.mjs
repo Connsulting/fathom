@@ -66,7 +66,7 @@ export const operations = [
     } },
   { tool: 'act_on_recommendation', name: 'decide', scope: 'write:decisions',
     summary: 'Decide on a stored war-game point, or the current pick.', route: 'Decide a salary or deferral choice',
-    routes: ['POST /api/decisions/:id/decide'], params: { decisionId: id, point }, required: ['decisionId'],
+    routes: ['POST /api/decisions/:id/decide', 'POST /api/threads/:id/messages/:messageId/blocks/:blockId/act'], params: { decisionId: id, point }, required: ['decisionId'],
     handler: (args, ctx) => changeDecision(args, ctx, 'decide') },
   { tool: 'act_on_recommendation', name: 'revisit', scope: 'write:decisions',
     summary: 'Reopen a decision and remove its decided assumption.', route: 'Revisit a decided choice',
@@ -74,7 +74,7 @@ export const operations = [
     handler: (args, ctx) => changeDecision(args, ctx, 'revisit') },
   { tool: 'act_on_recommendation', name: 'pick_point', scope: 'write:decisions',
     summary: 'Pick a salary or deferral point without deciding.', route: 'Pick a war-game point',
-    routes: ['POST /api/wargame/:name/pick'], params: { name: { type: 'string', enum: ['salary', 'deferral'] }, point }, required: ['name', 'point'],
+    routes: ['POST /api/wargame/:name/pick', 'POST /api/threads/:id/messages/:messageId/blocks/:blockId/act'], params: { name: { type: 'string', enum: ['salary', 'deferral'] }, point }, required: ['name', 'point'],
     handler(args, ctx) {
       requireActor(ctx);
       let receipt;
