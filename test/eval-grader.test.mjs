@@ -115,7 +115,7 @@ test('tier 1 demo fixtures state unsigned, dropped-cent and word-count figures',
   } finally { await store.close(); }
 });
 
-test('violation kinds are the five adjudication kinds and the harness counts them', async () => {
+test('delivered violation counts exclude report-only draft violations', async () => {
   const flat = [
     gradeFigures('$9', read({ amount: 1 })),
     gradeFigures('$140', read({ a: 100, b: 40 })),
@@ -135,7 +135,7 @@ test('violation kinds are the five adjudication kinds and the harness counts the
     }] });
     const summary = await readFile(join(dir, 'summary.md'), 'utf8');
     for (const kind of kinds) assert.match(summary, new RegExp(kind));
-    assert.match(summary, /\| sample \| fail \| none \/  \| 1 \/ 1 \/ 1 \/ 1 \/ 1 \|/);
+    assert.match(summary, /\| sample \| fail \| none \/  \| 1 \/ 0 \/ 0 \/ 0 \/ 0 \|/);
     const json = JSON.parse(await readFile(join(dir, 'scorecard.json'), 'utf8'));
     assert.equal(json.cases[0].turns[0].attempts.length, 4);
   } finally { await rm(dir, { recursive: true, force: true }); }

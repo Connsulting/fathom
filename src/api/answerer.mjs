@@ -86,6 +86,7 @@ import { fakeAnswerScript } from './fake-answers.mjs';
 import { stripSources, listMarkerSpans, markdownBlocks } from '../shared/answer-text.mjs';
 import { resolveRefs } from './context-refs.mjs';
 import { DEMO_LIMIT_MESSAGE } from '../public-demo/control.mjs';
+import { ANSWER_MAX_WORDS } from '../shared/answer-contract.mjs';
 
 export const PRODUCT_RULES = [
   'You are Fathom, a year-round financial co-pilot for one household of independent professionals.',
@@ -106,7 +107,7 @@ export const PRODUCT_RULES = [
 export const ANSWER_STYLE = [
   'Answer style:',
   'Lead with the direct answer in one or two sentences.',
-  'Keep the whole reply under about 150 words unless the owner asks for more detail.',
+  `Keep the whole reply under ${ANSWER_MAX_WORDS} words unless the owner asks for more detail.`,
   'Use at most one short list.',
   'Skip generic caveats the owner did not ask about.',
   'End with one offer of the next useful step.',
@@ -645,11 +646,16 @@ export function whatIfOwnerText(def) {
   return typeof def.manifest === 'string' ? escapeUserText(prompt) : prompt;
 }
 
-export function createLiveAnswerer({ engine, packs, root } = {}) {
+export function createLiveAnswerer({ engine, packs, root, onRead } = {}) {
   if (!engine || typeof engine.call !== 'function') throw new TypeError('createLiveAnswerer needs an engine');
   if (typeof root !== 'string' || !root) throw new TypeError('createLiveAnswerer needs the household root');
   // The tool context of every call this answerer makes: its household's db and root.
   const toolCtx = (db, now) => ({ db, now, dataDir: root });
+  const read = async (name, args, ctx) => {
+    const result = await callTool(name, args, ctx);
+    onRead?.({ name, args, result });
+    return result;
+  };
 
   // One grounded model answer: call, ground, regenerate once with a corrective turn when most
   // figures are unchecked (needsRevision), render.
@@ -660,7 +666,7 @@ export function createLiveAnswerer({ engine, packs, root } = {}) {
     const work = workList();
     stream.progress(PROGRESS_START);
     work.step(PROGRESS_START);
-    const summary = await callTool('household', { operation: 'summary' }, toolCtx(db, now));
+    const summary = await read('household', { operation: 'summary' }, toolCtx(db, now));
     const active = activeManifestPacks(db, packs);
     const packIds = active.map(a => a.pack.id).sort();
     const packContextText = packContext(active.map(({ pack }) => ({ pack, status: 'active' })));
@@ -685,7 +691,7 @@ export function createLiveAnswerer({ engine, packs, root } = {}) {
     const labelsFor = async toolResults => {
       if (accountLabels || !toolResults.some(r => r && !r.isError && r.name === 'transactions')) return accountLabels;
       try {
-        accountLabels = new Map((await callTool('accounts', { operation: 'list' }, toolCtx(db, now))).map(a => [a.id, a.name]));
+        accountLabels = new Map((await read('accounts', { operation: 'list' }, toolCtx(db, now))).map(a => [a.id, a.name]));
       } catch { accountLabels = new Map(); }
       return accountLabels;
     };
@@ -787,7 +793,7 @@ export function createLiveAnswerer({ engine, packs, root } = {}) {
       const rec = recForKey(scenario, key);
       let context = null;
       if (rec) {
-        context = { recommendation: await callTool('recommendations', { operation: 'detail', id: rec.id }, toolCtx(db, now)) };
+        context = { recommendation: await read('recommendations', { operation: 'detail', id: rec.id }, toolCtx(db, now)) };
         baseRefs = [...baseRefs, rec.id];
       } else if (key.startsWith('pack:')) {
         context = packConversationContext(db, packs, key.slice(5)).context;
