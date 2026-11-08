@@ -762,9 +762,8 @@ test('a transient model failure with unknown usage gets its automatic retry only
 
 test('a non-transient model failure asks the owner on the first attempt and is never retried automatically', async () => {
   const x = await setup();
-  // The real fake engine with no scripted response refuses the call (ModelCallError), a class
-  // isTransient rejects.
-  const eng = failEngine(x, []);
+  // An authentication refusal from the model port is not transient.
+  const eng = failEngine(x, [Object.assign(new Error('synthetic auth refusal'), { name: 'ModelCallError', code: 'authentication', accounting: USED })]);
   try {
     const csv = MODEL_CSV('model refused');
     const r = await P.ingestFile(x.db, modelFile(csv), x.opts);
@@ -776,6 +775,66 @@ test('a non-transient model failure asks the owner on the first attempt and is n
     assert.deepEqual((await P.resumeImports(x.db, { ...bg(x), fake: await fakeFor(csv) })).resumed, []);
     assert.equal(eng.calls.length, 1);
   } finally { eng.restore(); x.close(); }
+});
+
+// Review round 2: the model port reports a 429 as rate_limit and a 5xx or lost connection as
+// unavailable (src/models/port.mjs); both are transient and wait for the one automatic retry.
+test('a rate limit or an unavailable provider is a transient model failure', async () => {
+  for (const providerCode of ['rate_limit', 'unavailable']) {
+    const x = await setup();
+    const eng = failEngine(x, [Object.assign(new Error('synthetic provider refusal'), { name: 'ModelCallError', code: providerCode, accounting: USED })]);
+    try {
+      const csv = MODEL_CSV(`model ${providerCode}`);
+      const r = await P.ingestFile(x.db, modelFile(csv), x.opts);
+      assert.deepEqual([r.status, r.reasonCode], ['waiting_for_engine', 'model_transient'], providerCode);
+      const first = await P.resumeImports(x.db, { ...bg(x), fake: await fakeFor(csv) });
+      assert.deepEqual(first.resumed, [{ fileId: r.fileId, status: 'needs_confirmation' }], providerCode);
+    } finally { eng.restore(); x.close(); }
+  }
+});
+
+// Review round 2: an identical upload while the same failed file is being routed (the resume pass
+// or a Retry) answers the file's stored status, never duplicate, and does not route it twice.
+test('an identical upload during an in-flight retry answers the unresolved status, not duplicate', async () => {
+  const x = await setup();
+  try {
+    const file = csvOf('in flight overlap');
+    const failed = await P.ingestFile(x.db, file, { ...x.opts, parser: throwing(new Error('synthetic parse failure')) });
+    assert.equal(failed.status, 'failed');
+    x.opts.household.inFlight.add(failed.fileId);
+    const again = await P.ingestFile(x.db, file, x.opts);
+    assert.equal(again.status, 'failed');
+    assert.equal(again.duplicateOf, failed.fileId);
+    assert.equal(fileRowOf(x.db, failed.fileId).status, 'failed', 'not routed a second time');
+    x.opts.household.inFlight.delete(failed.fileId);
+    assert.equal((await P.ingestFile(x.db, file, x.opts)).status, 'imported', 'liveness: once free it is routed again');
+  } finally { x.close(); }
+});
+
+// Review round 2: the Add files control of a file that needs readable text (or a smaller file)
+// replaces it: a different file that was read removes the scan, identical bytes keep it.
+test('Add files on a needs_source_text row replaces the scan once a different file was read', async () => {
+  const OLD = 'f-scan-text-synthetic';
+  const waiting = { id: OLD, name: 'scan-synthetic.pdf', status: 'needs_source_text', reasonCode: 'no_safe_source_text', sourceKind: null, parser: null, uploadedAt: NOW,
+    counts: { rows: {}, warnings: 0, warningCodes: {} } };
+  const run = async (returned) => {
+    const { screens, calls } = harness({ ...EMPTY, waiting: [waiting] }, { uploadResult: { files: returned, pending: 0 } });
+    const row = rowOf(screens.addFiles('add'), OLD);
+    const button = tagsOf(row).find((t) => /^<button/.test(t) && t.includes('data-upload-open="1"'));
+    assert.ok(button, 'the row has its Add files control');
+    const inputTag = tagsOf(row).find((t) => /^<input/.test(t) && /type="file"/.test(t));
+    assert.ok(inputTag && inputTag.includes(`data-replace-for="${OLD}"`), 'its input names the file it replaces');
+    const input = { ...element(inputTag), files: returned.map((f) => ({ name: f.name })), value: 'x', click() {} };
+    const el = { ...element(button), parentElement: { querySelector: (sel) => (/input/.test(sel) ? input : null) } };
+    assert.equal(screens.handleClick({ target: { closest: () => el }, preventDefault() {} }), true);
+    assert.equal(screens.handleChange({ type: 'change', target: input }), true);
+    for (let i = 0; i < 5; i++) await settle();
+    return calls.filter((c) => c[0] === 'removeFile');
+  };
+  const fresh = { fileId: 'f-text-export-synthetic', name: 'statement-synthetic.txt', status: 'imported', counts: { rows: { balance: 1 } } };
+  const same = { fileId: OLD, name: 'scan-synthetic.pdf', status: 'needs_source_text', duplicateOf: OLD, counts: { rows: {} } };
+  assert.deepEqual(await run([fresh]), [['removeFile', OLD]]);
+  assert.deepEqual(await run([same]), []);
 });
 
 test('persistImport records warning rows per code, at most five, and warningText names them in plain words', async () => {

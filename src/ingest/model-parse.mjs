@@ -61,6 +61,10 @@ export function fileSpend(db, fileId) {
   return { ...row, costUsd: Number(row.costUsd.toFixed(12)) };
 }
 const code = (status, reasonCode) => ({ status, reasonCode });
+// The model port's own codes for a 429 (rate_limit) and a 5xx or lost connection (unavailable) are
+// transient too, beside the shared classes isTransient accepts.
+const PROVIDER_TRANSIENT = new Set(['rate_limit', 'unavailable']);
+const transientModelError = (error) => PROVIDER_TRANSIENT.has(error?.code) || [error?.code, error?.name].some(isTransient);
 function loweredLimits(overrides = {}) {
   if (Object.keys(overrides).some(k => !(k in FILE_LIMITS))) throw new TypeError('Unknown file limit');
   const limits = { ...FILE_LIMITS, ...overrides };
@@ -143,7 +147,7 @@ async function interpretBound({ ctx, file, fake, correction = null, retry = fals
     if (error instanceof EngineOffError || !live()) return code('waiting_for_engine', 'engine_unavailable');
     if (error instanceof BudgetExceededError) return code('budget_exhausted', 'engine_or_file_limit');
     // A transient engine failure waits for the resume pass's one automatic retry; that retry's own failure asks the owner.
-    if ([error?.code, error?.name].some(isTransient) && ctx.autoRetried !== true) return code('waiting_for_engine', 'model_transient');
+    if (transientModelError(error) && ctx.autoRetried !== true) return code('waiting_for_engine', 'model_transient');
     return code('needs_clarification', 'model_failed');
   }
 }

@@ -537,7 +537,8 @@ export function ingestScreens(h) {
       body = `<p data-proposal-question>${esc(q)}</p>${sum}${proposalSource(f)}${reviewBlock(p, false, f.id)}`;
     }
     else if (ctl === 'engine') body = `<a class="h-btn ghost" href="#/engine" data-go="engine" data-proposal-engine>${s === 'budget_exhausted' ? 'Check the engine budget' : 'Turn on the engine'}</a>`;
-    else if (ctl === 'upload') body = `<div class="h-ing-ctl">${btn(`${icon('plus')}Add files`, `data-upload-open="1"${st.busy ? ' disabled' : ''}`, 'ghost')}<input type="file" multiple data-upload="1" hidden tabindex="-1"></div>`;
+    // Add files here replaces this file: a different file that was read removes it.
+    else if (ctl === 'upload') body = `<div class="h-ing-ctl">${btn(`${icon('plus')}Add files`, `data-upload-open="1"${st.busy ? ' disabled' : ''}`, 'ghost')}<input type="file" multiple data-upload="1" hidden tabindex="-1" data-replace-for="${esc(f.id)}"></div>`;
     else if (ctl === 'replace') body = `<div class="h-ing-ctl">${btn(`${icon('plus')}Add files`, `data-replace="${esc(f.id)}"${st.busy ? ' disabled' : ''}`, 'ghost')}<input type="file" multiple data-upload="1" data-replace-for="${esc(f.id)}" hidden tabindex="-1"></div>`;
     else side = btn(st.retrying[f.id] ? 'Retrying' : 'Retry', `data-retry="${esc(f.id)}"${st.retrying[f.id] ? ' disabled' : ''}`, 'ghost');
     const label = fileStateOf(s)?.label ?? STATUS[s] ?? s;

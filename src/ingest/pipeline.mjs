@@ -108,7 +108,8 @@ export async function ingestFile(db, file, opts = {}) {
   const fileId = prior?.id ?? 'f-' + hash.slice(0, 24);
   const answer = (status, extra = {}) => ({ fileId, name, status, sourceKind: prior?.source_kind ?? null, parser: prior?.parser ?? null, counts: emptyCounts(), duplicateOf: fileId, ...extra });
   if (inFlight.has(fileId) || (prior && (prior.removed_at || !REROUTE.includes(prior.status)))) {
-    if (prior && !prior.removed_at && !inFlight.has(fileId) && UNRESOLVED.includes(prior.status)) {
+    // An unresolved file, including one routed right now, answers its own status, never duplicate.
+    if (prior && !prior.removed_at && UNRESOLVED.includes(prior.status)) {
       return answer(prior.status, { counts: parseJson(prior.counts, null) ?? emptyCounts(), reasonCode: prior.note ?? null });
     }
     return answer('duplicate');
