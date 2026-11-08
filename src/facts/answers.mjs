@@ -11,7 +11,10 @@ const object = v => !!v && typeof v === 'object' && !Array.isArray(v);
 const fail = () => { throw new FactAnswerError('Check the answer type, required fields and units.'); };
 
 function validate(value, shape, year) {
-  if (shape.type === 'map') {
+  if (shape.type === 'array') {
+    if (!Array.isArray(value) || !value.length || value.length > shape.maxItems) fail();
+    for (const entry of value) validate(entry, shape.items, year);
+  } else if (shape.type === 'map') {
     if (!object(value) || !Object.keys(value).length || Object.keys(value).some(k => !normalizeName(k)) || new Set(Object.keys(value).map(normalizeName)).size !== Object.keys(value).length) fail();
     for (const entry of Object.values(value)) validate(entry, shape.values, year);
   } else if (shape.type === 'object') {

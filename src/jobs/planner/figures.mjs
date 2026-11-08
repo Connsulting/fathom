@@ -298,7 +298,12 @@ export function computeFigures(data, facts, ctx) {
     const amounts = docs.flatMap(d => d.docType === 'w2' ? [d.fields.wages, d.fields.medicareWages]
       : [typeof d.fields.ytdGross === 'number' ? d.fields.ytdGross * 12 / Number(d.fields.payDate.slice(5, 7)) : null]);
     const observed = amounts.filter(v => typeof v === 'number' && Number.isFinite(v) && v >= 0);
-    out.info.gaps.push(taxGap(b.code, { ...b, impact: observed.length ? Math.max(...observed) : null }));
+    const gap = taxGap(b.code, { ...b, impact: observed.length ? Math.max(...observed) : null });
+    if (b.code === 'household_employer_unmatched' && !entities.length) gap.action = {
+      screen: 'ask', key: 'business.entities', label: 'Describe the household business',
+      prompt: `Help me record the household business ${b.employer}. Ask for its tax type and owner, preserving existing household businesses.`,
+    };
+    out.info.gaps.push(gap);
   }
   // inc.ytd.w2 (F8): outside-employer pay received in the tax year: W-2 box 1, or the latest
   // paystub's year-to-date gross. Held while any payroll document is unresolved.

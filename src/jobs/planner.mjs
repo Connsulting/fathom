@@ -13,7 +13,7 @@ import { looksLikeSpending, spendingStatement } from '../pnl/ledgers.mjs';
 import { getSetting, tx, parseJson } from '../store/db.mjs';
 import { withLabelHints } from '../accounts/naming.mjs';
 import { upsertFact } from '../store/facts.mjs';
-import { withholdingRecipient, ask, canonicalJson, FACT_CHECK_OPTIONS } from '../ingest/confirm.mjs';
+import { withholdingRecipient, ask, canonicalJson, FACT_CHECK_OPTIONS, normalizeName } from '../ingest/confirm.mjs';
 import { loadPacks, activePacks } from '../packs/index.mjs';
 import { refreshPackState, defaultPackDirs } from '../packs/state.mjs';
 import { resolveClock, loadGoals, loadCurve, loadContent } from '../scenario/build.mjs';
@@ -84,7 +84,7 @@ async function plan(db, engine, { clock, runId, packDirs }) {
   const storedValues = Object.fromEntries(Object.entries(stored).map(([k, r]) => [k, r.value]));
   const entities = resolveEntities(data, storedValues);
   for (const e of entities) {
-    const type = Object.entries(storedValues['business.entityTypes'] || {}).find(([name]) => name.trim().toLowerCase() === e.name.toLowerCase())?.[1];
+    const type = Object.entries(storedValues['business.entityTypes'] || {}).find(([name]) => normalizeName(name) === normalizeName(e.name) || normalizeName(name) === normalizeName(e.displayName))?.[1];
     if (type && !e.classified) { e.type = type; e.classified = true; }
   }
 

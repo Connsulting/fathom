@@ -34,6 +34,7 @@ function stated(value, text, shape, evidence) {
   if (typeof value === 'number') return statedAmounts(text, { unit: shape?.unit, evidence }).includes(value);
   if (shape?.type === 'map' && value && typeof value === 'object') return Object.entries(value).every(([k, v]) =>
     (evidence || text).toLowerCase().includes(k.toLowerCase()) && stated(v, text, shape.values, evidence));
+  if (Array.isArray(value)) return value.every(v => stated(v, text, shape?.items, evidence));
   if (value && typeof value === 'object') return Object.entries(value).every(([k, v]) => stated(v, text, shape?.fields?.[k], evidence));
   if (evidence) text = evidence;
   if (value === null) return /\b(clear|remove|unset|no target|no date)\b/i.test(text);

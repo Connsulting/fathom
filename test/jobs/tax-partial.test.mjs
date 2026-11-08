@@ -226,11 +226,31 @@ test('every missing-data task code targets an existing upload kind or an accepte
 
 test('retrying missing gross keeps a document recipient when both people share the employer', async () => {
   const db = await store({ missing: false });
-  await addPayroll(db, paystubDoc({ ...poor, person: 'both', document: 'owner', relation: 'outside' }));
+  await addPayroll(db, { ...paystubDoc({ ...poor, person: 'both', relation: 'outside' }), document: 'owner' });
   const engine = { isOn: () => true, async extract() { return [{ ...poor, gross: 3000, ytdGross: 30000, confidence: 0.95 }]; } };
   await runPlanning(db, engine, { now, runId: claimPlanRun(db), household: householdOf(db) });
   const r = payroll(db).records.find(r => r.employer === 'Cedar Labs');
   assert.equal(r.person, 'owner');
   assert.equal(r.wages, 36000);
   assert.ok(!payroll(db).blocks.some(b => b.code === 'w2_recipient_unknown'));
+});
+
+test('typed Ask corrections for business classification and contribution sponsors remove their gaps', async () => {
+  const db = await s.store();
+  addFact(db, 'retirement.contributions', [{ person: 'owner', plan: 'own-corp-401k', type: 'deferral', amount: 2000, entity: 'Unmatched Business' }]);
+  await planRun(db);
+  assert.ok(projection(db).locator.gaps.some(g => g.code === 'retirement_contribution_unattributed'));
+  const entries = getFacts(db)['business.entities'];
+  const entity = entries.find(e => e.type === 's_corp').name;
+  const words = `Replace the retirement contributions list with owner deferral $2000 to ${entity}.`;
+  await assert.rejects(callTool('answer', { operation: 'fact', key: 'retirement.contributions', value: [{ person: 'owner', plan: 'own-corp-401k', type: 'deferral', amount: 2500, entity }], evidence: words }, { db, ownerText: words, actorId: 'person-a', conversationKey: 'ask:0123456789ab', turnId: 'turn-a' }), /Use a value you stated/);
+  assert.equal(getFacts(db)['retirement.contributions'][0].entity, 'Unmatched Business');
+  const result = await callTool('answer', { operation: 'fact', key: 'retirement.contributions', value: [{ person: 'owner', plan: 'own-corp-401k', type: 'deferral', amount: 2000, entity }], evidence: words }, { db, ownerText: words, actorId: 'person-a', conversationKey: 'ask:0123456789ab', turnId: 'turn-a', replan: () => planRun(db) });
+  assert.ok(result.receipt);
+  assert.ok(!projection(db).locator.gaps.some(g => g.code === 'retirement_contribution_unattributed'));
+  db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES ('CypressStudio', '2026-10', 'Income', 20000, ?)").run(JSON.stringify({ sheet: "Cypress Studio's Income" }));
+  await planRun(db);
+  assert.ok(projection(db).locator.gaps.some(g => g.code.startsWith('entity_unclassified:')));
+  await answerFacts(db, [{ key: 'business.entityTypes', value: { "Cypress Studio's": 'sole_prop' } }], { now, replan: () => planRun(db) });
+  assert.ok(!projection(db).locator.gaps.some(g => g.code.startsWith('entity_unclassified:')));
 });
