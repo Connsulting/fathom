@@ -1,3 +1,5 @@
+import { normalizeName } from '../../ingest/confirm.mjs';
+import { ledgerDisplayName } from '../../pnl/ledgers.mjs';
 import { cents } from '../../store/db.mjs';
 
 const MONTH = '^\\d{4}-\\d{2}$';
@@ -16,8 +18,12 @@ export const operations = [
     params: obj({ entity: { type: 'string' }, from: { type: 'string', pattern: MONTH }, to: { type: 'string', pattern: MONTH } }).properties,
     required: [], scope: 'read',
     handler(args, ctx) {
-      const { clause, params } = where([['entity = ?', args.entity], ['period >= ?', args.from], ['period <= ?', args.to]]);
-      const rows = ctx.db.prepare('SELECT period, category, sum(amount) AS amount FROM pnl_lines' + clause +
+      const names = args.entity === undefined ? null : [...new Set(ctx.db.prepare('SELECT entity, locator FROM pnl_lines').all()
+        .filter(l => [l.entity, ledgerDisplayName(l)].some(name => normalizeName(name) === normalizeName(args.entity))).map(l => l.entity))];
+      const { clause, params } = where([['period >= ?', args.from], ['period <= ?', args.to]]);
+      const entityClause = names ? `${clause ? ' AND' : ' WHERE'} entity IN (${names.length ? names.map(() => '?').join(', ') : 'NULL'})` : '';
+      if (names) params.push(...names);
+      const rows = ctx.db.prepare('SELECT period, category, sum(amount) AS amount FROM pnl_lines' + clause + entityClause +
         ' GROUP BY period, category ORDER BY period, category').all(...params)
         .map(r => ({ period: r.period, category: r.category, amount: cents(r.amount) }));
       const totals = {};
