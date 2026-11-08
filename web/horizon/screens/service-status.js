@@ -23,8 +23,9 @@ function controlHtml(c) {
   return `<button type="button" class="h-btn" data-svc-act="${esc(c.id)}"${arg}>${esc(c.label || 'Check again')}</button>`;
 }
 
-// One service: its state, the cause, Last success, Next attempt and its one control.
-export function statusHtml(svc) {
+// One service: its state, the cause, Last success, Next attempt and its one control. A screen that
+// already shows that control elsewhere passes { control: false }.
+export function statusHtml(svc, { control = true } = {}) {
   if (!svc || typeof svc !== 'object') return '';
   const { esc } = H;
   const state = Object.hasOwn(STATE_LABEL, svc.state) ? svc.state : 'healthy';
@@ -33,7 +34,7 @@ export function statusHtml(svc) {
       <div class="h-svc-h"><b>${esc(svc.label)}</b><span class="h-svc-st">${esc(STATE_LABEL[state])}</span></div>
       ${svc.cause ? `<p class="h-svc-c">${esc(svc.cause)}</p>` : ''}
       <dl class="h-svc-dl"><div><dt>Last success</dt><dd>${esc(when(svc.lastSuccessAt) || 'None yet')}</dd></div><div><dt>Next attempt</dt><dd>${esc(next)}</dd></div></dl>
-      ${controlHtml(svc.control)}
+      ${control ? controlHtml(svc.control) : ''}
     </div>`;
 }
 

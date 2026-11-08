@@ -31,6 +31,10 @@ const PROBLEM = {
 
 // SimpleFIN sync waits on the household's jobs flag and its SimpleFIN flag (`services` is
 // scenario.live.services).
+// Controls this block already shows (Sync now, and the reconnect form), so the status card does
+// not repeat them.
+const BLOCK_CONTROLS = new Set(['sync_now', 'reconnect']);
+
 const syncPaused = (services) => services?.simplefin?.state === 'paused' || services?.jobs?.['simplefin-sync']?.state === 'paused';
 
 // The warning line for a failed last sync. A network failure names the next scheduled sync, taken
@@ -73,7 +77,7 @@ export function block() {
   return `<div class="h-sf on" data-sf-box data-sf-connected>
       <p class="h-sf-st">${icon('check')}<span><b>Connected to SimpleFIN</b>, ${plural(Number(sf.accounts) || 0, 'account')}, last sync ${esc(when(sf.lastSyncAt))}</span></p>
       ${S.notice ? `<p class="h-sf-sync" data-sf-sync>${esc(S.notice)}</p>` : ''}
-      ${svc ? statusHtml(svc) : ''}
+      ${svc ? statusHtml(svc, { control: !BLOCK_CONTROLS.has(svc.control?.id) }) : ''}
       ${problem ? `<p class="h-sf-warn" role="alert">${esc(problem)}</p>` : ''}
       ${msgs.length ? `<ul class="h-sf-msgs">${msgs.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>` : ''}
       ${sf.pendingMatches ? `<p class="h-mute sm">${plural(sf.pendingMatches, 'connected account')} ${sf.pendingMatches === 1 ? 'needs' : 'need'} an answer first: is it an account you already imported? ${goA('confirm', 'Answer in Confirm')}</p>` : ''}

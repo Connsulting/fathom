@@ -65,11 +65,12 @@ function planDetail() {
   return Array.isArray(w) && w.includes('rec_id_taken') ? `<p class="h-mute sm" data-plan-warning>${H.esc(REC_ID_TAKEN)}</p>` : '';
 }
 
-// The engine and every job that is not healthy, else one line.
+// The engine and every job that is not healthy, else one line. The engine switch above is the
+// engine_on control, so the status card does not repeat it.
 function statusSection(svc) {
   if (!svc) return '';
   const list = [svc.engine, ...Object.values(svc.jobs || {})].filter((x) => x && x.state !== 'healthy');
-  const body = list.length ? `<div class="h-svc-list">${list.map(statusHtml).join('')}</div>` : '<p class="h-mute" data-svc-ok>All background services are healthy.</p>';
+  const body = list.length ? `<div class="h-svc-list">${list.map((x) => statusHtml(x, { control: x.control?.id !== 'engine_on' })).join('')}</div>` : '<p class="h-mute" data-svc-ok>All background services are healthy.</p>';
   return H.section('Status', body);
 }
 
