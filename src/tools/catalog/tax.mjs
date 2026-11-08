@@ -59,7 +59,7 @@ function estimate(args, ctx) {
   const stored = (key,path,label) => {
     const row = rows.get(key);
     return current(row,year,clock) ? storedFigure(row,'tax',refArgs,path)
-      : make(path,null,label,null,{ calc: 'storedTax', sources: [{ table: 'figures', ids: [key], count: row ? 1 : 0 }] },[missing(`No current planning figure for ${key}.`)]);
+      : make(path,null,label,null,{ calc: 'storedTax', sources: [{ table: 'figures', ids: [key], count: row ? 1 : 0 }] },[missing('No current planning figure is stored for this.')]);
   };
   const out = { federal: {}, state: {}, safeHarbor: { federal: {}, state: {} }, marginal: {} };
   for (const [part,prefix] of [['federal','fed'],['state','va']]) {

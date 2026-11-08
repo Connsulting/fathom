@@ -5,7 +5,9 @@
 
    messageBodyHtml(m) is the inner html of a message body: m.html's top level paragraphs with each
    block placed after paragraph `after` (past the end: after the last one, in call order), then the
-   notes as muted lines. A message with neither keeps m.html as is. Each block is a <figure> with
+   notes as muted lines, then provenance.leftOut as a "What this leaves out" note, one line per
+   entry with its fix control (gapControl; design.js routes the click). A message with none of these
+   keeps m.html as is. Each block is a <figure> with
    its escaped title as the <figcaption>, drawn by the renderer for its op from RENDERERS; an op
    with no renderer draws its dropped note instead. Every value a block draws is a .fx-fig span
    whose figure is registered through api.registerFigures under blk:<messageId>:<blockId>:<n>, n
@@ -19,13 +21,14 @@
    drawn block (a MutationObserver finds blocks a screen inserts) and gives it ctx.redraw(), which
    redraws that one block in place from its state and puts focus back on the same control.
 
-   No imports: the kit (esc, money, registerFigures) comes from useKit, so the module also runs in
-   Node tests. */
+   The kit (esc, money, registerFigures) comes from useKit and the only other import is the pure
+   gapControl, so the module also runs in Node tests. */
 
 import * as table from './ask-block-table.js';
 import * as compare from './ask-block-compare.js';
 import * as chart from './ask-block-chart.js';
 import * as timeline from './ask-block-timeline.js';
+import { gapControl } from '../../core/gap-control.js';
 
 export const RENDERERS = { table, compare, chart, timeline };
 
@@ -175,12 +178,22 @@ function topLevel(html) {
   return out;
 }
 
+// The "What this leaves out" note: truncated reads first, then gaps, each with its fix control.
+function leftOutNote(entries) {
+  if (!entries.length) return '';
+  const ordered = [...entries.filter((e) => e.code === 'truncated'), ...entries.filter((e) => e.code !== 'truncated')];
+  const line = (e) => `<p data-left-out-code="${K.esc(e.code)}">${K.esc(e.text)}${e.fix ? ' ' + gapControl(e.fix, K.esc) : ''}</p>`;
+  return `<div class="h-leftout" data-left-out role="note"><b>What this leaves out</b>${ordered.map(line).join('')}</div>`;
+}
+
 export function messageBodyHtml(m) {
   const html = m && typeof m.html === 'string' ? m.html : '';
   const pv = m && isObj(m.provenance) ? m.provenance : null;
   const blocks = pv ? arr(pv.blocks).filter((b) => isObj(b) && typeof b.id === 'string' && b.id) : [];
   const notes = pv ? arr(pv.blockNotes).filter((n) => isObj(n) && typeof n.text === 'string' && n.text) : [];
-  if (!blocks.length && !notes.length) return html;
+  const leftOut = pv ? arr(pv.leftOut).filter((e) => isObj(e) && typeof e.text === 'string' && e.text) : [];
+  const leftOutHtml = leftOutNote(leftOut);
+  if (!blocks.length && !notes.length) return html + leftOutHtml;
   const parts = topLevel(html);
   const after = new Map();
   for (const b of blocks) {
@@ -190,7 +203,7 @@ export function messageBodyHtml(m) {
   }
   let out = arr(after.get(0)).map((b) => blockHtml(m.id, b)).join('');
   parts.forEach((p, i) => { out += p + arr(after.get(i + 1)).map((b) => blockHtml(m.id, b)).join(''); });
-  return out + notes.map((n) => `<p class="h-blk-note">${K.esc(n.text)}</p>`).join('');
+  return out + notes.map((n) => `<p class="h-blk-note">${K.esc(n.text)}</p>`).join('') + leftOutHtml;
 }
 
 /* ---------- binding (browser only) ---------- */

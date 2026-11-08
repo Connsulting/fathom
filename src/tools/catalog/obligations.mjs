@@ -11,7 +11,8 @@ import { resolveRef } from '../refs.mjs';
 import { ToolError } from '../errors.mjs';
 
 const bad = message => { throw new ToolError('bad_input',message); };
-const gap = message => ({code:'missing_fact',message});
+const gap = (message,fact) => ({code:'missing_fact',message,...(fact?{fact}:{})});
+const TERM = {balance:'balance',rate:'rate',monthlyPayment:'monthly payment',escrowMonthly:'monthly escrow amount',payoffDate:'payoff date'};
 const choice = values => ({enum:values});
 const kinds = ['mortgage','childcare','plan529'];
 const obligations = {type:'array',maxItems:3,items:choice(kinds)};
@@ -47,7 +48,7 @@ async function schedule(args,ctx) {
     let events=[];
     if(kind==='mortgage') {
       let date=stored?.payoffDate ?? null,derivedFrom='fact';
-      for(const field of mortgage.missing) {missing.push(`${key}.${field}`);gaps.push(gap(`Missing ${key}.${field}; tell Fathom only this mortgage term.`));}
+      for(const field of mortgage.missing) {missing.push(`${key}.${field}`);gaps.push(gap(`The mortgage ${TERM[field] ?? 'term'} is missing; tell Fathom only this term.`,key));}
       if(!date) {
         date=mortgagePayoff({...stored,monthlyPayment:mortgage.principalAndInterest,escrowMonthly:0},clock,(args.horizonYears ?? 30)*12);derivedFrom='amortization';
       }
@@ -61,14 +62,14 @@ async function schedule(args,ctx) {
       if(!events.length && kind==='childcare' && facts['obligations.childcareChangeDate']) {
         events=[{stage:'school_age',date:facts['obligations.childcareChangeDate'],derivedFrom:'fact',precise:true}];keys.push('obligations.childcareChangeDate');
       }
-      if(!events.length) {missing.push('household.dependentBirthDates');gaps.push(gap(`${kind} needs household.dependentBirthDates or household.dependentAges${kind==='childcare'?' or obligations.childcareChangeDate':''}.`));}
+      if(!events.length) {missing.push('household.dependentBirthDates');gaps.push(gap(`${kind==='plan529'?'College savings':'Childcare'} needs the children's birth dates or ages${kind==='childcare'?' or when childcare changes':''}.`,'household.dependentBirthDates'));}
       if(events.some(e=>e.precise===false))gaps.push(gap('Dependent ages give year precision only; dates use year end.'));
       events=events.map(e=>({...e,unattributed:kind==='childcare'&&events.some(later=>later.stage===e.stage&&later.date>e.date)}));
       events=events.filter(e=>e.date>clock&&e.date<=horizon).map(e=>{
         const field=e.stage==='school_age'?'schoolAgeMonthly':'afterCareEndMonthly';
         const override=assumptions.find(a=>a.kind===kind && (a.stage===e.stage || a.stage===undefined));
         const newValue=kind==='plan529'?0 : stored?.[field] ?? override?.record.value ?? (e.stage==='after_care_end'?0:null);
-        if(newValue===null){missing.push(key);gaps.push(gap(`Missing ${key}.${field}; this change is unavailable and is not applied.`));}
+        if(newValue===null){missing.push(key);gaps.push(gap(`The childcare cost ${field==='schoolAgeMonthly'?'at school age':'after care ends'} is missing; this change is unavailable and is not applied.`,key));}
         return {...e,newValue,amountSource:kind==='plan529'?'pack_default':stored?.[field]!==undefined?'fact':override?'assumption':newValue===0?'pack_default':null,
           assumption:stored?.[field]===undefined?override?.record:null,reason:kind==='plan529'?'Contributions stop at the default college age.':e.stage==='school_age'?'School begins at the pack entry age and cutoff.':'After-school care ends at the pack age.'};
       });

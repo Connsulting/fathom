@@ -177,26 +177,68 @@ export function paceBar(p) {
   return { fill: clamp01(a / t), tick: clamp01(e / t), muted: !['ahead', 'on pace', 'behind'].includes(p.status) };
 }
 
-export const REASON_TEXT = Object.freeze({
-  stale_data: 'The data behind it is past its update cadence.',
-  unknown_freshness: 'How current the data is cannot be told yet.',
-  undated_actual: 'The tracked value has no date.',
-  projected_actual: 'The tracked value is a projection, not a reading.',
-  missing_actual: 'Nothing tracks this goal yet.',
-  missing_plan_start: 'The plan has no starting point to measure from.',
-  invalid_plan_dates: 'The target date is not after the plan start.',
-  non_increasing_path: 'The target is not above where the plan started.',
-  no_target: 'This goal has no target amount and date.',
-  missing_actual_history: 'No monthly readings exist yet.',
-  missing_household_savings_plan: 'No household savings plan by month is stored yet.',
-  missing_meter_inputs: 'The figures this needs are not stored yet.',
-  missing_month_actual: 'No reading for this month.',
-  missing_contributions: 'No contributions are recorded or entered yet.',
-  kind_not_charted: 'This kind of goal has no monthly chart.'
+// Goal reasons: plain text and the fix beside it. A fix is { screen: 'goal', field, label } (a goal
+// edit form field, data-gf), { screen: 'goal-new', label }, { screen: 'upload', kind, label } or null.
+const goalField = (field, label) => ({ screen: 'goal', field, label });
+const goalUpload = (kind, label) => ({ screen: 'upload', kind, label });
+const TRACK = goalField('track', 'Choose what tracks it');
+export const GOAL_REASONS = Object.freeze({
+  stale_data: { text: 'The data behind it is past its update cadence.', fix: goalUpload('aggregator', 'Import recent data') },
+  unknown_freshness: { text: 'How current the data is cannot be told yet.', fix: goalField('track', 'Track a dated account') },
+  undated_actual: { text: 'The tracked value has no date.', fix: goalField('track', 'Track a dated account') },
+  projected_actual: { text: 'The tracked value is a projection, not a reading.', fix: goalField('track', 'Track an actual balance') },
+  missing_actual: { text: 'Nothing tracks this goal yet.', fix: TRACK },
+  missing_plan_start: { text: 'The plan has no starting point to measure from.', fix: TRACK },
+  invalid_plan_dates: { text: 'The target date is not after the plan start.', fix: goalField('targetDate', 'Fix the target date') },
+  non_increasing_path: { text: 'The target is not above where the plan started.', fix: goalField('target', 'Raise the target') },
+  no_target: { text: 'This goal has no target amount and date.', fix: goalField('target', 'Set a target') },
+  missing_actual_history: { text: 'No monthly readings exist yet.', fix: goalUpload('bank', 'Upload past statements') },
+  missing_household_savings_plan: { text: 'No household savings plan by month is stored yet.', fix: { screen: 'goal-new', label: 'Add a savings goal' } },
+  missing_meter_inputs: { text: 'The figures this needs are not stored yet.', fix: goalUpload('paystub', 'Upload a paystub') },
+  missing_month_actual: { text: 'No reading for this month.', fix: goalUpload('bank', 'Upload that statement') },
+  missing_contributions: { text: 'No contributions are recorded or entered yet.', fix: goalField('enteredTotal', 'Enter what was contributed') },
+  partial_contribution_coverage: { text: 'Only some contributions can be matched to the destination accounts.', fix: goalField('enteredTotal', 'Enter what was contributed') },
+  kind_not_charted: { text: 'This kind of goal has no monthly chart.', fix: null },
+  no_spending_history: { text: 'Not enough spending history is stored yet.', fix: goalUpload('aggregator', 'Import more spending') }
 });
+export const REASON_TEXT = Object.freeze(Object.fromEntries(Object.entries(GOAL_REASONS).map(([code, r]) => [code, r.text])));
 
 export function reasonText(code) {
-  return Object.prototype.hasOwnProperty.call(REASON_TEXT, code) ? REASON_TEXT[code] : 'Not enough data yet';
+  return Object.prototype.hasOwnProperty.call(GOAL_REASONS, code) ? GOAL_REASONS[code].text : 'Not enough data yet';
+}
+
+// The data-gf fields the goal edit form renders per kind (design.js goalFormHtml), and the kind's own
+// field for one it lacks.
+const FORM_FIELDS = {
+  balance: ['target', 'targetDate', 'track'],
+  range: ['targetLow', 'targetHigh', 'targetDate', 'track'],
+  floor: ['floor', 'track'],
+  contribution: ['target', 'taxYear', 'targetDate', 'dest', 'shareOwner', 'shareSpouse', 'enteredTotal', 'enteredAsOf']
+};
+const FIELD_FOR_KIND = { range: { target: 'targetLow' }, floor: { target: 'floor' }, contribution: { track: 'dest' } };
+
+// The fix for a reason on a goal: a goal field fix names the goal and the kind's field; an owner goal
+// without that field, or a goal Fathom made, gets an Ask about the goal (`goal.title` in plain text).
+// A goal field fix with no goal is null. Upload, goal-new and null fixes do not depend on the goal.
+export function goalReasonFix(code, goal) {
+  const fix = GOAL_REASONS[code]?.fix;
+  if (!fix) return null;
+  if (fix.screen !== 'goal') return { ...fix };
+  if (!goal) return null;
+  const kind = goal.kind || 'balance', fields = FORM_FIELDS[kind] || [];
+  const field = fields.includes(fix.field) ? fix.field : fields.includes(FIELD_FOR_KIND[kind]?.[fix.field]) ? FIELD_FOR_KIND[kind][fix.field] : null;
+  if (goal.origin === 'owner' && field && goal.id != null) return { screen: 'goal', field, label: fix.label, id: goal.id };
+  return { screen: 'ask', label: fix.label, prompt: `Change my goal "${goal.title ?? ''}": ${fix.label.toLowerCase()}.` };
+}
+
+// One button for a fix: goal and goal-new carry data-goal-fix; Ask and upload carry the same
+// data-tax-gap-fix button gapControl renders (web/core/gap-control.js), kept here so this file needs
+// no import for it.
+export function goalReasonControl(fix, esc, cls = 'h-link') {
+  if (!fix || typeof fix.label !== 'string') return '';
+  const attr = fix.screen === 'goal' || fix.screen === 'goal-new' ? 'data-goal-fix'
+    : fix.screen === 'ask' || fix.screen === 'upload' ? 'data-tax-gap-fix' : null;
+  return attr ? `<button type="button" class="${cls}" ${attr}="${esc(JSON.stringify(fix))}">${esc(fix.label)}</button>` : '';
 }
 
 /* ---------- kind lines ---------- */

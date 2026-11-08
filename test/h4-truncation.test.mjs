@@ -69,7 +69,7 @@ function assertRendered(reply, text) {
   const line = new RegExp(`<p data-left-out-code="truncated">([^<]*)</p>`).exec(note);
   assert.ok(line, `the truncation line renders: ${note}`);
   assert.equal(line[1].trim(), esc(text), 'the line is the plain truncation text');
-  assert.doesNotMatch(note, /data-tax-gap-fix|data-goal-fix/, 'a truncation has no control');
+  assert.doesNotMatch(line[0], /data-tax-gap-fix|data-goal-fix/, 'a truncation has no control');
 }
 
 test('H4-AC2a a search with a small explicit limit is truncated, not continued, and the answer says how much it showed', async t => {

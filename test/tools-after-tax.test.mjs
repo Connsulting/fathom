@@ -114,7 +114,7 @@ test('generic retirement needs plan type; rates resolve calculate refs without d
   s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run('pension','2026-10-31',10000);
   const unknown = await s.afterTax({accounts:['pension']});
   assert.equal(unknown.rows[0].afterTax.value,null);
-  assert.ok(unknown.gaps.some(g=>g.code==='missing_fact' && /planType/.test(g.message)));
+  assert.ok(unknown.gaps.some(g=>g.code==='missing_fact' && g.fact==='accounts.planType'));
   s.fact('accounts.planType',{pension:'401k'});
   const computed = await callTool('calculate',{operation:'add',operands:[{assumption:{...rate(0.1),name:'base',unit:'ratio'}},{assumption:{...rate(0.14),name:'extra',unit:'ratio'}}],label:'Ordinary rate'},s.ctx);
   const out = await s.afterTax({accounts:['pension'],ordinaryRate:{ref:computed.figure.ref}});

@@ -31,7 +31,7 @@ import * as pnlScreen from './screens/pnl.js';
 import * as tour from './screens/tour.js';
 import { createKeys } from './keys.js';
 import { createSwipe } from './screens/swipe.js';
-import { homeModel, homeHeadline, healthChip, healthLine, paceMeters, paceReason, boardCharts, reasonText, servedGoalIds, shortDate, longDate, windowSpan, kindLine, orderGoals, orderServes, planOrder, enteredDraft, enteredFields, enteredInputs } from './screens/home-model.js';
+import { homeModel, homeHeadline, healthChip, healthLine, paceMeters, paceReason, boardCharts, reasonText, goalReasonFix, goalReasonControl, servedGoalIds, shortDate, longDate, windowSpan, kindLine, orderGoals, orderServes, planOrder, enteredDraft, enteredFields, enteredInputs } from './screens/home-model.js';
 import { STARTERS, existingStarterIds, otherGoals, goalsToCreate, inviteLine } from './screens/onboard-model.js';
 import { KNOWN_FIGURES, GOAL_KINDS, KIND_LABEL, PRIORITIES, PRIORITY_LABEL, personLabel, goalOwnerOptions } from '/shared/goals.mjs';
 import { OWNERS, OWNER_LABEL } from '/shared/rec-links.mjs';
@@ -591,10 +591,10 @@ function goalCardHome(c) {
     bar = suggestHtml(c.suggestion);
   } else if (c.kind === 'balance' && c.goal.origin === 'owner' && Number.isFinite(c.goal.target) && !c.goal.track) {
     // A target with nothing tracked: say so rather than the pace reason for a missing plan start.
-    bar = `<p class="h-gwhy">${esc(reasonText('missing_actual'))}</p>`;
+    bar = whyHtml('missing_actual', c.goal, 'h-gwhy');
   } else if (p && p.reason && p.reason !== 'stale_data') {
     // Stale data is the data line's to say, not each card's.
-    bar = `<p class="h-gwhy">${esc(reasonText(p.reason))}</p>`;
+    bar = whyHtml(p.reason, c.goal, 'h-gwhy');
   }
   // Progress only: the actions live in the due list, the next-thing card and Plan.
   const tags = goalTagsHtml(c.owner, c.priority);
@@ -798,7 +798,7 @@ function meterHtml([k, label]) {
   const base = `pace.meters.${k}.meter`;
   const ratio = mt?.meter ? (figVal(`${base}.ratio`) ?? (Number.isFinite(mt.meter.ratio?.v) ? mt.meter.ratio.v : null)) : null;
   if (ratio == null) {
-    return `<div class="h-meter" data-meter="${k}"><div class="h-meter-top"><span>${label}</span></div><p class="h-meter-none">${esc(reasonText(mt?.reason))}</p></div>`;
+    return `<div class="h-meter" data-meter="${k}"><div class="h-meter-top"><span>${label}</span></div>${whyHtml(mt?.reason, null, 'h-meter-none')}</div>`;
   }
   const r = Math.max(0, Math.min(1, ratio));
   const asOf = mt.stale && mt.dataThrough ? `<p class="h-meter-note">Data stale, as of ${esc(shortDate(mt.dataThrough))}</p>` : '';
@@ -875,7 +875,7 @@ function pPace() {
   const projected = charts.some((ch) => ch.dataEnd && ch.dataEnd.slice(0, 7) < curM);
   const body = charts.length
     ? `<div class="h-pcharts">${charts.map(paceChart).join('')}</div>`
-    : `<p class="h-pchart-none">${esc(reasonText(pace?.series?.householdSavings?.reason))}</p>`;
+    : whyHtml(pace?.series?.householdSavings?.reason, null, 'h-pchart-none');
   const h = homeHealth();
   // Only meters with a figure; with none, no This year panel at all.
   const shown = paceMeters(pace?.meters);
@@ -1262,6 +1262,13 @@ const goalTitle = (g) => gText(g, g.title);
 // The same title as plain text (the "+" label).
 const goalText = (g) => (g && g.origin === 'owner' ? String(g.title ?? '') : api.txt(String(g?.title ?? '')));
 
+// A goal reason in plain words with its fix beside it. With no goal (a meter, the household savings
+// chart) only a fix that needs no goal shows.
+function whyHtml(code, goal, cls) {
+  const ctl = goalReasonControl(goalReasonFix(code, goal ? { ...goal, title: goalText(goal) } : null), esc);
+  return `<p class="${cls}">${esc(reasonText(code))}${ctl ? ` ${ctl}` : ''}</p>`;
+}
+
 // The goals a rec serves. In the dialog a rec that serves no open goal reads Housekeeping; plan
 // rows show nothing for it.
 // Each served goal is its title link, then whose goal and priority tags and its kind state, by priority.
@@ -1311,11 +1318,14 @@ function draftOf(g) {
   };
 }
 
-function openGoalForm(id, draft) {
+// Opens the goal form; `focus` names a data-gf field to focus instead of the title.
+function openGoalForm(id, draft, focus) {
   const g = id ? arr(api.s.goals).find((x) => x.id === id) : null;
   ui.goalForm = { id: g ? g.id : null, draft: g ? (draft || draftOf(g)) : emptyDraft(), err: '' };
   ui.goalDel = null;
   draw();
+  const field = focus ? root?.querySelector(`.h-gform [data-gf="${CSS.escape(focus)}"]`) : null;
+  if (field) { field.focus(); return; }
   const el = root?.querySelector('.h-gform [data-gf="title"]');
   if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
 }
@@ -1516,7 +1526,7 @@ function kindCardHtml(g) {
     const total = line.kind === 'contribution' && line.actual && line.target
       ? `<p class="h-gkind">${figHtml(line.actual, { k: true })} of ${figHtml(line.target, { k: true })} contributed</p>` : '';
     const why = p.reason && !(line.kind === 'contribution' ? line.actual : line.kind === 'floor' ? line.stateLabel : line.positionLabel)
-      ? `<p class="h-gnone">${esc(reasonText(p.reason))}</p>` : '';
+      ? whyHtml(p.reason, g, 'h-gnone') : '';
     return `${total}${kindHtml(line)}${why}`;
   }
   const k = (f) => `goal.${g.id}.${f}`;
@@ -2299,6 +2309,15 @@ function onClick(e) {
   }
   const gapFix = e.target.closest('[data-tax-gap-fix]');
   if (gapFix && root.contains(gapFix)) { e.preventDefault(); fixTaxGap(JSON.parse(gapFix.dataset.taxGapFix)); return; }
+  // A goal reason's fix: the goal's edit form on that field, or a new goal.
+  const goalFix = e.target.closest('[data-goal-fix]');
+  if (goalFix && root.contains(goalFix)) {
+    e.preventDefault();
+    const fix = JSON.parse(goalFix.dataset.goalFix);
+    if (fix.screen === 'goal-new') KIT.newGoal();
+    else if (fix.screen === 'goal') { if (routeNow().name !== 'goals') api.go('goals', {}); openGoalForm(fix.id, undefined, fix.field); }
+    return;
+  }
   const an = e.target.closest('[data-ask-next]');
   if (an && root.contains(an)) { e.preventDefault(); askNext(an.dataset.askNext, an); return; }
   const sel = '[data-go],[data-act],[data-askrec],[data-recstart],[data-wg],[data-onboard],[data-savenote],[data-modal],[data-whatif],[data-packtoggle],[data-decide],[data-revisit],[data-dlg]';
