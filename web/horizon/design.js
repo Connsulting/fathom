@@ -583,7 +583,7 @@ function goalCardHome(c) {
   let bar = '';
   if (c.bar) {
     const asOf = c.bar.muted && p.dataThrough ? `<em>as of ${esc(shortDate(p.dataThrough))}</em>` : '';
-    bar = `<div class="h-pbar ${c.chip.tone}${c.bar.muted ? ' muted' : ''}" aria-hidden="true"><i class="fill" style="width:${pct(c.bar.fill)}%"></i><i class="tick" style="left:${pct(c.bar.tick)}%"></i></div>`
+    bar = `<div class="h-pbar ${c.chip ? c.chip.tone : 'mute'}${c.bar.muted ? ' muted' : ''}" aria-hidden="true"><i class="fill" style="width:${pct(c.bar.fill)}%"></i><i class="tick" style="left:${pct(c.bar.tick)}%"></i></div>`
       + `<div class="h-pbar-l"><span>${figHtml(fk('actual'), { k: true })} of ${figHtml(fk('target'), { k: true })}</span><span>plan today ${figHtml(fk('expected'), { k: true })}${asOf}</span></div>`;
   } else if (c.suggestion) {
     bar = suggestHtml(c.suggestion);
@@ -760,8 +760,9 @@ function suggRate(t) {
 }
 
 // Desktop: the next goal actions due before Dec 31, up to five, each with date, title and owner.
-function dueHtml(m) {
-  const list = m.due.slice(0, 5);
+function dueHtml(m, skip = null) {
+  // A rec shown in the next-thing card is not listed again.
+  const list = m.due.filter((r) => r !== skip).slice(0, 5);
   if (!list.length) return '';
   const row = (r) => `<div class="h-due-r" data-rec="${esc(r.id)}"><span class="h-due-d${days(r) < 0 ? ' late' : ''}">${fmt(recDate(r))}</span>${recLink(r)}${whoTag(r)}</div>`;
   return `<div class="h-due"><div class="h-due-l">Due before Dec 31</div>${list.map(row).join('')}</div>`;
@@ -796,7 +797,7 @@ function pHome() {
   const rest = `${goalsH}${cards}${hkHtml(m.housekeeping)}`;
   const inner = isPhone()
     ? `${ownerFilterHtml(m)}${head}${nextHtml(m, subject)}${afterHtml(m)}${rest}`
-    : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${m.nextThing?.question?.primary ? nextHtml(m, subject) : ''}${dueHtml(m)}${rest}`;
+    : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${m.nextThing?.question?.primary ? `${nextHtml(m, subject)}${dueHtml(m, m.nextThing)}` : dueHtml(m)}${rest}`;
   return shell(`<section class="h-home">${inner}</section>`);
 }
 

@@ -374,6 +374,8 @@ export function mainRoutes() {
 export const questionsToConfirm = (n) => `${n} question${n === 1 ? '' : 's'} to confirm`;
 export const dataHealth = (page) => page.locator('section.h-home div.h-dhealth');
 export const healthConfirm = (page) => dataHealth(page).locator('a[data-go="confirm"]');
+// Home's verdict headline once any goal has a target: covered, or how many due goal actions need you.
+export const HOME_VERDICT = /^(You are covered through Dec 31|\d+ things? needs? you before Dec 31)$/;
 
 export const deckCard = (page) => page.locator('article.h-deck-card.cur');
 export const deckProgress = (page) => page.locator('[data-deck-progress]');
