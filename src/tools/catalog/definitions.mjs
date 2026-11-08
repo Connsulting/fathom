@@ -1,7 +1,7 @@
 import { saveDefinition, deleteDefinition, validateDefinition } from '../../spending/definitions.mjs';
 import { writePreference } from '../../actions/preferences.mjs';
 
-const definitionId = { type: 'string', minLength: 2, maxLength: 40, pattern: '^[a-z][a-z0-9_]+$' };
+const definitionId = { type: 'string', minLength: 2, maxLength: 40, pattern: '^[a-z][a-z0-9_-]+$' };
 const scope = 'write:preferences';
 export const capabilities = ['definitions'];
 export const rules = ['A named spending selection the owner wants kept is update_preferences.save_definition, never update_preferences.remember. A saved definition named in a question is passed as definition, by the id the context lists.'];

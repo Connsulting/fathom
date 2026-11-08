@@ -453,7 +453,7 @@ function receiptValue(value, scope) {
 // shows its label and the value before and after.
 function receiptLine(a) {
   const { esc } = H;
-  if (a.scope !== 'write:preferences') return `<p><b>${esc(a.label)}</b>: ${esc(receiptValue(a.before, a.scope))} → ${esc(receiptValue(a.after, a.scope))}</p>`;
+  if (a.scope !== 'write:preferences' || typeof (a.after ?? a.before) !== 'string') return `<p><b>${esc(a.label)}</b>: ${esc(receiptValue(a.before, a.scope))} → ${esc(receiptValue(a.after, a.scope))}</p>`;
   const had = a.before != null && a.before !== '';
   const head = a.after == null ? 'Memory deleted' : had ? 'Memory updated' : 'Memory saved';
   const text = a.after == null ? a.before : a.after;

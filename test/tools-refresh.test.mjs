@@ -221,6 +221,9 @@ test('refresh receipt rendering omits Undo while ordinary reversible receipts ke
     const html = receipt => chat.workHtml({ role: 'fathom', provenance: { actions: [receipt] } });
     const receipt = { id: 'synthetic', scope: 'write:imports', label: 'Data refresh', before: null, after: { status: 'imported' } };
     assert.match(html(receipt), /data-undo-action/);
+    const pack = html({ ...receipt, scope: 'write:preferences', label: 'Knowledge pack activation', before: false, after: true });
+    assert.match(pack, /Knowledge pack activation/);
+    assert.doesNotMatch(pack, /Memory updated|See all memories/);
     assert.doesNotMatch(html({ ...receipt, undo: { available: false, reason: 'This refresh cannot be undone here.' } }), /data-undo-action/);
   } finally { hook.deregister(); }
 });
