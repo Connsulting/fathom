@@ -1396,7 +1396,6 @@ lands the covering operation.
 | `POST /api/threads/:id/restore` | excluded: conversation chrome | | |
 | `POST /api/threads/:id/delete` | excluded: conversation chrome | | |
 | `POST /api/threads/:id/proposals/:messageId` | excluded: conversation chrome | | explicit confirmation of a stored Ask proposal |
-| `POST /api/threads/:id/proposals/:messageId` | excluded: conversation chrome | | |
 | `GET /api/accounts/:id` | `accounts.detail` | C5 |  |
 | `GET /api/accounts/:id/transactions` | `transactions.search` | C1 | `accountId` set |
 | `GET /api/pnl` | `business.pnl` | C4 | C1's `pnl` reads workbook lines only, as `pnl_by_month` does; the route also derives P&L from categorized transactions, which C4's `businessPnl` build covers |
