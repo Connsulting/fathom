@@ -77,7 +77,7 @@ async function seed(db) {
 
 const snapshot = async (db, cols) => Object.fromEntries(await mapSeries(Object.entries(cols), async ([t, c]) =>
   [t, (await db.prepare(`SELECT ${c.join(', ')} FROM ${t} ORDER BY rowid`).all()).map(r => JSON.stringify({ ...r }))]));
-const columnsOf = async (db, table) => (await db.columns(${table})).map(c => c.name);
+const columnsOf = async (db, table) => (await db.columns(table)).map(c => c.name);
 
 test('MGI3: a 006 store upgraded to 007 keeps its data and gains the planner tables and columns', async () => {
   const db = await storeAtMain();
