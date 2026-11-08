@@ -228,4 +228,3 @@ export async function messagesToolRound({ credential, system, systemDynamic, mes
     status: registry.results.length ? 'error_max_turns' : 'success', is_error: false, api_error_status: null,
     accountingUnknown: costUsd === undefined, details: { maxTokens }, toolResults: registry.results };
 }
-

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadModelConfig, selectionFor } from '../src/models/config.mjs';
 import { createModelPort, MODEL_ERROR_CODES, modelErrorCode } from '../src/models/port.mjs';
-import { createEngine } from '../src/engine/index.mjs';
+import { createEngine, EngineOffError } from '../src/engine/index.mjs';
 
 const messages = [{ role: 'user', content: 'Return a synthetic greeting.' }];
 const config = adapter => ({ ask: { adapter, model: 'synthetic-model', baseUrl: 'http://localhost:9999', inputUsdPerMillion: 1, outputUsdPerMillion: 2 } });
@@ -317,4 +317,12 @@ test('typed-choice requests apply the same final provider scrub',async()=>{
     assert.ok(!o.body.includes(ssn));assert.ok(o.body.includes('XXX-XX-XXXX'));return Response.json(jevResponse());
   }});
   assert.equal((await port.complete({choices:[{...choiceQuestions[0],state:{ssn},instructions:ssn}],maxTokens:64})).status,'success');
+});
+
+
+test('admission refusal identity and fields survive the completion port unchanged',async()=>{
+  const refusal=new EngineOffError();
+  const engine=createEngine({mode:'fake',admitRound:()=>{throw refusal;}});
+  await assert.rejects(engine.call({purpose:'chat',messages}),error=>error===refusal&&!Object.hasOwn(error,'code'));
+  assert.equal(modelErrorCode(refusal),'paused');assert.equal(refusal.code,undefined);
 });
