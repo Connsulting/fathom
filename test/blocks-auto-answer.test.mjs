@@ -121,8 +121,10 @@ test('AC3 a single figure read gets no block', async t => {
   assert.deepEqual(reply.provenance.blocks, []);
 });
 
-test('AC3 a refusal after a month read gets no block', async t => {
-  const { reply } = await answer(t, [[{ toolCalls: [read(MONTH)] }, { text: "I can't move money between your accounts. Fathom is advisory only." }]]);
+for (const refusal of ["I can't move money between your accounts. Fathom is advisory only.",
+  "Sorry, I can't move money between your accounts. Fathom is advisory only.",
+  "I'm unable to move money between your accounts. Fathom is advisory only."]) test(`AC3 a refusal after a month read gets no block: ${refusal.slice(0, 24)}`, async t => {
+  const { reply } = await answer(t, [[{ toolCalls: [read(MONTH)] }, { text: refusal }]]);
   clean(reply);
   assert.deepEqual(reply.provenance.blocks, []);
 });

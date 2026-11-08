@@ -39,7 +39,9 @@ function candidates({ name, args, result }) {
       breakdown('groups', [named(items('groups')), 'figure'], 'figure');
       break;
     case 'goals.pace':
+      // Goal ids outside the path grammar (a hyphen) cannot be named by a block source and are skipped.
       for (const id of Object.keys(result?.series?.goals ?? {})) if (validPath(id)) series(`series.goals.${id}.series`, 'month', 'plan.envelope', 'line');
+      series('series.householdSavings.series', 'month', 'plan.envelope', 'line');
       break;
     case 'business.pnl':
       if (args.groupBy === 'category') items('entities').forEach((_, i) => breakdown(`entities.${i}.groups`, ['key', 'revenue', 'expenses', 'profit'], 'expenses'));

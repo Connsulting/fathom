@@ -248,3 +248,31 @@ test('new ids skip ids already used in the answer', () => {
   assert.deepEqual(blocks.map(b => b.id), ['b2', 'b4']);
   blocks.forEach(b => checkBlock(b, results));
 });
+
+test('goal pace reads become line charts of the monthly plan, household savings included', async () => {
+  const pace = { name: 'goals', args: { operation: 'pace' }, result: await callTool('goals', { operation: 'pace' }, ctx) };
+  const goal = Object.entries(pace.result.series.goals).find(([id, g]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(id) && g.series?.length >= 2);
+  assert.ok(goal, 'the demo store paces at least one goal with a monthly series');
+  const block = checkBlock(only([pace]), [pace]);
+  assert.equal(block.op, 'chart'); assert.equal(block.snapshot.kind, 'line');
+  assert.equal(block.spec.source.path, `series.goals.${goal[0]}.series`);
+  assert.deepEqual(values(block.snapshot.series[0].points), goal[1].series.map(p => p.plan.envelope.value));
+  // The household savings plan has the same monthly shape as a goal's series.
+  const savings = structuredClone(pace);
+  savings.result.series = { goals: {}, householdSavings: structuredClone(goal[1]) };
+  const saved = checkBlock(only([savings]), [savings]);
+  assert.equal(saved.spec.source.path, 'series.householdSavings.series');
+  // A goal id outside the block path grammar cannot be a source and draws nothing.
+  const hyphen = structuredClone(pace);
+  hyphen.result.series = { goals: { 'checking-range': structuredClone(goal[1]) }, householdSavings: { series: null } };
+  assert.deepEqual(autoBlocks([hyphen], { now: NOW }), []);
+});
+
+test('recurring charges become a timeline labelled by merchant', () => {
+  const charges = calls.month.result.groups.slice(0, 2).map((g, i) => ({ merchant: ['Streamwave', 'Corner Gym'][i], cadence: 'monthly',
+    firstDate: '2026-01-03', lastDate: '2026-10-03', nextExpected: ['2026-12-03', '2026-11-20'][i], typicalAmount: g.figure, status: 'active' }));
+  const recurring = { name: 'spending', args: { operation: 'recurring' }, result: { charges, totalAnnual: calls.month.result.total, gaps: [] } };
+  const block = checkBlock(only([recurring]), [recurring]);
+  assert.equal(block.op, 'timeline');
+  assert.deepEqual(block.snapshot.events.map(e => [e.date, e.label]), [['2026-11-20', 'Corner Gym'], ['2026-12-03', 'Streamwave']]);
+});

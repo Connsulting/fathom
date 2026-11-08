@@ -101,7 +101,7 @@ import { ANSWER_MAX_WORDS } from '../shared/answer-contract.mjs';
 import { checkAnswerDiscipline } from '../shared/answer-discipline.mjs';
 
 // A final text that leads with a refusal gets no automatic block.
-const REFUSAL = /^[\s*_#>"'“]*(?:I|Fathom)\s+(?:can['’]?t|cannot|can not|won['’]?t|will not|am not able|is not able|(?:don['’]?t|do not|doesn['’]?t|does not) have)\b/i;
+const REFUSAL = /^[\s*_#>"'“]*(?:(?:sorry|unfortunately|i['’]m sorry|i am sorry)[,.!]?\s+)?(?:I|Fathom)(?:\s+|['’])(?:can['’]?t|cannot|can not|won['’]?t|will not|(?:am|m|is) (?:not able|unable)|(?:don['’]?t|do not|doesn['’]?t|does not) have)\b/i;
 
 export const PRODUCT_RULES = [
   'You are Fathom, a year-round financial co-pilot for one household of independent professionals.',
