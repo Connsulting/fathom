@@ -7,6 +7,8 @@ import { buildRegistry, tools } from '../src/tools/index.mjs';
 import { createRegistryServer } from '../src/engine/tools.mjs';
 import { createEngine } from '../src/engine/index.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
+import { threadCreate, ask } from '../src/api/handlers.mjs';
+import { proposalTools } from '../src/actions/proposals.mjs';
 import { tempDb, tempInstance, serveAppFixture } from './helpers/server.mjs';
 import { rpcResult, callToolRpc, listToolNames } from '../src/mcp/test/helpers.mjs';
 
@@ -113,18 +115,24 @@ test('every write scope lists undo and restores a receipt through MCP and Ask', 
       if (channel === 'mcp') out = rpcResult(await callToolRpc(app.baseUrl, key, 'undo', { operation: 'undo', id: r.id }));
       else {
         const transport = createEngine({ mode: 'fake' });
+        let chats = 0;
         const engine = { mode: 'live', isOn: () => true, async call(request) {
+          if (request.purpose === 'title') return { text: 'Synthetic undo', toolResults: [] };
+          chats++;
           const response = await transport.call({ ...request, fake: [
-            { toolCalls: [{ name: 'undo', args: { operation: 'undo', id: r.id } }] }, { text: 'Your change was undone.' },
+            { toolCalls: [{ name: 'undo', args: { operation: 'undo', id: r.id, propose: true } }] }, { text: 'Undo your change? Confirm below.' },
           ] });
-          const result = response.toolResults.find(r => r.name === 'undo');
-          out = { isError: result.isError, content: [{ type: 'text', text: JSON.stringify(result.result) }] };
           return response;
         } };
-        const reply = await createLiveAnswerer({ engine, root: s.root, services: app.household.services }).answer({
-          db: s.db, key: 'ask:012345abcdef', text: 'Undo my change.', actorId: ctx.actorId, replan: ctx.replan,
-        });
-        assert.ok(!reply.notice);
+        const askCtx = { db: s.db, config: {}, identity: { id: ctx.actorId }, scopes: [scope],
+          scheduler: { runNow: ctx.replan }, answerer: createLiveAnswerer({ engine, root: s.root, services: app.household.services }) };
+        const proposed = await threadCreate({ ...askCtx, body: { text: 'Undo my change.' } });
+        assert.deepEqual(proposed.message.provenance.pendingAction.scopes, [scope]);
+        assert.equal(s.db.prepare("SELECT value FROM settings WHERE key = 'surface'").get().value, '2');
+        const confirmed = await ask({ ...askCtx, body: { key: proposed.thread.key, text: 'yes' } });
+        const result = confirmed.message.provenance.tools.find(r => r.name === 'undo');
+        out = { isError: result.isError, content: [{ type: 'text', text: JSON.stringify(result.result) }] };
+        assert.equal(chats, 1, 'confirmation executes without another model call');
       }
       assert.ok(!out.isError, out.content[0].text);
       assert.equal(JSON.parse(out.content[0].text).receipt.undone, true);
@@ -136,6 +144,12 @@ test('every write scope lists undo and restores a receipt through MCP and Ask', 
     scope: 'write:facts', kind: 'setting', id: 'surface', label: 'Restricted', before: null, after: { key: 'surface', value: '1' } });
   const denied = rpcResult(await callToolRpc(app.baseUrl, key, 'undo', { operation: 'undo', id: r.id }));
   assert.equal(denied.isError, true); assert.match(denied.content[0].text, /^Permission denied:/);
+  const proposalServer = createRegistryServer(proposalTools(tools), { purpose: 'chat', ctx: {
+    db: s.db, actorId: `key:${app.keys.verify(key).id}`, scopes: ['write:recs'], onProposal() { assert.fail('unauthorized proposal'); },
+  } });
+  const proposalDenied = await proposalServer.invoke('undo', { operation: 'undo', id: r.id, propose: true });
+  assert.equal(proposalDenied.isError, true); assert.match(proposalDenied.content[0].text, /^Permission denied:/);
+  await proposalServer.instance.close();
   const readKey = app.keys.create({ householdId: s.householdId, name: 'Read only' }).key;
   const readDenied = rpcResult(await callToolRpc(app.baseUrl, readKey, 'undo', { operation: 'undo' }));
   assert.equal(readDenied.isError, true); assert.match(readDenied.content[0].text, /^Permission denied:/);
