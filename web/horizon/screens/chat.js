@@ -93,10 +93,11 @@ function revealAge(m) {
   return age;
 }
 
-// The highest stored message id in any thread this page knows.
+// The highest stored message id in any conversation this page renders: Ask threads and packs.
 function maxMessageId() {
+  const keys = [...threads().map(keyOf), ...H.arr(H.api.packs ? H.api.packs() : []).map((p) => 'pack:' + p.id)];
   let max = -1;
-  for (const t of threads()) for (const m of H.arr(H.api.conversation(keyOf(t)))) max = Math.max(max, msgNum(m && m.id));
+  for (const k of keys) for (const m of H.arr(H.api.conversation(k))) max = Math.max(max, msgNum(m && m.id));
   return max;
 }
 
@@ -768,14 +769,14 @@ function sendAsk({ key, recId, text, questionId, draftKey, refocus, host = 'page
     : (k ? (hasQ ? api.ask(questionId, k, { context: q.context }) : api.askFree(text, k, { context: q.context })) : api.newThread({ ...q, recId: rid }));
   Promise.resolve(req).then((res) => {
     if (A.pending === pend) A.pending = null;
-    // No new answer was drawn (an error): nothing to reveal.
-    if (A.reveal && A.reveal.id == null) A.reveal = null;
-    if (!H.api) return;
+    if (!H.api) { A.reveal = null; return; }
     const ok = k ? meCount(k) > pend.n : !!res;
     if (!ok && draftKey && !hasQ && !H.ui.draft[draftKey]) H.ui.draft[draftKey] = text;
     // pend.host, not the host it was sent from: Open in panel may have handed it over (handPending).
     if (!k && res && res.thread && H.onThread) H.onThread(res.thread, pend.host);
     H.draw();
+    // Still unclaimed after the thread is adopted and drawn (an error): nothing to reveal.
+    if (A.reveal && A.reveal.id == null) A.reveal = null;
     if (ok && refocus) { if (rid) focusRecInput(rid); else focusInput(pend.host); }
   });
   return true;
