@@ -281,22 +281,21 @@ export function homeModel({ goals, pace, recs, filter, suggestions, clock } = {}
 // The Home headline. A goal with a target gives the verdict: covered, or how many goal actions due
 // before Dec 31 need the filtered owner. It never explains the data; the data line does that. With
 // no target, it counts the goals that have a suggested target, else the goals that still need one.
-// bulk: Accept all is offered.
+// Fathom adopts suggestions itself, so there is no bulk accept.
 const WHOM = { both: 'you', me: 'you', spouse: 'your spouse' };
 export function homeHeadline({ cards, pending, due, filter } = {}) {
   const list = arr(cards);
   const n = Array.isArray(pending) ? pending.length : Math.max(0, Number(pending) || 0);
-  const bulk = n >= 2;
   if (list.some((c) => c?.pace && c.pace.status !== 'no target')) {
     const needs = Array.isArray(due) ? due.length : Math.max(0, Number(due) || 0);
     const whom = WHOM[filter] || WHOM.both;
-    if (needs > 0) return { title: `${plural(needs, 'thing')} ${needs === 1 ? 'needs' : 'need'} ${whom} before Dec 31`, verdict: 'needs', needs, bulk };
+    if (needs > 0) return { title: `${plural(needs, 'thing')} ${needs === 1 ? 'needs' : 'need'} ${whom} before Dec 31`, verdict: 'needs', needs };
     const who = whom === 'you' ? 'You are' : 'Your spouse is';
-    return { title: `${who} covered through Dec 31`, verdict: 'covered', needs: 0, bulk };
+    return { title: `${who} covered through Dec 31`, verdict: 'covered', needs: 0 };
   }
-  if (n > 0) return { title: `Suggested targets for ${plural(n, 'goal')}`, bulk };
+  if (n > 0) return { title: `Suggested targets for ${plural(n, 'goal')}` };
   const need = list.filter((c) => !c?.pace || c.pace.status === 'no target').length;
-  return { title: `${plural(need, 'goal')} ${need === 1 ? 'needs' : 'need'} a target`, bulk };
+  return { title: `${plural(need, 'goal')} ${need === 1 ? 'needs' : 'need'} a target` };
 }
 
 /* ---------- suggested targets ---------- */

@@ -14,7 +14,7 @@ import { accountNaming } from '../../accounts/naming.mjs';
 import { addDays, daysBetween } from '../../scenario/build.mjs';
 import { monthEnd } from '../../ingest/format.mjs';
 import { ledgerDisplayName, ledgerKind } from '../../pnl/ledgers.mjs';
-import { connectedThrough } from '../../ingest/coverage.mjs';
+import { connectedThrough, sourceStates } from '../../ingest/coverage.mjs';
 import { OWNER_OPTIONS, normalizeName } from '../../ingest/confirm.mjs';
 
 export const SUPPORTED_TAX_YEARS = Object.freeze([2026]);
@@ -107,7 +107,7 @@ export function loadPlanningData(db, clock) {
   const householdNames = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {};
   const holders = new Map(db.prepare('SELECT account_id, holder FROM account_holders').all().map((r) => [r.account_id, r.holder]));
   const naming = accountNaming(db);
-  const accounts = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all().map(a => {
+  const accounts = db.prepare('SELECT * FROM accounts WHERE archived_at IS NULL ORDER BY sort, id').all().map(a => {
     const kind = String(a.kind || '').toLowerCase();
     const stated = typeof byAccount[a.id] === 'string' && byAccount[a.id].trim() ? byAccount[a.id].trim() : null;
     return {
@@ -130,7 +130,7 @@ export function loadPlanningData(db, clock) {
     id: d.id, docType: String(d.doc_type || '').toLowerCase(), taxYear: d.tax_year, fields: parseJson(d.fields, {}) || {}, fileId: d.file_id,
   }));
   const transactions = db.prepare('SELECT * FROM transactions WHERE date > ? AND date <= ? ORDER BY id').all(addDays(clock, -400), clock).map(r => ({ ...r }));
-  const files = db.prepare('SELECT id, name, source_kind, uploaded_at, status FROM files ORDER BY uploaded_at, id').all().map(r => ({ ...r }));
+  const files = db.prepare('SELECT id, name, source_kind, uploaded_at, status FROM files WHERE removed_at IS NULL ORDER BY uploaded_at, id').all().map(r => ({ ...r }));
 
   return {
     clock, year, taxYear, accounts, pnl, taxPayments, taxPaymentsNext, withholding, documents, transactions, files,
@@ -173,11 +173,16 @@ function freshness(db, clock) {
     pnl: period ? monthEnd(period) : null,
     tax_payments: one('SELECT max(date) AS d FROM tax_payments WHERE date <= ?'),
   };
+  // With ingest accounts, balances and transactions are stale only when an active account is
+  // stale under the shared rule (coverage.mjs), the accounts the Cash card counts: an archived,
+  // connected or covered account never asks for a fresh export.
+  const accounts = [...sourceStates(db, clock).accounts.values()];
+  const anyStale = accounts.some(a => a.state === 'stale');
   return Object.entries(latest).map(([id, date]) => {
     let state = 'current';
     if (!date) state = 'missing';
     else if (id === 'tax_payments') state = date < lastInstallmentDue(clock) ? 'stale' : 'current';
-    else if (daysBetween(date, clock) > STALE_DAYS) state = 'stale';
+    else if (daysBetween(date, clock) > STALE_DAYS && !(accounts.length && ['balances', 'transactions'].includes(id) && !anyStale)) state = 'stale';
     return { id, label: SOURCE_LABELS[id], latest: date, state };
   });
 }
