@@ -26,3 +26,9 @@ test-results/
 playwright-report/
 
 /evals/out/
+
+# Generated public import oracles only.
+!/evals/imports/
+/evals/imports/*
+!/evals/imports/generate.mjs
+!/evals/imports/manifest.json

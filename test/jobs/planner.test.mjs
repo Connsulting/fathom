@@ -775,6 +775,7 @@ describe('recs', () => {
     const snapshot = Object.fromEntries(retained.map(k => [k, fig(db, k)]));
 
     addFact(db, 'tax.itemizedEstimate', 40000);
+  db.prepare("UPDATE transactions SET category = 'Uncategorized' WHERE lower(category) LIKE '%charit%' OR lower(category) LIKE '%donat%'").run();
     await plan(db, { now: '2026-11-20' });
     const blocked = recRow(db, 'va-q4-estimate');
     assert.equal(blocked.status, 'waiting');
