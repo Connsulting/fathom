@@ -26,7 +26,13 @@ function docItem(d) {
   const files = H.arr(d.files);
   let detail;
   if (d.status === 'have') detail = files.map((f) => `<span class="h-ye-file">${icon('doc')}${esc(f.name)}<em>${f.pnl ? 'ledger, ' : ''}stored ${esc(dateLabel(f.date))}</em></span>`).join('');
-  else if (d.status === 'skipped') detail = `<p>Not needed: ${esc(d.skip?.reason || '')}</p>`;
+  else if (d.status === 'skipped') {
+    detail = `<p>${d.skip?.inferred ? 'Inferred not needed' : 'Not needed'}: ${esc(d.skip?.reason || '')}</p>`;
+    if (d.skip?.inferred) {
+      const rows = H.arr(d.skip.evidence);
+      detail += `<details data-ye-evidence><summary>Evidence${d.skip.evidenceCount ? `: ${esc(d.skip.evidenceCount)} stored rows checked` : ''}</summary>${rows.map((r) => `<p>${esc(r.label)}${r.account ? ` (${esc(r.account)})` : ''}, ${esc(dateLabel(r.date))}. ${esc(r.table)} row ${esc(r.id)}${r.locator ? `, ${esc(r.locator)}` : ''}</p>`).join('')}</details>`;
+    }
+  }
   else detail = `<p>${esc(d.src)}. ${esc(d.note)}</p>`;
   let acts = '';
   if (d.status === 'missing' || d.status === 'expected') {
