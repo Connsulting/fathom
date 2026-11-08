@@ -78,6 +78,8 @@ import { listPreferences } from '../actions/preferences.mjs';
 // on a notice reply). answer's `scopes` limits what may be proposed; `staleNote` is a note from
 // Fathom given to the model with the question and shown as the reply's first paragraph.
 
+import { droppedBlock } from '../tools/catalog/show.mjs';
+import { placeBlocks } from '../shared/answer-text.mjs';
 import { callTool, tools as REGISTRY, getTool, instructions, ToolError } from '../tools/index.mjs';
 import { proposalTools } from '../actions/proposals.mjs';
 import { buildScenario, clockNow } from '../scenario/build.mjs';
@@ -136,7 +138,7 @@ const REGEN_SHARE = 0.5;
 const HISTORY_LIMIT = 20;
 const MAX_TOKENS = 1024;
 // Any brace pair that looks like a scenario token; valid ones also need a safe key.
-const TOKEN_LIKE = /\{(fk|f|l|p|n):([^{}]*)\}/g;
+const TOKEN_LIKE = /\{(fk|f|l|p|n|b):([^{}]*)\}/g;
 const SAFE_KEY = /^[A-Za-z0-9_.-]+$/;
 const CORRECTIVE = 'Some numbers in that answer are not in the tool results or the household data: {list}. ' +
   'Answer again using only numbers from tool results or the provided data, and write stored figures as {f:key} tokens from household.figures.';
@@ -398,6 +400,7 @@ export function groundAnswer(text, { scenario, toolResults = [], data = [], data
   const violations = [];
   const figureKeys = new Set();
   const masked = prose.replace(TOKEN_LIKE, (token, kind, key, index) => {
+    if (kind === 'b') return ' '.repeat(token.length);
     if (tokenValid(scenario, kind, key)) {
       if (kind === 'f' || kind === 'fk') figureKeys.add(key);
     } else {
@@ -692,7 +695,9 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
       pendingAction = structuredClone(proposal);
     };
     const fake = engine.mode === 'fake' ? fakeAnswerScript({ scenario, summary, propose: actions, ...fakeArgs }) : undefined;
-    const toolContext = { ...actionContext, ...toolCtx(db, now), channel: 'ask', ...(writes ? { onProposal } : {}) };
+    const turnResults = [];
+    const blocks = [];
+    const toolContext = { turnResults: () => turnResults, onBlock: block => blocks.push(block), ...actionContext, ...toolCtx(db, now), channel: 'ask', ...(writes ? { onProposal } : {}) };
     toolContext.ownerStatements = () => ownerStatements(toolContext);
     const request = { purpose: 'chat', system: prompt.system, systemDynamic: prompt.systemDynamic, messages: prompt.messages,
       tools: offered, toolContext, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}),
@@ -705,7 +710,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
     const data = [summary, context ? groundedContext : null, entryBodies];
     const dataLabels = ['household summary', 'conversation context', 'knowledge pack entries'];
     const resultsOf = res => (res && Array.isArray(res.toolResults) ? res.toolResults : []);
-    const textOf = res => stripSources(res.text);
+    const textOf = res => placeBlocks(stripSources(res.text), blocks).text;
     // Account labels for transaction literals, read the way accounts.list names them, once.
     let accountLabels;
     const labelsFor = async toolResults => {
@@ -765,7 +770,10 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
     }
 
     const recReads = toolResults.filter(r => !r.isError && r.name === 'recommendations' && r.args?.operation === 'detail').map(r => r.args && r.args.id);
-    const text = textOf(chosen);
+    const placement = placeBlocks(stripSources(chosen.text), blocks);
+    const text = placement.text;
+    const blockNotes = toolResults.filter(r => r.name === 'show' && (r.isError || r.result?.status === 'dropped'))
+      .map(r => droppedBlock(r.args?.operation, r.isError ? 'bad_input' : r.result.reason));
     const paragraphs = renderAnswer(text, grounding.violations, grounding.literals);
     if (!paragraphs.length) return noticeReply(NOTICES.modelError);
     const lower = text.toLowerCase();
@@ -788,6 +796,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
         costUsd: Number(costUsd.toFixed(6)),
         ...(references.length ? { references: references.map(({ kind, id }) => ({ kind, id })) } : {}),
         ...(pendingAction ? { pendingAction } : {}),
+        blocks: placement.blocks, blockNotes,
         work: { ms: Math.max(0, Math.round(performance.now() - t0)), items: work.items },
       },
     };

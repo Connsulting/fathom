@@ -83,3 +83,22 @@ test('block markers do not count as figures and stream as placeholders', () => {
   assert.match(html, /Chart being prepared/); assert.doesNotMatch(html, /\{b:|Checking this number/);
   assert.ok(getTool('show').operations.every(o => !o.referenceable));
 });
+
+test('chart, compare and timeline operations build from their minimum arguments', async t => {
+  const spending = { name: 'spending', args: { operation: 'total', groupBy: 'month', window: 'ytd' } };
+  const game = { name: 'recommendations', args: { operation: 'wargame', name: 'salary' } };
+  const deadlines = { name: 'household', args: { operation: 'deadlines' } };
+  const ref = (call, path) => ({ tool: call.name, args: call.args, path });
+  const { reply } = await answer(t, [[
+    { toolCalls: [spending, game, deadlines] },
+    { toolCalls: [
+      { name: 'show', args: { operation: 'chart', kind: 'line', source: ref(spending, 'groups'), x: 'key', series: [{ path: 'figure' }] } },
+      { name: 'show', args: { operation: 'compare', source: ref(game, 'salary.points'), fields: ['figures.salary'] } },
+      { name: 'show', args: { operation: 'timeline', source: ref(deadlines, ''), date: 'date' } },
+    ] },
+    { text: 'The stored results follow.\n\n{b:b1}\n\n{b:b2}\n\n{b:b3}' },
+  ]]);
+  assert.deepEqual(reply.provenance.blockNotes, []);
+  assert.deepEqual(reply.provenance.blocks.map(b => b.op), ['chart', 'compare', 'timeline']);
+  assert.ok(reply.provenance.blocks.every(b => b.after === 1));
+});
