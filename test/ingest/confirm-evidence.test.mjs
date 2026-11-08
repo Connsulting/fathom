@@ -63,7 +63,9 @@ const notReasonText = (evidence) => {
 
 describe('rule guesses', () => {
   test('account_kind from the account name: Rewards Card is a card, and the evidence quotes the name', () => withHousehold((s) => {
-    const item = pendingFor(s.db, 'account_kind', acct(s.db, '3344', 'Example Card'));
+    const subject = acct(s.db, '3344', 'Example Card');
+    C.reopenItem(s.db, C.listItems(s.db, { status: 'answered' }).find(i => i.kind === 'account_kind' && i.subject === subject).id, { now: NOW });
+    const item = pendingFor(s.db, 'account_kind', subject);
     const g = guessOf(s.db, item);
     assert.equal(g.option, 'card');
     assert.equal(g.label, labelOf(item.options, 'card'));
@@ -136,7 +138,9 @@ describe('engine guesses', () => {
   }
 
   test('a rule guess wins over an engine guess on the same item', () => withHousehold((s) => {
-    const item = pendingFor(s.db, 'account_kind', acct(s.db, '3344', 'Example Card'));
+    const subject = acct(s.db, '3344', 'Example Card');
+    C.reopenItem(s.db, C.listItems(s.db, { status: 'answered' }).find(i => i.kind === 'account_kind' && i.subject === subject).id, { now: NOW });
+    const item = pendingFor(s.db, 'account_kind', subject);
     storeGuess(s.db, item.id, 'checking', G.REASON_TEXT.account_name);
     const g = guessOf(s.db, item);
     assert.equal(g.option, 'card');
@@ -157,7 +161,9 @@ describe('ingestState', () => {
   test('items carry detail, guess with source and evidence, rank and group, ordered by rank', () => withHousehold(async (s) => {
     await seedHistoricalRows(s,fixture('tax-payments.xlsx'),historicalTaxRows(),{parser:'tax-payments',sourceKind:'tax_payments',period:{from:'2031-12-31',to:'2032-03-31'}});
     const owner = pendingFor(s.db, 'account_owner', acct(s.db, '3344', 'Example Card'));
-    const kind = pendingFor(s.db, 'account_kind', acct(s.db, '3344', 'Example Card'));
+    const subject = acct(s.db, '3344', 'Example Card');
+    C.reopenItem(s.db, C.listItems(s.db, { status: 'answered' }).find(i => i.kind === 'account_kind' && i.subject === subject).id, { now: NOW });
+    const kind = pendingFor(s.db, 'account_kind', subject);
     storeGuess(s.db, owner.id, 'spouse', G.REASON_TEXT.institution);
     const state = FR.ingestState(s.db);
     assert.equal(state.pending, state.items.length);

@@ -86,13 +86,14 @@ function plainQuestion(kind, question, context) {
   if (kind === 'fact_check' && !question.includes(key)) return question;
   let shape;
   try { shape = answerShape(key); } catch { shape = null; }
-  const label = (shape?.label || key.split('.').at(-1).replace(/([a-z])([A-Z])/g, '$1 $2').replaceAll('_', ' '))
+  const label = (shape?.label || key.replaceAll('.', ' ').replace(/([a-z])([A-Z])/g, '$1 $2').replaceAll('_', ' '))
     .replaceAll('{person}', 'you').replaceAll('{account}', 'this account');
   if (kind === 'resolver_fact') return label;
-  const display = shape?.choices?.find(c => c.value === value)?.label
-    ?? (typeof value === 'boolean' ? value ? 'Yes' : 'No' : typeof value === 'number' ? String(value)
-      : typeof value === 'string' ? value.replaceAll('_', ' ') : 'the imported details');
-  return `The import says ${display} for "${label.replace(/\?$/, '')}". Is that right?`;
+  const display = v => shape?.choices?.find(c => c.value === v)?.label
+    ?? (typeof v === 'boolean' ? v ? 'Yes' : 'No' : typeof v === 'number' ? String(v)
+      : typeof v === 'string' ? v.replaceAll('_', ' ') : 'the imported details');
+  const notes = Object.hasOwn(context, 'stored') ? ` Your notes say ${display(context.stored)}.` : '';
+  return `The import says ${display(value)} for "${label.replace(/\?$/, '')}".${notes} Is that right?`;
 }
 
 function itemOf(row) {

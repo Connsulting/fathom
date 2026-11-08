@@ -238,7 +238,7 @@ function accountKind(db, item) {
   const option = account && kindOf(account.name);
   const shared = sharedMask(db, item);
   if (!option || !validOption(item, option)) return shared;
-  if (shared && shared.option !== option) return null;
+  if (shared) return shared.option === option ? shared : null;
   return { option, rule: 'account_name', evidence: evidence(db,
     `The account is named "${account.name}"${account.inst ? ` at ${account.inst}` : ''}.`, [], { accountId: account.id }) };
 }

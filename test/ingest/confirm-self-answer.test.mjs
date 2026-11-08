@@ -7,6 +7,7 @@ import { setSetting } from '../../src/store/db.mjs';
 import { upsertFact } from '../../src/store/facts.mjs';
 import { autoResolve } from '../../src/ingest/auto.mjs';
 import { resolvePending } from '../../src/resolve/index.mjs';
+import { indexSource } from '../../src/ingest/model-source.mjs';
 import { JEV_MODEL } from '../../src/categories/jev.mjs';
 import { categoryOptions, loadCategoryInputs, setTransactionCategory } from '../../src/categories/store.mjs';
 import { KINDS, KIND_OPTIONS, EMPLOYER_OPTIONS, EMPLOYER_RECIPIENT_OPTIONS, DOCUMENT_RECIPIENT_OPTIONS,
@@ -86,10 +87,12 @@ test('AC1: missing or conflicting recipients stay pending and owner answers surv
   const id = question(db, 'employer_recipient', nameKey('Example Both'), EMPLOYER_RECIPIENT_OPTIONS, { employer: 'Example Both' });
   for (const employeeName of [names.me, names.spouse]) db.prepare('INSERT INTO documents (doc_type,tax_year,fields) VALUES (?,?,?)')
     .run('w2', 2026, JSON.stringify({ employerName: 'Example Both', employeeName, taxYear: 2026, wages: 60000 }));
+  const unknown = question(db, 'employer_relation', nameKey('Example Unknown Employer'), EMPLOYER_OPTIONS, { employer: 'Example Unknown Employer' });
   const missing = question(db, 'document_recipient', 'w2:unknown:2026:0:doc:missing', DOCUMENT_RECIPIENT_OPTIONS);
   autoResolve(db, { now: NOW });
   assert.equal(getItem(db, id).status, 'pending');
   assert.equal(getItem(db, missing).status, 'pending');
+  assert.equal(getItem(db, unknown).status, 'pending');
   answerItem(db, id, 'spouse', { now: NOW });
   autoResolve(db, { now: NOW });
   assert.equal(getItem(db, id).answer, 'spouse');
@@ -239,4 +242,12 @@ test('AC1: employer aliases reuse an owner relation, and Undo of that basis reop
   assert.deepEqual(autoInfo(db, alias).evidence.basis, [basis]);
   reopenItem(db, basis, { now: NOW });
   assert.equal(getItem(db, alias).status, 'pending');
+});
+
+test('AC1: recipient matching retains source names locally while the model envelope masks them', async () => {
+  const source = await indexSource({ fileId: 'synthetic-payroll', name: 'synthetic-payroll.txt', format: 'text',
+    bytes: Buffer.from('Employee: ' + names.me + '\nEmployer: Example Employer') }, { householdNames: names });
+  assert.ok(Object.values(source.values).some(v => String(v).includes(names.me)));
+  assert.ok(!JSON.stringify(source.envelope).includes(names.me));
+  assert.ok(!JSON.stringify(source.envelope).includes('Avery'));
 });
