@@ -50,11 +50,11 @@ for (const adapter of ['openai', 'ollama']) {
           ? { choices: [{ finish_reason: 'stop', message: { content: 'Hello' } }], usage: { prompt_tokens: 5, completion_tokens: 2 } }
           : { done: true, message: { content: 'Hello' }, prompt_eval_count: 5, eval_count: 2 });
       } });
-    await assert.rejects(await engine.call({ purpose: 'chat', messages }), e => e.name === 'EngineOffError');
+    await assert.rejects(engine.call({ purpose: 'chat', messages }), e => e.name === 'EngineOffError');
     enabled = true; funded = false;
-    await assert.rejects(await engine.call({ purpose: 'chat', messages }), e => e.code === 'funding_unavailable');
+    await assert.rejects(engine.call({ purpose: 'chat', messages }), e => e.code === 'funding_unavailable');
     funded = true;
-    await assert.rejects(await engine.call({ purpose: 'chat', messages, budget: { maxCostUsd: 0 } }), e => e.name === 'BudgetExceededError');
+    await assert.rejects(engine.call({ purpose: 'chat', messages, budget: { maxCostUsd: 0 } }), e => e.name === 'BudgetExceededError');
     assert.equal(calls, 0); assert.equal(reservations.events.length, 0);
     const r = await engine.call({ purpose: 'chat', messages });
     assert.equal(r.text, 'Hello'); assert.equal(calls, 1);
@@ -112,10 +112,10 @@ for (const adapter of ['openai', 'ollama']) {
           ? { choices: [{ finish_reason: 'stop', message: { content: 'Resumed' } }], usage: { prompt_tokens: 2, completion_tokens: 3 } }
           : { done: true, message: { content: 'Resumed' }, prompt_eval_count: 2, eval_count: 3 });
       } });
-    await assert.rejects(await engine.call({ purpose: 'chat', messages, tools: [{ ...tool, handler: () => { enabled = false; return {}; } }] }), e => modelErrorCode(e) === 'paused');
+    await assert.rejects(engine.call({ purpose: 'chat', messages, tools: [{ ...tool, handler: () => { enabled = false; return {}; } }] }), e => modelErrorCode(e) === 'paused');
     assert.equal(calls, 1); assert.equal(reservations.events.filter(e => e[0] === 'reserve').length, 1);
     enabled = true;
-    await assert.rejects(await engine.call({ purpose: 'chat', messages, beforeDispatch: () => { throw new Error('synthetic refusal'); } }), /synthetic refusal/);
+    await assert.rejects(engine.call({ purpose: 'chat', messages, beforeDispatch: () => { throw new Error('synthetic refusal'); } }), /synthetic refusal/);
     assert.equal(calls, 1); assert.equal(reservations.events.at(-1)[2].costUsd, 0);
     assert.equal((await engine.call({ purpose: 'chat', messages })).text, 'Resumed');
   });
@@ -141,13 +141,13 @@ for (const adapter of ['openai', 'ollama']) {
     const reservations = admitted();
     const engine = createEngine({ mode: 'live', modelConfig: config(adapter), reservations, modelTransport: async () => Response.json(adapter === 'openai'
       ? { choices: [{ finish_reason: 'stop', message: { content: 'No usage' } }] } : { done: true, message: { content: 'No usage' } }) });
-    await assert.rejects(await engine.call({ purpose: 'chat', messages }), e => e.code === 'accounting_hold');
+    await assert.rejects(engine.call({ purpose: 'chat', messages }), e => e.code === 'accounting_hold');
     assert.deepEqual(reservations.events.map(e => e[0]), ['reserve', 'hold']);
   });
   test(`${adapter} refuses a binary document before reservation or dispatch`, async () => {
     const reservations = admitted(); let calls = 0;
     const engine = createEngine({ mode: 'live', modelConfig: config(adapter), reservations, modelTransport: async () => { calls++; } });
-    await assert.rejects(await engine.call({ purpose: 'chat', messages: [{ role: 'user', content: [{ type: 'document', source: { type: 'base64', data: 'synthetic' } }] }] }), /text documents only/);
+    await assert.rejects(engine.call({ purpose: 'chat', messages: [{ role: 'user', content: [{ type: 'document', source: { type: 'base64', data: 'synthetic' } }] }] }), /text documents only/);
     assert.equal(calls, 0); assert.equal(reservations.events.length, 0);
   });
 }
@@ -157,7 +157,7 @@ test('reported aggregator cost settles exactly and an underpriced bound holds', 
   const engine = createEngine({ mode: 'live', modelConfig: config('openai'), reservations,
     ledger: { monthSpendUsd: () => 0, record: e => entries.push(e) }, modelTransport: async () => Response.json({
       choices: [{ finish_reason: 'stop', message: { content: 'Synthetic' } }], usage: { prompt_tokens: 1, completion_tokens: 1, cost: 10 } }) });
-  await assert.rejects(await engine.call({ purpose: 'chat', messages }), e => e.code === 'accounting_hold');
+  await assert.rejects(engine.call({ purpose: 'chat', messages }), e => e.code === 'accounting_hold');
   assert.equal(reservations.events.at(-1)[2].costUsd, 10); assert.equal(entries[0].costUsd, 10);
 });
 
@@ -193,11 +193,11 @@ test('Claude tool continuations use registered tools and per-response admission'
   const reservations = admitted();
   const engine = createEngine({ mode: 'live', credential: { type: 'api-key', value: 'synthetic-key' },
     testTransport: { baseURL: emulator.baseURL }, reservations, allowed: () => enabled, funded: () => funded });
-  await assert.rejects(await engine.call({ purpose: 'chat', messages }), e => modelErrorCode(e) === 'paused');
+  await assert.rejects(engine.call({ purpose: 'chat', messages }), e => modelErrorCode(e) === 'paused');
   enabled = true; funded = false;
-  await assert.rejects(await engine.call({ purpose: 'chat', messages }), e => e.code === 'funding_unavailable');
+  await assert.rejects(engine.call({ purpose: 'chat', messages }), e => e.code === 'funding_unavailable');
   funded = true;
-  await assert.rejects(await engine.call({ purpose: 'chat', messages, budget: { maxCostUsd: 0 } }), e => e.code === 'budget');
+  await assert.rejects(engine.call({ purpose: 'chat', messages, budget: { maxCostUsd: 0 } }), e => e.code === 'budget');
   assert.equal(emulator.requests.length, 0);
   const r = await engine.call({ purpose: 'chat', messages, tools: [tool], maxTokens: 64 });
   assert.equal(r.text, 'Synthetic answer.'); assert.equal(r.toolResults.length, 1);
@@ -247,9 +247,9 @@ test('typed-choice adapter passes pause, funding, budget and reservation checks'
   const engine = createEngine({ mode: 'live', credential: { type: 'api-key', value: 'synthetic-key' }, reservations,
     allowed: () => enabled, funded: () => funded, modelTransport: async () => { calls++; return Response.json(jevResponse()); } });
   const req = { purpose: 'categorize', messages, choices: choiceQuestions, maxTokens: 128 };
-  await assert.rejects(await engine.call(req), e => modelErrorCode(e) === 'paused');
-  enabled = true; funded = false; await assert.rejects(await engine.call(req), e => e.code === 'funding_unavailable');
-  funded = true; await assert.rejects(await engine.call({ ...req, budget: { maxCostUsd: 0 } }), e => e.code === 'budget');
+  await assert.rejects(engine.call(req), e => modelErrorCode(e) === 'paused');
+  enabled = true; funded = false; await assert.rejects(engine.call(req), e => e.code === 'funding_unavailable');
+  funded = true; await assert.rejects(engine.call({ ...req, budget: { maxCostUsd: 0 } }), e => e.code === 'budget');
   assert.equal(calls, 0);
   assert.equal((await engine.call(req)).choices[0].choice, 'Groceries'); assert.equal(calls, 1);
   assert.deepEqual(reservations.events.map(e => e[0]), ['reserve', 'settle']);
@@ -264,7 +264,7 @@ test('Claude and typed-choice transports report unknown usage and bounded failur
   const reservations = admitted();
   const engine = createEngine({ mode: 'live', credential: { type: 'api-key', value: 'synthetic-key' }, reservations,
     modelTransport: async () => Response.json({ ...jevResponse(), usage: {} }) });
-  await assert.rejects(await engine.call({ purpose: 'categorize', messages, choices: choiceQuestions, maxTokens: 64 }), e => e.code === 'accounting_hold');
+  await assert.rejects(engine.call({ purpose: 'categorize', messages, choices: choiceQuestions, maxTokens: 64 }), e => e.code === 'accounting_hold');
   assert.deepEqual(reservations.events.map(e => e[0]), ['reserve', 'hold']);
 });
 
@@ -322,7 +322,7 @@ test('typed-choice requests apply the shared engine scrub',async()=>{
 test('admission refusal identity and fields survive the completion port unchanged',async()=>{
   const refusal=new EngineOffError();
   const engine=createEngine({mode:'fake',admitRound:()=>{throw refusal;}});
-  await assert.rejects(await engine.call({purpose:'chat',messages}),error=>error===refusal&&!Object.hasOwn(error,'code'));
+  await assert.rejects(engine.call({purpose:'chat',messages}),error=>error===refusal&&!Object.hasOwn(error,'code'));
   assert.equal(modelErrorCode(refusal),'paused');assert.equal(refusal.code,undefined);
 });
 
@@ -332,7 +332,7 @@ for(const adapter of ['openai','ollama']) test(`${adapter} holds zero input usag
   const engine=createEngine({mode:'live',modelConfig:config(adapter),reservations,modelTransport:async()=>Response.json(adapter==='openai'
     ?{choices:[{finish_reason:'stop',message:{content:'Synthetic'}}],usage:{prompt_tokens:0,completion_tokens:0}}
     :{done:true,message:{content:'Synthetic'},prompt_eval_count:0,eval_count:0})});
-  await assert.rejects(await engine.call({purpose:'chat',messages}),e=>e.code==='accounting_hold');
+  await assert.rejects(engine.call({purpose:'chat',messages}),e=>e.code==='accounting_hold');
   assert.deepEqual(reservations.events.map(e=>e[0]),['reserve','hold']);
 });
 

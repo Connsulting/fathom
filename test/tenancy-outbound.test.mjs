@@ -266,7 +266,7 @@ test('pausing between engine rounds stops the next round', T, async () => {
   };
   const engine = createEngine({ mode: 'fake', ledger, capUsd: 10, allowed: () => allowed });
   const events = [];
-  await assert.rejects(await engine.call({
+  await assert.rejects(engine.call({
     purpose: 'chat', messages: [{ role: 'user', content: 'Synthetic' }], tools: [probe],
     fake: [{ toolCalls: [{ name: 'synthetic_probe', args: {} }] }, { text: 'Synthetic second round.' }],
     onEvent: e => events.push(e),

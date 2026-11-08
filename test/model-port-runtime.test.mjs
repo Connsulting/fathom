@@ -52,7 +52,7 @@ for (const adapter of ['openai', 'ollama', 'jev']) {
     assert.equal(rounds.length, calls); assert.ok(rounds.every(r => r.state === 'settled'));
     assert.equal((await db.prepare('SELECT count(*) n FROM spend_ledger WHERE round_id IS NOT NULL').get()).n, calls);
     await setSetting(db, 'cap', { usd: 0 });
-    await assert.rejects(await engine.complete({ purpose: 'categorize', messages, choices: questions, maxTokens: 64 }), e => e.code === 'budget');
+    await assert.rejects(engine.complete({ purpose: 'categorize', messages, choices: questions, maxTokens: 64 }), e => e.code === 'budget');
     assert.equal(calls, rounds.length);
     await setSetting(db, 'cap', { usd: 1 });
     await assert.rejects(runWithPrincipal({ check: () => false }, async () => await engine.complete({ purpose: 'categorize', messages, choices: questions, maxTokens: 64 })), e => e.code === 'authorization_revoked');
@@ -89,7 +89,7 @@ test('a missing categorizer credential cannot consume another purpose credential
     modelTransport: async () => { calls++; return Response.json({}); } });
   await engine.init();
   assert.equal(engine.credentialState, 'loaded');
-  await assert.rejects(await engine.complete({ purpose: 'categorize', messages, choices: questions, maxTokens: 64 }), e => e.code === 'authentication');
+  await assert.rejects(engine.complete({ purpose: 'categorize', messages, choices: questions, maxTokens: 64 }), e => e.code === 'authentication');
   assert.equal(calls, 0);
   assert.equal((await platform.prepare("SELECT count(*) n FROM model_rounds WHERE kind='round'").get()).n, 0);
 });

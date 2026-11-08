@@ -17,7 +17,7 @@ test('off and cap checks precede response consumption and have live neighboring 
   await assert.rejects(createEngine({ mode: 'off', ledger, now }).call(request), EngineOffError);
   ledger.record({ ts: now().toISOString(), purpose: 'chat', costUsd: 200, model: 'fake', tokens: {} });
   const blocked = createEngine({ mode: 'fake', ledger, now, responses: [{ text: 'Hello', costUsd: 0.01 }] });
-  await assert.rejects(await blocked.call(request), BudgetExceededError);
+  await assert.rejects(blocked.call(request), BudgetExceededError);
   const allowed = createEngine({ mode: 'fake', ledger, capUsd: 201, now, responses: [{ text: 'Hello', costUsd: 0.01 }] });
   assert.equal((await allowed.call(request)).text, 'Hello');
   assert.equal(ledger.entries.length, 2);
@@ -39,7 +39,7 @@ test('a tool round is accounted before a continuation cap refusal, with its tool
     { toolCalls: [{ name: 'balance', args: { account: 'demo' } }], costUsd: 0.02 },
     { text: 'Your balance is $125.', costUsd: 0.02 },
   ] });
-  await assert.rejects(await engine.call({ ...request, tools: [{ ...read, handler: async () => { calls++; return { value: 125 }; } }] }),
+  await assert.rejects(engine.call({ ...request, tools: [{ ...read, handler: async () => { calls++; return { value: 125 }; } }] }),
     error => error instanceof BudgetExceededError && error.toolResults[0].result.value === 125);
   assert.equal(calls, 1);
   assert.equal(ledger.entries.length, 1);
@@ -101,7 +101,7 @@ test('chat can invoke a recommendation-status write, while invalid scopes fail b
   assert.equal(writes, 1);
   const ledger = createMemoryLedger();
   const invalid = createEngine({ mode: 'fake', ledger, responses: [{ text: 'unused' }] });
-  await assert.rejects(await invalid.call({ ...request, tools: [{ ...read, kind: 'write', operations: [{ name: 'write', scope: 'write:money' }] }] }), /registry/);
+  await assert.rejects(invalid.call({ ...request, tools: [{ ...read, kind: 'write', operations: [{ name: 'write', scope: 'write:money' }] }] }), /registry/);
   assert.equal(ledger.entries.length, 0);
 });
 
@@ -124,9 +124,9 @@ test('ledger failures stop work, malformed responses retain known costs, and loo
   await assert.rejects(engine.extract({ document: { type: 'text', text: 'demo' }, schema: { type: 'object' } }), /JSON/);
   assert.equal(ledger.entries.length, 1);
   const bad = createEngine({ mode: 'fake', ledger: { monthSpendUsd: () => { throw new Error('store unavailable'); }, record: () => {} } });
-  await assert.rejects(await bad.call(request), /store unavailable/);
+  await assert.rejects(bad.call(request), /store unavailable/);
   const loop = createEngine({ mode: 'fake', responses: Array.from({ length: 8 }, () => ({ toolCalls: [{ name: 'balance', args: { account: 'demo' } }], costUsd: 0.001 })) });
-  await assert.rejects(await loop.call({ ...request, tools: [read] }), RoundLimitError);
+  await assert.rejects(loop.call({ ...request, tools: [read] }), RoundLimitError);
 });
 
 test('concurrent calls sharing a ledger check spend after the prior round records', async () => {
@@ -173,11 +173,11 @@ test('invalid tool arguments are recorded and the next model round can correct t
 test('unknown billed cost reserves spend that survives engine recreation', async () => {
   const ledger = createMemoryLedger();
   const engine = createEngine({ mode: 'fake', ledger, capUsd: 0.001, responses: [{ costUsd: null, accountingUnknown: true }] });
-  await assert.rejects(await engine.call({ ...request, maxTokens: 1000 }), /cost is incomplete/);
+  await assert.rejects(engine.call({ ...request, maxTokens: 1000 }), /cost is incomplete/);
   assert.ok(ledger.entries[0].costUsd >= 1000 * 20 / 1000000);
   assert.equal(ledger.entries[0].tokens.estimated, true);
   const restarted = createEngine({ mode: 'fake', ledger, capUsd: 0.001, responses: [{ text: 'must not run' }] });
-  await assert.rejects(await restarted.call(request), BudgetExceededError);
+  await assert.rejects(restarted.call(request), BudgetExceededError);
 });
 
 test('each model round receives the remaining monthly budget', async () => {
@@ -196,7 +196,7 @@ test('an SDK budget stop is recorded before the gateway reports the cap error', 
   const engine = createEngine({ mode: 'fake', ledger, capUsd: 0.001, responses: [
     { status: 'error_max_budget_usd', is_error: true, costUsd: 0.01, toolCalls: [{ name: 'balance', args: { account: 'demo' } }] },
   ] });
-  await assert.rejects(await engine.call({ ...request, tools: [read] }), error => error instanceof BudgetExceededError && error.toolResults[0].result.value === 125);
+  await assert.rejects(engine.call({ ...request, tools: [read] }), error => error instanceof BudgetExceededError && error.toolResults[0].result.value === 125);
   assert.equal(ledger.entries[0].costUsd, 0.01);
 });
 
@@ -209,7 +209,7 @@ test('bounded extraction uses selected prices, the smaller allowance, and one re
     let dispatched = 0;
     const engine = createEngine({ mode: 'fake', ledger, now, modelOverride: model });
     const budget = { maxCostUsd: estimate.costUsd / 2, maxInputTokens: 32768, timeoutMs: 120000, correlationId: 'synthetic-import' };
-    await assert.rejects(await engine.call({ ...base, budget, beforeDispatch: () => dispatched++, fake: [{ text: '{}' }] }), BudgetExceededError);
+    await assert.rejects(engine.call({ ...base, budget, beforeDispatch: () => dispatched++, fake: [{ text: '{}' }] }), BudgetExceededError);
     assert.equal(dispatched, 0); assert.equal(ledger.entries.length, 0);
     budget.maxCostUsd = estimate.costUsd;
     const result = await engine.call({ ...base, budget, beforeDispatch: () => dispatched++, fake: [{ text: '{}', costUsd: 0.001 }] });
@@ -224,9 +224,9 @@ test('bounded input and pre-dispatch refusal have a valid neighboring extraction
   const engine = createEngine({ mode: 'fake', now });
   const budget = { maxCostUsd: 0.50, maxInputTokens: 1, timeoutMs: 120000, correlationId: 'synthetic-import' };
   const req = { ...request, purpose: 'extract', budget, fake: [{ text: '{}' }] };
-  await assert.rejects(await engine.call(req), BudgetExceededError);
+  await assert.rejects(engine.call(req), BudgetExceededError);
   budget.maxInputTokens = 32768;
-  await assert.rejects(await engine.call({ ...req, beforeDispatch: () => { throw new EngineOffError(); } }), EngineOffError);
+  await assert.rejects(engine.call({ ...req, beforeDispatch: () => { throw new EngineOffError(); } }), EngineOffError);
   assert.equal((await engine.call(req)).text, '{}');
-  await assert.rejects(await engine.call({ ...req, budget: { ...budget, timeoutMs: 120001 } }), TypeError);
+  await assert.rejects(engine.call({ ...req, budget: { ...budget, timeoutMs: 120001 } }), TypeError);
 });

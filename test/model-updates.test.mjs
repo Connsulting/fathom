@@ -44,7 +44,7 @@ test('historical unanchored notes ask for the anchor and guessed amounts or date
   try {
     const p = await stageUpdate(x.ctx, { source: x.source, actions: [x.expected] });
     assert.equal(p.status, 'needs_clarification'); assert.equal(p.reasonCode, 'needs_date_anchor');
-    await assert.rejects(await approve(x, p));
+    await assert.rejects(approve(x, p));
     for (const args of [{ amount: 1250 }, { dueDate: '2032-03-16' }]) {
       await assert.rejects(async () => await stageUpdate(x.ctx, { source: x.source, capturedAt: '2032-03-02T14:00:00Z', actions: [{ ...x.expected, args: { ...x.expected.args, ...args } }] }), /stated|date|evidence/);
     }
@@ -59,7 +59,7 @@ test('source spans bind the exact file, bytes and actor instead of conversation 
       await assert.rejects(async () => await stageUpdate(x.ctx, { source: x.source, capturedAt: '2032-03-02T14:00:00Z', actions: [{ ...x.expected, span }] }), /source|span/);
     }
     const p = await stageUpdate(x.ctx, { source: x.source, capturedAt: '2032-03-02T14:00:00Z', actions: [x.expected] });
-    await assert.rejects(await approve(x, p, { actorId: 'foreign-actor' }), /owner|available/);
+    await assert.rejects(approve(x, p, { actorId: 'foreign-actor' }), /owner|available/);
     await approve(x, p);
   } finally { await x.close(); }
 });
@@ -69,10 +69,10 @@ test('approval refuses changed step definitions and stores a versioned correctio
   try {
     const p = await stageUpdate(x.ctx, { source: x.source, capturedAt: '2032-03-02T14:00:00Z', actions: [x.step, x.expected] });
     await x.db.prepare("UPDATE recs SET def=? WHERE id='payroll'").run(JSON.stringify({ tasks: [{ t: 'Different step' }] }));
-    await assert.rejects(await approve(x, p), e => e.code === 'proposal_stale');
+    await assert.rejects(approve(x, p), e => e.code === 'proposal_stale');
     const correction = await reviewImport({ ...x.ctx, ownerText: 'Use the other step' }, { proposalId: p.proposalId, version: 1, decision: 'correct', evidence: 'Use the other step' });
     assert.equal(correction.version, 2); assert.equal(correction.status, 'waiting_for_engine');
-    await assert.rejects(await approve(x, p), e => e.code === 'proposal_stale');
+    await assert.rejects(approve(x, p), e => e.code === 'proposal_stale');
     assert.equal((await x.db.prepare('SELECT count(*) n FROM expected_transactions').get()).n, 0);
   } finally { await x.close(); }
 });
@@ -112,7 +112,7 @@ test('unrelated household activity leaves a waiting note approvable, but source 
       const p = await stageUpdate(y.ctx, { source: y.source, capturedAt: '2032-03-02T14:00:00Z', actions: [y.expected] });
       if (changed === 'source') await y.db.prepare('UPDATE files SET removed_at=? WHERE id=?').run(y.ctx.now, y.source.fileId);
       else await y.db.prepare("INSERT INTO settings (key,value,updated_at) VALUES ('timezone','\"UTC\"',?)").run(y.ctx.now);
-      await assert.rejects(await approve(y, p), e => e.code === 'proposal_stale');
+      await assert.rejects(approve(y, p), e => e.code === 'proposal_stale');
       assert.equal((await y.db.prepare('SELECT count(*) n FROM expected_transactions').get()).n, 0);
     } finally { await y.close(); }
   }

@@ -488,7 +488,7 @@ export function analyze(files, { roots = () => false, root = null, driver = () =
     if (b?.kind === 'fn' && b.info?.reaches) escapes.push({ ...r, info: b.info, parent: p });
   }
 
-  return { modules, fns, calls, escapes, enclosing, isFunction, propName, unwrap };
+  return { modules, fns, calls, escapes, methods, enclosing, isFunction, propName, unwrap };
 }
 
 // How a Promise-valued call is consumed: 'await', 'return', 'void', 'chain', 'all', 'value', or a

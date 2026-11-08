@@ -110,7 +110,7 @@ describe('runPlanning', () => {
     const broken = join(root, 'packs', 'your-plans');
     mkdirSync(broken, { recursive: true });
     writeFileSync(join(broken, 'manifest.json'), '{ not json');
-    await assert.rejects(await plan(db, { dataDir }));
+    await assert.rejects(plan(db, { dataDir }));
     const run = await db.prepare("SELECT * FROM job_runs WHERE job_id = 'plan' ORDER BY id DESC").get();
     assert.ok(run, 'the run was recorded');
     assert.equal(run.status, 'error');

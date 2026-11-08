@@ -45,7 +45,7 @@ test('typed note facts use shared actions, require their scope, and expose group
     } }], completeness: 'complete', coverage: source.regions.map(regionId => ({ regionId, refs: source.inventory[regionId].refs, disposition: 'imported_detail' })) };
     const staged = await ingestFile(x.db, { name: 'state.txt', bytes }, { ...x.opts, fake: [{ text: JSON.stringify(output), costUsd: 0.001, tokens: { input_tokens: 20, output_tokens: 40 } }] });
     assert.equal(staged.status, 'needs_confirmation', JSON.stringify(staged));
-    await assert.rejects(await approve(x,staged), e => e.code === 'forbidden');
+    await assert.rejects(approve(x,staged), e => e.code === 'forbidden');
     x.ctx.scopes.push('write:facts');
     const approved = await approve(x,staged);
     assert.deepEqual(approved.receipt.scopes, ['write:facts','write:imports']);

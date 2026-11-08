@@ -117,7 +117,7 @@ test('lock refusal logs once per job and household at info level, then work can 
   await s.tick(); await s.tick();
   assert.equal(logs.length, 4);
   assert.equal(errors.length, 0);
-  await assert.rejects(await s.runNow('plan'), e => e.code === 'locked');
+  await assert.rejects(s.runNow('plan'), e => e.code === 'locked');
   assert.equal(logs.length, 4);
   await db.prepare('DELETE FROM job_lock').run();
   assert.equal((await s.runNow('plan')).status, 'ok');
@@ -132,7 +132,7 @@ test('shutdown of work queued behind occupied dispatcher slots is bounded and ne
   let calls = 0;
   const s = createScheduler({ db, dispatcher, household: () => ({ householdId: 'queued-household' }), drainMs: 30,
     handlers: { plan: async () => { calls++; } }, log: quiet });
-  const queued = assert.rejects(await s.runNow('plan'), e => e.code === 'locked');
+  const queued = assert.rejects(s.runNow('plan'), e => e.code === 'locked');
   const start = performance.now();
   let deadline;
   try {
