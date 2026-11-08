@@ -11,6 +11,7 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import scenario from './scenario.mjs';
+import { resolveTokens } from '../src/shared/tokens.mjs';
 import { buildLedger, isoFromLabel } from './ledger.mjs';
 import { getSetting, setSetting, listTables, tx, cents } from '../src/store/db.mjs';
 import { addDays, defaultPicks, BUILTIN_SOURCES, DEFAULT_CAP_USD } from '../src/scenario/build.mjs';
@@ -67,7 +68,7 @@ const FACTS = {
 const CLEAR_ORDER = [
   'auth_challenges', 'auth_tokens', 'auth_sessions', 'auth_rate_limits', 'passkeys', 'api_keys', 'users',
   'preferences', 'action_receipts', 'advisor_reviews', 'advisor_checkin', 'advisor_packets', 'messages', 'conversations', 'rec_events', 'job_runs', 'jobs', 'superseded_rows', 'confirm_undo', 'confirm_guesses', 'confirm_items',
-  'ingest_epoch', 'held_facts',
+  'ingest_epoch', 'held_facts', 'import_model_spend', 'import_batches', 'import_proposals',
   'transaction_category_imports', 'transaction_category_corrections', 'transaction_category_guesses', 'category_merchant_rules', 'category_source_rules',
   'column_mappings', 'entity_aliases', 'transactions', 'balances', 'positions',
   'pnl_lines', 'tax_payments', 'documents', 'figures', 'accounts', 'facts', 'sources', 'recs', 'goals',
@@ -229,6 +230,10 @@ export function seedDemo(db) {
     const fact = db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
                              VALUES (?, ?, 'you', ?, 1, ?, ?, ?, ?)`);
     for (const [key, value] of Object.entries(FACTS)) fact.run(key, JSON.stringify(value), clock, ...prov(`facts:${key}`), now);
+
+    const businessEntities = Object.fromEntries(S.accounts.filter(a => a.kind === 'business')
+      .map(a => [a.id, resolveTokens(S, a.owner, false)]));
+    fact.run('accounts.businessEntity', JSON.stringify(businessEntities), clock, ...prov('facts:accounts.businessEntity'), now);
 
     const ledger = buildLedger({
       accounts: S.accounts,

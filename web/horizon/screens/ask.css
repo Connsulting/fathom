@@ -444,3 +444,109 @@
 @media (prefers-reduced-motion: reduce) {
   .d-horizon .h-add, .d-horizon .h-askp-launch, .d-horizon .h-askp-grip::after { transition: none; }
 }
+
+/* ---------- Ask blocks (ask-blocks.js): tables and comparisons inside an answer ----------
+   The series ramp (--blk-s1 .. --blk-s4, for charts) and the panel background it is checked
+   against (--blk-bg, test/block-palette.test.mjs: every step at least 3:1). Horizon is dark
+   today; the light set is kept ready for a light theme under [data-theme="light"]. */
+.d-horizon { --blk-bg: var(--bg); --blk-s1: #3fcfae; --blk-s2: #7fa6ff; --blk-s3: #e3a857; --blk-s4: #d68ad9; }
+.d-horizon[data-theme="light"] { --blk-bg: #ffffff; --blk-s1: #0b7d67; --blk-s2: #3456c8; --blk-s3: #9a5c0c; --blk-s4: #9c3ea0; }
+
+/* Inline-size containment: a wide table never widens the message column; it scrolls in its box. */
+.d-horizon .h-blk { container-type: inline-size; margin: 14px 0; padding: 12px 14px 14px; border: 1px solid var(--line2); border-radius: 10px; background: var(--s1); color: var(--tx2); }
+.d-horizon .h-msg-b .h-blk:last-child { margin-bottom: 0; }
+.d-horizon .h-blk-t { margin: 0 0 10px; color: var(--mu); font-size: 12px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; }
+.d-horizon .h-blk-na { color: var(--fa); }
+.d-horizon .h-blk .fx-fig[data-unavailable] { color: var(--fa); font-family: var(--sans); font-size: 13px; }
+.d-horizon .h-blk-note { margin-top: 10px; color: var(--fa); font-size: 13px; }
+
+/* Table: filter, scroller, sticky first column, right-aligned tabular numbers. */
+.d-horizon .h-blk-filter { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.d-horizon .h-blk-filter label { flex: none; color: var(--mu); font-size: 12.5px; }
+.d-horizon .h-blk-filter input { flex: 1 1 auto; min-width: 0; height: 32px; padding: 0 10px; border: 1px solid var(--line2); border-radius: 7px; background: var(--bg); color: var(--tx); font: inherit; font-size: 13.5px; }
+.d-horizon .h-blk-filter input:focus { border-color: var(--ac); outline: none; }
+.d-horizon .h-blk-tw { width: 100%; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: var(--line2) transparent; border-radius: 6px; }
+.d-horizon .h-blk-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13.5px; }
+.d-horizon .h-blk-table th { padding: 0 10px 8px; text-align: left; font-weight: 500; white-space: nowrap; border-bottom: 1px solid var(--line2); }
+.d-horizon .h-blk-table td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: baseline; }
+.d-horizon .h-blk-table tbody tr:last-child td { border-bottom: 0; }
+.d-horizon .h-blk-table :is(th, td):first-child { position: sticky; left: 0; z-index: 1; padding-left: 0; background: var(--s1); color: var(--tx); }
+.d-horizon .h-blk-table :is(th, td):last-child { padding-right: 0; }
+.d-horizon .h-blk-table .n { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.d-horizon .h-blk-sort { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0; border: 0; background: none; color: var(--fa); font: inherit; font-size: 12px; letter-spacing: 0.04em; cursor: pointer; }
+.d-horizon .h-blk-sort:hover, .d-horizon th[aria-sort="ascending"] .h-blk-sort, .d-horizon th[aria-sort="descending"] .h-blk-sort { color: var(--tx); }
+.d-horizon .h-blk-sort i { font-style: normal; color: var(--ac); }
+.d-horizon .h-blk-sort i:empty { display: none; }
+/* A number column's arrow sits before its label, so the label lines up with the values. */
+.d-horizon .h-blk-table th.n .h-blk-sort { flex-direction: row-reverse; }
+.d-horizon .h-blk-empty { padding: 10px 0 2px; color: var(--fa); font-size: 13px; }
+.d-horizon .h-blk-more { margin-top: 8px; }
+
+/* Compare: stacked option cards; side by side once the block is 560px wide (4 options at most). */
+.d-horizon .h-blk-cmp { display: grid; gap: 10px; }
+.d-horizon .h-blk-opt { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.d-horizon .h-blk-opt h4 { margin: 0 0 6px; color: var(--tx); font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
+.d-horizon .h-blk-opt dl { margin: 0; }
+.d-horizon .h-blk-cf { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 6px 0; border-top: 1px solid var(--line); }
+.d-horizon .h-blk-cf dt { min-width: 0; color: var(--mu); font-size: 13px; }
+.d-horizon .h-blk-cf dd { margin: 0; text-align: right; white-space: nowrap; }
+@container (min-width: 560px) {
+  .d-horizon .h-blk-cmp.cols { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
+}
+
+/* Charts and timelines (ask-block-chart.js, ask-block-timeline.js). The Table toggle sits in the
+   caption row; series take the ramp through .c1 .. .c4. */
+.d-horizon .h-blk-chart, .d-horizon .h-blk-timeline { position: relative; }
+.d-horizon .h-blk-chart .h-blk-t, .d-horizon .h-blk-timeline .h-blk-t { min-height: 16px; padding-right: 72px; }
+.d-horizon .h-blk-tools { position: absolute; top: 7px; right: 10px; }
+.d-horizon .h-blk-tog { height: 26px; padding: 0 11px; border: 1px solid var(--line2); border-radius: 999px; background: none; color: var(--mu); font: inherit; font-size: 12px; cursor: pointer; }
+.d-horizon .h-blk-tog:hover { color: var(--tx); }
+.d-horizon .h-blk-tog[aria-pressed="true"] { border-color: var(--acl); background: var(--acd); color: var(--ac2); }
+.d-horizon .h-blk-tog:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; }
+.d-horizon .h-blk .c1 { --c: var(--blk-s1); }
+.d-horizon .h-blk .c2 { --c: var(--blk-s2); }
+.d-horizon .h-blk .c3 { --c: var(--blk-s3); }
+.d-horizon .h-blk .c4 { --c: var(--blk-s4); }
+.d-horizon .h-blk-plot { width: 100%; border-radius: 6px; touch-action: pan-y; }
+.d-horizon .h-blk-plot:focus-visible { outline: 2px solid var(--ac); outline-offset: 3px; }
+.d-horizon .h-blk-svg { display: block; width: 100%; height: auto; overflow: visible; }
+.d-horizon .h-blk-grid { stroke: var(--line); stroke-width: 1; }
+.d-horizon .h-blk-zero { stroke: var(--line2); stroke-width: 1; }
+.d-horizon .h-blk-tk { fill: var(--fa); font: 10.5px var(--mono); }
+.d-horizon .h-blk-ax { fill: var(--mu); font: 11px var(--sans); }
+.d-horizon .h-blk-ln { fill: none; stroke: var(--c); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.d-horizon .h-blk-ar { fill: var(--c); fill-opacity: 0.14; stroke: none; }
+.d-horizon .h-blk-guide { stroke: var(--line2); stroke-width: 1; }
+.d-horizon .h-blk-pt { fill: var(--c); stroke: var(--s1); stroke-width: 1.5; cursor: pointer; }
+.d-horizon .h-blk-plot.dense .h-blk-pt:not(.on):not(.solo) { opacity: 0; }
+.d-horizon .h-blk-pt.on { stroke: var(--tx); stroke-width: 2; }
+.d-horizon circle.h-blk-pt.on { r: 5px; }
+.d-horizon .h-blk-chart .fr.h-blk-pt { stroke: var(--s1); }
+.d-horizon .h-blk-pt:not(.fr) { fill-opacity: 0.55; }
+.d-horizon .h-blk-svg path ~ .h-blk-pt:not(.fr) { fill-opacity: 1; }
+.d-horizon .h-blk-pt.on:not(.fr) { fill-opacity: 1; }
+.d-horizon .h-blk-ring { fill: none; stroke: var(--tx2); stroke-width: 1.5; }
+.d-horizon .h-blk-front { fill: none; stroke: var(--blk-s1); stroke-width: 1.5; stroke-opacity: 0.55; }
+.d-horizon .h-blk-bar { fill: var(--c); cursor: pointer; }
+.d-horizon .h-blk-bar.on { stroke: var(--tx); stroke-width: 1.5; }
+.d-horizon .h-blk-bar.na { fill: none; stroke: var(--fa); stroke-dasharray: 3 2; }
+.d-horizon .h-blk-bar.none { fill: none; stroke: none; }
+.d-horizon .h-blk-key { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 8px 0 0; padding: 0; list-style: none; color: var(--mu); font-size: 12px; }
+.d-horizon .h-blk-key li { display: inline-flex; align-items: center; gap: 6px; }
+.d-horizon .h-blk-key i { width: 12px; height: 2px; border-radius: 1px; background: var(--c); }
+.d-horizon .h-blk-key i.sq { width: 9px; height: 9px; border-radius: 2px; }
+.d-horizon .h-blk-read { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; min-height: 20px; margin: 8px 0 0; color: var(--mu); font-size: 13px; }
+.d-horizon .h-blk-read-t { color: var(--tx2); }
+.d-horizon .h-blk-read .fx-fig { color: var(--tx); font-variant-numeric: tabular-nums; }
+
+/* Timeline: a date rail; each event's date above its label, the value on the right. */
+.d-horizon .h-blk-tl { margin: 0; padding: 0; list-style: none; }
+.d-horizon .h-blk-ev { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; align-items: baseline; padding: 0 0 14px 22px; }
+.d-horizon .h-blk-ev:last-child { padding-bottom: 0; }
+.d-horizon .h-blk-ev::before { content: ''; position: absolute; left: 0; top: 4px; width: 9px; height: 9px; box-sizing: border-box; border: 2px solid var(--blk-s1); border-radius: 50%; background: var(--s1); }
+.d-horizon .h-blk-ev::after { content: ''; position: absolute; left: 4px; top: 17px; bottom: 1px; width: 1px; background: var(--line2); }
+.d-horizon .h-blk-ev:last-child::after { display: none; }
+.d-horizon .h-blk-ev time { grid-column: 1 / -1; margin-bottom: 2px; color: var(--fa); font: 11.5px var(--mono); }
+.d-horizon .h-blk-ev-l { min-width: 0; color: var(--tx); font-size: 14px; overflow-wrap: anywhere; }
+.d-horizon .h-blk-asof { margin: 12px 0 0; color: var(--fa); font-size: 12.5px; }
+.d-horizon .h-blk-ev-v { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }

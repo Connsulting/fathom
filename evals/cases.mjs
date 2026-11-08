@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import Ajv from 'ajv';
 import { isoFromLabel } from '../demo/ledger.mjs';
 import { classOf } from '../src/calc/classes.mjs';
+import { ANSWER_MAX_WORDS } from '../src/shared/answer-contract.mjs';
 
 const predicate = { type: 'object', additionalProperties: false, required: ['path', 'op'], properties: {
   path: { type: 'string', pattern: '^[A-Za-z][A-Za-z0-9_.]*$' },
@@ -32,13 +33,14 @@ export const caseSchema = {
       missingCapabilities: { type: 'array', uniqueItems: true, items: { type: 'string', minLength: 1 } },
     } },
     turns: { type: 'array', minItems: 1, items: { type: 'object', additionalProperties: false,
-      required: ['question', 'required', 'forbidden', 'expected', 'maxWords', 'rubric'], properties: {
+      required: ['question', 'required', 'forbidden', 'expected', 'rubric'], properties: {
         question: { type: 'string', minLength: 1, maxLength: 4000 },
         required: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['name', 'operation', 'predicates'], properties: {
           name: { type: 'string', pattern: '^[a-z][a-z0-9_]+$' }, operation: { type: 'string', pattern: '^[a-z][a-z0-9_]*$' }, predicates: { type: 'array', items: predicate },
         } } },
         forbidden: { type: 'array', minItems: 2, maxItems: 3, uniqueItems: true, items: { enum: ['unsourced-figure', 'self-computed-figure', 'owner-assumption-not-in-messages'] } },
         expected: { type: 'array', items: expected }, maxWords: { type: 'integer', minimum: 1, maximum: 1000 },
+        wordLimitReason: { type: 'string', minLength: 1 },
         rubric: { type: 'string', minLength: 1 }, refusal: { type: 'boolean' },
         scriptedReply: { type: 'string', minLength: 1 },
         prohibit: { type: 'array', items: predicate },
@@ -52,6 +54,7 @@ export function validateCases(cases) {
   for (const c of cases) {
     if (c.requires?.script && !Array.isArray(c.requires.operations)) throw new TypeError('Scripted case requires operations');
     for (const turn of c.turns) {
+      if (turn.maxWords < ANSWER_MAX_WORDS && !turn.wordLimitReason?.trim()) throw new TypeError('Tighter word limit needs a reason');
       for (const requirement of turn.required) for (const p of requirement.predicates) {
         if (p.op !== 'exists' && !Object.hasOwn(p, 'value')) throw new TypeError('Predicate needs a value');
         if (['gte', 'lte'].includes(p.op) && !Number.isFinite(p.value)) throw new TypeError('Numeric predicate needs a number');
@@ -98,7 +101,9 @@ export async function loadCases(file = new URL('./catalog.json', import.meta.url
   const { getTool, CAPABILITIES } = availability ? {} : await import('../src/tools/index.mjs');
   const probe = availability ?? { hasOperation: (name, operation) => Boolean(getTool(name)?.operations.some(o => o.name === operation)), capabilities: CAPABILITIES,
     hasScript: id => existsSync(new URL(`./scripts/${id}.mjs`, import.meta.url)) };
-  const cases = data.cases.map(c => applyAvailability(c, probe));
+  const cases = data.cases.map(c => applyAvailability({ ...c,
+    turns: c.turns.map(t => ({ ...t, maxWords: t.maxWords ?? ANSWER_MAX_WORDS })),
+  }, probe));
   validateCases(cases);
   return cases;
 }

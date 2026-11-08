@@ -16,7 +16,8 @@ export async function guessClosedOptions(db,jev,{now}={}) {
   if(!jev?.isOn()) return {guessed:0};
   const names=householdNames(db), accounts=db.prepare('SELECT id,mask FROM accounts').all();
   const items=pendingItems(db).filter(item=>['account_kind','account_owner'].includes(item.kind)
-    && !db.prepare('SELECT 1 FROM confirm_guesses WHERE item_id=?').get(item.id));
+    && !db.prepare('SELECT 1 FROM confirm_guesses WHERE item_id=?').get(item.id)
+    && !db.prepare('SELECT 1 FROM confirm_auto_declined WHERE item_id=?').get(item.id));
   let guessed=0;
   try {
     for(let i=0;i<items.length;i+=10) {
