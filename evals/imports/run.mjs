@@ -71,27 +71,31 @@ function scripted(c, envelope, injectUnsafe) {
   return response;
 }
 
+const orderedRoles = entries => [...new Map(entries)].sort(([a], [b]) => a.localeCompare(b));
+const expectedContext = c => ({ dispositions: orderedRoles(Object.entries(c.oracle.dispositions)), completeness: c.family === 'january_tax_year' ? 'incomplete' : 'complete', reconciliation: c.oracle.reconciliation ?? 'no_sheet_total' });
+const observedContext = (proposal, source, errors) => ({ dispositions: orderedRoles(proposal.coverage.flatMap(region => region.refs.map(id => [coordinate(source.refs[id]), region.disposition]))), completeness: proposal.completeness, reconciliation: proposal.controls?.length ? errors.includes('total_mismatch') ? 'conflict' : 'match' : 'no_sheet_total' });
+
 function expectedRows(c) {
   const refs = new Map(c.oracle.source.refs.map(ref => [ref.id, ref]));
   if (c.family === 'january_tax_year') return [];
-  return typedRows(c).map(row => ({ ...attributes(row), fields: Object.fromEntries(Object.entries(row.fields).map(([key, value]) => [key, value === null ? null : {
+  return typedRows(c).map(row => ({ ...attributes(row), context: expectedContext(c), fields: Object.fromEntries(Object.entries(row.fields).map(([key, value]) => [key, value === null ? null : {
     ...value, references: value.refs.map(id => { const { id: refId, value: raw, ...ref } = refs.get(id); return ref; }), value: key === 'dueDate' ? refs.get(value.refs[0]).value.trim() : key === 'statement' ? refs.get(value.refs[0]).value.trim() : key === 'actor' ? 'owner' : row[key] ?? refs.get(value.refs[0])?.value,
   }])) }));
 }
 async function observedRows(c, x, file) {
-  const record = x.db.prepare('SELECT proposal FROM import_proposals WHERE file_id=? ORDER BY version DESC LIMIT 1').get(file.fileId);
+  const record = x.db.prepare('SELECT proposal,review_state FROM import_proposals WHERE file_id=? ORDER BY version DESC LIMIT 1').get(file.fileId);
   if (!record) return [];
   const source = await indexSource({ fileId: file.fileId, bytes: c.bytes, format: c.format });
-  return JSON.parse(record.proposal).rows.map(row => ({ ...attributes(row), fields: Object.fromEntries(Object.entries(row.fields).map(([key, value]) => [key, value === null ? null : {
+  const proposal = JSON.parse(record.proposal), errors = JSON.parse(record.review_state).presentation?.errors ?? [];
+  return proposal.rows.map(row => ({ ...attributes(row), context: observedContext(proposal, source, errors), fields: Object.fromEntries(Object.entries(row.fields).map(([key, value]) => [key, value === null ? null : {
     ...value, refs: value.refs.map(id => coordinate(source.refs[id])), references: value.refs.map(id => source.refs[id]), value: resolveField(source, value),
   }])) }));
 }
 async function contextMatches(c, x, file) {
-  const record = x.db.prepare('SELECT proposal FROM import_proposals WHERE file_id=? ORDER BY version DESC LIMIT 1').get(file.fileId);
+  const record = x.db.prepare('SELECT proposal,review_state FROM import_proposals WHERE file_id=? ORDER BY version DESC LIMIT 1').get(file.fileId);
   if (!record) return false;
   const proposal = JSON.parse(record.proposal), source = await indexSource({ fileId: file.fileId, bytes: c.bytes, format: c.format });
-  const actual = new Map(proposal.coverage.flatMap(region => region.refs.map(id => [coordinate(source.refs[id]), region.disposition])));
-  return Object.entries(c.oracle.dispositions).every(([id, disposition]) => actual.get(id) === disposition) && proposal.completeness === (c.family === 'january_tax_year' ? 'incomplete' : 'complete');
+  return isDeepStrictEqual(expectedContext(c), observedContext(proposal, source, JSON.parse(record.review_state).presentation?.errors ?? []));
 }
 const tables = ['transactions', 'balances', 'pnl_lines', 'tax_payments', 'positions', 'facts', 'expected_transactions', 'accounts'];
 const snapshot = x => stable(tables.map(table => x.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));

@@ -54,6 +54,7 @@ test('uncited cells, wrong accounts, wrong totals and cell instructions cannot s
     const report = await runEvaluation({ offline: true, caseIds: [injectUnsafe === 'account' ? 'reordered_sheets-1' : 'pnl_ledgers_refunds-1'], injectUnsafe });
     assert.equal(report.ok, false, injectUnsafe);
     assert.equal(report.failed, 1, injectUnsafe);
+    if (injectUnsafe === 'exclusion') assert.equal(report.f1, 0, 'exclusion roles participate in exact row matching');
     if (injectUnsafe === 'account') assert.ok(report.safety.unsafeAccepted > 0, 'a valid but wrongly bound posting must fail quality admission');
     else assert.equal(report.safety.unsafeAccepted, 0, injectUnsafe);
   }
