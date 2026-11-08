@@ -449,6 +449,8 @@ export function contributions(records, corps, attributed, owner) {
         if (c.type === 'deferral') outRegular += amt(c); else outCatch += amt(c);
       }
     }
+    if (of == null && owner['retirement.otherPlanDeferralsDefault']?.[p]?.undone && !outside.length
+      && !facts.some(c => c.sponsor.kind === 'outside' && elective(c))) outsideKnown = false;
     const plans = Object.values(byPlan);
     const loose = household.filter(r => !r.corp);
     const allRegular = cents(sum(plans.map(b => b.deferral)) + sum(loose.map(r => r.deferral)) + outRegular);

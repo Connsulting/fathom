@@ -44,12 +44,12 @@ const form1099 = (amounts) => obj({ taxYear: INT(), payerKind: STR(), payerName:
 
 export const SCHEMAS = Object.freeze({
   paystub: obj({
-    payDate: STR(), periodStart: STR(), periodEnd: STR(), employerName: STR(), gross: AMOUNT(), net: AMOUNT(),
+    payDate: STR(), periodStart: STR(), periodEnd: STR(), employerName: STR(), employeeName: STR(), gross: AMOUNT(), net: AMOUNT(),
     federalWithholding: AMOUNT(), stateWithholding: AMOUNT(), state: STR(), socialSecurity: AMOUNT(), medicare: AMOUNT(),
     retirementDeferral: AMOUNT(), hsaDeferral: AMOUNT(), ytdGross: AMOUNT(), confidence: CONFIDENCE(),
   }, ['payDate', 'confidence']),
   w2: obj({
-    taxYear: INT(), employerName: STR(), wages: AMOUNT(), federalWithheld: AMOUNT(), socialSecurityWages: AMOUNT(), medicareWages: AMOUNT(),
+    taxYear: INT(), employerName: STR(), employeeName: STR(), wages: AMOUNT(), federalWithheld: AMOUNT(), socialSecurityWages: AMOUNT(), medicareWages: AMOUNT(),
     state: STR(), stateWages: AMOUNT(), stateWithheld: AMOUNT(), retirementPlan: BOOL(),
     box12: { type: 'array', items: obj({ code: STR(), amount: AMOUNT() }, ['code', 'amount']) }, confidence: CONFIDENCE(),
   }, ['taxYear', 'confidence']),

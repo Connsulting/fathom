@@ -123,7 +123,8 @@ describe('recordAutoAnswer', () => {
   test('records an answer with its rule and evidence through the undo log, and refuses like answerItem', () => withHousehold((s) => {
     const card = kindItem(s.db, 'card');
     const rainy = kindItem(s.db, 'rainyDay');
-    assert.equal(card.status, 'pending');
+    C.reopenItem(s.db, card.id, { now: NOW });
+    assert.equal(C.getItem(s.db, card.id).status, 'pending');
     const evidence = { text: 'Synthetic evidence for a test.', basis: [], ancestors: [] };
     C.recordAutoAnswer(s.db, card.id, 'card', { rule: 'shared_mask', evidence, now: NOW });
     const info = assertAuto(s.db, card, { rule: 'shared_mask', answer: 'card' });
@@ -223,7 +224,7 @@ describe('holder_match', () => {
       assert.ok(info.evidence.ancestors.includes(ownerItem(s.db, brok).id), `${pos} rests on the ${brok} answer`);
     }
     assertPending(s.db, ownerItem(s.db, 'rainyDay'), 'a multi-holder account is never auto answered');
-    assert.equal(C.pendingItems(s.db).length, 4);
+    assert.equal(C.pendingItems(s.db).length, 3);
   }, { names: NAMES }));
 
   test('without the names fact nothing is answered by holder at import', () => withHousehold((s) => {
@@ -265,7 +266,7 @@ describe('shared_mask', () => {
       assert.ok(textOf(info.evidence).includes(role.slice(-4)), `the evidence names the mask: ${textOf(info.evidence)}`);
       assert.equal(accountOf(s.db, item.subject).kind, 'taxable');
     }
-    assertPending(s.db, kindItem(s.db, 'card'), 'no same-mask sibling');
+    assertAuto(s.db, kindItem(s.db, 'card'), { rule: 'account_name', answer: 'card' });
     assertPending(s.db, kindItem(s.db, 'rainyDay'), 'no same-mask sibling');
   }));
 
@@ -281,7 +282,7 @@ describe('shared_mask', () => {
     assert.ok(bridge, 'precondition: the bridge checking has its own account with mask 4821');
     assert.ok(bridge.kind, 'precondition: its kind came from the bridge');
     const positions = accountId(s.db, '4821', '');
-    assertPending(s.db, itemFor(s.db, 'account_kind', positions), 'a SimpleFIN account never supports shared_mask');
+    assertAuto(s.db, itemFor(s.db, 'account_kind', positions), { rule: 'account_name', answer: 'taxable' });
 
     C.answerItem(s.db, itemFor(s.db, 'account_owner', positions).id, 'owner', { now: LATER });
     A.autoResolve(s.db, { now: LATER });
@@ -494,7 +495,7 @@ describe('undo', () => {
   test('an auto owner answer stays undoable after the kind answer on the same account', () => withHousehold((s) => {
     const owner = ownerItem(s.db, 'card');
     assertAuto(s.db, owner, { rule: 'holder_match', answer: 'spouse' });
-    C.answerItem(s.db, kindItem(s.db, 'card').id, 'card', { now: LATER });
+    assertAuto(s.db, kindItem(s.db, 'card'), { rule: 'account_name', answer: 'card' });
     C.reopenItem(s.db, owner.id, { now: LATER });
     const acct = accountOf(s.db, owner.subject);
     assert.equal(acct.owner, null);
@@ -538,7 +539,7 @@ describe('ingestState', () => {
     assert.deepEqual(new Set(state.decided.map((d) => d.id)), new Set(auto.map((i) => i.id)));
     assert.deepEqual(new Set(state.decided.slice(0, 2).map((d) => d.id)), new Set([ownerItem(s.db, 'brokerage1111').id, ownerItem(s.db, 'positions1111').id]),
       'the answers made later come first');
-    const labels = { owner: 'You', taxable: 'Taxable brokerage', same: 'Same transaction, keep one' };
+    const labels = { card: 'Credit card', owner: 'You', taxable: 'Taxable brokerage', same: 'Same transaction, keep one' };
     for (const d of state.decided) {
       const item = C.getItem(s.db, d.id);
       assert.equal(d.kind, item.kind);

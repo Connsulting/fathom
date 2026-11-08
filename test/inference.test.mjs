@@ -156,7 +156,7 @@ test('AC9/AC10/AC11: personal budget tabs and an inactive past business leave th
   assert.equal(getFacts(db)['business.entities'].find(e => e.name === 'Former Studio').type, 'sole_prop');
 });
 
-test('unclear personal attribution asks once, accepts an owner answer with Undo, and never merges summaries into connected-account totals', async t => {
+test('unclear personal attribution asks once, accepts an owner answer with Undo, and fills connected-account gaps', async t => {
   const { db, ctx } = await store(t);
   budgetAndBusiness(db, { knownPeople: false });
   db.prepare("INSERT INTO accounts(id,name,kind,owner,parser) VALUES ('personal-cash','Personal checking','checking','You','aggregator')").run();
@@ -176,8 +176,8 @@ test('unclear personal attribution asks once, accepts an owner answer with Undo,
   scenario = buildScenario(db);
   assert.ok(!scenario.recs.find(r => r.id === 'missing-data')?.tasks.some(t => t.code === 'pnl_people_unknown' && !t.done));
   const after = await callTool('spending', selection, ctx);
-  assert.equal(after.total.value, before.total.value);
-  assert.equal(after.total.value, 270, 'only the connected account contributes to household spending');
+  assert.equal(before.total.value, 270);
+  assert.equal(after.total.value, 4770, 'connected groceries win and summaries fill other categories and the spouse');
   await callTool('undo', { operation: 'undo', id: out.receipt.id }, { ...ctx, scopes: ['write:facts'], channel: 'mcp' });
   assert.equal(pnlEntities({ db, clock: '2026-11-05' }).find(e => e.label === 'Birch').person, null);
   assert.ok(buildScenario(db).recs.find(r => r.id === 'missing-data').tasks.some(t => t.code === 'pnl_people_unknown'));

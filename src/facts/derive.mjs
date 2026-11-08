@@ -1,11 +1,12 @@
 import { cents, parseJson } from '../store/db.mjs';
-import { upsertFact } from '../store/facts.mjs';
-import { resolveEntities, inferEntities } from '../jobs/planner/data.mjs';
+import { upsertFact, withInferredRecFacts } from '../store/facts.mjs';
+import { resolveEntities, inferEntities, isOfficer } from '../jobs/planner/data.mjs';
 import { inferMortgage } from '../calc/mortgage-inference.mjs';
 import { docRecipient, payrollRecords, sameEmployer } from '../jobs/planner/payroll.mjs';
 import { TAX_2026 } from '../calc/index.mjs';
 import { activeInference } from '../shared/va529-plan.mjs';
 import { isCollegeAccount } from '../shared/account-kinds.mjs';
+import { PLAN_LABELS, inferPlanType } from '../shared/account-plans.mjs';
 import { ownerEntityIdentity } from '../pnl/ledgers.mjs';
 
 export const ADVISOR_KEYS = new Set(['retirement.planTermsConfirmed', 'retirement.aggregationConfirmed', 'business.salaryRange']);
@@ -14,6 +15,8 @@ export const DEFAULT_UNDO = Object.freeze({
   'business.cashBasisDefault': 'business.cashBasis',
   'accounts.va529CarryforwardDefault': 'accounts.va529',
   'business.entityInference': 'business.entities',
+  'accounts.planTypeInference': 'accounts.planTypeInferred',
+  'retirement.otherPlanDeferralsDefault': 'retirement.otherPlanDeferralsInferred',
 });
 const amount = v => typeof v === 'number' && Number.isFinite(v) && v >= 0;
 const ev = d => ({ table: 'documents', id: d.id, fileId: d.fileId ?? null });
@@ -41,7 +44,18 @@ export function deriveRecFacts(data, facts = {}, { entities = [] } = {}) {
       wageRows.push(ev(mine[0]));
     }
   }
-  if (wageRows.length) out['retirement.priorYearFicaWages'] = sourceFact(data, wages, 'Prior-year sponsor W-2 box three, by recipient', wageRows);
+  for (const person of ['owner', 'spouse']) {
+    if (wages[person] !== undefined || prior.some(d => sponsor(d)?.owner === person)) continue;
+    const corps = entities.filter(e => e.classified && e.type === 's_corp' && e.owner === person);
+    if (corps.length !== 1) continue;
+    const salary = (data.pnlHistory || []).filter(l => l.period?.slice(0, 4) === String(data.year - 1)
+      && sameEmployer(data, l.entity, corps[0].name) && isOfficer(l.category));
+    const total = cents(-salary.reduce((s, l) => s + l.amount, 0));
+    if (!salary.length || !amount(total)) continue;
+    wages[person] = total;
+    wageRows.push(...salary.map(l => ({ table: 'pnl_lines', id: l.id, fileId: l.file_id ?? null })));
+  }
+  if (wageRows.length) out['retirement.priorYearFicaWages'] = sourceFact(data, wages, 'Prior-year sponsor W-2 Social Security wages by recipient, otherwise inferred from the S corp owner officer salary in the prior-year profit and loss', wageRows);
 
   const payroll = payrollRecords(data, entities, facts);
   const other = {};
@@ -108,6 +122,16 @@ export function prepareRecFacts(db, data) {
   if (mortgage.present) values['obligations.mortgage'] = mortgage.values;
   const entities = resolveEntities(data, values);
   const candidates = deriveRecFacts(data, values, { entities });
+  const plans = {};
+  const planRows = [];
+  for (const account of data.accounts || []) {
+    if (values['accounts.planType']?.[account.id] !== undefined || values['accounts.planTypeInference']?.[account.id]?.undone) continue;
+    const type = inferPlanType(account);
+    if (!type) continue;
+    plans[account.id] = type;
+    planRows.push({ table: 'accounts', id: account.id, fileId: account.fileId ?? null });
+  }
+  if (planRows.length) candidates['accounts.planTypeInferred'] = sourceFact(data, plans, 'Retirement plan type inferred from the account name, institution and kind', planRows);
   const defaults = [];
   const addDefault = (key, value, undoKey, evidence, path = []) => {
     const flag = values[undoKey];
@@ -118,6 +142,28 @@ export function prepareRecFacts(db, data) {
   };
   if (values['household.filingStatus'] === undefined && spousePresent(values)) addDefault('household.filingStatus', 'mfj', 'household.filingStatusDefault', 'Assumption: filing jointly because a spouse is present.');
   if (values['business.cashBasis'] === undefined && entities.some(e => e.classified)) addDefault('business.cashBasis', true, 'business.cashBasisDefault', 'Assumption: the business uses cash-basis books.');
+  const payroll = payrollRecords(data, entities, values);
+  const other = candidates['retirement.otherPlanDeferrals']?.value || {};
+  const zeroPeople = {};
+  const people = new Set(entities.filter(e => e.classified).map(e => e.owner));
+  if (spousePresent(values)) { people.add('owner'); people.add('spouse'); }
+  for (const person of people) {
+    if (values['retirement.otherPlanDeferrals']?.[person] !== undefined) continue;
+    const mine = payroll.records.filter(r => r.person === person);
+    const outside = mine.some(r => !r.household)
+      || (values['retirement.contributions'] || []).some(c => c.person === person && c.plan === 'outside-401k');
+    const unknown = payroll.blocks.some(b => !b.person || b.person === person);
+    if (outside || unknown) continue;
+    if (values['retirement.otherPlanDeferralsDefault']?.[person]?.undone) { delete other[person]; continue; }
+    zeroPeople[person] = { deferral: 0, catchUp: 0 };
+    delete other[person];
+    defaults.push({ key: 'retirement.otherPlanDeferrals', path: [person], value: zeroPeople[person], undoKey: 'retirement.otherPlanDeferralsDefault',
+      evidence: `Assumption: ${person === 'spouse' ? 'your spouse has' : 'you have'} no deferrals to other workplace plans because none are on file.` });
+  }
+  if (Object.keys(zeroPeople).length) candidates['retirement.otherPlanDeferralsInferred'] = sourceFact(data, zeroPeople,
+    'Assumption: no deferrals to other workplace plans because none are on file',
+    [{ table: 'facts', id: entities.length ? 'business.entities' : 'household.birthYears' }], true);
+  if (candidates['retirement.otherPlanDeferrals'] && !Object.keys(other).length) delete candidates['retirement.otherPlanDeferrals'];
   const college = structuredClone(values['accounts.va529'] || {});
   const carryDefaults = {};
   for (const a of (data.accounts || []).filter(isCollegeAccount)) {
@@ -138,7 +184,12 @@ export function prepareRecFacts(db, data) {
     writes.push({ key, ...candidate });
   }
   const deletes = Object.entries(stored).filter(([key, r]) => automatic(r) && !candidates[key]).map(([key]) => key);
+  withInferredRecFacts(values);
   const assumptions = defaults.filter(a => a.path.length ? !values[a.undoKey]?.[a.path[0]]?.undone : values[a.undoKey] !== true);
+  for (const [id, type] of Object.entries(plans)) assumptions.push({
+    key: 'accounts.planType', path: [id], value: type, undoKey: 'accounts.planTypeInference',
+    evidence: `Inferred ${PLAN_LABELS[type]} from the account name and institution for ${(data.accounts || []).find(a => a.id === id)?.name || 'this account'}.`,
+  });
   for (const entity of entityInference.value.filter(e => e?.inferred)) assumptions.push({
     key: 'business.entities', path: [entity.name], value: entity.type, undoKey: 'business.entityInference',
     evidence: `${entity.name}: inferred ${entity.type === 'personal' ? 'personal spending and income summary' : entity.type === 'income_history' ? 'past client income history' : entity.type === 'inactive' ? 'inactive past business' : entity.type === null ? 'household business with tax type pending' : 'S corp'} from stored ${entity.inferenceKind === 'household_payroll' ? 'household employer and payroll evidence' : 'ledger activity'}.${entity.type === 'personal' ? entity.owner ? ` Attributed to ${entity.owner === 'spouse' ? 'your spouse' : 'you'}.` : ' Tell Fathom who this summary belongs to.' : ''} Not right? Tell Fathom which one is the S corp or correct this summary's person.`,
@@ -169,6 +220,16 @@ export function undoDefault(db, key, value) {
       db.prepare("UPDATE facts SET value=? WHERE key='business.entities'").run(JSON.stringify(prior.flatMap(e => !e?.inferred || !names.has(e.name.trim().toLowerCase()) ? [e]
         : e.nameSource === 'owner' ? [ownerEntityIdentity(e)] : [])));
     }
+    return;
+  }
+  if (key === 'accounts.planTypeInference' || key === 'retirement.otherPlanDeferralsDefault') {
+    const target = DEFAULT_UNDO[key];
+    const row = db.prepare('SELECT * FROM facts WHERE key = ?').get(target);
+    if (!row || row.confirmed || row.parser !== 'derive') return;
+    const prior = parseJson(row.value, {});
+    for (const [id, flag] of Object.entries(value)) if (flag?.undone) delete prior[id];
+    if (Object.keys(prior).length) db.prepare('UPDATE facts SET value = ? WHERE key = ?').run(JSON.stringify(prior), target);
+    else db.prepare('DELETE FROM facts WHERE key = ?').run(target);
     return;
   }
   const target = DEFAULT_UNDO[key];

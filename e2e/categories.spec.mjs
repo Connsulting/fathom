@@ -35,7 +35,7 @@ test('Check these learns a merchant rule, changes displayed spending, and undoes
   expect(order.slice(0,7),'one fixed category order on every card').toEqual(['Shopping','Business','Income','Internal Transfers','Taxes','Investment','Ignore']);
   expect(await card.innerText()).not.toMatch(/%|jev|typesafe/i);
   await expect(card).toContainText('Uncategorized');
-  await card.getByLabel('Always for this merchant').check();
+  await expect(card.getByRole('checkbox', { name: /Apply to all from/ })).toBeChecked();
   const sent=page.waitForResponse(r=>r.request().method()==='POST' && /\/api\/confirm\/\d+\/answer$/.test(new URL(r.url()).pathname));
   await card.getByRole('button',{name:/Business/}).click();
   const answer=await sent; expect(answer.status()).toBe(200); expect(answer.request().postDataJSON().answer).toBe('always:Business');
@@ -49,10 +49,11 @@ test('Check these learns a merchant rule, changes displayed spending, and undoes
   await page.screenshot({path:info.outputPath('check-these.png'),fullPage:true});
 });
 
-test('number keys and take-guess cannot learn a merchant rule without the checkbox @mobile @cat-ac3',async({page,request})=>{
+test('unchecking merchant-wide answers limits number keys and take-guess to one transaction @mobile @cat-ac3',async({page,request})=>{
   await start(request); const card=await serviceCard(page);
   const itemId=await card.getAttribute('data-item');
-  await expect(card.getByLabel('Always for this merchant')).not.toBeChecked();
+  await card.getByRole('checkbox', { name: /Apply to all from/ }).uncheck();
+  await expect(card.getByRole('checkbox', { name: /Apply to all from/ })).not.toBeChecked();
   const options=card.locator('button[data-answer]');
   const second=await options.nth(1).getAttribute('data-option');
   const numberPost=page.waitForResponse(r=>r.request().method()==='POST' && /\/api\/confirm\/\d+\/answer$/.test(new URL(r.url()).pathname));
@@ -64,7 +65,7 @@ test('number keys and take-guess cannot learn a merchant rule without the checkb
   await page.locator('button[data-deck="undo"]').click();
   expect((await reopened).status()).toBe(200);
   await expect(card).toHaveAttribute('data-item',itemId);
-  await expect(card.getByLabel('Always for this merchant')).not.toBeChecked();
+  await expect(card.getByRole('checkbox', { name: /Apply to all from/ })).not.toBeChecked();
   const guessed=page.waitForResponse(r=>r.request().method()==='POST' && /\/api\/confirm\/\d+\/answer$/.test(new URL(r.url()).pathname));
   await card.getByRole('button',{name:'Use best guess'}).click();
   const g=await guessed; expect(g.status()).toBe(200); expect(g.request().postDataJSON().answer.startsWith('always:')).toBe(false);

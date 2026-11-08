@@ -130,6 +130,7 @@ describe('account cards', () => {
 
   test('an account_kind card uses the same view; an account with no same-named sibling differs in nothing', () => withHousehold((s) => {
     const id = acct(s.db, '3344', 'Example Card');
+    C.reopenItem(s.db, C.listItems(s.db, { status: 'answered' }).find(i => i.kind === 'account_kind' && i.subject === id).id, { now: NOW });
     const d = X.cardDetail(s.db, pendingFor(s.db, 'account_kind', id));
     assert.equal(d.type, 'account');
     assert.equal(d.account.name, 'Rewards Card');

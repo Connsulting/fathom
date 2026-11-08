@@ -53,6 +53,15 @@ async function answerViaApi(request, it, optionId) {
   expect(res.status(), `answer ${it.id}`).toBe(200);
 }
 
+async function reopenRewardsKind(page, request) {
+  const ing = await ingestState(request);
+  const decided = ing.decided.find(i => i.kind === 'account_kind' && evidenceText(i.evidence).includes('Rewards Card'));
+  expect(decided, 'Rewards Card is classified automatically').toBeTruthy();
+  const response = await request.post(`/api/confirm/${decided.id}/reopen`, { data: {} });
+  expect(response.status()).toBe(200);
+  await page.reload();
+}
+
 // The pending item of `kind` whose account panel names `name` (first match).
 function itemForAccount(ing, kind, name) {
   const it = ing.items.find((i) => i.kind === kind && i.detail?.account?.name === name);
@@ -248,6 +257,7 @@ test('Decided for you lists the cross-format duplicates; Undo reopens one and it
 
 test('the account type card shows the Rewards Card best guess with evidence naming the account', async ({ page, request }) => {
   await uploadHousehold(page);
+  await reopenRewardsKind(page, request);
   const ing = await ingestState(request);
   const kinds = ing.items.filter((i) => i.kind === 'account_kind');
   const rewards = itemForAccount(ing, 'account_kind', 'Rewards Card');
@@ -300,6 +310,7 @@ test('the remaining possible duplicate shows both entries side by side and can b
 
 test('a single card with a best guess tags the option, explains it, and Use best guess answers it', async ({ page, request }) => {
   await uploadHousehold(page);
+  await reopenRewardsKind(page, request);
   let ing = await ingestState(request);
   const rewards = itemForAccount(ing, 'account_kind', 'Rewards Card');
   // Answer the other account type questions so the Rewards Card is a single card.
