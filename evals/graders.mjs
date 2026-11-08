@@ -208,7 +208,7 @@ export function gradeThreadTitle(row, fallback) {
 }
 
 export function gradeBlocks(provenance = {}, transcript = [], required = []) {
-  const blocks = provenance.blocks ?? [];
+  const blocks = provenance?.blocks ?? [];
   const violations = [];
   const add = (kind, id) => violations.push({ kind, ...(id ? { id } : {}) });
   const remaining = [...blocks];
@@ -216,9 +216,9 @@ export function gradeBlocks(provenance = {}, transcript = [], required = []) {
     const i = remaining.findIndex(b => b.op === need.op && (!need.kind || b.snapshot?.kind === need.kind));
     if (i < 0) add('block_missing'); else remaining.splice(i, 1);
   }
-  if (required.length && provenance.blockNotes?.length) add('block_dropped');
+  if (required.length && provenance?.blockNotes?.length) add('block_dropped');
   function literal(value, path = []) {
-    if (path.at(-1) === 'args' && ['source'].includes(path.at(-2))) return false;
+    if (path.at(-1) === 'args' && path.at(-2) === 'source') return false;
     if (typeof value === 'number') return true;
     return value && typeof value === 'object' && Object.entries(value).some(([k, v]) => literal(v, [...path, k]));
   }

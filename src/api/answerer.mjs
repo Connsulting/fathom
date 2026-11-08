@@ -775,7 +775,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
     const blockNotes = toolResults.filter(r => r.name === 'show' && (r.isError || r.result?.status === 'dropped'))
       .map(r => droppedBlock(r.args?.operation, r.isError ? 'bad_input' : r.result.reason));
     const paragraphs = renderAnswer(text, grounding.violations, grounding.literals);
-    if (!paragraphs.length) return noticeReply(NOTICES.modelError);
+    if (!paragraphs.length && !placement.blocks.length && !blockNotes.length) return noticeReply(NOTICES.modelError);
     const lower = text.toLowerCase();
     return {
       paragraphs,
