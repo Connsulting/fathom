@@ -45,7 +45,9 @@ function eligible(item) {
 function queueRecQuestions(db, now, create) {
   const open = new Map();
   for (const row of db.prepare("SELECT id,def FROM recs WHERE status IN ('proposed','doing','waiting','snoozed') ORDER BY id").all()) {
-    for (const key of parseJson(row.def, {}).question?.keys ?? []) {
+    const def = parseJson(row.def, {});
+    for (const key of [...(def.question?.keys ?? []), ...(Array.isArray(def.advisorQuestions) ? def.advisorQuestions : [])]) {
+      if (typeof key !== 'string') continue;
       let shape;
       try { shape = answerShape(key); } catch { continue; }
       if (closedShape(shape)) open.set(key, { shape, recId: row.id });
@@ -110,18 +112,27 @@ function propose(db, proposal, { open, sent, current, now }) {
   const { key, value, quote, refs } = proposal;
   if (typeof quote !== 'string' || !quote.trim() || !Array.isArray(refs) || !refs.length
     || refs.some(ref => !isOwnerRef(ref) || !sent.has(ref) || current.get(ref) !== sent.get(ref).json)) return false;
-  const cited = refs.map(ref => sent.get(ref)).find(row => typeof row.payload.quote === 'string' && row.payload.quote.includes(quote));
+  // The model quotes the masked text it was shown. When masking kept the length, the same span of
+  // the original text is the real quote; otherwise the quote must appear verbatim in the original.
+  let cited = null, realQuote = quote;
+  for (const row of refs.map(ref => sent.get(ref))) {
+    const masked = row.payload.quote, original = row.row.quote;
+    if (typeof masked !== 'string' || typeof original !== 'string') continue;
+    const at = masked.indexOf(quote);
+    if (at >= 0 && masked.length === original.length) { cited = row; realQuote = original.slice(at, at + quote.length); break; }
+    if (original.includes(quote)) { cited = row; break; }
+  }
   if (!cited) return false;
   let shape;
   try { shape = answerShape(key); } catch { return false; }
-  if (!statedIn(value, quote, shape) || !recordable(db, key, value, now)) return false;
+  if (!statedIn(value, realQuote, shape) || !recordable(db, key, value, now)) return false;
   const subject = `${key}|${canonicalJson(value)}`;
   if (db.prepare("SELECT 1 FROM confirm_items WHERE kind='stated_value' AND subject=?").get(subject)) return false;
   let description = describeProposal(db, { tool: 'answer', operation: 'fact', args: { key, value } }).text;
   if (description.includes(key)) description = 'Save this detail you told Fathom.';
-  const question = `${ownerSaidSentence({ ...cited.row, quote })} Use it?`;
+  const question = `${ownerSaidSentence({ ...cited.row, quote: realQuote })} Use it?`;
   return !!ask(db, { kind: 'stated_value', subject, question, options: [{ id: 'use', label: 'Use it' }, { id: 'not_this', label: 'Not this' }],
-    context: { key, value, quote, ref: cited.row.ref, description }, now }).queued;
+    context: { key, value, quote: realQuote, ref: cited.row.ref, description }, now }).queued;
 }
 function contextFor(db, packDirs, items, packs = loadPacks(packDirs), notes = []) {
   const facts = getFacts(db);

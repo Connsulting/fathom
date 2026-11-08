@@ -1,6 +1,7 @@
 // What the owner already said, as quoted source rows for the resolver: each saved memory (the
-// preferences table) and each sentence of an uploaded note file. Note text is read through the
-// household vault on demand and never stored in plaintext.
+// preferences table) and each sentence of an uploaded note file. Note files stay encrypted in the
+// household vault and are read on demand; only a quoted sentence that supports an answer or a
+// Use it card is kept, as that item's evidence.
 
 import { listPreferences } from '../actions/preferences.mjs';
 import { readStoredFile, PURPOSES } from '../ingest/vault.mjs';
