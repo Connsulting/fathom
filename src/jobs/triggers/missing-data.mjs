@@ -101,7 +101,7 @@ function rawReasonItem(ctx, reason, name) {
   }
   if (REASONS[reason]) return { code: reason, tax: TAX_CODES.has(reason), text: REASONS[reason][0], task: REASONS[reason][1] };
   if (reason.includes('.')) {
-    return { code: reason, tax: false, text: 'This is on hold until you answer an open question in your household settings.', task: confirmTask(reason) };
+    return { code: reason, tax: false, text: 'An answer here would improve the precision of your plan.', task: confirmTask(reason) };
   }
   return { code: reason, tax: true, text: 'Some figures could not be computed from the data on file.', task: 'Check the latest uploads for missing amounts' };
 }

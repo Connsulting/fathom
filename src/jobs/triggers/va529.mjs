@@ -63,7 +63,7 @@ export function template(ctx, hit) {
       summary: 'Tell us which college savings accounts are Virginia plans you own, and any carryforward, and we will size the deduction left this year. Your age comes from your birth year.',
       why: [
         'Virginia deducts contributions per account up to {l:va529Cap} a year, but only for Virginia plans owned by the household.',
-        'An owner who is seventy or older deducts the full amount, and any carryforward changes what is left, so Virginia tax waits for these answers.',
+        'An owner who is seventy or older deducts the full amount, and any carryforward changes what is left. The tax estimate excludes unverified college savings deductions until these answers are known.',
       ],
       qa: [],
     };
