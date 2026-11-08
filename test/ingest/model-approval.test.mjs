@@ -119,3 +119,35 @@ test('a corrected interpretation needs a fresh acceptance of its own version', a
     assert.equal(out.status, 'imported'); assert.equal(out.version, 2);
   } finally { x.close(); }
 });
+
+test('unrelated uploads and an independent approval do not stale another file', async () => {
+  const x = await fixture();
+  try {
+    const a = await x.source('Account,Date,Amount USD,Description\naccount-synthetic,2032-03-01,-3,First independent purchase\n');
+    const first = stageImport(x.ctx, { source: a, proposal: applyLayout(a, recipe()), layout: recipe() });
+    const b = await x.source('Account,Date,Amount USD,Description\naccount-synthetic,2032-03-02,-4,Second independent purchase\n');
+    const second = stageImport(x.ctx, { source: b, proposal: applyLayout(b, recipe()), layout: recipe() });
+    await x.source('Account,Date,Amount USD,Description\naccount-synthetic,2032-03-07,-8,Unrelated upload\n');
+    for (const p of [first, second]) assert.equal((await reviewImport(x.ctx, { proposalId: p.proposalId, version: 1, decision: 'approve', evidence: 'yes' })).status, 'imported');
+    assert.equal(x.db.prepare('SELECT count(*) n FROM transactions').get().n, 2);
+  } finally { x.close(); }
+});
+
+test('changed duplicate preview refuses with a meaningful diff and restages a fresh approvable version', async () => {
+  const x = await fixture();
+  try {
+    const a = await x.source('Account,Date,Amount USD,Description\naccount-synthetic,2032-03-01,-3,Same synthetic purchase\n');
+    const first = stageImport(x.ctx, { source: a, proposal: applyLayout(a, recipe()), layout: recipe() });
+    const b = await x.source('Account,Date,Amount USD,Description\naccount-synthetic,2032-03-01,-3.00,Same synthetic purchase\n');
+    const second = stageImport(x.ctx, { source: b, proposal: applyLayout(b, recipe()), layout: recipe() });
+    await reviewImport(x.ctx, { proposalId: first.proposalId, version: 1, decision: 'approve', evidence: 'yes' });
+    await assert.rejects(reviewImport(x.ctx, { proposalId: second.proposalId, version: 1, decision: 'approve', evidence: 'yes' }), e => e.code === 'proposal_stale' && e.diff.some(d => d.field.includes('counts')));
+    assert.equal(x.db.prepare('SELECT count(*) n FROM import_batches').get().n, 1);
+    const fresh = await prepareImport(x.ctx, { file: { fileId: b.fileId, format: b.format, bytes: b.bytes } });
+    assert.equal(fresh.version, 2); assert.equal(fresh.status, 'needs_confirmation');
+    assert.equal(fresh.counts.duplicates, 1);
+    await assert.rejects(reviewImport(x.ctx, { proposalId: second.proposalId, version: 1, decision: 'approve', evidence: 'yes' }), e => e.code === 'proposal_stale');
+    assert.equal((await reviewImport(x.ctx, { proposalId: second.proposalId, version: 2, decision: 'approve', evidence: 'yes' })).status, 'imported');
+    assert.equal(x.db.prepare('SELECT count(*) n FROM transactions').get().n, 1);
+  } finally { x.close(); }
+});
