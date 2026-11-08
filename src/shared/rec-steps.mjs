@@ -24,7 +24,7 @@ const CONFIRM_KINDS = Object.freeze({
   tax_year_unconfirmed: ['tax_year'],
 });
 
-export function confirmItemFor(code, items = []) {
+export function confirmItemFor(code = '', items = []) {
   const pending = items.filter(item => item.status === 'pending');
   if (code.startsWith('entity_unclassified:')) {
     return pending.find(item => item.kind === 'fact_check' && item.context?.src === 'ledger-confirm');
@@ -48,7 +48,8 @@ export function deriveSteps(tasks, done, env = {}) {
     if (isVerifiable(t)) {
       if (t.kind === 'confirm') {
         const { confirmId: _stored, ...rest } = t;
-        const confirmId = confirmItemFor(t.code, env.confirm)?.id;
+        const target = (env.confirm ?? []).find(item => item.id === t.confirmId && item.status === 'pending') ?? confirmItemFor(t.code, env.confirm);
+        const confirmId = target?.id;
         return { ...rest, ...(confirmId ? { confirmId } : {}), link: confirmId ? 'confirm' : 'ask', auto: true, done: checkCleared(t, env) };
       }
       return { ...t, auto: true, done: checkCleared(t, env) };

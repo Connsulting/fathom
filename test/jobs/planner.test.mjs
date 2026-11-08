@@ -87,7 +87,7 @@ function household() {
 }
 
 const EXPECTED_ACTIVE = [
-  'backdoor-roth', 'charitable-bunching', 'fed-q4-estimate', 'hsa-room', 'invoice-deferral', 'new-child',
+  'backdoor-roth', 'charitable-bunching', 'fed-q4-estimate', 'hsa-room', 'invoice-deferral', 'missing-data', 'new-child',
   'scorp-salary', 'solo401k-setup', 'va-q4-estimate', 'va529', 'year-end-retirement',
 ];
 
@@ -534,7 +534,10 @@ function assertRecShape(rec, scenario, packIds) {
   if (rec.question?.primary) {
     assert.ok(rec.question.fields.length > 0);
     assert.deepEqual(rec.tasks, []);
-  } else assert.ok(Array.isArray(rec.tasks) && rec.tasks.length >= 3 && rec.tasks.length <= 6, `${where}.tasks 3..6 (${rec.tasks.length})`);
+  } else {
+    const min = rec.id === 'missing-data' ? 1 : 3;
+    assert.ok(Array.isArray(rec.tasks) && rec.tasks.length >= min && rec.tasks.length <= 6, `${where}.tasks ${min}..6 (${rec.tasks.length})`);
+  }
   for (const t of rec.tasks) {
     assert.equal(typeof t.t, 'string');
     assert.equal(typeof t.done, 'boolean');
@@ -552,9 +555,10 @@ function lastStatusEvent(db, id) {
 }
 
 describe('recs', () => {
-  test('AC4: the synthetic household gets exactly the expected recs; dependent-care-fsa and missing-data do not fire', () => {
+  test('AC4: the synthetic household includes missing-data for its account with old data', () => {
     assert.deepEqual(activeRecIds(base), EXPECTED_ACTIVE);
-    for (const id of ['dependent-care-fsa', 'missing-data']) assert.equal(recRow(base, id), null, `${id} has no rec`);
+    assert.equal(recRow(base, 'dependent-care-fsa'), null);
+    assert.ok(recRow(base, 'missing-data').def.tasks.some(t => t.code === 'balances'));
     for (const id of EXPECTED_ACTIVE) {
       const r = recRow(base, id);
       assert.equal(r.status, 'proposed', `${id} starts proposed`);
@@ -717,12 +721,13 @@ describe('recs', () => {
   });
 
   test('AC4: missing-data fires when the data goes stale (clock 2027-01-10, no new data)', async () => {
-    const db = await S.store({ clock: '2027-01-10' });
+    const db = await S.store();
+    db.prepare("INSERT INTO balances (account_id, date, amount) SELECT id, ?, 100 FROM accounts WHERE archived_at IS NULL ON CONFLICT(account_id, date) DO NOTHING").run(NOW);
+    await plan(db);
+    assert.ok(!activeRecIds(db).includes('missing-data'), 'every account has current data');
     await plan(db, { now: '2027-01-10' });
     assert.ok(activeRecIds(db).includes('missing-data'));
     assert.equal(recRow(db, 'missing-data').def.domain, 'data');
-    // liveness: the same data at the November clock does not fire it
-    assert.ok(!activeRecIds(base).includes('missing-data'));
   });
 
   test('AC4: an empty real store plans cleanly: only missing-data fires and no figures are written', async () => {

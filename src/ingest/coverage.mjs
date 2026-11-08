@@ -32,8 +32,8 @@ export function coveredFileSources(db) {
 }
 
 // The newest row date (on or before `clock`) of the connected accounts when SimpleFIN covers every
-// account that has transactions, else null. A synced account with no recent activity is current,
-// so the household transaction log is not stale because its newest transaction is old.
+// account that has transactions, else null. A recent balance snapshot can cover an older
+// transaction log; sourceStates still checks the newest date of each account separately.
 export function connectedThrough(db, clock) {
   const connected = connectedAccountIds(db);
   if (!connected.size) return null;

@@ -1,6 +1,7 @@
 // Missing data: stale or missing sources, unclassified businesses, blocked figures and missing
 // tax inputs (R1, R14, R19, T9.5). Evaluated last so it sees every other trigger's block.
 
+import { normalizeName } from '../../ingest/confirm.mjs';
 import { ADVISOR_KEYS } from '../../facts/derive.mjs';
 import { looksLikeSpending, spendingStatement } from '../../pnl/ledgers.mjs';
 import { addDays } from '../planner/data.mjs';
@@ -175,7 +176,10 @@ export function evaluate(ctx) {
   const factFor = { va529_answers_missing: 'accounts.va529', retirement_other_deferrals_missing: 'retirement.otherPlanDeferrals', deferral_split_unknown: 'retirement.otherPlanDeferrals', va_itemized_missing: 'tax.vaItemizedEstimate', filing_status_assumed: 'household.filingStatus' };
   const list = items(ctx).map(i => {
     const answerKey = factFor[i.code] || (Object.hasOwn(ANSWER_SHAPES, i.code) ? i.code : null);
-    const confirmId = /\bin Confirm$/.test(i.task) ? confirmItemFor(i.code, ctx.data?.confirm)?.id : null;
+    const employers = (ctx.info.payrollBlocks ?? []).filter(b => b.code === i.code).map(b => normalizeName(b.employer)).filter(Boolean);
+    const files = (ctx.data?.documents ?? []).filter(doc => employers.includes(normalizeName(doc.fields?.employerName))).map(doc => doc.fileId).filter(Boolean);
+    const candidates = (ctx.data?.confirm ?? []).filter(item => !employers.length || employers.includes(normalizeName(item.context?.employer)) || files.includes(item.fileId));
+    const confirmId = /\bin Confirm$/.test(i.task) ? confirmItemFor(i.code, candidates)?.id : null;
     return { ...i, answerKey, ...(confirmId ? { confirmId } : {}), ...(answerKey ? { kind: 'question', link: 'ask' } : {}) };
   }).filter(i => (!i.answerKey || !ctx.questionKeys?.has(i.answerKey)) && (!i.answerKey || !questionFor([i.answerKey], { accounts: ctx.data?.accounts || [], facts: ctx.facts }).answered));
   if (!list.length) return null;
@@ -213,7 +217,7 @@ export function listTitle(list) {
 // carries where it is done: an upload, the exact Confirm question, or Ask with this rec attached.
 export function stepOf(i) {
   if (i.answerKey) return { t: i.task, kind: 'answer', fact: i.answerKey };
-  if (i.kind === 'upload') return { t: i.task, kind: 'upload', code: i.code, noun: i.noun, link: 'upload' };
+  if (i.kind === 'upload') return { t: i.task, kind: 'upload', code: i.code, noun: i.noun, link: 'upload', ...(i.accountIds ? { accountIds: i.accountIds } : {}) };
   if (/\bin Confirm$/.test(i.task)) return { t: i.task, kind: 'confirm', code: i.code, link: i.confirmId ? 'confirm' : 'ask', ...(i.confirmId ? { confirmId: i.confirmId } : {}) };
   if (i.code.startsWith('entity_unclassified:')) return { t: i.task, kind: 'classify', code: i.code, link: 'ask' };
   return { t: i.task, kind: i.kind === 'question' ? 'answer' : 'review', code: i.code, link: 'ask' };

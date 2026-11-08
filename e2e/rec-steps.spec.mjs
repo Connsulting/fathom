@@ -7,12 +7,13 @@ import { secretEnv, secretsFor } from '../test/helpers/server.mjs';
 import { planRun } from '../test/helpers/plan.mjs';
 import { startServer } from '../src/server.mjs';
 import { loadConfig } from '../src/config.mjs';
+import { ask, FACT_CHECK_OPTIONS } from '../src/ingest/confirm.mjs';
 import { createAuthStore } from '../src/auth/store.mjs';
 
 // The missing-data rec on a synthetic single filer late in the year: its filing status is unset
 // and its sources are stale, so the rec lists one answer step and its upload steps. Every step is
 // product-managed: inline controls, no checkboxes, and the answer step completes itself.
-let app, session, origin, dataDir;
+let app, session, origin, dataDir, confirmId;
 const supplied = !!(process.env.BASE_URL || process.env.FATHOM_SMOKE_BASE_URL);
 const clock = '2026-12-28';
 const variant = { facts: { 'household.filingStatus': undefined, 'household.birthYears': { owner: 1984 }, 'household.names': undefined } };
@@ -22,12 +23,18 @@ test.describe('product-managed steps on the missing-data rec', () => {
   test.describe.configure({ mode: 'serial' });
   test.beforeAll(async () => {
     const repo = resolve(import.meta.dirname, '..');
-    dataDir = resolve(repo, '.e2e-data-steps');
-    if (dirname(dataDir) !== repo || !/^\.e2e-data-steps$/.test(basename(dataDir))) throw new Error('Steps fixture needs its own directory');
+    dataDir = resolve(repo, `${process.env.E2E_DATA || '.e2e-data'}-steps`);
+    if (dirname(dataDir) !== repo || !/^\.e2e-data(?:-[a-z0-9]+)*-steps$/.test(basename(dataDir))) throw new Error('Steps fixture needs its own directory');
     if (existsSync(dataDir)) rmSync(dataDir, { recursive: true, force: true });
     mkdirSync(dataDir);
     const db = await buildRealStore(dataDir, { clock, variant });
+    ask(db, { kind: 'fact_check', subject: 'unrelated-synthetic-check', question: 'An unrelated synthetic question',
+      options: FACT_CHECK_OPTIONS, context: { key: 'synthetic.unrelated', value: true }, now: clock });
+    for (const category of ['Medical', 'Shopping', 'Groceries', 'HSA', 'Dining']) {
+      db.prepare('INSERT INTO pnl_lines (entity, period, category, amount) VALUES (?, ?, ?, ?)').run('Synthetic spending ledger', '2026-10', category, -100);
+    }
     await planRun(db, { now: clock, dataDir });
+    confirmId = db.prepare("SELECT id FROM confirm_items WHERE kind = 'fact_check' AND context LIKE '%ledger-confirm%' AND status = 'pending'").get().id;
     db.prepare("UPDATE recs SET status = CASE WHEN id = 'missing-data' THEN 'proposed' ELSE 'dismissed' END").run();
     db.close();
     const socket = createServer();
@@ -94,6 +101,23 @@ test.describe('product-managed steps on the missing-data rec', () => {
     await expect(page.locator('.h-dlg .h-steps li.h-step[data-kind="answer"]')).toHaveClass(/\bdone\b/);
     expect(errors).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+
+  test('@mobile @st1 a Confirm step opens its own question instead of the first item', async ({ page }) => {
+    await page.goto(`${origin}/#/rec/missing-data`);
+    const link = page.locator(`.h-dlg .h-steps [data-go="confirm"][data-id="${confirmId}"]`).first();
+    await expect(link).toBeVisible();
+    await expect(link).toHaveAttribute('href', `#/confirm/${confirmId}`);
+    await link.click();
+    await expect(page).toHaveURL(`${origin}/#/confirm/${confirmId}`);
+    const card = page.locator('.h-deck-card.cur');
+    await expect(card).toHaveAttribute('data-item', String(confirmId));
+    await expect(card).toContainText('Confirm these are spending ledgers.');
+    await page.reload();
+    await expect(page.locator('.h-deck-card.cur')).toHaveAttribute('data-item', String(confirmId));
+    await page.goto(`${origin}/#/confirm/999999`);
+    await expect(page.locator('.h-deck-card.cur')).toBeVisible();
+    await expect(page.locator('.h-deck-card.cur')).not.toHaveAttribute('data-item', '999999');
   });
 });
 
