@@ -93,14 +93,12 @@ import { signInTarget } from '../auth/return-path.js';
 import { money, resolveTokens, esc, KIND_WORDS } from '/shared/tokens.mjs';
 import { needsYou as needsYouOf, packStatus } from '/shared/rules.mjs';
 import { isOwner } from '/shared/rec-links.mjs';
+import { ROUTES, LAST_STEP, movedRoute, onboardStepOf } from '/shared/route-moves.mjs';
 
-const ROUTES = new Set(['onboarding', 'home', 'pace', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
-  'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm', 'add', 'money', 'settings', 'memories', 'account', 'pnl', 'pnlrows']);
 const PARAM_KEY = { rec: 'id', onboarding: 'step', wargame: 'name', packs: 'id', ask: 'id', account: 'id', pnl: 'state', pnlrows: 'id' };
 // Routes whose param is a URLSearchParams string: kept as written in the hash ('=', '&' and the
 // string's own percent escapes literal), never decoded as one value.
 const QUERY_PARAM = new Set(['pnl', 'pnlrows']);
-const LAST_STEP = 5;
 
 // ---------------------------------------------------------------- small helpers
 
@@ -135,7 +133,7 @@ const rawPack = id => packList().find(p => p.id === id) || null;
 const threadList = () => arr(live().threads);
 const rawThread = id => threadList().find(t => t && t.id === id) || null;
 const isReal = () => live().mode === 'real';
-const minStep = () => (isReal() ? 1 : 0);
+const minStep = () => onboardStepOf(0, { real: isReal() });
 const demoId = () => (live().demo === 'fresh' ? 'fresh' : 'november');
 
 // Figures and sources a screen fetched on its own (an account's transactions), kept beside the
@@ -166,7 +164,7 @@ function stateView() {
   const val = {
     demo: demoId(),
     engine: !!L.engine,
-    onboardStep: Math.max(minStep(), routeStep != null ? routeStep : (Number.isFinite(Number(L.onboardStep)) ? Number(L.onboardStep) : 0)),
+    onboardStep: onboardStepOf(routeStep != null ? routeStep : L.onboardStep, { real: isReal() }),
     picks: Object.assign({}, L.picks || {}, pendingPicks),
     convs: L.conversations || {},
   };
@@ -253,22 +251,24 @@ function defaultRoute() {
   if (demoId() === 'fresh') return { name: 'onboarding', params: { step: stateView().onboardStep || minStep() } };
   return { name: 'home', params: {} };
 }
-const clampStep = n => Math.max(minStep(), Math.min(LAST_STEP, Number.isFinite(n) ? Math.floor(n) : 0));
+// The cut Goals and Curve steps (1 and 2) land on Tell us (3).
+const clampStep = n => onboardStepOf(n, { real: isReal() });
 
 function normalizeRoute(r) {
   if (!r || !ROUTES.has(r.name)) return defaultRoute();
-  // 'brief' is the old name of Home; email links still carry #/brief.
-  if (r.name === 'brief') return normalizeRoute({ name: 'home', params: {} });
+  // An old route (#/brief, #/accounts) lands on its new home.
+  const moved = movedRoute(r);
+  if (moved) return normalizeRoute(moved);
   const p = r.params || {};
   if (demoId() === 'fresh') {
     const step = r.name === 'onboarding' && p.step != null && p.step !== '' ? clampStep(Number(p.step)) : stateView().onboardStep;
     return { name: 'onboarding', params: { step } };
   }
-  // A real store past first run reaches onboarding as Setup, landing on Goals (step 1).
-  if (r.name === 'onboarding') return isReal() ? { name: 'onboarding', params: { step: p.step != null && p.step !== '' ? clampStep(Number(p.step)) : 1 } } : defaultRoute();
+  // A real store past first run reaches onboarding as Setup, landing on Tell us.
+  if (r.name === 'onboarding') return isReal() ? { name: 'onboarding', params: { step: p.step != null && p.step !== '' ? clampStep(Number(p.step)) : minStep() } } : defaultRoute();
   if (r.name === 'rec') return p.id && rawRec(String(p.id)) ? { name: 'rec', params: { id: String(p.id) } } : { name: 'plan', params: {} };
-  // The account dialog is a route like the rec dialog; an account that is gone lands on Accounts.
-  if (r.name === 'account') return p.id && arr(S && S.accounts).some(a => a.id === String(p.id)) ? { name: 'account', params: { id: String(p.id) } } : { name: 'accounts', params: {} };
+  // The account dialog is a route like the rec dialog; an account that is gone lands on Money.
+  if (r.name === 'account') return p.id && arr(S && S.accounts).some(a => a.id === String(p.id)) ? { name: 'account', params: { id: String(p.id) } } : { name: 'money', params: {} };
   if (r.name === 'ask') return p.id && rawThread(String(p.id)) ? { name: 'ask', params: { id: String(p.id) } } : { name: 'ask', params: {} };
   if (r.name === 'packs') return p.id && rawPack(String(p.id)) ? { name: 'packs', params: { id: String(p.id) } } : { name: 'packs', params: {} };
   // The P&L keeps its sort and filter as one state string; its rows dialog needs a spec.

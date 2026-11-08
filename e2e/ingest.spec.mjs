@@ -22,7 +22,7 @@ test.beforeEach(async ({ request }) => {
 
 test('add files, confirm an owner, and see it on Accounts', async ({ page, request }) => {
   const before = (await pendingIds(request)).length;
-  await gotoRoute(page, 'accounts');
+  await gotoRoute(page, 'money');
   await expect(page.locator('input[type=file][data-upload]')).toHaveCount(1);
 
   const addFiles = page.getByRole('button', { name: 'Add files', exact: true });
@@ -87,7 +87,7 @@ test('add files, confirm an owner, and see it on Accounts', async ({ page, reque
   expect(left).not.toContain(item.id);
 
   // The owner label shows on Accounts; one fewer question is pending on Home.
-  await gotoRoute(page, 'accounts');
+  await gotoRoute(page, 'money');
   const card = page.locator('.h-acc').filter({ hasText: account.name });
   await expect(card).toContainText(`${account.inst}, ${option.label}`);
   await gotoRoute(page, 'home');
@@ -102,7 +102,7 @@ test('a waiting file shows on Accounts with Retry, without any pending question'
   writeFileSync(path, 'when,memo,value\n2032-03-02,Synthetic waiting memo,-3.33\n2032-03-03,Synthetic waiting memo two,-4.44\n');
 
   const before = await pendingIds(request);
-  await gotoRoute(page, 'accounts');
+  await gotoRoute(page, 'money');
   const [chooser] = await Promise.all([
     page.waitForEvent('filechooser'),
     page.getByRole('button', { name: 'Add files', exact: true }).click(),
@@ -141,7 +141,7 @@ test('imported account labels render as plain escaped text with no token expansi
   const q = (s) => `"${s.replace(/"/g, '""')}"`;
   writeFileSync(path, `${header}\n2032-02-29,2032-02-28,Checking,${q(name)},4821,${q(inst)},Example Shop,,42.35,"EXAMPLE SHOP, PURCHASE",Shopping,,,,\n`);
 
-  await gotoRoute(page, 'accounts');
+  await gotoRoute(page, 'money');
   const uploaded = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/files' && r.request().method() === 'POST');
   await page.locator('input[type=file][data-upload]').setInputFiles(path);
   const res = await uploaded;
@@ -211,7 +211,7 @@ test('upload file names render literally on onboarding, Accounts and Confirm', a
   // Back to the real (finished onboarding) scenario: reload to drop the forced one, then route.
   await page.unroute('**/api/**');
   await page.reload();
-  await gotoRoute(page, 'accounts');
+  await gotoRoute(page, 'money');
   const accountNames = await uploadHostile(page, 2);
   await expectLiteral(page.locator('.h-ing-files').first(), accountNames);
   await expect(page.locator('.h-ing-files b')).toHaveCount(0);
@@ -231,7 +231,7 @@ test('upload file names render literally on onboarding, Accounts and Confirm', a
 
 // D1: a file past the parse limits shows as "Too large to read" in the Accounts results.
 test('a file past the parse limits is labeled Too large to read', async ({ page }) => {
-  await gotoRoute(page, 'accounts');
+  await gotoRoute(page, 'money');
   const cols = Array.from({ length: 600 }, (_, i) => `c${i}`);
   const uploaded = page.waitForResponse((r) => new URL(r.url()).pathname === '/api/files' && r.request().method() === 'POST');
   await page.locator('input[type=file][data-upload]').setInputFiles({ name: 'wide-header.csv', mimeType: 'text/csv', buffer: Buffer.from(`${cols.join(',')}\n${cols.map(() => 'x').join(',')}\n`) });

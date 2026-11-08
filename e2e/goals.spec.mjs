@@ -140,19 +140,14 @@ test.describe('goals', TAGS, () => {
     await expect(page.locator('form.h-gform')).toBeVisible();
   });
 
-  test('onboarding Priorities save the owner positions', async ({ page }) => {
+  // SX5 cut the Curve step: its old link lands on Tell us and no page shows curve sliders.
+  test('onboarding has no Priorities step and no curve sliders', async ({ page }) => {
     await forceOnboarding(page);
     await page.goto('/#/onboarding/2');
-    await expectH1(page, 'Where on the curve');
-    const slider = page.locator('input[data-prio="tax_cash"]');
-    const post = saved(page, '/api/curve');
-    await slider.fill('15');
-    await post;
+    await expectH1(page, 'Dump everything in');
+    await expect(page.locator('input[data-prio]')).toHaveCount(0);
     await page.unroute('**/api/**');
     await page.reload();
-    // Goals has no curve sliders; the saved position feeds the planner.
-    const sc = await (await page.request.get('/api/scenario')).json();
-    expect(sc.curve.find((c) => c.id === 'tax_cash').value).toBe(0.15);
     await gotoGoals(page);
     await expect(page.locator('input[data-curve]')).toHaveCount(0);
   });

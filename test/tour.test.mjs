@@ -10,7 +10,7 @@ import { TOUR_STOPS, placeCallout, tourCount } from '../web/horizon/screens/tour
 const EM_DASH = String.fromCharCode(0x2014);
 const EMOJI = /\p{Extended_Pictographic}/u;
 
-const ROUTES = new Set(['home', 'plan', 'money', 'accounts', 'pnl', 'confirm', 'packs', 'ask', 'goals', 'pace',
+const ROUTES = new Set(['home', 'plan', 'money', 'pnl', 'confirm', 'packs', 'ask', 'goals', 'pace',
   'wargame', 'yearend', 'advisor', 'add', 'settings']);
 const FIELDS = ['id', 'route', 'anchor', 'title', 'body'];
 
@@ -51,9 +51,11 @@ test('stop copy is short: at most two sentences, no em dash, no emoji', () => {
 
 test('the core stops are present: the main screens, the Ask launcher and the add-to-Ask button', () => {
   const routes = new Set(TOUR_STOPS.map((s) => s.route));
-  for (const r of ['home', 'plan', 'money', 'pnl', 'accounts', 'confirm', 'packs']) {
+  for (const r of ['home', 'plan', 'money', 'pnl', 'confirm', 'packs']) {
     assert.ok(routes.has(r), `a stop on ${r}`);
   }
+  // The account mirror stop sits on Money, where the account list now lives (SX5).
+  assert.equal(TOUR_STOPS.find((s) => s.id === 'accounts')?.route, 'money');
   const anchors = TOUR_STOPS.map((s) => s.anchor);
   assert.ok(anchors.some((a) => a.includes('.h-askp-launch')), 'a stop anchored on the Ask launcher');
   assert.ok(anchors.some((a) => a.includes('.h-add')), 'a stop anchored on an add-to-Ask button');

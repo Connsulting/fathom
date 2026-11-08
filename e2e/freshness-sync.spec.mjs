@@ -19,7 +19,7 @@ async function hold(page, path, gate) {
 }
 
 test('connect shows Syncing, then a current data-through line, at desktop and phone width @fr-ac3 @mobile', async ({ page }) => {
-  await gotoRoute(page, 'accounts');
+  await gotoRoute(page, 'money');
   let releaseConnect;
   const connectGate = new Promise((resolve) => { releaseConnect = resolve; });
   await hold(page, '**/api/simplefin/connect', connectGate);
@@ -38,7 +38,7 @@ test('connect shows Syncing, then a current data-through line, at desktop and ph
   await expect(page.locator('div.h-dhealth')).toContainText(`Data through ${day}`);
   await page.evaluate(() => { window.location.hash = '#/money'; });
   await expect(page.locator('.h-money-health')).toContainText(`Data through ${day}`);
-  await page.evaluate(() => { window.location.hash = '#/accounts'; });
+  await page.evaluate(() => { window.location.hash = '#/money'; });
   await expect(page.locator('[data-sf-connected]')).toBeVisible();
 
   let releaseSync;

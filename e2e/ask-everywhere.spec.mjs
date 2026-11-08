@@ -354,9 +354,9 @@ test.describe('ask everywhere', () => {
     await expect(pageChip(page)).toHaveCount(0);
     await expect(panelInput(page)).toBeFocused();
 
-    await gotoRoute(page, 'accounts');
+    await gotoRoute(page, 'pnl');
     await expect(panel(page)).toBeVisible();
-    await expect(pageChip(page).locator('.h-ctx-l')).toHaveText('On: Money > Accounts');
+    await expect(pageChip(page).locator('.h-ctx-l')).toContainText('On: Money > P&L');
   });
 
   test('@ae-ac2 the page chip names the account in the account dialog and the rec in a rec dialog', async ({ page }) => {
@@ -398,7 +398,7 @@ test.describe('ask everywhere', () => {
 
   test('@ae-ac3 hovering an account row shows its +, and keyboard focus plus Enter adds the chip and opens the panel', async ({ page }) => {
     test.skip(!isDock(page), 'hover reveal is a pointer affordance');
-    await gotoRoute(page, 'accounts');
+    await gotoRoute(page, 'money');
     const btn = addBtn(page, 'account', ACC);
     await expect(btn).toHaveCount(1);
     await expect(btn).toHaveAttribute('aria-label', /^Ask about .+$/);
@@ -418,11 +418,11 @@ test.describe('ask everywhere', () => {
       (await accRow(page).locator('.h-acc-name').first().textContent()).trim());
     await expect(panelInput(page)).toBeFocused();
     await expect(recDialog(page)).toHaveCount(0);
-    await expect(page).toHaveURL(/#\/accounts$/);
+    await expect(page).toHaveURL(/#\/money$/);
   });
 
   test('@ae-ac3 @mobile chips stack on one page and one can be removed; a different page starts a new conversation', async ({ page }) => {
-    await addFrom(page, 'accounts', 'account', ACC);
+    await addFrom(page, 'money', 'account', ACC);
     await expect(recDialog(page)).toHaveCount(0);
     // A second and a third account on the same page stack in the same conversation.
     const others = page.locator(`.h-root button.h-add[data-ctx-add="account"]:not([data-ctx-id="${ACC}"])`);
@@ -480,7 +480,7 @@ test.describe('ask everywhere', () => {
   });
 
   test('@ae-ac3 @mobile-only at phone width the + shows without hover', async ({ page }) => {
-    await gotoRoute(page, 'accounts');
+    await gotoRoute(page, 'money');
     const btn = addBtn(page, 'account', ACC);
     await btn.scrollIntoViewIfNeeded();
     await expect(btn).toBeVisible();

@@ -33,6 +33,8 @@ import { homeModel, homeHeadline, healthChip, healthLine, paceMeters, paceReason
 import { STARTERS, existingStarterIds, otherGoals, goalsToCreate, inviteLine } from './screens/onboard-model.js';
 import { KNOWN_FIGURES, GOAL_KINDS, KIND_LABEL, PRIORITIES, PRIORITY_LABEL, personLabel, goalOwnerOptions } from '/shared/goals.mjs';
 import { OWNERS, OWNER_LABEL } from '/shared/rec-links.mjs';
+import { onboardStepOf } from '/shared/route-moves.mjs';
+import { TABS, SUBNAV, TAB_OF, OB_RAIL, obRailIndex, planGroups } from './nav.js';
 
 const MS = 864e5;
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -45,22 +47,6 @@ const STATUS = {
 const WAITING = { data: 'on data', advisor: 'on advisor', date: 'on a date' };
 const VALUE = { tax: 'Tax', timing: 'Timing', retire: 'Retirement', risk: 'Risk', cash: 'Cash', goal: 'Goal' };
 const TRIGGER = { calendar: 'Calendar', income: 'Income change', life: 'Life event', goal: 'Goal', advisor: 'Advisor' };
-// Four tabs, in order: route, label, phone bar icon. Every route belongs to one tab or to the gear
-// (settings); the active one comes from the current route, never from the screen.
-const TABS = [['home', 'Home', 'year'], ['plan', 'Plan', 'cal'], ['ask', 'Ask', 'chat'], ['money', 'Money', 'money']];
-// The views inside a tab, shown as a sub-nav on each of them. Home and the gear have none.
-const SUBNAV = {
-  plan: [['plan', 'Plan'], ['yearend', 'Year end'], ['advisor', 'Advisor']],
-  ask: [['ask', 'Conversations'], ['wargame', 'What-if'], ['packs', 'Packs']],
-  money: [['money', 'Overview'], ['accounts', 'Accounts'], ['pnl', 'P&L'], ['add', 'Files']]
-};
-// Routes with no sub-nav are listed by hand; every sub-nav view maps to its tab.
-const TAB_OF = {
-  home: 'home', pace: 'home', brief: 'home', goals: 'home', confirm: 'home',
-  settings: 'settings', memories: 'settings', connect: 'settings', engine: 'settings', email: 'settings', onboarding: 'settings',
-  ...Object.fromEntries(Object.entries(SUBNAV).flatMap(([tab, views]) => views.map(([k]) => [k, tab])))
-};
-
 let api = null;
 let root = null;
 let unsub = null;
@@ -78,7 +64,7 @@ let bodyLocked = false;
 let connectOn = false;
 
 const freshUi = () => ({
-  prio: {}, modal: null, goalForm: null, goalDel: null,
+  modal: null, goalForm: null, goalDel: null,
   pick: { salary: null, deferral: null }, build: 0,
   buildTimer: 0, draft: {}, recReset: {}, dumped: null, noteBusy: false, understood: null,
   under: null, inApp: false, closing: false, ret: null, y: 0, msgN: {}, det: {}, owner: 'both',
@@ -611,7 +597,7 @@ function ownerFilterHtml(m) {
 }
 
 // The Money page's data health links.
-const healthLinks = (h) => `${h.pending > 0 ? goA('confirm', 'Confirm') : ''}${goA('add', 'Files')}${goA('accounts', 'Accounts')}`;
+const healthLinks = (h) => `${h.pending > 0 ? goA('confirm', 'Confirm') : ''}${goA('add', 'Files')}${goA('money', 'Accounts')}`;
 
 // The one data line: the data date, and one link only when something needs the owner.
 function dhealthHtml(h) {
@@ -883,7 +869,7 @@ function pPace() {
     <div class="h-pace-head"><span class="h-hchip ${hc.tone}">${esc(hc.label)}</span><h1>${esc(pace?.rollup?.headline || 'No goals with targets')}</h1><p class="h-pace-why">${esc(paceReason(pace))}</p></div>
     ${section(charts.length && charts[0].id === 'householdSavings' ? 'Household savings' : 'By goal', body, charts.length ? 'Solid is observed, dashed is projected' : '')}
     ${thisYear.length ? section('This year', `<div class="h-meters">${thisYear.map(meterHtml).join('')}</div>`) : ''}
-    <p class="h-pace-fresh">${icon('clock')}<span>${esc(h.dataLabel)}.${projected ? ' Later months are projected.' : ''} ${goA('add', 'Files')} ${goA('accounts', 'Accounts')}</span></p></section>`);
+    <p class="h-pace-fresh">${icon('clock')}<span>${esc(h.dataLabel)}.${projected ? ' Later months are projected.' : ''} ${goA('add', 'Files')} ${goA('money', 'Accounts')}</span></p></section>`);
 }
 
 /* ---------- plan ---------- */
@@ -924,25 +910,17 @@ function planDecisions() {
 function pPlan() {
   const ny = api.needsYou();
   const recs = planOrder(visibleRecs(), arr(api.s.goals));
-  const c = clock();
-  const ye = daysBetween(c, new Date(Date.UTC(c.getUTCFullYear(), 11, 31)));
   const open = recs.filter((r) => OPEN.includes(r.status));
-  const groups = [
-    ['Next 30 days', open.filter((r) => days(r) <= 30)],
-    ['Before the year closes', open.filter((r) => days(r) > 30 && days(r) <= ye)],
-    [`${c.getUTCFullYear() + 1} and later`, open.filter((r) => days(r) > ye)],
-    ['Waiting', recs.filter((r) => r.status === 'waiting')],
-    ['Later', recs.filter((r) => r.status === 'snoozed')],
-    ['Done', recs.filter((r) => r.status === 'done')]
-  ];
-  const dismissed = recs.filter((r) => r.status === 'dismissed');
   const counts = [
     [ny.length, 'need you'], [open.length, 'open'], [recs.filter((r) => r.status === 'waiting').length, 'waiting'],
     [recs.filter((r) => r.status === 'done').length, 'done']
   ];
   const stats = `<div class="h-stats">${counts.map(([n, l]) => `<div><b>${n}</b><span>${l}</span></div>`).join('')}</div>`;
-  const body = groups.filter((g) => g[1].length).map(([t, list]) => section(`${t} <em>${list.length}</em>`, `<div class="h-rows">${list.map((r) => recRow(r, ny)).join('')}</div>`)).join('')
-    + (dismissed.length ? `<details class="h-details" data-det="dismissed"${ui.det.dismissed ? ' open' : ''}><summary>Not for us <em>${dismissed.length}</em></summary><div class="h-rows">${dismissed.map((r) => recRow(r, ny)).join('')}</div></details>` : '');
+  // Needs you, Fathom has it, and Done (done and not for us) folded away until asked for.
+  const rows = (list) => `<div class="h-rows">${list.map((r) => recRow(r, ny)).join('')}</div>`;
+  const body = planGroups(recs, ny).filter((g) => g.list.length).map((g) => (g.collapsed
+    ? `<details class="h-details" data-det="${g.key}" data-plan-group="${g.key}"${ui.det[g.key] ? ' open' : ''}><summary>${g.title} <em>${g.list.length}</em></summary>${rows(g.list)}</details>`
+    : `<section class="h-sec h-plan-g" data-plan-group="${g.key}"><div class="h-sec-h"><h2>${g.title} <em>${g.list.length}</em></h2></div>${rows(g.list)}</section>`)).join('');
   // Covered domains, What changed and the email note moved here from the old Year page.
   const evs = arr(api.s.events);
   const changed = evs.length ? `<ol class="h-evs">${evs.map((e) => `<li><time>${T(e.date)}</time><div><b>${T(e.title)}</b><p>${T(e.body)}</p></div></li>`).join('')}</ol>` : '<p class="h-mute">Nothing new since the last brief.</p>';
@@ -1686,8 +1664,8 @@ function spark([key, sr]) {
     <text x="${P}" y="${H - 1}">${X(pts[0].x)}</text><text x="${W - P}" y="${H - 1}" text-anchor="end">${X(last.x)}</text></svg></div>`;
 }
 
-// The account mirror: balances by kind, trend, connections, files and sources. Accounts and the
-// Money overview both render it, so neither carries its own account or file logic.
+// The account mirror: balances by kind, trend, connections, files and sources, on the Money
+// overview (#/accounts lands there too).
 function accountsBody({ groupTrends = false } = {}) {
   const accs = arr(api.s.accounts);
   const order = ['Business', 'Cash', 'Investing', 'Retirement', 'Health', 'Education', 'Debt'];
@@ -1724,10 +1702,6 @@ const mirrorText = () => {
   return `${accs.filter((a) => a.mirror === 'connected').length} of ${accs.length} accounts mirrored.`;
 };
 
-function pAccounts() {
-  return shell(`${pageHead('Accounts', 'Read-only mirror', `${mirrorText()} Data through ${T(api.s.meta.dataThrough)}. ${goA('add', 'Add more files')}`)}${accountsBody({ groupTrends: true })}`);
-}
-
 // The Home data-health line, spelled out: one row per part of the same healthLine() model, then
 // the places that fix it.
 function moneyHealthHtml(h) {
@@ -1739,7 +1713,7 @@ function moneyHealthHtml(h) {
 
 function pMoney() {
   return shell(`<section class="h-money">${pageHead('Household', 'Money', `${mirrorText()} Balances, files and the data behind every figure.`)}
-    ${trendScreen.render()}${moneyHealthHtml(homeHealth())}${accountsBody()}</section>`);
+    ${trendScreen.render()}${moneyHealthHtml(homeHealth())}${accountsBody({ groupTrends: true })}</section>`);
 }
 
 /* ---------- settings ---------- */
@@ -1757,7 +1731,7 @@ function pSettings() {
   const mem = settingsRow(arr(api.s.preferences));
   rows.push([mem.route, mem.label, mem.desc]);
   // A real store reaches onboarding again as Setup, to add more context.
-  if (api.s?.live?.mode === 'real') rows.push(['onboarding', 'Setup', 'Goals, priorities, notes and files.']);
+  if (api.s?.live?.mode === 'real') rows.push(['onboarding', 'Setup', 'Tell Fathom more about the household, in notes and files.']);
   const row = (link, desc) => `<li class="h-set-r">${link}<p>${esc(desc)}</p>${icon('arrow')}</li>`;
   let list = rows.map(([k, l, d]) => row(goA(k, l), d)).join('');
   if (id) list += row('<a href="/account">Account</a>', 'Passkeys and sign out.');
@@ -1807,23 +1781,24 @@ function pAdd() {
 
 /* ---------- onboarding ---------- */
 
-// The rail's three labelled steps; step 0 (demo sign-in) comes before them, steps 4 and 5 after.
-const OB_RAIL = ['Goals', 'Curve', 'Tell us'];
+// The rail (nav.js): Tell us (3), What we understood (4), Build (5). Step 0, the demo sign-in, comes
+// before it. The Goals and Curve steps (1 and 2) were cut and land on Tell us.
 
 function pOnboarding(step) {
   const ob = api.s.onboarding || {};
-  const first = api.s?.live?.mode === 'real' ? 1 : 0; // a real store has no demo sign-in step
-  const s = Math.max(first, Math.min(5, step));
+  const real = api.s?.live?.mode === 'real'; // a real store has no demo sign-in step
+  const first = onboardStepOf(0, { real });
+  const s = onboardStepOf(step, { real });
   const W = 600;
   const n = OB_RAIL.length;
-  // Rail position: -1 before Goals (step 0), 0 to 2 on steps 1 to 3, n (all done) on steps 4 and 5.
-  const ri = s < 1 ? -1 : Math.min(s - 1, n);
+  const ri = obRailIndex(s);
   const sx = (i) => 10 + (i / (n - 1)) * (W - 20);
   const rail = `<div class="h-ob-rail"><svg viewBox="0 0 ${W} 20" preserveAspectRatio="none" aria-hidden="true"><line class="bg" x1="10" x2="${W - 10}" y1="10" y2="10"/><line class="fg" x1="10" x2="${ri < 0 ? 10 : sx(Math.min(ri, n - 1))}" y1="10" y2="10"/>${OB_RAIL.map((_, i) => `<circle class="${i < ri ? 'done' : i === ri ? 'cur' : ''}" cx="${sx(i)}" cy="10" r="${i === ri ? 5 : 3.5}"/>`).join('')}</svg>
     <div class="h-ob-steps">${OB_RAIL.map((l, i) => `<span class="${i === ri ? 'on' : ''}" style="left:${(sx(i) / W) * 100}%">${l}</span>`).join('')}</div></div>`;
-  const next = (label = 'Continue', to = s + 1) => btn(`${label}${icon('arrow')}`, `data-onboard="${to}"`, 'pri');
-  const back = s > first ? btn('Back', `data-onboard="${s - 1}"`, 'ghost') : '';
-  const kick = s >= 1 && s <= 3 ? `<div class="h-kicker" data-ob-kicker="1">Step ${s} of ${n}</div>` : '';
+  // Welcome goes straight to Tell us, and Back from Tell us returns to the welcome.
+  const next = (label = 'Continue', to = s === 0 ? 3 : s + 1) => btn(`${label}${icon('arrow')}`, `data-onboard="${to}"`, 'pri');
+  const back = s > first ? btn('Back', `data-onboard="${s === 3 ? 0 : s - 1}"`, 'ghost') : '';
+  const kick = ri >= 0 && s < 5 ? `<div class="h-kicker" data-ob-kicker="1">Step ${ri + 1} of ${n}</div>` : '';
   let body = '';
   if (s === 0) {
     const who = api.identity?.();
@@ -1833,11 +1808,6 @@ function pOnboarding(step) {
     body = `<div class="h-ob-hero">${MARK}<h1>${T(ob.welcome?.headline)}</h1><p class="h-lede">${T(ob.welcome?.sub)}</p></div>
       <div class="h-ob-who" data-ob-who="1">${icon('lock')}<div>${line}</div></div>
       <div class="h-ob-nav">${next()}</div>`;
-  } else if (s === 1) {
-    body = kick + goalsStartHtml('onboarding', back);
-  } else if (s === 2) {
-    body = `${kick}${prioHtml(ob)}
-      <div class="h-ob-nav">${back}${next()}</div>`;
   } else if (s === 3) {
     // Tell us, then the connections: SimpleFIN Bridge (a synthetic bridge on a demo store) and the
     // accounts already imported from files. Imported names are file text: escaped, never tokens.
@@ -1855,7 +1825,7 @@ function pOnboarding(step) {
       ${imported.length ? `<div class="h-sub-h">Already in Fathom, not mirrored</div><ul class="h-insts">${imported.map((a) => `<li><div><b>${lbl(a, a.name)}</b><span>${lbl(a, a.inst || '')}</span></div></li>`).join('')}</ul>` : ''}</div>
       <div class="h-ob-nav">${back}${go}</div>`;
   } else if (s === 4) {
-    body = heardHtml(back, next);
+    body = kick + heardHtml(back, next);
   } else {
     const h = api.heard();
     const lines = [
@@ -1879,21 +1849,8 @@ function pOnboarding(step) {
   return `<div class="h-ob"><div class="h-ob-top"><span class="h-mark">${MARK}<span>${esc(api.s.meta.product || 'Fathom')}</span></span>${exit}</div>${rail}<div class="h-ob-card">${body}</div></div>`;
 }
 
-// "Where on the curve": the priority sliders, saved to the tradeoff curve on release.
-function prioHtml(ob) {
-  return `<h1>Where on the curve</h1><p class="h-lede">Every choice trades one good thing for another. Tell us how much each matters. You can change this any time.</p>
-      <div class="h-prios">${arr(ob.priorities).map((p) => {
-        const raw = ui.prio[p.id] ?? p.value;
-        const v = raw > 1 ? raw / 100 : raw;
-        const parts = api.txt(p.label).split(/\s+vs\.?\s+/i);
-        const cap = (x) => x.charAt(0).toUpperCase() + x.slice(1);
-        const ends = parts.length === 2 ? parts.map(cap) : [api.txt(p.label), ''];
-        return `<div class="h-curve" data-prio-box><div class="h-curve-ends"><span class="${v < 0.5 ? 'lean' : ''}">${esc(ends[0])}</span><span class="${v > 0.5 ? 'lean' : ''}">${esc(ends[1])}</span></div><input type="range" min="0" max="100" value="${Math.round(v * 100)}" data-prio="${esc(p.id)}" aria-label="${esc(api.txt(p.label))}"></div>`;
-      }).join('')}</div>`;
-}
-
-// The Goals step, on onboarding step 1 (where 'onboarding', primary Continue) and on a Home with no
-// open goals (where 'home', primary Save goals). Selection is ui state until the primary button.
+// The Goals step on a Home with no open goals (where 'home', primary Save goals). Onboarding no
+// longer asks for goals: Fathom infers them from what the household tells it. Selection is ui state until the primary button.
 function goalsStartHtml(where, back = '') {
   const goals = arr(api.s.goals);
   const have = new Set(existingStarterIds(goals));
@@ -1953,8 +1910,8 @@ function addOwnGoal() {
 }
 
 // Creates the selected goals one at a time through the goals API, with no target. A failure stops
-// there and keeps what is still unsaved selected (core shows the error line). On onboarding it then
-// goes on to the curve; on Home the new goals redraw it as the normal Home.
+// there and keeps what is still unsaved selected (core shows the error line). The new goals then
+// redraw Home as the normal Home.
 async function saveStarterGoals(where) {
   if (ui.goalsBusy) return;
   const bodies = goalsToCreate({ starterIds: ui.starterSel, ownTitles: ui.ownGoals, goals: api.s.goals });
@@ -1974,7 +1931,6 @@ async function saveStarterGoals(where) {
   ui.ownGoals = [];
   ui.ownOpen = false;
   ui.draft['goals-own'] = '';
-  if (where === 'onboarding') { ui.modal = null; ui.build = 0; api.onboard(2); return; }
   draw();
 }
 
@@ -2042,10 +1998,10 @@ function onboardStep() {
 const isDlgRoute = (name) => name === 'rec' || name === 'account' || name === 'pnlrows';
 
 // The page under an open dialog. After a deep link or reload there is none remembered: a rec falls
-// back to Plan, an account to Accounts and P&L rows to the P&L.
+// back to Plan, an account to Money and P&L rows to the P&L.
 function underRoute(dlgName = 'rec') {
   const u = ui.under;
-  return u && !isDlgRoute(u.name) && u.name !== 'onboarding' ? u : { name: dlgName === 'account' ? 'accounts' : dlgName === 'pnlrows' ? 'pnl' : 'plan', params: {} };
+  return u && !isDlgRoute(u.name) && u.name !== 'onboarding' ? u : { name: dlgName === 'account' ? 'money' : dlgName === 'pnlrows' ? 'pnl' : 'plan', params: {} };
 }
 
 function lockBody(on) {
@@ -2179,7 +2135,6 @@ function draw() {
     case 'wargame': html = pWargame(r.params?.name); break;
     case 'goals': html = pGoals(); break;
     case 'money': html = pMoney(); break;
-    case 'accounts': html = pAccounts(); break;
     case 'pnl': html = pnlScreen.render(); break;
     case 'add': html = pAdd(); break;
     case 'confirm': html = ingest.confirmPage(routeChanged); break;
@@ -2474,11 +2429,6 @@ function onInput(e) {
     if (go && was !== (t.value.trim() !== '') && !ui.noteBusy) go.outerHTML = noteGo(t.value.trim() !== '', false);
     return;
   }
-  if (t.dataset.prio) {
-    ui.prio[t.dataset.prio] = Number(t.value) / 100;
-    const [l, r] = t.parentElement.querySelectorAll('.h-curve-ends span');
-    if (l && r) { l.classList.toggle('lean', t.value < 50); r.classList.toggle('lean', t.value > 50); }
-  }
 }
 
 // Committed changes: a goal form select or checkbox, and a released curve or priority slider
@@ -2490,7 +2440,6 @@ function onChange(e) {
   if (GF_ON_CHANGE.includes(t?.dataset?.gf)) { goalInput(t); return; }
   if (GF_REDRAW.includes(t?.dataset?.gf)) { goalInput(t, { commit: true }); return; }
   if (t?.dataset?.recowner) { api.act(t.dataset.recowner, 'owner', t.value); return; }
-  if (t?.dataset?.prio) { api.setCurve(t.dataset.prio, Number(t.value) / 100); return; }
   ingest?.handleChange(e);
 }
 
