@@ -8,6 +8,42 @@ import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { startServer } from '../src/server.mjs';
 import { rpcResult, callToolRpc } from '../src/mcp/test/helpers.mjs';
+import { registerReceiptKind, saveReceipt } from '../src/actions/receipts.mjs';
+
+test('confirmed Ask proposals keep household services and owner statements', async t => {
+  const s = await tempInstance();
+  let receiptId, confirmedContext;
+  const transport = createEngine({ mode: 'fake' });
+  const engine = { mode: 'live', isOn: () => true, call(request) {
+    if (request.purpose === 'title') return Promise.resolve({ text: 'Synthetic undo', toolResults: [] });
+    return transport.call({ ...request, fake: [
+      { toolCalls: [{ name: 'undo', args: { operation: 'undo', id: receiptId, propose: true } }] },
+      { text: 'Undo your change? Confirm below.' },
+    ] });
+  } };
+  registerReceiptKind('c2_services_confirmation', { restore(ctx) {
+    confirmedContext = ctx;
+    assert.ok(ctx.services);
+    ctx.db.prepare("UPDATE settings SET value = '1' WHERE key = 'confirmation-setting'").run();
+  } });
+  const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'off' });
+  const app = await serveAppFixture({ db: s.db, platform: s.platform, config, secrets: s.secrets, engine, authenticated: true });
+  t.after(async () => { await app.close(); s.close(); rmSync(s.dataDir, { recursive: true, force: true }); });
+  s.db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)').run('confirmation-setting', '2', '2026-11-07');
+  receiptId = saveReceipt({ db: s.db, actorId: app.session.user.id }, { scope: 'write:decisions', kind: 'c2_services_confirmation',
+    id: 'confirmation-setting', label: 'Synthetic choice', before: '1', after: '2' }).id;
+  const proposed = await app.postJson('/api/threads', { text: 'Undo my change.' });
+  assert.equal(proposed.status, 200);
+  assert.deepEqual(proposed.json.message.provenance.pendingAction.scopes, ['write:decisions']);
+  const confirmed = await app.postJson('/api/ask', { key: proposed.json.thread.key, text: 'yes' });
+  assert.equal(confirmed.status, 200);
+  assert.equal(confirmedContext.services, app.household.services);
+  assert.equal(confirmedContext.household, app.household);
+  assert.equal(confirmedContext.dataDir, s.root);
+  assert.ok(confirmedContext.ownerStatements().includes('Undo my change.'));
+  assert.ok(confirmedContext.ownerStatements().includes('yes'));
+  assert.equal(s.db.prepare("SELECT value FROM settings WHERE key = 'confirmation-setting'").get().value, '1');
+});
 
 test('answerers require household services', () => {
   assert.throws(() => createLiveAnswerer({ engine: { call() {} }, root: 'synthetic-root' }), /household services/);
