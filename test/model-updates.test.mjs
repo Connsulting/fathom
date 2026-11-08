@@ -93,3 +93,25 @@ test('corrections ground new values and date anchors in the exact current owner 
     assert.equal(JSON.parse(row.evidence).correction.actorId, x.ctx.actorId);
   } finally { x.close(); }
 });
+
+test('unrelated household activity leaves a waiting note approvable, but source and timezone changes do not', async () => {
+  const x = await updateFixture();
+  try {
+    const p = stageUpdate(x.ctx, { source: x.source, capturedAt: '2032-03-02T14:00:00Z', actions: [x.step, x.expected] });
+    x.db.prepare("INSERT INTO facts (key,value,updated_at) VALUES ('household.state','\"VA\"',?)").run(x.ctx.now);
+    x.db.prepare("INSERT INTO settings (key,value,updated_at) VALUES ('unrelated','true',?)").run(x.ctx.now);
+    x.db.prepare("INSERT INTO files (id,name,sha256,size,mime,uploaded_at,status) VALUES ('unrelated','synthetic.txt',?,1,'text/plain',?,'imported')").run('a'.repeat(64), x.ctx.now);
+    await approve(x, p);
+    assert.equal(x.db.prepare('SELECT count(*) n FROM expected_transactions').get().n, 1);
+  } finally { x.close(); }
+  for (const changed of ['source', 'timezone']) {
+    const y = await updateFixture();
+    try {
+      const p = stageUpdate(y.ctx, { source: y.source, capturedAt: '2032-03-02T14:00:00Z', actions: [y.expected] });
+      if (changed === 'source') y.db.prepare('UPDATE files SET removed_at=? WHERE id=?').run(y.ctx.now, y.source.fileId);
+      else y.db.prepare("INSERT INTO settings (key,value,updated_at) VALUES ('timezone','\"UTC\"',?)").run(y.ctx.now);
+      await assert.rejects(approve(y, p), e => e.code === 'proposal_stale');
+      assert.equal(y.db.prepare('SELECT count(*) n FROM expected_transactions').get().n, 0);
+    } finally { y.close(); }
+  }
+});
