@@ -9,14 +9,16 @@ import { createAuthStore } from '../../src/auth/store.mjs';
 import { PURPOSES, storeObject, sealConnectionSecret } from '../../src/platform/household-vault.mjs';
 import { loadConfig } from '../../src/config.mjs';
 
-export async function backupFixture() {
+export async function backupFixture({ engine = 'off', engineOptions = null } = {}) {
   const root = await tempDir('fathom-backup-');
   const dataDir = join(root, 'data');
   const keys = writeInstanceKeys(join(root, 'keys'));
   const destination = join(root, 'backups');
   mkdirSync(destination, { mode: 0o700 });
-  const server = await startRuntime({ dataDir, keys, engine: 'off', extra: {
+  const credential = engine === 'live' ? writePrivate(join(root, 'keys', 'synthetic-credential'), 'synthetic-credential-not-valid\n') : null;
+  const server = await startRuntime({ dataDir, keys, engine, engineOptions, extra: {
     FATHOM_BACKUP_KEY_FILE: keys.backupKeyFile, FATHOM_BACKUP_DESTINATION: destination,
+    ...(credential ? { FATHOM_CLAUDE_CREDENTIAL_FILE: credential } : {}),
   } });
   const platform = server.app.platform;
   const store = createAuthStore(platform);
