@@ -317,7 +317,7 @@ export function computeFigures(data, facts, ctx) {
   if (outsideYtd.length) {
     out.source('docs', SOURCES.docs.label, dateLabel(clock), SOURCES.docs.kind);
     const label = outsideYtd.some(r => r.projected) ? 'Outside employer gross pay received this year' : 'Outside employer wages received this year';
-    out.put('inc.ytd.w2', sum(outsideYtd.map(r => r.ytdWages)), 'a', label, 'docs',
+    out.put('inc.ytd.w2', sum(outsideYtd.map(r => r.ytdWages)), outsideYtd.some(r => r.payrollProvenance?.assumption) ? 'e' : 'a', label, 'docs',
       rowsLoc('documents', outsideYtd.flatMap(r => r.docIds), { assumptions: outsideYtd.some(r => r.section125Unknown) ? ['section125_unknown'] : [] }), outsideYtd[0].fileId);
   }
   // Every age comes from the one household.birthYears answer (age by the end of the planning year).
@@ -772,7 +772,7 @@ function incomeTotal(out) {
   const keys = Object.keys(out.figures).filter(k => k.startsWith('inc.ytd.') && k !== 'inc.ytd.total').sort();
   if (!keys.length) return;
   const total = sum(keys.map(k => out.figures[k].v));
-  out.put('inc.ytd.total', total, 'a', 'Income received this year', 'calc:income',
+  out.put('inc.ytd.total', total, keys.some(k => out.figures[k].kind !== 'a') ? 'e' : 'a', 'Income received this year', 'calc:income',
     { ...rowsLoc('figures', keys), calc: 'sum', inputs: Object.fromEntries(keys.map(k => [k, out.figures[k].v])), steps: [{ label: 'Income received', formula: 'sum of income received per business plus outside wages', value: total }] });
 }
 

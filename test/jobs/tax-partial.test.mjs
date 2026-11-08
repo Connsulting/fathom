@@ -103,6 +103,8 @@ test('AC4: per-period gross uses recorded pay-period dates and carries its infer
   assert.equal(r.wages, 39000);
   assert.equal(r.ytdWages, 31500);
   assert.equal(r.payrollProvenance.assumption, true);
+  assert.equal(figureRow(db, 'inc.ytd.w2').kind, 'e');
+  assert.equal(figureRow(db, 'inc.ytd.total').kind, 'e');
   assert.ok(projection(db).locator.notes.some(n => /Cedar Labs.*gross.*pay periods/i.test(n)));
   assert.ok(projection(db).locator.gaps.some(g => g.code === 'paystub_gross_assumed'));
 });
