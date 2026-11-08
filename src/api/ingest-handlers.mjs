@@ -8,13 +8,13 @@ import { queueAccountPairs } from '../ingest/account-merge.mjs';
 
 import { getSetting } from '../store/db.mjs';
 import { openVault, VaultError } from '../ingest/vault.mjs';
-import { ingestFiles, retryFile as retryIngest, triggerPlan, triggerGuesses, triggerFreshness } from '../ingest/pipeline.mjs';
+import { ingestFiles, retryFile as retryIngest, triggerJob, triggerPlan, triggerGuesses, triggerFreshness } from '../ingest/pipeline.mjs';
 import { answerItem, answerItems, reviseItem, reopenItem, reopenItems, finalReason, getItem, pendingItems, listItems, ConfirmError } from '../ingest/confirm.mjs';
 import { autoResolve } from '../ingest/auto.mjs';
 import { listImportedFiles } from '../ingest/freshness.mjs';
 import { refreshPackState } from '../packs/state.mjs';
 import { HttpError } from './http.mjs';
-import { scenarioOf } from './handlers.mjs';
+import { scenarioOf } from './scenario.mjs';
 
 const UPLOAD_FIELD = 'files';
 const LIST_STATUSES = ['pending', 'answered', 'all'];
@@ -33,6 +33,8 @@ const FINAL_MESSAGE = {
   used_since: 'A later import used this answer, so it is final.',
 };
 
+const schedulerOf = ctx => ctx.scheduler ?? ctx.household?.scheduler ?? ctx.services?.household?.scheduler;
+
 const nowIso = () => new Date().toISOString();
 const storeMode = db => (getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real');
 
@@ -46,6 +48,9 @@ export async function householdVault(ctx) {
     throw err;
   }
 }
+
+const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+const safeCode = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && IDENT.test(v)) || 'unknown';
 
 export { triggerPlan, triggerGuesses, triggerFreshness } from '../ingest/pipeline.mjs';
 export const ingestOpts = ctx => ({ household: ctx.household, engine: ctx.engine, config: ctx.config, now: nowIso() });
@@ -122,7 +127,7 @@ function confirmAction(ctx, fn) {
     out = fn();
   } catch (err) {
     if (err instanceof ConfirmError && err.code === 'final' && Object.hasOwn(FINAL_MESSAGE, err.reason)) {
-      throw new HttpError(err.status, FINAL_MESSAGE[err.reason]);
+      throw Object.assign(new HttpError(err.status, FINAL_MESSAGE[err.reason]), { reason: err.reason });
     }
     if (err instanceof ConfirmError && Object.hasOwn(CONFIRM_MESSAGE, err.code)) {
       throw new HttpError(err.status, CONFIRM_MESSAGE[err.code], undefined, err.code);
@@ -131,7 +136,7 @@ function confirmAction(ctx, fn) {
   }
   resolveAfterAnswer(ctx);
   if (out.factsChanged) {
-    try { refreshPackState(ctx.db, { dataDir: ctx.household.root }); } catch (err) { console.error('fathom: pack refresh failed', err && err.name); }
+    try { refreshPackState(ctx.db, { dataDir: ctx.household?.root ?? ctx.services?.household?.root }); } catch (err) { console.error('fathom: pack refresh failed', err && err.name); }
   }
   const withFinal = item => {
     const now = getItem(ctx.db, item.id) || item;
@@ -155,10 +160,11 @@ function resolveAfterAnswer(ctx) {
 // the scheduler's debounce: one run 30 s after the last answer of a burst, or right away once the
 // pending queue is empty. The run's job_runs trigger is 'confirm'. Never fails the request.
 export function schedulePlan(ctx) {
-  if (!ctx.scheduler || typeof ctx.scheduler.soon !== 'function' || storeMode(ctx.db) === 'demo') return;
+  const scheduler = schedulerOf(ctx);
+  if (!scheduler || typeof scheduler.soon !== 'function' || storeMode(ctx.db) === 'demo') return;
   try {
     const left = ctx.db.prepare("SELECT count(*) AS n FROM confirm_items WHERE status = 'pending'").get().n;
-    ctx.scheduler.soon('plan', 'confirm', { immediate: left === 0 });
+    scheduler.soon('plan', 'confirm', { immediate: left === 0 });
   } catch (err) {
     console.error('fathom: plan trigger failed', safeCode(err));
   }
@@ -185,15 +191,14 @@ export function answerConfirm(ctx) {
   const optionId = ctx.body.answer;
   if (typeof optionId !== 'string' || !optionId) throw new HttpError(400, 'answer must be an option id');
   const revise = ctx.body.revise === true;
-  const out = afterAnswer(ctx, () => (revise ? reviseItem : answerItem)(ctx.db, id, optionId, { now: nowIso() }));
-  // A SimpleFIN account waits on its match question: the answer lets the next sync import it.
-  if (out.item && out.item.kind === 'account_match' && !out.item.context?.repair) triggerJob(ctx, 'simplefin-sync');
-  return out;
+  const out = saveConfirmAnswers(ctx, [{ id, answer: optionId }], { revise });
+  return { scenario: out.scenario, item: out.items[0] };
 }
 
 export function reopenConfirm(ctx) {
   const id = itemId(ctx.params.id);
-  return afterAnswer(ctx, () => reopenItem(ctx.db, id, { now: nowIso() }));
+  const out = saveConfirmReopen(ctx, [id]);
+  return { scenario: out.scenario, item: out.items[0] };
 }
 
 // A body item id: a positive integer, as a number or digits.
@@ -205,25 +210,30 @@ const bodyId = raw => {
 const MAX_BATCH = 500;
 
 // {answers: [{id, answer}]} answers every listed pending item in one transaction (a group card).
-export function answerConfirmBatch(ctx) {
-  const list = ctx.body.answers;
-  if (!Array.isArray(list) || !list.length || list.length > MAX_BATCH) throw new HttpError(400, 'answers must be a list of {id, answer}');
+export function saveConfirmAnswers(ctx, list, { revise = false } = {}) {
+  if (!Array.isArray(list) || !list.length || list.length > MAX_BATCH || (revise && list.length !== 1)) throw new HttpError(400, 'answers must be a list of {id, answer}; revise takes one item');
   const answers = list.map(a => {
     const id = bodyId(a && a.id);
     const option = a && a.answer;
     if (id === null || typeof option !== 'string' || !option) throw new HttpError(400, 'answers must be a list of {id, answer}');
     return { id, option };
   });
-  const out = afterAnswer(ctx, () => answerItems(ctx.db, answers, { now: nowIso() }));
+  const out = afterAnswer(ctx, () => revise
+    ? (() => { const result = reviseItem(ctx.db, answers[0].id, answers[0].option, { now: nowIso() }); return { items: [result.item], factsChanged: result.factsChanged }; })()
+    : answerItems(ctx.db, answers, { now: nowIso() }));
   if (out.items.some(i => i.kind === 'account_match' && !i.context?.repair)) triggerJob(ctx, 'simplefin-sync');
   return out;
 }
+export function answerConfirmBatch(ctx) {
+  return saveConfirmAnswers(ctx, ctx.body.answers);
+}
 
-// {ids: [...]} reopens every listed answered item in one transaction (undo of a group card).
-export function reopenConfirmBatch(ctx) {
-  const raw = ctx.body.ids;
+export function saveConfirmReopen(ctx, raw) {
   if (!Array.isArray(raw) || !raw.length || raw.length > MAX_BATCH) throw new HttpError(400, 'ids must be a list of question ids');
   const ids = raw.map(bodyId);
   if (ids.some(id => id === null)) throw new HttpError(400, 'ids must be a list of question ids');
   return afterAnswer(ctx, () => reopenItems(ctx.db, ids, { now: nowIso() }));
+}
+export function reopenConfirmBatch(ctx) {
+  return saveConfirmReopen(ctx, ctx.body.ids);
 }

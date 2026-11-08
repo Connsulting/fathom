@@ -67,6 +67,7 @@ test('unstated school care amount is unavailable and never applied; owner assump
  const changed=await s.call('projection',{years:3,obligations:['childcare'],changes:[{kind:'childcare',stage:'school_age',newMonthly:{value:200,source:'owner',evidence:'$200 a month'}}]});
  assert.ok(changed.years[1].changes.some(c=>c.applied));
  await assert.rejects(s.call('obligations',{changes:[{kind:'childcare',newMonthly:{value:200,source:'owner',evidence:'$300'}}]}),e=>e.code==='bad_input');
+ await assert.rejects(s.call('obligations',{changes:[{kind:'childcare',unexpected:true,newMonthly:{value:200,source:'owner',evidence:'$200'}}]}),e=>e.code==='bad_input');
 });
 
 test('amortization with interest matches monthly payoff simulation, and changes honor the projection date',async t=>{
