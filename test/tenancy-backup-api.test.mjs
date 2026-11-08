@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { backupFixture, changeMarker, marker } from './helpers/tenancy-backup.mjs';
+import { backupFixture, marker } from './helpers/tenancy-backup.mjs';
 import { openPlatform } from '../src/platform/db.mjs';
 import { startRuntime } from './helpers/tenancy-runtime.mjs';
 import { demoRouteBehavior } from '../src/public-demo/control.mjs';

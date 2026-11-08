@@ -4,8 +4,9 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { startRuntime } from './helpers/tenancy-runtime.mjs';
-import { browser, signIn } from './helpers/tenancy.mjs';
+import { browser, signIn, mcpList } from './helpers/tenancy.mjs';
 import { openReadOnlyHousehold } from '../src/platform/ready.mjs';
+import { logicalDigest } from '../src/platform/digest.mjs';
 import { backupFixture, backup, restore, marker, changeMarker, platformRows } from './helpers/tenancy-backup.mjs';
 
 const currentRows = f => Object.fromEntries(['household_memberships', 'household_model_budgets', 'model_rounds', 'notification_subscriptions'].map(t => [t, platformRows(f.platform, t, f.A.id)]));
@@ -13,7 +14,9 @@ const currentRows = f => Object.fromEntries(['household_memberships', 'household
 test('restore replaces only A, retains current authorization and spend, revokes A credentials and leaves outbound paused', async () => {
   const f = await backupFixture();
   try {
+    f.context(f.A.id).db.prepare("INSERT INTO job_runs (job_id, started_at, status) VALUES ('freshness', '2026-11-01', 'running')").run();
     const snap = await backup(f);
+    assert.equal((await mcpList(f.server.baseUrl, f.A.key.key)).status, 200);
     const old = f.context(f.A.id);
     changeMarker(old, 'alpha-current'); changeMarker(f.context(f.B.id), 'bravo-current');
     f.store.removeMember(f.A.id, f.A.member.userId, { actorId: f.A.admin.userId });
@@ -29,6 +32,7 @@ test('restore replaces only A, retains current authorization and spend, revokes 
     const passkeys = f.platform.prepare('SELECT * FROM passkeys ORDER BY id').all();
     const users = f.platform.prepare('SELECT * FROM users ORDER BY id').all();
     const bFile = readFileSync(join(f.B.root, 'files', 'synthetic-file.bin'));
+    const bDigest = logicalDigest(f.context(f.B.id).db);
     const result = await restore(f, snap.file);
     assert.equal(result.status, 'done'); assert.ok(result.membershipDrift > 0);
     const restored = f.context(f.A.id);
@@ -40,14 +44,19 @@ test('restore replaces only A, retains current authorization and spend, revokes 
     assert.deepEqual(f.platform.prepare('SELECT * FROM passkeys ORDER BY id').all(), passkeys);
     assert.deepEqual(f.platform.prepare('SELECT * FROM users ORDER BY id').all(), users);
     assert.deepEqual(readFileSync(join(f.B.root, 'files', 'synthetic-file.bin')), bFile);
+    assert.equal(logicalDigest(f.context(f.B.id).db), bDigest);
     assert.equal(f.platform.prepare('SELECT count(*) AS n FROM auth_sessions WHERE household_id = ?').get(f.A.id).n, 0);
     assert.ok(platformRows(f.platform, 'api_keys', f.A.id).every(k => k.revoked_at && k.revoked_code === 'household_restored'));
     assert.deepEqual(['jobs', 'email', 'simplefin', 'engine'].map(k => restored.outbound.enabled(k)), [false, false, false, false]);
     assert.equal(restored.db.prepare("SELECT sum(cost_usd) AS n FROM spend_ledger WHERE yyyymm = '2026-11'").get().n, 11);
     assert.equal(restored.db.prepare('SELECT status FROM simplefin_connection').get().status, 'error');
+    assert.equal(restored.db.prepare("SELECT count(*) AS n FROM job_runs WHERE status = 'running'").get().n, 0);
+    assert.ok(restored.db.prepare("SELECT count(*) AS n FROM job_runs WHERE status = 'interrupted' AND note = 'household_restored'").get().n > 0);
     assert.equal(readFileSync(join(restored.root, 'outbox', 'synthetic.json'), 'utf8'), readFileSync(join(f.A.root, 'outbox', 'synthetic.json'), 'utf8'));
     assert.ok(result.rollbackExpiresAt >= Date.now() + 6 * 86400000);
     assert.equal((await f.B.admin.client.get('/api/scenario')).status, 200);
+    assert.equal((await mcpList(f.server.baseUrl, f.A.key.key)).status, 401);
+    assert.equal((await mcpList(f.server.baseUrl, f.B.key.key)).status, 200);
     const read = openReadOnlyHousehold({ dataDir: f.dataDir }, f.A.id);
     assert.equal(marker(read), 'alpha'); read.db.close(); read.platform.close();
   } finally { await f.close(); }
