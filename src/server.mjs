@@ -28,6 +28,7 @@ import { openInstance, StartupError } from './platform/ready.mjs';
 import { createInstanceSecrets } from './platform/secrets.mjs';
 import { createRuntimeRegistry } from './platform/runtime.mjs';
 import { carryAllHouseholds } from './platform/model-carry.mjs';
+import { createBackupRunner, recoverHouseholdOperations } from './platform/household-backup.mjs';
 import { createHandler } from './api/router.mjs';
 import { createAuthService } from './auth/service.mjs';
 import { createKeyService } from './mcp/keys.mjs';
@@ -169,21 +170,25 @@ export async function startServer(config = loadConfig(), { engineOptions = {} } 
   const { platform, mode, secrets } = openOrCreateInstance(config);
   if (config.publicDemo) return startPublicDemo(config, platform);
   let runtimes = null;
+  let backups = null;
   const closeAll = async () => {
+    try { await backups?.close(); } catch { /* close anyway */ }
     try { await runtimes?.close(); } catch { /* close anyway */ }
     try { platform.close(); } catch { /* already closed */ }
   };
   let server;
   try {
+    await recoverHouseholdOperations({ platform, config });
     const transport = createEnrollmentTransport(config, { outboxDir: join(config.dataDir, 'outbox') });
     const auth = createAuthService({ platform, config, transport, secrets });
     // Live mode: every household's pre-MT-05 spend is carried before any household is admitted.
     if (config.engine === 'live') carryAllHouseholds(platform, { dataDir: config.dataDir, now: (engineOptions.fundingNow ?? Date.now)() });
     runtimes = createRuntimeRegistry({ platform, config, secrets, engineOptions });
+    backups = createBackupRunner({ platform, config, runtimes });
     backfillMerged(runtimes);
     const keys = createKeyService({ platform, secret: () => secrets.mcpSecret(), creatorActive: auth.creatorActive });
     const mcp = createMcpHandler({ keys, runtimes, config });
-    server = http.createServer(createHandler({ platform, config, runtimes, auth, keys, mcp }));
+    server = http.createServer(createHandler({ platform, config, runtimes, auth, keys, mcp, backups }));
   } catch (e) {
     await closeAll();
     throw e;
@@ -204,6 +209,7 @@ export async function startServer(config = loadConfig(), { engineOptions = {} } 
     server,
     platform,
     runtimes,
+    backups,
     url: urlOf(server, config),
     close() {
       closing ??= new Promise(done => {

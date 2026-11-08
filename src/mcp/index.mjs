@@ -52,7 +52,6 @@ export function createMcpHandler({ keys, runtimes, config }) {
       released = true;
       runtimes.release(household);
     };
-    res.on('close', release);
 
     let body;
     try {
@@ -100,6 +99,8 @@ export function createMcpHandler({ keys, runtimes, config }) {
       console.error(`mcp: request failed (${err && err.name ? err.name : 'Error'})`);
       if (!res.headersSent) sendJson(res, 500, { error: 'internal error' });
       else res.end();
+    } finally {
+      release();
     }
   };
 }

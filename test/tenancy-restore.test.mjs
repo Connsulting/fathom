@@ -2,6 +2,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { startRuntime } from './helpers/tenancy-runtime.mjs';
+import { browser, signIn } from './helpers/tenancy.mjs';
+import { openReadOnlyHousehold } from '../src/platform/ready.mjs';
 import { backupFixture, backup, restore, marker, changeMarker, platformRows } from './helpers/tenancy-backup.mjs';
 
 const currentRows = f => Object.fromEntries(['household_memberships', 'household_model_budgets', 'model_rounds', 'notification_subscriptions'].map(t => [t, platformRows(f.platform, t, f.A.id)]));
@@ -17,6 +21,8 @@ test('restore replaces only A, retains current authorization and spend, revokes 
       VALUES ('synthetic-current-round', ?, '2026-11', 'round', 'chat', 'settled', 3, 2, ?, ?, ?)`).run(f.A.id, Date.now(), Date.now(), Date.now());
     f.platform.prepare(`INSERT INTO model_rounds (id, household_id, month, kind, purpose, state, reserved_usd, reserved_at, expires_at)
       VALUES ('synthetic-current-hold', ?, '2026-11', 'round', 'chat', 'held', 4, ?, ?)`).run(f.A.id, Date.now(), Date.now());
+    f.platform.prepare(`INSERT INTO model_rounds (id, household_id, month, kind, purpose, state, reserved_usd, reserved_at, expires_at)
+      VALUES ('synthetic-current-reservation', ?, '2026-11', 'round', 'chat', 'reserved', 5, ?, ?)`).run(f.A.id, Date.now(), Date.now() + 600000);
     const current = currentRows(f);
     const bKeys = platformRows(f.platform, 'api_keys', f.B.id);
     const bSessions = platformRows(f.platform, 'auth_sessions', f.B.id);
@@ -37,33 +43,49 @@ test('restore replaces only A, retains current authorization and spend, revokes 
     assert.equal(f.platform.prepare('SELECT count(*) AS n FROM auth_sessions WHERE household_id = ?').get(f.A.id).n, 0);
     assert.ok(platformRows(f.platform, 'api_keys', f.A.id).every(k => k.revoked_at && k.revoked_code === 'household_restored'));
     assert.deepEqual(['jobs', 'email', 'simplefin', 'engine'].map(k => restored.outbound.enabled(k)), [false, false, false, false]);
-    assert.equal(restored.db.prepare("SELECT sum(cost_usd) AS n FROM spend_ledger WHERE yyyymm = '2026-11'").get().n, 6);
+    assert.equal(restored.db.prepare("SELECT sum(cost_usd) AS n FROM spend_ledger WHERE yyyymm = '2026-11'").get().n, 11);
     assert.equal(restored.db.prepare('SELECT status FROM simplefin_connection').get().status, 'error');
     assert.equal(readFileSync(join(restored.root, 'outbox', 'synthetic.json'), 'utf8'), readFileSync(join(f.A.root, 'outbox', 'synthetic.json'), 'utf8'));
     assert.ok(result.rollbackExpiresAt >= Date.now() + 6 * 86400000);
     assert.equal((await f.B.admin.client.get('/api/scenario')).status, 200);
+    const read = openReadOnlyHousehold({ dataDir: f.dataDir }, f.A.id);
+    assert.equal(marker(read), 'alpha'); read.db.close(); read.platform.close();
   } finally { await f.close(); }
 });
 
 for (const phase of ['validated', 'suspended', 'switched', 'finalized']) {
   test(`a crash at ${phase} recovers idempotently, including after the generation switch`, async () => {
     const f = await backupFixture();
+    let restarted;
     try {
       const snap = await backup(f);
       changeMarker(f.context(f.A.id), 'alpha-current'); changeMarker(f.context(f.B.id), 'bravo-current');
-      let fired = false;
-      await assert.rejects(restore(f, snap.file, { onPhase: reached => {
-        if (reached === phase) { fired = true; throw new Error('synthetic crash'); }
-      } }), /synthetic crash/);
-      assert.equal(fired, true);
-      const { recoverHouseholdOperations } = await import('../src/platform/household-backup.mjs');
-      await recoverHouseholdOperations({ platform: f.platform, config: f.config, runtimes: f.server.app.runtimes });
-      await recoverHouseholdOperations({ platform: f.platform, config: f.config, runtimes: f.server.app.runtimes });
-      assert.equal(marker(f.context(f.A.id)), 'alpha'); assert.equal(marker(f.context(f.B.id)), 'bravo-current');
-      assert.equal(f.context(f.A.id).generation, 2);
-      assert.equal(f.context(f.A.id).outbound.enabled('engine'), false);
-      assert.equal(f.platform.prepare("SELECT count(*) AS n FROM household_backup_operations WHERE kind = 'restore' AND status = 'done'").get().n, 1);
-    } finally { await f.close(); }
+      const bCookie = f.B.admin.client.session();
+      await f.server.close();
+      const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
+        import { loadConfig } from './src/config.mjs';
+        import { openInstance } from './src/platform/ready.mjs';
+        import { restoreHousehold } from './src/platform/household-backup.mjs';
+        const config = loadConfig();
+        const { platform } = openInstance(config);
+        await restoreHousehold({ platform, config, householdId: process.argv[1], confirmation: process.argv[1], file: process.argv[2],
+          onPhase: reached => { if (reached === process.argv[3]) process.exit(71); } });
+      `, f.A.id, snap.file, phase], { env: { ...process.env, ...f.server.env }, encoding: 'utf8', timeout: 30000 });
+      assert.equal(child.status, 71, child.stderr);
+      const extra = { FATHOM_BACKUP_KEY_FILE: f.keys.backupKeyFile, FATHOM_BACKUP_DESTINATION: f.destination };
+      restarted = await startRuntime({ dataDir: f.dataDir, keys: f.keys, engine: 'off', extra });
+      const a = restarted.app.runtimes.get(f.A.id);
+      assert.equal(marker(a), 'alpha'); assert.equal(marker(restarted.app.runtimes.get(f.B.id)), 'bravo-current');
+      assert.equal(a.generation, 2); assert.equal(a.outbound.enabled('engine'), false);
+      assert.equal(restarted.app.platform.prepare("SELECT count(*) AS n FROM household_backup_operations WHERE kind = 'restore' AND status = 'done'").get().n, 1);
+      assert.equal((await browser(restarted.baseUrl, { '__Host-fathom-session': bCookie }).get('/api/scenario')).status, 200);
+      const login = await signIn(restarted.baseUrl, f.A.admin.device);
+      assert.equal(login.verify?.status, 200, login.verify?.text);
+      assert.equal((await login.client.get('/api/scenario')).status, 200);
+      await restarted.close();
+      restarted = await startRuntime({ dataDir: f.dataDir, keys: f.keys, engine: 'off', extra });
+      assert.equal(restarted.app.runtimes.get(f.A.id).generation, 2, 'second restart cannot repeat the switch');
+    } finally { await restarted?.close(); await f.close(); }
   });
 }
 
