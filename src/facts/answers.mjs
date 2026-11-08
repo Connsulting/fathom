@@ -1,6 +1,6 @@
 import { undoDefault } from './derive.mjs';
 import { tx, parseJson } from '../store/db.mjs';
-import { upsertFact } from '../store/facts.mjs';
+import { upsertFact, getFacts } from '../store/facts.mjs';
 import { answerShape, acceptsAnswerAccount } from '../jobs/triggers/common.mjs';
 import { normalizeName } from '../ingest/confirm.mjs';
 import { isoDate } from '../ingest/format.mjs';
@@ -48,7 +48,7 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
   if (!Array.isArray(answers) || !answers.length || answers.length > 50) fail();
   const date = now.slice(0, 10);
   if (isoDate(date) !== date) fail();
-  const priorPlans = parseJson(db.prepare("SELECT value FROM facts WHERE key='accounts.planType'").get()?.value, {});
+  const priorPlans = getFacts(db)['accounts.planType'] || {};
   const planAnswer = answers.find(a => a?.key === 'accounts.planType');
   const facts = { 'accounts.planType': { ...priorPlans, ...(object(planAnswer?.value) ? planAnswer.value : {}) } };
   const year = Number(date.slice(0,4));
