@@ -85,6 +85,7 @@ Invalid or nonpositive values refuse startup. An IP request limit returns HTTP 4
 | GET | `/api/threads` | Visitor sandbox |
 | POST | `/api/threads` | Visitor sandbox |
 | GET | `/api/threads/:id` | Visitor sandbox |
+| GET | `/api/threads/:id/blocks` | Visitor sandbox |
 | POST | `/api/threads/:id/rename` | Visitor sandbox |
 | POST | `/api/threads/:id/archive` | Visitor sandbox |
 | POST | `/api/threads/:id/trash` | Visitor sandbox |
