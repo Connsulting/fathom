@@ -456,7 +456,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     }
     const error = new RoundLimitError(); error.toolResults = allResults; throw error;
   };
-  const call = req => complete(req).catch(error => { error.code = modelErrorCode(error); throw error; });
+  const call = req => complete(req).catch(error => { if (!(error instanceof EngineOffError)) error.code ??= modelErrorCode(error); throw error; });
   return { call, complete: call, async extract({ document, schema, system = 'Extract documented rows without guessing.', maxTokens = 4096, fake } = {}) {
     if (mode === 'off') throw new EngineOffError();
     const responseSchema = { type: 'object', properties: { rows: { type: 'array', items: schema } }, required: ['rows'], additionalProperties: false };

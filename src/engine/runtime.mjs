@@ -119,6 +119,7 @@ export function createRuntimeEngine({ db, config = {}, now, allowed = () => true
   let refused = false;
   let auth = null;
   const modelCredentials = {};
+  const credentialStates = {};
   const failedCredentials = new Set();
   let initPromise = null;
   const state = { credentialState: 'none' };
@@ -131,17 +132,17 @@ export function createRuntimeEngine({ db, config = {}, now, allowed = () => true
       for (const purpose of ['chat', 'job', 'confirm', 'extract', 'title', 'categorize']) {
         const selection = selectionFor(config.modelPorts, purpose);
         const file = selection.keyFile || (selection.adapter === 'claude' ? config.claudeCredentialFile : selection.adapter === 'jev' ? config.typesafeKeyFile : null) || null;
-        if (!file && !['claude', 'jev'].includes(selection.adapter)) continue;
+        if (!file && !['claude', 'jev'].includes(selection.adapter)) { credentialStates[purpose]='loaded'; continue; }
         if (!loaded.has(file)) {
           try { loaded.set(file, await loadCredential(file)); } catch { loaded.set(file, null); }
         }
         const value = loaded.get(file);
         if (value) modelCredentials[purpose] = value;
         else failedCredentials.add(purpose);
-        if (selection.adapter === 'claude') state.credentialState = value ? 'loaded' : 'failed';
+        credentialStates[purpose] = value ? 'loaded' : 'failed';
       }
       auth = modelCredentials.chat ?? null;
-      if (['chat', 'job', 'confirm', 'extract', 'title', 'categorize'].some(p => !failedCredentials.has(p))) state.credentialState = 'loaded';
+      state.credentialState = credentialStates.chat;
     })();
     return initPromise;
   }
@@ -169,7 +170,7 @@ export function createRuntimeEngine({ db, config = {}, now, allowed = () => true
       // latches. Fake and off: any accounting failure latches.
       if (error instanceof ModelAccountingError
         && (platformLedger ? error.code === 'accounting_unrecorded' : error.code !== 'accounting_hold')) refused = true;
-      error.code = modelErrorCode(error);
+      if (!(error instanceof EngineOffError)) error.code ??= modelErrorCode(error);
       throw error;
     }
   }
@@ -179,6 +180,7 @@ export function createRuntimeEngine({ db, config = {}, now, allowed = () => true
     modelConfig: config.modelPorts,
     init,
     get credentialState() { return state.credentialState; },
+    credentialStateFor: purpose => credentialStates[purpose] ?? 'none',
     isOn: () => mode !== 'off' && !refused && settingOn(db) && allowed() === true
       && (mode !== 'live' || (funded() === true && !platformLedger.held())),
     status() {

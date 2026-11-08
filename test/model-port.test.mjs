@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadModelConfig, selectionFor } from '../src/models/config.mjs';
-import { createModelPort, MODEL_ERROR_CODES } from '../src/models/port.mjs';
+import { createModelPort, MODEL_ERROR_CODES, modelErrorCode } from '../src/models/port.mjs';
 import { createEngine } from '../src/engine/index.mjs';
 
 const messages = [{ role: 'user', content: 'Return a synthetic greeting.' }];
@@ -112,7 +112,7 @@ for (const adapter of ['openai', 'ollama']) {
           ? { choices: [{ finish_reason: 'stop', message: { content: 'Resumed' } }], usage: { prompt_tokens: 2, completion_tokens: 3 } }
           : { done: true, message: { content: 'Resumed' }, prompt_eval_count: 2, eval_count: 3 });
       } });
-    await assert.rejects(engine.call({ purpose: 'chat', messages, tools: [{ ...tool, handler: () => { enabled = false; return {}; } }] }), e => e.code === 'paused');
+    await assert.rejects(engine.call({ purpose: 'chat', messages, tools: [{ ...tool, handler: () => { enabled = false; return {}; } }] }), e => modelErrorCode(e) === 'paused');
     assert.equal(calls, 1); assert.equal(reservations.events.filter(e => e[0] === 'reserve').length, 1);
     enabled = true;
     await assert.rejects(engine.call({ purpose: 'chat', messages, beforeDispatch: () => { throw new Error('synthetic refusal'); } }), /synthetic refusal/);
@@ -193,7 +193,7 @@ test('Claude tool continuations use registered tools and per-response admission'
   const reservations = admitted();
   const engine = createEngine({ mode: 'live', credential: { type: 'api-key', value: 'synthetic-key' },
     testTransport: { baseURL: emulator.baseURL }, reservations, allowed: () => enabled, funded: () => funded });
-  await assert.rejects(engine.call({ purpose: 'chat', messages }), e => e.code === 'paused');
+  await assert.rejects(engine.call({ purpose: 'chat', messages }), e => modelErrorCode(e) === 'paused');
   enabled = true; funded = false;
   await assert.rejects(engine.call({ purpose: 'chat', messages }), e => e.code === 'funding_unavailable');
   funded = true;
@@ -247,7 +247,7 @@ test('typed-choice adapter passes pause, funding, budget and reservation checks'
   const engine = createEngine({ mode: 'live', credential: { type: 'api-key', value: 'synthetic-key' }, reservations,
     allowed: () => enabled, funded: () => funded, modelTransport: async () => { calls++; return Response.json(jevResponse()); } });
   const req = { purpose: 'categorize', messages, choices: choiceQuestions, maxTokens: 128 };
-  await assert.rejects(engine.call(req), e => e.code === 'paused');
+  await assert.rejects(engine.call(req), e => modelErrorCode(e) === 'paused');
   enabled = true; funded = false; await assert.rejects(engine.call(req), e => e.code === 'funding_unavailable');
   funded = true; await assert.rejects(engine.call({ ...req, budget: { maxCostUsd: 0 } }), e => e.code === 'budget');
   assert.equal(calls, 0);

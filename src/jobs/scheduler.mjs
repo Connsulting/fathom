@@ -1,4 +1,5 @@
 import { createJev } from '../categories/jev.mjs';
+import { selectionFor } from '../models/config.mjs';
 import { createSpendLedger } from '../engine/runtime.mjs';
 import { guessClosedOptions } from '../ingest/jev.mjs';
 import { guessCategories } from '../categories/guess.mjs';
@@ -559,7 +560,11 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
         now: ctx.now, packDirs, allowed, funded,
         async categorize({ maxCostUsd, admit }) {
           const cap = getSetting(ctx.db, 'cap', { usd: 200 })?.usd;
-          const categorizer = await createJev({ keyFile: ctx.config?.engine === 'off' ? null : ctx.config?.typesafeKeyFile,
+          const selection = selectionFor(ctx.config?.modelPorts, 'categorize');
+          await ctx.engine?.init?.();
+          const enabled = ctx.config?.engine === 'live' && ctx.engine?.credentialStateFor?.('categorize') !== 'failed'
+            && (selection.adapter !== 'jev' || !!(selection.keyFile || ctx.config?.typesafeKeyFile));
+          const categorizer = await createJev({ keyFile: selection.keyFile || ctx.config?.typesafeKeyFile, enabled,
             ledger: createSpendLedger(ctx.db), maxCostUsd: Math.min(.05, maxCostUsd),
             monthlyCapUsd: Number.isFinite(cap) && cap >= 0 ? cap : 0, admit, complete: ctx.engine?.complete });
           const categories = await guessCategories(ctx.db, categorizer, { now: ctx.now });

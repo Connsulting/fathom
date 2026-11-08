@@ -31,9 +31,9 @@ export function categoryQuestions(rows, { accounts = [], householdNames = {}, ca
 
 export async function createJev({ keyFile = process.env.FATHOM_TYPESAFE_KEY_FILE, ledger,
   transport = fetch, maxCostUsd = .05, maxTokens = Math.floor(maxCostUsd/JEV_INPUT_USD), monthlyCapUsd = 200,
-  batchSize = 10, timeoutMs = 10_000, retries = 2, sleep = delay, now = () => new Date(), admit = () => null, complete } = {}) {
+  batchSize = 10, timeoutMs = 10_000, retries = 2, sleep = delay, now = () => new Date(), admit = () => null, complete, enabled = true } = {}) {
   if (typeof admit !== 'function') throw fail('jev_bad_options');
-  if (!complete && (!keyFile || !existsSync(keyFile))) return { isOn:()=>false, stats:()=>({costUsd:0,tokens:0,latenciesMs:[]}) };
+  if (!enabled || !complete && (!keyFile || !existsSync(keyFile))) return { isOn:()=>false, stats:()=>({costUsd:0,tokens:0,latenciesMs:[]}) };
   const credential = complete ? null : await loadCredential(keyFile);
   const port = complete ? null : createModelPort({ selection: { adapter: 'jev' }, transport, credential });
   for (const n of [maxTokens,maxCostUsd,monthlyCapUsd]) if (!Number.isFinite(n) || n<0) throw fail('jev_bad_budget');
