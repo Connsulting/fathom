@@ -107,7 +107,7 @@ test('AC1: a yes/no question is answered from a memory with quoted evidence, and
   assert.ok(info.evidence.text.includes(`Your memory says "${text}`), info.evidence.text);
   assert.ok(info.evidence.refs.includes(ref));
 
-  reopenItem(db, item.id, { now: NOW });
+  await reopenItem(db, item.id, { now: NOW });
   assert.equal((await getItem(db, item.id)).status, 'pending');
   assert.ok(await db.prepare('SELECT 1 FROM confirm_auto_declined WHERE item_id=?').get(item.id));
   assert.equal((await getFacts(db))['business.cashBasis'], undefined);
@@ -153,7 +153,7 @@ test('AC2: a salary range stated in a note becomes one Use it card; Use it recor
 
   await answerItem(db, item.id, 'use', { now: NOW });
   assert.deepEqual((await getFacts(db))['business.salaryRange'], { min: 90000, max: 120000 });
-  reopenItem(db, item.id, { now: NOW });
+  await reopenItem(db, item.id, { now: NOW });
   assert.equal((await getFacts(db))['business.salaryRange'], undefined, 'Undo removes the fact');
 }));
 

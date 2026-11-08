@@ -62,7 +62,7 @@ export async function mcpHouseholds() {
     };
     const A = { id: (await platform.prepare('SELECT id FROM households WHERE serves_store = 1').get()).id, canary: 'SyntheticAlphaCanary' };
     A.admin = await enroll(A.id, 'alpha@example.test', 'admin');
-    store.grantOperator(A.admin.userId);
+    await store.grantOperator(A.admin.userId);
     await store.setPlatformSetting('multi_household_enabled', true);
     const made = await A.admin.client.post('/api/operator/households', { displayName: 'Synthetic second household', adminEmail: 'bravo@example.test' });
     assert.equal(made.status, 200, made.text);

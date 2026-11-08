@@ -138,12 +138,12 @@ export async function enrollSession(platform, householdId, email, role = 'member
   let user = await store.findUser(email);
   if (!user || store.membership(user.id, householdId)?.status !== 'active') {
     const invited = store.invite(householdId, email, { role });
-    store.consumeInvitation(invited.token, invited.user.id);
+    await store.consumeInvitation(invited.token, invited.user.id);
     user = invited.user;
   }
   if (store.getUser(user.id).enrolledAt == null) await store.markEnrolled(user.id);
   user = store.getUser(user.id);
-  const { token } = store.createSession(user.id);
+  const { token } = await store.createSession(user.id);
   return { user, householdId, role: store.membership(user.id, householdId).role, token, cookie: `__Host-fathom-session=${token}` };
 }
 
@@ -216,7 +216,7 @@ export async function twoHouseholds({ engine = 'fake', extra = {}, engineOptions
     const A = { id: served.id };
     A.admin = await enrollSession(platform, A.id, 'alpha-admin@example.test', 'admin');
     A.client = sessionClient(baseUrl, A.admin);
-    store.grantOperator(A.admin.user.id);
+    await store.grantOperator(A.admin.user.id);
     await store.setPlatformSetting('multi_household_enabled', true);
     const made = await A.client.postJson('/api/operator/households', { displayName: 'Synthetic Bravo Household', adminEmail: 'bravo-admin@example.test' });
     if (made.status !== 200) throw new Error(`fixture: operator route -> ${made.status} ${made.text.slice(0, 200)}`);
@@ -225,7 +225,7 @@ export async function twoHouseholds({ engine = 'fake', extra = {}, engineOptions
     B.client = sessionClient(baseUrl, B.admin);
     const dualA = await enrollSession(platform, A.id, 'both-member@example.test', 'member');
     await enrollSession(platform, B.id, 'both-member@example.test', 'member');
-    const dualSession = store.createSession(dualA.user.id);
+    const dualSession = await store.createSession(dualA.user.id);
     await platform.prepare('UPDATE auth_sessions SET household_id = NULL WHERE hash = ?').run(sessionHash(dualSession.token));
     const dual = { user: dualA.user, token: dualSession.token, cookie: `__Host-fathom-session=${dualSession.token}` };
     dual.client = sessionClient(baseUrl, dual);

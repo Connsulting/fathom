@@ -525,7 +525,7 @@ describe('household membership on a real instance (AC1)', () => {
     assert.equal(granted.code, 0, granted.stderr);
     const removed = await as(admin).post(`/api/admin/users/${operator.id}/remove`, {});
     assert.equal(removed.status, 200, removed.text);
-    operator.token = store.createSession(operator.id).token;
+    operator.token = (await store.createSession(operator.id)).token;
   }, T);
 
   after(async () => {
@@ -583,7 +583,7 @@ describe('household membership on a real instance (AC1)', () => {
     await store.grantOperator(joiner.id);
     assert.equal((await as(admin).post(`/api/admin/users/${joiner.id}/remove`, {})).status, 200);
     assert.equal(membership(joiner.id).status, 'removed');
-    const joinerSession = store.createSession(joiner.id).token;
+    const joinerSession = (await store.createSession(joiner.id)).token;
     const invitation = await store.invite(hh, joiner.email, { role: 'member' });
     assert.equal(invitation.user.id, joiner.id, 'the invitation targets the existing account');
 
@@ -633,8 +633,8 @@ describe('household membership on a real instance (AC1)', () => {
     assert.equal(demote.status, 409, demote.text);
     const remove = await as(admin).post(`/api/admin/users/${admin.id}/remove`, {});
     assert.equal(remove.status, 409, remove.text);
-    await assert.rejects(async () => store.setRole(hh, admin.id, 'member'), err => err.status === 409);
-    await assert.rejects(async () => store.removeMember(hh, admin.id), err => err.status === 409);
+    await assert.rejects(async () => await store.setRole(hh, admin.id, 'member'), err => err.status === 409);
+    await assert.rejects(async () => await store.removeMember(hh, admin.id), err => err.status === 409);
     assert.deepEqual(pick(membership(admin.id), ['role', 'status']), { role: 'admin', status: 'active' });
     assert.equal((await as(admin).get('/api/scenario')).status, 200);
   });
@@ -805,8 +805,8 @@ describe('admin credential scoping and audit attribution (AC1)', () => {
     const outsider = { id: `usr-${randomBytes(6).toString('hex')}`, email };
     await platform.prepare('INSERT INTO users (id, email, user_handle, created_at, enrolled_at) VALUES (?, ?, ?, ?, ?)')
       .run(outsider.id, email, randomBytes(32).toString('base64url'), Date.now() - 60_000, Date.now() - 60_000);
-    store.grantOperator(outsider.id);
-    outsider.token = store.createSession(outsider.id).token;
+    await store.grantOperator(outsider.id);
+    outsider.token = (await store.createSession(outsider.id)).token;
     const pk = await insertPasskey(platform, outsider.id);
     secrets.push(email, outsider.token, pk);
     const held = async () => ({ passkeys: await passkeysOf(outsider.id), sessions: await sessionsOf(outsider.id) });
@@ -956,7 +956,7 @@ describe('instance operators (AC1)', () => {
     assert.equal(last.code, 1, last.stderr);
     assert.ok(!last.stderr.includes(first.email));
     assert.equal(store.isOperator(first.id), true);
-    await assert.rejects(async () => store.revokeOperator(first.id), err => err.status === 409);
+    await assert.rejects(async () => await store.revokeOperator(first.id), err => err.status === 409);
 
     assert.equal((await operatorCli(['grant', second.email], dataDir)).code, 0);
     const revoked = await operatorCli(['revoke', first.email], dataDir);
@@ -1056,9 +1056,9 @@ describe('second-household provisioning gate (AC3)', () => {
     const op = await enrollMember(s, householdId, 'store-operator@example.test', 'admin');
     await s.grantOperator(op.id);
     await p.prepare("UPDATE households SET status = 'provisioning' WHERE id = ?").run(householdId);
-    const request = email => s.provisionHousehold({ displayName: 'Synthetic Other Household', adminEmail: email }, { actorId: op.id });
+    const request = async email => await s.provisionHousehold({ displayName: 'Synthetic Other Household', adminEmail: email }, { actorId: op.id });
     const gated = err => err.status === 409 && err.code === 'multi_household_gated';
-    await assert.rejects(async () => request('blocked-admin@example.test'), gated);
+    await assert.rejects(async () => await request('blocked-admin@example.test'), gated);
     assert.equal(await count(p, 'SELECT count(*) AS n FROM households'), 1);
 
     await p.prepare("UPDATE households SET status = 'deleted' WHERE id = ?").run(householdId);
@@ -1066,7 +1066,7 @@ describe('second-household provisioning gate (AC3)', () => {
     assert.equal(made.household.status, 'provisioning');
     assert.equal(typeof made.token, 'string');
     assert.equal(await count(p, "SELECT count(*) AS n FROM households WHERE status != 'deleted' AND mode = 'real'"), 1);
-    await assert.rejects(async () => request('blocked-again@example.test'), gated, 'the new provisioning household counts');
+    await assert.rejects(async () => await request('blocked-again@example.test'), gated, 'the new provisioning household counts');
   });
 
   test('store level: demo households are exempt from the gate', T, async t => {

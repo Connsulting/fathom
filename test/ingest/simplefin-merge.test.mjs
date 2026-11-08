@@ -47,7 +47,7 @@ test('repair is idempotent and Keep both survives repeated reads and remains und
   await M.queueAccountPairs(s.db); await M.queueAccountPairs(s.db);
   assert.equal((await pending(s.db)).length, 0);
   assert.equal(await C.finalReason(s.db, await C.getItem(s.db, q.id)), null);
-  C.reopenItem(s.db, q.id, { now: NOW });
+  await C.reopenItem(s.db, q.id, { now: NOW });
   assert.equal((await pending(s.db)).length, 1);
 }));
 
@@ -70,7 +70,7 @@ test('merge keeps stable references, history and metadata, counts the merged acc
   assert.equal((await buildTrend(s.db, '2032-03-10')).trend.points.at(-1).total, 1200);
   assert.equal((await C.pendingItems(s.db)).filter(i => i.subject === pair.own).length, 0);
   await planRun(s.db, { now: '2032-03-10', dataDir: s.dataDir });
-  C.reopenItem(s.db, q.id, { now: NOW });
+  await C.reopenItem(s.db, q.id, { now: NOW });
   assert.equal((await buildTrend(s.db, '2032-03-10')).trend.points.at(-1).total, 2400);
   const restored = await s.db.prepare('SELECT * FROM accounts ORDER BY id').all();
   assert.deepEqual(restored.map(a => [a.id,a.name,a.owner,a.kind,a.mirror]), beforeAccounts.map(a => [a.id,a.name,a.owner,a.kind,a.mirror]));
@@ -256,7 +256,7 @@ test('repair questions use shared labels and preserve the imported display name 
   assert.match(q.question,/Household reserve/);assert.match(q.question,/Bridge reserve/);
   await C.answer(s.db,q.id,'same',{now:NOW});
   assert.equal((await s.db.prepare('SELECT display_name FROM accounts WHERE id=?').get(p.keep)).display_name,'Household reserve');
-  C.reopenItem(s.db,q.id,{now:NOW});
+  await C.reopenItem(s.db,q.id,{now:NOW});
   assert.equal((await s.db.prepare('SELECT display_name FROM accounts WHERE id=?').get(p.keep)).display_name,'Household reserve');
   assert.equal((await s.db.prepare('SELECT display_name FROM accounts WHERE id=?').get(p.own)).display_name,'Bridge reserve');
 }));
@@ -271,7 +271,7 @@ test('merge moves expected payments and merge Undo restores their original accou
   const q = (await pending(s.db))[0];
   await C.answer(s.db, q.id, 'same', { now: NOW });
   assert.equal((await s.db.prepare('SELECT account_id FROM expected_transactions WHERE id=?').get(out.expectedTransaction.id)).account_id, p.keep);
-  C.reopenItem(s.db, q.id, { now: NOW });
+  await C.reopenItem(s.db, q.id, { now: NOW });
   assert.equal((await s.db.prepare('SELECT account_id FROM expected_transactions WHERE id=?').get(out.expectedTransaction.id)).account_id, p.own);
   assert.deepEqual(await s.db.prepare('PRAGMA foreign_key_check').all(), []);
 }));

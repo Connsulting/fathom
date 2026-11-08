@@ -38,7 +38,7 @@ before(async () => {
   const store = createAuthStore(t.platform);
   for (const name of ['creator', 'member']) {
     const invited = store.invite(hh, `${name}@example.test`);
-    store.consumeInvitation(invited.token, invited.user.id);
+    await store.consumeInvitation(invited.token, invited.user.id);
     users[name] = invited.user.id;
   }
   clock = new Date('2026-11-05T15:00:00.000Z');

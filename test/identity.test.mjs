@@ -259,9 +259,9 @@ test('registration links expire or consume once while fresh invitations produce 
       const expiredStore = createAuthStore(platform, { now: () => Date.now() - 21 * 60 * 1000 });
       const expired = expiredStore.invite(hh, 'expired@example.test', { role: 'member' });
       const usedInvite = store.invite(hh, 'used@example.test', { role: 'member' });
-      store.consumeInvitation(usedInvite.token, usedInvite.user.id);
-      const used = store.createToken(enrolledUser.fixture.user.id, 'recovery');
-      store.consumeToken(used.token);
+      await store.consumeInvitation(usedInvite.token, usedInvite.user.id);
+      const used = await store.createToken(enrolledUser.fixture.user.id, 'recovery');
+      await store.consumeToken(used.token);
       const fresh = store.invite(hh, 'new@example.test', { role: 'member' });
       return { expired, usedInvite, used, fresh };
     });
@@ -496,12 +496,12 @@ test('expired sessions are denied and request entry lazily removes expired auth 
     const facts = await dbCall(server, async db => await db.prepare('SELECT * FROM facts ORDER BY key').all());
     const rows = await authCall(server, async (platform, store, hh) => {
       const { user, token } = store.invite(hh, 'expiry@example.test', { role: 'member' });
-      store.consumeInvitation(token, user.id);
+      await store.consumeInvitation(token, user.id);
       await store.markEnrolled(user.id);
       const old = createAuthStore(platform, { now: () => Date.now() - 8 * 24 * 60 * 60 * 1000 });
-      const expiredSession = old.createSession(user.id);
-      old.createToken(user.id, 'recovery');
-      const liveToken = store.createToken(server.session.user.id, 'recovery');
+      const expiredSession = await old.createSession(user.id);
+      await old.createToken(user.id, 'recovery');
+      const liveToken = await store.createToken(server.session.user.id, 'recovery');
       return { expiredSession, liveToken };
     });
     assert.equal((await request(server.baseUrl, { path: '/api/scenario', headers: { cookie: `__Host-fathom-session=${rows.expiredSession.token}` } })).status, 401);
@@ -560,7 +560,7 @@ test('bootstrap CLI requires explicit admin, reissues only before enrollment, an
     assert.equal(await store.invitation(token), null);
     assert.equal((await store.invitation(replacement)).role, 'admin');
     // The bootstrap admin redeems the invitation and enrolls; bootstrap then refuses.
-    store.consumeInvitation(replacement, user.id);
+    await store.consumeInvitation(replacement, user.id);
     await store.markEnrolled(user.id);
     const refused = await inviteCli(['another@example.test', '--admin'], cliEnv(temp.dataDir));
     assert.notEqual(refused.code, 0);

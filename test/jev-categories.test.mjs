@@ -61,7 +61,7 @@ test('auto application is provenance-marked, does not teach memory, and undo/rev
   const later=await transaction(db,'Synthetic Shop'); assert.equal((await resolutions(db)).get(later).layer,'uncategorized');
   assert.equal((await db.prepare('SELECT count(*) AS n FROM category_merchant_rules').get()).n,0);
   await db.applySchema('INSERT INTO ingest_epoch (id,n) VALUES (1,1) ON CONFLICT(id) DO UPDATE SET n=n+1');
-  reopenItem(db,item.id); await queueCategoryChecks(db); assert.equal((await resolutions(db)).get(id).layer,'uncategorized');
+  await reopenItem(db,item.id); await queueCategoryChecks(db); assert.equal((await resolutions(db)).get(id).layer,'uncategorized');
   await guessCategories(db,provider(.99),{policy}); assert.equal((await getItem(db,item.id)).status,'pending');
   const {answerItem}=await import('../src/ingest/confirm.mjs'); await answerItem(db,item.id,'Business');
   assert.equal((await resolutions(db)).get(id).layer,'correction');
@@ -176,8 +176,8 @@ test('duplicate consolidation keeps a model correction from becoming owner memor
   const {answerItem}=await import('../src/ingest/confirm.mjs');await answerItem(db,duplicate.id,'same');
   assert.equal((await resolutions(db)).get(keep).layer,'uncategorized');
   assert.equal((await resolutions(db)).get(later).layer,'uncategorized');
-  reopenItem(db,duplicate.id);assert.equal((await resolutions(db)).get(drop).layer,'guess');
-  reopenItem(db,auto.id);assert.equal((await resolutions(db)).get(drop).layer,'uncategorized');
+  await reopenItem(db,duplicate.id);assert.equal((await resolutions(db)).get(drop).layer,'guess');
+  await reopenItem(db,auto.id);assert.equal((await resolutions(db)).get(drop).layer,'uncategorized');
   assert.deepEqual((await db.foreignKeyCheck()),[]);
 });
 
@@ -221,7 +221,7 @@ test('near-duplicate consolidation retires the dropped Jev review and undo can r
   assert.equal(await getItem(db,droppedCard.id),null);
   const current=(await pendingItems(db)).filter(q=>q.kind==='transaction_category');
   assert.equal(current.length,1);assert.equal(current[0].subject,String(keep));assert.equal((await bestGuess(db,current[0],{})).confidence,.9);
-  reopenItem(db,duplicate.id);await queueCategoryChecks(db,{policy});
+  await reopenItem(db,duplicate.id);await queueCategoryChecks(db,{policy});
   assert.equal((await pendingItems(db)).filter(q=>q.kind==='transaction_category').length,2);
   assert.deepEqual((await db.foreignKeyCheck()),[]);
 });

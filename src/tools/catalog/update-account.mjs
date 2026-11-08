@@ -36,7 +36,7 @@ registerReceiptKind('account_answer', { async restore(ctx,{id,before,after}) {
 } });
 registerReceiptKind('account_merge', { async restore(ctx,{before,after}) {
   if (!isDeepStrictEqual(await itemState(ctx.db,after.itemId),after.item)) conflict();
-  domain(async () => await afterAnswer(ctx,() => reopenItem(ctx.db,after.itemId,{now:nowOf(ctx)})));
+  domain(async () => await afterAnswer(ctx,async () => await reopenItem(ctx.db,after.itemId,{now:nowOf(ctx)})));
 } });
 
 async function mergeEvidence(args,ctx) {

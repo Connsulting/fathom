@@ -403,9 +403,9 @@ export async function freshInstance(dataDir, mode = 'real') {
 // (invite, consumeInvitation, markEnrolled, createSession). Returns { id, email, token }.
 export async function enrollMember(store, householdId, email, role = 'member') {
   const { user, token } = store.invite(householdId, email, { role });
-  store.consumeInvitation(token, user.id);
+  await store.consumeInvitation(token, user.id);
   await store.markEnrolled(user.id);
-  const session = store.createSession(user.id);
+  const session = await store.createSession(user.id);
   return { id: user.id, email, token: session.token };
 }
 

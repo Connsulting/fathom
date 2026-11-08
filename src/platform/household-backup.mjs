@@ -23,7 +23,7 @@ const safeFile = path => path === DB_FILE || (typeof path === 'string' && TREES.
   && path.split('/').length > 1 && path.split('/').every(part => /^[A-Za-z0-9._-]+$/.test(part) && part !== '.' && part !== '..'));
 const inDir = (parent, path) => { const r = relative(parent, path); return r === '' || (!r.startsWith('..') && !isAbsolute(r)); };
 const assert = (ok, code) => { if (!ok) throw codeError(code); };
-const transaction = (p, fn) => p.transaction(fn);
+const transaction = async (p, fn) => p.transaction(fn);
 const phase = async (p, id, name) => await p.prepare('UPDATE household_backup_operations SET phase = ?, updated_at = ? WHERE id = ?').run(name, Date.now(), id);
 const result = row => ({ operationId: row.id, status: row.status, code: row.code, fileCount: row.file_count, byteCount: row.byte_count });
 const availableBytes = path => { const s = statfsSync(path); return Number(s.bavail) * Number(s.bsize); };
@@ -160,7 +160,7 @@ async function insertOperation(platform, row, { id, kind, file, target = null, h
 }
 
 async function suspend({ platform, config, runtimes }, op) {
-  transaction(platform, async (platform) => {
+  await transaction(platform, async (platform) => {
     const row = await household(platform, op.household_id);
     assert(row.storage_root === op.source_root && row.generation === op.source_generation && ['active', 'suspended'].includes(row.status), 'restore_source_changed');
     await platform.prepare("UPDATE households SET status = 'suspended', updated_at = ? WHERE id = ?").run(Date.now(), row.id);
@@ -198,7 +198,7 @@ export async function backupHousehold({ platform, config, runtimes = null, house
       householdBackup: { ...frozen.metadata, memberships: await memberships(platform, householdId) } });
     const opened = readSnapshotFile(snap.file, key);
     await db.close(); db = null;
-    transaction(platform, async (platform) => {
+    await transaction(platform, async (platform) => {
       await platform.prepare("UPDATE household_backup_operations SET status = 'done', phase = 'complete', bundle_hash = ?, file_count = ?, byte_count = ?, updated_at = ? WHERE id = ?")
         .run(snap.sha256, opened.files.size, readFileSync(snap.file).length, Date.now(), op.id);
       await platform.prepare("UPDATE households SET status = 'active', updated_at = ? WHERE id = ? AND storage_root = ? AND generation = ? AND status = 'suspended'")
@@ -208,7 +208,7 @@ export async function backupHousehold({ platform, config, runtimes = null, house
     return { ...result(await operation(platform, op.id)), file: snap.file };
   } catch (err) {
     await db?.close(); db = null;
-    if (op) transaction(platform, async (platform) => {
+    if (op) await transaction(platform, async (platform) => {
       await platform.prepare("UPDATE household_backup_operations SET status = 'failed', code = 'backup_failed', updated_at = ? WHERE id = ?").run(Date.now(), op.id);
       await platform.prepare("UPDATE households SET status = 'active', updated_at = ? WHERE id = ? AND storage_root = ? AND generation = ? AND status = 'suspended'")
         .run(Date.now(), householdId, op.source_root, op.source_generation);
@@ -249,7 +249,7 @@ async function reconcileStore(platform, sourceRoot, targetRoot, id) {
   const db = await openDb(join(targetRoot, DB_FILE));
   try {
     assert((await storeIdentity(source))?.householdId === id && (await storeIdentity(db))?.householdId === id, 'backup_identity_mismatch');
-    transaction(db, async (db) => {
+    await transaction(db, async (db) => {
       await db.prepare('DELETE FROM spend_ledger').run();
       const insert = db.prepare('INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens, round_id) VALUES (?, ?, ?, ?, ?, ?, ?)');
       const legacy = await source.prepare('SELECT * FROM spend_ledger WHERE round_id IS NULL').all();
@@ -281,7 +281,7 @@ async function continueRestore(options, id, onPhase = () => {}) {
     const source = await suspend(options, op);
     await source.close();
     await onPhase('suspended');
-    transaction(platform, async (platform) => {
+    await transaction(platform, async (platform) => {
       const current = await household(platform, op.household_id);
       assert(current.status === 'suspended' && current.storage_root === op.source_root && current.generation === op.source_generation, 'restore_source_changed');
       const drift = JSON.stringify(await memberships(platform, op.household_id)) === JSON.stringify(bundle.meta.memberships) ? 0 : 1;
@@ -304,7 +304,7 @@ async function continueRestore(options, id, onPhase = () => {}) {
     await phase(platform, id, 'finalized');
     await onPhase('finalized');
   }
-  transaction(platform, async (platform) => {
+  await transaction(platform, async (platform) => {
     await platform.prepare("UPDATE households SET status = 'active', updated_at = ? WHERE id = ?").run(Date.now(), op.household_id);
     await platform.prepare("UPDATE household_backup_operations SET status = 'done', phase = 'complete', updated_at = ? WHERE id = ?").run(Date.now(), id);
     await platform.prepare("INSERT INTO audit_events (at, household_id, action, outcome) VALUES (?, ?, 'household.restore', 'ok')").run(Date.now(), op.household_id);
@@ -359,7 +359,7 @@ export async function recoverHouseholdOperations({ platform, config, runtimes = 
       try { await continueRestore({ platform, config, runtimes }, op.id); }
       catch { console.error('fathom: restore recovery blocked', 'restore_recovery_required'); }
     }
-    else transaction(platform, async (platform) => {
+    else await transaction(platform, async (platform) => {
       await platform.prepare("UPDATE households SET status = 'active' WHERE id = ? AND storage_root = ? AND generation = ? AND status = 'suspended'")
         .run(op.household_id, op.source_root, op.source_generation);
       await platform.prepare("UPDATE household_backup_operations SET status = 'failed', code = 'backup_interrupted', updated_at = ? WHERE id = ?").run(Date.now(), op.id);

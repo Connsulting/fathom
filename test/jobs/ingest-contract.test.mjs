@@ -916,7 +916,7 @@ test('MGI2: payment dates infer sheet years with Undo and preserve explicit year
   near((await fig(db, 'tax.fed.paid')).v, 6000, 'January is inferred to the prior year');
   const item = await db.prepare("SELECT id FROM confirm_items WHERE kind='tax_year'").get();
   assert.ok(await autoInfo(db, item.id));
-  reopenItem(db, item.id, { now: NOW });
+  await reopenItem(db, item.id, { now: NOW });
   const reopened = await replan(db);
   await assertGap(db, reopened.info, 'tax_year_unconfirmed', ['tax.fed.paid']);
   await answerPending(db, 'tax_year', 'payment_year');

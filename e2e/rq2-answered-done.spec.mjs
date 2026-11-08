@@ -38,9 +38,9 @@ test.describe('an answered question rec is done on a synthetic household', () =>
     app = await startServer(loadConfig({ FATHOM_DATA: dataDir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_HOST: 'localhost', FATHOM_PORT: String(port), FATHOM_PUBLIC_URL: origin, FATHOM_CLOCK: clock, ...secretEnv(secretsFor(dataDir)) }));
     const auth = createAuthStore(app.platform);
     const { user, token } = auth.invite(auth.servedHousehold().id, 'owner@example.test', { role: 'admin' });
-    auth.consumeInvitation(token, user.id);
+    await auth.consumeInvitation(token, user.id);
     await auth.markEnrolled(user.id);
-    session = auth.createSession(user.id);
+    session = await auth.createSession(user.id);
   });
   test.afterAll(async () => {
     if (app) await app.close();

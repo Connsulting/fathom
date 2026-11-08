@@ -170,7 +170,7 @@ test('over HTTP, a session deleted or a membership removed mid-Ask stops the nex
   const client = sessionClient(two.baseUrl, member);
   from = emulator.requests.length;
   rowsBefore = (await roundsOf(two.platform, A)).length;
-  emulator.script([body => { store.removeMember(A, member.user.id); return toolRound(body); }]);
+  emulator.script([async body => { await store.removeMember(A, member.user.id); return toolRound(body); }]);
   r = await client.postJson('/api/threads', { text: 'Synthetic alpha question, member removed' });
   assert.ok(r.status !== 200 || r.json?.message?.notice === true, `no answer after removal: ${r.status}`);
   assert.equal(emulator.requests.length, from + 1, 'no round after the membership was removed');

@@ -66,7 +66,7 @@ export async function writeAccountAnswer(db, id, field, body, { now } = {}) {
   if (typeof body[field] !== 'string' || !options.some(o => o.id === body[field])) {
     throw new HttpError(400, `${field} must be one of ${options.map(o => o.id).join(', ')}`);
   }
-  return setAccountAnswer(db, kind, id, body[field], { now });
+  return await setAccountAnswer(db, kind, id, body[field], { now });
 }
 
 export async function mergeAccountPair(db, id, withId, { now } = {}) {

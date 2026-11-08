@@ -175,7 +175,7 @@ before(async () => {
   // Bootstrap: the operator's user-invite command issues the first admin's invitation.
   const boot = store.invite(A, 'alpha-admin@example.test', { role: 'admin' });
   f.alpha = await enrollByLink(boot.token);
-  store.grantOperator(f.alpha.identity.id);
+  await store.grantOperator(f.alpha.identity.id);
   await store.setPlatformSetting('multi_household_enabled', true);
   await session(f.alpha);
 });

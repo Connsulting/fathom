@@ -23,7 +23,7 @@ export async function openScope(config = {}) {
 
 // Run fn atomically on a handle: a scope opens a write transaction, a transaction handle a
 // savepoint. fn receives the handle to use for every statement inside.
-export function atomically(handle, fn) {
+export async function atomically(handle, fn) {
   return handle.transaction ? handle.transaction(fn) : handle.savepoint(fn);
 }
 

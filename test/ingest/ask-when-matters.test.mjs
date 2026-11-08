@@ -106,7 +106,7 @@ test('AC4: January Q4 estimate is inferred to the prior tax year with evidence a
   const id = JSON.parse(payment.locator).confirmId;
   assert.ok((await autoInfo(db, id))?.evidence.text);
   assert.equal((await pendingItems(db)).filter(i => i.kind === 'transaction_payment').length, 0);
-  reopenItem(db, id, { now: NOW });
+  await reopenItem(db, id, { now: NOW });
   assert.equal((await db.prepare('SELECT count(*) n FROM tax_payments').get()).n, 0);
   await reconcileTransactionPayments(db, { now: NOW });
   assert.equal((await pendingItems(db)).filter(i => i.kind === 'transaction_payment').length, 1, 'Undo is never silently inferred again');
@@ -145,7 +145,7 @@ test('uploaded estimates infer date-based years once, preserve explicit years, a
   assert.equal((await getItem(db, item.id)).status, 'answered');
   assert.ok(await autoInfo(db, item.id));
   assert.deepEqual((await db.prepare('SELECT tax_year FROM tax_payments ORDER BY date').all()).map(r => r.tax_year), [2025, 2026]);
-  reopenItem(db, item.id, { now: NOW });
+  await reopenItem(db, item.id, { now: NOW });
   await autoResolve(db, { now: NOW });
   assert.equal((await getItem(db, item.id)).status, 'pending');
   assert.deepEqual((await db.prepare('SELECT tax_year_basis FROM tax_payments').all()).map(r => r.tax_year_basis), ['sheet_label', 'sheet_label']);
@@ -192,6 +192,6 @@ test('the payment workbook import and planning boundaries infer years and preser
   assert.equal((await pendingItems(s.db)).some(i => i.kind === 'tax_year'), false);
   assert.deepEqual((await s.db.prepare('SELECT tax_year,tax_year_basis FROM tax_payments ORDER BY date').all()).map(r => [r.tax_year,r.tax_year_basis]),
     [[2025, 'inferred_payment_year'], [2026, 'confirmed_tax_year']]);
-  reopenItem(s.db, row.id, { now: NOW });
+  await reopenItem(s.db, row.id, { now: NOW });
   assert.ok((await pendingItems(s.db)).some(i => i.id === row.id));
 });

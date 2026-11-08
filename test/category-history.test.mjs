@@ -53,7 +53,7 @@ test('Confirm answers and enriched imported categories train immediately without
   assert.equal((await autoInfo(db,item.id)).evidence.refs.stage,'history');
   assert.equal(resolveCategories(await loadCategoryInputs(db)).get(target).category,'Groceries');
   assert.equal((await db.prepare('SELECT count(*) AS n FROM category_merchant_rules').get()).n,0);
-  reopenItem(db,item.id);
+  await reopenItem(db,item.id);
   assert.equal(resolveCategories(await loadCategoryInputs(db)).get(target).layer,'uncategorized');
   await guessCategories(db,off);
   assert.equal((await pendingItems(db)).find(q=>q.id===item.id).status,'pending');
@@ -96,7 +96,7 @@ test('processor business deposits, card payments and own-account transfers are u
   for(const id of [payout,card,out,incoming]) {
     const item=await db.prepare("SELECT id FROM confirm_items WHERE kind='transaction_category' AND subject=?").get(String(id));
     assert.equal((await autoInfo(db,item.id)).evidence.refs.stage,'rules');
-    reopenItem(db,item.id);
+    await reopenItem(db,item.id);
     assert.equal(resolveCategories(await loadCategoryInputs(db)).get(id).layer,'uncategorized');
   }
 });
@@ -189,7 +189,7 @@ test('undoing a learned business category restores spending through the calculat
   const spend=async ()=>spendingInputs({...await loadCategoryInputs(db),clock:'2032-11-30'});
   assert.ok(!(await spend()).spendIds.includes(target));
   const item=await db.prepare("SELECT id FROM confirm_items WHERE kind='transaction_category' AND subject=?").get(String(target));
-  reopenItem(db,item.id);
+  await reopenItem(db,item.id);
   assert.ok((await spend()).spendIds.includes(target));
 });
 

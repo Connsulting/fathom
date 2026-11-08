@@ -27,10 +27,10 @@ async function main([command, email, ...extra]) {
     if (!user) throw fail('no_such_user');
     if (command === 'grant') {
       if (user.enrolledAt == null) throw fail('not_enrolled');
-      store.grantOperator(user.id, { actorId: null });
+      await store.grantOperator(user.id, { actorId: null });
       return 'granted';
     }
-    store.revokeOperator(user.id, { actorId: null });
+    await store.revokeOperator(user.id, { actorId: null });
     return 'revoked';
   } finally {
     await platform.close();

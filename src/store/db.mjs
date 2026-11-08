@@ -12,7 +12,7 @@ export const DB_FILE = 'fathom.sqlite';
 
 // Open a store file read-write in WAL mode with foreign keys on and a 5000 ms busy timeout. The
 // busy timeout comes first, so switching to WAL waits out another process's lock.
-export function openDb(path, options = {}) {
+export async function openDb(path, options = {}) {
   return openScope({ path, ...options });
 }
 
@@ -23,7 +23,7 @@ export function listMigrations(dir = MIGRATIONS_DIR) {
 
 // Apply pending migrations from `dir` with ids up to `through` (the offline platform migration
 // stops the financial store just before the platform migration, 022, extracts accounts).
-export function migrate(db, { dir = MIGRATIONS_DIR, through = Infinity } = {}) {
+export async function migrate(db, { dir = MIGRATIONS_DIR, through = Infinity } = {}) {
   return db.migrate({ dir, through });
 }
 
@@ -32,7 +32,7 @@ export async function schemaVersion(db) {
   return r && r.id != null ? r.id : 0;
 }
 
-export function listTables(db) {
+export async function listTables(db) {
   return db.tables();
 }
 
@@ -67,7 +67,7 @@ export async function openMigrated(path) {
 
 // Run fn(handle) inside a write transaction on scope db; rolls back on throw. fn must use the handle
 // it receives for every statement.
-export function tx(db, fn) {
+export async function tx(db, fn) {
   return db.transaction(fn);
 }
 
@@ -84,16 +84,16 @@ function withHandle(ctx, db) {
 }
 
 // tx and actionTx over ctx.db: fn receives a context whose db is the transaction handle.
-export function txWith(ctx, fn) {
+export async function txWith(ctx, fn) {
   return ctx.db.transaction(db => fn(withHandle(ctx, db)));
 }
 
 // rehearse over ctx.db: fn's writes are always rolled back.
-export function rehearseWith(ctx, fn) {
+export async function rehearseWith(ctx, fn) {
   return rehearse(ctx.db, db => fn(withHandle(ctx, db)));
 }
 
-export function actionTxWith(ctx, fn) {
+export async function actionTxWith(ctx, fn) {
   return ctx.db.transaction ? txWith(ctx, fn) : fn(ctx);
 }
 
@@ -112,7 +112,7 @@ export async function readStoreMode(file) {
 }
 
 // Run fn atomically: in a new transaction on a scope, or directly inside the caller's open one.
-export function actionTx(db, fn) {
+export async function actionTx(db, fn) {
   return db.transaction ? db.transaction(fn) : fn(db);
 }
 

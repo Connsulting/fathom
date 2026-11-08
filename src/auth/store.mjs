@@ -57,8 +57,8 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
   // Statements follow the caller's open platform transaction, if any, so a store write inside one
   // joins it as a savepoint.
   const db = { prepare: text => currentHandle(platform).prepare(text) };
-  function transaction(fn) {
-    return atomically(currentHandle(platform), () => fn());
+  async function transaction(fn) {
+    return await atomically(currentHandle(platform), () => fn());
   }
 
   const userRow = async id => typeof id === 'string' ? await db.prepare('SELECT * FROM users WHERE id = ?').get(id) || null : null;
@@ -158,10 +158,10 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
     }
     return { householdId: row.household_id, ...await membership(userId, row.household_id) };
   }
-  function invite(householdId, email, { role = 'member', inviterId = null } = {}) {
+  async function invite(householdId, email, { role = 'member', inviterId = null } = {}) {
     const canonical = normalizeEmail(email);
     checkRole(role);
-    return transaction(async () => {
+    return await transaction(async () => {
       const household = await householdRow(householdId);
       if (!household || household.status === 'deleted') throw new HttpError(404, 'no such household');
       const existing = await db.prepare('SELECT * FROM users WHERE email = ?').get(canonical);
@@ -221,11 +221,11 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
         await db.prepare('UPDATE household_invitations SET revoked_at = ? WHERE hash = ? AND consumed_at IS NULL AND revoked_at IS NULL').run(now(), digest(raw));
       }
     },
-    consumeInvitation(raw, userId) { return transaction(async () => await consume(raw, userId)); },
+    async consumeInvitation(raw, userId) { return await transaction(async () => await consume(raw, userId)); },
     // A signed-in user redeems an invitation addressed to their own account. The role comes from
     // the invitation only. 410 for a dead link, 403 for another account's link (nothing changes).
-    acceptInvitation(raw, sessionUserId) {
-      return transaction(async () => {
+    async acceptInvitation(raw, sessionUserId) {
+      return await transaction(async () => {
         const row = await liveInvitationRow(raw);
         if (!row) throw expiredLink();
         const user = await userRow(sessionUserId);
@@ -252,9 +252,9 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
       const active = (await membershipRow(userId, householdId))?.status === 'active';
       return active || await pendingInvitationRow(householdId, userId) ? await personOf(householdId, row) : null;
     },
-    setRole(householdId, userId, role, { actorId = null } = {}) {
+    async setRole(householdId, userId, role, { actorId = null } = {}) {
       checkRole(role);
-      return transaction(async () => {
+      return await transaction(async () => {
         const row = await userRow(userId);
         const m = row ? await membershipRow(userId, householdId) : null;
         if (m?.status === 'active') {
@@ -279,8 +279,8 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
     // created is then deleted when nothing holds it, an enrolled account is left untouched.
     // An active member's MCP keys in this household are deleted with the membership. False when the
     // user is not in the household.
-    removeMember(householdId, userId, { actorId = null } = {}) {
-      return transaction(async () => {
+    async removeMember(householdId, userId, { actorId = null } = {}) {
+      return await transaction(async () => {
         const row = await userRow(userId);
         if (!row) return false;
         const m = await membershipRow(userId, householdId);
@@ -305,8 +305,8 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
         return true;
       });
     },
-    grantOperator(userId, { actorId = null } = {}) {
-      return transaction(async () => {
+    async grantOperator(userId, { actorId = null } = {}) {
+      return await transaction(async () => {
         const row = await userRow(userId);
         if (!row || row.enrolled_at === null) throw new HttpError(409, 'only an enrolled user can be an operator');
         await db.prepare('INSERT OR IGNORE INTO instance_operators (user_id, granted_at, granted_by) VALUES (?, ?, ?)').run(userId, now(), actorId);
@@ -314,8 +314,8 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
         return true;
       });
     },
-    revokeOperator(userId, { actorId = null } = {}) {
-      return transaction(async () => {
+    async revokeOperator(userId, { actorId = null } = {}) {
+      return await transaction(async () => {
         if (!await isOperator(userId)) throw new HttpError(404, 'no such operator');
         if ((await db.prepare('SELECT count(*) AS n FROM instance_operators').get()).n <= 1) throw new HttpError(409, 'cannot revoke the last operator');
         await db.prepare('DELETE FROM instance_operators WHERE user_id = ?').run(userId);
@@ -326,10 +326,10 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
     // A new household in status provisioning with an admin invitation. Real instances allow one
     // non-deleted real household (provisioning included) until multi_household_enabled is set;
     // demo instances are exempt.
-    provisionHousehold({ displayName: name, adminEmail } = {}, { actorId = null } = {}) {
+    async provisionHousehold({ displayName: name, adminEmail } = {}, { actorId = null } = {}) {
       const label = displayName(name);
       const email = normalizeEmail(adminEmail);
-      return transaction(async () => {
+      return await transaction(async () => {
         if (!actorId || !await isOperator(actorId)) throw new HttpError(403, 'operator required');
         const mode = (await servedHousehold())?.mode === 'demo' ? 'demo' : 'real';
         if (mode === 'real' && await store.getPlatformSetting('multi_household_enabled', false) !== true) {
@@ -341,7 +341,7 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
         await db.prepare(`INSERT INTO households (id, status, mode, display_name, serves_store, created_at, updated_at)
           VALUES (?, 'provisioning', ?, ?, 0, ?, ?)`).run(id, mode, label, at, at);
         await audit('household.provision', { actorId, householdId: id });
-        const issued = invite(id, email, { role: 'admin', inviterId: actorId });
+        const issued = await invite(id, email, { role: 'admin', inviterId: actorId });
         return { household: { id, status: 'provisioning' }, token: issued.token, user: issued.user, expiresAt: issued.expiresAt };
       });
     },
@@ -360,8 +360,8 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
     },
     // Audited as passkey.revoke with the household it was revoked in (the admin's, or the
     // session's for self revocation) when one applies.
-    revokePasskey(userId, id, { actorId = null, householdId = null } = {}) {
-      return transaction(async () => {
+    async revokePasskey(userId, id, { actorId = null, householdId = null } = {}) {
+      return await transaction(async () => {
         const removed = (await db.prepare('DELETE FROM passkeys WHERE user_id = ? AND id = ?').run(userId, id)).changes > 0;
         if (removed) {
           await revokeUserSessions(userId);
@@ -371,9 +371,9 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
         return removed;
       });
     },
-    createToken(userId, purpose) {
+    async createToken(userId, purpose) {
       if (!TOKEN_PURPOSES.includes(purpose)) throw new HttpError(400, 'invalid token purpose');
-      return transaction(async () => {
+      return await transaction(async () => {
         if (!await userRow(userId)) throw new HttpError(404, 'no such user');
         const raw = randomHandle();
         const expiresAt = now() + TOKEN_TTL;
@@ -383,8 +383,8 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
       });
     },
     token,
-    consumeToken(raw) {
-      return transaction(async () => {
+    async consumeToken(raw) {
+      return await transaction(async () => {
         const row = await token(raw);
         if (row) await store.revokeToken(raw);
         return row;
@@ -393,8 +393,8 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
     async revokeToken(raw) {
       if (validHandle(raw)) await db.prepare('DELETE FROM auth_tokens WHERE hash = ?').run(digest(raw));
     },
-    createSession(userId) {
-      return transaction(async () => {
+    async createSession(userId) {
+      return await transaction(async () => {
         if ((await getUser(userId))?.enrolledAt == null) throw new HttpError(401, 'unauthorized');
         const raw = randomHandle();
         const signedInAt = now();
@@ -415,8 +415,8 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
     // Select the session's household: only an active membership in an active household. Binds it
     // and rotates the context version in one write; anything else is the generic 403 with nothing
     // changed. Returns { id, name, role } of the selected household.
-    switchHousehold(raw, householdId) {
-      return transaction(async () => {
+    async switchHousehold(raw, householdId) {
+      return await transaction(async () => {
         const user = store.session(raw);
         if (!user) throw new HttpError(401, 'unauthorized');
         const row = typeof householdId === 'string' ? await db.prepare(`SELECT h.id, h.display_name, m.role FROM household_memberships m

@@ -20,7 +20,7 @@ test('restore replaces only A, retains current authorization and spend, revokes 
     assert.equal((await mcpList(f.server.baseUrl, f.A.key.key)).status, 200);
     const old = f.context(f.A.id);
     await changeMarker(old, 'alpha-current'); await changeMarker(f.context(f.B.id), 'bravo-current');
-    f.store.removeMember(f.A.id, f.A.member.userId, { actorId: f.A.admin.userId });
+    await f.store.removeMember(f.A.id, f.A.member.userId, { actorId: f.A.admin.userId });
     await f.platform.prepare(`INSERT INTO model_rounds (id, household_id, month, kind, purpose, state, reserved_usd, cost_usd, reserved_at, expires_at, settled_at)
       VALUES ('synthetic-current-round', ?, '2026-11', 'round', 'chat', 'settled', 3, 2, ?, ?, ?)`).run(f.A.id, Date.now(), Date.now(), Date.now());
     await f.platform.prepare(`INSERT INTO model_rounds (id, household_id, month, kind, purpose, state, reserved_usd, reserved_at, expires_at)

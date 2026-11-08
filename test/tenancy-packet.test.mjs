@@ -17,10 +17,10 @@ test('a packet assembled after membership removal is refused and cleaned up; act
     // Observe the real packet builder's first async filesystem operation without replacing it.
     // Revocation runs synchronously before that operation completes and before any packet bytes.
     let removed = false;
-    const hook = createHook({ init(_id, type) {
+    const hook = createHook({ async init(_id, type) {
       if (removed || type !== 'FSREQPROMISE') return;
       removed = true;
-      f.store.removeMember(f.A.id, member.user.id, { actorId: f.A.admin.user.id });
+      await f.store.removeMember(f.A.id, member.user.id, { actorId: f.A.admin.user.id });
     } });
     hook.enable();
     let response;

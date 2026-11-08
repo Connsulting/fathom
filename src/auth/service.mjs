@@ -245,9 +245,9 @@ export function createAuthService({ platform, config, transport, secrets = null,
         const fresh = await recheckRegistration(req, body, context);
         if (await db.prepare('SELECT 1 FROM passkeys WHERE id = ?').get(credential.id)) throw badVerification();
         if (fresh.purpose === 'invite') {
-          store.consumeInvitation(fresh.token, fresh.user.id);
+          await store.consumeInvitation(fresh.token, fresh.user.id);
         } else if (fresh.token) {
-          const consumed = store.consumeToken(fresh.token);
+          const consumed = await store.consumeToken(fresh.token);
           if (!consumed || consumed.userId !== fresh.user.id || consumed.purpose !== fresh.purpose) throw expiredLink();
           if (fresh.purpose === 'recovery') {
             await db.prepare('DELETE FROM passkeys WHERE user_id = ?').run(fresh.user.id);
@@ -264,10 +264,10 @@ export function createAuthService({ platform, config, transport, secrets = null,
         // session: the browser keeps a live session of the same user, or gets a new one beside any other.
         let session = null;
         if (fresh.purpose === 'add-passkey') {
-          if (store.session(currentSession(req))?.id !== fresh.user.id) session = store.createSession(fresh.user.id);
+          if (store.session(currentSession(req))?.id !== fresh.user.id) session = await store.createSession(fresh.user.id);
         } else if (fresh.token) {
           store.revokeSession(currentSession(req));
-          session = store.createSession(fresh.user.id);
+          session = await store.createSession(fresh.user.id);
         }
         const sessionUser = store.session(session ? session.token : currentSession(req));
         return { identity: sessionUser?.id === fresh.user.id ? await identityFor(sessionUser) : await identityOfUser(fresh.user.id), session };
@@ -311,7 +311,7 @@ export function createAuthService({ platform, config, transport, secrets = null,
           || current.created_at !== credential.created_at || !Buffer.from(current.public_key).equals(Buffer.from(credential.public_key))) throw badVerification();
         await db.prepare('UPDATE passkeys SET counter = ? WHERE id = ?').run(verified.authenticationInfo.newCounter, credential.id);
         store.revokeSession(currentSession(req));
-        const session = store.createSession(user.id);
+        const session = await store.createSession(user.id);
         return { session, identity: await identityOfSession(session.token) };
       });
       setCookie(res, SESSION_COOKIE, result.session, now());
@@ -324,7 +324,7 @@ export function createAuthService({ platform, config, transport, secrets = null,
       await store.rateLimit(`recover:email:${email ?? 'invalid'}`, { limit: 10, windowMs: 20 * 60_000 });
       const user = email ? await store.findUser(email) : null;
       if (user?.enrolledAt != null) {
-        const issued = store.createToken(user.id, 'recovery');
+        const issued = await store.createToken(user.id, 'recovery');
         void Promise.resolve().then(async () => sendLink(user, issued.token, 'recovery')).catch(() => {});
       }
       return { ...GENERIC_MAIL };
@@ -346,7 +346,7 @@ export function createAuthService({ platform, config, transport, secrets = null,
     async passkeys({ req }) { return { passkeys: await store.listPasskeys((await requireUser(req)).id) }; },
     async revokePasskey({ req, res, params }) {
       const user = await requireUser(req);
-      if (!store.revokePasskey(user.id, params.id, { actorId: user.id, householdId: user.householdId })) throw new HttpError(404, 'no such passkey');
+      if (!await store.revokePasskey(user.id, params.id, { actorId: user.id, householdId: user.householdId })) throw new HttpError(404, 'no such passkey');
       setCookie(res, SESSION_COOKIE, null);
       return { passkeys: await store.listPasskeys(user.id) };
     },
@@ -370,7 +370,7 @@ export function createAuthService({ platform, config, transport, secrets = null,
       await requireRecentSignin(req);
       await rate(req, 'device');
       await store.rateLimit(`device:user:${user.id}`, { limit: 10, windowMs: 20 * 60_000 });
-      const { token } = store.createToken(user.id, 'add-passkey');
+      const { token } = await store.createToken(user.id, 'add-passkey');
       await sendLink(user, token, 'add-passkey');
       return { ...GENERIC_MAIL };
     },
@@ -380,11 +380,11 @@ export function createAuthService({ platform, config, transport, secrets = null,
       const admin = await requireUser(req, { admin: true });
       const hh = adminHousehold(admin);
       if (!await store.person(hh, params.id)) throw new HttpError(404, 'no such user');
-      return { user: store.setRole(hh, params.id, body.role, { actorId: admin.id }) };
+      return { user: await store.setRole(hh, params.id, body.role, { actorId: admin.id }) };
     },
     async removeUser({ req, params }) {
       const admin = await requireUser(req, { admin: true });
-      if (!store.removeMember(adminHousehold(admin), params.id, { actorId: admin.id })) throw new HttpError(404, 'no such user');
+      if (!await store.removeMember(adminHousehold(admin), params.id, { actorId: admin.id })) throw new HttpError(404, 'no such user');
       return { removed: true };
     },
     // Only an active member's passkeys: a pending invitee's are 404 with nothing changed.
@@ -392,7 +392,7 @@ export function createAuthService({ platform, config, transport, secrets = null,
       const admin = await requireUser(req, { admin: true });
       const hh = adminHousehold(admin);
       if ((await store.person(hh, params.id))?.status !== 'active'
-        || !store.revokePasskey(params.id, params.keyId, { actorId: admin.id, householdId: hh })) throw new HttpError(404, 'no such passkey');
+        || !await store.revokePasskey(params.id, params.keyId, { actorId: admin.id, householdId: hh })) throw new HttpError(404, 'no such passkey');
       return { passkeys: await store.listPasskeys(params.id) };
     },
     // Select the session's household (docs/multi-tenancy.md, Active household and switching): only
@@ -404,7 +404,7 @@ export function createAuthService({ platform, config, transport, secrets = null,
       await rate(req, 'ceremony');
       if (typeof body.householdId !== 'string' || !body.householdId) throw new HttpError(400, 'householdId must be a household id');
       const raw = currentSession(req);
-      const household = store.switchHousehold(raw, body.householdId);
+      const household = await store.switchHousehold(raw, body.householdId);
       contextEnded(raw);
       return { identity: await identityOfSession(raw), household };
     },
@@ -412,7 +412,7 @@ export function createAuthService({ platform, config, transport, secrets = null,
     async acceptInvitation({ req, body }) {
       const user = await requireUser(req);
       await rate(req, 'ceremony');
-      store.acceptInvitation(body.token, user.id);
+      await store.acceptInvitation(body.token, user.id);
       return { identity: await identityFor(currentUser(req)) };
     },
     // An operator provisions another household; the gate refuses it with 409 multi_household_gated.
@@ -423,7 +423,7 @@ export function createAuthService({ platform, config, transport, secrets = null,
       const user = await requireUser(req);
       if (!store.isOperator(user.id)) throw new HttpError(403, 'operator required');
       await rate(req, 'invite');
-      const made = store.provisionHousehold({ displayName: body.displayName, adminEmail: body.adminEmail }, { actorId: user.id });
+      const made = await store.provisionHousehold({ displayName: body.displayName, adminEmail: body.adminEmail }, { actorId: user.id });
       try {
         await createHouseholdStorage({ platform, dataDir: config.dataDir, householdId: made.household.id, mode: demo ? 'demo' : 'real', secrets });
       } catch (err) {

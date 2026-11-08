@@ -42,7 +42,7 @@ test('operator dry run is read only, apply-sure merges only sure and normal Undo
     assert.equal((await s.db.prepare('SELECT count(*) n FROM accounts').get()).n,3);
     assert.equal((await pendingItems(s.db)).filter(i=>i.context.repair).length,1);
     const q = await s.db.prepare("SELECT id FROM confirm_items WHERE kind='account_match' AND answer='same'").get();
-    reopenItem(s.db,q.id,{now:NOW});
+    await reopenItem(s.db,q.id,{now:NOW});
     assert.ok(await s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get(sure.own));
     assert.equal((await s.db.prepare('SELECT count(*) n FROM accounts').get()).n,4);
   } finally {s.close();}
@@ -126,7 +126,7 @@ test('apply-sure merges a survivor with a balance-only file and Undo restores it
     assert.equal((await s.db.prepare('SELECT count(*) n FROM accounts').get()).n, 1);
     assert.equal((await s.db.prepare('SELECT account_id FROM simplefin_accounts').get()).account_id, 'file-only');
     const q = await s.db.prepare("SELECT id FROM confirm_items WHERE kind='account_match' AND answer='same'").get();
-    reopenItem(s.db, q.id, { now: NOW });
+    await reopenItem(s.db, q.id, { now: NOW });
     assert.ok(await s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get('survivor'));
     assert.equal((await s.db.prepare('SELECT count(*) n FROM accounts').get()).n, 2);
   } finally { s.close(); }

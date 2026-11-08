@@ -12,6 +12,7 @@ import { startServer } from '../src/server.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { demoRouteBehavior } from '../src/public-demo/control.mjs';
 import { mapSeries } from '../src/shared/series.mjs';
+import { mapSeries } from '../src/shared/series.mjs';
 
 const clock = '2026-11-05';
 async function fixture(t) {
@@ -96,7 +97,7 @@ test('row account labels from an earlier account read stay current and track a r
   const f = await fixture(t);
   const spec = { source: { tool: 'transactions', args: { operation: 'search', limit: 3 }, path: 'rows' }, columns: ['description', 'amount'] };
   const { id, block } = await f.store('table', spec);
-  const results = await Promise.all([{ tool: 'accounts', args: { operation: 'list' } }, ...block.calls].map(async c => ({
+  const results = await Promise.all(await mapSeries([{ tool: 'accounts', args: { operation: 'list' } }, ...block.calls], async c => ({
     name: c.tool, args: c.args, result: await callTool(c.tool, c.args, { db: f.db, clock }),
   })));
   block.snapshot = buildSnapshot('table', spec, results);

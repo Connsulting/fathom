@@ -8,6 +8,7 @@ import { digest } from '../src/auth/store.mjs';
 import { ask, OWNER_OPTIONS } from '../src/ingest/confirm.mjs';
 import { createLocalData, localPort, removeLocalData, refuseSuppliedTarget, householdStoreFile } from './local-store.mjs';
 import { secretEnv, secretsFor } from '../test/helpers/server.mjs';
+import { mapSeries } from '../src/shared/series.mjs';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 const REMOTE = !!(process.env.BASE_URL || process.env.FATHOM_SMOKE_BASE_URL);
@@ -641,7 +642,7 @@ async function signin(client, expectedStatus = 200, hash = '#/home') {
 }
 
 async function assertAuthenticatedBoot(client) {
-  const sessions = await Promise.all(client.sessionResponses.map(async (entry) => ({ ...entry, body: await entry.body })));
+  const sessions = await Promise.all(await mapSeries(client.sessionResponses, async (entry) => ({ ...entry, body: await entry.body })));
   expect(client.scenarioRequests.length, 'authenticated app fetched the scenario').toBeGreaterThan(0);
   for (const request of client.scenarioRequests) {
     expect(sessions.some((entry) => entry.document === request.document && entry.sequence < request.sequence && entry.body?.identity), 'scenario fetch must follow authenticated identity in the same document').toBe(true);

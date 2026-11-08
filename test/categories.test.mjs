@@ -124,7 +124,7 @@ test('AC3 amount threshold/top ten, one source-name mapping, rules past/future a
   assert.equal((await spend(db)).spendTotal,before-111);
   await txn(db,{amount:-200,description:item.context.description,date:'2032-06-11'});
   assert.equal(resolveCategories(await loadCategoryInputs(db)).get((await db.prepare('SELECT max(id) AS id FROM transactions').get()).id).bucket,'business');
-  reopenItem(db,item.id);
+  await reopenItem(db,item.id);
   assert.equal((await spend(db)).spendTotal,before+200);
   await txn(db,{category:'New category',parser:'another-app',amount:-50});
   await txn(db,{category:'New category',parser:'another-app',amount:-500});
@@ -133,7 +133,7 @@ test('AC3 amount threshold/top ten, one source-name mapping, rules past/future a
   assert.equal(maps.length,1);
   await answerItem(db,maps[0].id,'tax');
   assert.equal([...resolveCategories(await loadCategoryInputs(db)).values()].filter(c=>c.category==='New category' && c.bucket==='tax').length,2);
-  reopenItem(db,maps[0].id);
+  await reopenItem(db,maps[0].id);
   assert.equal((await db.prepare('SELECT count(*) AS n FROM category_source_rules').get()).n,0);
 });
 
@@ -172,7 +172,7 @@ test('AC2 corrections survive duplicate consolidation and its undo without casca
   const q=await ask(db,{kind:'near_duplicate',subject:'a|b',question:'Same?',options:[{id:'same',label:'Same'},{id:'different',label:'Different'}],context:{keys:['a','b']}});
   await answerItem(db,q.id,'same');
   assert.equal(resolveCategories(await loadCategoryInputs(db)).get(a).bucket,'business');
-  reopenItem(db,q.id);
+  await reopenItem(db,q.id);
   assert.equal(resolveCategories(await loadCategoryInputs(db)).get(b).bucket,'business');
   assert.equal(resolveCategories(await loadCategoryInputs(db)).get(a).layer,'uncategorized');
   assert.deepEqual((await db.foreignKeyCheck()),[]);
@@ -228,7 +228,7 @@ test('AC1 migration preserves a populated store and existing Confirm undo histor
   assert.deepEqual((await migrate(db)).applied,[23]);
   assert.equal((await db.prepare('SELECT changes FROM confirm_undo WHERE item_id=?').get(q.id)).changes,before);
   assert.equal((await db.prepare('SELECT count(*) AS n FROM transactions').get()).n,count);
-  reopenItem(db,q.id);
+  await reopenItem(db,q.id);
   assert.equal((await db.prepare('SELECT owner FROM accounts WHERE id=?').get('checking')).owner,null);
 });
 
@@ -246,7 +246,7 @@ test('AC2 a corrected connected row survives the actual account merge and Undo',
   await answerItem(s.db,q.id,'same');
   const survivor=await s.db.prepare('SELECT id FROM transactions WHERE account_id=? AND amount=-10').get(keep);
   assert.equal(resolveCategories(await loadCategoryInputs(s.db)).get(survivor.id).bucket,'business');
-  reopenItem(s.db,q.id);
+  await reopenItem(s.db,q.id);
   assert.equal(resolveCategories(await loadCategoryInputs(s.db)).get(r.id).bucket,'business');
   assert.deepEqual((await s.db.foreignKeyCheck()),[]);
 });

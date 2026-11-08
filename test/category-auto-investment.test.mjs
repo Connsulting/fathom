@@ -131,7 +131,7 @@ test('AC3: Undo reopens investment and history decisions permanently while owner
   const owner = await row(db, 'b', 'Sold synthetic fund');
   await answerItem(db, owner.item, 'Ignore');
   await guessCategories(db, off);
-  for (const x of [investment, history]) { assert.ok(await autoInfo(db, x.item)); reopenItem(db, x.item); }
+  for (const x of [investment, history]) { assert.ok(await autoInfo(db, x.item)); await reopenItem(db, x.item); }
   await guessCategories(db, off);
   for (const x of [investment, history]) {
     assert.equal((await getItem(db, x.item)).status, 'pending');

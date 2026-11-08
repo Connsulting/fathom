@@ -6,12 +6,13 @@ import { join } from 'node:path';
 import { twoHouseholds, enrollSession, writePrivate, sideHousehold } from './helpers/tenancy-runtime.mjs';
 import { createHouseholdTransport, createEnrollmentTransport } from '../src/email/transport.mjs';
 import { JOBS } from '../src/jobs/scheduler.mjs';
+import { mapSeries } from '../src/shared/series.mjs';
 
 const options = { timeout: 120000 };
 const messages = async root => {
   const dir = join(root, 'outbox');
   const files = await readdir(dir).catch(e => { if (e.code === 'ENOENT') return []; throw e; });
-  return Promise.all(files.sort().filter(f => f.endsWith('.json')).map(async f => JSON.parse(await readFile(join(dir, f), 'utf8'))));
+  return Promise.all(await mapSeries(files.sort().filter(f => f.endsWith('.json')), async f => JSON.parse(await readFile(join(dir, f), 'utf8'))));
 };
 async function subscribe(hh, rows) {
   const r = await hh.client.postJson('/api/email/subscriptions', { subscriptions: rows });
@@ -60,9 +61,9 @@ test('manual and periodic mail, preview, history, subscriptions and outbox are h
     assert.ok((await messages(fx.dataDir)).some(m => m.to.includes(fx.B.admin.user.email)), 'enrollment is platform-private');
     const dual = await enrollSession(fx.platform, fx.A.id, 'extra-member@example.test');
     await subscribe(fx.A, [row(fx.A.admin.user.id), row(dual.user.id)]);
-    fx.store.setRole(fx.A.id, dual.user.id, 'admin', { actorId: fx.A.admin.user.id });
+    await fx.store.setRole(fx.A.id, dual.user.id, 'admin', { actorId: fx.A.admin.user.id });
     assert.equal((await fx.A.client.request({ path: '/api/email/subscriptions' })).json.subscriptions.find(r => r.userId === dual.user.id).subscribed, true);
-    fx.store.setRole(fx.A.id, dual.user.id, 'member', { actorId: fx.A.admin.user.id });
+    await fx.store.setRole(fx.A.id, dual.user.id, 'member', { actorId: fx.A.admin.user.id });
     assert.equal((await fx.A.client.postJson('/api/email/test', {})).json.send.recipients, 2);
     const mail = (await messages(fx.rootOf(fx.A.id))).slice(3);
     assert.equal(mail.length, 2);
@@ -76,7 +77,7 @@ test('manual and periodic mail, preview, history, subscriptions and outbox are h
     const memberClient = (await import('./helpers/server.mjs')).sessionClient(fx.baseUrl, dual);
     assert.equal((await memberClient.postJson('/api/email/subscriptions', { subscriptions: [row(dual.user.id, false)] })).status, 403);
     await subscribe(fx.A, [row(fx.A.admin.user.id), row(dual.user.id, false)]);
-    fx.store.removeMember(fx.A.id, dual.user.id, { actorId: fx.A.admin.user.id });
+    await fx.store.removeMember(fx.A.id, dual.user.id, { actorId: fx.A.admin.user.id });
     assert.equal((await fx.A.client.postJson('/api/email/test', {})).json.send.recipients, 1);
     for (const path of [`/households/${fx.A.id}/outbox/`, `/outbox/`]) {
       const response = await fx.A.client.request({ path });
@@ -94,7 +95,7 @@ test('original verified recipients and cadence survive migration, global routing
     const first = await fx.A.client.postJson('/api/email/test', {});
     assert.equal(first.json.send.status, 'sent', first.text);
     assert.deepEqual((await messages(fx.rootOf(fx.A.id)))[0].to, ['both-member@example.test']);
-    fx.store.removeMember(fx.A.id, fx.dual.user.id, { actorId: fx.A.admin.user.id });
+    await fx.store.removeMember(fx.A.id, fx.dual.user.id, { actorId: fx.A.admin.user.id });
     const rejoined = await enrollSession(fx.platform, fx.A.id, 'both-member@example.test');
     assert.equal(rejoined.user.id, fx.dual.user.id, 'membership in the other household retains the global user');
     assert.equal((await fx.A.client.postJson('/api/email/test', {})).json.send.errorCode, 'recipient_unverified');
@@ -131,7 +132,7 @@ test('removal during credential loading is blocked at the real HTTP mail transpo
       recipients: hh.emailRecipients,
       readFile: async file => {
         const contents = await readFile(file, 'utf8');
-        if (remove) fx.store.removeMember(fx.A.id, member.user.id, { actorId: fx.A.admin.user.id });
+        if (remove) await fx.store.removeMember(fx.A.id, member.user.id, { actorId: fx.A.admin.user.id });
         return contents;
       },
       // Resend wire shape: https://resend.com/docs/api-reference/emails/send-email

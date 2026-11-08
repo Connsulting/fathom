@@ -48,7 +48,7 @@ export async function initOutbound(platform, householdId, { enabled = false, now
 export async function setOutbound(platform, householdId, patch, { actorUserId = null, now = Date.now() } = {}) {
   const keys = checkPatch(patch);
   if (typeof householdId !== 'string') throw codeError('bad_outbound');
-  atomically(platform, async platform => {
+  await atomically(platform, async platform => {
     const next = { ...await readOutbound(platform, householdId) };
     for (const k of keys) next[k] = patch[k];
     const flag = k => (next[k] ? 1 : 0);

@@ -58,7 +58,7 @@ export async function isolationFixture({ engine = 'fake', extra = {}, engineOpti
     const A = { id: (await app.platform.prepare('SELECT id FROM households WHERE serves_store = 1').get()).id, canary: 'ALPHAFINCH' };
     // The first invitation is the OS operator bootstrap. All sessions are verified by HTTP WebAuthn.
     A.admin = await enroll(store.invite(A.id, 'alpha-admin@example.test', { role: 'admin' }).token);
-    store.grantOperator(A.admin.identity.id);
+    await store.grantOperator(A.admin.identity.id);
     A.admin.identity = ok(await A.admin.client.get('/api/auth/session')).identity;
     const before = mail();
     const made = ok(await A.admin.client.post('/api/operator/households', {
@@ -73,8 +73,8 @@ export async function isolationFixture({ engine = 'fake', extra = {}, engineOpti
     ok(await B.admin.client.post('/api/admin/users/invite', { email: 'dual-member@example.test', role: 'member' }));
     dual.identity = ok(await dual.client.post('/api/auth/invitations/accept', { token: mailedToken(prior, 'dual-member@example.test') })).identity;
     const operator = await invite(A, 'operator@example.test');
-    store.grantOperator(operator.identity.id);
-    store.removeMember(A.id, operator.identity.id, { actorId: A.admin.identity.id });
+    await store.grantOperator(operator.identity.id);
+    await store.removeMember(A.id, operator.identity.id, { actorId: A.admin.identity.id });
     const signed = await signIn(baseUrl, operator.device, operator.credentialId);
     operator.client = signed.client;
     operator.identity = ok(signed.verify).identity;

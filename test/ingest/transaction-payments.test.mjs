@@ -99,7 +99,7 @@ test('a later upload replaces the detected duplicate and undo cannot delete the 
   assert.equal((await payments(s.db)).length, 3);
   assert.equal((await payments(s.db)).filter(r => r.parser === 'synthetic-payment-log').length, 1);
   const before = await payments(s.db);
-  try { reopenItem(s.db, item.id, { now: NOW }); } catch (e) { assert.equal(e.code, 'final'); }
+  try { await reopenItem(s.db, item.id, { now: NOW }); } catch (e) { assert.equal(e.code, 'final'); }
   assert.ok((await payments(s.db)).some(r => r.parser === 'synthetic-payment-log'));
   assert.equal(before.find(r => r.parser === 'synthetic-payment-log').amount, 1200);
 }));
@@ -118,11 +118,11 @@ test('removing and restoring a payment log keeps observed payments counted with 
   assert.equal(await projectedFederalPaid(s.db), 3000);
   assert.equal((await payments(s.db)).filter(r => r.parser === 'synthetic-payment-log').length, 1);
   assert.equal((await payments(s.db)).length, 3);
-  reopenItem(s.db, item.id, { now: NOW });
+  await reopenItem(s.db, item.id, { now: NOW });
   assert.equal(await projectedFederalPaid(s.db), 3000, 'Undo of the inference leaves the restored uploaded log alone');
   await answer(s.db, item.id, 'estimate', { now: NOW });
   await removeFile(ctx, log.fileId);
-  reopenItem(s.db, item.id, { now: NOW });
+  await reopenItem(s.db, item.id, { now: NOW });
   assert.equal(await projectedFederalPaid(s.db), 1800, 'Undo removes the restored inference');
   await syncSimplefin(s.db, opts);
   assert.equal(await projectedFederalPaid(s.db), 1800, 'resync respects the undone inference');
@@ -173,7 +173,7 @@ test('a logged-match answer recovers its own payment after every matching log is
   await removeFile(ctx, first.fileId);
   await removeFile(ctx, second.fileId);
   assert.equal(await projectedFederalPaid(s.db), 1200);
-  reopenItem(s.db, item.id, { now: NOW });
+  await reopenItem(s.db, item.id, { now: NOW });
   assert.equal((await payments(s.db)).length, 0);
 }, [postings()[0]]));
 
@@ -183,7 +183,7 @@ test('Undo removes a detected payment and its rec evidence, survives resync, and
   assert.ok(row);
   const id = JSON.parse(row.locator).confirmId;
   assert.equal(deriveSteps([taxTask()], [], await stepEnvOf(s.db))[0].done, true);
-  reopenItem(s.db, id, { now: NOW });
+  await reopenItem(s.db, id, { now: NOW });
   assert.equal((await payments(s.db)).some(r => r.amount === 1800), false);
   assert.equal(deriveSteps([taxTask()], [], await stepEnvOf(s.db))[0].done, false);
   await syncSimplefin(s.db, opts);
@@ -257,7 +257,7 @@ test('January estimates infer the prior tax year; refunds and payroll taxes neve
   assert.equal((await payments(s.db))[0].tax_year, 2025);
   const id = JSON.parse((await payments(s.db))[0].locator).confirmId;
   assert.ok(await autoInfo(s.db, id));
-  reopenItem(s.db, id, { now: NOW });
+  await reopenItem(s.db, id, { now: NOW });
   assert.equal((await payments(s.db)).length, 0);
 }, [posting('january', '2026-01-15', -125, 'IRS ESTIMATED TAX'),
   posting('refund', '2026-09-01', 125, 'IRS TAX REFUND'),
@@ -304,7 +304,7 @@ test('confirming a separate payment preserves it beside log candidates on resync
   await syncSimplefin(s.db, opts);
   assert.equal((await payments(s.db)).length, 3);
   assert.equal(await finalReason(s.db, await getItem(s.db, item.id)), null);
-  reopenItem(s.db, item.id, { now: NOW });
+  await reopenItem(s.db, item.id, { now: NOW });
   assert.equal((await payments(s.db)).length, 2);
 }, [postings()[0]]));
 

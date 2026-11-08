@@ -189,7 +189,7 @@ test('a signed-in browser with a recent sign-in gets an add-passkey link mailed 
   const other = await enrolled(app, 'other@example.test');
   // Was an invite token plus a recovery token: invite links are household invitations now, so the
   // owner's consumed invitation row stands in for the other link kind.
-  app.store.createToken(owner.user.id, 'recovery');
+  await app.store.createToken(owner.user.id, 'recovery');
   const kept = await otherRows(app, owner.user.id);
   assert.equal(kept.length, 1);
   const invitations = await invitationRows(app, owner.user.id);
@@ -414,7 +414,7 @@ test('the link is bound to its user and never reaches another account or a pendi
   assert.ok(app.store.token(memberToken), "the other user's link is unaffected");
 
   const { user: pending, token: invite } = app.store.invite(app.hh, 'pending@example.test');
-  const pendingAdd = app.store.createToken(pending.id, 'add-passkey');
+  const pendingAdd = await app.store.createToken(pending.id, 'add-passkey');
   const refused = await register(app, browser(app), createAuthenticator(), { token: pendingAdd.token }, 'Pending device');
   assert.equal(refused.options.status, 410);
   assert.deepEqual(refused.options.json, EXPIRED);
@@ -427,10 +427,10 @@ test('the link is bound to its user and never reaches another account or a pendi
 test('add-passkey tokens are independent of invitations and recovery tokens', async t => {
   const app = await fixture(t);
   const owner = await enrolled(app, 'owner@example.test');
-  const recovery = app.store.createToken(owner.user.id, 'recovery');
+  const recovery = await app.store.createToken(owner.user.id, 'recovery');
   const first = await requestLink(app, owner.client, owner.user.email);
   assert.equal(app.store.token(recovery.token)?.purpose, 'recovery', 'issuing add-passkey keeps recovery');
-  const nextRecovery = app.store.createToken(owner.user.id, 'recovery');
+  const nextRecovery = await app.store.createToken(owner.user.id, 'recovery');
   assert.equal(app.store.token(recovery.token), null, 'recovery replaces only recovery');
   assert.equal(app.store.token(first)?.purpose, 'add-passkey', 'issuing recovery keeps add-passkey');
   const second = await requestLink(app, owner.client, owner.user.email);
@@ -444,7 +444,7 @@ test('add-passkey tokens are independent of invitations and recovery tokens', as
 
   const invited = app.store.invite(app.hh, 'pending@example.test');
   const pending = invited.user;
-  const add = app.store.createToken(pending.id, 'add-passkey');
+  const add = await app.store.createToken(pending.id, 'add-passkey');
   assert.equal((await app.store.invitation(invited.token))?.userId, pending.id);
   assert.equal(app.store.token(add.token)?.purpose, 'add-passkey');
   const reissued = app.store.invite(app.hh, 'pending@example.test');

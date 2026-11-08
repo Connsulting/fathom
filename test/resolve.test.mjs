@@ -43,7 +43,7 @@ test('a scripted household engine answers an account kind with grounded evidence
   assert.match((await autoInfo(db, id)).evidence.text, /Fathom.*Synthetic reserve/);
   assert.deepEqual((await autoInfo(db, id)).evidence.refs, ['accounts:synthetic-a']);
   assert.equal((await autoInfo(db, id)).rule, 'resolver');
-  reopenItem(db, id, { now: NOW });
+  await reopenItem(db, id, { now: NOW });
   assert.equal((await getItem(db, id)).status, 'pending');
   assert.ok(await db.prepare('SELECT 1 FROM confirm_auto_declined WHERE item_id=?').get(id));
   await resolvePending(db, engine, options);
@@ -77,7 +77,7 @@ test('engine off still applies deterministic account-name rules without calls', 
   await resolvePending(db, engine, options);
   assert.equal((await getItem(db, id)).answer, 'cash');
   assert.equal((await db.prepare("SELECT count(*) AS n FROM confirm_items WHERE kind='resolver_fact'").get()).n, 0);
-  reopenItem(db, id, { now: NOW });
+  await reopenItem(db, id, { now: NOW });
   await resolvePending(db, engine, options);
   assert.equal((await getItem(db, id)).status, 'pending');
 }));
@@ -107,7 +107,7 @@ test('a yes/no recommendation is answered through resolver provenance and replan
   assert.equal(fact.parser, 'resolver');
   assert.doesNotMatch((await db.prepare('SELECT label FROM sources WHERE id=?').get(fact.src)).label, /you told|MCP/);
   const item = await db.prepare("SELECT id FROM confirm_items WHERE kind='resolver_fact'").get();
-  reopenItem(db, item.id, { now: NOW });
+  await reopenItem(db, item.id, { now: NOW });
   assert.equal(await db.prepare("SELECT * FROM facts WHERE key='benefits.hsaEligible'").get(), undefined);
   await resolvePending(db, engine, options);
   assert.equal(engine.calls.length, 1);
@@ -201,10 +201,10 @@ test('independent automatic facts retain their own source after either answer is
   const items = await db.prepare("SELECT id,subject FROM confirm_items WHERE kind='resolver_fact' ORDER BY id").all();
   assert.equal(items.length, 2);
   await db.prepare('UPDATE ingest_epoch SET n=n+1 WHERE id=1').run();
-  reopenItem(db, items[0].id, { now: NOW });
+  await reopenItem(db, items[0].id, { now: NOW });
   const other = await db.prepare('SELECT src FROM facts WHERE key=?').get(items[1].subject);
   assert.ok(await db.prepare('SELECT 1 FROM sources WHERE id=?').get(other.src));
-  reopenItem(db, items[1].id, { now: NOW });
+  await reopenItem(db, items[1].id, { now: NOW });
 }));
 
 test('a recommendation answered elsewhere retires its pending resolver item and does not call again', async () => store(async db => {
@@ -223,7 +223,7 @@ test('declined Confirm items are never sent to the categorizer again', async () 
   const id = await account(db);
   const engine = await model(db, [prediction(id)]);
   await resolvePending(db, engine, options);
-  reopenItem(db, id, { now: NOW });
+  await reopenItem(db, id, { now: NOW });
   const { guessClosedOptions } = await import('../src/ingest/jev.mjs');
   await guessClosedOptions(db, { isOn: () => true, choose() { assert.fail('declined item sent'); } }, { now: NOW });
   assert.equal((await getItem(db, id)).status, 'pending');
@@ -259,7 +259,7 @@ test('remaining transaction choices use the resolver without learning automatic 
   const payload = JSON.parse(engine.calls[0].messages[0].content);
   assert.ok(payload.items.every(i => i.options.every(o => !o.id.startsWith('always:'))));
   const item = await db.prepare("SELECT id FROM confirm_items WHERE kind='transaction_category'").get();
-  reopenItem(db, item.id, { now: NOW });
+  await reopenItem(db, item.id, { now: NOW });
   await resolvePending(db, engine, options);
   assert.equal(engine.calls.length, 1);
 }));
@@ -275,7 +275,7 @@ test('source category mappings retain automatic provenance and do not train hous
   assert.equal(resolveCategories(inputs).get(transactionId).layer, 'guess');
   assert.equal(createHistoryIndex(inputs).size, 0);
   const item = await db.prepare("SELECT id FROM confirm_items WHERE kind='category_mapping'").get();
-  reopenItem(db, item.id, { now: NOW });
+  await reopenItem(db, item.id, { now: NOW });
   assert.equal((await db.prepare('SELECT count(*) AS n FROM category_source_rules').get()).n, 0);
 }));
 

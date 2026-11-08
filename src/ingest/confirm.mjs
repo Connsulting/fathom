@@ -20,8 +20,8 @@ import { statedIn } from '../actions/evidence.mjs';
 import { mapSeries } from '../shared/series.mjs';
 
 // A write transaction on a scope, a savepoint inside the caller's transaction.
-function confirmTransaction(db, fn) {
-  return atomically(db, fn);
+async function confirmTransaction(db, fn) {
+  return await atomically(db, fn);
 }
 
 export const KINDS = Object.freeze([
@@ -156,7 +156,7 @@ export async function answer(db, id, optionId, { now } = {}) {
 // answer() plus whether facts changed, for callers that refresh pack state.
 export async function answerItem(db, id, optionId, { now } = {}) {
   const item = await answerable(db, id, optionId);
-  return confirmTransaction(db, async (db) => {
+  return await confirmTransaction(db, async (db) => {
     const { factsChanged } = await recordAnswer(db, item, optionId, { now });
     return { item: await getItem(db, item.id), factsChanged: Boolean(factsChanged) };
   });
@@ -183,7 +183,7 @@ async function answerable(db, id, optionId) {
 export async function answerItems(db, answers, { now } = {}) {
   const list = Array.isArray(answers) ? answers : [];
   for (const a of list) await answerable(db, a?.id, a?.option);
-  return confirmTransaction(db, async (db) => {
+  return await confirmTransaction(db, async (db) => {
     let factsChanged = false;
     const items = await mapSeries(list, async (a) => {
       const item = await answerable(db, a.id, a.option);
@@ -203,7 +203,7 @@ export async function recordAutoAnswer(db, itemId, optionId, { rule, evidence, n
   if (!evidence || typeof evidence.text !== 'string' || !evidence.text) throw new TypeError('An auto answer needs its evidence text');
   const stored = { text: evidence.text, basis: ids(evidence.basis), ancestors: ids(evidence.ancestors), ...(evidence.refs ? { refs: evidence.refs } : {}) };
   const item = await answerable(db, itemId, optionId);
-  return confirmTransaction(db, async (db) => {
+  return await confirmTransaction(db, async (db) => {
     await recordAnswer(db, item, optionId, { now, auto: { rule, evidence: stored } });
     return await getItem(db, item.id);
   });
@@ -301,7 +301,7 @@ async function revertDependents(db, id) {
     const dep = await getItem(db, depId);
     if (!dep || dep.status !== 'answered' || await finalReason(db, dep)) continue;
     try {
-      logs.push(...atomically(db, async db => await revertAnswer(db, dep)));
+      logs.push(...await atomically(db, async db => await revertAnswer(db, dep)));
     } catch { /* stays answered */ }
   }
   return logs;
@@ -320,7 +320,7 @@ export async function reviseItem(db, id, optionId, { now } = {}) {
   if (optionId === item.answer) return { item, factsChanged: false };
   const reason = await finalReason(db, item);
   if (reason) throw new ConfirmError('final', reason);
-  return confirmTransaction(db, async (db) => await revise(db, item, optionId, { now }));
+  return await confirmTransaction(db, async (db) => await revise(db, item, optionId, { now }));
 }
 
 // reviseItem inside the caller's transaction.
@@ -353,10 +353,10 @@ function accountQuestion(kind) {
 // Pending: answer. Answered: revise, or when the answer is final (any later import marks it used),
 // restate it: apply and record it with a fresh undo log, and decline any auto answer.
 // Returns {item, before: {answer, present, created}, factsChanged}; before is what undo needs.
-export function setAccountAnswer(db, kind, accountId, optionId, { now } = {}) {
+export async function setAccountAnswer(db, kind, accountId, optionId, { now } = {}) {
   const spec = accountQuestion(kind);
   if (!spec.options.some((o) => o.id === optionId)) throw new ConfirmError('bad_option');
-  return confirmTransaction(db, async (db) => {
+  return await confirmTransaction(db, async (db) => {
     let item = await findItem(db, kind, accountId);
     const before = { answer: item?.status === 'answered' ? item.answer : null, present: Boolean(item), created: !item };
     if (!item) {
@@ -383,12 +383,12 @@ export function setAccountAnswer(db, kind, accountId, optionId, { now } = {}) {
 // is reverted and removed; an item that was pending is reopened. Returns {item, factsChanged}.
 export async function undoAccountAnswer(db, kind, accountId, before, { now } = {}) {
   accountQuestion(kind);
-  if (before?.answer != null) return setAccountAnswer(db, kind, accountId, before.answer, { now });
+  if (before?.answer != null) return await setAccountAnswer(db, kind, accountId, before.answer, { now });
   const item = await findItem(db, kind, accountId);
   if (!item || item.status !== 'answered' || (!before?.present && !before?.created)) return { item, factsChanged: false };
   const reason = await finalReason(db, item);
   if (reason) throw new ConfirmError('final', reason);
-  return confirmTransaction(db, async (db) => {
+  return await confirmTransaction(db, async (db) => {
     if (before.created) {
       await revertDependents(db, item.id);
       await revertAnswer(db, item);
@@ -401,8 +401,8 @@ export async function undoAccountAnswer(db, kind, accountId, before, { now } = {
 // Put an answered item back to pending, restoring every row its answer touched, after the auto
 // answers resting on it. An item the owner reopens (owner or auto answer) is always asked again,
 // never auto-answered: it is declined. Returns {item, factsChanged}.
-export function reopenItem(db, id, { now } = {}) {
-  return confirmTransaction(db, async (db) => await reopenItemInTx(db, id, { now }));
+export async function reopenItem(db, id, { now } = {}) {
+  return await confirmTransaction(db, async (db) => await reopenItemInTx(db, id, { now }));
 }
 
 // reopenItem inside the caller's open transaction (an action receipt's Undo runs in one).
@@ -438,7 +438,7 @@ export async function reopenItems(db, ids, { now } = {}) {
     const reason = await finalReason(db, item);
     if (reason) throw new ConfirmError('final', reason);
   }
-  return confirmTransaction(db, async (db) => {
+  return await confirmTransaction(db, async (db) => {
     let factsChanged = false;
     for (const item of items) {
       const fresh = await getItem(db, item.id);

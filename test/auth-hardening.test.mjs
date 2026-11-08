@@ -87,7 +87,7 @@ test('HTTP reinvites apply both pending role changes and replace only the invita
     const before = { ...await app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) };
     const firstMail = app.sent.at(-1);
     const oldToken = new URL(firstMail.text.match(/https?:\/\/\S+/)[0]).hash.slice(1);
-    const recovery = app.store.createToken(user.id, 'recovery');
+    const recovery = await app.store.createToken(user.id, 'recovery');
     const again = await admin.postJson('/api/admin/users/invite', { email: email.toUpperCase(), role: replacement });
     assert.equal(again.status, 200);
     assert.deepEqual(again.json, { sent: true });
@@ -136,8 +136,8 @@ test('HTTP active-member reinvites direct callers to a role action without mutat
   for (const initial of ['admin', 'member']) {
     const client = await app.client(`enrolled-${initial}@example.test`, initial);
     const user = client.session.user;
-    app.store.createToken(user.id, 'add-passkey');
-    app.store.createToken(user.id, 'recovery');
+    await app.store.createToken(user.id, 'add-passkey');
+    await app.store.createToken(user.id, 'recovery');
     const before = { ...await app.platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) };
     const membership = app.store.membership(user.id, app.hh);
     const invitations = await app.platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all();
@@ -230,7 +230,7 @@ test('invite and recovery registration are independent of an absent or stale bro
   const pending = invited.user;
   app.advance(RECENT);
   for (const [user, purpose] of [[pending, 'invite'], [client.session.user, 'recovery']]) {
-    const issued = purpose === 'invite' ? invited : app.store.createToken(user.id, purpose);
+    const issued = purpose === 'invite' ? invited : await app.store.createToken(user.id, purpose);
     const live = async () => (purpose === 'invite' ? await app.store.invitation(issued.token) : app.store.token(issued.token));
     for (const sessionCookie of ['', client.session.cookie]) {
       const options = await app.post('/api/auth/register/options', { token: issued.token }, { cookie: sessionCookie });

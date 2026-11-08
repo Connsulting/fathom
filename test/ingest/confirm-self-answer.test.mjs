@@ -65,17 +65,17 @@ test('AC1: business aliases, exact payroll names and clear account kinds answer 
   await assertAuto(db, relation, 'household');
   await assertAuto(db, checking, 'cash');
   await assertAuto(db, savings, 'cash');
-  reopenItem(db, relation, { now: NOW });
+  await reopenItem(db, relation, { now: NOW });
   assert.equal((await getItem(db, relation)).status, 'pending');
   for (const [employer, person] of [['exampleoutsideone', 'owner'], ['exampleoutsidetwo', 'spouse']]) {
     const item = await db.prepare("SELECT id FROM confirm_items WHERE kind='employer_recipient' AND subject=?").get(nameKey(employer));
     assert.ok(item, 'payroll import queued a recipient');
     await assertAuto(db, item.id, person);
-    reopenItem(db, item.id, { now: NOW });
+    await reopenItem(db, item.id, { now: NOW });
     assert.equal((await getItem(db, item.id)).status, 'pending');
   }
   assert.equal((await getItem(db, ambiguous)).status, 'pending');
-  reopenItem(db, checking, { now: NOW });
+  await reopenItem(db, checking, { now: NOW });
   await autoResolve(db, { now: NOW });
   assert.equal((await getItem(db, checking)).status, 'pending');
   assert.equal((await db.prepare("SELECT kind FROM accounts WHERE id='cash'").get()).kind, null);
@@ -124,7 +124,7 @@ test('AC2: model mappings need at least 0.90 confidence and remain undoable', as
   const low = mappings.find(i => JSON.parse(i.context).category === ids[1].category);
   await assertAuto(db, high.id, 'household');
   assert.equal((await getItem(db, low.id)).status, 'pending');
-  reopenItem(db, high.id, { now: NOW });
+  await reopenItem(db, high.id, { now: NOW });
   assert.equal((await db.prepare('SELECT count(*) n FROM category_source_rules').get()).n, 0);
   await resolvePending(db, engine, { now: NOW, packDirs: [] });
   assert.equal((await getItem(db, high.id)).status, 'pending');
@@ -248,7 +248,7 @@ test('AC1: per-document W-2 and paystub recipients resolve after a shared employ
   const documents = await db.prepare("SELECT id,subject FROM confirm_items WHERE kind='document_recipient' ORDER BY id").all();
   assert.equal(documents.length, 2);
   for (const item of documents) await assertAuto(db, item.id, item.subject.startsWith('w2:') ? 'owner' : 'spouse');
-  reopenItem(db, documents[0].id, { now: NOW });
+  await reopenItem(db, documents[0].id, { now: NOW });
   await autoResolve(db, { now: NOW });
   assert.equal((await getItem(db, documents[0].id)).status, 'pending');
   await assertAuto(db, documents[1].id, 'spouse');
@@ -263,7 +263,7 @@ test('AC1: employer aliases reuse an owner relation, and Undo of that basis reop
   await autoResolve(db, { now: NOW });
   await assertAuto(db, alias, 'outside');
   assert.deepEqual((await autoInfo(db, alias)).evidence.basis, [basis]);
-  reopenItem(db, basis, { now: NOW });
+  await reopenItem(db, basis, { now: NOW });
   assert.equal((await getItem(db, alias)).status, 'pending');
 });
 

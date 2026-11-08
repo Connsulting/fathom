@@ -318,13 +318,13 @@ export async function createSessionFixture(platform, { email = 'admin@example.te
   let membership = user ? store.membership(user.id, household.id) : null;
   if (membership?.status !== 'active') {
     const invited = store.invite(household.id, email, { role });
-    store.consumeInvitation(invited.token, invited.user.id);
+    await store.consumeInvitation(invited.token, invited.user.id);
     user = invited.user;
     membership = store.membership(user.id, household.id);
   }
   if (store.getUser(user.id).enrolledAt == null) await store.markEnrolled(user.id);
   user = store.getUser(user.id);
-  const { token, expiresAt } = store.createSession(user.id);
+  const { token, expiresAt } = await store.createSession(user.id);
   return { user, householdId: household.id, role: membership.role, token, expiresAt, cookie: `__Host-fathom-session=${token}` };
 }
 
