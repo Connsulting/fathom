@@ -522,3 +522,19 @@ test('a merchant cell shows its name, keeps the raw bank text on hover and match
   assert.ok(html.includes(`<span title="${esc(raw)}">Wire to Sample Trading</span>`), 'the raw bank text is the hover title');
   assert.deepEqual(filterRows(snapshot.rows, 'SYN0042').map((r) => r.cells[0].name), ['Wire to Sample Trading'], 'the filter matches the raw reference');
 });
+
+// UI3 AC2: the hover compares the name with the raw bank text, not the normalized merchant, so a raw
+// reference survives even when the name equals the merchant text.
+test('a merchant cell whose name equals its merchant text still shows the raw bank text on hover', async () => {
+  const { render } = await import('../web/horizon/screens/ask-block-table.js');
+  const { render: compare } = await import('../web/horizon/screens/ask-block-compare.js');
+  const raw = 'SAMPLE CAFE #0412';
+  const cell = { t: 'text', text: 'Sample Cafe', name: 'Sample Cafe', raw };
+  const want = `<span title="${esc(raw)}">Sample Cafe</span>`;
+  const table = render({ title: 'Rows', columns: [{ label: 'Merchant', type: 'text' }], rows: [{ cells: [cell] }] },
+    { esc, key: 'm:r', ctl: (x) => x, fig: () => '', state: { sort: null, filter: '', all: false } });
+  assert.ok(table.includes(want), 'table');
+  const cmp = compare({ title: 'Two', fields: [{ label: 'Merchant' }], options: [{ label: 'A', cells: [cell] }, { label: 'B', cells: [cell] }] },
+    { esc, key: 'm:r', ctl: (x) => x, fig: () => '' });
+  assert.ok(cmp.includes(want), 'compare');
+});
