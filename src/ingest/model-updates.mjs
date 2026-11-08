@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { tx, parseJson } from '../store/db.mjs';
 import { ToolError } from '../tools/errors.mjs';
 import { getTool } from '../tools/index.mjs';
@@ -7,7 +7,7 @@ import { recordFact, changeGoal, changeRec } from '../actions/index.mjs';
 import { expectedTransaction } from '../actions/expected-transaction.mjs';
 import { requireActor, requireScope, groupReceipts, replanAction } from '../actions/receipts.mjs';
 import { sourceStatement, requireEvidence } from '../actions/evidence.mjs';
-import { proposalBasis } from '../actions/proposals.mjs';
+import { ownerTimezone } from '../jobs/scheduler.mjs';
 import { answerShape } from '../jobs/triggers/common.mjs';
 import { indexSource } from './model-source.mjs';
 import { openVault, readStoredFile } from './vault.mjs';
@@ -22,7 +22,19 @@ function context(ctx) {
 }
 const output = row => ({ proposalId: row.id, version: row.version, status: row.status, reasonCode: row.reason_code, ...parseJson(row.review_state).presentation });
 const latest = (db, id) => db.prepare('SELECT * FROM import_proposals WHERE id=? ORDER BY version DESC LIMIT 1').get(id);
-const basis = (db, actions) => actions.map(action => proposalBasis(db, action.tool, ['write:imports', ...action.scopes], action.args));
+function basis(db, fileId, actions) {
+  const parts = [db.prepare('SELECT id,sha256,removed_at FROM files WHERE id=?').get(fileId), ownerTimezone(db)];
+  for (const { tool, operation, args } of actions) {
+    if (tool === 'answer' && operation === 'fact') parts.push(db.prepare('SELECT * FROM facts WHERE key=?').get(args.key) ?? null);
+    else if (tool === 'update_goal' && operation === 'edit') parts.push(db.prepare('SELECT * FROM goals WHERE id=?').get(args.id) ?? null);
+    else if (tool === 'act_on_recommendation') {
+      const row = db.prepare('SELECT def,tasks_done,status,wake,owner,owner_override FROM recs WHERE id=?').get(args.id);
+      parts.push(operation === 'step' && row ? { tasks: parseJson(row.def, {}).tasks, done: parseJson(row.tasks_done, []), status: row.status } : row ?? null);
+    }
+    if (args.accountId) parts.push(db.prepare('SELECT * FROM accounts WHERE id=?').get(args.accountId) ?? null);
+  }
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+}
 const apply = (action, ctx) => {
   if (action.tool === 'answer') return action.operation === 'fact' ? recordFact(action.args, ctx) : expectedTransaction(action.args, ctx);
   if (action.tool === 'update_goal') return changeGoal(action.args, ctx, action.operation === 'edit');
@@ -100,7 +112,7 @@ export function stageUpdate(ctx, { source, actions, capturedAt = null, proposalI
   const needed = [...new Set(['write:imports', ...accepted.flatMap(a => a.scopes)])];
   const missing = needed.filter(scope => ctx.scopes && !ctx.scopes.includes(scope));
   const proposal = { kind: 'actions', actions: accepted, notes, capturedAt, fileId: source.fileId, version, proposalId };
-  const review = { kind: 'actions', ...(correction ? { correction } : {}), basis: basis(ctx.db, accepted), presentation: { actions: presentation, notes, requiredScopes: needed,
+  const review = { kind: 'actions', ...(correction ? { correction } : {}), basis: basis(ctx.db, source.fileId, accepted), presentation: { actions: presentation, notes, requiredScopes: needed,
     ...(reasonCode ? { question: 'What date was this note written?' } : {}), ...(missing.length ? { permission: { reasonCode: 'missing_scope', scopes: missing } } : {}) } };
   const now = stamp(ctx);
   return tx(ctx.db, () => {
@@ -140,7 +152,7 @@ export async function reviewUpdate(ctx, args, row) {
     const current = latest(ctx.db, row.id);
     const savedFile = ctx.db.prepare('SELECT sha256,removed_at FROM files WHERE id=?').get(file.id);
     if (current?.version !== row.version || current.status !== row.status || savedFile?.removed_at || savedFile?.sha256 !== source.sha256 || source.sha256 !== row.source_sha256 ||
-      JSON.stringify(review.basis) !== JSON.stringify(basis(ctx.db, proposal.actions))) fail('proposal_stale', 'The proposal changed.');
+      JSON.stringify(review.basis) !== JSON.stringify(basis(ctx.db, source.fileId, proposal.actions))) fail('proposal_stale', 'The proposal changed.');
     const { children } = execute(ctx, source, proposal.actions, proposal.capturedAt, review.correction);
     const receipt = groupReceipts(ctx, children, { id: row.id });
     const now = stamp(ctx);
