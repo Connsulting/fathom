@@ -24,6 +24,8 @@ test('Confirm reads match pending, detail and merge-candidate routes with filter
  assert.deepEqual(await callTool('household',{operation:'confirm_items'},s.ctx),listPendingConfirm(s.ctx));
  const detail=await callTool('household',{operation:'confirm_items',status:'all',ids:[id]},s.ctx);
  assert.deepEqual(detail.items,[getConfirm({...s.ctx,params:{id:String(id)}}).item]);
+ answerConfirm({...s.ctx,params:{id:String(id)},body:{answer:'owner'}});
+ assert.deepEqual((await callTool('household',{operation:'confirm_items',ids:[id]},s.ctx)).items,[getConfirm({...s.ctx,params:{id:String(id)}}).item]);
  assert.equal((await callTool('household',{operation:'confirm_items',kinds:['account_kind']},s.ctx)).items.length,0);
  assert.deepEqual(await callTool('accounts',{operation:'merge_candidates',id:'manual'},s.ctx),accountMergeCandidates({...s.ctx,params:{id:'manual'}}));
 });
@@ -62,7 +64,7 @@ test('rec_questions checks question keys and evidence, matches route values and 
  assert.equal(r.receipts[0].scope,'write:facts');
  await callTool('undo',{operation:'undo',id:r.receipts[0].id},s.ctx);assert.equal(s.db.prepare("SELECT * FROM facts WHERE key='benefits.hsaCoverage'").get(),undefined);
  await recAnswers({...s.ctx,params:{id:'synthetic'},body:{answers:args.answers}});assert.equal(JSON.parse(s.db.prepare("SELECT value FROM facts WHERE key='benefits.hsaCoverage'").get().value),'family');
- s.db.prepare("UPDATE recs SET status='hidden' WHERE id='synthetic'").run();await assert.rejects(callTool('answer',args,s.ctx));
+ s.db.prepare("UPDATE recs SET status='hidden' WHERE id='synthetic'").run();await assert.rejects(callTool('answer',args,s.ctx),{name:'ToolError',code:'not_found'});
 });
 
 test('yearend mark and clear match route validation and undo prior reasons',async t=>{

@@ -74,7 +74,7 @@ test('account proposals do not mutate and stale when a merge source changes',asy
   assert.notEqual(proposalBasis(s.db,'update_account',['write:accounts'],{id:'manual',withId:'other'}),basis);
 });
 
-test('a stored Ask merge proposal executes only on the later confirmation and its own scope can undo',async t=>{
+for (const confirmation of ['yes','Confirmed']) test(`a stored Ask merge proposal executes on ${confirmation} and its own scope can undo`,async t=>{
   const { claimProposal, executeProposal }=await import('../src/actions/proposals.mjs');
   const s=await realStore();t.after(()=>s.close());const ids=await seedDuplicate(s,{sure:true});
   const key='ask:fedcba654321',ctx={...context(s),channel:'ask',conversationKey:key,ownerText:'Merge these accounts',scopes:['write:accounts']};
@@ -83,8 +83,10 @@ test('a stored Ask merge proposal executes only on the later confirmation and it
   await tool.handler({operation:'merge',id:ids.keep,withId:ids.own,confirm:true,evidence:'Merge these accounts',propose:true},{...ctx,onProposal:p=>{pending=p;}});
   assert.ok(s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get(ids.own));
   const id=Number(s.db.prepare("INSERT INTO messages (conversation_key,role,text,ts,provenance) VALUES (?,'fathom','Merge these shown candidates?',?,?)").run(key,NOW,JSON.stringify({pendingAction:pending,tools:[{name:'accounts',args:{operation:'merge_candidates',id:ids.keep}}]})).lastInsertRowid);
+  api.accountMergeCandidates({...ctx,params:{id:ids.keep}});
+  const {scenarioOf}=await import('../src/api/scenario.mjs');scenarioOf(ctx);
   const claim=claimProposal(s.db,{key,id,decision:'confirm',scopes:ctx.scopes,at:NOW});assert.equal(claim.status,'confirmed');
-  const out=await executeProposal(claim.pending,{...ctx,ownerText:'yes',evidenceMessageId:id});
+  const out=await executeProposal(claim.pending,{...ctx,ownerText:confirmation,evidenceMessageId:id});
   assert.equal(out.receipt.scope,'write:accounts');assert.equal(s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get(ids.own),undefined);
   await assert.rejects(undo({...ctx,scopes:['write:confirm']},out),{code:'forbidden'});
   await undo(ctx,out);assert.ok(s.db.prepare('SELECT 1 FROM accounts WHERE id=?').get(ids.own));

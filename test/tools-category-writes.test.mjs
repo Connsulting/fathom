@@ -59,3 +59,12 @@ test('merchant count excludes individual corrections and repeat rules change no 
  assert.equal(r.affected.value,1);assert.equal(resolveCategories(loadCategoryInputs(s.db)).get(id).category,'Shopping');
  const again=await callTool('categorize',{operation:'merchant_rule',merchant,category:'Groceries'},s.ctx);assert.equal(again.affected.value,0);
 });
+
+test('Confirm always answers retain long merchants while the tool enforces its input limit',async t=>{
+ const s=await setup(t),description='Long synthetic merchant '.repeat(12),merchant=normalizeMerchant(description);
+ const id=Number(s.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('card','2032-02-02',-175,?)").run(description).lastInsertRowid);
+ const q=ask(s.db,{kind:'transaction_category',subject:String(id),question:'Category?',options:[{id:'always:Groceries',label:'Groceries'}],context:{transactionId:id},now:NOW});
+ answerItem(s.db,q.id,'always:Groceries',{now:NOW});
+ assert.equal(s.db.prepare('SELECT category FROM category_merchant_rules WHERE merchant=?').get(merchant).category,'Groceries');
+ await assert.rejects(callTool('categorize',{operation:'merchant_rule',merchant,category:'Groceries'},s.ctx),{code:'bad_input'});
+});
