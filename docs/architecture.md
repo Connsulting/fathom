@@ -527,6 +527,8 @@ Migration 030 adds durable per-file engine accounting. The internal interpreter 
 
 Migration 029 adds `schema_version`, `mapping_version`, `approval_status`, `approved_by`, `approved_at`, and `structural_context` to `column_mappings`. Existing mappings are unapproved; historical financial rows and locators remain intact. The new proposal contract is internal until upload cutover. It accepts cited fields and declarative transforms only, with complete source-region coverage required for completeness claims. This migration does not change live mapping reuse.
 
+Migration 034 adds `review_state` to `import_proposals` and an indexed `header_signature` to `column_mappings`. It follows migration 033 for spending definitions and preserves existing financial rows.
+
 Migration 002 (`002-ingest.sql`) adds the ingest columns above (`files.parser` through
 `files.coverage`, `accounts.source_id` and `identity`, `transactions.occurrence`, every
 `dedupe_key` and `source_slot`, `tax_payments.payer`, `date_precision` and `tax_year_basis`) and
