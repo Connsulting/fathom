@@ -12,9 +12,12 @@ function validate(value, shape) {
   if (shape.type === 'object') {
     if (!object(value) || Object.keys(value).some(k => !Object.hasOwn(shape.fields, k))) fail();
     for (const [key, field] of Object.entries(shape.fields)) {
-      const needed = !field.when || Object.entries(field.when).every(([k, v]) => value[k] === v);
+      const needed = !field.optional && (!field.when || Object.entries(field.when).every(([k, v]) => value[k] === v));
       if (needed || Object.hasOwn(value, key)) validate(value[key], field);
     }
+  } else if (shape.type === 'years') {
+    if (!Array.isArray(value) || !value.length || value.length > shape.maxItems
+      || value.some(y => !Number.isInteger(y) || y < shape.min || y > shape.max)) fail();
   } else if (shape.type === 'boolean') {
     if (typeof value !== 'boolean') fail();
   } else if (shape.type === 'number') {
@@ -49,8 +52,17 @@ export async function answerFacts(db, answers, { now = new Date().toISOString(),
       }
       const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
       value = { ...(object(prior) ? prior : {}), ...value };
-    } else validate(value, shape);
+    } else {
+      // Birth years are told a person at a time: a later answer keeps the years it does not name.
+      if (a.key === 'household.birthYears' && object(value)) {
+        const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
+        value = { ...(object(prior) ? prior : {}), ...value };
+      }
+      validate(value, shape);
+    }
     if (a.key === 'business.salaryRange' && value.min > value.max) fail();
+    // A birth year in the future is a typo, not an answer.
+    if (a.key === 'household.birthYears' && [value.owner, value.spouse, ...(value.dependents || [])].some(y => y > Number(date.slice(0, 4)))) fail();
     return { key: a.key, value };
   });
   tx(db, () => {

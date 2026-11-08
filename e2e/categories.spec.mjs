@@ -52,7 +52,8 @@ test('Check these learns a merchant rule, changes displayed spending, and undoes
 });
 
 test('number keys and take-guess cannot learn a merchant rule without the checkbox @mobile @cat-ac3',async({page,request})=>{
-  await start(request); let card=await serviceCard(page);
+  await start(request); const card=await serviceCard(page);
+  const itemId=await card.getAttribute('data-item');
   await expect(card.getByLabel('Always for this merchant')).not.toBeChecked();
   const options=card.locator('button[data-answer]');
   const second=await options.nth(1).getAttribute('data-option');
@@ -61,8 +62,11 @@ test('number keys and take-guess cannot learn a merchant rule without the checkb
   await page.keyboard.press('2');
   const n=await numberPost; expect(n.status()).toBe(200); expect(n.request().postDataJSON().answer).toBe(second);
   expect(second.startsWith('always:')).toBe(false);
+  const reopened=page.waitForResponse(r=>r.request().method()==='POST' && new URL(r.url()).pathname===`/api/confirm/${itemId}/reopen`);
   await page.locator('button[data-deck="undo"]').click();
-  card=await serviceCard(page);
+  expect((await reopened).status()).toBe(200);
+  await expect(card).toHaveAttribute('data-item',itemId);
+  await expect(card.getByLabel('Always for this merchant')).not.toBeChecked();
   const guessed=page.waitForResponse(r=>r.request().method()==='POST' && /\/api\/confirm\/\d+\/answer$/.test(new URL(r.url()).pathname));
   await card.getByRole('button',{name:'Use best guess'}).click();
   const g=await guessed; expect(g.status()).toBe(200); expect(g.request().postDataJSON().answer.startsWith('always:')).toBe(false);
