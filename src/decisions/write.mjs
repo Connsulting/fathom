@@ -144,4 +144,3 @@ export function revisit(db, id, { now = new Date().toISOString(), actor = 'ui', 
     return { decision: { id, status: 'open' }, decidedIndex };
   });
 }
-
