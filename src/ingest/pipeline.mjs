@@ -180,7 +180,7 @@ async function planFile(db, fileId, file, opts) {
   if (!file.bytes.length) return { status: 'unsupported', warnings: [{ code: 'empty_file', locator: {} }] };
   const parser = opts.mode === 'reinterpret' ? null : opts.parser ?? pickParser(file);
   if (parser) return { status: 'imported', parser: parser.id, label: parser.label, sourceKind: parser.sourceKind,
-    mirror: parser.mirror ?? 'manual', parsed: parser.parse(file), capabilities: { positions: parser.id === 'brokerage-positions' } };
+    mirror: parser.mirror ?? 'manual', parsed: parser.parse(file), capabilities: parser.capabilities ?? {} };
   const format = sourceFormat(file);
   if (!format) return { status: 'unsupported', warnings: [{ code: 'unsupported_format', locator: {} }] };
   try {
@@ -243,7 +243,15 @@ export function persistImport(db, fileId, file, plan, opts) {
   ctx.sourceId = sourceId;
   ctx.asOf = period.to ?? now.slice(0, 10);
 
-  const coverage = plan.coverage ?? [];
+  const coverage = [...(plan.coverage ?? [])];
+  if (plan.capabilities?.targetCoverage) {
+    const groups = new Map();
+    for (const row of parsed.rows.filter(r => ['balance','position','snapshot'].includes(r.kind))) {
+      const group = { table: row.kind === 'balance' ? 'balances' : 'positions', accountId: row.accountId, period: row.date ?? row.asOf, complete: true, authority: row.date ?? row.asOf };
+      groups.set(JSON.stringify(group), group);
+    }
+    coverage.push(...groups.values());
+  }
   ctx.coverage = coverage;
   ctx.incomplete = { pnl: () => false, tax: new Set() };
 
@@ -553,7 +561,7 @@ const periodTo = (db, fileId) => db.prepare('SELECT period_to FROM files WHERE i
 // Newer or equal file period (unknown oldest) holds authority over a revision slot.
 function newerOrEqual(db, incomingTo, existingFileId, group = null) {
   const coverage = existingFileId && group ? parseJson(db.prepare('SELECT coverage FROM files WHERE id=?').get(existingFileId)?.coverage, []) : [];
-  const held = coverage.find(g => g.table === group?.table && g.period === group?.period && g.entity === group?.entity && g.slot === group?.slot);
+  const held = coverage.find(g => g.table === group?.table && g.period === group?.period && g.entity === group?.entity && g.slot === group?.slot && g.accountId === group?.accountId);
   const existingTo = held?.authority ?? (existingFileId ? periodTo(db, existingFileId) : null);
   if (existingTo == null) return true;
   return incomingTo != null && incomingTo >= existingTo;
@@ -570,7 +578,8 @@ function putBalance(ctx, row, parser, locator) {
     bump(ctx, 'balance');
     return;
   }
-  const authority = newerOrEqual(db, periodTo(db, fileId), stored.file_id);
+  const group = ctx.coverage.find(g => g.table === 'balances' && g.accountId === row.accountId && g.period === row.date);
+  const authority = newerOrEqual(db, group?.authority ?? periodTo(db, fileId), stored.file_id, group);
   if (moneyEq(stored.amount, amount)) {
     if (authority) db.prepare('UPDATE balances SET file_id = ?, parser = ?, locator = ? WHERE id = ?').run(fileId, parser, locator, stored.id);
     counts.duplicates += 1;
@@ -597,7 +606,8 @@ function putPosition(ctx, row, parser, locator) {
     return;
   }
   const same = numEq(stored.quantity, values.quantity) && moneyEq(stored.price, values.price) && moneyEq(stored.value, values.value) && moneyEq(stored.cost_basis, values.cost_basis);
-  const authority = newerOrEqual(db, periodTo(db, fileId), stored.file_id);
+  const group = ctx.coverage.find(g => g.table === 'positions' && g.accountId === row.accountId && g.period === row.asOf);
+  const authority = newerOrEqual(db, group?.authority ?? periodTo(db, fileId), stored.file_id, group);
   if (same) {
     if (authority) db.prepare('UPDATE positions SET file_id = ?, parser = ?, locator = ? WHERE id = ?').run(fileId, parser, locator, stored.id);
     counts.duplicates += 1;
@@ -769,8 +779,9 @@ function removeOmittedPositions(ctx, rows, warnings) {
   const remove = db.prepare('DELETE FROM positions WHERE id = ?');
   const held = db.prepare('SELECT 1 FROM positions WHERE account_id = ? AND as_of = ? LIMIT 1');
   for (const { accountId, asOf, keys, locator } of snapshots.values()) {
+    const group = ctx.coverage.find(g => g.table === 'positions' && g.accountId === accountId && g.period === asOf);
     for (const p of db.prepare('SELECT * FROM positions WHERE account_id = ? AND as_of = ? ORDER BY id').all(accountId, asOf)) {
-      if (keys.has(p.dedupe_key) || p.file_id === fileId || !newerOrEqual(db, incomingTo, p.file_id)) continue;
+      if (keys.has(p.dedupe_key) || p.file_id === fileId || !newerOrEqual(db, group?.authority ?? incomingTo, p.file_id, group)) continue;
       archive(db, 'positions', { ...p }, { by: fileId, reason: 'removed', now });
       remove.run(p.id);
       counts.superseded += 1;

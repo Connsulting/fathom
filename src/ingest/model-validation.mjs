@@ -33,7 +33,7 @@ export function importPlan(rows, { reinterpret = false } = {}) {
     const group = row.kind === 'pnl_line' ? { table: 'pnl_lines', entity: row.entity, period } : { table: 'tax_payments', slot, period };
     return [JSON.stringify(group), { ...group, complete: true, authority: row.date ?? `${row.period}-01` }];
   })).values()];
-  return { reinterpret, coverage, capabilities: { positions: true }, status: 'imported', parser: 'model-import', label: 'Reviewed import', sourceKind: 'model_import',
+  return { reinterpret, coverage, capabilities: { positions: true, targetCoverage: true }, status: 'imported', parser: 'model-import', label: 'Reviewed import', sourceKind: 'model_import',
     parsed: { rows, warnings: [], period: { from: dates[0] ?? null, to: dates.at(-1) ?? null } } };
 }
 

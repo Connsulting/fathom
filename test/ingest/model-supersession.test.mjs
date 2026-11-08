@@ -47,3 +47,20 @@ test('month-precision tax revisions retain tax year basis, recipient and full so
     assert.equal(JSON.parse(archived.row).amount,250); assert.equal(archived.file_id,first.fileId);
   } finally { x.close(); }
 });
+
+test('position authority and omissions belong to each resolved account and date', async () => {
+  const { undoAction } = await import('../../src/actions/receipts.mjs');
+  const x = await setup();
+  try {
+    x.db.prepare("INSERT INTO accounts(id,name,inst,kind,owner,identity) VALUES ('account-second','Second account','Example bank','cash','you','synthetic-second')").run();
+    const position = (accountId,asOf,symbol,value) => ({ target: 'position', fields: { accountId,asOf,symbol,quantity: 1,value } });
+    const initial = [position('account-synthetic','2032-02-01','FIRST',100),position('account-synthetic','2032-02-01','OLD',20),position('account-second','2032-03-01','OTHER',50)];
+    await importProposedRows(x,initial);
+    const before = x.db.prepare('SELECT * FROM positions ORDER BY id').all();
+    const next = await importProposedRows(x,[position('account-synthetic','2032-02-01','FIRST',110)]);
+    assert.equal(next.status,'imported');
+    assert.deepEqual(x.db.prepare('SELECT symbol,value FROM positions ORDER BY symbol').all().map(r => [r.symbol,r.value]), [['FIRST',110],['OTHER',50]]);
+    await undoAction(x.ctx,next.receipt.id,'write:imports');
+    assert.deepEqual(x.db.prepare('SELECT * FROM positions ORDER BY id').all(),before);
+  } finally { x.close(); }
+});
