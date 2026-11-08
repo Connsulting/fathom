@@ -51,15 +51,17 @@ test('Undo first approval makes the layout require approval again', async () => 
 test('Undo survives the real category guessing job but refuses a later owner correction', async () => {
   const { guessCategories } = await import('../../src/categories/guess.mjs');
   const { setTransactionCategory } = await import('../../src/categories/store.mjs');
-  for (const ownerChange of [false,true]) {
+  const { JEV_MODEL } = await import('../../src/categories/jev.mjs');
+  for (const confidence of [0.85,0.95]) for (const ownerChange of [false,true]) {
     const x = await setup();
     try {
       const approved = await approve(x,await upload(x,transactions()));
       x.db.prepare("INSERT INTO category_source_rules VALUES ('aggregator','Groceries','household',?)").run(x.ctx.now);
       x.db.prepare("INSERT INTO category_source_rules VALUES ('aggregator','Business','business',?)").run(x.ctx.now);
-      const guessed = await guessCategories(x.db,{isOn:()=>true,model:'synthetic-category-provider',choose:async questions=>questions.map(()=>({choice:'Groceries',confidence:0.8,probabilities:{Groceries:0.8,Business:0.2}}))},{now:x.ctx.now});
+      const guessed = await guessCategories(x.db,{isOn:()=>true,model:JEV_MODEL,choose:async questions=>questions.map(()=>({choice:'Groceries',confidence,probabilities:{Groceries:confidence,Business:1-confidence}}))},{now:x.ctx.now});
       assert.equal(guessed.stopped,undefined);
       assert.equal(x.db.prepare('SELECT count(*) n FROM transaction_category_guesses').get().n,2);
+      assert.equal(x.db.prepare('SELECT count(*) n FROM confirm_auto').get().n,confidence>=0.9 ? 2 : 0);
       if (ownerChange) {
         setTransactionCategory(x.db,x.db.prepare('SELECT min(id) id FROM transactions').get().id,'Business',{now:x.ctx.now});
         await assert.rejects(undoAction(x.ctx,approved.receipt.id,'write:imports'), e=>e.code==='conflict');
@@ -72,4 +74,23 @@ test('Undo survives the real category guessing job but refuses a later owner cor
       }
     } finally { x.close(); }
   }
+});
+
+
+test('grouped reinterpret Undo retains the active file status and permits another reinterpret', async () => {
+  const { importProposedRows } = await import('../helpers/import-proposal-fixture.mjs');
+  const { retryFile } = await import('../../src/ingest/pipeline.mjs');
+  const x = await setup();
+  try {
+    x.ctx.scopes.push('write:facts');
+    const rows = [{ target:'document',docType:'w2',fields:{taxYear:2031,employerName:'Synthetic employer',wages:500} }];
+    await importProposedRows(x,rows);
+    const second = await importProposedRows(x,rows,{reinterpret:true});
+    assert.deepEqual(second.receipt.scopes,['write:facts','write:imports']);
+    await undoAction(x.ctx,second.receipt.id,'write:imports');
+    assert.equal(x.db.prepare('SELECT status FROM files WHERE id=?').get(second.fileId).status,'imported');
+    const proposal = JSON.parse(x.db.prepare('SELECT proposal FROM import_proposals ORDER BY rowid DESC LIMIT 1').get().proposal);
+    const staged = await retryFile(x.db,second.fileId,{...x.opts,scopes:x.ctx.scopes,mode:'reinterpret',fake:[{text:JSON.stringify({rows:proposal.rows,coverage:proposal.coverage,completeness:proposal.completeness})}]});
+    assert.equal(staged.status,'needs_confirmation');
+  } finally { x.close(); }
 });

@@ -24,7 +24,7 @@ test('corrected overlapping files remove only complete represented groups, retai
   try {
     x.db.prepare('INSERT INTO entity_aliases(alias,entity,created_at) VALUES (?,?,?)').run('syntheticstudio', 'Synthetic studio', x.ctx.now);
     await importProposedRows(x, [pnl('2032-02','Income',100), pnl('2032-02','Travel',-20), pnl('2032-03','Income',120)]);
-    const next = await importProposedRows(x, [pnl('2032-02','Income',110)]);
+    const next = await importProposedRows(x, [pnl('2032-02','Income',110),pnl('2032-03','Income',120)]);
     assert.equal(next.status, 'imported');
     assert.deepEqual(x.db.prepare('SELECT period,category,amount FROM pnl_lines ORDER BY period,category').all().map(r => [r.period,r.category,r.amount]), [['2032-02','Income',110],['2032-03','Income',120]]);
     assert.equal(x.db.prepare("SELECT count(*) n FROM superseded_rows WHERE reason IN ('revised','removed')").get().n, 2);
@@ -91,7 +91,7 @@ test('older model exports cannot overwrite or remove newer P&L groups', async ()
     x.db.prepare('INSERT INTO entity_aliases VALUES (?,?,?)').run('syntheticstudio','Synthetic studio',x.ctx.now);
     await importProposedRows(x,[pnl('2032-02','Income',200),pnl('2032-02','Software',-10),pnl('2032-12','Income',200)]);
     const before = x.db.prepare('SELECT * FROM pnl_lines ORDER BY id').all();
-    await importProposedRows(x,[pnl('2032-02','Income',100),pnl('2032-03','Income',100)]);
+    await importProposedRows(x,[pnl('2032-02','Income',100),pnl('2032-02','Travel',-5),pnl('2032-03','Income',100)]);
     assert.deepEqual(x.db.prepare("SELECT * FROM pnl_lines WHERE period='2032-02' ORDER BY id").all(),before.filter(r => r.period==='2032-02'));
   } finally { x.close(); }
 });
@@ -112,5 +112,37 @@ test('newer model exports revise and recategorize historical P&L and tax groups 
     assert.deepEqual(x.db.prepare('SELECT period,category,amount FROM pnl_lines ORDER BY period,category').all().map(r=>[r.period,r.category,r.amount]),[['2032-08','Income',50],['2032-09','Software',-25],['2032-11','Income',150]]);
     assert.equal(x.db.prepare("SELECT amount FROM tax_payments WHERE date='2032-09-30'").get().amount,120);
     assert.ok(x.db.prepare("SELECT count(*) n FROM superseded_rows WHERE file_id=?").get(old.fileId).n>=2);
+  } finally { x.close(); }
+});
+
+
+test('an unchanged observation advances authority using source coverage rather than upload time', async () => {
+  const x = await setup();
+  try {
+    x.db.prepare('INSERT INTO entity_aliases VALUES (?,?,?)').run('syntheticstudio','Synthetic studio',x.ctx.now);
+    await importProposedRows(x,[pnl('2032-02','Income',100),pnl('2032-03','Income',100)]);
+    await importProposedRows(x,[pnl('2032-02','Income',100),pnl('2032-12','Income',100)]);
+    await importProposedRows(x,[pnl('2032-02','Income',50),pnl('2032-04','Income',100)]);
+    assert.equal(x.db.prepare("SELECT amount FROM pnl_lines WHERE period='2032-02'").get().amount,100);
+  } finally { x.close(); }
+});
+
+
+test('reinterpretation cannot discard a source occurrence with an owner correction', async () => {
+  const { setTransactionCategory } = await import('../../src/categories/store.mjs');
+  const x = await setup();
+  try {
+    await approve(x,await upload(x,transactions()));
+    const last = x.db.prepare('SELECT max(id) id FROM transactions').get().id;
+    setTransactionCategory(x.db,last,'Groceries',{now:x.ctx.now});
+    const before = x.db.prepare('SELECT * FROM transactions ORDER BY id').all();
+    const staged = await upload(x,transactions(),recipe(),{reinterpret:true,change:proposal=>{
+      proposal.rows.pop();
+      const region = proposal.coverage.at(-1);
+      region.disposition='excluded'; region.reason={refs:[region.refs.at(-1)],transform:{op:'identity'}};
+    }});
+    assert.equal(staged.status,'needs_clarification');
+    assert.deepEqual(x.db.prepare('SELECT * FROM transactions ORDER BY id').all(),before);
+    assert.equal(x.db.prepare('SELECT category FROM transaction_category_corrections WHERE transaction_id=?').get(last).category,'Groceries');
   } finally { x.close(); }
 });

@@ -13,7 +13,7 @@ import { persistImport } from './pipeline.mjs';
 import { currentPrincipal } from '../platform/model-budget.mjs';
 import { interpretFile } from './model-parse.mjs';
 import { applySourceActions } from './model-updates.mjs';
-import { importSnapshot, importChanges } from './model-undo.mjs';
+import { importSnapshot, importChanges, importCategoryState } from './model-undo.mjs';
 import { refreshPackState } from '../packs/state.mjs';
 import { triggerPlan, triggerGuesses, triggerFreshness } from './pipeline.mjs';
 
@@ -197,8 +197,9 @@ function commit(ctx, row, proposal, source, file, review, validation, { automati
     return child ? [child] : [];
   });
   for (const current of afterSnapshot.facts.filter(r => !actionFacts.has(r.key) && !snapshot.facts.some(old => old.key === r.key))) factReceipts.push(saveReceipt({ ...ctx, now }, { scope: 'write:facts', kind: 'fact', id: current.key, label: 'Imported fact', before: null, after: current }));
+  const changes = importChanges(db, snapshot, afterSnapshot).filter(c => c.table !== 'facts');
   const batchReceipt = saveReceipt({ ...ctx, now }, { scope: requiredScopes.includes('write:facts') ? 'write:facts' : 'write:imports', kind: 'model_import', id: row.id, label: 'Reviewed import', before,
-    after: { status: 'imported', counts: result.counts, scopes: requiredScopes, changes: importChanges(db, snapshot, afterSnapshot).filter(c => c.table !== 'facts'),
+    after: { status: 'imported', counts: result.counts, scopes: requiredScopes, changes, categories: importCategoryState(db,changes),
       mapping: proposal.mappingId ? { id: proposal.mappingId, version: proposal.mappingVersion } : null } });
   const receipt = requiredScopes.length > 1 || factReceipts.length || actionChildren.some(Boolean) ? groupReceipts({ ...ctx, now }, [batchReceipt, ...factReceipts, ...actionChildren], { id: row.id, label: 'Reviewed import' }) : batchReceipt;
   db.prepare(`INSERT INTO import_batches (id,proposal_id,proposal_version,file_id,status,before_state,after_state,receipt_id,created_at)

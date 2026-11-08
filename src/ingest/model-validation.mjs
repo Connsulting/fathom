@@ -27,11 +27,20 @@ function accountFor(db, value) {
 }
 
 export function importPlan(rows, { reinterpret = false } = {}) {
-  const dates = rows.map(r => r.date ?? r.asOf ?? (r.period ? r.period + '-01' : null)).filter(Boolean).sort();
+  const monthEnd = period => new Date(Date.UTC(Number(period.slice(0,4)), Number(period.slice(5,7)), 0)).toISOString().slice(0,10);
+  const rowDate = row => row.date ?? row.asOf ?? (row.period ? monthEnd(row.period) : null);
+  const dates = rows.map(rowDate).filter(Boolean).sort();
+  const horizons = new Map();
+  const family = row => row.kind === 'pnl_line' ? `pnl:${normalize(row.entity)}:${row.period.slice(0,4)}`
+    : `tax:${row.taxYear ?? row.sheetYear}:${normalize(row.jurisdiction).replace(/[^a-z0-9]/g, '')}:${normalize(row.payer).replace(/[^a-z0-9]/g, '')}`;
+  for (const row of rows.filter(r => ['pnl_line','tax_payment'].includes(r.kind))) {
+    const key = family(row), date = rowDate(row);
+    if (!horizons.has(key) || date > horizons.get(key)) horizons.set(key,date);
+  }
   const coverage = [...new Map(rows.filter(r => ['pnl_line', 'tax_payment'].includes(r.kind)).map(row => {
     const period = row.period ?? row.date.slice(0, 7), slot = `tax:${row.taxYear ?? row.sheetYear}:${normalize(row.jurisdiction).replace(/[^a-z0-9]/g, '')}:${normalize(row.payer).replace(/[^a-z0-9]/g, '')}`;
     const group = row.kind === 'pnl_line' ? { table: 'pnl_lines', entity: row.entity, period } : { table: 'tax_payments', slot, period };
-    return [JSON.stringify(group), { ...group, complete: true, authority: row.date ?? `${row.period}-01` }];
+    return [JSON.stringify(group), { ...group, complete: true, authority: horizons.get(family(row)) }];
   })).values()];
   const targets = [...new Set(rows.map(r => r.kind))].sort();
   const documents = [...new Set(rows.filter(r => r.kind === 'document').map(r => r.docType))].sort();

@@ -7,7 +7,7 @@ import { stageImport, reviewImport } from '../../src/ingest/model-review.mjs';
 import { createRuntimeEngine } from '../../src/engine/runtime.mjs';
 import { createAuthStore } from '../../src/auth/store.mjs';
 
-export async function importProposedRows(store, rows, { name = 'synthetic.xlsx', now = '2032-04-17T12:00:00.000Z', marker = '', approve = true } = {}) {
+export async function importProposedRows(store, rows, { name = 'synthetic.xlsx', now = '2032-04-17T12:00:00.000Z', marker = '', approve = true, reinterpret = false } = {}) {
   const leaves = [], shared = new Map();
   function cite(value, key) {
     if (Array.isArray(value)) return value.map(v => cite(v, key));
@@ -31,7 +31,7 @@ export async function importProposedRows(store, rows, { name = 'synthetic.xlsx',
   const household = { ...store.household, engine };
   const ctx = { db: store.db, household, scheduler: { trigger() {} }, actorId: 'actor-synthetic', now, ownerText: 'yes', scopes: ['write:imports', 'write:facts', 'write:goals', 'write:steps', 'write:recs'] };
   await ingestFile(store.db, { name, bytes, mime: XLSX_MIME }, { ...ctx, household: { ...household, engine: { isOn: () => false } } });
-  const staged = stageImport(ctx, { source, proposal: { proposalId: randomUUID(), version: 1, fileId, sha256: source.sha256, interpreterVersion: 'synthetic', mappingId: null, mappingVersion: null, rows: targets, coverage, completeness: 'complete' } });
+  const staged = stageImport(ctx, { source, reinterpret, proposal: { proposalId: randomUUID(), version: 1, fileId, sha256: source.sha256, interpreterVersion: 'synthetic', mappingId: null, mappingVersion: null, rows: targets, coverage, completeness: 'complete' } });
   if (!approve || staged.status !== 'needs_confirmation') return { fileId, ...staged };
   return { fileId, ...staged, ...await reviewImport(ctx, { proposalId: staged.proposalId, version: staged.version, decision: 'approve', evidence: 'yes' }) };
 }

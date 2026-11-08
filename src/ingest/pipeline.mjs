@@ -214,10 +214,27 @@ export function persistImport(db, fileId, file, plan, opts) {
   if (!parsed) return finish(plan.status);
 
   if (plan.reinterpret) {
+    ctx.reinterpretedTransactions = new Map();
+    const incoming = new Map(), retained = new Set();
+    for (const row of parsed.rows.filter(row => row.kind === 'transaction')) for (const key of transactionOrigins(row.locator)) {
+      const matches = incoming.get(key) ?? []; matches.push(row); incoming.set(key,matches);
+    }
+    for (const old of db.prepare('SELECT * FROM transactions WHERE file_id=?').all(fileId)) {
+      const matches = transactionOrigins(parseJson(old.locator,{})).map(key => incoming.get(key) ?? []).find(rows => rows.length === 1) ?? [];
+      if (matches.length === 1 && !ctx.reinterpretedTransactions.has(matches[0])) { ctx.reinterpretedTransactions.set(matches[0],old.id); retained.add(old.id); }
+      else if (db.prepare('SELECT 1 FROM transaction_category_corrections WHERE transaction_id=?').get(old.id)) throw new Error('confirmed_transaction_unmapped');
+    }
     for (const table of ['transactions', 'balances', 'positions', 'pnl_lines', 'tax_payments', 'documents']) {
       for (const row of db.prepare(`SELECT * FROM ${table} WHERE file_id=?`).all(fileId)) {
         archive(db, table, { ...row }, { by: fileId, reason: 'reinterpreted', now });
-        if (table === 'transactions') for (const dependent of ['transaction_category_imports', 'transaction_category_corrections', 'transaction_category_guesses']) db.prepare(`DELETE FROM ${dependent} WHERE transaction_id=?`).run(row.id);
+        if (table === 'transactions' && retained.has(row.id)) {
+          db.prepare('UPDATE transactions SET dedupe_key=NULL WHERE id=?').run(row.id);
+          continue;
+        }
+        if (table === 'transactions') for (const dependent of ['transaction_category_imports', 'transaction_category_corrections', 'transaction_category_guesses']) {
+          for (const observation of db.prepare(`SELECT * FROM ${dependent} WHERE transaction_id=?`).all(row.id)) archive(db,dependent,{ ...observation },{ by:fileId, fileId, reason:'reinterpreted',now });
+          db.prepare(`DELETE FROM ${dependent} WHERE transaction_id=?`).run(row.id);
+        }
         db.prepare(`DELETE FROM ${table} WHERE id=?`).run(row.id);
       }
     }
@@ -469,6 +486,14 @@ function categoryCounterpart(ctx,row,parser) {
   return !matches.length && candidates.length===1 && overlapping.length===1 ? candidates[0] : null;
 }
 
+function transactionOrigins(locator = {}) {
+  const refs = locator.fields?.amount?.refs, keys = refs?.length ? ['refs:' + JSON.stringify([...refs].sort())] : [];
+  const rows = locator.row != null ? [JSON.stringify([locator.sheet ?? null,locator.row])]
+    : [...new Set((locator.derivedFrom ?? []).filter(ref => ref.row != null).map(ref => JSON.stringify([ref.sheet?.index ?? null,ref.row])))];
+  if (rows.length === 1) keys.push('row:' + rows[0]);
+  return keys;
+}
+
 function putTransaction(ctx, row, parser, locator) {
   const { db, fileId, counts, now } = ctx;
   const values = {
@@ -489,6 +514,14 @@ function putTransaction(ctx, row, parser, locator) {
     }
   };
   let key = dedupeKey(row);
+  const retainedId = ctx.reinterpretedTransactions?.get(row);
+  if (retainedId) {
+    const cols = Object.keys(values);
+    db.prepare(`UPDATE transactions SET ${cols.map(k => `${k}=?`).join(',')},dedupe_key=? WHERE id=?`)
+      .run(...cols.map(k => values[k]),key,retainedId);
+    counts.revised++;
+    return;
+  }
   let collided = null;
   let seen = observations(db, key);
   if (seen.some((o) => o.stored && o.file_id === fileId)) { counts.duplicates += 1; return; }
@@ -618,6 +651,13 @@ function putPosition(ctx, row, parser, locator) {
 }
 
 const aliasMap = db => new Map(db.prepare('SELECT alias,entity FROM entity_aliases').all().map(row => [row.alias,row.entity]));
+function olderGroup(ctx, group) {
+  if (!group) return false;
+  const rows = group.table === 'pnl_lines'
+    ? ctx.db.prepare('SELECT file_id FROM pnl_lines WHERE lower(entity)=? AND period=?').all(group.entity.toLowerCase(),group.period)
+    : ctx.db.prepare('SELECT file_id FROM tax_payments WHERE source_slot=? AND substr(date,1,7)=?').all(group.slot,group.period);
+  return rows.some(row => !newerOrEqual(ctx.db,group.authority,row.file_id,group));
+}
 const pnlSlot = (entity, period) => `pnl:${normalizeName(entity)}:${period.slice(0, 4)}`;
 
 function putPnl(ctx, row, parser, locator) {
@@ -627,12 +667,16 @@ function putPnl(ctx, row, parser, locator) {
   const amount = cents(row.amount);
   const stored = db.prepare('SELECT * FROM pnl_lines WHERE dedupe_key = ?').get(key);
   const group = ctx.coverage.find(g => g.table === 'pnl_lines' && g.entity === row.entity && g.period === row.period);
+  if (olderGroup(ctx,group)) { counts.incomplete++; return; }
   if (!stored) {
     db.prepare('INSERT INTO pnl_lines (entity, period, category, amount, file_id, parser, locator, dedupe_key, source_slot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(row.entity, row.period, row.category, amount, fileId, parser, locator, key, pnlSlot(row.entity, row.period));
     bump(ctx, 'pnl_line');
   } else if (moneyEq(stored.amount, amount)) {
-    if (stored.file_id !== fileId) archive(db, 'pnl_lines', { ...stored, file_id: fileId, parser, locator }, { by: stored.file_id, reason: 'duplicate_observation', now });
+    if (group && stored.file_id !== fileId) {
+      archive(db, 'pnl_lines', { ...stored }, { by: fileId, reason: 'duplicate_observation', now });
+      db.prepare('UPDATE pnl_lines SET file_id=?,parser=?,locator=? WHERE id=?').run(fileId,parser,locator,stored.id);
+    }
     counts.duplicates += 1;
   } else if (!newerOrEqual(db, group?.authority ?? periodTo(db, fileId), stored.file_id, group)) {
     counts.incomplete += 1;
@@ -682,11 +726,16 @@ function putTax(ctx, row, parser, locator) {
     .run(shaped.jurisdiction, shaped.tax_year, shaped.date, amount, shaped.kind, fileId, parser, locator, rowKey, slot, rowPayer, shaped.date_precision, shaped.tax_year_basis, recipient).lastInsertRowid);
   const stored = db.prepare('SELECT * FROM tax_payments WHERE dedupe_key = ?').get(key);
   const group = ctx.coverage.find(g => g.table === 'tax_payments' && g.slot === slot && g.period === row.date.slice(0, 7));
+  if (olderGroup(ctx,group)) { counts.incomplete++; return; }
   if (!stored) {
     const id = insert(payer, key);
     bump(ctx, 'tax_payment');
     if (summarizes) tally(ctx, askSlotConflict(db, db.prepare('SELECT * FROM tax_payments WHERE id = ?').get(id), { now }));
   } else if (moneyEq(stored.amount, amount)) {
+    if (group && stored.file_id !== fileId) {
+      archive(db, 'tax_payments', { ...stored }, { by: fileId, reason: 'duplicate_observation', now });
+      db.prepare('UPDATE tax_payments SET file_id=?,parser=?,locator=? WHERE id=?').run(fileId,parser,locator,stored.id);
+    }
     counts.duplicates += 1;
   } else if (!newerOrEqual(db, group?.authority ?? periodTo(db, fileId), stored.file_id, group)) {
     counts.incomplete += 1;
