@@ -9,7 +9,7 @@ import { indexSource } from './model-source.mjs';
 import { openVault, readStoredFile } from './vault.mjs';
 import { validateImport, importEffect, importPlan } from './model-validation.mjs';
 import { applyLayout, layoutContext, layoutDigest, layoutDelta } from './model-layout.mjs';
-import { persistImport } from './pipeline.mjs';
+import { persistImport, retryFile } from './pipeline.mjs';
 import { currentPrincipal } from '../platform/model-budget.mjs';
 import { interpretFile } from './model-parse.mjs';
 import { applySourceActions } from './model-updates.mjs';
@@ -76,6 +76,11 @@ export async function prepareImport(ctx, { file, layout = null, fake, reinterpre
     if (prior.status !== 'waiting_for_engine') return out(prior);
   }
   const correcting = prior?.status === 'waiting_for_engine' && prior.reason_code === 'owner_correction';
+  if (correcting) {
+    const review = parseJson(prior.review_state, {});
+    reinterpret = review.reinterpret === true;
+    ctx = { ...ctx, capturedAt: review.capturedAt ?? parseJson(prior.proposal)?.capturedAt ?? null };
+  }
   const reused = reinterpret || correcting || !source ? { candidateCount: 0 } : await reuseApprovedMapping(ctx, { source, layout });
   if (reused.status === 'imported') return reused;
   if (layout || reused.suggestedLayout || reused.candidateCount) {
@@ -207,7 +212,22 @@ function commit(ctx, row, proposal, source, file, review, validation, { automati
   return { proposalId: row.id, version: row.version, status: 'imported', counts: result.counts, receipt, confirmationRequired: false };
 }
 
+export const IMPORT_READING_MESSAGE = 'Fathom is reading your file. The result will appear in Files and Confirm.';
+
 export async function reviewImport(ctx, args) {
+  if (ctx.channel === 'ask' && args?.decision === 'correct' && typeof ctx.queueAfterTools !== 'function') {
+    throw new ToolError('bad_input', 'This import correction needs the Ask round-end queue.');
+  }
+  const result = await review(ctx, args);
+  if (result.status !== 'queued') return result;
+  const row = latest(ctx.db, result.proposalId);
+  const run = async () => ({ ...result, ...await retryFile(ctx.db, row.file_id, { ...ctx, mode: 'retry', now: stamp(ctx) }) });
+  if (ctx.channel !== 'ask') return run();
+  ctx.queueAfterTools(run);
+  return { ...result, message: IMPORT_READING_MESSAGE };
+}
+
+async function review(ctx, args) {
   context(ctx); scopes(ctx);
   if (!args || Object.keys(args).some(k => !['proposalId', 'version', 'decision', 'evidence'].includes(k)) || typeof args.proposalId !== 'string' ||
     !Number.isSafeInteger(args.version) || args.version <= 0 || !['approve', 'correct'].includes(args.decision)) throw new ToolError('bad_input', 'Invalid import review.');

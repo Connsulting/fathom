@@ -141,7 +141,7 @@ test('a changed layout asks only the delta and a plain correction waits for the 
   await r.locator('[data-proposal-correct]').click();
   const done = await reviewed;
   expect(done.status()).toBe(200);
-  expect((await done.json()).status).toBe('queued');
+  expect((await done.json()).status).toBe('waiting_for_engine');
   await expect(r.locator('[data-proposal-status]')).toHaveText('Waiting for the engine');
   await expect(r.locator('[data-proposal-cause]')).toHaveText('Your correction is saved. Waiting for the engine to read the file again.');
   await expect(page.locator('[data-review-note]').first()).toContainText('Correction saved.');

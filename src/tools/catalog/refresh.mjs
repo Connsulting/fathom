@@ -27,18 +27,21 @@ function content(args) {
 function preflight(name, args, ctx) {
   requireActor(ctx);
   if (!ctx.services || !apiContext(ctx).household) refusal('Household services are unavailable.');
+  if (apiContext(ctx).household.db !== ctx.db) refusal('Household services do not own this store.');
   if (name === 'import_file') content(args);
   if (name === 'retry_import' && !ctx.db.prepare('SELECT id FROM files WHERE id=?').get(args.fileId)) throw new ToolError('not_found', 'No such file.');
+  if (name === 'review_import' && !ctx.db.prepare('SELECT id FROM import_proposals WHERE id=?').get(args.proposalId)) throw new ToolError('not_found', 'No such proposal.');
   if (name === 'run_job' && args.job === 'plan' && getSetting(ctx.db, 'mode', null) === 'demo') refusal('planning runs on real stores only');
   if (ctx.channel === 'ask' && needsQueue(name, args) && typeof ctx.queueAfterTools !== 'function') refusal('This refresh needs the Ask round-end queue.');
 }
-const needsQueue = (name, args) => name !== 'run_job' || ['plan', 'confirm-guess'].includes(args.job);
+const needsQueue = (name, args) => name === 'review_import' ? args.decision === 'correct' : name !== 'run_job' || ['plan', 'confirm-guess'].includes(args.job);
 async function execute(name, args, ctx) {
   const api = apiContext(ctx);
   try {
     if (name === 'import_file' || name === 'retry_import') {
       await openVault(api.household);
       const opts = { ...ctx, household: api.household, mode: args.mode ?? 'retry', engine: api.engine, config: api.config, now: new Date(ctx.now ?? Date.now()).toISOString() };
+      if (name === 'import_file' && args.text !== undefined) opts.capturedAt = opts.now;
       const file = name === 'import_file'
         ? (await ingestFiles(ctx.db, [{ name: args.name, mime: args.mime, bytes: content(args) }], opts)).results[0]
         : await retryFile(ctx.db, args.fileId, opts);
@@ -68,6 +71,9 @@ function updateReceipt(ctx, id, outcome) {
 }
 async function refresh(name, args, ctx) {
   preflight(name, args, ctx);
+  const { reviewImport, IMPORT_READING_MESSAGE } = await import('../../ingest/model-review.mjs');
+  if (name === 'review_import') return reviewImport({ ...ctx, ...apiContext(ctx), actorId: ctx.actorId,
+    ownerText: ctx.channel === 'mcp' ? args.evidence : ctx.ownerText }, args);
   const queued = ctx.channel === 'ask' && needsQueue(name, args);
   const initial = { status: queued ? 'queued' : 'running', operation: name };
   const receipt = saveReceipt(ctx, { scope: name === 'run_job' ? 'write:jobs' : 'write:imports', kind: 'refresh', id: randomUUID(),
@@ -76,7 +82,8 @@ async function refresh(name, args, ctx) {
     try {
       const result = await execute(name, args, ctx);
       const outcome = { ...result, status: result.status ?? result.file?.status ?? result.run?.status ?? 'finished' };
-      return { ...result, receipt: updateReceipt(ctx, receipt.id, outcome), undo };
+      const audit = updateReceipt(ctx, receipt.id, outcome);
+      return { ...result, receipt: result.file?.receipt ?? audit, ...(result.file?.receipt ? {} : { undo }) };
     } catch (e) {
       updateReceipt(ctx, receipt.id, { status: 'failed', operation: name, error: 'The refresh could not finish. Check the import or job status.' });
       if (!queued) throw e;
@@ -93,16 +100,18 @@ async function refresh(name, args, ctx) {
   ctx.queueAfterTools(run);
   ctx.onReceipt?.(receipt);
   const nameOut = name === 'import_file' ? args.name : name === 'retry_import' ? ctx.db.prepare('SELECT name FROM files WHERE id=?').get(args.fileId).name : null;
-  return { status: 'queued', ...(nameOut ? { name: nameOut } : {}), ...(name === 'run_job' ? { run: { id: receipt.id, status: 'queued' } } : {}), receipt, undo };
+  return { status: 'queued', ...(nameOut ? { name: nameOut, message: IMPORT_READING_MESSAGE } : {}), ...(name === 'run_job' ? { run: { id: receipt.id, status: 'queued' } } : {}), receipt, undo };
 }
 const string = { type: 'string', minLength: 1 };
 const definitions = [
-  ['import_file', 'write:imports', 'Import base64 file content or pasted text.', 'Import a file or pasted note', ['POST /api/files', 'POST /api/onboarding/notes'],
+  ['import_file', 'write:imports', 'Import.', 'Import a file or pasted note', ['POST /api/files', 'POST /api/onboarding/notes'],
     { name: { ...string, maxLength: 200 }, mime: string, text: string, contentBase64: string }, ['name', 'mime']],
-  ['retry_import', 'write:imports', 'Retry or reinterpret a saved import.', 'Retry an imported file', ['POST /api/files/:id/retry'], { fileId: string, mode: { type: 'string', enum: ['retry', 'reinterpret'] } }, ['fileId']],
-  ['build_your_plans', 'write:imports', 'Rebuild Your plans from imported documents.', 'Rebuild the Your plans pack', ['POST /api/your-plans/build'],
+  ['retry_import', 'write:imports', 'Retry.', 'Retry an imported file', ['POST /api/files/:id/retry'], { fileId: string, mode: { type: 'string', enum: ['retry', 'reinterpret'] } }, ['fileId']],
+  ['review_import', 'write:imports', 'Review.', 'Review an import proposal', ['POST /api/import-proposals/:proposalId/review'],
+    { proposalId: string, version: { type: 'integer', minimum: 1 }, decision: { type: 'string', enum: ['approve', 'correct'] }, evidence: { ...string, maxLength: 4000 } }, ['proposalId', 'version', 'decision', 'evidence']],
+  ['build_your_plans', 'write:imports', 'Build plans.', 'Rebuild the Your plans pack', ['POST /api/your-plans/build'],
     { fileIds: { type: 'array', items: { ...string, maxLength: 200 }, maxItems: 50 } }, []],
-  ['run_job', 'write:jobs', 'Run planning, bank sync, freshness or Confirm guessing now.', 'Refresh data or recompute the plan', ['POST /api/jobs/:id/run'], { job: { type: 'string', enum: jobs } }, ['job']],
+  ['run_job', 'write:jobs', 'Run.', 'Refresh data or recompute the plan', ['POST /api/jobs/:id/run'], { job: { type: 'string', enum: jobs } }, ['job']],
 ];
 export const operations = definitions.map(([name, scope, summary, route, routes, params, required]) => ({
   tool: 'refresh', name, scope, summary, route, routes, params, required,

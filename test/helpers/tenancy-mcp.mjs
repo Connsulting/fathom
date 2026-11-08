@@ -9,11 +9,25 @@ import { mcpPost } from '../../src/mcp/test/helpers.mjs';
 import { createAuthStore } from '../../src/auth/store.mjs';
 import { SCOPES } from '../../src/mcp/keys.mjs';
 import { writeSyntheticPack, ALWAYS } from './packs.mjs';
+import { indexSource } from '../../src/ingest/model-source.mjs';
+import { openVault, storeFile } from '../../src/ingest/vault.mjs';
+import { stageUpdate } from '../../src/ingest/model-updates.mjs';
 
 export { toolText };
 export const mcp = (baseUrl, key, method, params = {}, headers = {}) => mcpPost(baseUrl, { auth: key ? `Bearer ${key}` : undefined, method, params, headers });
 
 export const refreshImportFixture = household => ({ operation: 'import_file', name: `Synthetic ${household.canary} notes.md`, mime: 'text/markdown', text: `# ${household.canary}\n\nKeep answers short.` });
+
+export async function refreshReviewFixture(household) {
+  const bytes = Buffer.from(`${household.canary} source note.`), fileId = `${household.canary}-review`;
+  const source = await indexSource({ fileId, format: 'text', bytes });
+  const stored = await storeFile({ vault: await openVault(household.ctx), id: fileId, bytes, purpose: 'upload' });
+  household.db.prepare('INSERT INTO files(id,name,sha256,stored_path,status,uploaded_at) VALUES (?,?,?,?,?,?)')
+    .run(fileId, 'Synthetic review.txt', source.sha256, stored, 'needs_confirmation', '2032-03-10T12:00:00Z');
+  const span = { fileId, sha256: source.sha256, byteStart: 0, byteEnd: bytes.length };
+  const proposal = stageUpdate({ db: household.db, household: household.ctx, actorId: household.admin.userId }, { source, actions: [{ tool: 'note', span }] });
+  return { operation: 'review_import', proposalId: proposal.proposalId, version: proposal.version, decision: 'approve', evidence: 'yes' };
+}
 
 export const expectedTransactionFixture = household => ({ operation: 'expected_transaction', subject: household.canary,
   direction: 'inflow', dueDate: '2032-06-19', datePrecision: 'day', amount: null,

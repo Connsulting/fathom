@@ -427,7 +427,7 @@ async function decideProposal(ctx, key, id, decision, ownerText) {
       toolContext.ownerStatements = () => ownerStatements(toolContext);
       const result = await executeProposal(pending, toolContext);
       for (const task of afterTools) await task();
-      reply = { paragraphs: [result?.undo?.available === false ? 'The refresh is queued. Its receipt records the outcome.' : CONFIRMED_TEXT], refs: [], provenance: { actionTurn: run.turnId, confirmedProposal: 'm' + id, description,
+      reply = { paragraphs: [result?.message ?? (result?.undo?.available === false ? 'The refresh is queued. Its receipt records the outcome.' : CONFIRMED_TEXT)], refs: [], provenance: { actionTurn: run.turnId, confirmedProposal: 'm' + id, description,
         tools: [{ name: pending.tool, args: { operation: pending.operation, ...pending.args }, result: JSON.parse(JSON.stringify(result ?? null)) }] } };
     } catch (e) {
       markProposal(db, id, 'stale', stamp(ctx));

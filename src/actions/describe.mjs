@@ -209,6 +209,7 @@ export const DESCRIBERS = Object.freeze({
   'refresh.build_your_plans': () => 'Rebuild Your plans from your imported documents.',
   'refresh.import_file': a => { const name = said(a.name); return `Import ${name ? q(name) : 'the file you shared'}.`; },
   'refresh.retry_import': (a, L) => `Retry importing ${L.file(a.fileId)}.`,
+  'refresh.review_import': a => a.decision === 'approve' ? 'Approve this import proposal.' : 'Correct this import proposal.',
   'refresh.run_job': a => JOBS[a.job] || 'Refresh your data now.',
   'sources.archive_account': (a, L) => (a.archived === false ? `Restore ${L.account(a.id)} from the archive.`
     : `Archive ${L.account(a.id)}. Its history is kept.`),

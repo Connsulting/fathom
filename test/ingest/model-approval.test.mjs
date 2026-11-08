@@ -74,7 +74,7 @@ test('corrections retain exact owner evidence, queue a fresh version and invalid
     const staged = stageImport(x.ctx, { source, proposal, layout: recipe() });
     const evidence = 'The amounts are expenses; negate the sign.';
     const out = await reviewImport({ ...x.ctx, ownerText: evidence }, { proposalId: staged.proposalId, version: 1, decision: 'correct', evidence });
-    assert.equal(out.status, 'queued'); assert.equal(out.version, 2);
+    assert.equal(out.status, 'waiting_for_engine'); assert.equal(out.version, 2);
     assert.equal(x.db.prepare('SELECT approval_evidence FROM import_proposals WHERE version=2').get().approval_evidence, evidence);
     await assert.rejects(reviewImport(x.ctx, { proposalId: staged.proposalId, version: 1, decision: 'approve', evidence: 'yes' }), e => e.code === 'proposal_stale');
     await assert.rejects(reviewImport(x.ctx, { proposalId: staged.proposalId, version: 2, decision: 'approve', evidence: 'yes' }), e => e.code === 'bad_input');

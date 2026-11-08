@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mcpHouseholds, mcp, toolText, result, digest, expectedTransactionFixture, refreshImportFixture, accountCategoryFixtures, c7ReadFixtures } from './helpers/tenancy-mcp.mjs';
+import { mcpHouseholds, mcp, toolText, result, digest, expectedTransactionFixture, refreshImportFixture, refreshReviewFixture, accountCategoryFixtures, c7ReadFixtures } from './helpers/tenancy-mcp.mjs';
 import { callTool, tools } from '../src/tools/index.mjs';
 import { isMcpTool } from '../src/mcp/keys.mjs';
 
@@ -71,6 +71,14 @@ test('each registered MCP tool executes with only its bearer household context',
       const expectation = result(await f.call(own, 'answer', { ...expectedTransactionFixture(own), conversationKey: `ask:${thread.json.thread.id}` }));
       assert.equal(expectation.expectedTransaction.subject, own.canary);
       assert.equal(own.db.prepare('SELECT count(*) n FROM expected_transactions').get().n, 1);
+      const review = await refreshReviewFixture(own);
+      const reviewed = result(await f.call(own, 'refresh', review, { cookie: other.admin.cookie }));
+      assert.equal(reviewed.status, 'imported');
+      const ownBefore = digest(own.db);
+      const foreign = await f.call(other, 'refresh', review, { cookie: own.admin.cookie });
+      assert.equal(foreign.json.result.isError, true);
+      assert.match(toolText(foreign), /No such proposal/);
+      assert.equal(digest(own.db), ownBefore);
       assert.equal(digest(other.db), before, 'no foreign writes or receipts');
     }
   } finally { await f.close(); }

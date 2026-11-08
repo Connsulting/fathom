@@ -13,7 +13,7 @@ test('MCP action scopes deny before validation and permit only matching writes a
       ...['send', 'verdict', 'checkin', 'packet'].map(operation => ['write:recs', 'advisor_review', operation]),
       ...['archive', 'delete', 'suggestion'].map(operation => ['write:goals', 'update_goal', operation]),
       ...['curve', 'forget', 'save_definition', 'delete_definition', 'pack'].map(operation => ['write:preferences', 'update_preferences', operation]),
-      ...['import_file', 'retry_import', 'build_your_plans'].map(operation => ['write:imports', 'refresh', operation]),
+      ...['import_file', 'retry_import', 'review_import', 'build_your_plans'].map(operation => ['write:imports', 'refresh', operation]),
       ['write:jobs', 'refresh', 'run_job'],
       ...['rename', 'mask', 'owner', 'kind', 'merge'].map(operation => ['write:accounts', 'update_account', operation]),
       ...['transaction', 'merchant_rule'].map(operation => ['write:categories', 'categorize', operation]),

@@ -71,6 +71,8 @@ test('refresh validates size, encoding, job allowlist, queue capability and demo
     { name: note.name, mime: note.mime, contentBase64: '???' }, { name: note.name, mime: note.mime } ])
     await assert.rejects(callTool('refresh', { operation: 'import_file', ...input }, ctx));
   assert.equal(ctx.db.prepare('SELECT count(*) n FROM files').get().n, 0);
+  await assert.rejects(callTool('refresh', { operation: 'import_file', ...note }, { ...ctx, household: { ...ctx.household, db: {} } }), /own this store/);
+  assert.equal(ctx.db.prepare('SELECT count(*) n FROM action_receipts').get().n, 0);
   for (const job of ['brief-email','deadline-alerts','trash-purge']) await assert.rejects(callTool('refresh', { operation: 'run_job', job }, ctx));
   for (const args of [ { operation: 'import_file', ...note }, { operation: 'retry_import', fileId: 'unknown' }, { operation: 'build_your_plans' }, { operation: 'run_job', job: 'plan' }, { operation: 'run_job', job: 'confirm-guess' } ])
     await assert.rejects(callTool('refresh', args, { ...ctx, channel: 'ask' }));
@@ -82,7 +84,7 @@ test('refresh validates size, encoding, job allowlist, queue capability and demo
 test('read-only MCP denies each new write before validation', async () => {
   const rpc = await client(await setup(), ['read']);
   try {
-    for (const [name,operation] of [ ...['forget','save_definition','delete_definition','pack'].map(op => ['update_preferences',op]), ...['import_file','retry_import','build_your_plans','run_job'].map(op => ['refresh',op]) ]) {
+    for (const [name,operation] of [ ...['forget','save_definition','delete_definition','pack'].map(op => ['update_preferences',op]), ...['import_file','retry_import','review_import','build_your_plans','run_job'].map(op => ['refresh',op]) ]) {
       const result = await rpc.call(name, { operation });
       assert.equal(result.isError, true);
       assert.match(result.content[0].text, new RegExp(`Permission denied: ${name}\\.${operation} needs`));

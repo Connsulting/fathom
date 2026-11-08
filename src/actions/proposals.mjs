@@ -254,6 +254,7 @@ export function proposalBasis(db, tool, scopes, args = {}) {
       continue;
     }
     if (scope === 'write:imports' || scope === 'write:jobs') {
+      if (tool === 'refresh') parts.push(['import_proposals', db.prepare('SELECT * FROM import_proposals ORDER BY id,version').all()]);
       parts.push(['expected_transactions', db.prepare('SELECT * FROM expected_transactions ORDER BY id').all()]);
       parts.push(['accounts', db.prepare('SELECT id,kind FROM accounts ORDER BY id').all()]);
       parts.push(['files', db.prepare('SELECT * FROM files ORDER BY id').all()]);
