@@ -336,3 +336,11 @@ test('correction provenance keeps the triggering kinds after a clean replacement
   const clean = await ask(s, [[{ text: 'The total is unavailable.' }]]);
   assert.deepEqual(clean.reply.provenance.discipline, { violations: [], triggeredBy: [] });
 });
+
+
+test('a failed corrective round still records the triggering kinds', async t => {
+  const s = await cardStore(t);
+  const { reply } = await ask(s, [[{ text: 'The total is forty dollars.' }], [{ text: '', costUsd: null }]]);
+  assert.equal(reply.notice, true);
+  assert.deepEqual(reply.provenance.discipline.triggeredBy, ['figures.spelled_out']);
+});

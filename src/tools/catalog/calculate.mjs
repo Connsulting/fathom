@@ -287,11 +287,11 @@ const base = {
   label: { type: 'string', minLength: 1, maxLength: 80, pattern: '^[^0-9]*$' },
 };
 const SUMMARIES = {
-  add: ['Two or more figures in one unit added.', 'Add figures'],
+  add: ['Add figures in one unit.', 'Add figures'],
   subtract: ['The first figure minus the rest.', 'Subtract figures'],
   multiply: ['Two figures; usd times ratio, months times usd_per_month.', 'Multiply figures'],
   divide: ['Two figures; equal units give a ratio.', 'Divide figures'],
-  sum: ['Total of figures, or of one ref to a list of figures.', 'Total several figures'],
+  sum: ['Sum figures or a ref to a figure list.', 'Total several figures'],
   min: ['The smallest figure.', 'Smallest of figures'],
   max: ['The largest figure.', 'Largest of figures'],
   negate: ['The figure with its sign flipped.', 'Flip a sign'],
@@ -299,7 +299,7 @@ const SUMMARIES = {
   monthly: ['usd_per_year to usd_per_month.', 'A yearly figure as a month'],
   percent_of: ['A ratio of a base: the ratio first.', 'A share of a figure'],
   round_up: ['Up to the next 1, 100 or 1000.', 'Round a figure up'],
-  compound: ['Future value at a yearly ratio over years, compounded monthly.', 'Grow a figure at a rate'],
+  compound: ['Future value, compounded monthly.', 'Grow a figure at a rate'],
 };
 const PARAMS = {
   round_up: { operands: base.operands, places: { type: 'integer', enum: [1, 100, 1000] }, label: base.label },
@@ -316,8 +316,8 @@ export const operations = Object.keys(OPS).map(name => ({
 
 // Section 4 rules 2 to 6.
 export const rules = [
-  'Write every figure as digits, get derived figures only from calculate, and state no figure without a tool source.',
-  'Write each figure exactly as its quote field gives it (for a stored figure, its {f:key} token). Money leaving the household is quoted unsigned with a word that says so ("spent", "paid"). For a different form, use calculate with refs and named assumptions (round_up, monthly, subtract).',
+  'Write every figure as digits, never spelled-out number words. Call calculate for every sum, difference, ratio or change; never compute a figure yourself or state one without a tool source.',
+  'Copy each returned quote exactly. Money leaving the household is quoted unsigned with a word that says so ("spent", "paid"). For a different form, use calculate with refs and named assumptions (round_up, monthly, subtract).',
   "Copy a figure's ref field to reference it; do not compose refs by hand. Pass the same arguments when you re-run a call so the figure is the same.",
   "State every assumption with its name, value and source: the owner said it (owner, with the owner's words as evidence), a saved preference (preference, with its id), a stored fact (fact, with its key), or the operation's default (default). Pass defaults by omitting the argument, and name them in the answer. Never mark a value as the owner's when the owner did not say it; when a tool needs a value nobody stated (a cost basis, a tax rate), leave it out, report the unavailable figure, and ask.",
   'Report data gaps. For each gap in a result, say what is missing and its size when the gap gives an amount or count. Never fill a gap with an estimate. Offer the fix the gap implies (a Confirm item, an import, a fact to record).',

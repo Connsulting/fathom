@@ -107,8 +107,8 @@ test('the assembled rule text holds section 4 rules 2 to 6', async () => {
   assert.equal(rules.length, 5);
   for (const line of rules) assert.ok(instructions.includes(line), line);
   const [arithmetic, quoting, refs, assumptions, gaps] = rules;
-  assert.match(arithmetic, /digits.*derived figures only from calculate.*no figure without a tool source/);
-  assert.match(quoting, /quote.*\{f:key\}.*calculate with refs and named assumptions/);
+  assert.match(arithmetic, /digits.*Call calculate for every sum, difference, ratio or change.*without a tool source/);
+  assert.match(quoting, /quote exactly.*calculate with refs and named assumptions/);
   assert.match(quoting, /unsigned.*spent.*paid/);
   assert.match(refs, /Copy a figure's ref field.*do not compose refs by hand.*same arguments/);
   assert.match(assumptions, /name, value and source.*owner.*evidence.*preference.*fact.*default.*Never mark a value as the owner's/);

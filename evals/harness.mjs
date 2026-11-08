@@ -221,7 +221,12 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
       rows.push(result);
       if (c.storedGoal) db.prepare('DELETE FROM goals WHERE id = ?').run(goalId);
     }
-    const scorecard = { version: 2, live, generatedAt: new Date().toISOString(), maxUsd, costUsd: ledger.costUsd,
+    const correctionTriggers = {};
+    for (const row of rows) for (const turn of row.turns) {
+      for (const kind of new Set(turn.discipline?.triggeredBy ?? []))
+        correctionTriggers[kind] = (correctionTriggers[kind] ?? 0) + 1;
+    }
+    const scorecard = { correctionTriggers, version: 2, live, generatedAt: new Date().toISOString(), maxUsd, costUsd: ledger.costUsd,
       reservedUsd: ledger.reservedUsd, outstandingReservedUsd: ledger.outstandingReservedUsd,
       releasedUsd: rounded(ledger.reservedUsd - ledger.costUsd),
       stopped: ledger.state.stopped ?? (rows.some(r => r.status === 'budget-stopped') ? 'budget' : null), selected: cases.length,
@@ -236,6 +241,7 @@ export async function writeScorecard(dir, scorecard) {
   await mkdir(dir, { recursive: true });
   const lines = ['# Ask evals', '', `Tier: ${scorecard.live ? 'live' : 'scripted'}. Cost: $${scorecard.costUsd.toFixed(6)}. Stop: ${scorecard.stopped ?? 'none'}.`, '', `Reserved (cumulative, reused after each round): $${scorecard.reservedUsd.toFixed(6)}. Spent: $${scorecard.costUsd.toFixed(6)}. Outstanding: $${scorecard.outstandingReservedUsd.toFixed(6)}.`, '',
     `Failed superseded drafts (report only): ${scorecard.failedDrafts ?? 0}.`, '',
+    `Correction triggers (answers per kind): ${Object.entries(scorecard.correctionTriggers ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([kind, count]) => `${kind}: ${count}`).join(', ') || 'none'}.`, '',
     '| Case | Result | Tools called / required | unsourced / self-computed / rounded / spelled_out / context-only | Words / budget | Actual cost | Reserved | Missing operations | Failing checks | Reason |',
     '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |'];
   const kindCount = (grade, kind) => (grade?.[kind === 'self-computed' ? 'selfComputed' : kind === 'spelled_out' ? 'spelledOut' : kind === 'context-only' ? 'contextOnly' : kind] ?? []).length;
