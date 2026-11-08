@@ -256,7 +256,7 @@ export async function expectH1(page, text) {
 }
 
 // Open a rec from a page link (in-app entry, pushes one history entry). `scope` is the list the
-// link lives in: '.h-rows' on Plan, '.h-gnext' (a goal card's next action or a
+// link lives in: '.h-rows' on Plan, '.h-gnext' (a
 // housekeeping row) on Home.
 export async function openRecFromPage(page, id, scope = '.h-rows') {
   await page.locator(`${scope} a[data-go="rec"][data-id="${id}"]`).first().click();
@@ -334,7 +334,11 @@ export async function fetchScenario(request) {
   return res.json();
 }
 
-// Home and the pace board are headed by the pace rollup headline, which the server computes.
+// Home is headed by its verdict, or, before any goal has a target, by how many goals have a
+// suggested target or still need one. getByRole matches the pattern against the h1's name.
+export const homeHeading = async () => /^(You are covered through Dec 31|\d+ things? needs? you before Dec 31|Suggested targets for \d+ goals?|\d+ goals? needs? a target)$/;
+
+// The pace board is headed by the pace rollup headline, which the server computes.
 export async function paceHeadline(request) {
   return (await fetchScenario(request)).pace.rollup.headline;
 }
@@ -348,7 +352,7 @@ export async function headingFor(heading, request) {
 // Main routes with their h1 text (rec and per-pack routes are handled by the specs).
 export function mainRoutes() {
   return [
-    ['home', paceHeadline],
+    ['home', homeHeading],
     ['pace', paceHeadline],
     ['plan', 'Everything on the calendar'],
     ['ask', ASK_HELLO],
