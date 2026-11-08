@@ -24,14 +24,12 @@
 //
 // Prints each file written; exits nonzero on any failure. The child server is always stopped.
 
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, statSync } from 'node:fs';
-import { createConnection } from 'node:net';
-import { dirname, join, relative, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { dirname, join, relative } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { chromium } from '@playwright/test';
+import { api, fail, installCleanup, parseArgs, parsePort, repo, resetDemo, startDemo, stopServer } from './demo-server.mjs';
 
-const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const DATA = '.e2e-data-shots';
 const IMAGES = join(repo, 'docs', 'images');
 const ARCH_HTML = join(repo, 'docs', 'architecture', 'fathom-architecture.html');
@@ -50,101 +48,7 @@ const STILL_CSS = `
   ::-webkit-scrollbar { display: none !important; }
 `;
 
-function fail(msg) {
-  throw new Error(msg);
-}
-
-function parsePort() {
-  const args = process.argv.slice(2);
-  let raw = process.env.SCREENSHOT_PORT || '';
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--port') raw = args[++i] ?? '';
-    else if (args[i].startsWith('--port=')) raw = args[i].slice('--port='.length);
-    else fail(`unknown argument ${args[i]}; usage: node scripts/screenshots.mjs --port <n>`);
-  }
-  if (!raw) fail('a port is required: node scripts/screenshots.mjs --port <n> (or SCREENSHOT_PORT=<n>)');
-  const port = Number(raw);
-  if (!Number.isInteger(port) || port < 1024 || port > 65535) fail(`port must be an integer from 1024 to 65535, got ${raw}`);
-  return port;
-}
-
-function portInUse(port) {
-  return new Promise((res) => {
-    const sock = createConnection({ host: '127.0.0.1', port });
-    sock.once('connect', () => { sock.destroy(); res(true); });
-    sock.once('error', () => res(false));
-  });
-}
-
-/* ---------- demo server ---------- */
-
-let server = null;
-
-function startServer(port) {
-  const env = {};
-  for (const [k, v] of Object.entries(process.env)) {
-    // Nothing from the caller's Fathom or e2e setup leaks in: engine, clock, email and smoke
-    // targets all take their demo defaults.
-    if (/^(FATHOM_|E2E_)/.test(k) || k === 'BASE_URL') continue;
-    env[k] = v;
-  }
-  Object.assign(env, { E2E_DATA: DATA, FATHOM_PORT: String(port), FATHOM_FAKE_STREAM_MS: '0' });
-  server = spawn(process.execPath, [join(repo, 'e2e', 'serve.mjs')], {
-    cwd: repo,
-    env,
-    detached: true,
-    stdio: ['ignore', 'pipe', 'pipe']
-  });
-  let log = '';
-  const keep = (b) => { log = (log + b.toString()).slice(-4000); };
-  server.stdout.on('data', keep);
-  server.stderr.on('data', keep);
-  server.log = () => log;
-  return server;
-}
-
-function serverAlive() {
-  return server && server.exitCode === null && server.signalCode === null;
-}
-
-function killGroup(sig) {
-  try { process.kill(-server.pid, sig); } catch { /* already gone */ }
-}
-
-async function stopServer() {
-  if (!server) return;
-  if (serverAlive()) {
-    const exited = new Promise((res) => server.once('exit', res));
-    killGroup('SIGTERM');
-    const t = setTimeout(() => killGroup('SIGKILL'), 5000);
-    await exited;
-    clearTimeout(t);
-  }
-  // serve.mjs runs the real server as its own child; make sure nothing of the group survives.
-  killGroup('SIGKILL');
-  server = null;
-}
-
-async function waitHealthy(base) {
-  const until = Date.now() + 120_000;
-  while (Date.now() < until) {
-    if (!serverAlive()) fail(`demo server exited early:\n${server ? server.log() : ''}`);
-    try {
-      const res = await fetch(`${base}/healthz`);
-      if (res.ok) return;
-    } catch { /* not up yet */ }
-    await new Promise((r) => setTimeout(r, 250));
-  }
-  fail(`demo server did not answer /healthz within 120s:\n${server.log()}`);
-}
-
-async function api(base, path, opts = {}) {
-  const res = await fetch(`${base}${path}`, opts);
-  if (!res.ok) fail(`${opts.method || 'GET'} ${path} returned ${res.status}`);
-  return res.json();
-}
-
-const resetDemo = (base) => api(base, '/api/demo/reset', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+const CLI = { portEnv: 'SCREENSHOT_PORT', usage: 'node scripts/screenshots.mjs --port <n>' };
 
 /* ---------- page helpers ---------- */
 
@@ -313,17 +217,8 @@ async function architecture(browser) {
 /* ---------- main ---------- */
 
 async function main() {
-  const port = parsePort();
-  if (await portInUse(port)) fail(`port ${port} is already in use; stop that server or pick another port`);
-  const base = `http://127.0.0.1:${port}`;
-  startServer(port);
-  await waitHealthy(base);
-
-  const { live } = await api(base, '/api/scenario');
-  if (!live || live.mode !== 'demo') fail('the server is not in demo mode');
-  // A fresh demo forces onboarding; e2e/serve.mjs seeds the finished November demo, so this
-  // only trips if that changes.
-  if (live.demo !== 'november') fail(`expected the November demo, got ${live.demo} (onboarding step ${live.onboardStep})`);
+  const port = parsePort(parseArgs(process.argv.slice(2), CLI).port, CLI);
+  const base = await startDemo(port, DATA);
 
   const browser = await chromium.launch({ headless: true });
   try {
@@ -340,18 +235,7 @@ async function main() {
   console.log(`${written.length} image${written.length === 1 ? '' : 's'} written; check each one before committing.`);
 }
 
-let exiting = false;
-for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
-  process.on(sig, async () => {
-    if (exiting) return;
-    exiting = true;
-    console.error(`screenshots: ${sig}, stopping the demo server`);
-    await stopServer();
-    process.exit(130);
-  });
-}
-// Last resort if the process exits some other way: the group kill is synchronous.
-process.on('exit', () => { if (server) killGroup('SIGKILL'); });
+installCleanup('screenshots');
 
 try {
   await main();

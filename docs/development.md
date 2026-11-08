@@ -194,6 +194,19 @@ taken), writes the images to
 [`architecture/fathom-architecture.html`](architecture/fathom-architecture.html). Rerun it after UI
 changes, and check every image shows only synthetic demo data before committing.
 
+The demo tour at the top of the README (`images/demo.gif` and `images/demo.mp4`) comes from
+[`scripts/demo-gif.mjs`](../scripts/demo-gif.mjs):
+
+```bash
+npm run demo:gif -- --port 5330            # or DEMO_GIF_PORT=5330
+node scripts/demo-gif.mjs --check          # size, width, fps and duration of the committed files
+```
+
+It starts the demo build the same way, resets the demo, drives the real UI with Playwright, captures
+frames over the Chrome DevTools screencast and encodes both files with the dev-only ffmpeg from
+`@ffmpeg-installer/ffmpeg`. It is not part of the e2e suite. Re-record it after UI changes that touch
+the tour, and look at frames from every beat before committing.
+
 ## Docker
 
 ```bash
