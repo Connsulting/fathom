@@ -88,7 +88,7 @@ import { escapeUserText, resolveTokens } from '../shared/tokens.mjs';
 import { parseJson } from '../store/db.mjs';
 import { findQuestion, matchQuestion, recForKey, isThreadKey } from './questions.mjs';
 import { fakeAnswerScript } from './fake-answers.mjs';
-import { stripSources, listMarkerSpans, markdownBlocks } from '../shared/answer-text.mjs';
+import { stripSources, listMarkerSpans, markdownBlocks, wrapBlocks, plainAnswerText } from '../shared/answer-text.mjs';
 import { resolveRefs } from './context-refs.mjs';
 import { DEMO_LIMIT_MESSAGE } from '../public-demo/control.mjs';
 import { ANSWER_MAX_WORDS } from '../shared/answer-contract.mjs';
@@ -143,7 +143,22 @@ function correctiveTurn(kinds) {
   if (kinds.some(k => k === 'figures.unsourced' || k === 'figures.context-only'))
     corrections.push('Drop any figure no tool returned, or call a tool to source it.');
   return 'Answer again to correct these violations: ' + corrections.join(' ') +
-    ' Write stored figures as {f:key} tokens from household.figures.';
+    ' Write stored figures as {f:key} tokens from household.figures. Keep any proposal sentence and its confirmation offer in the answer.';
+}
+
+const PROPOSAL_SUBJECTS = {
+  update_goal: /\bgoals?\b/i,
+  update_preferences: /\b(?:preferences?|memor(?:y|ies)|remember)\b/i,
+  answer: /\b(?:facts?|answers?|dates?|assumptions?)\b/i,
+  act_on_recommendation: /\b(?:recommendations?|decisions?|plan items?)\b/i,
+};
+function proposalStillOffered(text, pending) {
+  const plain = plainAnswerText(text);
+  if (/^(?:please )?(?:confirm|approve)(?: (?:it|this|the proposal|the change))? below[.!]?$/i.test(plain)) return true;
+  const title = pending.args?.title;
+  const refers = /\bproposal\b/i.test(plain) || PROPOSAL_SUBJECTS[pending.tool]?.test(plain)
+    || (typeof title === 'string' && title.trim() && plain.toLowerCase().includes(title.toLowerCase()));
+  return !!refers && /\b(?:confirm|approve|propose|proposed)\b|\b(?:I can|Would you like me to|Shall I)\b[^.!?\n]*\b(?:create|save|add|edit|update|change|set|remember|mark|start|complete|dismiss|snooze|reopen)\b/i.test(plain);
 }
 
 // ---------------------------------------------------------------- prompt assembly
@@ -413,6 +428,10 @@ export function groundAnswer(text, { scenario, toolResults = [], data = [], data
   // Ordered-list markers ("1. ") are list numbering, not figures. The mask keeps the line a list
   // item (a bullet, then spaces of equal length) so grounding's structural count sees the list.
   let unlisted = masked;
+  const masks = new Set(toolResults.filter(r => !r.isError && r.name === 'accounts')
+    .flatMap(r => rowsOf(r.result).map(row => String(row.mask ?? ''))));
+  unlisted = unlisted.replace(/\b(?:account|card)\s+(?:ending|ends)(?:\s+(?:in|with))?\s+(\d{4})\b(?!\s*(?:%|percent\b|dollars?\b))/gi,
+    (match, mask) => masks.has(mask) ? match.slice(0, -mask.length) + ' '.repeat(mask.length) : match);
   for (const m of listMarkerSpans(masked)) {
     unlisted = unlisted.slice(0, m.index) + '•' + ' '.repeat(m.length - 1) + unlisted.slice(m.index + m.length);
   }
@@ -537,6 +556,14 @@ export function renderAnswer(text, violations = [], literals = []) {
   }
   html += escapeKeepingTokens(prose.slice(at));
   return markdownBlocks(html);
+}
+
+export function checkAnswerForDelivery(text, { scenario, toolResults = [], data = [], grounding, moreDetail = false }) {
+  const figures = Object.fromEntries(Object.entries(scenario.fig || {}).map(([key, f]) => [key, f.v]));
+  const contextReads = data.map(result => ({ name: 'context', args: {}, result: evidence(result) }));
+  return checkAnswerDiscipline(text, [...toolResults, ...contextReads], { figures,
+    contextNumbers: Object.values(figures).filter(Number.isFinite), moreDetail, grounding,
+    renderedHtml: wrapBlocks(renderAnswer(text, grounding.violations, grounding.literals)) });
 }
 
 // ---------------------------------------------------------------- progress labels
@@ -712,8 +739,8 @@ export function createLiveAnswerer({ engine, packs, root, onRead } = {}) {
     // References (ids and tool hints) are for the model only and never ground a number.
     const entryBodies = active.flatMap(({ pack }) => pack.entries.map(e => groundingBody(e.body)));
     const { references: _references, ...groundedContext } = context || {};
-    const data = [summary, context ? groundedContext : null, entryBodies];
-    const dataLabels = ['household summary', 'conversation context', 'knowledge pack entries'];
+    const data = [summary, context ? groundedContext : null, entryBodies, question];
+    const dataLabels = ['household summary', 'conversation context', 'knowledge pack entries', 'what you told Fathom'];
     const resultsOf = res => (res && Array.isArray(res.toolResults) ? res.toolResults : []);
     const textOf = res => stripSources(res.text);
     // Account labels for transaction literals, read the way accounts.list names them, once.
@@ -727,15 +754,9 @@ export function createLiveAnswerer({ engine, packs, root, onRead } = {}) {
     };
     const ground = async (res, toolResults) => groundAnswer(textOf(res),
       { scenario, toolResults, data, dataLabels, accountLabels: await labelsFor(toolResults) });
-    const figures = Object.fromEntries(Object.entries(scenario.fig || {}).map(([key, f]) => [key, f.v]));
     const moreDetail = /\b(?:(?:more|greater) detail|in detail|detailed (?:answer|explanation|breakdown)|(?:explain|walk me through) (?:it |this )?(?:fully|thoroughly|step by step))\b/i.test(question);
-    const disciplineOf = (res, toolResults, g) => {
-      const check = checkAnswerDiscipline(textOf(res), [...sourceReads, ...toolResults],
-        { figures, contextNumbers: Object.values(figures).filter(Number.isFinite), moreDetail });
-      if (g.violations.some(v => !v.date) && !check.violations.some(k => k.startsWith('figures.')))
-        check.violations.push('figures.unsourced');
-      return check;
-    };
+    const disciplineOf = (res, toolResults, grounding) => checkAnswerForDelivery(textOf(res),
+      { scenario, toolResults: [...sourceReads, ...toolResults], data, grounding, moreDetail });
 
     const actionReply = reply => actionContext?.turnId ? { ...reply, provenance: { ...reply.provenance, actionTurn: actionContext.turnId } } : reply;
     let first;
@@ -780,6 +801,8 @@ export function createLiveAnswerer({ engine, packs, root, onRead } = {}) {
 
     const recReads = toolResults.filter(r => !r.isError && r.name === 'recommendations' && r.args?.operation === 'detail').map(r => r.args && r.args.id);
     const text = textOf(chosen);
+    if (retried && pendingAction && !proposalStillOffered(text, pendingAction))
+      pendingAction = null;
     const paragraphs = renderAnswer(text, grounding.violations, grounding.literals);
     if (!paragraphs.length) return noticeReply(NOTICES.modelError);
     const lower = text.toLowerCase();

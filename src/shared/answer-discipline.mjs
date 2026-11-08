@@ -1,4 +1,6 @@
 import { ANSWER_MAX_WORDS } from './answer-contract.mjs';
+import { plainAnswerText, markdownBlocks, wrapBlocks } from './answer-text.mjs';
+import { escapeUserText } from './tokens.mjs';
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const small = { zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9,
@@ -97,7 +99,7 @@ function droppedCents(n, v) {
   return magnitudes(v).some(t => Math.trunc(t) === n.value && Math.abs(t - n.value) > 0.0050001);
 }
 function listCount(n, calls) {
-  if (!n.words || n.money || n.percent || n.value < 0 || n.value > 20 || !Number.isInteger(n.value)) return false;
+  if (n.money || n.percent || n.abbrev || n.scale !== 1 || n.value < 0 || n.value > 20 || !Number.isInteger(n.value)) return false;
   return calls.some(c => !c.isError && arrayLengths(c.result).includes(n.value));
 }
 function abbrevRounded(n, numbers) {
@@ -137,7 +139,7 @@ export function gradeFigures(text, calls, { figures = {}, contextNumbers = [] } 
   });
   for (const n of numericFigures(cleaned)) {
     const exact = numbers.some(v => exactHit(n, v) || (!n.percent && exactHit(n, Math.abs(v))));
-    if (n.words ? listCount(n, calls) : exact || numbers.some(v => droppedCents(n, v))) continue;
+    if (listCount(n, calls) || (!n.words && (exact || numbers.some(v => droppedCents(n, v))))) continue;
     let kind = 'unsourced';
     let arithmetic = null;
     if (n.words) kind = 'spelled_out';
@@ -176,9 +178,19 @@ export function figureViolationKinds(grade) {
     .filter(([key]) => grade[key]?.length).map(([, name]) => `figures.${name}`);
 }
 
-export function checkAnswerDiscipline(text, calls, { maxWords = ANSWER_MAX_WORDS, moreDetail = false, ...options } = {}) {
+export function checkAnswerDiscipline(text, calls, { maxWords = ANSWER_MAX_WORDS, moreDetail = false, grounding, renderedHtml, ...options } = {}) {
   const figures = gradeFigures(text, calls, options);
-  const length = gradeLength(text, maxWords);
+  if (grounding) {
+    const flagged = new Set(grounding.violations.filter(v => !v.date).map(v => v.text));
+    for (const key of ['unsourced', 'selfComputed', 'rounded', 'spelledOut', 'contextOnly']) {
+      figures[key] = figures[key].filter(n => n.money || n.percent || n.abbrev || n.scale > 1
+        || /\b(?:hundred|thousand|million|billion)\b/i.test(n.text) || /^\{(?:f|fk):/.test(n.text) || flagged.has(n.text));
+    }
+    figures.ok = figureViolationKinds(figures).length === 0;
+  }
+  const html = renderedHtml ?? wrapBlocks(markdownBlocks(escapeUserText(text)));
+  const length = gradeLength(plainAnswerText(html), maxWords);
   const violations = [...figureViolationKinds(figures), ...(!length.ok && !moreDetail ? ['length'] : [])];
+  if (grounding?.violations.some(v => !v.date) && !violations.some(k => k.startsWith('figures.'))) violations.unshift('figures.unsourced');
   return { ok: violations.length === 0, violations, figures, length };
 }

@@ -1732,13 +1732,18 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    matches a date in a same-turn tool row or in the context data is sourced to it (a stated year
    must match). Every remaining violation, dates included, is stored in place as
    `<span class="fx-checking fx-unchecked" title="Not checked against your data">`. Ask and the eval
-   grader share figure and word-count checks in `src/shared/answer-discipline.mjs`. Any violation
+   grader share figure and word-count checks in `src/shared/answer-discipline.mjs`. Ask uses the
+   same sanitized prompt evidence as grounding, including pack bodies and the owner's stated
+   quantities. Its figure gate checks quantity-marked figures and anything grounding flags;
+   ordinary metadata and structural counts do not cause a correction. Word counts use the same
+   plain rendered text as the eval. Any remaining violation
    triggers one corrective user turn: shorten an over-limit answer unless the owner requested
    detail, write figures as digits, get derived figures from calculate, and use exact tool values.
    The stream and work block show "Revised to remove N unchecked figures" before the reset when
    figures are unchecked, or "Revised to follow the answer rules" otherwise, never the earlier
    draft. `provenance.grounding.revised` is N when nonzero. The corrected answer is delivered even
-   if violations remain, with kinds only in `provenance.discipline.violations`. If that call fails, the answer is the matching
+   if violations remain, with kinds only in `provenance.discipline.violations`. The correction keeps
+   any proposal sentence; a proposal absent from the delivered answer is cleared. If that call fails, the answer is the matching
    notice (engine off, over the cap, model error), never the first ungrounded text; the spend the
    engine recorded for each completed round stays in the ledger. Answers stored before this rule
    keep their `.fx-unverified` spans and draft notes.
