@@ -1,3 +1,4 @@
+import { seedHistoricalRows } from '../helpers/historical-import.mjs';
 // The planner on ingest's contract (plan Revision 6: MGI1, MGI2, MGI5; driver decisions D9 to D12).
 // Every store is built by test/helpers/real-store.mjs, so every W-2, paystub, K-1 and form1040 goes
 // through ingest's own extraction, pipeline and confirm code (a scripted engine plays the model and
@@ -34,7 +35,7 @@ import { reasonText } from '../../src/jobs/triggers/missing-data.mjs';
 import { nameKey } from '../../src/ingest/extract.mjs';
 import {
   scratch, addFact, addFile, addNotes, addPayroll, factRow, contentValue, answerPending, figureRow, plannerFigures, recRow, activeRecIds, parseJson, pnlWorkbook,
-  SCORP, SOLE_PROP, INST, MASKS,
+  SCORP, SOLE_PROP, INST, MASKS, householdOf,
 } from '../helpers/real-store.mjs';
 
 const NOW = '2026-11-05';
@@ -269,7 +270,9 @@ test('MGI1: a household employer is matched by name or alias', async () => {
   assertBlocked(unmatched.db, unmatched.info, 'household_employer_unmatched', ['agi.est']);
 
   const db = await S.store({ variant: { payroll: [nwLlcW2()] } });
-  await addFile(db, pnlWorkbook([{ name: NW_LLC, income: 0, expenses: { Software: 10 } }], [], { months: 1 }));
+  await seedHistoricalRows({ db, household: householdOf(db) }, { name: 'historical-alias.xlsx', bytes: Buffer.from('synthetic historical alias') }, [
+    { kind: 'pnl_line', entity: NW_LLC, period: '2026-01', category: 'Software', amount: -10, locator: { sheet: NW_LLC, cells: ['C3'] } },
+  ], { parser: 'entity-pnl', sourceKind: 'pnl' });
   assert.equal(answerPending(db, 'entity_alias', `entity:${SCORP.name}`).length, 1, 'ingest asks whether the alias is the S corp');
   const { info } = await replan(db);
   assertNotBlocked(info, 'household_employer_unmatched');
@@ -771,8 +774,8 @@ test('MGI2: withholding and estimates are each counted once', async () => {
   near(fedPaid.v, 18000, 'federal estimates');
   assert.equal(fedPaid.label, 'Federal estimated payments logged this year');
   assert.equal(fedPaid.src, 'tax-payments');
-  assert.ok(assumptionsOf(fedPaid).includes('paid_rows_as_estimates'), `noted: ${assumptionsOf(fedPaid)}`);
-  assert.deepEqual([...fedPaid.locator.rows.ids].sort((a, b) => a - b), ids('federal', 'paid'));
+  assert.ok(!assumptionsOf(fedPaid).includes('paid_rows_as_estimates'), 'explicit estimates need no historical-kind assumption');
+  assert.deepEqual([...fedPaid.locator.rows.ids].sort((a, b) => a - b), ids('federal', 'estimate'));
 
   const fedW = fig(db, 'tax.fed.withheld');
   near(fedW.v, 9000, 'federal withholding');
@@ -891,6 +894,19 @@ test('MGI2: an unconfirmed sheet year blocks estimates', async () => {
 
   const asTaxYear = await planned({ taxPayments: JAN_APR, taxYear: 'tax_year' });
   near(fig(asTaxYear.db, 'tax.fed.paid').v, 12000, 'both rows count toward 2026');
+});
+
+test('MGI2: historical paid rows and explicit estimates count once together', async () => {
+  const classifyPayments = await paymentsExport('classifyPayments');
+  const data = { taxPayments: ['paid', 'estimate', 'withholding'].map((kind, i) => ({
+    id: i + 1, kind, amount: 100, jurisdiction: 'federal', date: '2026-04-30', recipient: 'owner', tax_year_basis: 'confirmed_tax_year',
+  })) };
+  const out = classifyPayments(data, { persons: ['owner'], f: 'single', isVa: true });
+  assert.equal(out.fed.paid.blocked, null);
+  assert.equal(out.fed.paid.total, 200);
+  assert.deepEqual(out.fed.paid.ids, [1, 2]);
+  assert.equal(out.fed.withheld.total, 100);
+  assert.deepEqual(out.fed.withheld.ids, [3]);
 });
 
 test('MGI2: an unknown payment kind blocks', async () => {

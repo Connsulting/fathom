@@ -345,7 +345,7 @@ export function taxPaymentsWorkbook({ year = TAX_YEAR, fed = SYNTH.fedPaid, stat
     const paid = months.includes(i + 1);
     rows.push([label, paid ? fed : null, paid ? state : null]);
   });
-  const proposalRows = months.flatMap(m => [['federal', fed], ['state', state]].map(([jurisdiction, amount]) => ({ target: 'tax_payment', kind: 'estimate', status: 'paid', datePrecision: 'month',
+  const proposalRows = months.flatMap(m => [['federal', fed], ['state', state]].filter(([, amount]) => amount != null).map(([jurisdiction, amount]) => ({ target: 'tax_payment', kind: 'estimate', status: 'paid', datePrecision: 'month',
     fields: { jurisdiction, payer: 'Owner', recipient: 'you', amount, taxYear: year, taxYearBasis: 'sheet_label', paymentDate: `${year}-${pad(m)}-${lastDay(year, m)}` } })));
   return { name: 'Estimated taxes.xlsx', mime: XLSX_MIME, bytes: writeXlsx([{ name: String(year), rows }]), proposalRows };
 }

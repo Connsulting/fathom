@@ -119,7 +119,7 @@ export function validateImport(ctx, proposal, source) {
       if (!validateExtraction(row.docType, f)) errors.push('invalid_document');
       else {
         const entities = ctx.db.prepare('SELECT entity AS name FROM pnl_lines UNION SELECT entity AS name FROM entity_aliases').all().map(r => r.name);
-        const converted = toRows(row.docType, f, { fileId: source.fileId, households: { entities }, warnings: [] });
+        const converted = toRows(row.docType, { ...f, confidence: 1 }, { fileId: source.fileId, households: { entities }, warnings: [] });
         const period = periodOf(row.docType, f);
         rows.push(...converted.map(r => ({ ...r, locator: { ...locator, document: row.docType, ...(r.locator?.field ? { field: r.locator.field } : {}) },
           ...(r.kind === 'document' ? { asOf: period.to } : {}) })));

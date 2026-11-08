@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { isoDate, number, cents, institution, text as decodeText } from './format.mjs';
+import { isoDate, number, cents, institution } from './format.mjs';
 import { normalizeName } from './confirm.mjs';
 
 export const DOC_TYPES = Object.freeze(['paystub', 'w2', '1099-int', '1099-div', '1099-b', '1099-nec', '1099-misc', 'k1', 'form1040', 'statement', 'plan', 'notes', 'other']);
@@ -301,15 +301,4 @@ export function periodOf(docType, x) {
   if (SOURCE_KIND[docType] === 'tax_doc') return { from: `${x.taxYear}-01-01`, to: `${x.taxYear}-12-31` };
   if (docType === 'statement') return { from: null, to: x.periodEnd };
   return { from: null, to: null };
-}
-
-export const isPdf = (file) => /\.pdf$/i.test(file.name ?? '') || /application\/pdf/i.test(file.mime ?? '')
-  || (file.bytes?.length >= 5 && Buffer.from(file.bytes.subarray(0, 5)).toString('latin1') === '%PDF-');
-
-// Decoded UTF-8 text without control characters, or null.
-export function plainText(file) {
-  try {
-    const text = decodeText(file);
-    return /[\x00-\x08\x0B\x0E-\x1F\x7F]/.test(text) ? null : text;
-  } catch { return null; }
 }

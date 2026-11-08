@@ -1,11 +1,6 @@
 import { CATEGORY_TABLES } from '../categories/resolve.mjs';
 import { kindOf, accountMask, compatibleKind, sameInstitution } from './account-match.mjs';
-// Ingest pipeline: store each upload encrypted, route it to a parser, a learned column mapping or
-// model extraction, and persist its rows with provenance in one transaction per file: accounts by
-// identity, deduplication, revisions and supersede by coverage, confirm questions, sources and
-// account figures. Deterministic code decides every stored value. Nothing here logs file contents
-// or values; a failure logs an error code only. File text is never stored: a note is kept as a
-// reference to its encrypted file, and an input past the parse limits is recorded as too_large.
+// Store encrypted uploads, stage nonstandard proposals, and persist deterministic rows with provenance.
 
 import { createHash } from 'node:crypto';
 import { tx, parseJson } from '../store/db.mjs';
@@ -253,7 +248,6 @@ export function persistImport(db, fileId, file, plan, opts) {
     coverage.push(...groups.values());
   }
   ctx.coverage = coverage;
-  ctx.incomplete = { pnl: () => false, tax: new Set() };
 
   db.prepare(`UPDATE files SET parser = ?, source_kind = ?, source_id = ?, header_signature = coalesce(?, header_signature),
               period_from = ?, period_to = ?, coverage = ? WHERE id = ?`)

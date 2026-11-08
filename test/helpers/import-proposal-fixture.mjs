@@ -11,7 +11,7 @@ export async function importProposedRows(store, rows, { name = 'synthetic.xlsx',
   const leaves = [], shared = new Map();
   function cite(value, key) {
     if (Array.isArray(value)) return value.map(v => cite(v, key));
-    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([k, v]) => k !== 'confidence' && v !== undefined && v !== null).map(([k, v]) => [k, cite(v, k)]));
+    if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).filter(([k, v]) => k !== 'confidence' && v !== undefined && v !== null && v !== '').map(([k, v]) => [k, cite(v, k)]));
     const token = JSON.stringify(value);
     let id = !['amount', 'quantity', 'value'].includes(key) ? shared.get(token) : null;
     if (!id) { id = 'r' + leaves.length; leaves.push(value); if (!['amount', 'quantity', 'value'].includes(key)) shared.set(token, id); }
