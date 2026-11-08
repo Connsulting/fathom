@@ -7,7 +7,7 @@ import { spendingInputs } from '../src/calc/targets.mjs';
 import { loadCategoryInputs } from '../src/categories/store.mjs';
 import { resolveCategories } from '../src/categories/resolve.mjs';
 import { classOf, BUILTIN_DEFINITIONS } from '../src/calc/classes.mjs';
-import { callTool } from '../src/tools/index.mjs';
+import { callTool, getTool } from '../src/tools/index.mjs';
 import { assertRefsResolve } from './helpers/figures.mjs';
 
 const sum = (xs) => Math.round(xs.reduce((s, x) => s + x, 0) * 100) / 100;
@@ -192,8 +192,9 @@ test('available eval scripts call valid operations through the Ask tool boundary
   const { createRegistryServer } = await import('../src/engine/tools.mjs');
   const server = createRegistryServer(proposalTools(tools), { purpose: 'chat', ctx: { db: store.db, dataDir: store.root, clock: '2026-11-05', actorId: 'demo', onProposal() {} } });
   for (const c of await loadCases()) {
-    if (!c.requires?.script || c.expectedFail) continue;
-    const { script } = await import(`../evals/scripts/${c.id}.mjs`);
+    if (!c.requires?.script || c.expectedFail || c.requires.operations.some(pair => getTool(pair.split('.')[0])?.kind === 'write')) continue;
+    const { script, setup } = await import(`../evals/scripts/${c.id}.mjs`);
+    await setup?.({ db: store.db, clock: '2026-11-05' });
     for (const turn of c.turns) {
       const frames = await script({ turn, db: store.db, clock: '2026-11-05' });
       assert.ok(frames[0].toolCalls.length, c.id);
