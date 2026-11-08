@@ -120,7 +120,7 @@ export const operations = [
     'This period against that one',
     (args, ctx) => compare(readInput(ctx), args, resolveDefinition(ctx.db, args.definition)),
   ),
-  op('definitions', {}, 'Built-in spending selections.', 'Named spending definitions', () => spendingDefinitions()),
+  op('definitions', {}, 'Built-in and saved selections.', 'Named spending definitions', (args, ctx) => spendingDefinitions(ctx.db)),
   op(
     'cash_flow',
     { ...periodParams, scope },

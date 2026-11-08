@@ -261,8 +261,16 @@ required `operation` enum. The shared schema contains all parameters, and dispat
 parameter unused by the selected operation or a missing required parameter as `bad_input`.
 Each operation declares its scope, summary, routing line and API routes. Headers in
 `src/tools/tools.mjs` own purpose, progress and source labels. Generated routing and rules are
-shared by Ask and MCP instructions. `getTool`, `callTool`, `tools`, `parity`, `CAPABILITIES` and
-`instructions` expose the registry. There are no retired-name aliases.
+shared by Ask and MCP instructions, except for Ask-only routing and rules. `getTool`, `callTool`, `tools`, `parity`, `CAPABILITIES` and
+`instructions` expose the registry; `mcpInstructions` excludes Ask-only rules. There are no retired-name aliases.
+
+Ask offers the read-only `show` tool with `chart`, `table`, `compare` and `timeline` operations.
+Its sources must match successful reads from this answer, including a corrective retry's earlier
+attempt. A shared turn collector supplies those results to deterministic block validation and
+snapshot building. The message stores `provenance.blocks` and `blockNotes`; placement markers
+are removed before grounding and become paragraph offsets. Reopening draws stored snapshots
+without re-reading tools. Streaming markers show a preparation placeholder. MCP never lists or
+calls `show`, which is not referenceable by calculations or blocks.
 
 The twelve registered tools and their operations are shown below. Dot notation means a call to
 the tool before the dot with the `operation` after it; it is not a dotted MCP tool name.
@@ -393,8 +401,8 @@ secrets are read there.
 | `FATHOM_EMAIL_TRANSPORT` | `dev` | `dev`, `smtp`, `resend`, `postmark` or `agentmail` (see Email). |
 | `FATHOM_EMAIL_FROM` | unset (`dev` uses `fathom@example.invalid`) | Sender address; for `agentmail` the inbox id. Not with `FATHOM_EMAIL_FROM_FILE`. |
 | `FATHOM_EMAIL_FROM_FILE` | unset | Path to a file holding the sender address. Not with `FATHOM_EMAIL_FROM`. |
-| `FATHOM_EMAIL_TO` | unset (`dev` uses `owner@example.invalid`) | Recipient addresses, comma separated. Not with `FATHOM_EMAIL_TO_FILE`. |
-| `FATHOM_EMAIL_TO_FILE` | unset | Path to a file of recipient addresses (comma or newline separated). Not with `FATHOM_EMAIL_TO`. |
+| `FATHOM_EMAIL_TO` | unset (`dev` uses `owner@example.invalid`) | Original-household recipient migration input, comma separated. Financial delivery then uses verified member subscriptions. Not with `FATHOM_EMAIL_TO_FILE`. |
+| `FATHOM_EMAIL_TO_FILE` | unset | Original-household recipient migration input file (comma or newline separated). Not with `FATHOM_EMAIL_TO`. |
 | `FATHOM_EMAIL_CREDENTIAL_FILE` | unset | Path to the mounted email credential (API key or SMTP password); must not be readable by other users; mount the secret with mode 0400 or 0440 (with fsGroup) or 0600. Required by every transport but `dev`. |
 | `FATHOM_EMAIL_SMTP_USER` | unset | SMTP user name for `smtp`. |
 | `FATHOM_EMAIL_SMTP_HOST` | `smtp.gmail.com` | SMTP host for `smtp`. |
@@ -486,6 +494,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `goals` | `id` PK, `def` JSON, `sort`, `origin` (`seed` or `owner`), `archived_at`, `created_at`, `updated_at` (migration 012), `done_at` (migration 026: app clock ISO time a goal was marked done); see "Goals and the tradeoff curve" |
 | `deadlines` | `id` PK, `date`, `label`, `title`, `rec_id`, `hard` |
 | `events` | `id` PK, `date` (label as in the scenario), `kind`, `title`, `body`, `sort` |
+| `spending_definitions` | `id` PK (slug), `name`, `def` JSON selectors, `updated_at`; migration 033 links exactly one preference through nullable unique `preferences.definition_id`. Save, delete, forget and Undo update both rows atomically. |
 | `packs_state` | `id` PK, `def` JSON (the pack with its base status, plus an optional `manifest` tag naming the repo pack manifest the row stands for, and on demo rows a `label` keeping the demo name; migration 005 tags the demo rows with `manifest`, migration 006 adds `label`, real rows link by their own id), `active` (NULL means no override), `exploring`, `what_if_asked`, `what_if_done`, `unhid` JSON, `sort`, `updated_at` |
 | `decisions` | `id` PK, `title`, `status` in open, decided, upcoming, `wargame`, `rec_id`, `opens_on`, `when_label`, `note`, `decided_line`, `sort` |
 | `jobs` | `id` PK, `name`, `cadence`, `does`, `cost`, `next_label`, `last_label`, `enabled`, `sort` |
@@ -519,6 +528,8 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `advisor_checkin` | `id` PK (always 1), `date`, `time` (`HH:MM` or NULL), `length_min`, `updated_at`. The owner-set next check-in (migration 011). |
 | `advisor_packets` | `id` PK (`advpkt-` and 16 hex), `created_at`, `clock` (the scenario date it was built for), `rec_ids` JSON, `stored_path` (encrypted under the data key, `files/<id>.bin`), `bytes`, `sha256` (migration 011) |
 | `planner_recs` | `rec_id` PK (references `recs.id`), `trigger_id`, `grounding_hash`, `prose_src` in model, template, `first_run`, `last_run` (reference `job_runs.id`), `retired_at`, `retired_reason`, `retired_from`, `held_from`. Bookkeeping for planner-owned recs (migration 007). |
+
+Migration 032 (`032-sources.sql`) adds `accounts.archived_at`, `files.removed_at` and `source_changes` (`receipt_id` PK, `changes`: the JSON change log of a file removal, keyed by its action receipt). Archived accounts and removed files are described with `POST /api/accounts/:id/archive` and `POST /api/files/:id/remove`.
 
 Migration 030 adds durable per-file engine accounting. The internal interpreter indexes every sheet or text span and sends scrubbed reference tokens through the household engine with no tools. File limits are USD 0.50, four dispatched calls, 32,768 input tokens and 8,192 output tokens, with 4,096 output tokens per call, a 120-second attempt deadline and one explicit retry. Each dispatch also requires current household generation, outbound permission, funding, engine admission and remaining monthly cap. Unknown or interrupted calls retain conservative reservations after restart; upload routing is unchanged until the later cutover.
 
@@ -937,7 +948,9 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/accounts/:id/owner` | `{owner}` (a confirm option id) or `{undo: before}` | `{scenario, account, before}`. Records the value as the account's `account_owner` confirm answer (asked, answered, revised, or restated when final), so a later import keeps it; schedules a replan like a Confirm answer. `{undo: before}` sets the prior answer back, reopens a question that was pending, or removes one the edit created. 400 for a bad value, 404 unknown, 409 when the answer can no longer be undone. |
 | `POST /api/accounts/:id/kind` | `{kind}` (a confirm option id) or `{undo: before}` | `{scenario, account, before}`. Same as the owner route, for the `account_kind` answer.
 | `GET /api/accounts/:id/merge-candidates` | none | `{items: [{id, label, inst, kind, mask, lastDataDate, mirror, plan: {keepId, keepLabel, ownId, ownLabel, moves: {transactions, balances, positions, sources}}, refused?}]}`. Every other account with what a merge would keep and move: a connected account is merged into the other one; between two file accounts the open one survives; two connected accounts carry `refused`. 404 unknown. Read-only. |
-| `POST /api/accounts/:id/merge` | `{withId}` | `{scenario, survivorId, itemId}`. Merges through a manual `account_match` item answered `same`, the same path and undo log as a detected pair; the survivor takes a missing institution and a reliable last 4 from the SimpleFIN snapshot. Undo is `POST /api/confirm/:itemId/reopen`. 400 for a missing or same id, 404 unknown, 409 for two connected accounts. |
+| `POST /api/accounts/:id/merge` | `{withId}` | `{scenario, survivorId, itemId, receipt}`. Merges through a manual `account_match` item answered `same`, the same path and undo log as a detected pair; the survivor takes a missing institution and a reliable last 4 from the SimpleFIN snapshot. The receipt (scope `write:sources`, kind `merge`) is undone by `POST /api/actions/:id/undo`, which reopens the item; `POST /api/confirm/:itemId/reopen` still works. Same code as the `sources.merge_accounts` tool. 400 for a missing or same id, 404 unknown, 409 for two connected accounts. |
+| `POST /api/accounts/:id/archive` | `{archived?}` (boolean, default true) | `{scenario, receipt}`. Sets or clears `accounts.archived_at`. An archived account leaves `scenario.accounts`, the current point of the household trend, the per-account series, planner accounts and Ask; its rows stay and it is never stale. `receipt` is null when nothing changed; Undo is `POST /api/actions/:id/undo`. Same code as `sources.archive_account`. 400 for a non-boolean, 404 unknown. |
+| `GET /api/sources` | none | `{sources}`: each ingest source by its real origin (`name`: institution, file name, or newest file plus a count), `label` (parser label, not shown), `kind`, `state` (`history`, `fresh`, `stale`, `unknown`; `src/ingest/coverage.mjs` `sourceStates`), `range` `{from, to}`, `asOf`, `ageDays`, `cadence`, `accounts` `[{id, label, state, archived}]` and live uploaded `files` `[{id, name, removable}]`. Same view as `accounts.sources` and `live.ingest.sources`. |
 | `POST /api/goals` | `{title, note?, horizon?, kind?, owner?, priority?, status?, ...kind fields}` | `{scenario, goal}`. Creates an owner goal (`origin` owner). `title` 1 to 120 characters, no line breaks; `note` at most 500; `horizon` now, 1-3y or 3-10y (default now); `kind` balance (default), range, floor or contribution; `owner` (whose goal) owner, spouse, joint, a dependent key such as kid, or null; `priority` high, medium, low or null; `status` open (default), done or archived. Kind fields (only the kind's own; another kind's field is 400 "`<field>` does not apply to a `<kind>` goal"): balance `target` (non-negative number or null), `targetDate` (YYYY-MM-DD or null), `track` (null, `{accounts: [account ids]}` at most 20 known ids, or `{figure: key}` a known figure the store holds); range `targetLow` and `targetHigh` (both required, low not above high), `targetDate`, `track`; floor `floor` and `track` (both required); contribution `target` (the amount, above zero), `taxYear` (2000 to 2100), `targetDate` (the deadline, after Jan 1 of the tax year), optional `accounts` (destination account ids), `split` (`[{person, amount}]`, owner and spouse once each, adding up to the amount to the cent) and `entered` (`{asOf, total}` or `{asOf, people: [{person, amount}]}`, people within the split when one is set). Anything else 400 with the validation message. |
 | `GET /api/pace` | none | Deterministic `clock`, `rollup`, `goals`, `series` and `meters`, identical to `scenario.pace`. Uses the same owner gate as the scenario. No writes or model calls. |
 | `POST /api/tour/seen` | none | `{scenario}`. The signed-in user finished or dismissed the guided tour: clears `users.tour_pending` on the caller's own platform row (a body or path id never selects another user) and answers with the fresh scenario. 401 without an identity. `scenario.live.tourPending` is that flag, set when the user completes onboarding (the not-done to done change of `POST /api/onboarding`), so the tour auto-starts once per user on a real instance. The public demo has no accounts and keeps its once-per-browser rule. |
@@ -957,8 +970,9 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/keys/:id/revoke` | `{}` | `{record, keys}`. Sets `revokedAt` once (a second revoke keeps it); 404 unknown id. A member may revoke only keys they created (403 otherwise); an admin may revoke any. |
 | `GET /api/mcp` | | `{url, publicUrlSet, tools: [{name, description, scope}], scopes: [{id, label, access}]}`. `url` is the `FATHOM_PUBLIC_URL` origin with `/mcp` appended. |
 | `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`, `unsupported`, `too_large` (past a parse limit, see Ingest) or `failed`. 400 no files or malformed body, 409 a real household without `FATHOM_PLATFORM_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
-| `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first. |
+| `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first; removed files are omitted and a list over 256 KB is shortened with `truncated: true`. |
 | `POST /api/files/:id/retry` | `{}` | `{scenario, file: result}`. Routes a `needs_mapping` or `needs_extraction` file again under the same id; 404 unknown file, 409 a file that is not waiting. |
+| `POST /api/files/:id/remove` | `{}` | `{scenario, receipt}`. Deletes an uploaded file's transactions (with their category rows), balances, positions, P&L lines, tax payments, facts, held facts and documents and its pending questions, drops figures read from it and recomputes each fed account's balance figure, archives an account left with no rows that no live bank connection feeds, and sets `files.removed_at`. The captured change log is stored in `source_changes` under the receipt id; `POST /api/actions/:id/undo` replays it and refuses (409) when a touched row changed since. 404 unknown, 409 already removed, 400 for a file with no stored bytes. Same code as `sources.remove_file`; off on the public demo. |
 | `GET /api/confirm` | | `{items: [pending confirm items]}`. |
 | `POST /api/confirm/list` | `{status?: pending (default), answered or all}` | `{items}`; 400 for another status. |
 | `GET /api/confirm/:id` | | `{item}` with `item.final`, pending or answered; 404 unknown item. The Confirm deck reads it after a lost answer reply to retry only an item that is still pending. |
@@ -966,7 +980,9 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/confirm/:id/reopen` | `{}` | `{scenario, item}`. Puts an answered item back to pending and restores every row its answer changed. 404 unknown item, 409 not answered, stale or final, as for a revise. |
 | `POST /api/confirm/answers` | `{answers: [{id, answer}]}` | `{scenario, items}`, each item with `final`. Answers every listed pending item in one transaction (one undo log per item); every refusal is checked before any write, so a refusal changes nothing. Errors as the single answer route; 400 for a malformed body. Auto-resolution runs once after it. |
 | `POST /api/confirm/reopen-many` | `{ids: [...]}` | `{scenario, items}`. Reopens every listed answered item in one transaction (the undo of a grouped card); any refusal, including a final item with its reason, changes nothing. Errors as the reopen route. |
-| `GET /api/email` | | `{status: {transport, state, recipient, recipients, detail}, preview: {subject, text, html, summarySrc}, history}`. `recipient` is masked (`o***@e***.invalid`); `history` is `email_sends` rows newest first with no bodies. The preview is the brief composed now over the store with the runtime engine (template summary when the engine cannot answer). |
+| `GET /api/email/subscriptions` | | Admin only. `{subscriptions: [{userId, subscribed}]}` for verified active household members. |
+| `POST /api/email/subscriptions` | `{subscriptions: [{userId, subscribed}]}` | Admin only. Replaces the subscriber set; omitted members are unsubscribed. Foreign and pending members refuse. |
+| `GET /api/email` | | `{status: {transport, state, recipient, recipients, skippedRecipients, detail}, preview: {subject, text, html, summarySrc}, history}`. `recipient` is masked (`o***@e***.invalid`); `skippedRecipients` counts configured recipients excluded from the original one-time member import, without addresses; `history` is `email_sends` rows newest first with no bodies. The preview is the brief composed now over the store with the runtime engine (template summary when the engine cannot answer). |
 | `POST /api/email/test` | `{}` | `{send, history}`. Sends a fixed test email (kind `test`) through the configured transport; a failed send is a 200 with `send.status` `failed` and `send.errorCode`. |
 | `POST /api/email/brief` | `{}` | `{send, history}`. Composes and sends the brief now (kind `brief`); failures as above. |
 | `POST /api/advisor/reviews` | `{recId}` | `{scenario, reviewId}`. Sends the rec to the advisor (idempotent while it waits; a reviewed rec sent again closes the old verdict). 404 unknown or hidden rec. |
@@ -1218,9 +1234,12 @@ Enrollment, recovery and add-a-device links.
    malformed header falls back to the socket address. IPv4-mapped IPv6 sockets match IPv4 CIDRs.
    The default trusts no proxy, which is safe but puts everyone behind a proxy in one per-client
    bucket.
-7. Mail needs a real transport in production (`FATHOM_EMAIL_TRANSPORT` and its settings; the
-   existing `FATHOM_EMAIL_TO` setup is assumed). `dev` writes the message, link included, to
-   `outbox/` in the data directory.
+7. Enrollment mail needs a real transport in production (`FATHOM_EMAIL_TRANSPORT`, sender and
+   credential settings), with an explicit invitee recipient independent of financial subscriptions.
+   `dev` writes the message, link included, to platform-private `outbox/` in the data directory.
+   Financial messages use platform `notification_subscriptions` and `notification_policy` records
+   for verified household members, plus household-private outboxes; see
+   [Email](development.md#email).
 8. Add-a-device: a signed-in user with a recent sign-in requests `POST /api/auth/passkeys/link`,
    which issues an `add-passkey` token for that user only and emails the link to the user's own
    address. Limits: `device` global 120 and per client 60 per 10 minutes, and 10 per user per 20
@@ -2969,12 +2988,14 @@ Migration 025 adds durable `action_receipts` and `preferences`. Each receipt com
 transaction as its write and records actor, conversation, changed fields and prior values. Receipts
 hydrate beside the answer's work block, including notice or missing replies, and keep their conversation
 reachable. Undo restores the prior value and provenance, refuses another actor or a later conflicting
-edit, and replans facts. The MCP-only undo operation checks the loaded receipt scope against the key scopes. Ask gets the Undo button through
+edit, and replans facts. The undo operation checks the loaded receipt scope against the key scopes. Ask gets the Undo button through
 `POST /api/actions/:id/undo`. A busy planner preserves the fact and receipt, reports planning pending,
 and queues planning again. Ask queues replanning until the paid model round releases its engine lock, then drains that work before continuing; planner prose may safely call the same engine. Demo baby dates use the same deterministic new-child window calculation.
 
-`update_preferences.remember` stores a short verbatim preference or definition. The Memories page (`#/memories`, linked from Settings) lists it with its source (`origin` and `conversation_key`, migration 028) and allows adding, editing or deletion through the same validation. Preferences enter the dynamic Ask prompt as household
+`update_preferences.remember` stores a short verbatim preference. `update_preferences.save_definition` stores a named selector and exactly one linked preference atomically (migration 033). Linked preferences expose `definitionId` to Ask, refuse ordinary edits, and are removed together with their saved definition by forget or delete; Undo restores both rows. Built-in selections cannot be overwritten. The Memories page (`#/memories`, linked from Settings) lists it with its source (`origin` and `conversation_key`, migration 028) and allows adding, editing or deletion through the same validation. Preferences enter the dynamic Ask prompt as household
 data; they never override product boundaries, evidence requirements or permissions.
+
+`refresh` imports files, retries extraction, rebuilds Your plans and runs the four allowed jobs through the same household pipeline and scheduler as the API. Engine-using refreshes in Ask wait in the round-end queue until the model ledger is released; MCP awaits completion inline. A refresh receipt records its eventual result, including the file id or failure status. These receipts expose `undo.available: false` and the chat receipt omits Undo. Imported facts are changed through Confirm.
 
 
 ## Transaction categories

@@ -8,7 +8,7 @@
 // effective, else the first that applies of:
 // jobs: paused, not_configured (no scheduler).
 // email: paused, not_configured (sender, recipients or credential missing), recipient_unverified
-//   (a real household's recipient is not an enrolled, active member of it).
+//   (a real household has no verified subscribed members or recipient migration is blocked).
 // simplefin: paused, not_connected (no healthy connection).
 // engine: paused, not_configured (engine mode or setting off, or the engine refused further calls),
 //   credential_unavailable (live credential not loaded), funding_unavailable (live mode without
@@ -17,17 +17,14 @@
 // writes them in one audited transaction (omitted kinds keep their value) and answers as GET.
 
 import { HttpError } from './http.mjs';
-import { OUTBOUND_KINDS, readOutbound, setOutbound, recipientsVerified } from '../platform/outbound.mjs';
-import { configuredRecipients, emailStatus } from '../email/transport.mjs';
+import { OUTBOUND_KINDS, readOutbound, setOutbound } from '../platform/outbound.mjs';
 
 const verdict = (enabled, reason) => ({ enabled, effective: enabled && reason === null, reason: enabled ? reason : 'paused' });
 
 async function emailReason(ctx) {
-  const status = await emailStatus(ctx.config);
-  if (status.state !== 'dev' && status.state !== 'configured') return 'not_configured';
-  if (ctx.household.mode !== 'real') return null;
-  const recipients = await configuredRecipients(ctx.config);
-  return recipientsVerified(ctx.platform, ctx.household.householdId, recipients) ? null : 'recipient_unverified';
+  const status = await ctx.household.emailRecipients.status();
+  if (status.state === 'recipient_unverified') return 'recipient_unverified';
+  return status.state === 'dev' || status.state === 'configured' ? null : 'not_configured';
 }
 
 function simplefinReason(ctx) {

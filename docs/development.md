@@ -55,8 +55,8 @@ npm run seed:demo -- --household <id>
 | `FATHOM_SIMPLEFIN_ALLOWED_HOSTS` | `bridge.simplefin.org,beta-bridge.simplefin.org` | Hosts the SimpleFIN client may call (no scheme, port or path). Anything else refuses to start. |
 | `FATHOM_EMAIL_FROM` | unset (`dev` uses `fathom@example.invalid`) | Sender address, or the AgentMail inbox id. Not with `FATHOM_EMAIL_FROM_FILE`. |
 | `FATHOM_EMAIL_FROM_FILE` | unset | File holding the sender address. Not with `FATHOM_EMAIL_FROM`. |
-| `FATHOM_EMAIL_TO` | unset (`dev` uses `owner@example.invalid`) | Recipient addresses, comma separated. Not with `FATHOM_EMAIL_TO_FILE`. |
-| `FATHOM_EMAIL_TO_FILE` | unset | File of recipients, comma or newline separated. Not with `FATHOM_EMAIL_TO`. |
+| `FATHOM_EMAIL_TO` | unset (`dev` uses `owner@example.invalid`) | Original-household recipient migration input, comma separated. Later delivery uses member subscriptions. Not with `FATHOM_EMAIL_TO_FILE`. |
+| `FATHOM_EMAIL_TO_FILE` | unset | Original-household recipient migration input file. Not with `FATHOM_EMAIL_TO`. |
 | `FATHOM_EMAIL_CREDENTIAL_FILE` | unset | API key or SMTP password file. Required except for `dev`. Mode 0400, 0440 with fsGroup, or 0600. |
 | `FATHOM_EMAIL_SMTP_USER` | unset | SMTP user name when the transport is `smtp`. |
 | `FATHOM_EMAIL_SMTP_HOST` | `smtp.gmail.com` | SMTP host. |
@@ -332,11 +332,26 @@ Either is valid only until the new release has taken writes; later changes are n
 
 Fathom sends a monthly brief and short deadline alerts. The default `dev` transport writes each
 message to `outbox/` under the household's root (`households/<id>/`) and sends nothing. For real delivery set
-`FATHOM_EMAIL_TRANSPORT` (AgentMail is the production target), the sender and recipients
-(`FATHOM_EMAIL_FROM`, `FATHOM_EMAIL_TO` or their `_FILE` forms) and mount the API key as a file other
+`FATHOM_EMAIL_TRANSPORT` (AgentMail is the production target), the sender
+(`FATHOM_EMAIL_FROM` or its `_FILE` form) and mount the API key as a file other
 users cannot read (mode 0400, 0440 with fsGroup, or 0600) named by `FATHOM_EMAIL_CREDENTIAL_FILE`. The Email screen shows the
-status, a preview, the send history and the scheduled jobs. `FATHOM_LIVE_EMAIL=1 npm run
-email:test` sends one real test email; every key is listed in [`architecture.md`](architecture.md).
+status, a preview, the send history and the scheduled jobs. Financial recipients are verified active
+members with a subscription in that household. `GET /api/email/subscriptions` lists verified member
+ids and preferences for an admin. `POST /api/email/subscriptions` replaces the subscription set with
+`{"subscriptions":[{"userId":"<member-id>","subscribed":true}]}`; omitted members are unsubscribed.
+A removed or re-enrolled membership needs an explicit subscription again.
+
+The original household imports the `FATHOM_EMAIL_TO` or `_FILE` addresses that match verified active
+members, once. Other configured addresses are skipped and never receive financial mail. Email
+status reports `skippedRecipients`, the count skipped by that import, without their addresses.
+If none match, delivery fails closed with `recipient_unverified`; an admin can supply the
+subscription set. Later environment changes do not reroute subscribed mail. New households start without
+subscribers. Every financial recipient gets a separate message, with membership and subscription rechecked at dispatch. Links identify
+the household and require normal authentication. Enrollment uses a separate policy and the
+platform-private `outbox/`, including when an invitee is not yet a member.
+
+`FATHOM_LIVE_EMAIL=1 npm run email:test -- --household <id>` sends a test message to that household's
+subscribers; every setting is listed in [`architecture.md`](architecture.md).
 
 ## Bank and brokerage connections
 
