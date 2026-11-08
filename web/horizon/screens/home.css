@@ -26,7 +26,6 @@
 .d-horizon .h-home-head { display: grid; gap: 12px; justify-items: start; min-width: 0; }
 .d-horizon .h-home-k { font-family: var(--mono); font-size: 11.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--fa); }
 .d-horizon .h-home-h { font-size: 40px; line-height: 1.12; letter-spacing: -0.02em; max-width: 24ch; text-wrap: balance; }
-.d-horizon .h-home-sub { color: var(--mu); font-size: 15.5px; }
 
 /* owner filter: a segmented control */
 .d-horizon .h-ownerf { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; padding: 3px; background: var(--s1); border: 1px solid var(--line); border-radius: 10px; }
@@ -40,15 +39,20 @@
 .d-horizon .h-ownerf button[aria-pressed="true"] span { color: var(--ac); }
 .d-horizon .h-ownerf button:focus-visible { outline: 2px solid var(--ac); outline-offset: 1px; }
 
-/* ---------- data health ---------- */
-.d-horizon .h-dhealth {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 28px; padding: 8px 8px 8px 14px;
-  border: 1px solid var(--line); border-radius: 10px; background: var(--s1); color: var(--tx2); font-size: 13.5px;
+/* ---------- data line ---------- */
+/* One quiet line under the verdict: the data date, and one link only when something needs the owner. */
+.d-horizon .h-dhealth { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; color: var(--mu); font-size: 14px; }
+.d-horizon .h-home-gs .h-dhealth { margin-top: 28px; }
+.d-horizon .h-dhealth-t { min-width: 0; }
+.d-horizon .h-dh-need { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; min-width: 0; }
+.d-horizon .h-dh-link {
+  display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 0 12px; border-radius: 999px;
+  border: 1px solid var(--acl); background: var(--acd); color: var(--ac2); font-size: 13px; font-weight: 500;
 }
-.d-horizon .h-dh-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ac); flex: none; }
-.d-horizon .h-dhealth.stale { border-color: rgba(229, 115, 95, 0.28); background: var(--badd); }
-.d-horizon .h-dhealth.stale .h-dh-dot { background: var(--bad); }
-.d-horizon .h-dhealth-t { flex: 1 1 260px; min-width: 0; }
+.d-horizon .h-dh-link::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+.d-horizon .h-dh-link:hover { filter: brightness(1.15); }
+.d-horizon .h-dh-what { color: var(--fa); font-size: 13px; }
+/* Link pills, shared with the Money page's data health block. */
 .d-horizon .h-dhealth-a { display: flex; flex-wrap: wrap; gap: 6px; }
 .d-horizon .h-dhealth-a a {
   display: inline-flex; align-items: center; min-height: 32px; padding: 0 12px; border-radius: 7px; border: 1px solid var(--line2);
@@ -62,7 +66,7 @@
 .d-horizon .h-home-sec h2 { font-size: 14px; font-weight: 500; }
 .d-horizon .h-home-sec a { color: var(--ac); font-size: 13px; }
 .d-horizon .h-gcards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 14px; }
-.d-horizon .h-gcard { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 16px 18px 6px; background: var(--s1); border: 1px solid var(--line); border-radius: 12px; }
+.d-horizon .h-gcard { display: flex; flex-direction: column; gap: 12px; min-width: 0; padding: 16px 18px; background: var(--s1); border: 1px solid var(--line); border-radius: 12px; }
 .d-horizon .h-gcard-h { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .d-horizon .h-gcard-t { font-weight: 500; font-size: 15.5px; color: var(--tx); min-width: 0; overflow-wrap: anywhere; }
 .d-horizon .h-gcard-t:hover { color: var(--ac2); }
@@ -99,8 +103,6 @@
 .d-horizon .h-gcd.late b { color: var(--warn); }
 .d-horizon .h-gnext-t { display: block; padding: 10px 0; color: var(--tx2); font-size: 13.5px; line-height: 1.4; min-width: 0; overflow-wrap: anywhere; }
 .d-horizon .h-gnext-t:hover { color: var(--tx); }
-.d-horizon .h-gnext-none { border-top: 1px solid var(--line); padding: 14px 0; color: var(--fa); font-size: 13px; }
-.d-horizon .h-gmore { display: inline-flex; align-items: center; min-height: 36px; margin-top: -6px; color: var(--ac); font-size: 12.5px; width: fit-content; }
 .d-horizon span.h-who {
   display: inline-block; margin: 0; padding: 1px 6px; border: 1px solid var(--line2); border-radius: 4px;
   font-family: var(--mono); font-size: 10.5px; line-height: 16px; color: var(--mu); white-space: nowrap; overflow-wrap: normal;
@@ -264,13 +266,10 @@
   .d-horizon .h-home-head { gap: 10px; }
   .d-horizon .h-home-k { display: none; }
   .d-horizon .h-home-h { font-size: 26px; line-height: 1.2; }
-  .d-horizon .h-home-sub { font-size: 14.5px; }
   .d-horizon .h-hchip { min-height: 40px; padding: 0 14px; font-size: 12.5px; }
   .d-horizon .h-ownerf button { min-height: 44px; }
-  .d-horizon .h-home .h-dhealth { margin-top: 4px; padding: 12px; }
-  .d-horizon .h-dhealth-t { flex-basis: 100%; }
-  .d-horizon .h-dhealth .h-dh-dot { display: none; }
-  .d-horizon .h-dhealth-a a { min-height: 40px; padding: 0 14px; }
+  .d-horizon .h-dhealth { font-size: 13.5px; }
+  .d-horizon .h-dh-link { min-height: 40px; padding: 0 14px; }
   .d-horizon .h-home .h-home-sec { margin: 12px 0 -4px; }
   .d-horizon .h-home-sec a { display: inline-flex; align-items: center; min-height: 40px; }
   .d-horizon .h-home details.h-hk { margin-top: 0; }
@@ -279,8 +278,7 @@
   .d-horizon .h-sugg-rate input { min-height: 40px; }
   .d-horizon .h-home-bulk .h-btn { height: 44px; }
   .d-horizon .h-home-rev { display: inline-flex; align-items: center; min-height: 40px; }
-  .d-horizon .h-gcard { padding: 14px 14px 4px; }
-  .d-horizon .h-gmore { min-height: 40px; }
+  .d-horizon .h-gcard { padding: 14px; }
   .d-horizon .h-back { min-height: 40px; margin-bottom: 8px; }
   .d-horizon .h-pace-head h1 { font-size: 26px; }
   .d-horizon .h-pace-why { font-size: 14.5px; }

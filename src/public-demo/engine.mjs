@@ -1,11 +1,30 @@
+import Anthropic from '@anthropic-ai/sdk';
 import { createEngine, loadCredential, BudgetExceededError, ModelCallError } from '../engine/index.mjs';
 import { createSpendLedger } from '../engine/runtime.mjs';
-import { demoRound } from '../engine/live.mjs';
-import { PRICING } from '../engine/pricing.mjs';
+import { wireMessages, ANTHROPIC_BASE_URL } from '../engine/live.mjs';
+import { PRICING, usageCostUsd } from '../engine/pricing.mjs';
+import { redactProviderText } from '../ingest/redact.mjs';
 import { DEMO_LIMIT_MESSAGE } from './control.mjs';
 
 export class DemoLimitError extends BudgetExceededError {
   constructor() { super(); this.demoLimit = true; }
+}
+
+export async function publicDemoRound({ credential, system, systemDynamic, messages, tools, maxTokens, model, registry, onEvent }) {
+  const client = new Anthropic({ apiKey: credential.value, authToken: null,
+    baseURL: ANTHROPIC_BASE_URL, maxRetries: 0, timeout: 30000 });
+  const response = await client.messages.create(redactProviderText({ model, max_tokens: maxTokens,
+    system: `${system}\n${systemDynamic}`, messages: wireMessages(messages),
+    ...(tools.length ? { tools: tools.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema })) } : {}) }));
+  for (const block of response.content) {
+    if (block.type === 'tool_use') {
+      onEvent?.({ type: 'tool', name: block.name });
+      await registry.invoke(block.name, block.input);
+    } else if (block.type === 'text') onEvent?.({ type: 'text', text: block.text });
+  }
+  return { text: response.content.filter(b => b.type === 'text').map(b => b.text).join(''), content: response.content,
+    tokens: response.usage, model, costUsd: usageCostUsd(model, response.usage), toolResults: registry.results,
+    status: response.stop_reason === 'tool_use' ? 'error_max_turns' : 'success', details: {} };
 }
 
 export function createPublicDemoEngine({ db, config, control, visitorId }) {
@@ -21,7 +40,7 @@ export function createPublicDemoEngine({ db, config, control, visitorId }) {
     }
     inner = createEngine({ mode: config.engine, credential, ledger: createSpendLedger(db), capUsd: Number.MAX_SAFE_INTEGER,
       modelOverride: limits.model, maxRounds: 2, streamDelayMs: config.fakeStreamMs,
-      roundRunner: demoRound,
+      roundRunner: publicDemoRound,
       admitRound(request) {
         const definitions = request.tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
         const input = Buffer.byteLength(JSON.stringify({ system: request.system, systemDynamic: request.systemDynamic,

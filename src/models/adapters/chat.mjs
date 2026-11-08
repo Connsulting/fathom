@@ -1,3 +1,4 @@
+import { redactProviderText } from '../../ingest/redact.mjs';
 import { compileSchema } from '../../engine/schema.mjs';
 
 const statusCode = status => status === 401 || status === 403 ? 'authentication' : status === 429 ? 'rate_limit'
@@ -78,7 +79,7 @@ export function createChatAdapter(selection, transport = fetch, credential) {
         const result = await Promise.race([(async () => {
           const response = await transport(`${baseUrl.replace(/\/$/, '')}/${ollama ? 'api/chat' : 'chat/completions'}`, {
             method: 'POST', headers: { 'Content-Type': 'application/json', ...(auth?.value ? { Authorization: `Bearer ${auth.value}` } : {}) },
-            body: JSON.stringify(body), signal: controller.signal,
+            body: JSON.stringify(redactProviderText(body)), signal: controller.signal,
           });
           if (!response.ok) return failure(model, statusCode(response.status), 0);
           const data = await response.json();

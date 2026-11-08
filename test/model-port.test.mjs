@@ -285,3 +285,36 @@ test('typed-choice service refuses unsupported tools without dispatch', async ()
   assert.equal((await port.complete({ messages, choices: choiceQuestions, tools: [tool], maxTokens: 64 })).errorCode, 'invalid_request');
   assert.equal(calls, 0);
 });
+
+for (const adapter of ['openai','ollama']) test(`${adapter} redacts the complete outbound body on structured and tool rounds`, async () => {
+  const ssn=['000','12','3456'].join('-');
+  let calls=0;
+  const engine=createEngine({mode:'live',modelConfig:config(adapter),reservations:admitted(),modelTransport:async(_,o)=>{
+    calls++;
+    assert.ok(!o.body.includes(ssn),'synthetic SSN cannot reach any transport');
+    assert.ok(o.body.includes('XXX-XX-XXXX'),'identifier masking remains on every round');
+    if(calls===1) {
+      const call={id:'synthetic-secret-tool',type:'function',function:{name:tool.name,arguments:adapter==='openai'?JSON.stringify({key:ssn}):{key:ssn}}};
+      return Response.json(adapter==='openai'
+        ?{choices:[{finish_reason:'tool_calls',message:{tool_calls:[call]}}],usage:{prompt_tokens:20,completion_tokens:5}}
+        :{done:true,message:{tool_calls:[call]},prompt_eval_count:20,eval_count:5});
+    }
+    const body=JSON.parse(o.body);
+    assert.ok(body.messages.some(m=>m.role==='tool'&&m.content.includes('XXX-XX-XXXX')));
+    return Response.json(adapter==='openai'
+      ?{choices:[{finish_reason:'stop',message:{content:'{"note":"ok"}'}}],usage:{prompt_tokens:30,completion_tokens:5}}
+      :{done:true,message:{content:'{"note":"ok"}'},prompt_eval_count:30,eval_count:5});
+  }});
+  const schema={type:'object',properties:{note:{type:'string',description:ssn}},required:['note'],additionalProperties:false};
+  const r=await engine.call({purpose:'chat',system:`Synthetic ${ssn}`,messages:[{role:'user',content:ssn}],
+    schema,tools:[{...tool,description:ssn,handler:()=>({label:ssn})}],maxTokens:64});
+  assert.equal(calls,2);assert.deepEqual(JSON.parse(r.text),{note:'ok'});
+});
+
+test('typed-choice requests apply the same final provider scrub',async()=>{
+  const ssn=['000','12','3456'].join('-');
+  const port=createModelPort({selection:{adapter:'jev'},credential:{value:'synthetic-key'},transport:async(_,o)=>{
+    assert.ok(!o.body.includes(ssn));assert.ok(o.body.includes('XXX-XX-XXXX'));return Response.json(jevResponse());
+  }});
+  assert.equal((await port.complete({choices:[{...choiceQuestions[0],state:{ssn},instructions:ssn}],maxTokens:64})).status,'success');
+});
