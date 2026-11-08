@@ -966,6 +966,8 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/confirm/:id/reopen` | `{}` | `{scenario, item}`. Puts an answered item back to pending and restores every row its answer changed. 404 unknown item, 409 not answered, stale or final, as for a revise. |
 | `POST /api/confirm/answers` | `{answers: [{id, answer}]}` | `{scenario, items}`, each item with `final`. Answers every listed pending item in one transaction (one undo log per item); every refusal is checked before any write, so a refusal changes nothing. Errors as the single answer route; 400 for a malformed body. Auto-resolution runs once after it. |
 | `POST /api/confirm/reopen-many` | `{ids: [...]}` | `{scenario, items}`. Reopens every listed answered item in one transaction (the undo of a grouped card); any refusal, including a final item with its reason, changes nothing. Errors as the reopen route. |
+| `GET /api/email/subscriptions` | | Admin only. `{subscriptions: [{userId, subscribed}]}` for verified active household members. |
+| `POST /api/email/subscriptions` | `{subscriptions: [{userId, subscribed}]}` | Admin only. Replaces the subscriber set; omitted members are unsubscribed. Foreign and pending members refuse. |
 | `GET /api/email` | | `{status: {transport, state, recipient, recipients, detail}, preview: {subject, text, html, summarySrc}, history}`. `recipient` is masked (`o***@e***.invalid`); `history` is `email_sends` rows newest first with no bodies. The preview is the brief composed now over the store with the runtime engine (template summary when the engine cannot answer). |
 | `POST /api/email/test` | `{}` | `{send, history}`. Sends a fixed test email (kind `test`) through the configured transport; a failed send is a 200 with `send.status` `failed` and `send.errorCode`. |
 | `POST /api/email/brief` | `{}` | `{send, history}`. Composes and sends the brief now (kind `brief`); failures as above. |
@@ -1221,7 +1223,8 @@ Enrollment, recovery and add-a-device links.
 7. Enrollment mail needs a real transport in production (`FATHOM_EMAIL_TRANSPORT`, sender and
    credential settings), with an explicit invitee recipient independent of financial subscriptions.
    `dev` writes the message, link included, to platform-private `outbox/` in the data directory.
-   Financial messages use household member subscriptions and household-private outboxes; see
+   Financial messages use platform `notification_subscriptions` and `notification_policy` records
+   for verified household members, plus household-private outboxes; see
    [Email](development.md#email).
 8. Add-a-device: a signed-in user with a recent sign-in requests `POST /api/auth/passkeys/link`,
    which issues an `add-passkey` token for that user only and emails the link to the user's own

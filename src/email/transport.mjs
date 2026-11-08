@@ -288,7 +288,7 @@ export function createTransport(config, {
 export async function configuredRecipients(config, { readFile = readRegular } = {}) {
   try {
     const { to } = await readAddresses(config, readFile);
-    return to.length || config.emailTransport !== 'dev' ? to : [DEV_TO];
+    return to.length || (config.emailTransport ?? 'dev') !== 'dev' ? to : [DEV_TO];
   } catch (err) {
     if (!(err instanceof EmailError)) throw err;
     return [];
