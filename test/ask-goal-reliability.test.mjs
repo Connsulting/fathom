@@ -198,12 +198,15 @@ test('SEC2: stored notes and sourced proposals keep identifier context for numer
     assert.equal(out.isError, true, String(target));
     assert.equal(receipts(), 0);
   }
-  const text = 'Create a savings goal for account ending in 4821?';
-  message(db, text, { literals: [{ text: '4821', source: 'account summary' }] });
-  ctx.ownerText = 'yes';
-  const rejected = await registry().invoke('update_goal', { operation: 'create', title: 'Savings', target: 4821 });
-  assert.equal(rejected.isError, true);
-  assert.equal(receipts(), 0);
+  for (const rendered of [false, true]) {
+    const text = 'Create a savings goal for account ending in 4821?';
+    const literals = [{ text: '4821', index: text.indexOf('4821'), source: 'account summary' }];
+    message(db, rendered ? renderAnswer(text, [], literals).join('') : text, { literals });
+    ctx.ownerText = 'yes';
+    const rejected = await registry().invoke('update_goal', { operation: 'create', title: 'Savings', target: 4821 });
+    assert.equal(rejected.isError, true);
+    assert.equal(receipts(), 0);
+  }
   const accepted = await registry().invoke('update_goal', { operation: 'create', title: 'Savings', target: 8000 });
   assert.ok(!accepted.isError, accepted.content[0].text);
   assert.equal(receipts(), 1);
