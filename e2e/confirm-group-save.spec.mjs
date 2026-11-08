@@ -366,9 +366,9 @@ for (const [label, size] of SIZES) {
       await page.locator('a[data-go="confirm"]').first().click();
       await expect(page).toHaveURL(/#\/confirm$/);
       await finishDeck(page);
-      await expect(homeBtn(page)).toHaveText('Back to Accounts');
+      await expect(homeBtn(page)).toHaveText('Back to Money');
       await homeBtn(page).click();
-      await expect(page).toHaveURL(/#\/accounts$/);
+      await expect(page).toHaveURL(/#\/money$/);
     });
   });
 }
