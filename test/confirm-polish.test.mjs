@@ -178,6 +178,20 @@ for (const evidence of ["Fathom's categorization", "Fathom's categorization.", {
   });
 }
 
+for (const [evidence, expected] of [
+  ["Fathom's categorization: your last 3 from Sample Shop were Groceries.", "Your last 3 from Sample Shop were Groceries."],
+  ["Fathom's categorization: a payment on your card or a matching transfer between your accounts is not spending.", "A payment on your card or a matching transfer between your accounts is not spending."],
+  ["fathom's CATEGORIZATION. a payment processor or payroll deposit into your business account is income.", "A payment processor or payroll deposit into your business account is income."],
+  ['this distinct evidence keeps its original wording.', 'this distinct evidence keeps its original wording.'],
+]) {
+  test(`a decided categorization preserves its reason without a repeated source: ${evidence}`, () => {
+    const { screens } = harness([], [decidedRow(1, { evidence })]);
+    const row = text(screens.decidedSection());
+    assert.equal((row.match(/Fathom's categorization/gi) || []).length, 1);
+    assert.ok(row.includes(`Fathom's categorization. ${expected}`));
+  });
+}
+
 test('a short Decided for you list shows every row and no toggle', () => {
   const { screens } = harness([], [decidedRow(1), decidedRow(2)]);
   const html = screens.confirmPage(true);
