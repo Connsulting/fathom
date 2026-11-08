@@ -989,3 +989,17 @@ export function refreshFigures(ctx, accountIds) {
   }
 }
 
+
+const safeTriggerCode = error => [error?.code, error?.name].find(v => typeof v === 'string' && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(v)) ?? 'unknown';
+export function triggerJob(ctx, jobId) {
+  const scheduler = ctx.scheduler ?? ctx.household?.scheduler ?? ctx.services?.household?.scheduler;
+  if (!scheduler) return;
+  const failed = error => console.error(`fathom: ${jobId} trigger failed`, safeTriggerCode(error));
+  try {
+    const pending = scheduler.trigger(jobId, 'ingest');
+    if (pending && typeof pending.then === 'function') pending.then(null, failed);
+  } catch (error) { failed(error); }
+}
+export const triggerPlan = ctx => triggerJob(ctx, 'plan');
+export const triggerGuesses = ctx => triggerJob(ctx, 'confirm-guess');
+export const triggerFreshness = ctx => triggerJob(ctx, 'freshness');

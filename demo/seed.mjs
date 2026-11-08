@@ -66,7 +66,7 @@ const FACTS = {
 // Children before parents so foreign keys hold while clearing.
 const CLEAR_ORDER = [
   'auth_challenges', 'auth_tokens', 'auth_sessions', 'auth_rate_limits', 'passkeys', 'api_keys', 'users',
-  'preferences', 'action_receipts', 'advisor_reviews', 'advisor_checkin', 'advisor_packets', 'messages', 'conversations', 'rec_events', 'job_runs', 'jobs', 'superseded_rows', 'confirm_undo', 'confirm_guesses', 'confirm_items',
+  'preferences', 'spending_definitions', 'action_receipts', 'advisor_reviews', 'advisor_checkin', 'advisor_packets', 'messages', 'conversations', 'rec_events', 'job_runs', 'jobs', 'superseded_rows', 'confirm_undo', 'confirm_guesses', 'confirm_items',
   'ingest_epoch', 'held_facts', 'import_model_spend', 'import_batches', 'import_proposals',
   'transaction_category_imports', 'transaction_category_corrections', 'transaction_category_guesses', 'category_merchant_rules', 'category_source_rules',
   'column_mappings', 'entity_aliases', 'transactions', 'balances', 'positions',
