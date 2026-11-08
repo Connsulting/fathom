@@ -166,3 +166,113 @@ test('@mobile @st2 a stored draft note is not rendered and no draft tag shows', 
   await expect(page.getByText('Earlier draft')).toHaveCount(0);
   await expect(page.getByText(DRAFT_NOTE)).toHaveCount(0);
 });
+
+// The panel's new conversation: the reveal must survive the thread being adopted after the send.
+const PANEL = 'aside#h-askp.h-askp';
+
+async function installPanelRecorder(page) {
+  await page.addInitScript((sel) => {
+    const log = { texts: [], first: [] };
+    window.__npLog = log;
+    const txt = (el) => (el ? el.textContent.replace(/\s+/g, ' ').trim() : '');
+    const look = () => {
+      const els = document.querySelectorAll(sel);
+      const el = els[els.length - 1];
+      const t = txt(el);
+      if (!t) return;
+      if (log.texts[log.texts.length - 1] !== t) {
+        log.texts.push(t);
+        const cs = getComputedStyle(el);
+        log.first.push({ text: t, className: el.className, animation: cs.animationName, reveal: el.classList.contains('h-reveal') });
+      }
+    };
+    const start = () => {
+      new MutationObserver(look).observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class'] });
+      look();
+    };
+    if (document.documentElement) start();
+    else document.addEventListener('readystatechange', start, { once: true });
+  }, `${PANEL} .h-msg.fathom .h-msg-b`);
+}
+
+test('@st2 a new conversation\'s first answer in the Ask panel fades in', async ({ page }) => {
+  test.setTimeout(120_000);
+  await installPanelRecorder(page);
+  await gotoRoute(page, 'home');
+  const launcher = page.locator('button.h-askp-launch');
+  await expect(launcher).toBeVisible();
+  await launcher.click();
+  const panel = page.locator(PANEL);
+  await expect(panel).toBeVisible();
+  const input = panel.locator('form.h-askx-compose textarea[name="q"]');
+  await expect(input).toBeFocused();
+  await page.evaluate(() => document.fonts.ready);
+  await input.fill(QUICK);
+  await input.press('Enter');
+  const answer = panel.locator('.h-askx-msgs .h-msg.fathom').last();
+  await expect(answer).toBeVisible({ timeout: 30_000 });
+  await expect(panel.locator('.h-askx-pend')).toHaveCount(0);
+  await expect(panel.locator('.h-askx-msgs .h-msg.fathom')).toHaveCount(1);
+  const shown = (await answer.locator('.h-msg-b').textContent()).replace(/\s+/g, ' ').trim();
+
+  const log = await page.evaluate(() => window.__npLog);
+  const ctx = JSON.stringify(log);
+  expect(log.texts, `answer text set exactly once: ${ctx}`).toEqual([shown]);
+  expect(log.first, ctx).toHaveLength(1);
+  expect(log.first[0].reveal, ctx).toBe(true);
+  expect(log.first[0].animation, ctx).toBe('h-reveal');
+});
+
+test('@st2 an earlier pack answer never fades again when a new answer arrives', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.addInitScript(() => {
+    const log = { armed: false, revealed: [] };
+    window.__npk = log;
+    const txt = (el) => el.textContent.replace(/\s+/g, ' ').trim();
+    const look = () => {
+      if (!log.armed) return;
+      for (const el of document.querySelectorAll('.h-msg.fathom .h-msg-b.h-reveal')) {
+        const t = txt(el);
+        if (t && !log.revealed.includes(t)) log.revealed.push(t);
+      }
+    };
+    const start = () => {
+      new MutationObserver(look).observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ['class'] });
+    };
+    if (document.documentElement) start();
+    else document.addEventListener('readystatechange', start, { once: true });
+  });
+  await gotoRoute(page, 'packs/giving');
+  await page.getByRole('button', { name: 'What if', exact: true }).click();
+  const packAnswer = page.locator('.h-thread .h-msg.fathom');
+  await expect(packAnswer).toHaveCount(1);
+  const packBody = packAnswer.first().locator('.h-msg-b');
+  await expect(packBody).not.toHaveText('');
+  await expect(packAnswer.first().locator('details.h-src')).toHaveCount(1);
+  const packText = (await packBody.textContent()).replace(/\s+/g, ' ').trim();
+  // Let the pack answer's own reveal window (400 ms) pass before the ask is recorded.
+  await expect(packBody).not.toHaveClass(/\bh-reveal\b/, { timeout: 5_000 });
+  await page.evaluate(() => { window.__npk.armed = true; });
+
+  // Ask a new question in the panel beside the pack.
+  await page.locator('button.h-askp-launch').click();
+  const panel = page.locator(PANEL);
+  await expect(panel).toBeVisible();
+  const input = panel.locator('form.h-askx-compose textarea[name="q"]');
+  await expect(input).toBeFocused();
+  await input.fill(QUICK);
+  await input.press('Enter');
+  const fresh = panel.locator('.h-askx-msgs .h-msg.fathom').last();
+  await expect(fresh).toBeVisible({ timeout: 30_000 });
+  await expect(panel.locator('.h-askx-pend')).toHaveCount(0);
+  const freshText = (await fresh.locator('.h-msg-b').textContent()).replace(/\s+/g, ' ').trim();
+  expect(freshText).not.toBe(packText);
+  // Let the reveal window close so every late re-render is recorded too.
+  await page.waitForTimeout(700);
+
+  const log = await page.evaluate(() => window.__npk);
+  const ctx = JSON.stringify({ log, packText, freshText });
+  expect(log.revealed, `only the new answer is ever revealed: ${ctx}`).toEqual([freshText]);
+  expect(log.revealed, ctx).not.toContain(packText);
+  await expect(packBody).not.toHaveClass(/\bh-reveal\b/);
+});
