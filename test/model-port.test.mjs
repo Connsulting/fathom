@@ -311,18 +311,51 @@ for (const adapter of ['openai','ollama']) test(`${adapter} redacts the complete
   assert.equal(calls,2);assert.deepEqual(JSON.parse(r.text),{note:'ok'});
 });
 
-test('typed-choice requests apply the same final provider scrub',async()=>{
+test('typed-choice requests apply the shared engine scrub',async()=>{
   const ssn=['000','12','3456'].join('-');
-  const port=createModelPort({selection:{adapter:'jev'},credential:{value:'synthetic-key'},transport:async(_,o)=>{
+  const engine=createEngine({mode:'live',credential:{type:'api-key',value:'synthetic-key'},reservations:admitted(),modelTransport:async(_,o)=>{
     assert.ok(!o.body.includes(ssn));assert.ok(o.body.includes('XXX-XX-XXXX'));return Response.json(jevResponse());
   }});
-  assert.equal((await port.complete({choices:[{...choiceQuestions[0],state:{ssn},instructions:ssn}],maxTokens:64})).status,'success');
+  assert.equal((await engine.call({purpose:'categorize',messages,choices:[{...choiceQuestions[0],state:{ssn},instructions:ssn}],maxTokens:64})).choices[0].choice,'Groceries');
 });
-
 
 test('admission refusal identity and fields survive the completion port unchanged',async()=>{
   const refusal=new EngineOffError();
   const engine=createEngine({mode:'fake',admitRound:()=>{throw refusal;}});
   await assert.rejects(engine.call({purpose:'chat',messages}),error=>error===refusal&&!Object.hasOwn(error,'code'));
   assert.equal(modelErrorCode(refusal),'paused');assert.equal(refusal.code,undefined);
+});
+
+
+for(const adapter of ['openai','ollama']) test(`${adapter} holds zero input usage instead of settling a free round`,async()=>{
+  const reservations=admitted();
+  const engine=createEngine({mode:'live',modelConfig:config(adapter),reservations,modelTransport:async()=>Response.json(adapter==='openai'
+    ?{choices:[{finish_reason:'stop',message:{content:'Synthetic'}}],usage:{prompt_tokens:0,completion_tokens:0}}
+    :{done:true,message:{content:'Synthetic'},prompt_eval_count:0,eval_count:0})});
+  await assert.rejects(engine.call({purpose:'chat',messages}),e=>e.code==='accounting_hold');
+  assert.deepEqual(reservations.events.map(e=>e[0]),['reserve','hold']);
+});
+
+test('a zero reported cost cannot override positive configured token rates',async()=>{
+  const reservations=admitted(),entries=[];
+  const engine=createEngine({mode:'live',modelConfig:config('openai'),reservations,
+    ledger:{monthSpendUsd:()=>0,record:e=>entries.push(e)},modelTransport:async()=>Response.json({
+      choices:[{finish_reason:'stop',message:{content:'Synthetic'}}],usage:{prompt_tokens:10,completion_tokens:5,cost:0}})});
+  const result=await engine.call({purpose:'chat',messages});
+  assert.equal(result.costUsd,.000020);assert.equal(entries[0].costUsd,.000020);
+  assert.equal(reservations.events.at(-1)[2].costUsd,.000020);
+});
+
+
+test('the shared engine scrub precedes the SDK runner without cloning live capabilities',async()=>{
+  const ssn=['000','12','3456'].join('-');
+  let calls=0;
+  const engine=createEngine({mode:'live',credential:{type:'api-key',value:'synthetic-key'},reservations:admitted(),roundRunner:async req=>{
+    calls++;assert.ok(!JSON.stringify({system:req.system,messages:req.messages,tools:req.tools,schema:req.schema}).includes(ssn));
+    assert.ok(req.system.includes('XXX-XX-XXXX'));assert.equal(typeof req.registry.invoke,'function');
+    assert.equal(req.credential.value,'synthetic-key');
+    return {text:'Synthetic',content:[{type:'text',text:'Synthetic'}],model:DEFAULT_MODEL,tokens:{input_tokens:10,output_tokens:2},costUsd:.001,status:'success',toolResults:[],details:{}};
+  }});
+  await engine.call({purpose:'chat',system:ssn,messages:[{role:'user',content:ssn}],tools:[{...tool,description:ssn}],schema:{type:'string',description:ssn}});
+  assert.equal(calls,1);
 });

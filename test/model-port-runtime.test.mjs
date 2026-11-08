@@ -155,6 +155,9 @@ for (const mode of ['live','fake']) test(`scheduled Confirm resolution continues
   const config={engine:mode,claudeCredentialFile:keyFile,clock:'2032-01-01'};
   const engine=createRuntimeEngine({db,platform,householdId,config,funded:()=>true,testTransport:{baseURL:emulator.baseURL},
     modelTransport:async()=>{categoryCalls++;assert.fail('the optional categorizer is off');}});
+  await engine.init();
+  const off=await createJev({complete:engine.complete,enabled:false});
+  assert.equal((await guessCategories(db,off)).skipped,'provider_off');
   const call=engine.call;
   engine.call=req=>{jobCalls++;return call({...req,...(mode==='fake'?{fake:[{text,costUsd:.001}]}:{})});};
   const handlers=defaultHandlers({});

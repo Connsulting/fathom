@@ -1,4 +1,3 @@
-import { redactProviderText } from '../../ingest/redact.mjs';
 export const JEV_MODEL = 'jev-1.14.0';
 export const JEV_INPUT_USD = .042 / 1_000_000;
 const probability = n => Number.isFinite(n) && n >= 0 && n <= 1;
@@ -37,7 +36,7 @@ export function createJevAdapter({ transport = fetch, credential } = {}) {
         const timeout = new Promise((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(Object.assign(new Error(), { name: 'TimeoutError' })); }, timeoutMs); });
         return await Promise.race([(async () => {
           const response = await transport('https://api.typesafe.ai/v1/systemone', { method: 'POST',
-            headers: { Authorization: `Bearer ${auth.value}`, 'Content-Type': 'application/json' }, body: JSON.stringify(redactProviderText(jevBody(choices))), signal: controller.signal });
+            headers: { Authorization: `Bearer ${auth.value}`, 'Content-Type': 'application/json' }, body: JSON.stringify(jevBody(choices)), signal: controller.signal });
           if (!response.ok) return { ...base, status: 'model_error', is_error: true, costUsd: 0, httpStatus: response.status,
             retryAfterMs: Math.min(10000, Math.max(0, Number(response.headers?.get('retry-after')) * 1000 || 0)),
             errorCode: response.status === 429 ? 'rate_limit' : response.status === 401 || response.status === 403 ? 'authentication'
