@@ -358,3 +358,15 @@ test('removing a file removes its documents and recomputes a balance figure it o
   await T.callTool('undo', { operation: 'undo', id: out.receipt.id }, toolCtx(s));
   assert.equal(docs(), 1);
 }));
+
+test('an archived account leaves accounts.net_worth and household.health by default', () => withStore(async ({ s, invest }) => {
+  const worth = () => T.callTool('accounts', { operation: 'net_worth' }, toolCtx(s));
+  const health = () => T.callTool('household', { operation: 'health' }, toolCtx(s));
+  const mentions = (out) => JSON.stringify(out).includes(invest);
+  assert.ok(mentions(await worth()) && mentions(await health()), 'precondition: both read the investment account');
+  const out = await T.callTool('sources', { operation: 'archive_account', id: invest }, toolCtx(s));
+  assert.ok(!mentions(await worth()), 'net worth leaves the archived account out');
+  assert.ok(!mentions(await health()), 'data health leaves the archived account out');
+  await T.callTool('undo', { operation: 'undo', id: out.receipt.id }, toolCtx(s));
+  assert.ok(mentions(await worth()));
+}));
