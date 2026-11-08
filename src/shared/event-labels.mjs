@@ -27,6 +27,7 @@ const VALUE = Object.freeze({
   'household.filingStatus': 'Filing status updated',
   'household.dependents': 'Number of dependents updated',
   'household.dependentAges': 'Dependent ages updated',
+  'household.birthYears': 'Birth years updated',
   'income.agiEstimate': 'Income estimate updated',
   'giving.annualEstimate': 'Yearly giving estimate updated',
 });
