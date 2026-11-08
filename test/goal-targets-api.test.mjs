@@ -80,61 +80,45 @@ test('GET /api/goals/suggestions: one record per untargeted owner goal, behind t
 
   const body = await ok(srv.request({ path: '/api/goals/suggestions' }));
   assert.equal(body.clock, CLOCK);
-  assert.deepEqual(body.suggestions.map(s => s.goalId).sort(), [g.cushion, g.free, g.kids].sort());
-  const cushion = recOf(body.suggestions, g.cushion);
-  assert.equal(cushion.state, 'suggested');
-  assert.equal(cushion.accept.target, 18100);
-  assert.equal(recOf(body.suggestions, g.free).accept.target, 902000);
+  // Fathom adopted the cushion and work-optional targets on create; only the question remains.
+  assert.deepEqual(body.suggestions.map(s => s.goalId), [g.kids]);
   const kids = recOf(body.suggestions, g.kids);
   assert.equal(kids.state, 'question');
   assert.equal(kids.accept, null);
 
-  // The same records ride on the scenario.
+  // The same records ride on the scenario, next to the adopted targets.
   const sc = await srv.getScenario();
   assert.deepEqual(sc.suggestions, body.suggestions);
+  assert.equal(sc.fig[`goal.${g.cushion}.target`].v, 18100);
+  assert.equal(sc.fig[`goal.${g.free}.target`].v, 902000);
+  assert.equal(sc.fig[`goal.${g.boat}.target`].src, 'goal-target', 'a typed target is untouched');
 });
 
-test('POST /api/goals/:id/suggestion dismisses, restores and sets the withdrawal rate; bad input is refused', async t => {
+test('POST /api/goals/:id/suggestion undoes an adopted target; bad input is refused', async t => {
   const srv = await serve(t);
   const g = await goals(srv);
 
-  let { scenario } = await ok(suggestion(srv, g.cushion, { action: 'dismiss' }));
-  assert.equal(recOf(scenario.suggestions, g.cushion).state, 'dismissed');
-  assert.equal(recOf((await ok(srv.request({ path: '/api/goals/suggestions' }))).suggestions, g.cushion).state, 'dismissed', 'the dismissal persists');
-  ({ scenario } = await ok(suggestion(srv, g.cushion, { action: 'restore' })));
-  assert.equal(recOf(scenario.suggestions, g.cushion).state, 'suggested');
-
-  ({ scenario } = await ok(suggestion(srv, g.free, { withdrawalRate: 0.03 })));
-  const free = recOf(scenario.suggestions, g.free);
-  assert.equal(free.params.withdrawalRate, 0.03);
-  assert.equal(scenario.fig[free.figures.target].v, 1202000, '36,060 / 0.03');
-  assert.equal(free.accept.target, 1202000);
-
-  for (const bad of [{ withdrawalRate: 0.5 }, { withdrawalRate: 0.01 }, { withdrawalRate: '0.03' }, { action: 'explode' },
-    { action: 'dismiss', withdrawalRate: 0.03 }, {}]) {
+  for (const bad of [{ withdrawalRate: 0.03 }, { action: 'dismiss' }, { action: 'restore' }, { action: 'explode' },
+    { action: 'undo', withdrawalRate: 0.03 }, {}]) {
     await fails(suggestion(srv, g.free, bad), 400);
   }
-  assert.equal(recOf((await srv.getScenario()).suggestions, g.free).params.withdrawalRate, 0.03, 'refused bodies change nothing');
-  await fails(suggestion(srv, 'gnosuchgoal0', { action: 'dismiss' }), 404);
-  await fails(suggestion(srv, g.seed, { action: 'dismiss' }), 409);
+  assert.equal((await srv.getScenario()).fig[`goal.${g.free}.target`].v, 902000, 'refused bodies change nothing');
+  const { scenario } = await ok(suggestion(srv, g.free, { action: 'undo' }));
+  assert.equal(recOf(scenario.suggestions, g.free).state, 'declined');
+  assert.equal(scenario.fig[`goal.${g.free}.target`], undefined);
+  await fails(suggestion(srv, 'gnosuchgoal0', { action: 'undo' }), 404);
+  await fails(suggestion(srv, g.seed, { action: 'undo' }), 409);
+  await fails(suggestion(srv, g.boat, { action: 'undo' }), 409);
 });
 
-test('accepting a suggestion through POST /api/goals/:id targets the goal and its pace', async t => {
+test('an adopted target puts the goal on pace with calculator provenance', async t => {
   const srv = await serve(t);
   const g = await goals(srv);
-  const before = await srv.getScenario();
-  const record = recOf(before.suggestions, g.cushion);
-  assert.equal(before.fig[`suggest.${g.free}.target`].src, 'calc:targets');
-  assert.equal(before.fig[record.figures.target].src, 'calc:targets');
-  assert.equal(before.src['calc:targets'].label, 'Suggested target calculator');
-
-  const { scenario } = await ok(srv.postJson(`/api/goals/${g.cushion}`, record.accept));
-  assert.equal(recOf(scenario.suggestions, g.cushion), undefined, 'an accepted goal has a target and no suggestion');
+  const scenario = await srv.getScenario();
   const pace = scenario.pace.goals.find(p => p.id === g.cushion);
-  assert.ok(pace, 'the accepted goal is on pace');
+  assert.ok(pace, 'the adopted goal is on pace');
   assert.equal(pace.target.v, 18100);
-  assert.equal(pace.targetDate, record.accept.targetDate);
-  assert.ok(recOf(scenario.suggestions, g.free), 'other suggestions remain');
-  assert.equal(scenario.fig[`suggest.${g.free}.target`].src, 'calc:targets');
+  assert.equal(scenario.fig[`goal.${g.cushion}.target`].src, 'calc:targets');
   assert.equal(scenario.src['calc:targets'].label, 'Suggested target calculator');
 });
+

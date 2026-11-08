@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
-import { tempInstance, tempDir, serveAppFixture } from './helpers/server.mjs';
+import { tempInstance, tempDir, serveAppFixture, createSessionFixture } from './helpers/server.mjs';
 import { getTool, CAPABILITIES } from '../src/tools/index.mjs';
 import { createEngine } from '../src/engine/index.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
@@ -95,7 +95,8 @@ test('Ask and MCP share the resolved household services and root, with actor-bou
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'off', FATHOM_CLOCK: '2026-11-07' });
   const app = await serveAppFixture({ db: s.db, platform: s.platform, config, secrets: s.secrets, engine, scheduler });
   t.after(() => app.close());
-  const { key } = app.keys.create({ householdId: s.householdId, name: 'Synthetic services' });
+  const creator = await createSessionFixture(s.platform, { email: 'services@example.test', role: 'member' });
+  const { key } = app.keys.create({ householdId: s.householdId, userId: creator.user.id, name: 'Synthetic services' });
   const mcp = rpcResult(await callToolRpc(app.baseUrl, key, 'transactions', { operation: 'search' }));
   assert.ok(!mcp.isError, mcp.content[0].text);
   assert.equal(JSON.parse(mcp.content[0].text).statements, null, 'MCP uses its explicit evidence, never a conversation');

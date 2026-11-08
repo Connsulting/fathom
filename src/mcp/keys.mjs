@@ -81,8 +81,8 @@ function cleanName(name) {
 // createKeyService({ platform, secret, creatorActive }): `secret()` returns the MCP HMAC secret or
 // throws (a missing or invalid secret makes every call throw KeyError('unavailable'));
 // creatorActive(userId, householdId) answers whether a key's creator is still an active member of
-// the key's household. A key whose creator is not active fails closed in verify; ownerless keys
-// (user_id NULL) do not depend on it.
+// the key's household. Membership version and household generation are captured at creation and
+// rechecked on verification. Only a synthetic demo household may issue an ownerless key.
 // create({ householdId, name, scopes, userId }) -> { key, record }
 // list({ householdId, userId }) -> records of that household (only userId's own when userId is set)
 // revoke(id, { householdId, userId }) -> record; an id of another household is not_found, another
@@ -96,7 +96,9 @@ export function createKeyService({ platform, secret, creatorActive, now = () => 
   const all = platform.prepare('SELECT * FROM api_keys ORDER BY created_at, id');
   const ofHousehold = platform.prepare('SELECT * FROM api_keys WHERE household_id = ? ORDER BY created_at, id');
   const owned = platform.prepare('SELECT * FROM api_keys WHERE household_id = ? AND user_id = ? ORDER BY created_at, id');
-  const insert = platform.prepare('INSERT INTO api_keys (id, household_id, name, key_hash, scopes, created_at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  const insert = platform.prepare('INSERT INTO api_keys (id, household_id, name, key_hash, scopes, created_at, user_id, household_generation, membership_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  const householdState = platform.prepare('SELECT status, mode, generation FROM households WHERE id = ?');
+  const membership = platform.prepare('SELECT status, version FROM household_memberships WHERE user_id = ? AND household_id = ?');
   const revokeStmt = platform.prepare('UPDATE api_keys SET revoked_at = ? WHERE id = ? AND household_id = ? AND revoked_at IS NULL');
   const touchStmt = platform.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?');
 
@@ -118,10 +120,15 @@ export function createKeyService({ platform, secret, creatorActive, now = () => 
       const hh = household(householdId);
       const clean = cleanName(name);
       const scopeList = normalizeScopes(scopes);
+      const state = householdState.get(hh);
+      const member = userId === null ? null : membership.get(userId, hh);
+      if (state?.status !== 'active' || (userId === null ? state.mode !== 'demo' : member?.status !== 'active' || !creatorActive(userId, hh))) {
+        throw new KeyError('forbidden', 'active household membership required');
+      }
       const serverSecret = hmacSecret();
       const key = KEY_PREFIX + randomBytes(32).toString('base64url');
       const id = 'key_' + randomBytes(6).toString('hex');
-      insert.run(id, hh, clean, hashKey(key, serverSecret), JSON.stringify(scopeList), now().toISOString(), userId);
+      insert.run(id, hh, clean, hashKey(key, serverSecret), JSON.stringify(scopeList), now().toISOString(), userId, state.generation, member?.version ?? null);
       return { key, record: toRecord(byId.get(id, hh)) };
     },
 
@@ -155,7 +162,14 @@ export function createKeyService({ platform, secret, creatorActive, now = () => 
         if (same && match === null) match = row;
       }
       if (!match || match.revoked_at !== null) return null;
-      if (match.user_id !== null && !creatorActive(match.user_id, match.household_id)) return null;
+      const state = householdState.get(match.household_id);
+      if (state?.status !== 'active' || state.generation !== match.household_generation) return null;
+      if (match.user_id === null) {
+        if (state.mode !== 'demo') return null;
+      } else {
+        const member = membership.get(match.user_id, match.household_id);
+        if (member?.status !== 'active' || member.version !== match.membership_version || !creatorActive(match.user_id, match.household_id)) return null;
+      }
       return { ...toRecord(match), userId: match.user_id };
     },
 

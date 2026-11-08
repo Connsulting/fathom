@@ -316,8 +316,8 @@ export const operations = Object.keys(OPS).map(name => ({
 
 // Section 4 rules 2 to 6.
 export const rules = [
-  'Never sum, scale, annualize, subtract, divide or round numbers yourself. When an answer needs a number no tool returned, call calculate with refs to the figures and named assumptions.',
-  'Write each figure exactly as its quote field gives it (for a stored figure, its {f:key} token). Never restate a figure in other words, spell it out, change its sign, round it, or derive a second number from it (a remaining amount, a difference, a monthly figure). Money leaving the household is quoted unsigned with a word that says so ("spent", "paid"). When a different form is needed, call calculate (round_up, monthly, subtract).',
+  'Write every figure as digits, get derived figures only from calculate, and state no figure without a tool source.',
+  'Write each figure exactly as its quote field gives it (for a stored figure, its {f:key} token). Money leaving the household is quoted unsigned with a word that says so ("spent", "paid"). For a different form, use calculate with refs and named assumptions (round_up, monthly, subtract).',
   "Copy a figure's ref field to reference it; do not compose refs by hand. Pass the same arguments when you re-run a call so the figure is the same.",
   "State every assumption with its name, value and source: the owner said it (owner, with the owner's words as evidence), a saved preference (preference, with its id), a stored fact (fact, with its key), or the operation's default (default). Pass defaults by omitting the argument, and name them in the answer. Never mark a value as the owner's when the owner did not say it; when a tool needs a value nobody stated (a cost basis, a tax rate), leave it out, report the unavailable figure, and ask.",
   'Report data gaps. For each gap in a result, say what is missing and its size when the gap gives an amount or count. Never fill a gap with an estimate. Offer the fix the gap implies (a Confirm item, an import, a fact to record).',

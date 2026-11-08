@@ -125,7 +125,7 @@ export function sourcesHtml(m) {
     + group('Numbers from tools', lits)
     + group('Pack entries', entries)
     + (read.length ? `<p class="h-src-note">Knowledge packs in context: ${read.map(esc).join(', ')}</p>` : '')
-    + (pv.model ? `<p class="h-src-note">Answered by ${esc(pv.model)}</p>` : '')
+    + (pv.model ? `<p class="h-src-note">Answered by Fathom</p>` : '')
     + '</div></details>';
 }
 
