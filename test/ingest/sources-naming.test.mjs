@@ -1,3 +1,4 @@
+import { importProposedRows } from '../helpers/import-proposal-fixture.mjs';
 // SRC1 AC1: every source in ingestState(db).sources is named by its real origin, never by its
 // parser label. A file source whose accounts share one institution is named for it; otherwise it
 // carries its file name, and with several live files the newest name plus " and N more files".
@@ -89,7 +90,9 @@ test('a source with no institution is named for its file', () => withStore(async
 
 test('the bank activity and balance fixtures are named by institution or file, never by parser', () => withStore(async (s) => {
   await ingest(s, fixture('Chase7766_Activity_20320305.csv', 'text/csv'));
-  await ingest(s, fixture('month-end-balances.csv', 'text/csv'));
+  s.db.prepare("INSERT INTO accounts(id,name,kind,identity) VALUES ('balance-synthetic','Daily account','cash','synthetic-balance')").run();
+  const reviewed = await importProposedRows(s,[['2032-02-29',1400.25],['2032-03-31',2300.75]].map(([asOf,amount])=>({target:'balance',basis:'closing',datePrecision:'day',fields:{accountId:'balance-synthetic',asOf,amount}})),{name:'month-end-balances.csv'});
+  assert.equal(reviewed.status,'imported');
   for (const name of ['Chase7766_Activity_20320305.csv', 'month-end-balances.csv']) {
     const source = sourceOfFile(s, name);
     assertNotParserLabel(source);

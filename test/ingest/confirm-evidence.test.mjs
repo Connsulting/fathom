@@ -1,3 +1,4 @@
+import { seedHistoricalRows, historicalTaxRows } from '../helpers/historical-import.mjs';
 // AC2 (plan feat-confirm-context, Interfaces): every best guess carries evidence that names a field
 // or a document and quotes stored values. Rule guesses (account kind from the account name, same
 // date and amount for a near duplicate, joint for a holder naming both household members) win over
@@ -153,7 +154,8 @@ describe('ingestState', () => {
   let FR;
   before(async () => { FR = await src('src/ingest/freshness.mjs'); });
 
-  test('items carry detail, guess with source and evidence, rank and group, ordered by rank', () => withHousehold((s) => {
+  test('items carry detail, guess with source and evidence, rank and group, ordered by rank', () => withHousehold(async (s) => {
+    await seedHistoricalRows(s,fixture('tax-payments.xlsx'),historicalTaxRows(),{parser:'tax-payments',sourceKind:'tax_payments',period:{from:'2031-12-31',to:'2032-03-31'}});
     const owner = pendingFor(s.db, 'account_owner', acct(s.db, '3344', 'Example Card'));
     const kind = pendingFor(s.db, 'account_kind', acct(s.db, '3344', 'Example Card'));
     storeGuess(s.db, owner.id, 'spouse', G.REASON_TEXT.institution);
@@ -196,7 +198,7 @@ describe('ingestState', () => {
       assert.ok(a.rank <= b.rank, `rank order at ${n}`);
       if (a.rank === b.rank && !ACCOUNT_KINDS.includes(a.kind) && !ACCOUNT_KINDS.includes(b.kind)) assert.ok(a.id < b.id, `id order within rank at ${n}`);
     }
-  }, { extra: [fixture('tax-payments.xlsx')] }));
+  }));
 
   test('the demo seed guess renders concrete evidence from the seeded account', async () => {
     const { seedDemo } = await src('demo/seed.mjs');
