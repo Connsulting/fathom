@@ -140,9 +140,12 @@ Use `--cases spending,retirement-hsa-room` to select families or exact case IDs,
 to choose a report directory. Without `--out`, each run writes gitignored
 `evals/out/<timestamp>/scorecard.json` and `summary.md`.
 
-The JSON records each turn's required argument predicates, tool results, runtime expected figures,
-numeric violations, raw attempts, delivered answer, word budget and cost. The Markdown table
-summarizes those checks. Expected financial amounts come from the seeded demo store at runtime.
+The JSON records each turn's required argument predicates, tool results (including Ask's own
+reads), runtime expected figures, numeric violations, raw attempts, delivered answer, word budget
+and cost. Only the delivered answer affects the verdict; failed superseded drafts have a separate
+report-only count. The Markdown table summarizes those checks. Stdout also lists every case's
+status, failing check names and missing operations, plus one receipt per round with its estimate,
+actual spend and remaining budget. Expected financial amounts come from the seeded demo store at runtime.
 A `pass` meets the mechanical checks; the rubric remains a human judgment. An `xfail` names a
 missing tool, while other failures remain failures. `xpass` means the tool gap disappeared and the
 case marker needs updating. Case IDs will be aligned with the tool catalog when it merges.
@@ -150,21 +153,26 @@ case marker needs updating. Case IDs will be aligned with the tool catalog when 
 Numeric grading is independent of production grounding. Only successful tool result payloads from
 this turn count as evidence, excluding argument echoes and metadata such as identifiers, labels
 and dates. A figure token must have been read through `household.figures` this turn. A bad numeric
-attempt fails even if Ask corrects it. The grader detects digit amounts, magnitudes and numeric
+delivered answer fails even if an earlier draft was correct. The grader detects digit amounts, magnitudes and numeric
 words; arithmetic classification checks pairwise addition, subtraction, multiplication, division
 and ratios. Dates, bare years, tax-form and plan identifiers, and idiomatic uses of "one" are not figures.
 Percentages can use a returned fraction. Comparisons allow rounded cents for money and a relative
 tolerance of one part per million for other quantities; this is a bounded arithmetic detector, not a proof
 about all possible expressions.
 
-Live cost comes from new spend-ledger rows, excluding demo spend. A conservative reserve is
-checked before every paid engine round, including tool continuations and grounding retries;
-the run may stop with budget remaining. A budget or unknown-accounting stop ends the run and
-returns nonzero, preserving the current case and charged cost in the report. No later case starts.
+Live cost comes from new spend-ledger rows, excluding demo spend. Eval admission estimates
+input tokens from serialized prompt size plus an SDK allowance, at the five-minute cache-write
+price, and reserves the full output limit. Synthetic usage fixtures keep the estimate above
+actual cost and below three times actual cost; live round receipts are needed to verify calibration.
+Production budget enforcement and conservative unknown-usage accounting remain unchanged.
+An unaffordable round stops its case, then later cases run serially if budget remains. Unknown
+accounting stops the whole run. Either condition returns nonzero and preserves charged cost.
 
 `evals/catalog.json` is the versioned case file. Each turn declares `question`, required tool
 and operation pairs and argument predicates (`eq`, `includes`, `includes_or_absent`, `gte`, `lte`, `exists`), forbidden numeric behavior,
-expectation descriptors, `maxWords`, and a rubric. Optional follow-ups are additional turns.
+expectation descriptors and a rubric. Word limits default to the shared Ask contract
+(`src/shared/answer-contract.mjs`); a tighter `maxWords` needs a `wordLimitReason`.
+Optional follow-ups are additional turns.
 `expectedFail.missingOperations`, `missingCapabilities` and `missingScript` name missing requirements.
 `requires.operations` holds dotted pairs, and `requires.script` gates later-ticket scripts under
 `evals/scripts/<case-id>.mjs`, exporting `script(ctx)`. The executable
