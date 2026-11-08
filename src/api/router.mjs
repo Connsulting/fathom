@@ -366,7 +366,9 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
             household, db: household?.db, engine: household?.engine, packs: household?.packs, answerer: household?.answerer,
             scheduler: household?.scheduler, transport: household?.transport, platform, config, identity, auth, backups,
             get keys() { if (config.publicDemo) throw demoOff(); return keys; },
-            params, query, body, uploads, req, res, ...(onEvent ? { onEvent } : {}),
+            params, query, body, uploads, req, res,
+            assertResponseContext() { const lost = contextLost(); if (lost) throw lost; },
+            ...(onEvent ? { onEvent } : {}),
           }));
         } catch (err) {
           // Once the event stream has started, an error is its last event.

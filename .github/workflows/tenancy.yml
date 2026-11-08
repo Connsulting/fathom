@@ -1,0 +1,62 @@
+name: tenancy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tenancy-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  isolation:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: node --test test-isolation/route-fuzz.mjs
+        env:
+          FATHOM_FUZZ_SEEDS: '2'
+          FATHOM_FUZZ_BUDGET_MS: '600000'
+          FATHOM_FUZZ_REPRO_DIR: ${{ runner.temp }}/isolation-repros
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: isolation-repros
+          path: ${{ runner.temp }}/isolation-repros/
+          if-no-files-found: ignore
+
+  isolation-nightly:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: node --test test-isolation/route-fuzz.mjs
+        env:
+          FATHOM_FUZZ_SEEDS: '100'
+          FATHOM_FUZZ_BUDGET_MS: '3600000'
+          FATHOM_FUZZ_REPRO_DIR: ${{ runner.temp }}/isolation-repros
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: isolation-nightly-repros
+          path: ${{ runner.temp }}/isolation-repros/
+          if-no-files-found: ignore

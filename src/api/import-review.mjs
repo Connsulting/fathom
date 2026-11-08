@@ -12,7 +12,11 @@ export async function reviewProposal(ctx) {
     return { ...result, scenario: scenarioOf(ctx) };
   } catch (error) {
     if (!(error instanceof ToolError)) throw error;
-    if (error.code === 'proposal_stale') { sendJson(ctx.res, 409, { error: error.message, code: error.code, diff: error.diff ?? [] }); return; }
+    if (error.code === 'proposal_stale') {
+      ctx.assertResponseContext();
+      sendJson(ctx.res, 409, { error: error.message, code: error.code, diff: error.diff ?? [] });
+      return;
+    }
     throw new HttpError({ bad_input: 400, forbidden: 403, not_found: 404 }[error.code] ?? 400, error.message, undefined, error.code);
   }
 }

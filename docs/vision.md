@@ -23,9 +23,9 @@ Sources, in priority order:
 
 ## Status
 
-Built, on `main`: the SQLite store and Horizon UI in one process; dump-everything ingest with an encrypted file vault and a Confirm deck (revisable answers, engine guesses from fixed basis codes); the planner (figures, provenance, war games); in-process jobs (nightly plan, monthly brief, deadline alerts, freshness, Ask trash purge, confirm guesses, SimpleFIN sync); the budgeted engine (`chat`, `job`, `extract`, `confirm`, `title`, with `modelFor` choosing the model); Ask conversations with streamed, grounded answers; MCP with app-issued keys; knowledge packs and Your plans; email transports; household accounts (one household, admin and member roles) with passkey sign-in, emailed enrollment and recovery links, server-side sessions and several passkeys per person; real onboarding (Tell us, Confirm); owner-editable goals and the tradeoff curve; the advisor review workflow; the year-end checklist and accountant packet; the keyboard layer and Ctrl+K switcher; the phone layout and home-screen install; a real-store smoke mode (signed-out checks, or a supplied signed-in storage state); read-only SimpleFIN bank and brokerage connections (balances and transactions; holdings are not mapped); account trend series from balances; plain event labels; war-game Decide and Revisit (a decided salary is the payroll assumption); Files under the Money tab and in the switcher; and the four-tab navigation (Home, Plan, Ask, Money, with Settings behind a gear).
+Built, on `main`: the SQLite store and Horizon UI in one process; dump-everything ingest with an encrypted file vault and a Confirm deck (revisable answers, engine guesses from fixed basis codes); the planner (figures, provenance, war games); in-process jobs (nightly plan, monthly brief, deadline alerts, freshness, Ask trash purge, confirm guesses, SimpleFIN sync); the budgeted engine (`chat`, `job`, `extract`, `confirm`, `title`, with `modelFor` choosing the model); Ask conversations with streamed, grounded answers; MCP with app-issued keys; knowledge packs and Your plans; email transports; isolated household accounts (operator-provisioned households, admin and member roles) with passkey sign-in, emailed enrollment and recovery links, server-side sessions and several passkeys per person; real onboarding (Tell us, Confirm); owner-editable goals and the tradeoff curve; the advisor review workflow; the year-end checklist and accountant packet; the keyboard layer and Ctrl+K switcher; the phone layout and home-screen install; a real-store smoke mode (signed-out checks, or a supplied signed-in storage state); read-only SimpleFIN bank and brokerage connections (balances and transactions; holdings are not mapped); account trend series from balances; plain event labels; war-game Decide and Revisit (a decided salary is the payroll assumption); Files under the Money tab and in the switcher; and the four-tab navigation (Home, Plan, Ask, Money, with Settings behind a gear).
 
-Still deferred: tax filing and money movement (out of scope); multi-household tenancy; a real advisor login (the owner records the verdict); a service worker for the installed phone app; mapping SimpleFIN holdings.
+Still deferred: tax filing and money movement (out of scope); a real advisor login (the owner records the verdict); a service worker for the installed phone app; mapping SimpleFIN holdings.
 
 ## 1. The product in one paragraph
 
@@ -257,7 +257,7 @@ split panes with a command palette), **Horizon** (the calendar year as the spine
 ## 11. Deferred
 
 This list is the original mock-era deferral. The Status section above is what shipped. Still
-deferred from the product: multi-household tenancy; tax filing integrations; money movement (out
+deferred from the product: tax filing integrations; money movement (out
 of scope permanently). Real model calls, the calculators, and household accounts (passkeys, not
 passwords) are built. Read-only SimpleFIN aggregation is built; holdings are not mapped.
 

@@ -1014,7 +1014,9 @@ describe('second-household provisioning gate (AC3)', () => {
     assert.equal(households(), 1);
   });
 
-  test('gated by default (409 multi_household_gated); enabled it provisions; gated again a provisioning household still counts', T, async () => {
+  test('an explicit disabled gate refuses provisioning; enabling it provisions; a provisioning household still counts', T, async () => {
+    assert.equal(store.getPlatformSetting('multi_household_enabled', false), true, 'release migration enables provisioning');
+    store.setPlatformSetting('multi_household_enabled', false);
     assert.equal(store.getPlatformSetting('multi_household_enabled', false), false, 'the gate defaults to off');
     const gated = await provision(operator, 'second-admin@example.test');
     assert.equal(gated.status, 409, gated.text);
@@ -1049,6 +1051,7 @@ describe('second-household provisioning gate (AC3)', () => {
     const p = m.openPlatform(join(dir, PLATFORM_FILE));
     t.after(() => p.close());
     const s = m.createAuthStore(p);
+    s.setPlatformSetting('multi_household_enabled', false);
     const op = enrollMember(s, householdId, 'store-operator@example.test', 'admin');
     await s.grantOperator(op.id);
     p.prepare("UPDATE households SET status = 'provisioning' WHERE id = ?").run(householdId);
@@ -1072,6 +1075,7 @@ describe('second-household provisioning gate (AC3)', () => {
     const p = m.openPlatform(join(dir, PLATFORM_FILE));
     t.after(() => p.close());
     const s = m.createAuthStore(p);
+    s.setPlatformSetting('multi_household_enabled', false);
     assert.equal(s.getPlatformSetting('multi_household_enabled', false), false);
     const op = enrollMember(s, householdId, 'demo-operator@example.test', 'admin');
     await s.grantOperator(op.id);
