@@ -8,15 +8,30 @@
 
 import { asciiMinus } from './format.mjs';
 
-const SSN = /\b\d{3}-\d{2}-\d{4}\b/g;
-const EIN = /\b\d{2}-\d{7}\b/g;
+const SSN = /(?<![A-Za-z\d])\d{3}[-_ \t\u2010-\u2015\u2212]+\d{2}[-_ \t\u2010-\u2015\u2212]+\d{4}(?![A-Za-z\d])/g;
+const EIN = /(?<![A-Za-z\d])\d{2}[-_ \t\u2010-\u2015\u2212]+\d{7}(?![A-Za-z\d])/g;
+const TAX_LABEL = String.raw`(?:SSN|ITIN|EIN|TIN|tax(?:payer)?[ _-]*(?:id(?:entification)?|identifier|number)|social[ _-]+security|individual[ _-]+taxpayer[ _-]+identification|employer[ _-]+identification)(?:[ _-]*number)?`;
+const TAX_FIELD = new RegExp(`^${TAX_LABEL}$`, 'i');
+const LABELED_TAX_ID = new RegExp(String.raw`((?<![a-z\d])${TAX_LABEL}[ \t"'\\:=#_-]*)(\d{9})(?!\d)`, 'gi');
 const LONG_RUN = /\d{5,}/g;
 
 const maskRun = (run) => 'X'.repeat(run.length - 4) + run.slice(-4);
-const maskIds = (text) => text.replace(SSN, 'XXX-XX-XXXX').replace(EIN, 'XX-XXXXXXX');
+// Formatted identifiers are masked even in filenames or unrelated prose. Unformatted nine-digit
+// strings require a tax-ID label so ordinary amounts and numeric evidence IDs stay intact.
+export function redactTaxIdentifiers(text) {
+  return String(text ?? '').replace(SSN, 'XXX-XX-XXXX').replace(EIN, 'XX-XXXXXXX')
+    .replace(LABELED_TAX_ID, (_, label) => `${label}XXXXXXXXX`);
+}
+
+export function redactProviderText(value, field = '') {
+  if (typeof value === 'string') return /^\d{9}$/.test(value) && TAX_FIELD.test(field) ? 'XXXXXXXXX' : redactTaxIdentifiers(value);
+  if (Array.isArray(value)) return value.map(item => redactProviderText(item));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [redactTaxIdentifiers(key), redactProviderText(item, key)]));
+}
 
 export function redact(text) {
-  return maskIds(String(text ?? '')).replace(LONG_RUN, maskRun);
+  return redactTaxIdentifiers(text).replace(LONG_RUN, maskRun);
 }
 
 // Strings are redacted; a number whose integer part has more than 4 digits becomes its redacted
@@ -55,7 +70,7 @@ export function redactForExtraction(text) {
     return token;
   };
   // Unicode minus and dash forms directly before a digit or `$` read as an ASCII minus first.
-  const out = maskIds(asciiMinus(String(text ?? ''))).replace(SCAN, (match, open1, minus1, dollar, minus2, num1, close1, open2, minus3, num2, close2) => {
+  const out = redactTaxIdentifiers(asciiMinus(String(text ?? ''))).replace(SCAN, (match, open1, minus1, dollar, minus2, num1, close1, open2, minus3, num2, close2) => {
     const money = num1 ?? num2;
     if (money === undefined) return match.length > 4 ? maskRun(match) : match;
     const open = open1 ?? open2;

@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { requireActor, undoAction, ensureActionConversation, receiptsFor, receiptMessages } from '../actions/receipts.mjs';
 import { writeRec } from '../store/recs.mjs';
 import { latestProposal, claimProposal, markProposal, executeProposal, isPlainConfirmation } from '../actions/proposals.mjs';
+import { ownerStatements } from '../actions/evidence.mjs';
 import { ToolError } from '../tools/errors.mjs';
 import { queueAccountPairs } from '../ingest/account-merge.mjs';
 // API handlers. Each takes { household, db, config, engine, packs, answerer, params, body } and
@@ -63,7 +64,7 @@ const nowIso = () => new Date().toISOString();
 
 export function scenarioOf(ctx) {
   queueAccountPairs(ctx.db);
-  const scenario = buildScenario(ctx.db, { clock: ctx.config && ctx.config.clock, engineMode: ctx.config && ctx.config.engine, packs: ctx.packs || null });
+  const scenario = buildScenario(ctx.db, { clock: ctx.config && ctx.config.clock, engineMode: ctx.config && ctx.config.engine, modelConfig: ctx.config?.modelPorts, packs: ctx.packs || null });
   scenario.live.publicDemo = ctx.config?.publicDemo === true;
   // The signed-in user's own tour flag; false for a demo or any caller without an identity.
   scenario.live.tourPending = tourPending(ctx);
@@ -155,8 +156,9 @@ export function recAction(ctx) {
     if (!isIndex(arg) || Number(arg) >= tasks.length) throw new HttpError(400, `task index must be 0 to ${tasks.length - 1}`);
     const i = Number(arg);
     const done = parse(row.tasks_done, []);
-    try { writeRec(db, id, 'step', { index: i, checked: !done[i] }, { now: nowIso(), actor: 'ui' }); }
-    catch (e) { if (e instanceof ToolError) throw new HttpError(400, e.message); throw e; }
+    // The step records who acted: the signed-in member, else the app.
+    try { writeRec(db, id, 'step', { index: i, checked: !done[i] }, { now: nowIso(), actor: ctx.identity?.id || 'ui' }); }
+    catch (e) { if (e instanceof ToolError) throw new HttpError(e.code === 'conflict' ? 409 : 400, e.message); throw e; }
     return { scenario: scenarioOf(ctx) };
   }
 
@@ -560,9 +562,12 @@ async function decideProposal(ctx, key, id, decision, ownerText) {
     const run = streaming(turn);
     const { pending } = claim;
     try {
-      const result = await executeProposal(pending, { db, now: stamp(ctx), dataDir: ctx.household?.root, actorId: run.actorId,
+      const toolContext = { db, now: stamp(ctx), dataDir: ctx.household?.root, actorId: run.actorId,
         ownerText, turnId: run.turnId, replan: run.replan, queuePlan: run.queuePlan, conversationKey: key,
-        recId: db.prepare('SELECT rec_id FROM conversations WHERE key = ?').get(key)?.rec_id ?? null, scopes: run.scopes, evidenceMessageId: id });
+        recId: db.prepare('SELECT rec_id FROM conversations WHERE key = ?').get(key)?.rec_id ?? null, scopes: run.scopes, evidenceMessageId: id,
+        channel: 'ask', household: ctx.household, services: ctx.household?.services };
+      toolContext.ownerStatements = () => ownerStatements(toolContext);
+      const result = await executeProposal(pending, toolContext);
       reply = { paragraphs: [CONFIRMED_TEXT], refs: [], provenance: { actionTurn: run.turnId, confirmedProposal: 'm' + id,
         tools: [{ name: pending.tool, args: { operation: pending.operation, ...pending.args }, result: JSON.parse(JSON.stringify(result ?? null)) }] } };
     } catch (e) {

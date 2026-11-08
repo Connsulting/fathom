@@ -339,15 +339,33 @@
 .d-horizon .h-prog span { font-family: var(--mono); font-size: 12px; color: var(--mu); white-space: nowrap; }
 .d-horizon svg .bg { fill: var(--line); }
 .d-horizon svg .fg { fill: var(--ac); }
-.d-horizon .h-tasks li + li { border-top: 1px solid var(--line); }
-.d-horizon .h-task { all: unset; box-sizing: border-box; display: flex; gap: 12px; padding: 10px 0; width: 100%; cursor: pointer; color: var(--tx2); font-size: 14px; }
-.d-horizon .h-task i { flex: none; width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid var(--fa); display: grid; place-items: center; margin-top: 1px; }
-.d-horizon .h-task:hover i { border-color: var(--ac); }
-.d-horizon .h-task.done { color: var(--fa); }
-.d-horizon .h-task.done span { text-decoration: line-through; text-decoration-color: var(--line2); }
-.d-horizon .h-task.done i { background: var(--ac); border-color: var(--ac); color: var(--ink); }
-.d-horizon .h-task.done i .h-i { width: 12px; height: 12px; stroke-width: 2.4; }
-.d-horizon .h-task:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; }
+/* Steps: product-managed. A verifiable step shows a ring until the data clears it; an "I did this"
+   step shows a square. No step is a free checkbox. */
+.d-horizon .h-steps { list-style: none; margin: 0; padding: 0; }
+.d-horizon .h-step { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; color: var(--tx2); font-size: 14px; }
+.d-horizon .h-step + .h-step { border-top: 1px solid var(--line); }
+.d-horizon .h-step-mark { flex: none; width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid var(--fa); display: grid; place-items: center; margin-top: 1px; }
+.d-horizon .h-step.auto .h-step-mark { border-radius: 50%; border-style: dashed; }
+.d-horizon .h-step.done .h-step-mark { background: var(--ac); border: 1.5px solid var(--ac); color: var(--ink); }
+.d-horizon .h-step.done .h-step-mark .h-i { width: 12px; height: 12px; stroke-width: 2.4; }
+.d-horizon .h-step-b { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.d-horizon .h-step-t { line-height: 1.45; overflow-wrap: anywhere; }
+.d-horizon .h-step.done .h-step-t { color: var(--fa); text-decoration: line-through; text-decoration-color: var(--line2); }
+.d-horizon .h-step-n { font-style: normal; font-size: 12px; color: var(--mu); }
+.d-horizon .h-step-c { flex: none; display: flex; align-items: center; gap: 6px; }
+.d-horizon .h-step-c .h-btn { height: 28px; padding: 0 10px; font-size: 13px; }
+.d-horizon .h-step-c .h-ing-ctl { display: inline-flex; }
+.d-horizon .h-step-undo { all: unset; cursor: pointer; font-size: 13px; color: var(--mu); padding: 4px 2px; }
+.d-horizon .h-step-undo:hover { color: var(--tx); text-decoration: underline; }
+.d-horizon .h-step-undo:focus-visible { outline: 2px solid var(--ac); outline-offset: 2px; border-radius: 4px; }
+.d-horizon .h-step-next { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line); font-size: 14px; color: var(--tx2); }
+.d-horizon .h-step-next-k { flex-basis: 100%; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--mu); }
+.d-horizon .h-step-next-k em { font-style: normal; text-transform: none; letter-spacing: 0; margin-left: 6px; font-family: var(--mono); }
+.d-horizon .h-step-next .h-step-t { flex: 1 1 200px; min-width: 0; }
+@media (max-width: 520px) {
+  .d-horizon .h-step { flex-wrap: wrap; }
+  .d-horizon .h-step-c { flex-basis: 100%; padding-left: 30px; }
+}
 .d-horizon .h-advbox p { color: var(--tx2); margin-top: 8px; font-size: 14px; }
 .d-horizon .h-advbox p.h-mute { color: var(--mu); }
 
@@ -1054,7 +1072,6 @@ a.h-dec-t:hover { color: var(--ac2); }
 .d-horizon .h-blocker b { display: block; font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: var(--tx2); margin-bottom: 6px; }
 .d-horizon .h-blocker p { margin: 0 0 6px; font-size: 14px; line-height: 1.5; color: var(--tx); overflow-wrap: anywhere; }
 .d-horizon .h-blocker .h-blocker-do { color: var(--tx2); }
-.d-horizon .h-task-go { flex: none; font-size: 13px; color: var(--ac); margin-left: 8px; white-space: nowrap; }
 .d-horizon .h-answer-field legend { font-size: 13px; line-height: 1.5; color: var(--tx2); margin-bottom: 8px; overflow-wrap: anywhere; }
 .d-horizon .h-answer-toggle { display: flex; gap: 8px; }
 .d-horizon .h-answer-toggle label { position: relative; cursor: pointer; }

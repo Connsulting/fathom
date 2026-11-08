@@ -78,7 +78,7 @@ One line each, taken from merged pull request bodies and deduplicated. The numbe
 
 The header-based owner gate (#11) and its limits are gone; these replace them.
 
-1. `scripts/dump.mjs` sends no session cookie and no `Origin`, so it cannot upload to a real store; it needs an operator-provided session mechanism in a separate change.
+1. `scripts/dump.mjs` requires an operator-provided authenticated session file and explicit household selector; it does not enroll an account or authenticate a passkey itself.
 2. Recovery mail and security notices are sent in process with no durable queue; if the process stops before the send, or a notice fails (logged as `security_notice_failed`), nothing retries.
 3. A sole admin who loses every passkey and the mailbox too needs trusted offline database work; the bootstrap CLI refuses once anyone has enrolled.
 4. Enrollment needs a browser or passkey provider that reports `credProps.rk` true; one that omits it cannot enroll. Only Chromium is proven by the tests.

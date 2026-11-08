@@ -11,7 +11,7 @@ export const CATEGORY_THRESHOLD = 100;
 export const CATEGORY_LIMIT = 10;
 const labels = { household:'Household spending',business:'Business',income:'Income',transfer:'Transfer',tax:'Tax',saving:'Saving or investing',excluded:'Excluded' };
 const nowOf = now => now ?? new Date().toISOString();
-export const isJevProposal = g => g?.model===JEV_MODEL && typeof g.category==='string'
+export const isJevProposal = g => (g?.model===JEV_MODEL || g?.modelPort===true) && typeof g.category==='string'
   && Number.isFinite(g.confidence) && g.confidence>=0 && g.confidence<=1;
 export function loadCategoryInputs(db) {
   const named = parseJson(db.prepare("SELECT value FROM facts WHERE key='accounts.businessEntity' AND (src IS NULL OR src!='planner')").get()?.value,{});
@@ -32,10 +32,10 @@ export function loadCategoryInputs(db) {
       LEFT JOIN confirm_auto a ON a.item_id=i.id`).all().map(r=>({...r,auto:parseJson(r.auto_evidence,null)})),
     guesses:db.prepare('SELECT * FROM transaction_category_guesses').all().map(r=>{
       const p=parseJson(r.category,null);
-      return {...r,category:p?.category??null,confidence:p?.confidence,probabilities:p?.probabilities};
+      return {...r,category:p?.category??null,confidence:p?.confidence,probabilities:p?.probabilities,modelPort:p?.modelPort};
     }) };
 }
-function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice(0,10)),threshold = CATEGORY_THRESHOLD,policy}={}) {
+function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice(0,10)),threshold = CATEGORY_THRESHOLD,policy,accountIds}={}) {
   const input=loadCategoryInputs(db);
   input.transactions=input.transactions.filter(t=>t.date<=clock);
   const {windowTransactionIds}=spendingInputs({...input,clock});
@@ -63,7 +63,10 @@ function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice
       merchant:normalizeMerchant(t.description),guess,...(proposal ? {jev:{category:proposal.category,confidence:proposal.confidence,probabilities:proposal.probabilities}} : {})});
   }
   const order=(a,b)=>Math.abs(b.amount)-Math.abs(a.amount) || a.subject.localeCompare(b.subject);
-  const ranked=[...list,...unknown.values()].sort(order);
+  const selected = accountIds === undefined ? input.transactions : input.transactions.filter(t => accountIds.includes(t.account_id));
+  const selectedIds = new Set(selected.map(t => t.id));
+  const selectedMappings = new Set(selected.map(t => { const c = importedCategory(t); return JSON.stringify([c.parser,c.category]); }));
+  const ranked=[...list,...unknown.values()].filter(c => accountIds === undefined || selectedIds.has(c.transactionId) || (c.kind === 'category_mapping' && selectedMappings.has(c.subject))).sort(order);
   return [...ranked.filter(c=>c.jev),...ranked.filter(c=>!c.jev).slice(0,CATEGORY_LIMIT)].sort(order);
 }
 export function categoryNames(input) {
@@ -162,6 +165,7 @@ export function categoryCoverage(db,options={}) {
   const input=loadCategoryInputs(db), resolved=resolveCategories(input);
   const layers=Object.fromEntries(['correction','import','structural','merchant','guess','uncategorized'].map(k=>[k,0]));
   const buckets=Object.fromEntries(BUCKETS.map(k=>[k,0]));
-  for(const c of resolved.values()) { layers[c.layer]++; buckets[c.bucket]++; }
-  return {rows:resolved.size,layers,buckets,uncategorized:layers.uncategorized,queueSize:checks(db,options).length};
+  const ids = new Set(input.transactions.filter(t => options.accountIds === undefined || options.accountIds.includes(t.account_id)).map(t => t.id));
+  for(const [id,c] of resolved) { if (!ids.has(id)) continue; layers[c.layer]++; buckets[c.bucket]++; }
+  return {rows:ids.size,layers,buckets,uncategorized:layers.uncategorized,queueSize:checks(db,options).length};
 }
