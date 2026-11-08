@@ -1,3 +1,4 @@
+import { recordFactAnswers } from '../facts/answers.mjs';
 import { applyCategoryAnswer, moveCategoryRows } from '../categories/store.mjs';
 import { assertCurrentPair, mergeAccounts, refreshMergedAccounts } from './account-merge.mjs';
 // Confirm queue: short questions an import asks so its rows land in the right place, answered by
@@ -15,7 +16,7 @@ import { accountNaming } from '../accounts/naming.mjs';
 
 export const KINDS = Object.freeze([
   'account_owner', 'account_kind', 'entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 'employer_relation', 'employer_recipient', 'document_recipient',
-  'withholding_conflict', 'account_match', 'transaction_category', 'category_mapping',
+  'withholding_conflict', 'account_match', 'transaction_category', 'category_mapping', 'resolver_fact',
 ]);
 
 export const OWNER_OPTIONS = Object.freeze([
@@ -141,6 +142,7 @@ function answerable(db, id, optionId) {
   if (item.status === 'answered') throw new ConfirmError(item.answer === 'superseded' ? 'stale' : 'answered');
   if (!item.options.some((o) => o.id === optionId)) throw new ConfirmError('bad_option');
   if (optionId !== 'different') assertCurrentPair(db, item);
+  if (item.kind === 'resolver_fact' && db.prepare('SELECT 1 FROM facts WHERE key=?').get(item.context.key)) throw new ConfirmError('stale');
   if (item.kind === 'fact_check' && factIsStale(db, item)) throw new ConfirmError('stale');
   if (item.kind === 'withholding_conflict' && !conflictCurrent(db, item)) throw new ConfirmError('stale');
   return item;
@@ -190,7 +192,7 @@ export function autoInfo(db, itemId) {
 // log, so reverting the answer removes it. Returns applyAnswer's result plus the log.
 function recordAnswer(db, item, optionId, { now, auto = null }) {
   const { result, changes } = captureChanges(db, () => {
-    const applied = applyAnswer(db, item, optionId, { now });
+    const applied = applyAnswer(db, item, optionId, { now, channel: auto?.rule === 'resolver' ? 'resolver' : null });
     db.prepare("UPDATE confirm_items SET status = 'answered', answer = ?, answered_at = ? WHERE id = ?").run(optionId, stamp(now), item.id);
     if (auto) {
       db.prepare(`INSERT INTO confirm_auto (item_id, rule, evidence, created_at) VALUES (?, ?, ?, ?)
@@ -219,14 +221,14 @@ function markUsed(db, id, { now } = {}) {
 // pending item). Cheap: a later change to a logged row (changed_since) shows only on revert. An
 // auto answer to account_owner or account_kind is not final on a later import (imported_since):
 // its account columns revert one by one, so an ordinary import does not block it.
-const IMPORT_EXEMPT = ['account_owner', 'account_kind'];
+const IMPORT_EXEMPT = ['account_owner', 'account_kind', 'resolver_fact'];
 export function finalReason(db, item) {
   if (!item || item.status !== 'answered') return null;
   if (item.answer === 'superseded') return 'stale';
   const undo = db.prepare('SELECT ingest_epoch, used_at FROM confirm_undo WHERE item_id = ?').get(item.id);
   if (!undo) return 'no_undo';
   if (undo.used_at != null) return 'used_since';
-  if (undo.ingest_epoch !== ingestEpoch(db) && !((IMPORT_EXEMPT.includes(item.kind) && hasAuto(db, item.id)) || (item.kind==='transaction_category' && autoInfo(db,item.id)?.rule==='jev_category'))) return 'imported_since';
+  if (undo.ingest_epoch !== ingestEpoch(db) && !((IMPORT_EXEMPT.includes(item.kind) && hasAuto(db, item.id)) || (item.kind==='transaction_category' && hasAuto(db,item.id)))) return 'imported_since';
   return null;
 }
 
@@ -437,8 +439,14 @@ function factIsStale(db, item) {
 }
 
 // Apply an answer by kind. Returns {factsChanged}.
-export function applyAnswer(db, item, optionId, { now } = {}) {
+export function applyAnswer(db, item, optionId, { now, channel = null } = {}) {
   switch (item.kind) {
+    case 'resolver_fact': {
+      const { key, values } = item.context;
+      if (!Object.hasOwn(values, optionId)) throw new ConfirmError('bad_option');
+      recordFactAnswers(db, [{ key, value: values[optionId] }], { now, channel });
+      return { factsChanged: true };
+    }
     case 'transaction_category':
     case 'category_mapping': return applyCategoryAnswer(db,item,optionId,{now});
     case 'account_owner': {
