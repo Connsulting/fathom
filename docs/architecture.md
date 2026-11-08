@@ -440,7 +440,8 @@ The data directory holds `platform.sqlite` (accounts, memberships, sessions, MCP
 data keys, outbound flags) and one directory per household: `households/<id>/{fathom.sqlite,files,
 packs/your-plans,outbox,work}`. A request resolves its runtime (store, engine, packs, scheduler,
 transport) through the session's household membership; a session with no household or no runtime
-is 403. MCP keys are bound to a household (platform `api_keys.household_id`); a CLI that opens a
+is 403. MCP keys bind immutably to a household, its generation and their creator's membership
+version in platform `api_keys`; a CLI that opens a
 store takes `--household <id>`. Files, advisor packets and SimpleFIN access URLs are stored in the
 FTHM2 vault (see Encryption at rest) under the household's data key, wrapped by
 `FATHOM_PLATFORM_KEY_FILE`.
@@ -1316,14 +1317,15 @@ UI.
 MCP keys.
 
 1. Bearer keys stay independent of sessions: a session never authorizes `/mcp` and a key never
-   opens a page. Bearer verification is unchanged.
+   opens a page. Each stateless request resolves the key's household, ignoring browser cookies
+   and refusing household tool arguments.
 2. A new key records its creator in `api_keys.user_id`, from the session. Members list and revoke
-   their own keys (403 for anyone else's); admins list and revoke every key. Keys created before
-   accounts have no creator, stay valid as household keys, and only admins manage them. Removing a
-   user deletes the keys they created; demotion keeps them, because members keep the same data and
-   recommendation access. Revoking a passkey, even the last one, leaves the user's MCP keys live;
-   only removing the user or revoking the key ends them. No MCP tool manages users. Demo key
-   behavior is unchanged.
+   their own keys (403 for anyone else's); admins list and revoke every key in their household.
+   Membership version changes, removal and restore generation changes invalidate old keys.
+   Suspension refuses keys while the household is unavailable. A member can create a fresh key
+   within their current permissions. Legacy ownerless keys bind to the single active admin during
+   offline migration, or are revoked when ownership is ambiguous. Only demo keys may stay
+   ownerless. Revoking a passkey leaves the user's MCP keys live. No MCP tool manages users.
 
 Deployment. The container sits behind a reverse proxy that terminates HTTPS for the
 `FATHOM_PUBLIC_URL` host, serves the app at the root path, and passes `Cookie` and `Origin`
@@ -1731,11 +1733,19 @@ process, so accounting poison lasts for the process, and awaits `init()` once at
    date, description"); other tool literals carry a plain label, never the tool name. A date that
    matches a date in a same-turn tool row or in the context data is sourced to it (a stated year
    must match). Every remaining violation, dates included, is stored in place as
-   `<span class="fx-checking fx-unchecked" title="Not checked against your data">`. Only when two
-   or more figures and more than half of the answer's figures (dates excluded) are unchecked is
-   the answer regenerated once, with a corrective user turn; the stream and the work block then
-   show one step "Revised to remove N unchecked figures" before the reset, never the earlier
-   draft, and `provenance.grounding.revised` is N. If that call fails, the answer is the matching
+   `<span class="fx-checking fx-unchecked" title="Not checked against your data">`. Ask and the eval
+   grader share figure and word-count checks in `src/shared/answer-discipline.mjs`. Ask uses the
+   same sanitized prompt evidence as grounding, including pack bodies and the owner's stated
+   quantities. Its figure gate checks quantity-marked figures and anything grounding flags;
+   ordinary metadata and structural counts do not cause a correction. Word counts use the same
+   plain rendered text as the eval. Any remaining violation
+   triggers one corrective user turn: shorten an over-limit answer unless the owner requested
+   detail, write figures as digits, get derived figures from calculate, and use exact tool values.
+   The stream and work block show "Revised to remove N unchecked figures" before the reset when
+   figures are unchecked, or "Revised to follow the answer rules" otherwise, never the earlier
+   draft. `provenance.grounding.revised` is N when nonzero. The corrected answer is delivered even
+   if violations remain, with kinds only in `provenance.discipline.violations`. The correction keeps
+   any proposal sentence; a proposal absent from the delivered answer is cleared. If that call fails, the answer is the matching
    notice (engine off, over the cap, model error), never the first ungrounded text; the spend the
    engine recorded for each completed round stays in the ledger. Answers stored before this rule
    keep their `.fx-unverified` spans and draft notes.
@@ -2953,7 +2963,7 @@ assistant messages, imported prose and account masks cannot supply evidence. Fac
 "you told Fathom in Ask on <date>" with the signed-in actor id. MCP provenance says "through MCP".
 MCP new fact values require existing typed Fathom conversation evidence or stored data; an invented
 caller quote is insufficient. Read-only keys receive `Permission denied:` before argument validation.
-New scopes appear in key creation with plain descriptions. Ownerless keys use a stable key actor.
+New scopes appear in key creation with plain descriptions. Ownerless demo keys use a stable key actor.
 
 Migration 025 adds durable `action_receipts` and `preferences`. Each receipt commits in the same
 transaction as its write and records actor, conversation, changed fields and prior values. Receipts
