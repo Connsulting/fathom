@@ -183,6 +183,31 @@ test('deferral decisions undo, replan through the hook, and revisit still works 
   await assert.rejects(undo(ctx, reopened), { code: 'conflict' });
 });
 
+test('decide and revisit remain undoable after their real planning runs rewrite war-game figures', async () => {
+  const ctx = await store();
+  const original = ctx.db.prepare("SELECT v FROM figures WHERE key = 'pnl.northwind-advisory.salaryProj'").get().v;
+  const points = loadContent(ctx.db).wargame.salary.points;
+  const point = points.findIndex(p => ctx.db.prepare('SELECT v FROM figures WHERE key = ?').get(`wg.salary.${p.id}.salary`).v !== original);
+  assert.ok(point >= 0);
+  const deferral = () => ctx.db.prepare("SELECT key, v FROM figures WHERE key LIKE 'wg.deferral.%' ORDER BY key").all();
+  const before = deferral();
+  ctx.replan = () => planRun(ctx.db, { now: CLOCK });
+  const chosen = await call(ctx, 'decide', { decisionId: 'salary-2026', point });
+  assert.notDeepEqual(deferral(), before, 'the action really changed the planner-derived figures');
+  await undo(ctx, chosen);
+  assert.equal(decision(ctx.db).status, 'open');
+  assert.equal(factRow(ctx.db, 'business.salaryDecided'), null);
+  assert.deepEqual(deferral(), before);
+  await call(ctx, 'decide', { decisionId: 'salary-2026', point });
+  const revisited = await call(ctx, 'revisit', { decisionId: 'salary-2026' });
+  assert.equal(decision(ctx.db).status, 'open');
+  assert.equal(factRow(ctx.db, 'business.salaryDecided'), null);
+  await undo(ctx, revisited);
+  assert.equal(decision(ctx.db).status, 'decided');
+  assert.equal(factRow(ctx.db, 'business.salaryDecided').locator.point, points[point].id);
+  assert.notDeepEqual(deferral(), before);
+});
+
 test('writes require an actor and Undo keeps its receipt scope and actor', async () => {
   const ctx = await store();
   await assert.rejects(call({ ...ctx, actorId: null }, 'decide', { decisionId: 'salary-2026' }), { code: 'forbidden' });
