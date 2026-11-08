@@ -784,7 +784,9 @@ describe('MG9 Virginia529', () => {
   const va529 = async (entry, { older = false } = {}) => {
     const db = await S.store({ variant: { facts: AGES } });
     if (older) db.prepare("UPDATE accounts SET owner = 'owner' WHERE kind = '529'").run();
-    addFact(db, 'accounts.va529', { [accountIdByMask(db, MASKS.college)]: entry });
+    const id = accountIdByMask(db, MASKS.college);
+    addFact(db, 'accounts.va529', { [id]: entry });
+    if (entry.carryforward === undefined) addFact(db, 'accounts.va529CarryforwardDefault', { [id]: { undone: true } });
     await plan(db);
     return { db, info: computeFor(db).info };
   };
