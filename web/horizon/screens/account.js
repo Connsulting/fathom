@@ -38,6 +38,10 @@ let CARRY = null;
 
 export function reset() { clearTimeout(S.timer); S = fresh(); CARRY = null; }
 
+// The Files page's Merge link opens the dialog with the merge picker already open.
+let MERGE_FOR = null;
+export function requestMerge(id) { MERGE_FOR = id; }
+
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 function dateLabel(iso) {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || ''));
@@ -377,6 +381,7 @@ export function html(id) {
     CARRY = null;
     S = { ...fresh(), id, undo };
   }
+  if (MERGE_FOR === id) { MERGE_FOR = null; if (!S.merge) startMerge(id); }
   const a = accountOf(id);
   if (!a) return frame('Account', '<h1 id="h-dlg-t" class="h-dlg-title">Account not found</h1><p class="h-mute">That account is not in your data right now.</p>');
   // The date filter, when set, for the Ask page chip (the text search is not sent).
@@ -540,20 +545,24 @@ function saveMask() {
   });
 }
 
-function openMerge() {
-  const id = S.id;
-  if (S.merge) { S.merge = null; H.draw(); return; }
+// Opens the merge picker for account `id` and loads its candidates; the caller draws.
+function startMerge(id) {
   const seq = ++GEN;
   const m = { seq, items: null, failed: false, pick: null, busy: false, err: '' };
   if (!S.mask?.busy) S.mask = null;
   S.merge = m;
-  H.draw();
   Promise.resolve(H.api.accountMergeCandidates(id)).then((r) => {
     if (S.id !== id || S.merge !== m) return;
     m.items = r && Array.isArray(r.items) ? r.items : null;
     m.failed = !m.items;
     H.draw();
   });
+}
+
+function openMerge() {
+  if (S.merge) { S.merge = null; H.draw(); return; }
+  startMerge(S.id);
+  H.draw();
 }
 
 function pickMerge(withId) {
