@@ -234,6 +234,7 @@ function categoryTransaction(db, category) {
 }
 test('remaining transaction choices use the resolver without learning automatic answers as personal history', () => store(async db => {
   const transactionId = categoryTransaction(db, 'Uncategorized');
+  db.prepare('INSERT INTO transaction_category_guesses VALUES (?,?,?,?)').run(transactionId, JSON.stringify({ category: 'Groceries', confidence: 0.85 }), 'jev-1.14.0', NOW);
   const engine = model(db, ({ items }) => items.map(i => ({ item: i.id, option: 'Groceries', basis: 'imported_values', refs: [`transactions:${transactionId}`] })));
   await resolvePending(db, engine, options);
   assert.ok(engine.calls.length);
