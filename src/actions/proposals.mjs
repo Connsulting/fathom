@@ -187,8 +187,13 @@ function localProposalRows(db, tool, args) {
           const related = filtered('tax_payments', r => slots.has(r.source_slot) || rekeyed.has(r.dedupe_key));
           const paymentIds = new Set([...payments, ...related].map(r => r.id));
           const payers = new Set(payments.map(r => r.payer));
-          const checks = filtered('confirm_items', r => (r.kind === 'document_recipient' && payers.has(r.subject))
-            || (r.kind === 'withholding_conflict' && [parse(r.context, {}).first, parse(r.context, {}).second].some(ref => {
+          const rememberedRecipient = item.kind === 'employer_recipient' && answer === 'both' && db.prepare(
+            "SELECT subject FROM confirm_items WHERE kind='document_recipient' AND status='answered' AND answer IN ('owner','spouse')"
+          ).all().some(r => payers.has(r.subject));
+          const sweepsConflicts = ['owner','spouse'].includes(answer) || rememberedRecipient
+            || (item.kind === 'withholding_conflict' && ['first','second'].includes(answer));
+          const checks = filtered('confirm_items', r => (item.kind === 'employer_recipient' && answer === 'both' && r.kind === 'document_recipient' && payers.has(r.subject))
+            || (sweepsConflicts && r.kind === 'withholding_conflict' && [parse(r.context, {}).first, parse(r.context, {}).second].some(ref => {
               const row = ref && db.prepare('SELECT * FROM tax_payments WHERE id=?').get(ref.id);
               return paymentIds.has(ref?.id) || (r.status === 'pending' && (!row || row.dedupe_key !== ref.key
                 || (row.file_id ?? null) !== ref.fileId || Math.round(row.amount * 100) !== ref.cents));

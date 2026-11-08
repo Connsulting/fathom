@@ -2,7 +2,7 @@ import { envelope } from '../../calc/figure.mjs';
 import { bindFigures } from '../../calc/aggregate.mjs';
 import { futureValue, requiredMonthly } from '../../calc/growth.mjs';
 import { ACCOUNT_TREATMENT, ACCESS_RULES } from '../../calc/treatment.mjs';
-import { TARGET_PARAMETERS, INVESTMENT_KINDS, independenceProjection, spendingInputs, holdingsTotal, monthsToReach, monthEndAfter } from '../../calc/targets.mjs';
+import { TARGET_PARAMETERS, INVESTMENT_KINDS, independenceProjection, spendingInputs, holdingsTotal, monthsToReach } from '../../calc/targets.mjs';
 import { accountHistory } from '../../pace/build.mjs';
 import { ownerOf } from '../../jobs/planner/data.mjs';
 import { tokenScope } from '../../scenario/build.mjs';
