@@ -157,6 +157,15 @@ const CASES = {
     pairs: [['true', 'false'], ['false', 'true']],
     reopen: ['true', 'false'],
   },
+  stated_value: {
+    setup: async s => C.ask(s.db, { kind: 'stated_value', subject: 'business.salaryRange|{"max":120000,"min":90000}',
+      question: 'Your note says "My salary range from the advisor is 90k to 120k." Use it?',
+      options: [{ id: 'use', label: 'Use it' }, { id: 'not_this', label: 'Not this' }],
+      context: { key: 'business.salaryRange', value: { min: 90000, max: 120000 }, quote: 'My salary range from the advisor is 90k to 120k.',
+        ref: 'notes:synthetic:0', description: 'Save a household detail you told Fathom.' }, now: SETUP_AT }).id,
+    pairs: [['use', 'not_this'], ['not_this', 'use']],
+    reopen: ['use', 'not_this'],
+  },
   transaction_category: {
     setup: async s => {
       await imported(s,categoryHistory());

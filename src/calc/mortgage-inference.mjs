@@ -6,8 +6,14 @@ import { listPreferences } from '../actions/preferences.mjs';
 const sum = rows => rows.reduce((s, r) => s + r.amount, 0);
 const source = (table, rows) => ({ table, ids: rows.map(r => r.id).slice(0, 50), count: rows.length });
 const paymentText = text => /\b(?:pay(?:ment)?|pmt|autopay|transfer)\b/i.test(text || '');
-const paidOffStatement = text => /^(?:(?:my|our|the)\s+)?(?:home\s+)?mortgage\s+(?:(?:is|was|has been)\s+)?(?:(?:already|fully|completely)\s+)*paid[ -]+off(?:\s+(?:in|since)\s+\d{4})?[.!]?$/i.test(text.trim())
-  || /^(?:i|we)\s+(?:have\s+)?(?:already\s+)?paid\s+off\s+(?:my|our|the)\s+(?:home\s+)?mortgage[.!]?$/i.test(text.trim());
+const MONTH = '(?:january|february|march|april|may|june|july|august|september|october|november|december)';
+// A trailing time phrase: "in 2024", "in March", "in March 2026", "since 2024", "last year".
+const WHEN = `(?:\\s+(?:(?:in|since)\\s+(?:${MONTH}(?:\\s+(?:of\\s+)?\\d{4})?|\\d{4})|last\\s+(?:year|month)|(?:earlier\\s+)?this\\s+year))?`;
+const PAID_OFF = [
+  new RegExp(`^(?:(?:my|our|the)\\s+)?(?:home\\s+)?mortgage\\s+(?:(?:is|was|has been)\\s+)?(?:(?:already|fully|completely)\\s+)*paid[ -]+off${WHEN}[.!]?$`, 'i'),
+  new RegExp(`^(?:i|we)\\s+(?:have\\s+)?(?:already\\s+)?paid\\s+off\\s+(?:my|our|the)\\s+(?:home\\s+)?mortgage${WHEN}[.!]?$`, 'i'),
+];
+const paidOffStatement = text => PAID_OFF.some(re => re.test(text.trim()));
 
 export function inferMortgage(db, clock, stated) {
   const values = { ...(stated || {}) }, assumptions = [], sources = [], inferred = {};
@@ -15,13 +21,18 @@ export function inferMortgage(db, clock, stated) {
     sources: evidence, assumptions: [], inferred: {}, missing: [], observedMonthly: null, principalAndInterest: null,
     present: false, loan: null, payments: [], asOf: null });
   const memory = listPreferences(db).find(m => paidOffStatement(m.text));
-  if (values.paidOff === true || values.status === 'paid_off' || values.balance === 0 || memory) return inactive('paid_off',
-    'Your mortgage is paid off. There is no mortgage obligation or future mortgage payoff to project. Other debt payments are not a mortgage payment.',
-    memory ? [source('preferences', [memory])] : [{ table: 'facts', ids: ['obligations.mortgage'], count: 1 }]);
   const accounts = db.prepare('SELECT * FROM accounts WHERE archived_at IS NULL ORDER BY id').all();
   const namedLoans = accounts.filter(a => a.kind === 'loan' && /mortgage|home loan|housing loan/i.test(`${a.name || ''} ${a.display_name || ''}`));
   const balances = new Map(namedLoans.map(a => [a.id, db.prepare('SELECT id,date,amount FROM balances WHERE account_id=? AND date<=? ORDER BY date DESC,id DESC LIMIT 1').get(a.id, clock)]));
   const loans = namedLoans.filter(a => Math.abs(balances.get(a.id)?.amount ?? 0) > 0);
+  if (values.paidOff === true || values.status === 'paid_off' || values.balance === 0 || memory) {
+    // A memory wins over loan data that still shows a balance; the result says so.
+    const overridden = memory && values.paidOff !== true && values.status !== 'paid_off' && values.balance !== 0 && loans.length > 0;
+    const out = inactive('paid_off',
+      `Your mortgage is paid off. There is no mortgage obligation or future mortgage payoff to project. Other debt payments are not a mortgage payment.${overridden ? ' Your memory that the mortgage is paid off overrides the loan balance on file.' : ''}`,
+      memory ? [source('preferences', [memory])] : [{ table: 'facts', ids: ['obligations.mortgage'], count: 1 }]);
+    return overridden ? { ...out, overridden: { by: `preferences:${memory.id}`, inferred: 'active' } } : out;
+  }
   if (namedLoans.length && namedLoans.every(a => balances.get(a.id)?.amount === 0)) return inactive('paid_off',
     'The mortgage loan balance is zero. There is no mortgage obligation or future mortgage payoff to project.',
     [source('accounts', namedLoans), source('balances', [...balances.values()])]);

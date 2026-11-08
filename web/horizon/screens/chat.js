@@ -741,7 +741,7 @@ export function newConversation() {
 // the canned question instead of the text. key null starts a new thread, asked from recId when set.
 // On failure the core keeps the old state and shows its error line; typed text goes back in the
 // composer. Returns false when nothing was sent.
-function sendAsk({ key, recId, text, questionId, draftKey, refocus, host = 'page' }) {
+function sendAsk({ key, recId, text, questionId, draftKey, refocus, host = 'page', context: extra = [] }) {
   if (A.pending || !text) return false;
   // A panel question after the owner moved to another page starts a new conversation (askBegin).
   const k = host === 'panel' && H.askBegin && H.askBegin() ? null : (key || null);
@@ -762,7 +762,7 @@ function sendAsk({ key, recId, text, questionId, draftKey, refocus, host = 'page
   const onEvent = (name, data) => streamEvent(pend, name, data);
   const q = hasQ ? { questionId } : { text };
   // References (kind and id) the owner put in the composer, when there are any.
-  const context = H.askRefs ? H.askRefs(host) : [];
+  const context = [...extra, ...(H.askRefs ? H.askRefs(host) : [])];
   if (context.length) q.context = context;
   const req = live
     ? (k ? api.askStream(q, k, onEvent) : api.newThreadStream({ ...q, recId: rid }, onEvent))
@@ -946,12 +946,13 @@ export function prefillAsk(text) {
   focusInput();
 }
 
-export function askNew(text) {
+// context: references (kind and id) sent with the question, such as the Confirm card it came from.
+export function askNew(text, { context = [] } = {}) {
   const q = String(text || '').trim();
   if (!H || !H.api || !q) return;
   if (!onAsk() || (H.api.route.params && H.api.route.params.id)) H.api.go('ask', {});
   if (A.pending) { H.ui.draft[NEW_DRAFT] = q; H.draw(); focusInput(); return; }
-  sendAsk({ key: null, text: q, draftKey: NEW_DRAFT, refocus: true });
+  sendAsk({ key: null, text: q, draftKey: NEW_DRAFT, refocus: true, context });
 }
 
 // The Ask page shortcuts, registered as the 'ask' screen table in screens/switcher.js. The

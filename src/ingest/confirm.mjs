@@ -15,6 +15,7 @@ import { captureChanges, revertChanges, touches } from './undo.mjs';
 import { accountNaming } from '../accounts/naming.mjs';
 import { applyTransactionPayment } from './transaction-payments.mjs';
 import { answerShape } from '../jobs/triggers/common.mjs';
+import { statedIn } from '../actions/evidence.mjs';
 
 function confirmTransaction(db, fn) {
   if (!db.isTransaction) return tx(db, fn);
@@ -33,6 +34,7 @@ function confirmTransaction(db, fn) {
 export const KINDS = Object.freeze([
   'account_owner', 'account_kind', 'entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 'employer_relation', 'employer_recipient', 'document_recipient',
   'withholding_conflict', 'account_match', 'transaction_category', 'category_mapping', 'resolver_fact', 'transaction_payment',
+  'stated_value',
 ]);
 
 export const OWNER_OPTIONS = Object.freeze([
@@ -178,6 +180,7 @@ function answerable(db, id, optionId) {
   if (item.kind === 'resolver_fact' && db.prepare('SELECT 1 FROM facts WHERE key=?').get(item.context.key)) throw new ConfirmError('stale');
   if (item.kind === 'fact_check' && factIsStale(db, item)) throw new ConfirmError('stale');
   if (item.kind === 'withholding_conflict' && !conflictCurrent(db, item)) throw new ConfirmError('stale');
+  if (item.kind === 'stated_value' && optionId === 'use' && !statedValueCurrent(db, item)) throw new ConfirmError('stale');
   return item;
 }
 
@@ -469,6 +472,16 @@ const PLANNER = 'planner';
 // records the notes value it was asked against (context.stored) and is stale only when the stored
 // fact changed since. A planner check without context.stored (asked before it was recorded) is
 // stale; the next planning run asks it again with the field.
+// A "Use it?" value still holds when no fact is on file for its key (an owner answer is never
+// overwritten) and its quote still states the value.
+function statedValueCurrent(db, item) {
+  const { key, value, quote } = item.context ?? {};
+  if (typeof key !== 'string' || db.prepare('SELECT 1 FROM facts WHERE key = ?').get(key)) return false;
+  let shape;
+  try { shape = answerShape(key); } catch { return false; }
+  return statedIn(value, quote, shape);
+}
+
 function factIsStale(db, item) {
   const current = db.prepare('SELECT value FROM facts WHERE key = ?').get(item.context.key);
   if (item.context.src === PLANNER || item.context.src === 'ledger-confirm') {
@@ -483,6 +496,12 @@ function factIsStale(db, item) {
 export function applyAnswer(db, item, optionId, { now, channel = null, autoRule = null } = {}) {
   switch (item.kind) {
     case 'transaction_payment': return applyTransactionPayment(db, item, optionId);
+    case 'stated_value': {
+      if (optionId !== 'use') return {};
+      if (!statedValueCurrent(db, item)) throw new ConfirmError('stale');
+      recordFactAnswers(db, [{ key: item.context.key, value: item.context.value }], { now });
+      return { factsChanged: true };
+    }
     case 'resolver_fact': {
       const { key, values } = item.context;
       if (!Object.hasOwn(values, optionId)) throw new ConfirmError('bad_option');
