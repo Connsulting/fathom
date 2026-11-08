@@ -1575,9 +1575,9 @@ function goalCard(g) {
   // A live goal's Archive and Delete live in its edit view; an archived one keeps Restore and Delete.
   const del = !g.archived ? `${btn('Edit', `data-goal="edit" data-id="${esc(g.id)}"`, 'ghost')}${life}`
     : ui.goalDel === g.id ? goalDelAsk(g.id)
-      : `${btn('Restore', `data-goal="restore" data-id="${esc(g.id)}"`, 'ghost')}${btn('Delete', `data-goal="delete" data-id="${esc(g.id)}"`, 'ghost')}`;
+      : `${owner && g.status === 'done' ? btn('Reopen', `data-goal="reopen" data-id="${esc(g.id)}"`, 'ghost') : btn('Restore', `data-goal="restore" data-id="${esc(g.id)}"`, 'ghost')}${btn('Delete', `data-goal="delete" data-id="${esc(g.id)}"`, 'ghost')}`;
   const note = owner ? g.note : g.prose;
-  return `<article class="h-goal ${esc((g.statusLabel || g.status || '').replace(/\s+/g, '-'))}${g.archived ? ' archived' : ''}" data-goal-id="${esc(g.id)}"><div class="h-goal-h"><b>${goalTitle(g)}</b><span>${g.archived ? 'Archived' : doneOwner ? 'Done' : owner ? '' : T(g.statusLabel || g.status)}</span>${addBtn('goal', g.id, goalText(g))}</div>${note ? `<p>${gText(g, note)}</p>` : ''}${meta.length ? `<div class="h-meta">${meta.map((m) => `<span>${m}</span>`).join('')}</div>` : ''}${prog}<div class="h-gacts">${del}</div></article>`;
+  return `<article class="h-goal ${esc((g.statusLabel || g.status || '').replace(/\s+/g, '-'))}${g.archived ? ' archived' : ''}" data-goal-id="${esc(g.id)}"><div class="h-goal-h"><b>${goalTitle(g)}</b><span>${owner && g.status === 'done' ? 'Done' : g.archived ? 'Archived' : owner ? '' : T(g.statusLabel || g.status)}</span>${addBtn('goal', g.id, goalText(g))}</div>${note ? `<p>${gText(g, note)}</p>` : ''}${meta.length ? `<div class="h-meta">${meta.map((m) => `<span>${m}</span>`).join('')}</div>` : ''}${prog}<div class="h-gacts">${del}</div></article>`;
 }
 
 function pGoals() {
