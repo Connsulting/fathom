@@ -166,6 +166,7 @@ describe('household A sees only its own data on every financial route', T, () =>
     '/api/keys': { own: true },
     '/api/mcp': {},
     '/api/files': { own: true },
+    '/api/sources': { own: true },
     '/api/confirm': { own: true },
     '/api/confirm/:id': { path: `/api/confirm/${A.confirmId}`, own: true },
     '/api/email': {},
