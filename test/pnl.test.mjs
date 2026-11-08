@@ -15,6 +15,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInstance } from '../src/platform/db.mjs';
+import { callTool } from '../src/tools/index.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import { accountLabel } from '../src/shared/account-label.mjs';
 import { serveAppFixture, tempDb } from './helpers/server.mjs';
@@ -703,4 +704,33 @@ test('pl-ac4 the module exports the contract, takes one object, never writes, an
   await get(`/api/pnl/rows?entity=${encodeURIComponent(STUDIO)}&section=sideways&category=Income`, 400);
   await get(`/api/pnl/rows?entity=${encodeURIComponent(STUDIO)}&section=income&category=Income&month=2032-7`, 400);
   assert.equal(changes(), before, 'the HTTP reads never write the store');
+});
+
+
+test('PN1: P&L lists spending ledgers separately and restores original tab names from locators', async t => {
+  const { db, root } = store(t);
+  file(db);
+  const id = line(db, 'Asters', '2032-03', 'Medical', -120);
+  db.prepare('UPDATE pnl_lines SET locator = ? WHERE id = ?').run(JSON.stringify({ sheet: "Aster's - (Actual Expenses)", cells: ['D2'] }), id);
+  line(db, 'Example Studio', '2032-03', 'Income', 500);
+  fact(db, 'pnl.ledgers', { "Aster's": { kind: 'spending' } });
+  const entities = pnlEntities({ db, clock: CLOCK });
+  assert.equal(entities.find(e => e.key === 'entity:asters').label, "Aster's");
+  assert.equal(entities.find(e => e.key === 'entity:asters').kind, 'spending');
+  assert.equal(entities.find(e => e.key === STUDIO).kind, 'entity');
+  const p = businessPnl({ db, entity: "Aster's", clock: CLOCK });
+  assert.equal(p.entity.kind, 'spending');
+  assert.equal(p.entity.label, "Aster's");
+  assert.equal(p.figures[p.expenses.total].v, 120);
+  const ctx = { db, dataDir: root, clock: CLOCK };
+  const tool = await callTool('business', { operation: 'pnl', from: '2032-03', to: '2032-03' }, ctx);
+  assert.deepEqual(tool.entities.map(e => e.entity.key), [STUDIO]);
+  assert.equal(tool.totals.expenses.value, 0);
+  assert.equal(tool.totals.profit.value, 500);
+  for (const entity of [p.entity.key, p.entity.label]) {
+    await assert.rejects(callTool('business', { operation: 'pnl', entity }, ctx), e => e.code === 'bad_input');
+    await assert.rejects(callTool('business', { operation: 'rows', entity, section: 'expenses', category: 'Medical' }, ctx), e => e.code === 'bad_input');
+  }
+  const rows = await callTool('business', { operation: 'rows', entity: STUDIO, section: 'income', category: 'Income', from: '2032-03', to: '2032-03' }, ctx);
+  assert.equal(rows.figures[rows.sum].v, 500);
 });
