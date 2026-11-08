@@ -18,6 +18,10 @@ import { advisorWait } from '../../shared/advisor-waits.mjs';
 
 const PLAN_TERMS = 'plan_terms_confirmed';
 const OVER_LIMIT = 'retirement_contribution_over_limit';
+// As in the main tax run, a refundable child tax credit the calculator cannot model is limited to
+// income tax and noted, not a hold (household.mjs computes the run either way).
+const CTC = 'ctc_refundable_unsupported';
+const blockOf = hh => (hh.blocked === CTC ? null : hh.blocked);
 const OVER_LIMIT_TEXT = Object.freeze({
   salary: 'A retirement contribution would be over its plan limit at this salary, so this point is left out.',
   deferral: 'A retirement contribution would be over its plan limit with this much moved, so this option is left out.',
@@ -172,6 +176,7 @@ function salaryGame(data, out, ctx) {
   // K2: a point whose tax run is blocked returns {blocked}. A contribution over its limit at that
   // salary (IRC 404(a)(3), 402(g), 415(c)) drops that point alone, listed under excluded with its
   // reason (H3); over the limit at the current salary, or any other block, makes the game invalid.
+  let ctcLimited = false;
   const evaluate = s => out.safe('salaryPoint', () => {
     const pay = payrollTax({ wages: s, filingStatus: f, spouseMedicareWages: otherMedicare });
     const K = cents(P - s - pay.value.employerTotal);
@@ -183,7 +188,8 @@ function salaryGame(data, out, ctx) {
       : [...parts.w2, { person: corp.person, src: `corp:${slug}`, gross: s, comp, agi }];
     const biz = parts.biz.map(b => (b.id === slug && b.kind === 'scorp' ? { ...b, agi: K, qbi: K, w2Wages: comp } : b));
     const hh = householdTax({ ...parts, w2, biz });
-    if (hh.blocked) return { s, blocked: hh.blocked };
+    if (blockOf(hh)) return { s, blocked: hh.blocked };
+    if (hh.blocked === CTC) ctcLimited = true;
     const payrollNet = cents(pay.value.total - pay.value.additionalMedicare);
     const total = cents(hh.fedTotal + (hh.va ?? 0) + payrollNet);
     const room = solo401kRoom({
@@ -218,7 +224,7 @@ function salaryGame(data, out, ctx) {
     ...(retireMissing.includes('retirement.aggregationConfirmed') ? ['plan_aggregation_pending'] : []),
   ];
   const otherAssumed = Object.hasOwn(owner['retirement.otherPlanDeferralsInferred'] || {}, corp.person);
-  const assumptions = [...(pending.length ? pending : [PLAN_TERMS]), ...(otherAssumed ? ['other_plan_deferrals_zero'] : [])];
+  const assumptions = [...(pending.length ? pending : [PLAN_TERMS]), ...(otherAssumed ? ['other_plan_deferrals_zero'] : []), ...(ctcLimited ? [CTC] : [])];
   const content = [];
   for (const p of points) {
     const id = pointId(p.s);
@@ -328,7 +334,7 @@ function deferralValidity(data, ctx) {
   });
   const T = p => {
     const h = householdTax(p);
-    return h.blocked ? { blocked: h.blocked } : { total: cents(h.fedTotal + (h.va ?? 0)), steps: h.steps };
+    return blockOf(h) ? { blocked: h.blocked } : { total: cents(h.fedTotal + (h.va ?? 0)), steps: h.steps, ctc: h.blocked === CTC };
   };
   const next = owner['plan.nextYearBusinessIncome'];
   const base27 = typeof next === 'number' && Number.isFinite(next) ? next : b.agi;
@@ -377,8 +383,9 @@ function deferralModel(data, out, ctx, valid) {
     ? cents(((e.salaryDecided ? e.salaryAssumed : e.proj(e.sums.salary)) + (e.salaryDecided ? e.decidedPayrollTax : e.proj(e.sums.payrollTax))) / 12) : 0;
   const monthlyOut = out.figures['cash.monthlyOut'] ? out.figures['cash.monthlyOut'].v : 0;
   const need = isCorp ? monthlyPayroll : monthlyOut;
-  const codes26 = ['agi_as_magi_proxy'];
-  const codes27 = ['parameters_2026_proxy', ...(base27 === b.agi && typeof next !== 'number' ? ['next_year_flat'] : [])];
+  const ctcLimited = [t26Base, t27Base, ...runs.flatMap(r => [r.t26, r.t27])].some(t => t.ctc);
+  const codes26 = ['agi_as_magi_proxy', ...(ctcLimited ? [CTC] : [])];
+  const codes27 = [...(ctcLimited ? [CTC] : []), 'parameters_2026_proxy', ...(base27 === b.agi && typeof next !== 'number' ? ['next_year_flat'] : [])];
 
   put(out, 'wg.deferral.base.income', A, 'Invoice deferral: monthly invoices', {
     calc: 'deferralBase', inputs: { incomeYtd: e.sums.income, months: m },
