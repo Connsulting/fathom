@@ -42,10 +42,10 @@ export function usageCostUsd(model, usage) {
     oneHour * price.cacheWrite1h) / 1e6).toFixed(12));
 }
 
-export function estimateUnknownCost({ model, maxTokens, system, messages, tools }) {
+export function estimateUnknownCost({ model, maxTokens, system, messages, tools, schema }) {
   const definitions = tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
   // Reserve UTF-8 bytes as input tokens plus an SDK envelope, at the highest standard input rate.
-  const inputTokens = Buffer.byteLength(JSON.stringify({ system, messages, tools: definitions }), 'utf8') + 4096;
+  const inputTokens = Buffer.byteLength(JSON.stringify({ system, messages, tools: definitions, ...(schema ? { schema } : {}) }), 'utf8') + 4096;
   const tokens = { input_tokens: 0, output_tokens: maxTokens, cache_creation_input_tokens: inputTokens,
     cache_creation: { ephemeral_1h_input_tokens: inputTokens } };
   return { costUsd: usageCostUsd(model, tokens), inputTokens, outputTokens: maxTokens };

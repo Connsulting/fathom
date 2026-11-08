@@ -193,9 +193,8 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
   const scripted = [...responses];
   let poisoned = false;
   const call = async ({ purpose, system = '', systemDynamic = '', messages, tools = [], maxTokens = 1024, schema, grounding = {}, fake,
-    toolContext: callContext, onEvent, budgetUsd } = {}) => {
+    toolContext: callContext, onEvent, budget, beforeDispatch } = {}) => {
     if (mode === 'off') throw new EngineOffError();
-    if (budgetUsd !== undefined && (!Number.isFinite(budgetUsd) || budgetUsd < 0)) throw new TypeError('Invalid call budget');
     const answer = createAnswerAssembler();
     // The text streamed in the current round since its last interim event.
     let roundStream = '';
@@ -240,6 +239,8 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     const rounds = [];
     const toolRounds = [];
     let cost = 0;
+    let accounting = null;
+    if (budget && (!Number.isFinite(budget.maxCostUsd) || budget.maxCostUsd < 0 || budget.maxInputTokens !== undefined && (!Number.isInteger(budget.maxInputTokens) || budget.maxInputTokens <= 0) || budget.timeoutMs !== undefined && (!Number.isInteger(budget.timeoutMs) || budget.timeoutMs <= 0 || budget.timeoutMs > 120000) || budget.correlationId !== undefined && typeof budget.correlationId !== 'string')) throw new TypeError('Invalid request budget');
     for (let roundIndex = 0; roundIndex < maxRounds; roundIndex++) {
       let round;
       const afterTools = [];
@@ -251,11 +252,11 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
         const ts = new Date(now()).toISOString();
         const spend = await ledger.monthSpendUsd(monthKey(ts));
         if (!Number.isFinite(spend) || spend < 0) throw new ModelAccountingError();
-        const remainingBudget = Math.min(capUsd - spend, budgetUsd === undefined ? Infinity : budgetUsd - cost);
-        if (budgetUsd !== undefined && estimateUnknownCost({ model, maxTokens, system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools }).costUsd > remainingBudget) {
-          throw new BudgetExceededError();
-        }
         if (spend >= capUsd) { const error = new BudgetExceededError(); error.toolResults = allResults; throw error; }
+        const estimate = budget ? estimateUnknownCost({ model, maxTokens, system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools, schema }) : null;
+        const allowance = Math.min(capUsd - spend, (budget?.maxCostUsd ?? Infinity) - cost);
+        if (budget && (estimate.costUsd > allowance || estimate.inputTokens > (budget.maxInputTokens ?? Infinity))) throw new BudgetExceededError();
+        if (beforeDispatch) await beforeDispatch({ model, ...estimate, allowance });
         if (admitRound) await admitRound({ purpose, system, systemDynamic, messages: transcript, tools, maxTokens });
         const auth = mode === 'live' ? explicitCredential(credential) : undefined;
         const context = callContext ?? toolContext;
@@ -289,11 +290,11 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               status: script.status ?? (script.toolCalls?.length ? 'error_max_turns' : 'success'),
               is_error: script.is_error === true, api_error_status: script.api_error_status ?? null,
               accountingUnknown: script.accountingUnknown ?? false, toolResults: registry.results,
-              content: Array.isArray(script.content) ? script.content : [{ type: 'text', text }], details: { maxBudgetUsd: remainingBudget } };
+              content: Array.isArray(script.content) ? script.content : [{ type: 'text', text }], details: { maxBudgetUsd: allowance } };
           } else {
             try {
               round = await (SINGLE_ROUND.includes(purpose) ? messagesRound : roundRunner)({ credential: auth, system, systemDynamic,
-                messages: transcript, tools, maxTokens, maxBudgetUsd: remainingBudget, model, registry, schema, ...(emit ? { onEvent: emit } : {}) });
+                messages: transcript, tools, maxTokens, maxBudgetUsd: allowance, model, registry, schema, ...(budget ? { timeoutMs: budget.timeoutMs } : {}), ...(emit ? { onEvent: emit } : {}) });
             } catch {
               round = { text: '', content: [], status: 'transport_error', is_error: true,
                 accountingUnknown: true, model, tokens: {}, toolResults: registry.results, details: {} };
@@ -302,14 +303,16 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
           const knownCost = Number.isFinite(round.costUsd) && round.costUsd >= 0 ? round.costUsd : 0;
           if (round.accountingUnknown || !Number.isFinite(round.costUsd) || round.costUsd < 0) {
             const estimate = estimateUnknownCost({ model, maxTokens,
-              system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools });
+              system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools, schema });
             round.costUsd = Math.max(knownCost, estimate.costUsd);
             round.tokens = { ...round.tokens, estimated: true, knownCostUsd: knownCost,
               estimatedInputTokens: estimate.inputTokens, estimatedOutputTokens: estimate.outputTokens };
             round.accountingUnknown = true;
           }
+          accounting = { costUsd: round.costUsd, model: round.model, tokens: round.tokens, estimated: round.accountingUnknown === true,
+            correlationId: budget?.correlationId ?? null };
           if (Number.isFinite(round.costUsd) && round.costUsd >= 0) {
-            try { await ledger.record({ ts, purpose, costUsd: round.costUsd, model: round.model, tokens: round.tokens }); }
+            try { await ledger.record({ ts, purpose, costUsd: round.costUsd, model: round.model, tokens: { ...round.tokens, ...(budget ? { correlationId: budget.correlationId } : {}) } }); }
             catch { poisoned = true; throw new ModelAccountingError(); }
           } else { poisoned = true; throw new ModelAccountingError(); }
           if (round.accountingUnknown) {
@@ -318,7 +321,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
             throw new ModelAccountingError();
           }
         } finally { await registry.instance.close(); }
-      }).finally(async () => { for (const task of afterTools) await task(); });
+      }).catch(error => { if (accounting) error.accounting = accounting; throw error; }).finally(async () => { for (const task of afterTools) await task(); });
       cost += round.costUsd;
       rounds.push(round.details);
       allResults.push(...round.toolResults);
@@ -331,12 +334,12 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       }
       const toolBoundary = round.status === 'error_max_turns' && round.toolResults.length > 0;
       if (round.api_error_status != null || (round.is_error && !toolBoundary && round.status !== 'error_max_budget_usd')) {
-        throw new ModelCallError('Model did not complete a valid response');
+        throw Object.assign(new ModelCallError('Model did not complete a valid response'), { accounting });
       }
       if (round.status === 'error_max_budget_usd') {
         const error = new BudgetExceededError(); error.toolResults = allResults; throw error;
       }
-      if (!['success', 'error_max_turns'].includes(round.status)) throw new ModelCallError('Model did not complete a valid response');
+      if (!['success', 'error_max_turns'].includes(round.status)) throw Object.assign(new ModelCallError('Model did not complete a valid response'), { accounting });
       if (round.status === 'error_max_turns' && round.toolResults.length === 0) throw new ModelCallError('Model reached a turn limit without a tool result');
       if (round.toolResults.length === 0 || SINGLE_ROUND.includes(purpose)) {
         const fallback = purpose === 'chat' && !answer.text;
@@ -346,7 +349,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
             toolRounds: fallback ? toolRounds.map(r => ({ ...r, text: '', parts: r.parts.filter(p => !('text' in p)) })) : toolRounds }
           : {};
         return { text, content: round.content, costUsd: Number(cost.toFixed(12)), model: round.model,
-          toolResults: allResults, rounds, ...chatParts, grounding: checkGrounding(text, { ...grounding, toolResults: allResults }) };
+          toolResults: allResults, rounds, accounting, ...chatParts, grounding: checkGrounding(text, { ...grounding, toolResults: allResults }) };
       }
       transcript.push({ role: 'assistant', content: round.content }, { role: 'tool', content: round.toolResults });
     }

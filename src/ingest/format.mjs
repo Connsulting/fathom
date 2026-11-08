@@ -71,7 +71,7 @@ export const asciiMinus = (value) => String(value).replace(MINUS_FORMS, '-');
 // is the whole input). Returns {stopped, unclosed, start}. Cells are counted, never built one
 // character at a time: with `build` a well-formed record's cells are sliced from the source when
 // each cell ends; without it nothing is built or kept, and onRecord gets an empty array.
-function scanCsv(input, limits, complete, onRecord, onBad, build = true) {
+function scanCsv(input, limits, complete, onRecord, onBad, build = true, delimiter = ',') {
   let cells = [], count = 0, chars = 0, begin = 0, open = -1, close = -1, escaped = false;
   let quoted = false, closed = false, bad = false, blank = true, line = 1, start = 1;
   let rows = 0, total = 0, stopped = false;
@@ -108,7 +108,7 @@ function scanCsv(input, limits, complete, onRecord, onBad, build = true) {
       if (ch === '"' && input[i + 1] === '"') { add('"'); escaped = true; i++; }
       else if (ch === '"') { quoted = false; closed = true; close = i; }
       else { add(ch); if (ch === '\n') line++; }
-    } else if (ch === ',') { push(i); begin = i + 1; }
+    } else if (ch === delimiter) { push(i); begin = i + 1; }
     else if (ch === '\n' || ch === '\r') {
       const end = i;
       if (ch === '\r' && input[i + 1] === '\n') i++;
@@ -182,4 +182,13 @@ export function csvParse(file, required, convert) {
     if (e instanceof LimitError) throw e;
     return empty('malformed_csv');
   }
+}
+
+export function delimitedCells(file, delimiter = ',') {
+  const input = text(file), rows = [];
+  const bad = () => { throw new Error('Malformed delimited source'); };
+  scanCsv(input, LIMITS, true, () => {}, bad, false, delimiter);
+  const result = scanCsv(input, LIMITS, true, (values, locator) => { rows.push({ values, row: locator.row }); }, bad, true, delimiter);
+  if (result.unclosed) bad();
+  return rows;
 }
