@@ -816,8 +816,9 @@ source. Rules and missing inputs:
 `bridge`: retiring at a stated age before access age, spending until access age against money
 reachable without penalty.
 
-1. `accessible.rothContributions` is the sum of `accounts.rothBasis`; a Roth account without it
-   adds nothing and is named in a `missing_fact` gap.
+1. `accessible.rothContributions` sums `accounts.rothBasis`, capped at each account's current
+   value. A Roth account without basis adds nothing and is named in a `missing_fact` gap; a
+   missing balance leaves accessible contributions unavailable.
 2. `accessible.ruleOf55` counts an employer-plan balance only for an account that qualifies under
    `access`'s rule, and only from its separation date: a qualifying balance whose separation date
    is after the bridge's start (the date the person reaches `retireAge`) is excluded until that
@@ -1318,7 +1319,7 @@ Household facts the tools need:
 | `obligations.childcareChangeDate` | date | no | after C7 |
 | `accounts.planType` | per account choice: `traditional_ira`, `roth_ira`, `sep_ira`, `401k`, `roth_401k`, `solo_401k`, `403b`, `457b`, `hsa`, `529`, `taxable` | no | after C7 (account scope, kinds retirement, roth, ira, taxable, brokerage) |
 | `accounts.rothFirstContributionYear` | per account year (1975 to the current year) | no | after C7 (account scope, kind roth, or plan type roth_ira or roth_401k) |
-| `accounts.rothBasis` | per account dollars | no | after C7 (account scope, kind roth) |
+| `accounts.rothBasis` | per account dollars | no | after C7 (account scope, kind roth, or plan type roth_ira or roth_401k) |
 | `accounts.separationDate` | per account date: the day the person left or will leave the plan's sponsoring employer | no | after C7 (account scope, `date` answer shape, accounts whose plan type is an employer plan; the owner states it, never inferred from a retirement age) |
 
 `accounts.planType` replaces the `accounts.taxTreatment` key an earlier draft named: one fact

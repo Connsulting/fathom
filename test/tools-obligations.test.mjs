@@ -132,5 +132,8 @@ test('one child entering school cannot replace the whole childcare total while a
  const out=await s.call('projection',{years:6,obligations:['childcare']});
  assert.equal(out.years[1].changes.find(c=>c.stage==='school_age').applied,false);
  for(const i of [0,1,2])assert.equal(out.years[i].spending.value,base.total.value);
+ const short=await s.call('projection',{years:2,obligations:['childcare']});
+ assert.equal(short.years[1].spending.value,base.total.value);
+ assert.equal(short.years[1].changes[0].applied,false);
  assert.equal(out.years[4].spending.value,base.total.value-12000);
 });

@@ -57,6 +57,7 @@ async function schedule(args,ctx) {
       }
       if(!events.length) {missing.push('household.dependentBirthDates');gaps.push(gap(`${kind} needs household.dependentBirthDates or household.dependentAges${kind==='childcare'?' or obligations.childcareChangeDate':''}.`));}
       if(events.some(e=>e.precise===false))gaps.push(gap('Dependent ages give year precision only; dates use year end.'));
+      events=events.map(e=>({...e,unattributed:kind==='childcare'&&events.some(later=>later.stage===e.stage&&later.date>e.date)}));
       events=events.filter(e=>e.date>clock&&e.date<=horizon).map(e=>{
         const field=e.stage==='school_age'?'schoolAgeMonthly':'afterCareEndMonthly';
         const override=assumptions.find(a=>a.kind===kind && (a.stage===e.stage || a.stage===undefined));
@@ -69,7 +70,7 @@ async function schedule(args,ctx) {
     const sources=factSources(ctx,keys),asOf=latest([observed.perMonth.asOf,...sources.map(s=>s.as_of),...balanceInputs.map(b=>b.asOf)]);
     const prov={calc:'obligationSchedule',formula:'Stored obligation amounts and dates, amortization or dependent age rules',inputs:[observed.perMonth,...balanceInputs],sources:sources.map(s=>({table:'facts',ids:[s.key],count:1})),packRefs:[pack(kind)]};
     const f=(value,unit,label,extra={})=>figure(value,unit,label,asOf,{...prov,...extra},gaps);
-    const eventRows=events.map(e=>({stage:e.stage,...(e.dependent===undefined?{}:{dependent:e.dependent}),date:f(e.date,'date','Obligation change date'),
+    const eventRows=events.map(e=>({stage:e.stage,...(e.dependent===undefined?{}:{dependent:e.dependent}),unattributed:e.unattributed ?? false,date:f(e.date,'date','Obligation change date'),
       newMonthly:f(e.newValue,'usd_per_month','New monthly obligation',{assumptions:e.assumption?[e.assumption]:[]}),reason:e.reason,derivedFrom:e.derivedFrom,amountSource:e.amountSource ?? 'fact'}));
     rows.push({kind,label:kind==='plan529'?'Education contributions':kind==='mortgage'?'Mortgage':'Childcare',monthly:f(monthly,'usd_per_month','Current monthly obligation'),
       observedMonthly:observed.perMonth,changes:eventRows,endDate:f(events.at(-1)?.date ?? null,'date','Obligation end date'),missing:[...new Set(missing)],gaps});
@@ -98,8 +99,8 @@ async function projection(args,ctx) {
     const applied=[];
     for(const {state,change} of events.filter(e=>Number(e.change.date.value.slice(0,4))===year)) {
       const amount=change.newMonthly.value,old=state.remaining;
-      const unattributed=state.row.kind==='childcare'&&change.stage==='after_care_end'&&state.row.changes.some(c=>c.stage==='after_care_end'&&c.date.value>change.date.value);
-      if(unattributed)gaps.push(gap('Childcare is a household total with no per-dependent allocation; an earlier child leaving care cannot remove the remaining household amount.'));
+      const unattributed=change.unattributed;
+      if(unattributed)gaps.push(gap('Childcare is a household total with no per-dependent allocation; an earlier child changing care stages cannot replace the remaining household amount.'));
       const available=amount!==null&&old!==null&&annual!==null&&!unattributed;
       const next=available&&old>0?(state.row.kind==='mortgage'?Math.min(old,amount):amount):old;
       const delta=available?(next-old)*12:null;

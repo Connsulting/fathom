@@ -119,7 +119,12 @@ async function bridge(args,ctx) {
       const basis=data.facts['accounts.rothBasis']?.[r.a.id];
       if(!Number.isFinite(basis)){gaps.push(gap(`${r.label} needs accounts.rothBasis; no contribution basis is counted.`));}
       else if(r.plan==='roth_401k')notes.push(`${r.label}: workplace Roth contribution basis is not separately withdrawable and is excluded unless the whole plan qualifies for access.`);
-      else {sums.rothContributions+=basis;inputs.rothContributions.push({value:basis,unit:'usd',label:r.label,asOf,account:r.ref,factKey:'accounts.rothBasis'});}
+      else {
+        const accessible=value===null?null:Math.min(basis,Math.max(0,value));
+        if(accessible===null){sums.rothContributions=null;gaps.push(gap(`${r.label} has no stored balance to bound accounts.rothBasis; accessible contributions are unavailable.`));}
+        else if(sums.rothContributions!==null)sums.rothContributions+=accessible;
+        inputs.rothContributions.push({value:accessible,unit:'usd',label:r.label,asOf,account:r.ref,factKey:'accounts.rothBasis',provenance:{sources:(snapshot?.value?.locator?.sources ?? []).map(s=>s.rows)}});
+      }
     }
     if(eligible) {
       if(start&&r.separation<=start)key='ruleOf55';
