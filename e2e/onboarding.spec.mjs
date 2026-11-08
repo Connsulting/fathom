@@ -99,7 +99,10 @@ function makeDemoFresh() {
 
 test.describe('demo build', () => {
   test.beforeEach(async ({ request }) => { await resetDemo(request); });
-  test.afterEach(async ({ request }) => { await resetDemo(request); });
+  test.afterEach(async ({ page, request }) => {
+    await page.unrouteAll({ behavior: 'wait' });
+    await resetDemo(request);
+  });
 
   test('sign-in step: an honest private-network line, no fake passkey @mobile', async ({ page }) => {
     await forceFresh(page, 0);

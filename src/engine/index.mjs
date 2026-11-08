@@ -240,7 +240,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     const toolRounds = [];
     let cost = 0;
     let accounting = null;
-    if (budget && (!SINGLE_ROUND.includes(purpose) || tools.length || !Number.isFinite(budget.maxCostUsd) || budget.maxCostUsd < 0 || !Number.isInteger(budget.maxInputTokens) || budget.maxInputTokens <= 0 || !Number.isInteger(budget.timeoutMs) || budget.timeoutMs <= 0 || budget.timeoutMs > 120000 || typeof budget.correlationId !== 'string')) throw new TypeError('Invalid request budget');
+    if (budget && (!Number.isFinite(budget.maxCostUsd) || budget.maxCostUsd < 0 || budget.maxInputTokens !== undefined && (!Number.isInteger(budget.maxInputTokens) || budget.maxInputTokens <= 0) || budget.timeoutMs !== undefined && (!Number.isInteger(budget.timeoutMs) || budget.timeoutMs <= 0 || budget.timeoutMs > 120000) || budget.correlationId !== undefined && typeof budget.correlationId !== 'string')) throw new TypeError('Invalid request budget');
     for (let roundIndex = 0; roundIndex < maxRounds; roundIndex++) {
       let round;
       const afterTools = [];
@@ -254,8 +254,8 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
         if (!Number.isFinite(spend) || spend < 0) throw new ModelAccountingError();
         if (spend >= capUsd) { const error = new BudgetExceededError(); error.toolResults = allResults; throw error; }
         const estimate = budget ? estimateUnknownCost({ model, maxTokens, system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools, schema }) : null;
-        const allowance = Math.min(capUsd - spend, budget?.maxCostUsd ?? Infinity);
-        if (budget && (estimate.costUsd > allowance || estimate.inputTokens > budget.maxInputTokens)) throw new BudgetExceededError();
+        const allowance = Math.min(capUsd - spend, (budget?.maxCostUsd ?? Infinity) - cost);
+        if (budget && (estimate.costUsd > allowance || estimate.inputTokens > (budget.maxInputTokens ?? Infinity))) throw new BudgetExceededError();
         if (beforeDispatch) await beforeDispatch({ model, ...estimate, allowance });
         if (admitRound) await admitRound({ purpose, system, systemDynamic, messages: transcript, tools, maxTokens });
         const auth = mode === 'live' ? explicitCredential(credential) : undefined;
