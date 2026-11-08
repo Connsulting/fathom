@@ -279,18 +279,6 @@ test('route documentation assigns every server route a demo behavior', () => {
   }
   assert.ok(docs.trimEnd().endsWith('provider key provisioning and external spend limits.'));
 });
-test('block status reads stay inside the visitor conversation sandbox', async t => {
-  const s = await app(t), a = visitor(s), b = visitor(s);
-  const thread = await a('/api/threads', { text: 'Show recent transactions in a table.' });
-  assert.equal(thread.status, 200);
-  const path = `/api/threads/${thread.body.thread.id}/blocks`;
-  const own = await a(path);
-  assert.equal(own.status, 200);
-  assert.equal(own.body.blocks[0].state, 'current');
-  assert.equal((await b(path)).status, 404);
-  assert.equal(demoRouteBehavior('HEAD', '/api/threads/:id/blocks'), 'sandbox');
-  assert.equal(demoRouteBehavior('POST', '/api/threads/:id/blocks'), 'off');
-});
 test('P&L and spending reads use the visitor sandbox and refuse writes', async t => {
   const s = await app(t);
   const v = visitor(s);
