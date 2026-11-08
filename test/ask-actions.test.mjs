@@ -91,6 +91,11 @@ test('SEC2: identifier and date evidence refuses facts and goals without writes 
   const ctx = context(db);
   for (const [ownerText, value, evidence = ownerText] of [
     ['Create a savings goal for the account ending in 4821. Ask me for its target.', 4821],
+    ['Create a savings goal for the card ending with 4821. Ask me for its target.', 4821],
+    ['The account ends in 4821.', 4821],
+    ['The account ends with 4821.', 4821],
+    ['The last four digits are 4821.', 4821],
+    ['The last 4 digits is 4821.', 4821],
     ['Use account x4821.', 4821],
     ['Use account ...4821.', 4821],
     ['Use account 4821 (last4).', 4821],
