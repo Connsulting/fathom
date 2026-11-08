@@ -35,7 +35,7 @@ export function loadCategoryInputs(db) {
       return {...r,category:p?.category??null,confidence:p?.confidence,probabilities:p?.probabilities};
     }) };
 }
-function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice(0,10)),threshold = CATEGORY_THRESHOLD,policy}={}) {
+function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice(0,10)),threshold = CATEGORY_THRESHOLD,policy,accountIds}={}) {
   const input=loadCategoryInputs(db);
   input.transactions=input.transactions.filter(t=>t.date<=clock);
   const {windowTransactionIds}=spendingInputs({...input,clock});
@@ -63,7 +63,10 @@ function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice
       merchant:normalizeMerchant(t.description),guess,...(proposal ? {jev:{category:proposal.category,confidence:proposal.confidence,probabilities:proposal.probabilities}} : {})});
   }
   const order=(a,b)=>Math.abs(b.amount)-Math.abs(a.amount) || a.subject.localeCompare(b.subject);
-  const ranked=[...list,...unknown.values()].sort(order);
+  const selected = accountIds === undefined ? input.transactions : input.transactions.filter(t => accountIds.includes(t.account_id));
+  const selectedIds = new Set(selected.map(t => t.id));
+  const selectedMappings = new Set(selected.map(t => { const c = importedCategory(t); return JSON.stringify([c.parser,c.category]); }));
+  const ranked=[...list,...unknown.values()].filter(c => accountIds === undefined || selectedIds.has(c.transactionId) || (c.kind === 'category_mapping' && selectedMappings.has(c.subject))).sort(order);
   return [...ranked.filter(c=>c.jev),...ranked.filter(c=>!c.jev).slice(0,CATEGORY_LIMIT)].sort(order);
 }
 export function categoryNames(input) {
@@ -162,6 +165,7 @@ export function categoryCoverage(db,options={}) {
   const input=loadCategoryInputs(db), resolved=resolveCategories(input);
   const layers=Object.fromEntries(['correction','import','structural','merchant','guess','uncategorized'].map(k=>[k,0]));
   const buckets=Object.fromEntries(BUCKETS.map(k=>[k,0]));
-  for(const c of resolved.values()) { layers[c.layer]++; buckets[c.bucket]++; }
-  return {rows:resolved.size,layers,buckets,uncategorized:layers.uncategorized,queueSize:checks(db,options).length};
+  const ids = new Set(input.transactions.filter(t => options.accountIds === undefined || options.accountIds.includes(t.account_id)).map(t => t.id));
+  for(const [id,c] of resolved) { if (!ids.has(id)) continue; layers[c.layer]++; buckets[c.bucket]++; }
+  return {rows:ids.size,layers,buckets,uncategorized:layers.uncategorized,queueSize:checks(db,options).length};
 }
