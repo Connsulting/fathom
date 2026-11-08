@@ -24,7 +24,7 @@ export function resolveDefinition(db, id) {
 }
 
 function definitionId(id) {
-  if (typeof id !== 'string' || !/^[a-z][a-z0-9_]{1,39}$/.test(id)) fail('definitionId must be a slug from 2 to 40 characters.');
+  if (typeof id !== 'string' || !/^[a-z][a-z0-9_-]{1,39}$/.test(id)) fail('definitionId must be a slug from 2 to 40 characters.');
   if (Object.hasOwn(BUILTIN_DEFINITIONS, id)) fail('Built-in definitions cannot be changed.');
   return id;
 }
@@ -84,7 +84,7 @@ export function saveDefinition(ctx, args) {
     else ctx.db.prepare(`INSERT INTO preferences(id,text,actor_id,created_at,updated_at,origin,conversation_key,definition_id)
       VALUES (?,?,?,?,?,'ask',?,?)`).run(randomUUID(), text, actor, stamp, stamp, conversation, clean.id);
     receipt = saveReceipt(ctx, { scope: 'write:preferences', kind: 'spending_definition', id: clean.id,
-      label: 'Saved spending definition', before, after: snapshot(ctx.db, clean.id) });
+      label: 'Saved spending definition', before, after: snapshot(ctx.db, clean.id), from: before.preference?.text ?? null, to: text });
   });
   ctx.onReceipt?.(receipt ?? null);
   return { definition: resolveDefinition(ctx.db, clean.id), receipt: receipt ?? null };
@@ -98,7 +98,7 @@ export function deleteDefinition(ctx, id) {
     if (!before.definition) throw new ToolError('not_found', 'No such saved definition.');
     restoreRows(ctx.db, id, { definition: null, preference: null });
     receipt = saveReceipt(ctx, { scope: 'write:preferences', kind: 'spending_definition', id,
-      label: 'Deleted spending definition', before, after: snapshot(ctx.db, id) });
+      label: 'Deleted spending definition', before, after: snapshot(ctx.db, id), from: before.preference?.text ?? before.definition.name, to: null });
   });
   ctx.onReceipt?.(receipt);
   return { deleted: true, receipt };

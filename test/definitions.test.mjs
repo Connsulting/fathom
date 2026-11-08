@@ -20,6 +20,8 @@ test('all five linkage rules: one atomic preference, updates, linked edit refusa
   const db = await store(), ctx = context(db);
   const saved = await callTool('update_preferences', args, ctx);
   assert.equal(saved.definition.id, args.definitionId);
+  assert.equal(typeof saved.receipt.after, 'string');
+  assert.equal(saved.receipt.before, null);
   assert.equal(listPreferences(db)[0].definitionId, args.definitionId);
   assert.equal(listPreferences(db)[0].text, 'When I say Elective spending, use my saved spending definition elective_spending.');
   assert.equal(listPreferences(db)[0].id, saved.definition.preferenceId);
@@ -39,6 +41,7 @@ test('all five linkage rules: one atomic preference, updates, linked edit refusa
   assert.deepEqual(snapshot(db), first);
   const deleted = await callTool('update_preferences', { operation: 'delete_definition', definitionId: args.definitionId }, ctx);
   assert.equal(deleted.deleted, true);
+  assert.equal(deleted.receipt.after, null);
   await callTool('undo', { operation: 'undo', id: deleted.receipt.id }, ctx);
   assert.deepEqual(snapshot(db), first);
   await callTool('undo', { operation: 'undo', id: saved.receipt.id }, ctx);
@@ -72,6 +75,9 @@ test('definition bounds, built-ins, evidence, preference cap and stale Undo refu
     assert.deepEqual(snapshot(db), { definitions: [], preferences: [] });
   }
   await assert.rejects(callTool('update_preferences', { operation: 'delete_definition', definitionId: 'essential' }, ctx), /built.in/i);
+  const hyphenated = await callTool('update_preferences', { ...args, definitionId: 'valid-selection' }, ctx);
+  assert.equal(hyphenated.definition.id, 'valid-selection');
+  await callTool('update_preferences', { operation: 'delete_definition', definitionId: 'valid-selection' }, ctx);
   const saved = await callTool('update_preferences', args, ctx);
   await callTool('update_preferences', { ...args, name: 'Changed selection' }, ctx);
   await assert.rejects(callTool('undo', { operation: 'undo', id: saved.receipt.id }, ctx), /changed since/);
