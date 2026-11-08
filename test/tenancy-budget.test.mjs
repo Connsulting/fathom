@@ -33,6 +33,8 @@ import { liveTwoHouseholds, enrollSession, startRuntime, withSqlite } from './he
 const T = { timeout: 180_000 };
 const pause = ms => new Promise(r => setTimeout(r, ms));
 const QUESTION = Object.freeze([{ role: 'user', content: 'Synthetic budget question' }]);
+// extract() wraps the row schema in its response schema; the reservation estimate counts that schema's bytes too.
+const responseSchemaOf = schema => ({ type: 'object', properties: { rows: { type: 'array', items: schema } }, required: ['rows'], additionalProperties: false });
 const ROW_SCHEMA = Object.freeze({ type: 'object', properties: { label: { type: 'string' } }, required: ['label'], additionalProperties: false });
 const PROBE = name => ({
   name, description: 'Synthetic probe tool.', kind: 'read', operations: [{ name: 'read', scope: 'read' }],
@@ -964,7 +966,7 @@ describe('an image-only PDF extract reserves a per-page input bound', T, () => {
     assert.ok(Array.isArray(rows));
     assert.equal(emulator.requests.length, 1, 'one round dispatched');
     assert.equal(log.reserve.length, 1, 'one reservation');
-    const args = { model: pricing.modelFor('extract'), maxTokens: 256, system: SYSTEM, tools: [],
+    const args = { model: pricing.modelFor('extract'), maxTokens: 256, system: SYSTEM, tools: [], schema: responseSchemaOf(ROW_SCHEMA),
       messages: messagesOf({ type: 'base64', media_type: 'application/pdf', data: PDF.toString('base64') }) };
     const expected = pricing.estimateUnknownCost({ ...args, extraInputTokens: pages * pricing.PDF_PAGE_INPUT_TOKENS }).costUsd;
     near(log.reserve[0].boundUsd, expected, 'the PDF reservation bound');
@@ -988,7 +990,7 @@ describe('an image-only PDF extract reserves a per-page input bound', T, () => {
     assert.ok(Array.isArray(rows));
     assert.equal(emulator.requests.length, 1);
     const expected = pricing.estimateUnknownCost({ model: pricing.modelFor('extract'), maxTokens: 256, system: SYSTEM, tools: [],
-      messages: messagesOf({ type: 'text', media_type: 'text/plain', data: text }) }).costUsd;
+      schema: responseSchemaOf(ROW_SCHEMA), messages: messagesOf({ type: 'text', media_type: 'text/plain', data: text }) }).costUsd;
     near(log.reserve[0].boundUsd, expected, 'the text reservation bound');
     assert.equal(log.settle.length, 1);
   }));
