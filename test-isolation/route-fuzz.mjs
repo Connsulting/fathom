@@ -488,7 +488,7 @@ test('adversarial isolation gate crosses real sessions, dispatch, runtimes, pers
           const messages = readdirSync(dir).filter(p => p.endsWith('.json')).map(p => JSON.parse(readFileSync(join(dir, p), 'utf8')));
           assert.ok(messages.length >= 1, 'local_financial_mail_sink');
           for (const message of messages) {
-            assert.equal(message.to, own.admin.identity.email, 'financial_mail_recipient');
+            assert.deepEqual(message.to, [own.admin.identity.email], 'financial_mail_recipient');
             assert.ok(!JSON.stringify(message).includes(other.canary), 'financial_mail_context');
           }
         }
