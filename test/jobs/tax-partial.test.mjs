@@ -226,7 +226,7 @@ test('every former payroll and income block produces federal and state estimates
     partnership_incomplete(d, f) { f['business.entities'].push({ name: 'Partnership Studio', type: 'partnership', owner: 'owner' }); },
     k1_unmatched(d, f) { cases.partnership_incomplete(d, f); for (let id = 903; id < 905; id++) d.documents.push({ id, docType: 'k1', taxYear: 2026, fields: { entityKind: 'partnership', ordinaryIncome: 20000, guaranteedPayments: 0, selfEmploymentEarnings: 20000 } }); },
     k1_scorp_unmatched(d) { d.documents.push({ id: 905, docType: 'k1', taxYear: 2026, fields: { entityKind: 's_corp', ordinaryIncome: 20000 } }); },
-    retirement_contribution_unattributed(d, f) { f['retirement.contributions'] = [{ person: 'owner', plan: 'own-corp-401k', type: 'deferral', entity: 'Unknown Sponsor', amount: 3000 }]; },
+    retirement_contribution_unattributed(d, f) { f['business.entities'].push({ name: 'Second Sponsor', type: 's_corp', owner: 'owner' }); f['retirement.contributions'] = [{ person: 'owner', plan: 'own-corp-401k', type: 'deferral', entity: 'Unknown Sponsor', amount: 3000 }]; },
     retirement_contribution_over_limit(d, f) { f['retirement.contributions'] = [{ person: 'owner', plan: 'own-corp-401k', type: 'employer', entity: 'Juniper Studio', amount: 100000 }]; },
     va_itemized_missing(d, f) { f['tax.itemizedEstimate'] = 100000; delete f['tax.vaItemizedEstimate']; },
     va529_answers_missing(d, f) { d.accounts.push({ id: 'college', name: 'College savings', kind: '529', owner: 'owner', inst: '', latest: null }); f['accounts.va529'] = {}; },
@@ -254,7 +254,9 @@ test('every former payroll and income block produces federal and state estimates
     }
     if (['withholding_conflict_pending', 'tax_year_unconfirmed', 'estimated_payer_unknown'].includes(code)) {
       const payment = code === 'withholding_conflict_pending' ? 'tax.fed.withheld' : 'tax.fed.paid';
-      assert.ok(!computed.figures[payment] || computed.figures[payment].v === 0, 'ambiguous credits are excluded');
+      assert.equal(computed.figures[payment]?.v, 0, 'ambiguous credits are excluded');
+      assert.ok(computed.figures[payment].locator.gaps.some(g => g.code === code), 'excluded credits carry their gap');
+      assert.match(computed.figures[payment].locator.completeness, /^estimate with/);
       assert.equal(computed.figures['sh.fed.currentTarget'].locator.inputs.currentYearTax, computed.figures['tax.fed.proj'].v);
     }
     assert.ok(gap.message && gap.action.label);
@@ -288,6 +290,7 @@ test('retrying missing gross keeps a document recipient when both people share t
 
 test('typed Ask corrections for business classification and contribution sponsors remove their gaps', async () => {
   const db = await s.store();
+  addFact(db, 'business.entities', [...getFacts(db)['business.entities'], { name: 'Second Sponsor', type: 's_corp', owner: 'owner' }]);
   addFact(db, 'retirement.contributions', [{ person: 'owner', plan: 'own-corp-401k', type: 'deferral', amount: 2000, entity: 'Unmatched Business' }]);
   await planRun(db);
   assert.ok(projection(db).locator.gaps.some(g => g.code === 'retirement_contribution_unattributed'));
@@ -304,4 +307,21 @@ test('typed Ask corrections for business classification and contribution sponsor
   assert.ok(projection(db).locator.gaps.some(g => g.code.startsWith('entity_unclassified:')));
   await answerFacts(db, [{ key: 'business.entityTypes', value: { "Cypress Studio's": 'sole_prop' } }], { now, replan: () => planRun(db) });
   assert.ok(!projection(db).locator.gaps.some(g => g.code.startsWith('entity_unclassified:')));
+});
+
+test('a sole business receives its owner contribution with an explicit sponsor assumption', async () => {
+  const db = await store({ missing: false });
+  const contribution = { person: 'owner', plan: 'own-corp-401k', type: 'deferral', amount: 3000, entity: 'Mistyped Sponsor' };
+  addFact(db, 'retirement.contributions', [contribution]);
+  await planRun(db);
+  const assumed = projection(db);
+  const gap = assumed.locator.gaps.find(g => g.code === 'retirement_sponsor_assumed');
+  assert.match(gap?.message || '', /Juniper Studio.*owner/);
+  assert.equal(gap?.action.key, 'retirement.contributions');
+  assert.ok(!assumed.locator.gaps.some(g => g.code === 'retirement_contribution_unattributed'));
+  addFact(db, 'retirement.contributions', [{ ...contribution, entity: 'Juniper Studio' }]);
+  await planRun(db);
+  const stated = projection(db);
+  assert.equal(stated.v, assumed.v, 'assumed sponsor uses the same recorded contribution');
+  assert.ok(!stated.locator.gaps.some(g => g.code === 'retirement_sponsor_assumed'));
 });
