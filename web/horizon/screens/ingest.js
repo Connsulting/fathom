@@ -5,6 +5,7 @@
    resolution. */
 
 import { createSwipe } from './swipe.js';
+import { ownWordsHtml } from '../own-words.js';
 
 // The household's fixed category order for a category card. Number key N names the same category
 // on every card; the best guess is highlighted where it already sits, never moved up. A category
@@ -182,7 +183,8 @@ const KIND = {
   employer_relation: 'Employer',
   employer_recipient: 'Who is paid',
   document_recipient: 'Whose document',
-  withholding_conflict: 'Withholding', transaction_category: 'Check these', category_mapping: 'Check these'
+  withholding_conflict: 'Withholding', transaction_category: 'Check these', category_mapping: 'Check these',
+  stated_value: 'From your own words'
 };
 
 // Confirm deck keys. One plain table; the handler in ingestScreens reads it.
@@ -892,7 +894,7 @@ export function ingestScreens(h) {
       : (dk.answers[id] != null && !busy ? '<p class="h-deck-state">Answered. Pick another option to change it.</p>' : '');
     return `<article class="h-deck-card cur${fin ? ' final' : ''}" data-item="${esc(id)}">
       <div class="h-cf-k">${esc(KIND[it.kind] || 'Question')}${name ? `<span>${esc(name)}</span>` : ''}${addBtn('confirm', id, KIND[it.kind] || 'Question')}</div>
-      ${cat ? txnHead(it, id) : `<p class="h-cf-q">${esc(it.question)}</p>${detailHtml(it)}`}${guess}${it.kind === 'transaction_category' && it.context?.merchant ? `<label class="h-cf-sub"><input type="checkbox" data-category-always="${esc(id)}"${dk.categoryAlways?.[id] !== false ? ' checked' : ''}${busy || fin ? ' disabled' : ''}> Apply to all from ${esc(it.txn?.name || it.context.merchant)}</label>` : ''}<div class="h-deck-opts${short ? ' short' : ''}">${opts}</div>${state}</article>`;
+      ${cat ? txnHead(it, id) : `<p class="h-cf-q">${esc(it.question)}</p>${it.kind === 'stated_value' && it.context?.description ? `<p class="h-cf-sub" data-stated-description>${esc(it.context.description)}</p>` : ''}${detailHtml(it)}`}${guess}${it.kind === 'transaction_category' && it.context?.merchant ? `<label class="h-cf-sub"><input type="checkbox" data-category-always="${esc(id)}"${dk.categoryAlways?.[id] !== false ? ' checked' : ''}${busy || fin ? ' disabled' : ''}> Apply to all from ${esc(it.txn?.name || it.context.merchant)}</label>` : ''}<div class="h-deck-opts${short ? ' short' : ''}">${opts}</div>${state}${ownWordsHtml(esc, `confirm:${id}`, 'deck')}</article>`;
   }
 
   function rowHtml(dk, key, id) {
@@ -945,7 +947,7 @@ export function ingestScreens(h) {
     return `<article class="h-deck-card cur group" data-group="${esc(kind)}">
       <div class="h-cf-k">${esc(KIND[kind] || 'Questions')}<span>${plural(ids.length, 'account')}</span>${addBtn('confirm', `group:${kind}`, KIND[kind] || 'Questions')}</div>
       <p class="h-cf-q">${esc(GROUP_Q[kind] || 'Answer each row.')}</p>
-      <table class="h-cf-group">${head}<tbody>${rows}</tbody></table>${foot}${state}</article>`;
+      <table class="h-cf-group">${head}<tbody>${rows}</tbody></table>${foot}${state}${ownWordsHtml(esc, `confirm:${ids[0]}`, 'deck')}</article>`;
   }
 
   // The unanswered rows of group card `key` that have a best guess: [{id, answer}].

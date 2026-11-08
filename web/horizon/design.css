@@ -1089,6 +1089,12 @@ a.h-dec-t:hover { color: var(--ac2); }
 .d-horizon .h-answer-unit, .d-horizon .h-answer-note { font-size: 12px; color: var(--mu); }
 .d-horizon .h-answer-acts { display: flex; flex-wrap: wrap; gap: 8px; }
 .d-horizon .h-answer-acts .h-btn { min-height: 44px; }
+/* The own-words box under a question form or Confirm card (web/horizon/own-words.js). */
+.d-horizon .h-own-words { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; margin-top: 12px; min-width: 0; }
+.d-horizon .h-own-words label { flex: 1 1 100%; font-size: 12.5px; color: var(--mu); }
+.d-horizon .h-own-words textarea { flex: 1 1 240px; min-width: 0; box-sizing: border-box; background: var(--bg); color: var(--tx); border: 1px solid var(--line2); border-radius: 8px; font: inherit; font-size: 16px; padding: 8px 12px; resize: vertical; line-height: 1.45; color-scheme: dark; }
+.d-horizon .h-own-words textarea:focus { outline: none; border-color: var(--ac); }
+.d-horizon .h-own-words .h-btn { min-height: 44px; }
 .d-horizon .h-answers .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .d-horizon article.h-next .h-answers { margin: 0; gap: 16px; }
 .d-horizon article.h-next .h-answer-toggle { flex-direction: row; gap: 8px; }

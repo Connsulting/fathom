@@ -169,6 +169,7 @@ test('AC4: every Confirm kind uses a plain question and fact questions use answe
     transaction_payment: 'Is this connected-account payment an estimated tax payment?',
     category_mapping: 'Treat Example Essentials as ...',
     resolver_fact: key,
+    stated_value: 'Your note says "My salary range from the advisor is 90k to 120k." Use it?',
   };
   assert.deepEqual(Object.keys(questions).sort(), [...KINDS].sort());
   for (const [kind, questionText] of Object.entries(questions)) {

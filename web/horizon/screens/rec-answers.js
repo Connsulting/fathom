@@ -1,3 +1,5 @@
+import { ownWordsHtml } from '../own-words.js';
+
 let H;
 let drafts = new Map();
 const busy = new Set();
@@ -66,7 +68,7 @@ export function html(r, surface) {
     }
     return `<fieldset class="h-answer-field" data-qr-wrap="${esc(f.id)}"${on ? '' : ' hidden'}><legend>${group}${esc(f.label)}</legend>${f.type === 'boolean' ? '' : `<label class="sr-only" for="${esc(id)}">${esc(f.label)}${f.unit ? ` (${esc(f.unit)})` : ''}</label>`}${control}</fieldset>`;
   }).join('');
-  return assumptions + `<form class="h-answers" data-rec-answers="${esc(r.id)}" aria-label="Answer questions for your plan" aria-busy="${pending}">${fields}<p class="h-answer-note">Your answers update the plan automatically.</p><div class="h-answer-acts"><button type="submit" class="h-btn pri"${pending ? ' disabled' : ''}>${pending ? 'Saving...' : r.question.primary ? 'Save' : 'Save answers'}</button>${r.question.primary ? `<button type="button" class="h-btn" data-act="snooze" data-rec="${esc(r.id)}" data-arg="${esc(H.snoozeLabel())}"${pending ? ' disabled' : ''}>Not now</button><button type="button" class="h-btn" data-ask-next="${esc(r.id)}">Ask</button>` : ''}</div></form>`;
+  return assumptions + `<form class="h-answers" data-rec-answers="${esc(r.id)}" aria-label="Answer questions for your plan" aria-busy="${pending}">${fields}<p class="h-answer-note">Your answers update the plan automatically.</p><div class="h-answer-acts"><button type="submit" class="h-btn pri"${pending ? ' disabled' : ''}>${pending ? 'Saving...' : r.question.primary ? 'Save' : 'Save answers'}</button>${r.question.primary ? `<button type="button" class="h-btn" data-act="snooze" data-rec="${esc(r.id)}" data-arg="${esc(H.snoozeLabel())}"${pending ? ' disabled' : ''}>Not now</button><button type="button" class="h-btn" data-ask-next="${esc(r.id)}">Ask</button>` : ''}</div></form>${ownWordsHtml(esc, `rec:${r.id}`, surface)}`;
 }
 
 export function onChange(e) {
