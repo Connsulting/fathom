@@ -40,19 +40,19 @@ const acct = (db, mask, inst) => one(db, "SELECT id FROM accounts WHERE mask = ?
 const byKind = (items) => items.reduce((out, i) => ({ ...out, [i.kind]: (out[i.kind] ?? 0) + 1 }), {});
 const textOf = (evidence) => (typeof evidence === 'string' ? evidence : evidence?.text);
 
-test('no names known: 13 pending including three source categories and 4 decided for the owner', () => withHousehold((s) => {
+test('no names known: 12 pending including three source categories and 5 decided for the owner', () => withHousehold((s) => {
   const state = FR.ingestState(s.db);
   const pending = C.pendingItems(s.db);
-  assert.equal(pending.length, 13);
-  assert.deepEqual(byKind(pending), { account_owner: 7, account_kind: 2, near_duplicate: 1, category_mapping: 3 });
+  assert.equal(pending.length, 12);
+  assert.deepEqual(byKind(pending), { account_owner: 7, account_kind: 1, near_duplicate: 1, category_mapping: 3 });
   const kindSubjects = pending.filter((i) => i.kind === 'account_kind').map((i) => i.subject).sort();
-  assert.deepEqual(kindSubjects, [acct(s.db, '3344', 'Example Card'), acct(s.db, '5566', 'Example Credit Union')].sort(), 'Rewards Card and Rainy Day');
+  assert.deepEqual(kindSubjects, [acct(s.db, '5566', 'Example Credit Union')], 'Rainy Day');
 
-  assert.equal(state.pending, 13);
+  assert.equal(state.pending, 12);
   assert.deepEqual(state.items.filter(i=>i.kind==='category_mapping').map(i=>i.context.category).sort(), ['Auto','Dining','Utilities']);
-  assert.equal(state.decided.length, 4);
+  assert.equal(state.decided.length, 5);
   const rules = state.decided.map((d) => d.rule).sort();
-  assert.deepEqual(rules, ['cross_format_duplicate', 'cross_format_duplicate', 'shared_mask', 'shared_mask']);
+  assert.deepEqual(rules, ['account_name', 'cross_format_duplicate', 'cross_format_duplicate', 'shared_mask', 'shared_mask']);
   for (const d of state.decided) {
     assert.equal(typeof d.id, 'number');
     assert.equal(typeof d.question, 'string');
@@ -63,6 +63,9 @@ test('no names known: 13 pending including three source categories and 4 decided
     if (d.rule === 'cross_format_duplicate') {
       assert.deepEqual([d.kind, d.answer], ['near_duplicate', 'same']);
       assert.ok(text.includes(AGG_FILE) && text.includes(CHASE_FILE), `names both files: ${text}`);
+    } else if (d.rule === 'account_name') {
+      assert.deepEqual([d.kind, d.answer], ['account_kind', 'card']);
+      assert.ok(text.includes('Rewards Card'));
     } else {
       assert.deepEqual([d.kind, d.answer], ['account_kind', 'taxable']);
       const { mask } = one(s.db, 'SELECT a.mask FROM accounts a JOIN confirm_items ci ON ci.subject = a.id WHERE ci.id = ?', d.id);
@@ -71,12 +74,12 @@ test('no names known: 13 pending including three source categories and 4 decided
   }
 }));
 
-test('names known before the import: 7 pending including three source categories, the only owner question is Rainy Day', () => withHousehold((s) => {
+test('names known before the import: 6 pending including three source categories, the only owner question is Rainy Day', () => withHousehold((s) => {
   const state = FR.ingestState(s.db);
   const pending = C.pendingItems(s.db);
-  assert.equal(pending.length, 7);
-  assert.deepEqual(byKind(pending), { account_owner: 1, account_kind: 2, near_duplicate: 1, category_mapping: 3 });
+  assert.equal(pending.length, 6);
+  assert.deepEqual(byKind(pending), { account_owner: 1, account_kind: 1, near_duplicate: 1, category_mapping: 3 });
   const owner = pending.find((i) => i.kind === 'account_owner');
   assert.equal(owner.subject, acct(s.db, '5566', 'Example Credit Union'), 'Rainy Day, held by both, stays a question');
-  assert.equal(state.pending, 7);
+  assert.equal(state.pending, 6);
 }, { names: true }));

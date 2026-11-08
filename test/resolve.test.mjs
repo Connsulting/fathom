@@ -266,7 +266,7 @@ test('remaining transaction choices use the resolver without learning automatic 
 
 test('source category mappings retain automatic provenance and do not train household history', () => store(async db => {
   const transactionId = categoryTransaction(db, 'Synthetic essentials');
-  const engine = model(db, ({ items }) => items.map(i => ({ item: i.id, option: 'household', basis: 'imported_values', refs: [`transactions:${transactionId}`] })));
+  const engine = model(db, ({ items }) => items.map(i => ({ item: i.id, option: 'household', confidence: 0.92, basis: 'imported_values', refs: [`transactions:${transactionId}`] })));
   await resolvePending(db, engine, options);
   const { loadCategoryInputs } = await import('../src/categories/store.mjs');
   const { resolveCategories, createHistoryIndex } = await import('../src/categories/resolve.mjs');
