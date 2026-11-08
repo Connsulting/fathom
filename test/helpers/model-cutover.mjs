@@ -12,7 +12,7 @@ export async function setup() {
 export async function upload(x, text, layout = recipe(), options = {}) {
   const bytes = Buffer.from(text), name = 'synthetic.csv';
   const fileId = 'f-' + createHash('sha256').update(bytes).digest('hex').slice(0, 24);
-  const source = await indexSource({ fileId, bytes, name });
+  const source = await indexSource({ fileId, bytes, name, format: 'csv' });
   const proposal = applyLayout(source, layout);
   options.change?.(proposal);
   const fake = [{ text: JSON.stringify({ rows: proposal.rows, coverage: proposal.coverage, completeness: proposal.completeness, controls: proposal.controls, layout }), costUsd: 0.001,

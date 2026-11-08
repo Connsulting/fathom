@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setup, upload, approve, transactions } from '../helpers/model-cutover.mjs';
+import { setSetting } from '../../src/store/db.mjs';
 import { ingestFile } from '../../src/ingest/pipeline.mjs';
 
 test('nonstandard upload stages, approval preserves repeated occurrences, repeat bytes deduplicate', async () => {
@@ -20,8 +21,7 @@ test('nonstandard upload stages, approval preserves repeated occurrences, repeat
 test('unknown files with the engine off wait without writes and raw scans are withheld', async () => {
   const x = await setup();
   try {
-    x.household.engine.setOn?.(false);
-    x.db.prepare("INSERT OR REPLACE INTO settings(key,value) VALUES ('engine','{\"on\":false}')").run();
+    setSetting(x.db, 'engine', { on: false });
     const r = await ingestFile(x.db, { name: 'unknown.csv', bytes: Buffer.from('One,Two\na,b\n') }, x.opts);
     assert.equal(r.status, 'waiting_for_engine');
     const pdf = await ingestFile(x.db, { name: 'scan.pdf', bytes: Buffer.from('%PDF-1.7\n%%EOF'), mime: 'application/pdf' }, x.opts);
