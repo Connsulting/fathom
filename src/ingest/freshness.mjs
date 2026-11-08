@@ -11,7 +11,8 @@ import { monthEnd } from './format.mjs';
 import { pendingItems, finalReason } from './confirm.mjs';
 import { cardDetail } from './context.mjs';
 import { bestGuess } from './bestguess.mjs';
-import { coveredFileSources } from './coverage.mjs';
+import { sourceStates } from './coverage.mjs';
+import { accountLabel } from '../shared/account-label.mjs';
 import { merchantDisplayName, plainEvidence } from '../categories/display.mjs';
 
 const MONTHLY = Object.freeze({ label: 'monthly', staleAfterDays: 45 });
@@ -96,6 +97,15 @@ export function recordSource(db, { id, label, kind, asOf, now } = {}) {
                 last_ingest_at = excluded.last_ingest_at`)
     .run(id, String(label ?? id), latest, kind ?? null, stamp);
   return { id, asOf: latest };
+}
+
+export function listImportedFiles(db) {
+  const result = { files: db.prepare('SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files WHERE removed_at IS NULL ORDER BY uploaded_at DESC, rowid DESC').all().map(fileOf) };
+  while (Buffer.byteLength(JSON.stringify(result)) > 256 * 1024 && result.files.length) {
+    result.files.splice(Math.floor(result.files.length / 2));
+    result.truncated = true;
+  }
+  return result;
 }
 
 // A files row as the API returns it.
@@ -217,31 +227,86 @@ export function refreshFreshness(db, { clock } = {}) {
   return { ...state, dataThrough: householdDataThrough(db, clock) };
 }
 
-// Each account with an ingest source, its newest row date and its freshness at `at`. One rule for
-// the health line, the account list and the account dialog. `kindOf` maps an ingest source id to
-// its kind; `only` limits the rows to one account id.
-function accountFreshnessRows(db, at, kindOf, only = null) {
-  const rows = db.prepare(`SELECT a.id, a.name, a.inst, a.mask, a.kind, a.owner, a.display_name, a.source_id, (
-      SELECT max(d) FROM (
-        SELECT max(date) AS d FROM transactions WHERE account_id = a.id
-        UNION ALL SELECT max(date) FROM balances WHERE account_id = a.id
-        UNION ALL SELECT max(as_of) FROM positions WHERE account_id = a.id)
-    ) AS as_of
-    FROM accounts a WHERE a.source_id IS NOT NULL AND (? IS NULL OR a.id = ?) ORDER BY a.id`).all(only, only);
-  return rows.map((row) => {
-    const asOf = isoDay(row.as_of) ?? '';
-    const kind = kindOf.get(row.source_id);
-    return { row, asOf, kind, f: asOf && kind ? freshnessOf({ kind, asOf }, at) : null };
-  });
+// One account's { asOf, fresh, sourceId } as ingestState reports it, without building the rest.
+// fresh follows the shared rule (coverage.mjs sourceStates): 'archived' for an archived account.
+export function accountFreshness(db, accountId, { clock } = {}) {
+  const hit = sourceStates(db, clockOf(db, clock)).accounts.get(accountId);
+  if (!hit) return { asOf: '', fresh: 'unknown', sourceId: null };
+  return { asOf: hit.asOf, fresh: hit.state, sourceId: hit.sourceId };
 }
 
-// One account's { asOf, fresh, sourceId } as ingestState reports it, without building the rest.
-export function accountFreshness(db, accountId, { clock } = {}) {
+// Sources the Files page lists: stale first, then fresh, then history, then by name.
+const STATE_RANK = Object.freeze({ stale: 0, fresh: 1, history: 2 });
+const rankOfState = (state) => STATE_RANK[state] ?? 3;
+
+// Each ingest source by its real origin (see sourceList), with its state from the shared rule.
+// `states` is sourceStates(db, at). A source whose files were all removed is left out.
+function sourceList(db, at, states) {
+  const naming = accountNaming(db);
+  const labelOf = (id) => accountLabel(naming.byId.get(id) ?? { id });
+  const liveFiles = db.prepare(`SELECT id, name, stored_path, period_from, period_to FROM files
+                                WHERE source_id = ? AND removed_at IS NULL ORDER BY uploaded_at DESC, rowid DESC`);
+  const anyFile = db.prepare('SELECT 1 FROM files WHERE source_id = ? LIMIT 1');
+  const rowRange = new Map(db.prepare(`SELECT f.source_id AS source, min(r.d) AS a, max(r.d) AS b FROM files f JOIN (
+      SELECT file_id, date AS d FROM transactions UNION ALL SELECT file_id, date FROM balances UNION ALL SELECT file_id, as_of FROM positions
+    ) r ON r.file_id = f.id WHERE f.source_id IS NOT NULL AND f.removed_at IS NULL GROUP BY f.source_id`).all().map((r) => [r.source, r]));
+  const ownSources = db.prepare('SELECT id FROM accounts WHERE source_id = ?');
+  const rows = db.prepare("SELECT id, label, as_of, kind, last_ingest_at FROM sources WHERE substr(id, 1, 4) = 'ing:' ORDER BY id").all();
+  const out = [];
+  for (const row of rows) {
+    const files = liveFiles.all(row.id);
+    if (!files.length && anyFile.get(row.id)) continue;
+    const st = states.sources.get(row.id);
+    const simplefin = row.kind === 'simplefin';
+    const ids = new Set(st ? st.fed.keys() : []);
+    if (simplefin) for (const a of ownSources.all(row.id)) ids.add(a.id);
+    const accounts = [...ids].map((id) => {
+      const a = states.accounts.get(id);
+      const archived = a ? a.archived : !!naming.byId.get(id)?.archived_at;
+      return { id, label: labelOf(id), state: a ? a.state : (archived ? 'archived' : 'unknown'), archived };
+    }).sort((x, y) => x.label.localeCompare(y.label) || x.id.localeCompare(y.id));
+    const insts = [...new Set(accounts.map((a) => String(naming.byId.get(a.id)?.inst ?? '').trim()))];
+    let name;
+    if (simplefin) name = insts.filter(Boolean).join(', ') || 'Bank connection';
+    else if (insts.length === 1 && insts[0]) name = insts[0];
+    else if (files.length) name = files.length > 1 ? `${files[0].name} and ${files.length - 1} more file${files.length === 2 ? '' : 's'}` : files[0].name;
+    else name = row.label;
+    const periods = files.length > 0 && files.every((f) => isoDay(f.period_from) && isoDay(f.period_to));
+    const days = rowRange.get(row.id);
+    const range = periods
+      ? { from: files.map((f) => isoDay(f.period_from)).sort()[0], to: files.map((f) => isoDay(f.period_to)).sort().at(-1) }
+      : { from: isoDay(days?.a) ?? null, to: isoDay(days?.b) ?? null };
+    const f = freshnessOf({ kind: row.kind, asOf: row.as_of }, at);
+    out.push({
+      id: row.id,
+      name,
+      // The parser label, kept for compatibility; no screen shows it.
+      label: row.label,
+      kind: row.kind,
+      asOf: row.as_of ?? '',
+      lastIngestAt: row.last_ingest_at ?? null,
+      cadence: f.cadence ? f.cadence.label : null,
+      state: st ? st.state : f.state,
+      ageDays: f.ageDays,
+      range,
+      accounts,
+      files: simplefin ? [] : files.filter((x) => x.stored_path != null).map((x) => ({ id: x.id, name: x.name, removable: true })),
+      howTo: howToFor(row.kind),
+    });
+  }
+  // Two sources named for the same institution (an export and a newer activity file of one bank)
+  // add their newest file name, so each row says which one it is.
+  const count = new Map();
+  for (const s of out) count.set(s.name, (count.get(s.name) ?? 0) + 1);
+  for (const s of out) if (count.get(s.name) > 1 && s.files.length) s.name = `${s.name}, ${s.files[0].name}`;
+  return out.sort((a, b) => rankOfState(a.state) - rankOfState(b.state) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+}
+
+// The Sources view the API and the accounts.sources tool return: each source's id, real name,
+// parser label, kind, state, range, last data date, cadence, accounts and live files.
+export function sourcesView(db, { clock } = {}) {
   const at = clockOf(db, clock);
-  const kindOf = new Map(db.prepare("SELECT id, kind FROM sources WHERE substr(id, 1, 4) = 'ing:'").all().map((r) => [r.id, r.kind]));
-  const hit = accountFreshnessRows(db, at, kindOf, accountId)[0];
-  if (!hit) return { asOf: '', fresh: 'unknown', sourceId: null };
-  return { asOf: hit.asOf, fresh: hit.f ? hit.f.state : 'unknown', sourceId: hit.row.source_id };
+  return sourceList(db, at, sourceStates(db, at)).map(({ lastIngestAt, howTo, ...rest }) => rest);
 }
 
 export function ingestState(db, { clock } = {}) {
@@ -250,48 +315,32 @@ export function ingestState(db, { clock } = {}) {
   const items = pendingWithGuesses(db);
   // Uploaded files always have stored bytes; the demo seed's provenance row does not.
   const files = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files
-                            WHERE stored_path IS NOT NULL ORDER BY uploaded_at DESC, rowid DESC LIMIT ?`)
+                            WHERE stored_path IS NOT NULL AND removed_at IS NULL ORDER BY uploaded_at DESC, rowid DESC LIMIT ?`)
     .all(FILES_LIMIT).map(fileOf);
   const waiting = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files
-                              WHERE stored_path IS NOT NULL AND status IN ('needs_mapping', 'needs_extraction')
+                              WHERE stored_path IS NOT NULL AND removed_at IS NULL AND status IN ('needs_mapping', 'needs_extraction')
                               ORDER BY uploaded_at DESC, rowid DESC`).all().map(fileOf);
 
-  const covered = coveredFileSources(db);
-  const sources = db.prepare("SELECT id, label, as_of, kind, last_ingest_at FROM sources WHERE substr(id, 1, 4) = 'ing:' ORDER BY label, id")
-    .all().map((row) => {
-      const f = freshnessOf({ kind: row.kind, asOf: row.as_of }, at);
-      return {
-        id: row.id,
-        label: row.label,
-        kind: row.kind,
-        asOf: row.as_of ?? '',
-        lastIngestAt: row.last_ingest_at ?? null,
-        cadence: f.cadence ? f.cadence.label : null,
-        // A file source whose accounts SimpleFIN covers is never stale (coverage.mjs).
-        state: f.state === 'stale' && covered.has(row.id) ? 'covered' : f.state,
-        ageDays: f.ageDays,
-        howTo: howToFor(row.kind),
-      };
-    });
-  const kindOf = new Map(sources.map((s) => [s.id, s.kind]));
+  const states = sourceStates(db, at);
+  const sources = sourceList(db, at, states);
+  const naming = accountNaming(db);
 
   const accounts = {};
   const accountNotes = [];
-  const naming = accountNaming(db);
-  for (const { row, asOf, kind, f } of accountFreshnessRows(db, at, kindOf)) {
-    accounts[row.id] = { asOf, fresh: f ? f.state : 'unknown', sourceId: row.source_id };
+  for (const [id, a] of states.accounts) {
+    accounts[id] = { asOf: a.asOf, fresh: a.state, sourceId: a.sourceId };
     // A stale source already yields a note covering its accounts; only a stale account in a
-    // fresh source needs its own.
-    const source = sources.find((s) => s.id === row.source_id);
-    if (f && f.state === 'stale' && DOMAIN_OF[kind] && source && source.state !== 'stale') {
-      accountNotes.push({ domain: DOMAIN_OF[kind], text: `${naming.label(row) || row.id} data is ${f.ageDays} days old. Export a fresh copy.` });
+    // source that is not stale needs its own.
+    const source = sources.find((s) => s.id === a.sourceId);
+    if (a.state === 'stale' && DOMAIN_OF[a.kind] && source && source.state !== 'stale') {
+      accountNotes.push({ domain: DOMAIN_OF[a.kind], text: `${accountLabel(naming.byId.get(id) ?? { id }) || id} data is ${a.ageDays} days old. Export a fresh copy.` });
     }
   }
 
   const staleNotes = [
     ...sources
       .filter((s) => s.state === 'stale' && DOMAIN_OF[s.kind])
-      .map((s) => ({ domain: DOMAIN_OF[s.kind], text: `${s.label} data is ${s.ageDays} days old. Export a fresh copy.` })),
+      .map((s) => ({ domain: DOMAIN_OF[s.kind], text: `${s.name} data is ${s.ageDays} days old. Export a fresh copy.` })),
     ...accountNotes,
   ];
 

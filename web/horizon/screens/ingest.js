@@ -122,6 +122,21 @@ export function dateText(iso) {
   return `${MON[+m[2] - 1]} ${+m[3]}, ${m[1]}`;
 }
 
+// 'Mar 2019' from an ISO date; '' when there is none.
+export function monthYearText(iso) {
+  const m = /^(\d{4})-(\d{2})/.exec(String(iso || ''));
+  if (!m || +m[2] < 1 || +m[2] > 12) return '';
+  return `${MON[+m[2] - 1]} ${m[1]}`;
+}
+
+// A source's date range as 'Mar 2019 to Jun 2025', one month when both ends share it, '' when unknown.
+export function sourceRangeText(range) {
+  const a = monthYearText(range && range.from);
+  const b = monthYearText(range && range.to);
+  if (a && b) return a === b ? a : `${a} to ${b}`;
+  return a || b;
+}
+
 // '2 transactions, 1 duplicate skipped' from a file result's counts; 'No new rows' when nothing landed.
 export function countsText(counts) {
   const c = counts && typeof counts === 'object' ? counts : {};
@@ -192,13 +207,16 @@ const cadenceText = (c) => (c && typeof c === 'object' ? String(c.label || '') :
 export function ingestScreens(h) {
   const { api, shell, section, pageHead, btn, icon, esc, draw, getUi, addBtn } = h;
   // Module state survives scenario re-renders (the design redraws the whole page on every change).
-  const st = { busy: 0, results: null, retrying: {}, open: {}, rowOpen: {}, undoing: {}, decidedFinal: {}, deck: freshDeck(), origin: null, decidedAll: false, bankOpen: {} };
+  const st = { busy: 0, results: null, retrying: {}, open: {}, rowOpen: {}, undoing: {}, decidedFinal: {}, deck: freshDeck(), origin: null, decidedAll: false, bankOpen: {},
+    // Sources: open Manage panels by source id, the action in flight, and the status line of the
+    // last action ({ text, receiptId }) with its Undo.
+    srcOpen: {}, srcBusy: null, srcNote: null };
   const ing = () => api.ingest();
 
   function chip(state) {
     if (state === 'fresh') return '<span class="h-fresh fresh">Fresh</span>';
     if (state === 'stale') return '<span class="h-fresh stale">Stale</span>';
-    if (state === 'covered') return '<span class="h-fresh fresh">Connected</span>';
+    if (state === 'history') return '<span class="h-fresh history">History</span>';
     return '';
   }
 
@@ -264,14 +282,36 @@ export function ingestScreens(h) {
     return `<div class="h-acc-f">${d ? `<span>Last data ${esc(d)}</span>` : ''}${chip(fresh)}</div>`;
   }
 
+  function sourceManage(s) {
+    const busy = st.srcBusy != null;
+    const accounts = arr(s.accounts).map((a) => {
+      const archived = !!a.archived;
+      const act = btn(archived ? 'Restore' : 'Archive', `data-src-archive="${esc(a.id)}" data-archived="${archived ? '0' : '1'}"${busy ? ' disabled' : ''}`, 'ghost');
+      const merge = archived ? '' : `<a class="h-src-merge" href="#/account/${encodeURIComponent(a.id)}" data-src-merge="${esc(a.id)}">Merge</a>`;
+      return `<li class="${archived ? 'archived' : ''}"><span class="h-src-it">${esc(a.label)}${archived ? '<em>Archived</em>' : ''}</span><span class="h-src-acts">${merge}${act}</span></li>`;
+    }).join('');
+    const files = arr(s.files).map((f) => `<li><span class="h-src-it">${icon('doc')}${esc(f.name)}</span><span class="h-src-acts">${btn('Remove', `data-src-remove="${esc(f.id)}"${busy ? ' disabled' : ''}`, 'ghost')}</span></li>`).join('');
+    if (!accounts && !files) return '';
+    const id = String(s.id);
+    return `<details class="h-src-m" data-src-manage="${esc(id)}"${st.srcOpen[id] ? ' open' : ''}><summary>${icon('chev')}<span>Manage</span></summary>
+      ${accounts ? `<ul class="h-src-items" aria-label="Accounts">${accounts}</ul>` : ''}${files ? `<ul class="h-src-items" aria-label="Files">${files}</ul>` : ''}</details>`;
+  }
+
+  function sourceNote() {
+    const n = st.srcNote;
+    if (!n) return '';
+    const undo = n.receiptId ? btn(st.srcBusy === 'undo' ? 'Undoing' : 'Undo', `data-src-undo="${esc(n.receiptId)}"${st.srcBusy != null ? ' disabled' : ''}`, 'ghost') : '';
+    return `<div class="h-src-undo" role="status"><span>${esc(n.text)}</span>${undo}</div>`;
+  }
+
   function sourcesSection() {
     const g = ing();
     const srcs = g.sources.length
-      ? `<ul class="h-srcs">${g.sources.map((s) => {
-        const d = dateText(s.asOf);
-        const cad = cadenceText(s.cadence);
-        const meta = [d ? `Last data ${esc(d)}` : 'No dated rows', cad ? `Export ${esc(cad)}` : ''].filter(Boolean).join('<span class="h-dotsep"></span>');
-        return `<li><div class="h-src-n"><b>${esc(s.label)}</b><span>${meta}</span></div>${chip(s.state)}</li>`;
+      ? `<ul class="h-srcs h-src-list">${g.sources.map((s) => {
+        const range = sourceRangeText(s.range);
+        const d = dateText((s.range && s.range.to) || s.asOf);
+        const meta = [range ? esc(range) : '', d ? `Last data ${esc(d)}` : 'No dated rows'].filter(Boolean).join('<span class="h-dotsep"></span>');
+        return `<li><div class="h-src-top"><div class="h-src-n"><b>${esc(s.name || s.label)}</b><span>${meta}</span></div>${chip(s.state)}</div>${sourceManage(s)}</li>`;
       }).join('')}</ul>`
       : '<p class="h-mute">No files added yet.</p>';
     const fmts = g.formats.length
@@ -281,7 +321,7 @@ export function ingestScreens(h) {
           <ol>${arr(f.steps).map((x) => `<li>${esc(x)}</li>`).join('')}</ol>${f.cadence ? `<p class="h-mute sm">How often: ${esc(cadenceText(f.cadence))}</p>` : ''}</details>`;
       }).join('')}</div>`)
       : '';
-    return section('Sources', srcs, g.sources.length ? plural(g.sources.length, 'source') : '') + fmts;
+    return section('Sources', sourceNote() + srcs, g.sources.length ? plural(g.sources.length, 'source') : '') + fmts;
   }
 
   // Files that need a mapping or the engine; '' when none. Shared by Confirm and Accounts.
@@ -982,14 +1022,48 @@ export function ingestScreens(h) {
     });
   }
 
+  // One tap source actions: no confirm step, a status line with Undo after each.
+  function sourceAction(kind, run, text) {
+    if (st.srcBusy != null) return;
+    st.srcBusy = kind;
+    draw();
+    Promise.resolve(run()).then((r) => {
+      st.srcBusy = null;
+      if (r) st.srcNote = r.receipt ? { text, receiptId: r.receipt.id } : { text, receiptId: null };
+      draw();
+    });
+  }
+
+  function accountLabelOf(id) {
+    for (const s of arr(ing().sources)) for (const a of arr(s.accounts)) if (a.id === id) return String(a.label || '');
+    return '';
+  }
+
+  function fileNameOf(id) {
+    for (const s of arr(ing().sources)) for (const f of arr(s.files)) if (f.id === id) return String(f.name || '');
+    return '';
+  }
+
+  function undoSource(receiptId) {
+    if (st.srcBusy != null) return;
+    st.srcBusy = 'undo';
+    draw();
+    Promise.resolve(api.actionUndo(receiptId)).then((r) => {
+      st.srcBusy = null;
+      if (r) st.srcNote = { text: 'Undone.', receiptId: null };
+      draw();
+    });
+  }
+
   function handleClick(e) {
-    const t = e.target.closest?.('[data-upload-open],[data-answer],[data-row-answer],[data-row-undo],[data-group-apply],[data-take-guess],[data-decided-undo],[data-decided-more],[data-deck],[data-deck-home],[data-retry],details[data-howto] > summary,details[data-row-detail] > summary,details[data-bank-details] > summary');
+    const t = e.target.closest?.('[data-upload-open],[data-answer],[data-row-answer],[data-row-undo],[data-group-apply],[data-take-guess],[data-decided-undo],[data-decided-more],[data-deck],[data-deck-home],[data-retry],[data-src-archive],[data-src-remove],[data-src-undo],[data-src-merge],details[data-howto] > summary,details[data-row-detail] > summary,details[data-bank-details] > summary,details[data-src-manage] > summary');
     if (!t) return false;
     if (t.tagName === 'SUMMARY') {
       // The native toggle runs; the open state is kept so a redraw does not close it.
       const d = t.parentElement;
       if (d.dataset.rowDetail) st.rowOpen[d.dataset.rowDetail] = !d.open;
       else if (d.dataset.bankDetails) st.bankOpen[d.dataset.bankDetails] = !d.open;
+      else if (d.dataset.srcManage) st.srcOpen[d.dataset.srcManage] = !d.open;
       else st.open[d.dataset.howto] = !d.open;
       return true;
     }
@@ -1042,6 +1116,27 @@ export function ingestScreens(h) {
       else if (d.deck === 'done') forward();
       else move(d.deck === 'next' ? 1 : -1);
       t.ownerDocument.querySelector(`[data-deck="${d.deck}"]:not([disabled])`)?.focus();
+      return true;
+    }
+    if (d.srcArchive) {
+      const id = d.srcArchive;
+      const archive = d.archived === '1';
+      const label = accountLabelOf(id) || 'Account';
+      sourceAction('archive', () => api.archiveAccount(id, archive), `${label} ${archive ? 'archived' : 'restored'}.`);
+      return true;
+    }
+    if (d.srcRemove) {
+      const id = d.srcRemove;
+      sourceAction('remove', () => api.removeFile(id), `${fileNameOf(id) || 'File'} removed.`);
+      return true;
+    }
+    if (d.srcUndo) {
+      undoSource(d.srcUndo);
+      return true;
+    }
+    if (d.srcMerge) {
+      if (h.openAccountMerge) h.openAccountMerge(d.srcMerge, t);
+      else api.go('account', { id: d.srcMerge });
       return true;
     }
     if (d.retry) {

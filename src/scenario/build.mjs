@@ -383,7 +383,7 @@ export function loadYourPlans(db) {
                               WHERE d.doc_type IN ('plan', 'benefits') ORDER BY d.id`).all()
     .filter(r => r.file_id ? r.name != null : typeof parse(r.fields, {})?.text === 'string')
     .map(r => ({ fileId: r.file_id || null, name: r.file_id ? r.name : `document-${r.id}`, docType: r.doc_type }));
-  const files = db.prepare(`SELECT id, name FROM files WHERE ${READABLE} ORDER BY uploaded_at, id`).all()
+  const files = db.prepare(`SELECT id, name FROM files WHERE ${READABLE} AND removed_at IS NULL ORDER BY uploaded_at, id`).all()
     .map(r => ({ id: r.id, name: r.name }));
   return { sources, files, built: getSetting(db, 'yourPlans', null) };
 }
@@ -739,7 +739,8 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
     wargame,
     decisions,
     ask: section(content, 'ask'),
-    accounts: accountRows.map(a => {
+    // An archived account leaves current accounts; goals and recs still resolve it above.
+    accounts: accountRows.filter(a => !a.archived_at).map(a => {
       const f = Object.hasOwn(ingestAccounts, a.id) ? ingestAccounts[a.id] : {};
       const named = naming.byId.get(a.id) || { ...a, householdNames };
       const label = accountLabel(named);
