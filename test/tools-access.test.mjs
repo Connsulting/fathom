@@ -99,3 +99,14 @@ test('bridge uses the person-scoped retirement fact, excludes spouse and busines
  s.db.prepare("DELETE FROM facts WHERE key='household.retireAge'").run();
  assert.equal((await s.call('bridge')).yearsToAccess.value,null);
 });
+
+test('accessible Roth contributions cannot exceed the current account value',async t=>{
+ const s=await setup(t);
+ s.fact('accounts.rothBasis',{roth:40000});
+ const out=await s.call('bridge',{retireAge:{value:50,source:'owner',evidence:'retire at 50'}});
+ assert.equal(out.accessible.rothContributions.value,30000);
+ s.db.prepare("DELETE FROM balances WHERE account_id='roth'").run();
+ const missing=await s.call('bridge',{retireAge:{value:50,source:'owner',evidence:'retire at 50'}});
+ assert.equal(missing.accessible.rothContributions.value,null);
+ assert.equal(missing.shortfall.value,null);
+});

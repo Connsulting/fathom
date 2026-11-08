@@ -51,3 +51,18 @@ test('account eligibility follows the plan type in the same atomic answer batch 
  assert.throws(()=>recordFactAnswers(s.db,[{...plan,value:{plan:'traditional_ira'}},separation],{now}),FactAnswerError);
  assert.equal(JSON.parse(s.db.prepare("SELECT value FROM facts WHERE key='accounts.planType'").get().value).plan,'401k');
 });
+
+test('answer.fact collects Roth basis for accounts identified by plan type and bridge counts it',async t=>{
+ const s=await spendingStore(t);
+ for(const [id,kind] of [['ira-plan','ira'],['workplace-ira','retirement']])s.account(id,kind,'owner');
+ s.fact('accounts.planType',{'ira-plan':'roth_ira','workplace-ira':'roth_ira'});
+ for(const id of ['ira-plan','workplace-ira']) {
+  s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run(id,'2026-10-31',10000);
+  const evidence='My Roth contribution basis is $2500.';
+  const out=await callTool('answer',{operation:'fact',key:'accounts.rothBasis',value:{[id]:2500},evidence},{...s.ctx,actorId:'synthetic-actor',ownerText:evidence});
+  assert.equal(out.value[id],2500);
+ }
+ const bridge=await callTool('retirement',{operation:'bridge',retireAge:{value:50,source:'owner',evidence:'retire at 50'}},{...s.ctx,channel:'mcp'});
+ assert.equal(bridge.accessible.rothContributions.value,5000);
+ assert.ok(!bridge.gaps.some(g=>g.message.includes('accounts.rothBasis')));
+});
