@@ -221,7 +221,7 @@ function room(args, ctx) {
 
 export const operations = [
   { tool: 'tax', name: 'estimate', scope: 'read', summary: 'Stored tax and safe harbor projections, marginal rates and sourced income or deduction what-ifs.', route: 'Tax owed, safe harbor, marginal rate, tax what-if', routes: [], referenceable: true, params: { year: yearParam,
-    whatIf: { type: 'object', properties: { extraIncome: assumption, extraDeduction: assumption, incomeType: { type: 'string', enum: ['business','wages','other'] } }, additionalProperties: false } }, required: [], handler: (args,ctx) => bounded(estimate(args,ctx)) },
+    whatIf: { type: 'object', properties: { extraIncome: assumption, extraDeduction: { ...assumption, description: 'Additional federal itemized deduction; does not reduce AGI or change state itemized deductions.' }, incomeType: { type: 'string', enum: ['business','wages','other'], description: 'business: the single self-employment line, else the sole business. wages: a single wage line. other: ordinary income without QBI or self-employment tax.' } }, additionalProperties: false } }, required: [], handler: (args,ctx) => bounded(estimate(args,ctx)) },
   { tool: 'tax', name: 'room', scope: 'read', summary: 'Contribution limits and recorded remaining room; reports missing payroll or eligibility inputs.', route: 'Contribution room and deadlines', routes: [], referenceable: true,
     params: { person: { type: 'string', enum: ['owner','spouse','both'] }, types: { type: 'array', items: { type: 'string', enum: TYPES }, maxItems: 9 }, year: yearParam }, required: [], handler: (args,ctx) => bounded(room(args,ctx)) },
 ];
