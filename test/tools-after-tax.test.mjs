@@ -67,7 +67,7 @@ test('missing hypothetical basis stays unavailable and no loss tax credit is inv
 
 test('Roth qualification uses the later age and five-year dates, naming missing facts',async t => {
   const s = await setup(t);
-  s.account('roth','roth','Owner');
+  s.account('roth','roth','owner');
   s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run('roth','2026-10-31',10000);
   const missing = await s.afterTax({accounts:['roth']});
   assert.equal(missing.rows[0].afterTax.value,10000);
@@ -84,7 +84,7 @@ test('Roth qualification uses the later age and five-year dates, naming missing 
 
 test('HSA presents both purposes, with age-dependent additional tax and missing-age gaps',async t => {
   const s = await setup(t);
-  s.account('health','hsa','Owner');
+  s.account('health','hsa','owner');
   s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run('health','2026-10-31',10000);
   let out = await s.afterTax({accounts:['health']});
   assert.equal(out.rows[0].afterTaxMedical.value,10000);
@@ -102,7 +102,7 @@ test('HSA presents both purposes, with age-dependent additional tax and missing-
 
 test('generic retirement needs plan type; rates resolve calculate refs without defaults',async t => {
   const s = await setup(t);
-  s.account('pension','retirement','Owner');
+  s.account('pension','retirement','owner');
   s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run('pension','2026-10-31',10000);
   const unknown = await s.afterTax({accounts:['pension']});
   assert.equal(unknown.rows[0].afterTax.value,null);
