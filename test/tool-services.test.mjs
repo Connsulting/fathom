@@ -15,7 +15,7 @@ test('confirmed Ask proposals keep household services and owner statements', asy
   let receiptId, confirmedContext;
   const transport = createEngine({ mode: 'fake' });
   const engine = { mode: 'live', isOn: () => true, call(request) {
-    if (request.purpose === 'title') return Promise.resolve({ text: 'Synthetic undo', toolResults: [] });
+    if (request.purpose === 'title') return Promise.resolve({ text: JSON.stringify({ title: 'Synthetic undo' }), toolResults: [] });
     return transport.call({ ...request, fake: [
       { toolCalls: [{ name: 'undo', args: { operation: 'undo', id: receiptId, propose: true } }] },
       { text: 'Undo your change? Confirm below.' },
