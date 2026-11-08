@@ -445,7 +445,7 @@ test('AC15-AC19: one missing-data Ask proposal records owner S corp, spouse LLC 
   await addPayroll(db, { docType: 'w2', fields: { taxYear: 2026, employerName: 'Current Studio', wages: 40000, medicareWages: 40000, federalWithheld: 4000, box12: [] }, recipient: 'owner', relation: 'household' });
   await planRun(db);
   const before = getFacts(db)['business.entities'];
-  assert.match(JSON.stringify(buildScenario(db).recs), /does not match any business on file/);
+  assert.ok(!JSON.stringify(buildScenario(db).recs).includes('does not match any business on file'));
   const text = "mine is an S-Corp, the spouse's is an LLC; the spouse left a K-1 partnership this year and has to file a final K-1.";
   const value = [
     { name: 'Current Studio', type: 's_corp', owner: 'owner', status: 'active', accountId: 'business-cash' },
@@ -485,7 +485,7 @@ test('AC15-AC19: one missing-data Ask proposal records owner S corp, spouse LLC 
   const receipt = saved.message.provenance.actions[0];
   await callTool('undo', { operation: 'undo', id: receipt.id }, { ...ctx, channel: 'mcp', scopes: ['write:facts'] });
   assert.deepEqual(getFacts(db)['business.entities'], before);
-  assert.match(JSON.stringify(buildScenario(db).recs), /does not match any business on file/);
+  assert.ok(!JSON.stringify(buildScenario(db).recs).includes('does not match any business on file'));
 });
 
 test('entity status and account links validate atomically without accepting missing final years or personal accounts', async t => {
@@ -553,7 +553,7 @@ for (const scorp of [true, false]) test(`AC20/AC21: a household payroll employer
   assert.equal(entity.owner, 'owner');
   assert.equal(entity.type, scorp ? 's_corp' : null);
   assert.equal(entity.accountId, 'business-cash');
-  assert.ok(figureRow(db, 'agi.est'));
+  assert.ok(figureRow(db, 'agi.est'), JSON.stringify(buildScenario(db).recs.find(r => r.id === 'missing-data')));
   assert.ok(figureRow(db, 'tax.fed.proj'));
   const scenario = buildScenario(db);
   assert.ok(!JSON.stringify(scenario.recs).includes('does not match any business on file'));

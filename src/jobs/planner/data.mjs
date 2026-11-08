@@ -9,6 +9,7 @@
 //   withholding_conflict answer dropped; aliases: entity_aliases rows.
 // ownerOf(value) -> 'owner' | 'spouse' | 'joint' | 'business' | null (ingest stores option labels)
 
+import { docRecipient, employerKeyOf, matchEntity } from './payroll.mjs';
 import { parseJson, cents } from '../../store/db.mjs';
 import { accountNaming } from '../../accounts/naming.mjs';
 import { addDays, daysBetween } from '../../scenario/build.mjs';
@@ -212,7 +213,7 @@ export function resolveEntities(data, facts) {
     out.push({
       name: e.name.trim(), slug: slugOf(e.name), type: TYPES.includes(e.type) ? e.type : null,
       owner: e.owner === 'spouse' ? 'spouse' : 'owner', sstb: typeof e.sstb === 'boolean' ? e.sstb : null,
-      docId: null, fileId: null, status: e.status || 'active', finalYear: e.finalYear, classified: TYPES.includes(e.type), lines: [], accountIds: [],
+      docId: null, fileId: null, payrollEmployer: e.inferenceKind === 'household_payroll', status: e.status || 'active', finalYear: e.finalYear, classified: TYPES.includes(e.type), lines: [], accountIds: [],
     });
   };
   const listed = facts['business.entities'];
@@ -229,7 +230,7 @@ export function resolveEntities(data, facts) {
   for (const activity of data.businessActivity || []) {
     if (!activity.rows.length) continue;
     const account = data.accounts.find(a => a.id === activity.accountId);
-    const name = ownerNames.find(e => e.accountId === account.id)?.name || facts['accounts.businessEntity']?.[account.id] || account.entity || ownerNames.find(e => e.accountIds?.includes(account.id))?.name || (ownerNames.length === 1 ? ownerNames[0].name : null);
+    const name = (Array.isArray(listed) ? listed.find(e => e?.accountId === account.id)?.name : null) || facts['accounts.businessEntity']?.[account.id] || account.entity || ownerNames.find(e => e.accountIds?.includes(account.id))?.name || (ownerNames.length === 1 ? ownerNames[0].name : null);
     const candidate = activity.rows.some(r => r.section === 'income') && activity.rows.some(r => r.section === 'expenses');
     let e = name ? out.find(e => sameName(e.name, name)) : null;
     if (!e && !candidate) continue;
@@ -256,9 +257,38 @@ export function inferEntities(data, facts) {
   const listed = Array.isArray(facts['business.entities']) ? facts['business.entities'] : [];
   const value = structuredClone(listed.flatMap(e => !e?.inferred ? [e] : e.nameSource === 'owner' ? [ownerEntityIdentity(e)] : []));
   const baseFacts = { ...facts, 'business.entities': value };
+  const payrollRows = [];
+  const undone = name => Object.entries(facts['business.entityInference'] || {}).some(([key, flag]) => sameName(key, name) && flag?.undone);
+  const payrollDocs = data.documents.filter(d => (d.docType === 'w2' && Number(d.taxYear) === data.year)
+    || (d.docType === 'paystub' && yearOf(d.fields.payDate) === data.year));
+  const employers = new Map();
+  for (const doc of payrollDocs) {
+    const name = String(doc.fields.employerName || '').trim();
+    const relation = data.confirm.find(i => i.kind === 'employer_relation' && i.subject === employerKeyOf(name) && i.status === 'answered' && i.answer === 'household');
+    const person = docRecipient(data, doc).person;
+    if (!name || !relation || !person) continue;
+    const key = employerKeyOf(name);
+    if (!employers.has(key)) employers.set(key, { name, docs: [], people: new Set(), relation });
+    employers.get(key).docs.push(doc);
+    employers.get(key).people.add(person);
+  }
+  const businessAccounts = data.accounts.filter(a => a.kind === 'business');
+  for (const employer of employers.values()) {
+    if (employer.people.size !== 1 || undone(employer.name)) continue;
+    const existing = matchEntity(data, resolveEntities(data, baseFacts), employer.name);
+    if (existing?.classified || ledgerKind(baseFacts, employer.name)) continue;
+    const prior = value.findIndex(e => sameName(e?.name, employer.name));
+    const entity = { name: employer.name, type: facts['income.sCorp'] === true ? 's_corp' : null, owner: [...employer.people][0],
+      inferred: true, inferenceKind: 'household_payroll', nameSource: prior >= 0 ? 'owner' : 'employer',
+      ...(businessAccounts.length === 1 ? { accountId: businessAccounts[0].id } : {}), evidence: {
+        rule: 'Employer marked as a household business; employee from payroll recipient answers',
+        documentCount: employer.docs.length, kinds: [...new Set(employer.docs.map(d => d.docType))],
+      } };
+    if (prior >= 0) value[prior] = { ...value[prior], ...entity }; else value.push(entity);
+    payrollRows.push({ table: 'confirm_items', id: employer.relation.id }, ...employer.docs.map(d => ({ table: 'documents', id: d.id, fileId: d.fileId })));
+  }
   const entities = resolveEntities({ ...data, pnl: data.pnlHistory || data.pnl }, baseFacts);
   for (const entity of entities) entity.budgetLedger = entity.lines.some(l => data.files?.some(f => f.id === l.file_id && /budget|personal|household|spending/i.test(f.name)));
-  const undone = name => Object.entries(facts['business.entityInference'] || {}).some(([key, flag]) => sameName(key, name) && flag?.undone);
   const add = (entity, type, rule) => {
     const nameSource = listed.some(e => sameName(e?.name, entity.name) && (!e.inferred || e.nameSource === 'owner')) ? 'owner' : entity.accountIds.length ? 'account' : 'ledger';
     const entry = { name: entity.name, type, inferred: true, nameSource, ...(entity.accountIds.length ? { accountIds: entity.accountIds } : {}), evidence: {
@@ -292,7 +322,7 @@ export function inferEntities(data, facts) {
   }
   const order = name => { const i = listed.findIndex(e => sameName(e?.name, name)); return i < 0 ? listed.length : i; };
   value.sort((a, b) => order(a?.name) - order(b?.name));
-  return { value, changed: JSON.stringify(value) !== JSON.stringify(listed), rows: entities.flatMap(e => e.lines.map(l => ({ table: l.sourceTable || 'pnl_lines', id: l.id, fileId: l.file_id }))) };
+  return { value, changed: JSON.stringify(value) !== JSON.stringify(listed), rows: [...payrollRows, ...entities.flatMap(e => e.lines.map(l => ({ table: l.sourceTable || 'pnl_lines', id: l.id, fileId: l.file_id })))] };
 }
 
 // P&L sums for one entity (amounts: income positive, expenses negative).

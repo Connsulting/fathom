@@ -365,11 +365,15 @@ export function computeFigures(data, facts, ctx) {
       w2.push({ person: r.person, src, gross: r.medicare, comp: r.comp, agi: r.wages });
       continue;
     }
-    if (r.household) continue;
-    w2.push({ person: r.person, src: 'outside', gross: r.medicare, comp: r.comp, agi: r.wages });
+    if (r.household && !r.classificationPending) continue;
+    w2.push({ person: r.person, src: r.classificationPending ? `household:${r.key}` : 'outside', gross: r.medicare, comp: r.comp, agi: r.wages });
   }
   for (const e of pnlEntities) {
-    if (!e.classified) { blocked.push(`entity_unclassified:${e.slug}`); out.warn('entity_unclassified'); continue; }
+    if (!e.classified) {
+      if (e.payrollEmployer) { out.info.heldReasons.push(`entity_unclassified:${e.slug}`); out.warn('household_business_tax_pending'); }
+      else { blocked.push(`entity_unclassified:${e.slug}`); out.warn('entity_unclassified'); }
+      continue;
+    }
     if ((e.type === 'sole_prop' || e.type === 'llc_single') && inUnit(e.owner)) {
       const S = e.proj(e.sums.net);
       biz.push({ id: e.slug, kind: 'sole', person: e.owner, agi: S, qbi: S, seInput: S, w2Wages: 0, sstb: sstbOf(e) });
@@ -653,6 +657,12 @@ export function computeFigures(data, facts, ctx) {
   if (out.info.blocked.length) out.withhold([...TAX_KEYS, ...persons.map(p => `room.ira.${p}`), 'room.ira.household'], out.info.blocked[0]);
   else if (vaBlocked) out.withhold(VA_KEYS, vaBlocked);
   if (!sizing && out.info.blocked.length) out.withhold([...SOLO_KEYS, 'room.sep'], out.info.blocked[0]);
+  if (records.some(r => r.classificationPending)) for (const key of TAX_KEYS.filter(k => !k.includes('prior') && !k.startsWith('va529.deduction'))) {
+    const figure = out.figures[key];
+    if (!figure) continue;
+    figure.locator.assumptions = [...(figure.locator.assumptions || []), 'household_business_tax_pending'];
+    figure.locator.notes = [...(figure.locator.notes || []), ...notesFor(['household_business_tax_pending'])];
+  }
   for (const k of Object.keys(out.info.withheld)) if (out.figures[k]) delete out.info.withheld[k];
   return finish(out);
 }
@@ -902,7 +912,7 @@ function writeTax(data, out, { hh, parts, owner, f, isVa, pay, section125 }) {
 function summarizeParts(parts, hh) {
   return {
     filingStatus: parts.f, state: parts.state,
-    wages: parts.w2.map(w => ({ person: w.person, source: w.src.startsWith('corp:') ? 'own S corp' : 'outside employer', gross: w.gross, agi: w.agi })),
+    wages: parts.w2.map(w => ({ person: w.person, source: w.src.startsWith('corp:') ? 'own S corp' : w.src.startsWith('household:') ? 'household employer with tax type pending' : 'outside employer', gross: w.gross, agi: w.agi })),
     businesses: parts.biz.map(b => ({ id: b.id, kind: b.kind, person: b.person, income: b.agi, qbi: b.qbi, seInput: b.seInput, retire: hh.retireByBiz[b.id] || 0 })),
     hsaPersonal: parts.hsaPersonal, itemized: parts.itemized || null, va529Deduction: parts.va529Deduction, children: parts.children,
     qbiLossCarryforward: parts.qbiLossCarryforward ?? null,
