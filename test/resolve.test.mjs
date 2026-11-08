@@ -285,6 +285,9 @@ test('the scheduled resolver answers HSA eligibility and runs the actual planner
   let scheduler;
   try {
     rec(db, ['benefits.hsaEligible']);
+    db.prepare("INSERT INTO sources(id,label,kind,as_of) VALUES ('ing:synthetic-reserve','Synthetic reserve','balances','2031-01-01')").run();
+    db.prepare("INSERT INTO accounts(id,name,inst,kind,owner,source_id) VALUES ('reserve','Reserve','Example Bank','cash','You','ing:synthetic-reserve')").run();
+    db.prepare("INSERT INTO balances(account_id,date,amount) VALUES ('reserve','2031-01-01',100)").run();
     db.prepare("INSERT INTO facts (key,value,confirmed,updated_at) VALUES ('synthetic.planDescription',?,0,?)").run(JSON.stringify('HSA eligible health plan'), NOW);
     instance.platform.prepare('INSERT OR REPLACE INTO platform_settings (key,value,updated_at) VALUES (?,?,?)')
       .run('instance_model_cap_usd', '1', Date.now());

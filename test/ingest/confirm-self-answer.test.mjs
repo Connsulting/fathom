@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { realStore } from '../helpers/ingest.mjs';
 import { importProposedRows } from '../helpers/import-proposal-fixture.mjs';
+import { buildScenario } from '../../src/scenario/build.mjs';
 import { planRun } from '../helpers/plan.mjs';
 import { setSetting } from '../../src/store/db.mjs';
 import { upsertFact } from '../../src/store/facts.mjs';
@@ -185,7 +186,7 @@ test('AC4: every Confirm kind uses a plain question and fact questions use answe
   assert.doesNotMatch(item.question, /mfj|household[.]filingStatus/);
 });
 
-test('AC5: production-shaped planning keeps the pending Confirm count within the recorded ceiling', async t => {
+test('AC5: production-shaped planning keeps Confirm and total owner asks within recorded ceilings', async t => {
   const { db } = await store(t);
   fact(db, 'household.names', names);
   fact(db, 'business.entities', [{ name: 'Example Studio', type: 's_corp', owner: 'owner' }]);
@@ -203,11 +204,30 @@ test('AC5: production-shaped planning keeps the pending Confirm count within the
   }
   for (let i = 0; i < 7; i++) transaction(db, 'Example Unfamiliar ' + String.fromCharCode(65 + i));
   assert.equal(pendingItems(db).length, 13);
+  db.prepare("INSERT INTO sources(id,label,kind,as_of) VALUES ('ing:connected','Bank connection','simplefin','2026-11-04'),('ing:old','Old CSV','bank_csv','2026-01-31'),('ing:stub','Example payroll','paystub','2026-08-01')").run();
+  db.prepare("INSERT INTO simplefin_connection(id,access_blob,connected_at) VALUES (1,'synthetic',?)").run(NOW);
+  for (const id of ['cash', 'reserve', 'ambiguous']) {
+    db.prepare("UPDATE accounts SET source_id='ing:connected',mirror='connected' WHERE id=?").run(id);
+    db.prepare("INSERT INTO simplefin_accounts(sf_key,account_id,status,name,created_at) VALUES (?,?,'mapped',?,?)").run(id, id, id, NOW);
+    db.prepare("INSERT INTO balances(account_id,date,amount) VALUES (?,'2026-11-04',1000)").run(id);
+  }
+  db.prepare("INSERT INTO files(id,name,status,source_id,uploaded_at) VALUES ('old-csv','History.csv','imported','ing:old',?),('old-stub','Payroll.pdf','imported','ing:stub',?)").run(NOW, NOW);
+  db.prepare("INSERT INTO balances(account_id,date,amount,file_id) VALUES ('cash','2026-01-31',800,'old-csv')").run();
+  db.prepare("INSERT INTO documents(doc_type,tax_year,fields,file_id) VALUES ('paystub',2026,?,'old-stub')").run(JSON.stringify({ employerName: 'Example Outside One', employeeName: names.me, payDate: '2026-08-01', gross: 3000, ytdGross: 24000 }));
+  for (const date of ['2026-09-01', '2026-10-01', '2026-11-01']) db.prepare("INSERT INTO transactions(account_id,date,amount,description,parser) VALUES ('cash',?,2500,'Example Outside One PAYROLL','simplefin')").run(date);
   await planRun(db, { now: NOW.slice(0, 10) });
   const RECORDED_PENDING_CEILING = 8;
   assert.ok(pendingItems(db).length <= RECORDED_PENDING_CEILING,
     `Confirm ceiling ${RECORDED_PENDING_CEILING}; actual ${pendingItems(db).length}`);
   assert.equal(pendingItems(db).filter(i => i.kind === 'account_kind').length, 1);
+  const recs = buildScenario(db).recs.filter(r => ['proposed', 'doing', 'waiting', 'snoozed'].includes(r.status));
+  const missingSteps = recs.filter(r => r.id === 'missing-data').flatMap(r => r.tasks).filter(t => !t.done && t.kind !== 'upload');
+  const uploadSteps = recs.flatMap(r => r.tasks).filter(t => !t.done && t.kind === 'upload');
+  const ownerAsks = pendingItems(db).length + missingSteps.length + uploadSteps.length;
+  const RECORDED_OWNER_ASK_CEILING = 11;
+  assert.ok(ownerAsks <= RECORDED_OWNER_ASK_CEILING,
+    `Owner ask ceiling ${RECORDED_OWNER_ASK_CEILING}; actual ${ownerAsks}; Confirm ${pendingItems(db).length}, missing ${missingSteps.length}, uploads ${uploadSteps.length}`);
+
 });
 
 test('AC1: per-document W-2 and paystub recipients resolve after a shared employer is labeled both', async t => {

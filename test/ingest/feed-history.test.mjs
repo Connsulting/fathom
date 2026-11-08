@@ -7,6 +7,7 @@
 import test, { before } from 'node:test';
 import assert from 'node:assert/strict';
 import { src } from '../helpers/server.mjs';
+import { computeFigures } from '../../src/jobs/planner/figures.mjs';
 import { realStore, fixture, offEngine, one, NOW } from '../helpers/ingest.mjs';
 
 let FR;
@@ -53,8 +54,9 @@ const feedOf = (d, sourceId) => d.feeds.find((f) => f.id === sourceId);
 // The planner's freshness and the missing-data steps built from it, at OLD_CLOCK.
 function missingData(db) {
   const data = D.loadPlanningData(db, OLD_CLOCK);
-  const list = M.items({ facts: {}, data, freshness: data.freshness, warnings: [], info: {}, blockedReasons: [] });
-  return { freshness: data.freshness, uploads: list.filter((i) => i.kind === 'upload' && ['balances', 'transactions'].includes(i.code)) };
+  const refreshNeeds = C.refreshDependencies(db, computeFigures(data, {}, { clock: OLD_CLOCK, entities: [] }).figures, OLD_CLOCK);
+  const list = M.items({ refreshNeeds, facts: {}, data, freshness: data.freshness, warnings: [], info: {}, blockedReasons: [] });
+  return { freshness: data.freshness, uploads: list.filter((i) => i.kind === 'upload' && i.code.startsWith('balances:')) };
 }
 
 test('a connected fresh account lists its older file sources as history, and nothing asks for a fresh export', () => withStore(async (s) => {
@@ -113,7 +115,7 @@ test('an unconnected account with an old file stays stale with How to refresh, b
   assert.equal(feedOf(detail(s, cash.id), agg.source_id).state, 'history', 'the connected account beside it shows history');
 
   const { uploads } = missingData(s.db);
-  const balances = uploads.find((i) => i.code === 'balances');
+  const balances = uploads.find((i) => i.code.startsWith('balances:'));
   assert.ok(balances, 'the missing-data steps ask for the latest balances');
   assert.ok(balances.accountIds.includes(invest.id), 'the step names the stale account');
   assert.ok(!balances.accountIds.includes(cash.id), 'the step does not name the connected account');

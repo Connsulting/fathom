@@ -370,3 +370,35 @@ test('an archived account leaves accounts.net_worth and household.health by defa
   await T.callTool('undo', { operation: 'undo', id: out.receipt.id }, toolCtx(s));
   assert.ok(mentions(await worth()));
 }));
+
+
+const reupload = (app, file) => {
+  const boundary = 'synthetic-restore-boundary';
+  const body = Buffer.concat([Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="files"; filename="${file.name}"\r\nContent-Type: text/csv\r\n\r\n`),
+    Buffer.from(file.bytes), Buffer.from(`\r\n--${boundary}--\r\n`)]);
+  return app.request({ method: 'POST', path: '/api/files', headers: { 'content-type': `multipart/form-data; boundary=${boundary}` }, body });
+};
+
+test('identical re-upload restores removed data through HTTP and consumes the original removal Undo', () => withApp(async ({ app, api, bank, cash }) => {
+  const before = await api.scenario(), txBefore = await api.txTotal(cash);
+  const removed = await api.post(`/api/files/${bank.fileId}/remove`);
+  assert.equal(removed.status, 200, removed.text);
+  const restored = await reupload(app, fixture('Chase7766_Activity_20320305.csv', 'text/csv'));
+  assert.equal(restored.status, 200, restored.text);
+  assert.equal(restored.json.files[0].fileId, bank.fileId);
+  assert.equal(restored.json.files[0].restored, true);
+  assert.equal(restored.json.files[0].status, 'imported');
+  assert.equal(await api.txTotal(cash), txBefore);
+  assert.equal(totalOf(await api.scenario()), totalOf(before));
+  assert.equal((await api.undo(removed.json.receipt.id)).status, 409, 'the removal was already undone by the upload');
+  const duplicate = await reupload(app, fixture('Chase7766_Activity_20320305.csv', 'text/csv'));
+  assert.equal(duplicate.json.files[0].status, 'duplicate', 'active identical uploads retain duplicate detection');
+}));
+
+test('a re-upload refuses an intervening source change with a conflict and leaves removal intact', () => withApp(async ({ app, api, pos, invest }) => {
+  assert.equal((await api.post(`/api/files/${pos.fileId}/remove`)).status, 200);
+  assert.equal((await api.post(`/api/accounts/${invest}/archive`, { archived: false })).status, 200);
+  const refused = await reupload(app, fixture('positions.csv', 'text/csv'));
+  assert.equal(refused.status, 409, refused.text);
+  assert.ok(!(await api.sources()).some(source => source.files.some(file => file.id === pos.fileId)));
+}));

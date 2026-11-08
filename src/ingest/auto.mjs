@@ -15,6 +15,7 @@ import { parseJson } from '../store/db.mjs';
 import { getFacts } from '../store/facts.mjs';
 import { loadPlanningData, resolveEntities } from '../jobs/planner/data.mjs';
 import { sameEmployer, docPayer, docRecipient, employerKeyOf } from '../jobs/planner/payroll.mjs';
+import { estimatedTaxYear } from './transaction-payments.mjs';
 import { kindOf } from './account-match.mjs';
 import { accountNaming } from '../accounts/naming.mjs';
 import {
@@ -55,6 +56,7 @@ export function autoResolve(db, { now } = {}) {
 }
 
 function decide(db, item) {
+  if (item.kind === 'tax_year') return paymentYear(db, item);
   if (item.kind === 'near_duplicate') return crossFormatDuplicate(db, item);
   if (item.kind === 'account_kind') return accountKind(db, item);
   if (item.kind === 'employer_relation') return employerRelation(db, item);
@@ -65,6 +67,18 @@ function decide(db, item) {
   const byMask = sharedMask(db, item);
   if (byHolder && byMask && byHolder.option !== byMask.option) return null;
   return byHolder ?? byMask;
+}
+
+function paymentYear(db, item) {
+  const year = item.context.sheetYear;
+  if (!Number.isInteger(year) || !validOption(item, 'payment_year')) return null;
+  const rows = db.prepare("SELECT id,date,kind,jurisdiction FROM tax_payments WHERE source_slot LIKE ? AND tax_year_basis='sheet_label'").all(`tax:${year}:%`);
+  const state = getFacts(db)['household.state'];
+  if (!rows.length || rows.some(r => !['paid', 'estimate'].includes(r.kind)
+    || estimatedTaxYear(r.date, r.jurisdiction === 'state' ? state : r.jurisdiction) === null)) return null;
+  return { option: 'payment_year', rule: 'estimated_payment_year', evidence: evidence(db,
+    'Estimated payments use their payment dates. Federal and Virginia fourth installments are due in January for the prior tax year; this inferred year can be undone.',
+    [], rows.map(r => ({ table: 'tax_payments', id: r.id }))) };
 }
 
 // ---------------------------------------------------------------- shared helpers

@@ -339,11 +339,11 @@ function sourceList(db, at, states) {
       // The parser label, kept for compatibility; no screen shows it.
       label: row.label,
       kind: row.kind,
-      asOf: row.as_of ?? '',
+      asOf: st?.asOf ?? row.as_of ?? '',
       lastIngestAt: row.last_ingest_at ?? null,
       cadence: f.cadence ? f.cadence.label : null,
       state: st ? st.state : f.state,
-      ageDays: f.ageDays,
+      ageDays: st?.ageDays ?? f.ageDays,
       range,
       accounts,
       files: simplefin ? [] : files.filter((x) => x.stored_path != null).map((x) => ({ id: x.id, name: x.name, removable: true })),

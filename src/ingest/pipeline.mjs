@@ -1,3 +1,4 @@
+import { restoreRemovedFile } from '../accounts/sources.mjs';
 import { CATEGORY_TABLES } from '../categories/resolve.mjs';
 import { kindOf, accountMask, compatibleKind, sameInstitution } from './account-match.mjs';
 // Store encrypted uploads, stage nonstandard proposals, and persist deterministic rows with provenance.
@@ -96,8 +97,8 @@ function resolveAfterImport(db, opts) {
 // household.inFlight holds the file ids this household is storing or routing now. A 'pending' row
 // whose id is not there was left by an interrupted run, and a 'failed' row is retried: both are
 // routed again. A prior row in another unresolved status answers that status with duplicateOf (and
-// its stored reasonCode), so the client shows its cause; only an imported or removed prior is
-// 'duplicate'. Checked and added synchronously, before any await.
+// its stored reasonCode), so the client shows its cause. A removed file replays its removal Undo;
+// only an active imported prior is 'duplicate'. Checked and added synchronously, before any await.
 export async function ingestFile(db, file, opts = {}) {
   const { inFlight } = householdOf(db, opts);
   db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
@@ -108,7 +109,15 @@ export async function ingestFile(db, file, opts = {}) {
   const prior = db.prepare('SELECT id, source_kind, parser, status, note, counts, removed_at FROM files WHERE sha256 = ?').get(hash);
   const fileId = prior?.id ?? 'f-' + hash.slice(0, 24);
   const answer = (status, extra = {}) => ({ fileId, name, status, sourceKind: prior?.source_kind ?? null, parser: prior?.parser ?? null, counts: emptyCounts(), duplicateOf: fileId, ...extra });
-  if (inFlight.has(fileId) || (prior && (prior.removed_at || !REROUTE.includes(prior.status)))) {
+  if (prior?.removed_at && !inFlight.has(fileId)) {
+    inFlight.add(fileId);
+    try {
+      await restoreRemovedFile({ ...opts, db, now }, fileId);
+      return { fileId, name, status: prior.status, sourceKind: prior.source_kind, parser: prior.parser,
+        counts: parseJson(prior.counts, null) ?? emptyCounts(), restored: true };
+    } finally { inFlight.delete(fileId); }
+  }
+  if (inFlight.has(fileId) || (prior && !REROUTE.includes(prior.status))) {
     // An unresolved file, including one routed right now, answers its own status, never duplicate.
     if (prior && !prior.removed_at && UNRESOLVED.includes(prior.status)) {
       return answer(prior.status, { counts: parseJson(prior.counts, null) ?? emptyCounts(), reasonCode: prior.note ?? null });

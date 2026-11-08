@@ -6,6 +6,7 @@
 // not stale. An account's own freshness still comes from its newest row.
 
 import { freshnessOf } from './freshness.mjs';
+import { parseJson } from '../store/db.mjs';
 
 // Account ids mapped to a SimpleFIN account while a connection exists (a disconnected bridge
 // covers nothing, though its mappings stay).
@@ -87,6 +88,53 @@ export function fileSourceHistory(db) {
   return historyRule(db).covered;
 }
 
+function payrollThrough(db, source, clock, connected) {
+  const employers = db.prepare(`SELECT d.fields FROM documents d JOIN files f ON f.id=d.file_id
+    WHERE d.doc_type='paystub' AND f.source_id=? AND f.removed_at IS NULL`).all(source)
+    .map(r => parseJson(r.fields, {}).employerName).filter(Boolean);
+  if (!employers.length || !connected.size) return null;
+  const key = text => String(text).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const deposits = db.prepare('SELECT account_id,date,description FROM transactions WHERE amount>0 AND date<=? ORDER BY date').all(clock)
+    .filter(t => connected.has(t.account_id));
+  const dates = employers.map(employer => {
+    const name = key(employer);
+    const matches = deposits.filter(t => name && ` ${key(t.description)} `.includes(` ${name} `));
+    if (new Set(matches.map(t => t.date.slice(0, 7))).size < 2) return null;
+    const latest = matches.at(-1)?.date;
+    return freshnessOf({ kind: 'paystub', asOf: latest }, clock).state === 'fresh' ? latest : null;
+  });
+  return dates.every(Boolean) ? dates.sort()[0] : null;
+}
+
+export function refreshDependencies(db, figures, clock) {
+  const accountIds = new Set(), sourceIds = new Set();
+  const tables = new Set(['transactions', 'balances', 'positions', 'pnl_lines', 'tax_payments', 'documents', 'facts']);
+  const fileSource = db.prepare('SELECT source_id FROM files WHERE id=? AND removed_at IS NULL');
+  const addFile = id => { const source = id && fileSource.get(id)?.source_id; if (source) sourceIds.add(source); };
+  const visit = value => {
+    if (!value || typeof value !== 'object') return;
+    if (tables.has(value.table) && Array.isArray(value.ids)) {
+      const table = value.table;
+      for (const id of value.ids) {
+        const row = db.prepare(`SELECT * FROM ${table} WHERE ${table === 'facts' ? 'key' : 'id'}=?`).get(id);
+        if (row?.account_id) accountIds.add(row.account_id);
+        addFile(row?.file_id);
+      }
+    }
+    for (const child of Object.values(value)) if (child && typeof child === 'object') visit(child);
+  };
+  for (const [key, figure] of Object.entries(figures)) {
+    if (key.startsWith('bal.')) accountIds.add(key.slice(4));
+    addFile(figure.fileId);
+    visit(figure.locator);
+  }
+  const connected = connectedAccountIds(db), states = sourceStates(db, clock);
+  for (const source of sourceIds) if (states.sources.get(source)?.state === 'history') sourceIds.delete(source);
+  const accounts = db.prepare('SELECT id,inst,name,display_name,source_id FROM accounts WHERE archived_at IS NULL ORDER BY id').all()
+    .filter(a => accountIds.has(a.id) && !connected.has(a.id) && ['stale', 'unknown'].includes(states.accounts.get(a.id)?.state));
+  return { accounts, sourceIds };
+}
+
 // The shared rule, at `clock` (an ISO day). Returns {sources, accounts}, Maps keyed by id:
 //   accounts (every account with an ingest source): {state, asOf, ageDays, kind, sourceId,
 //     archived}. state is 'archived' for an archived account (never stale, never counted);
@@ -112,13 +160,16 @@ export function sourceStates(db, clock) {
     accounts.set(a.id, { state, asOf, ageDays: f ? f.ageDays : null, kind: kind ?? null, sourceId: a.source_id, archived: archived.has(a.id) });
   }
 
+  const connected = connectedAccountIds(db);
   const sources = new Map();
   for (const s of rows) {
     const fed = new Map();
     for (const [account, per] of bySource) if (per.has(s.id)) fed.set(account, per.get(s.id));
-    const f = freshnessOf({ kind: s.kind, asOf: s.as_of }, clock);
+    const payroll = s.kind === 'paystub' ? payrollThrough(db, s.id, clock, connected) : null;
+    const asOf = payroll && payroll > s.as_of ? payroll : s.as_of;
+    const f = freshnessOf({ kind: s.kind, asOf }, clock);
     const history = s.kind !== 'simplefin' && fed.size > 0 && [...fed.keys()].every((account) => covered(account, s.id));
-    sources.set(s.id, { state: history ? 'history' : f.state, asOf: s.as_of ?? '', ageDays: f.ageDays, cadence: f.cadence, kind: s.kind, fed });
+    sources.set(s.id, { state: history ? 'history' : f.state, asOf: asOf ?? '', ageDays: f.ageDays, cadence: f.cadence, kind: s.kind, fed });
   }
   return { sources, accounts };
 }

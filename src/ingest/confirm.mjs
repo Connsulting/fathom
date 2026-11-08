@@ -141,7 +141,7 @@ export function ask(db, { kind, subject, question, options, context = {}, fileId
   const prior = findItem(db, kind, subject);
   if (prior && prior.status === 'answered') {
     markUsed(db, prior.id, { now });
-    const applied = applyAnswer(db, { ...prior, context: { ...prior.context, ...context } }, prior.answer, { now });
+    const applied = applyAnswer(db, { ...prior, context: { ...prior.context, ...context } }, prior.answer, { now, autoRule: autoInfo(db, prior.id)?.rule });
     return applied.factsChanged ? { remembered: true, factsChanged: true } : { remembered: true };
   }
   if (prior) return { existing: true };
@@ -225,7 +225,7 @@ export function autoInfo(db, itemId) {
 // log, so reverting the answer removes it. Returns applyAnswer's result plus the log.
 function recordAnswer(db, item, optionId, { now, auto = null }) {
   const { result, changes } = captureChanges(db, () => {
-    const applied = applyAnswer(db, item, optionId, { now, channel: auto?.rule === 'resolver' ? 'resolver' : null });
+    const applied = applyAnswer(db, item, optionId, { now, channel: auto?.rule === 'resolver' ? 'resolver' : null, autoRule: auto?.rule });
     db.prepare("UPDATE confirm_items SET status = 'answered', answer = ?, answered_at = ? WHERE id = ?").run(optionId, stamp(now), item.id);
     if (auto) {
       db.prepare(`INSERT INTO confirm_auto (item_id, rule, evidence, created_at) VALUES (?, ?, ?, ?)
@@ -480,7 +480,7 @@ function factIsStale(db, item) {
 }
 
 // Apply an answer by kind. Returns {factsChanged}.
-export function applyAnswer(db, item, optionId, { now, channel = null } = {}) {
+export function applyAnswer(db, item, optionId, { now, channel = null, autoRule = null } = {}) {
   switch (item.kind) {
     case 'transaction_payment': return applyTransactionPayment(db, item, optionId);
     case 'resolver_fact': {
@@ -503,7 +503,7 @@ export function applyAnswer(db, item, optionId, { now, channel = null } = {}) {
       if (typeof optionId === 'string' && optionId.startsWith('entity:')) mergeAlias(db, item.subject, optionId.slice('entity:'.length), { now });
       return {};
     case 'tax_year':
-      applyTaxYear(db, item.subject, optionId);
+      applyTaxYear(db, item.subject, optionId, autoRule === 'estimated_payment_year');
       return {};
     case 'fact_check':
       return applyFactCheck(db, item, optionId, { now });
@@ -565,13 +565,13 @@ function mergeAlias(db, alias, entity, { now }) {
 }
 
 // tax_year: subject tax:<sheetYear>. tax_year keeps the sheet year; payment_year moves January
-// rows to the prior tax year. Applies to every workbook row of that sheet year.
-function applyTaxYear(db, subject, optionId) {
+// rows to the prior tax year. Explicitly designated years stay as supplied.
+function applyTaxYear(db, subject, optionId, inferred = false) {
   const year = Number(/^tax:(\d{4})$/.exec(subject)?.[1]);
   if (!year) return;
-  const basis = optionId === 'payment_year' ? 'confirmed_payment_year' : 'confirmed_tax_year';
+  const basis = inferred ? 'inferred_payment_year' : optionId === 'payment_year' ? 'confirmed_payment_year' : 'confirmed_tax_year';
   const update = db.prepare('UPDATE tax_payments SET tax_year = ?, tax_year_basis = ? WHERE id = ?');
-  for (const row of db.prepare("SELECT id, date FROM tax_payments WHERE source_slot LIKE ?").all(`tax:${year}:%`)) {
+  for (const row of db.prepare("SELECT id, date FROM tax_payments WHERE source_slot LIKE ? AND tax_year_basis = 'sheet_label'").all(`tax:${year}:%`)) {
     const taxYear = optionId === 'payment_year' && row.date.slice(5, 7) === '01' ? year - 1 : year;
     update.run(taxYear, basis, row.id);
   }

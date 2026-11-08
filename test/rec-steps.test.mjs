@@ -46,23 +46,24 @@ test('an upload step completes itself when the file lands and stays listed as do
   await planRun(db, { now: LATE });
   let rec = missingOf(buildScenario(db, { clock: LATE }));
   assert.ok(rec, 'stale sources raise the missing-data rec');
-  const balances = rec.tasks.find(t => t.code === 'balances');
+  const balances = rec.tasks.find(t => t.code?.startsWith('balances:'));
+  const code = balances?.code;
   assert.ok(balances && balances.kind === 'upload' && balances.auto && !balances.done, JSON.stringify(rec.tasks));
   const i = rec.tasks.indexOf(balances);
   assert.throws(() => writeRec(db, 'missing-data', 'step', { index: i, checked: true }, { now: LATE }), /completes itself/);
-  // Updating one account cannot clear a step while the others are stale.
-  db.prepare('UPDATE balances SET date = ? WHERE id = (SELECT max(id) FROM balances)').run('2026-12-27');
+  // Updating another institution cannot clear this institution's upload step.
+  db.prepare('INSERT INTO balances(account_id,date,amount) SELECT id,?,100 FROM accounts WHERE inst IS NOT (SELECT inst FROM accounts WHERE id=?) LIMIT 1').run('2026-12-27', balances.accountIds[0]);
   await planRun(db, { now: LATE });
   rec = missingOf(buildScenario(db, { clock: LATE }));
   assert.ok(rec, 'other sources are still stale');
-  assert.equal(rec.tasks.find(t => t.code === 'balances').done, false);
+  assert.equal(rec.tasks.find(t => t.code === code).done, false);
   db.prepare("INSERT INTO balances (account_id, date, amount) SELECT id, '2026-12-27', 100 FROM accounts WHERE archived_at IS NULL ON CONFLICT(account_id, date) DO NOTHING").run();
   await planRun(db, { now: LATE });
   rec = missingOf(buildScenario(db, { clock: LATE }));
-  const after = rec.tasks.find(t => t.code === 'balances');
+  const after = rec.tasks.find(t => t.code === code);
   assert.ok(after, 'the cleared step is still listed');
   assert.equal(after.done, true);
-  assert.ok(rec.tasks.some(t => t.code !== 'balances' && !t.done));
+  assert.ok(rec.tasks.some(t => t.code !== code && !t.done));
   assert.doesNotMatch(rec.title, /balances/i);
 });
 

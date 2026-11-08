@@ -8,6 +8,7 @@ import { queueAccountPairs } from '../ingest/account-merge.mjs';
 
 import { getSetting } from '../store/db.mjs';
 import { openVault, VaultError } from '../ingest/vault.mjs';
+import { ToolError } from '../tools/errors.mjs';
 import { ingestFiles, retryFile as retryIngest, triggerJob, triggerPlan, triggerGuesses, triggerFreshness } from '../ingest/pipeline.mjs';
 import { answerItem, answerItems, reviseItem, reopenItem, reopenItems, finalReason, getItem, pendingItems, listItems, ConfirmError } from '../ingest/confirm.mjs';
 import { autoResolve } from '../ingest/auto.mjs';
@@ -65,6 +66,7 @@ export async function uploadFiles(ctx) {
     ({ results } = await ingestFiles(ctx.db, files, ingestOpts(ctx)));
   } catch (err) {
     if (err instanceof VaultError) throw new HttpError(409, err.message);
+    if (err instanceof ToolError) throw new HttpError(err.code === 'forbidden' ? 403 : 409, err.message);
     throw err;
   }
   if (results.some(r => r && r.status === 'imported')) { triggerPlan(ctx); triggerFreshness(ctx); }
