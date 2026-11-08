@@ -54,6 +54,6 @@ function categorize(operation,args,ctx) {
 }
 const category={type:'string',minLength:1};
 export const operations=[
-  {tool:'categorize',name:'transaction',scope:'write:categories',summary:'Correct one transaction category and its bucket.',route:'Correct a transaction category',routes:[],params:{transactionId:{type:'integer',minimum:1},category},required:['transactionId','category'],handler:(args,ctx)=>categorize('transaction',args,ctx)},
-  {tool:'categorize',name:'merchant_rule',scope:'write:categories',summary:'Set a normalized merchant category rule and count reclassified rows.',route:'Categorize a merchant from now on',routes:[],params:{merchant:{type:'string',minLength:1,maxLength:200},category},required:['merchant','category'],handler:(args,ctx)=>categorize('merchant_rule',args,ctx)},
+  {tool:'categorize',name:'transaction',scope:'write:categories',summary:'Transaction category and bucket.',route:'Transaction category',routes:[],params:{transactionId:{type:'integer',minimum:1},category},required:['transactionId','category'],handler:(args,ctx)=>categorize('transaction',args,ctx)},
+  {tool:'categorize',name:'merchant_rule',scope:'write:categories',summary:'Set a merchant rule; count reclassified rows.',route:'Merchant category',routes:[],params:{merchant:{type:'string',minLength:1,maxLength:200},category},required:['merchant','category'],handler:(args,ctx)=>categorize('merchant_rule',args,ctx)},
 ];
