@@ -179,7 +179,16 @@ before(async () => {
   await session(f.alpha);
 });
 
+// A refused stream's handler still finishes and stores its turn in the household it started in
+// (src/api/handlers.mjs stores the question with its answer); wait for those turns before closing.
+const STREAMED = ['Synthetic delayed stream question', 'Synthetic stream at sign out'];
+async function answersSettled() {
+  const stored = () => [f.A, f.B].filter(Boolean).flatMap(id => threadTexts(id));
+  for (let i = 0; i < 150 && !STREAMED.every(q => stored().includes(q)); i++) await new Promise(r => setTimeout(r, 100));
+}
+
 after(async () => {
+  if (f) await answersSettled();
   await f?.server.close();
   if (f?.root) rmSync(f.root, { recursive: true, force: true });
 });
@@ -259,7 +268,7 @@ describe('context assertions', () => {
     for (const [label, headers] of [
       ['missing', {}],
       ['foreign household', { 'x-fathom-household': f.B, 'x-fathom-context-version': '1' }],
-      ['old version', { 'x-fathom-household': f.A, 'x-fathom-context-version': '0' }],
+      ['another version', { 'x-fathom-household': f.A, 'x-fathom-context-version': '3' }],
       ['newer version', { 'x-fathom-household': f.A, 'x-fathom-context-version': '2' }],
     ]) {
       const w = await post(f.alpha, '/api/goals', { title: `${ALPHA} ${label}`, horizon: '1-3y' }, headers);
@@ -437,7 +446,7 @@ describe('role-aware management', () => {
     // B's admin manages B's people and engine.
     await session(f.bravo);
     const people = await ok(get(f.bravo, '/api/admin/users'), 'B people');
-    assert.deepEqual(people.users.map(u => u.email).sort(), ['bravo-admin@example.test', 'both-member@example.test']);
+    assert.deepEqual(people.users.map(u => u.email).sort(), ['both-member@example.test', 'bravo-admin@example.test']);
     await ok(post(f.bravo, '/api/engine/cap', { usd: 12 }), 'B admin sets the cap');
     await ok(post(f.bravo, '/api/engine', { on: true }), 'B admin turns the engine on');
     const promoted = await ok(post(f.bravo, `/api/admin/users/${member.id}/role`, { role: 'admin' }), 'promote');

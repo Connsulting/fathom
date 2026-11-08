@@ -51,6 +51,7 @@ import * as ah from './advisor-handlers.mjs';
 import * as obh from './outbound-handlers.mjs';
 import * as bh from './backup-handlers.mjs';
 import { identityOf, revalidateRequest, sendUnauthorized } from './identity.mjs';
+import { readAssertion, checkAssertion, stampContext, staleContext } from './household-context.mjs';
 import * as authHandlers from '../auth/handlers.mjs';
 import { demoRouteBehavior, DEMO_OFF_MESSAGE } from '../public-demo/control.mjs';
 import { runWithPrincipal } from '../platform/model-budget.mjs';
@@ -74,6 +75,7 @@ const TABLE = [
   { method: 'POST', path: '/api/admin/users/:id/remove', handler: authHandlers.removeUser, quiet: true, auth: true, admin: true },
   { method: 'POST', path: '/api/admin/users/:id/passkeys/:keyId/revoke', handler: authHandlers.adminRevokePasskey, quiet: true, auth: true, admin: true },
   { method: 'POST', path: '/api/auth/invitations/accept', handler: authHandlers.acceptInvitation, quiet: true, auth: true },
+  { method: 'POST', path: '/api/auth/household', handler: authHandlers.switchHousehold, quiet: true, auth: true },
   { method: 'POST', path: '/api/operator/households', handler: authHandlers.provisionHousehold, quiet: true, operator: true },
   { method: 'GET', path: '/api/scenario', handler: h.getScenario },
   { method: 'GET', path: '/api/pace', handler: gh.getPace },
@@ -92,8 +94,8 @@ const TABLE = [
   { method: 'POST', path: '/api/packs/:id/toggle', handler: h.packToggle },
   { method: 'POST', path: '/api/packs/:id/whatif', handler: h.packWhatIf },
   { method: 'GET', path: '/api/packs/:id/entries/:entryId', handler: h.packEntry },
-  { method: 'POST', path: '/api/engine', handler: h.setEngine },
-  { method: 'POST', path: '/api/engine/cap', handler: h.setCap },
+  { method: 'POST', path: '/api/engine', handler: h.setEngine, admin: true },
+  { method: 'POST', path: '/api/engine/cap', handler: h.setCap, admin: true },
   { method: 'POST', path: '/api/your-plans/build', handler: h.yourPlansBuild },
   { method: 'POST', path: '/api/ask', handler: h.ask, stream: true },
   { method: 'GET', path: '/api/threads', handler: h.threadList },
@@ -230,6 +232,9 @@ const membershipRequired = () => new HttpError(403, 'household membership requir
 const adminRequired = () => new HttpError(403, 'administrator required');
 
 const financial = r => !r.public && !r.auth && !r.session && !r.operator;
+// Routes that act on the session's household: financial, admin and backup control. On a real
+// instance each carries the household context assertion (src/api/household-context.mjs).
+const householdScoped = r => financial(r) || Boolean(r.admin) || Boolean(r.backupControl);
 
 // `platform` is the platform DB (accounts, memberships, sessions, keys); `runtimes` the household
 // runtime registry (src/platform/runtime.mjs); `auth` the auth service; `keys` the MCP key service.
@@ -240,6 +245,13 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
   // A public demo serves no MCP endpoint and no key routes.
   const mcpHandler = config.publicDemo ? null : (mcp ?? createMcpHandler({ keys, runtimes, config }));
   const demoOff = () => new HttpError(403, DEMO_OFF_MESSAGE);
+  // Streams by session key: a switch or sign-out of that session ends them with a 409 stale event.
+  const sessionStreams = new Map();
+  auth.onContextEnded?.(key => {
+    const cancels = sessionStreams.get(key);
+    sessionStreams.delete(key);
+    for (const cancel of cancels ?? []) cancel();
+  });
   // Route access beyond a session (see the header).
   const checkAccess = (r, identity) => {
     if (r.backupControl) {
@@ -266,6 +278,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
     let authPath = false;
     let held = null;
     let cancelStream = null;
+    let streamEntry = null;
     try {
       auth.sweep();
       if (rawPath === '/mcp') {
@@ -292,6 +305,14 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
         route = r;
         if (config.publicDemo && demoRouteBehavior(r.method, r.path) === 'off') throw new HttpError(403, DEMO_OFF_MESSAGE);
         if (gated && !r.public) checkAccess(r, identity);
+        const query = queryOf(url, q);
+        // The household context assertion is checked before anything is read or written.
+        let assertion = null;
+        if (gated && householdScoped(r)) {
+          assertion = readAssertion(req, query);
+          checkAssertion(assertion, identity);
+          stampContext(res, identity);
+        }
         // The household is fixed before the body is read and kept for the whole request.
         let household = null;
         if (financial(r)) {
@@ -310,16 +331,23 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
           body = await readJsonBody(req);
         }
         if (gated && !r.public) {
-          identity = revalidateRequest({ authenticate: () => identityOf(req, auth), checkAccess: fresh => checkAccess(r, fresh), household, runtimes });
+          identity = revalidateRequest({ authenticate: () => identityOf(req, auth), checkAccess: fresh => checkAccess(r, fresh), assertion, household, runtimes });
         }
         // A write to a seeded demo household drops its synthetic marker.
         const seeded = household && !gated && !config.publicDemo && r.method === 'POST' && path !== '/api/demo/reset' ? household.db : null;
         const changesBefore = seeded ? seeded.prepare('SELECT total_changes() AS n').get().n : 0;
         const events = r.stream && wantsEventStream(req) ? createEventStream(req, res) : null;
+        const sessionKey = gated && r.stream ? auth.sessionKey(req) : null;
+        if (sessionKey) {
+          streamEntry = { key: sessionKey, cancel: () => { if (events) events.fail(staleContext()); else res.destroy(); } };
+          if (!sessionStreams.has(sessionKey)) sessionStreams.set(sessionKey, new Set());
+          sessionStreams.get(sessionKey).add(streamEntry.cancel);
+        }
         const caller = identity;
         const principal = gated && household ? { check() {
           const now = identityOf(req, auth);
-          return Boolean(now) && now.id === caller.id && now.householdId === caller.householdId && auth.servedMember(now);
+          return Boolean(now) && now.id === caller.id && now.householdId === caller.householdId
+            && now.contextVersion === caller.contextVersion && auth.servedMember(now);
         } } : null;
         const run = fn => (principal ? runWithPrincipal(principal, fn) : fn());
         let out;
@@ -328,7 +356,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
             household, db: household?.db, engine: household?.engine, packs: household?.packs, answerer: household?.answerer,
             scheduler: household?.scheduler, transport: household?.transport, platform, config, identity, auth, backups,
             get keys() { if (config.publicDemo) throw demoOff(); return keys; },
-            params, query: queryOf(url, q), body, uploads, req, res, ...(events ? { onEvent: events.send } : {}),
+            params, query, body, uploads, req, res, ...(events ? { onEvent: events.send } : {}),
           }));
         } catch (err) {
           // Once the event stream has started, an error is its last event.
@@ -379,6 +407,11 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
       sendError(res, err);
     } finally {
       if (held) runtimes.release(held, cancelStream);
+      if (streamEntry) {
+        const set = sessionStreams.get(streamEntry.key);
+        set?.delete(streamEntry.cancel);
+        if (set && !set.size) sessionStreams.delete(streamEntry.key);
+      }
     }
   };
 }

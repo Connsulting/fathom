@@ -16,4 +16,5 @@ export const setRole = ctx => ctx.auth.setRole(ctx);
 export const removeUser = ctx => ctx.auth.removeUser(ctx);
 export const adminRevokePasskey = ctx => ctx.auth.adminRevokePasskey(ctx);
 export const acceptInvitation = ctx => ctx.auth.acceptInvitation(ctx);
+export const switchHousehold = ctx => ctx.auth.switchHousehold(ctx);
 export const provisionHousehold = ctx => ctx.auth.provisionHousehold(ctx);
