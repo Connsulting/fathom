@@ -281,3 +281,26 @@
   .d-horizon .h-mem-b { min-height: 44px; min-width: 44px; padding: 0 10px; }
   .d-horizon .h-mem-edit .h-mem-acts { margin-left: 0; }
 }
+
+/* ---------- background service status (Engine, Email, SimpleFIN) ---------- */
+.d-horizon .h-svc-list { display: flex; flex-direction: column; gap: 10px; margin: 0 0 14px; }
+.d-horizon .h-svc { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--line2); background: var(--s1); }
+.d-horizon .h-svc.needs_you { border-color: #f0a58f; }
+.d-horizon .h-svc.retrying { border-color: var(--warnd); }
+.d-horizon .h-svc-h { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
+.d-horizon .h-svc-h b { color: var(--tx); font-size: 14.5px; font-weight: 600; }
+.d-horizon .h-svc-st, .d-horizon .h-svc-tag {
+  display: inline-flex; align-items: center; min-height: 22px; padding: 0 9px; border-radius: 999px;
+  border: 1px solid var(--line2); color: var(--mu); font-size: 12px; font-weight: 500;
+}
+.d-horizon .h-svc.healthy .h-svc-st, .d-horizon .h-svc-tag.healthy { border-color: var(--acl); background: var(--acd); color: var(--ac2); }
+.d-horizon .h-svc.retrying .h-svc-st, .d-horizon .h-svc-tag.retrying { border-color: var(--warnd); color: var(--warn); }
+.d-horizon .h-svc.needs_you .h-svc-st, .d-horizon .h-svc-tag.needs_you { border-color: #f0a58f; color: #f0a58f; }
+.d-horizon .h-svc-tag { margin-left: 6px; min-height: 20px; font-size: 11.5px; vertical-align: 1px; }
+.d-horizon .h-svc-c { margin: 0; color: var(--tx2); font-size: 13.5px; line-height: 1.45; }
+.d-horizon .h-svc-dl { display: flex; flex-wrap: wrap; gap: 4px 22px; margin: 0; font-size: 13px; }
+.d-horizon .h-svc-dl div { display: flex; gap: 6px; min-width: 0; }
+.d-horizon .h-svc-dl dt { color: var(--fa); }
+.d-horizon .h-svc-dl dd { margin: 0; color: var(--tx2); }
+.d-horizon .h-svc .h-btn { align-self: flex-start; }
+.d-horizon .h-svc .h-btn[disabled] { opacity: 0.6; cursor: progress; }

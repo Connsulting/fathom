@@ -1,12 +1,20 @@
 /* Horizon engine screen: on/off switch, monthly spend against an editable cap, the recent spend
-   ledger and the scheduled jobs. Every amount is a figure; ledger rows carry time, purpose, model
-   and cost only. */
+   ledger, background service status and the scheduled jobs. Every amount is a figure; ledger rows
+   carry time, purpose, model and cost only. */
+
+import { statusHtml, STATE_LABEL } from './service-status.js';
 
 let H = null;
 
 export function bind(kit) { H = kit; }
 
-const S = { cap: null, plan: { phase: 'idle', text: '' } }; // unsaved cap input text; the Run plan now state
+// Unsaved cap input text; the Run plan now state; the pending re-read while a plan runs.
+const S = { cap: null, plan: { phase: 'idle', text: '' }, poll: null };
+const POLL_MS = 5000;
+
+const services = () => H.api?.s?.live?.services || null;
+// A plan run on the server (scheduled, or started from another tab).
+const planRunning = () => services()?.jobs?.plan?.running === true;
 
 /* ---------- Run plan now ---------- */
 
@@ -40,12 +48,35 @@ const PLAN_IDLE = 'Re-plans recommendations and deadlines from the latest data.'
 export function planControl() {
   const { esc } = H;
   const { phase, text } = S.plan;
-  const running = phase === 'running';
-  const line = running ? 'Running the plan.' : text || PLAN_IDLE;
+  const mine = phase === 'running';
+  const running = mine || planRunning();
+  const line = mine ? 'Running the plan.' : running ? 'A plan is running.' : text || PLAN_IDLE;
   return `<div class="h-plan-run">
       <button type="button" class="h-btn" data-fx-plan-run${running ? ' disabled' : ''}>Run plan now</button>
       <p class="h-mute sm" role="status" aria-live="polite" data-plan-status data-plan-phase="${esc(phase)}">${esc(line)}</p>
     </div>`;
+}
+
+const REC_ID_TAKEN = 'The last plan skipped a recommendation because a recommendation you added or imported already uses its id.';
+
+// The planner's warnings on its last ok run, in plain words.
+function planDetail() {
+  const w = services()?.jobs?.plan?.warnings;
+  return Array.isArray(w) && w.includes('rec_id_taken') ? `<p class="h-mute sm" data-plan-warning>${H.esc(REC_ID_TAKEN)}</p>` : '';
+}
+
+// The engine and every job that is not healthy, else one line.
+function statusSection(svc) {
+  if (!svc) return '';
+  const list = [svc.engine, ...Object.values(svc.jobs || {})].filter((x) => x && x.state !== 'healthy');
+  const body = list.length ? `<div class="h-svc-list">${list.map(statusHtml).join('')}</div>` : '<p class="h-mute" data-svc-ok>All background services are healthy.</p>';
+  return H.section('Status', body);
+}
+
+// While a plan runs, re-read the scenario once after POLL_MS; the redraw schedules the next one.
+function pollWhileRunning() {
+  if (!planRunning() || S.poll) return;
+  S.poll = setTimeout(() => { S.poll = null; H.api.refresh(); }, POLL_MS);
 }
 
 function capForm(b) {
@@ -95,10 +126,16 @@ export function render() {
   const p = mo ? Math.min(1, used / mo) : 0;
   const jobsList = arr(en.jobs);
   const cost = (j) => (typeof j.cost === 'number' ? figHtml(`engine.job.${j.id}.cost`, { cents: true }) : T(j.cost));
+  const svc = services();
+  const stateTag = (j) => {
+    const st = svc?.jobs?.[j.id]?.state;
+    return st && STATE_LABEL[st] ? ` <span class="h-svc-tag ${st}">${STATE_LABEL[st]}</span>` : '';
+  };
+  pollWhileRunning();
   const rows = jobsList.map((j) => `<div class="h-jt-r" role="row">
       <div class="h-jt-n" role="cell"><b>${T(j.name)}</b><p>${T(j.does)}</p></div>
       <div class="h-jt-c" role="cell" data-l="Cadence">${T(j.cadence)}</div>
-      <div class="h-jt-c" role="cell" data-l="Last run">${T(j.last)}</div>
+      <div class="h-jt-c" role="cell" data-l="Last run">${T(j.last)}${stateTag(j)}</div>
       <div class="h-jt-c${running ? '' : ' off'}" role="cell" data-l="Next run">${running ? T(j.next) : 'Paused'}</div>
       <div class="h-jt-c r mono" role="cell" data-l="Cost per run">${cost(j)}</div>
     </div>`).join('');
@@ -117,7 +154,8 @@ export function render() {
     : on ? 'Proactive jobs run on schedule and stay inside the monthly budget.' : 'Proactive jobs are paused. Chat answers only from what is on file. Turn it back on here.')}
     <div class="h-card">${summary}</div>
     ${ledgerHtml(en)}
-    ${section('Jobs', planControl() + table, `${jobsList.length} scheduled`)}`);
+    ${statusSection(svc)}
+    ${section('Jobs', planControl() + planDetail() + table, `${jobsList.length} scheduled`)}`);
 }
 
 /* ---------- events ---------- */
@@ -147,7 +185,7 @@ export function onClick(e) {
   const t = e.target?.closest?.('[data-fx-plan-run]');
   if (!t || !H.root?.contains(t)) return false;
   e.preventDefault();
-  if (S.plan.phase === 'running') return true;
+  if (S.plan.phase === 'running' || planRunning()) return true;
   setPlanState({ phase: 'running' });
   H.draw();
   H.api.runPlan().then(({ res, error }) => {
@@ -157,4 +195,9 @@ export function onClick(e) {
   return true;
 }
 
-export function reset() { S.cap = null; S.plan = { phase: 'idle', text: '' }; }
+export function reset() {
+  S.cap = null;
+  S.plan = { phase: 'idle', text: '' };
+  if (S.poll) clearTimeout(S.poll);
+  S.poll = null;
+}

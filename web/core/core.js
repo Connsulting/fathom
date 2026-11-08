@@ -991,6 +991,41 @@ function runPlan() {
   return p;
 }
 
+// Run now for a scheduled job (POST /api/jobs/:id/run): the response carries the fresh scenario.
+// Resolves the response or null (error line shown); never rejects.
+function runJob(id) {
+  if (id == null || id === '') return done();
+  return send('/api/jobs/' + encodeURIComponent(id) + '/run', {}, d => d, null, 'Could not run that job. ');
+}
+
+// Resume or pause outbound kinds (POST /api/household/outbound, an administrator route). The reply
+// has no scenario, so the scenario is re-read after. Resolves true, or null (error line shown).
+function setOutbound(patch) {
+  const run = async () => {
+    try {
+      const res = await fetch('/api/household/outbound', {
+        method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify(patch || {}), credentials: 'same-origin',
+      });
+      if (res.status === 401) signedOut('expired');
+      if (!res.ok) {
+        let data = null;
+        try { data = await res.json(); } catch (e) { data = null; }
+        throw new Error((data && typeof data.error === 'string' && data.error) || 'The server answered ' + res.status + '.');
+      }
+    } catch (err) {
+      showError('Could not resume that. ' + (err && err.message ? err.message : ''));
+      return null;
+    }
+    hideError();
+    await refetchScenario();
+    return true;
+  };
+  const p = queue.then(run);
+  queue = p;
+  return p;
+}
+
 function buildYourPlans(fileIds) {
   const ids = arr(fileIds).filter(x => x != null && x !== '').map(String);
   return send('/api/your-plans/build', { fileIds: ids }, d => (d.result && typeof d.result === 'object' ? d.result : null));
@@ -1418,6 +1453,8 @@ const api = {
   setEngine,
   setCap,
   runPlan,
+  runJob,
+  setOutbound,
   demo: demoId,
   packs,
   pack,

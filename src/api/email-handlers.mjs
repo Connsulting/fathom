@@ -13,6 +13,7 @@ import { composeBrief } from '../email/brief.mjs';
 import { simpleDarkEmail } from '../email/palette.mjs';
 import { SchedulerError, runManualJob, SCHEDULER_STATUS, SCHEDULER_MESSAGE } from '../jobs/scheduler.mjs';
 import { scenarioOf } from './handlers.mjs';
+import { servicesOf } from './scenario.mjs';
 import { HttpError } from './http.mjs';
 
 const HISTORY_LIMIT = 50;
@@ -63,6 +64,7 @@ function jobsBody(ctx) {
     jobs: s ? s.jobs().map(jobOut) : [],
     runs: s ? s.runs({ limit: RUNS_LIMIT }) : [],
     timezone: ownerTimezone(ctx.db),
+    services: servicesOf(ctx),
   };
 }
 
