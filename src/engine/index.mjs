@@ -5,7 +5,7 @@ import { compileSchema } from './schema.mjs';
 import { createRegistryServer } from './tools.mjs';
 import { sdkRound, messagesRound, messagesToolRound } from './live.mjs';
 import { modelFor, estimateUnknownCost } from './pricing.mjs';
-import { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError, fundingUnavailable } from './errors.mjs';
+import { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError, fundingUnavailable, withCode } from './errors.mjs';
 export { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError, fundingUnavailable } from './errors.mjs';
 export { checkGrounding, numberPattern } from './grounding.mjs';
 
@@ -181,17 +181,30 @@ const pause = ms => (ms > 0 ? new Promise(resolve => setTimeout(resolve, ms)) : 
 // Live mode with `reservations` ({ reserve({ purpose, model, boundUsd }) -> { roundId, boundUsd },
 // settle(roundId, { costUsd, inputTokens, outputTokens }), hold(roundId, code) }, the platform
 // ledger of src/platform/model-budget.mjs): the household ledger's cap check is skipped and every
-// round, tool continuations and retries included, first reserves its worst-case bound
-// (estimateUnknownCost over the round's system, transcript and tools), which is also the round's
-// maxBudgetUsd. A refused reservation throws its own error and dispatches nothing. A known cost
-// settles; a cost above the bound is held as debt and the engine refuses (ModelAccountingError); an
-// unknown cost or a transport failure holds the full reservation, then takes the conservative path
-// below. The final cost is mirrored into the ledger with its roundId (ledger.record upserts by it).
-// The serial ledger queue orders one engine's rounds; the platform ledger is the authority.
+// round, tool continuations and retries included, first reserves its worst-case bound. E, the
+// per-response bound, is estimateUnknownCost over the round's system, transcript and tools, and is
+// the round's maxBudgetUsd. A Messages API round (messagesRound, or messagesToolRound under
+// testTransport) makes one paid response, so it reserves E. A round on the SDK round runner
+// (sdkRound, the production chat and job path) may make more than one paid response (the SDK's
+// refusal and fallback retries), and the SDK stops only once the round's cumulative cost exceeds
+// maxBudgetUsd. So the cumulative cost before its last response is at most E, the last response
+// adds at most E, and the round reserves SDK_RESPONSE_BOUND * E (2E). A refused reservation throws
+// its own error and dispatches nothing. A cost up to the reservation settles; a cost above it is
+// held as reservation_bound_exceeded with the debt recorded; an unknown cost or a transport failure
+// holds the full reservation, which is then the round's conservative cost. Either hold throws
+// ModelAccountingError (code accounting_hold) without poisoning the engine: the platform hold is the
+// authority (the next reserve refuses while it lasts), so once the round is reconciled the engine
+// admits the next call. Only a failure to write the platform settle or hold poisons the engine
+// (ModelAccountingError code accounting_unrecorded, on that call and every later one). The final
+// cost is mirrored into the ledger with its roundId (ledger.record upserts by it). The serial ledger
+// queue orders one engine's rounds; the platform ledger is the authority. Without reservations (fake
+// mode, or live without the platform ledger) an unknown cost poisons the engine as below.
 //
 // testTransport ({ baseURL }, programmatic only, tests): a loopback http origin with a port. Every
 // round then goes to that origin on the Messages API (chat and job as a tool round, no SDK
 // subprocess); without it requests go to https://api.anthropic.com.
+export const SDK_RESPONSE_BOUND = 2;
+
 const LOOPBACK = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):([1-9]\d{0,4})$/;
 
 function checkTestTransport(testTransport) {
@@ -269,7 +282,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       const afterTools = [];
       answer.beginRound();
       await serial(ledger, async () => {
-        if (poisoned) throw new ModelAccountingError();
+        if (poisoned) throw reserving ? withCode(new ModelAccountingError(), 'accounting_unrecorded') : new ModelAccountingError();
         if (allowed() !== true) { const error = new EngineOffError(); error.toolResults = allResults; throw error; }
         if (mode === 'live' && funded() !== true) { const error = fundingUnavailable(); error.toolResults = allResults; throw error; }
         const ts = new Date(now()).toISOString();
@@ -287,13 +300,15 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
           ...(purpose === 'chat' && typeof context.replan === 'function' ? { queueAfterTools: task => afterTools.push(task) } : {}) } });
         const unknownCost = () => estimateUnknownCost({ model, maxTokens,
           system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools });
+        const runner = SINGLE_ROUND.includes(purpose) ? messagesRound : transport ? messagesToolRound : roundRunner;
         let admission = null;
         try {
           if (reserving) {
-            const boundUsd = unknownCost().costUsd;
+            const perResponseUsd = unknownCost().costUsd;
+            const boundUsd = runner === messagesRound || runner === messagesToolRound ? perResponseUsd : SDK_RESPONSE_BOUND * perResponseUsd;
             try { admission = await reservations.reserve({ purpose, model, boundUsd }); }
             catch (error) { error.toolResults = allResults; throw error; }
-            maxBudgetUsd = boundUsd;
+            maxBudgetUsd = perResponseUsd;
           }
           if (mode === 'fake') {
             if (!queue.length) throw new ModelCallError('Fake engine has no scripted response');
@@ -324,7 +339,6 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               accountingUnknown: script.accountingUnknown ?? false, toolResults: registry.results,
               content: Array.isArray(script.content) ? script.content : [{ type: 'text', text }], details: { maxBudgetUsd } };
           } else {
-            const runner = SINGLE_ROUND.includes(purpose) ? messagesRound : transport ? messagesToolRound : roundRunner;
             try {
               round = await runner({ credential: auth, system, systemDynamic, messages: transcript, tools, maxTokens, maxBudgetUsd, model,
                 registry, schema, ...(transport ? { baseURL: transport.baseURL } : {}), ...(emit ? { onEvent: emit } : {}) });
@@ -336,7 +350,8 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
           const knownCost = Number.isFinite(round.costUsd) && round.costUsd >= 0 ? round.costUsd : 0;
           if (round.accountingUnknown || !Number.isFinite(round.costUsd) || round.costUsd < 0) {
             const estimate = unknownCost();
-            round.costUsd = Math.max(knownCost, estimate.costUsd);
+            // With a reservation the conservative cost is the full reservation (what the hold commits).
+            round.costUsd = Math.max(knownCost, admission ? admission.boundUsd : estimate.costUsd);
             round.tokens = { ...round.tokens, estimated: true, knownCostUsd: knownCost,
               estimatedInputTokens: estimate.inputTokens, estimatedOutputTokens: estimate.outputTokens };
             round.accountingUnknown = true;
@@ -346,10 +361,12 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
             try {
               if (round.accountingUnknown) await reservations.hold(roundId, 'cost_unknown');
               else await reservations.settle(roundId, { costUsd: round.costUsd, inputTokens: round.tokens?.input_tokens, outputTokens: round.tokens?.output_tokens });
-            } catch { poisoned = true; throw new ModelAccountingError(); }
+            } catch { poisoned = true; throw withCode(new ModelAccountingError(), 'accounting_unrecorded'); }
             // The platform round is the authority; a lost mirror is restored from it later.
             try { await ledger.record({ ts, purpose, costUsd: round.costUsd, model: round.model, tokens: round.tokens, roundId }); } catch { /* restored later */ }
-            if (!round.accountingUnknown && round.costUsd > boundUsd) { poisoned = true; throw new ModelAccountingError(); }
+            // Held in the platform (unknown cost, or a cost over the reservation): the hold refuses
+            // further rounds until it is reconciled; this engine is not poisoned.
+            if (round.accountingUnknown || round.costUsd > boundUsd) throw withCode(new ModelAccountingError(), 'accounting_hold');
           } else if (Number.isFinite(round.costUsd) && round.costUsd >= 0) {
             try { await ledger.record({ ts, purpose, costUsd: round.costUsd, model: round.model, tokens: round.tokens }); }
             catch { poisoned = true; throw new ModelAccountingError(); }
