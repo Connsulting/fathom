@@ -11,7 +11,7 @@ import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { threadCreate } from '../src/api/handlers.mjs';
 import { writePreference } from '../src/actions/preferences.mjs';
 import { loadPlanningData, resolveEntities } from '../src/jobs/planner/data.mjs';
-import { pnlEntities } from '../src/pnl/index.mjs';
+import { pnlEntities, businessPnl, businessPnlRows } from '../src/pnl/index.mjs';
 
 const now = '2026-11-05T12:00:00Z';
 async function store(t) {
@@ -84,9 +84,8 @@ function budgetAndBusiness(db, { named = true, knownPeople = true } = {}) {
         i % 2 ? 'retired-format' : null, JSON.stringify({ sheet: `${person} Expenses` }));
     }
   }
-  for (const period of ['2026-01', '2026-02', '2026-03']) {
-    line.run('Former Studio', period, 'Income', 4000, 'retired-format', null);
-    line.run('Former Studio', period, 'Software', -200, null, null);
+  for (const period of ['2025-01', '2025-02', '2025-03']) {
+    line.run('Former Studio', period, 'Client income', 4000, 'retired-format', null);
   }
   db.prepare("INSERT INTO files(id,name,uploaded_at,status) VALUES ('budget-current','Synthetic household budget.xlsx',?,'imported'),('budget-history','Synthetic personal budget history.xlsx',?,'imported')").run(now, now);
   db.prepare("UPDATE pnl_lines SET file_id=CASE WHEN period<'2026-01' THEN 'budget-history' ELSE 'budget-current' END").run();
@@ -101,12 +100,16 @@ function budgetAndBusiness(db, { named = true, knownPeople = true } = {}) {
 
 test('AC9/AC10/AC11: personal budget tabs and an inactive past business leave the account-backed S corp as the current business', async t => {
   const { db, ctx } = await store(t);
-  budgetAndBusiness(db, { knownPeople: false });
+  budgetAndBusiness(db);
+  const rawBefore = db.prepare('SELECT * FROM pnl_lines ORDER BY id').all();
   await planRun(db);
   const listed = getFacts(db)['business.entities'];
   assert.equal(listed.find(e => e.name === 'Aster').type, 'personal');
   assert.equal(listed.find(e => e.name === 'Birch').type, 'personal');
-  assert.equal(listed.find(e => e.name === 'Former Studio').type, 'inactive');
+  assert.equal(listed.find(e => e.name === 'Aster').owner, 'owner');
+  assert.equal(listed.find(e => e.name === 'Birch').owner, 'spouse');
+  assert.equal(listed.find(e => e.name === 'Former Studio').type, 'income_history');
+  assert.equal(listed.find(e => e.name === 'Former Studio').owner, 'owner');
   assert.equal(listed.find(e => e.name === 'Current Studio').type, 's_corp');
   assert.deepEqual(listed.find(e => e.name === 'Current Studio').accountIds, ['business-cash']);
   const model = resolveEntities(loadPlanningData(db, '2026-11-05'), getFacts(db));
@@ -116,7 +119,21 @@ test('AC9/AC10/AC11: personal budget tabs and an inactive past business leave th
   assert.equal(business.totals.profit.value, 110000);
   const views = pnlEntities({ db, clock: '2026-11-05' });
   assert.ok(views.filter(e => ['Aster', 'Birch'].includes(e.label)).every(e => e.kind === 'spending'));
-  assert.ok(!views.some(e => e.label === 'Former Studio'));
+  assert.equal(views.find(e => e.label === 'Aster').person, 'owner');
+  assert.equal(views.find(e => e.label === 'Birch').person, 'spouse');
+  assert.equal(views.find(e => e.label === 'Former Studio').kind, 'income_history');
+  assert.equal(views.find(e => e.label === 'Former Studio').person, 'owner');
+  assert.equal(views.find(e => e.label === 'Former Studio').inactive, true);
+  const history = businessPnl({ db, entity: 'Former Studio', clock: '2026-11-05' });
+  assert.equal(history.from, '2025-01');
+  assert.equal(history.to, '2025-03');
+  assert.equal(history.figures[history.income.total].v, 12000);
+  const spouse = businessPnl({ db, entity: 'entity:birch', from: '2025-01', to: '2026-10', clock: '2026-11-05' });
+  assert.equal(spouse.figures[spouse.income.total].v, 55000);
+  assert.equal(spouse.figures[spouse.expenses.total].v, 19800);
+  const spouseRows = businessPnlRows({ db, entity: 'entity:birch', from: '2025-01', to: '2026-10', section: 'income', category: 'Income', clock: '2026-11-05' });
+  assert.equal(spouseRows.items.length, 22);
+  assert.deepEqual(db.prepare('SELECT * FROM pnl_lines ORDER BY id').all(), rawBefore, 'classification never rewrites or drops personal or income-history rows');
   const scenario = buildScenario(db);
   assert.equal(scenario.fig['pnl.current-studio.net'].v, 110000);
   assert.equal(figureRow(db, 'pnl.current-studio.net').locator.rows.table, 'transactions');
@@ -137,6 +154,32 @@ test('AC9/AC10/AC11: personal budget tabs and an inactive past business leave th
   recordFactAnswers(db, [{ key: 'business.entities', value: [{ name: 'Former Studio', type: 'sole_prop' }] }], { now });
   await planRun(db);
   assert.equal(getFacts(db)['business.entities'].find(e => e.name === 'Former Studio').type, 'sole_prop');
+});
+
+test('unclear personal attribution asks once, accepts an owner answer with Undo, and never merges summaries into connected-account totals', async t => {
+  const { db, ctx } = await store(t);
+  budgetAndBusiness(db, { knownPeople: false });
+  db.prepare("INSERT INTO accounts(id,name,kind,owner,parser) VALUES ('personal-cash','Personal checking','checking','You','aggregator')").run();
+  for (const month of ['08', '09', '10']) db.prepare("INSERT INTO transactions(account_id,date,amount,category,parser) VALUES ('personal-cash',?,-90,'Groceries','aggregator')").run(`2026-${month}-15`);
+  const before = await callTool('spending', { operation: 'total' }, ctx);
+  await planRun(db);
+  let scenario = buildScenario(db);
+  const questions = scenario.recs.find(r => r.id === 'missing-data').tasks.filter(t => t.code === 'pnl_people_unknown');
+  assert.equal(questions.length, 1);
+  assert.match(questions[0].t, /Aster.*Birch/);
+  assert.equal(pnlEntities({ db, clock: '2026-11-05' }).find(e => e.label === 'Birch').person, null);
+  const text = 'Aster is my summary and Birch is my spouse\'s summary';
+  const out = await callTool('answer', { operation: 'fact', key: 'pnl.people', value: { Aster: 'owner', Birch: 'spouse' }, evidence: text }, { ...ctx, ownerText: text });
+  assert.ok(out.receipt);
+  assert.equal(getFacts(db)['business.entities'].find(e => e.name === 'Birch').owner, 'spouse');
+  scenario = buildScenario(db);
+  assert.ok(!scenario.recs.find(r => r.id === 'missing-data')?.tasks.some(t => t.code === 'pnl_people_unknown'));
+  const after = await callTool('spending', { operation: 'total' }, ctx);
+  assert.equal(after.total.value, before.total.value);
+  assert.equal(after.total.value, 270, 'only the connected account contributes to household spending');
+  await callTool('undo', { operation: 'undo', id: out.receipt.id }, { ...ctx, scopes: ['write:facts'], channel: 'mcp' });
+  assert.equal(pnlEntities({ db, clock: '2026-11-05' }).find(e => e.label === 'Birch').person, null);
+  assert.ok(buildScenario(db).recs.find(r => r.id === 'missing-data').tasks.some(t => t.code === 'pnl_people_unknown'));
 });
 
 test('an unnamed account-backed S corp asks once for its business name, then uses the answer and preserves the receipt Undo', async t => {
