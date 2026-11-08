@@ -180,24 +180,15 @@ describe('read tools', () => {
     for (const p of one) assert.ok(p.symbol && p.name && typeof p.value === 'number');
   });
 
-  test('business.pnl groups by period and category with totals', async () => {
+  test('business.pnl keeps entity and custom period totals', async () => {
     const entity = t.db.prepare('SELECT entity FROM pnl_lines LIMIT 1').get().entity;
-    const r = await call('business', { operation: 'pnl',  entity, from: '2026-03', to: '2026-05' });
-    assert.ok(r.rows.length > 0);
-    const periods = [...new Set(r.rows.map(x => x.period))];
-    assert.deepEqual(periods, ['2026-03', '2026-04', '2026-05']);
-    for (const row of r.rows) {
-      const want = t.db.prepare('SELECT sum(amount) AS s FROM pnl_lines WHERE entity = ? AND period = ? AND category = ?')
-        .get(entity, row.period, row.category).s;
-      assert.equal(row.amount, Math.round(want * 100) / 100, `${row.period} ${row.category}`);
+    const r = await call('business', { operation: 'pnl', entity, from: '2026-03', to: '2026-05' });
+    assert.equal(r.entities.length, 1);
+    for (const group of r.entities[0].groups) {
+      const want = t.db.prepare('SELECT sum(amount) AS s FROM pnl_lines WHERE entity = ? AND period = ?').get(entity, group.key).s;
+      assert.equal(group.profit.value, Math.round(want * 100) / 100);
     }
-    for (const p of periods) {
-      const sum = r.rows.filter(x => x.period === p).reduce((a, x) => a + x.amount, 0);
-      assert.equal(r.totals[p], Math.round(sum * 100) / 100, `total ${p}`);
-    }
-    const all = await call('business', { operation: 'pnl' });
-    const allPeriods = new Set(all.rows.map(x => x.period));
-    assert.ok(allPeriods.size >= periods.length);
+    assert.ok((await call('business', {operation:'pnl'})).entities.length >= r.entities.length);
   });
 
   test('recommendations.list never returns hidden recs and filters by status', async () => {
@@ -512,4 +503,48 @@ describe('engine compatibility', () => {
     assert.ok(!got.isError);
     assert.equal(JSON.parse(got.content[0].text).id, expected[0].id);
   });
+});
+
+test('resolved transaction filters and keyset pages preserve every tied real-store row', async t => {
+  const { spendingStore } = await import('./helpers/spending.mjs');
+  const s = await spendingStore(t); s.account('paged', 'card');
+  for (let i=0;i<450;i++) s.tx('paged',i<300?'2026-10-01':'2026-10-02',-12,'Groceries','Example Market');
+  const args={operation:'search',accountId:'paged',bucket:'household',class:'essential_other',merchant:'example market',limit:200};
+  const seen=[]; let next;
+  do {
+    const page=await callTool('transactions',{...args,...(next?{cursor:next}:{})},s.ctx);
+    assert.equal(page.total,450);
+    for(const row of page.rows) { assert.equal(row.category,'Groceries'); assert.equal(row.bucket,'household'); assert.equal(row.class,'essential_other'); assert.equal(row.layer,'import'); assert.equal(row.merchant,'example market'); seen.push(row.id); }
+    next=page.next;
+  } while(next);
+  assert.equal(seen.length,450); assert.equal(new Set(seen).size,450);
+  await assert.rejects(callTool('transactions',{operation:'search',cursor:'invalid'},s.ctx),e=>e.code==='bad_input');
+});
+
+test('transaction text search skips null descriptions and keeps matching neighbors', async t => {
+  const {spendingStore}=await import('./helpers/spending.mjs');const s=await spendingStore(t);
+  s.tx('checking','2026-04-01',-1,'Groceries',null);
+  const r=await callTool('transactions',{operation:'search',text:'market'},s.ctx);
+  assert.equal(r.total,10);assert.ok(r.rows.every(row=>row.description==='Market'));
+});
+
+test('C4 read metadata and copied refs never ground sentinel argument amounts', async t => {
+  const { spendingStore }=await import('./helpers/spending.mjs');
+  const {groundAnswer}=await import('../src/api/answerer.mjs');
+  const {buildScenario}=await import('../src/scenario/build.mjs');
+  const s=await spendingStore(t);s.fact('business.entities',[{name:'Example Studio'}]);s.tx('business','2026-04-01',137,'Income','Client');
+  const selector={merchants:['Synthetic $987,654.31']};
+  const cases=[
+    ['spending',{operation:'total',from:'2091-07',to:'2091-07',include:selector,exclude:selector}],
+    ['spending',{operation:'compare',a:{from:'2091-07',to:'2091-07'},b:{from:'2091-08',to:'2091-08'},include:selector}],
+    ['spending',{operation:'cash_flow',from:'2091-07',to:'2091-07'}],
+    ['spending',{operation:'recurring',since:'2091-07-23'}],
+    ['business',{operation:'pnl',from:'2091-07',to:'2091-07'}],
+    ['business',{operation:'rows',entity:'Example Studio',section:'income',category:'Synthetic $987,654.31',from:'2091-07',to:'2091-07'}],
+    ['transactions',{operation:'search',text:'Synthetic $987,654.31',from:'2091-07-23'}],
+  ];
+  for(const [name,args] of cases){
+    const result=await callTool(name,args,s.ctx);
+    for(const text of ['$987,654.31','$2,091'])assert.equal(groundAnswer(`The figure is ${text}.`,{scenario:buildScenario(s.db),data:[],toolResults:[{name,args,result}]}).ok,false,`${name}.${args.operation}: ${text}`);
+  }
 });
