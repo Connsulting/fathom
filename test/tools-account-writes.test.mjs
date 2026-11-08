@@ -58,7 +58,7 @@ test('merge requires confirmation and later owner evidence, then restores moved 
 });
 
 test('all account operations deny a read key before validating arguments',async()=>{
-  const server=createToolServer({scopes:['read'],authorize:()=>true,ctx:{}});
+  const server=createToolServer({scopes:['read'],authorize:()=>true,ctx:{},runTool:fn=>fn()});
   for(const operation of ['rename','mask','owner','kind','merge']){
     const r=await server._requestHandlers.get('tools/call')({method:'tools/call',params:{name:'update_account',arguments:{operation}}},{});assert.equal(r.isError,true);assert.match(r.content[0].text,/Permission denied.*write:accounts/);
   }

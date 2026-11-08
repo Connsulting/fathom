@@ -106,6 +106,11 @@ export function fakeAnswerScript({ scenario, key, questionId, text, whatIfPack, 
       { toolCalls: [{ name: 'show', args: { operation: 'chart', kind: 'line', source: { tool: 'spending', args, path: 'groups' }, x: 'key', series: [{ path: 'figure' }] } }] },
       { text: 'Your monthly spending follows.\n\n{b:b1}' }];
   }
+  if (typeof text === 'string' && /^how has (?:our|my) monthly spending changed this year\?*$/i.test(text.trim())) {
+    // No show call: Fathom draws the monthly chart itself (src/blocks/auto.mjs).
+    return [{ toolCalls: [{ name: 'spending', args: { operation: 'total', groupBy: 'month', window: 'ytd' } }] },
+      { text: 'Your monthly spending this year follows.' }];
+  }
   if (typeof text === 'string' && /(?:recent transactions.*table|table.*recent transactions)/i.test(text)) {
     const args = { operation: 'search', limit: 5 };
     return [{ toolCalls: [{ name: 'transactions', args }] },

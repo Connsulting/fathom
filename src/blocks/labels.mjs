@@ -36,7 +36,7 @@ export function dateText(value) {
   return String(value);
 }
 export function itemLabel(item, ref) {
-  for (const key of ['label', 'key', 'month', 'year']) {
+  for (const key of ['label', 'key', 'month', 'year', 'merchant']) {
     if (typeof item?.[key] === 'string') return key === 'month' || key === 'year' ? dateText(item[key]) : item[key];
   }
   return sourceLabel(ref);

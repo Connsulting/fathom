@@ -80,7 +80,7 @@ test('yearend mark and clear match route validation and undo prior reasons',asyn
 });
 
 test('Confirm and fact operations enforce scopes and proposal bases without writes',async t=>{
- const s=await setup(t),id=s.q('account_owner'),server=createToolServer({scopes:['read'],authorize:()=>true,ctx:s.ctx});
+ const s=await setup(t),id=s.q('account_owner'),server=createToolServer({scopes:['read'],authorize:()=>true,ctx:s.ctx,runTool:fn=>fn()});
  for(const operation of ['rec_questions','confirm','reopen','yearend_mark']){
   const r=await server._requestHandlers.get('tools/call')({method:'tools/call',params:{name:'answer',arguments:{operation}}},{});assert.match(r.content[0].text,/Permission denied/);
  }
