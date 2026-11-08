@@ -3,6 +3,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { secretEnv, secretsFor, servedStore } from '../test/helpers/server.mjs';
+import { mainDataDir } from './data-dir.mjs';
 
 const ownedDirectories = new Set();
 
@@ -117,7 +118,7 @@ export async function startEnrolledServer({ dataDir, clock } = {}) {
 }
 
 // The local demo instance's data directory (E2E_DATA), resolved.
-export const localDataDir = () => resolve(process.env.E2E_DATA || '.e2e-data');
+export const localDataDir = mainDataDir;
 
 // Seed synthetic rows beside a running local demo server (dataDir, default E2E_DATA) through its
 // original household's runtime context, built the way a store-opening CLI builds it (scheduler not
