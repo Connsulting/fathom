@@ -1,0 +1,219 @@
+{
+  "id": "b3",
+  "op": "compare",
+  "after": 2,
+  "spec": {
+    "options": [
+      {
+        "source": {
+          "tool": "retirement.target",
+          "args": {
+            "realReturn": 0.03
+          },
+          "path": ""
+        }
+      },
+      {
+        "source": {
+          "tool": "retirement.target",
+          "args": {
+            "realReturn": 0.04
+          },
+          "path": ""
+        }
+      }
+    ],
+    "fields": [
+      "target",
+      "realReturn",
+      "years",
+      "date"
+    ]
+  },
+  "calls": [
+    {
+      "tool": "retirement.target",
+      "args": {
+        "realReturn": 0.03
+      }
+    },
+    {
+      "tool": "retirement.target",
+      "args": {
+        "realReturn": 0.04
+      }
+    }
+  ],
+  "snapshot": {
+    "title": "Reaching the target at two returns",
+    "fields": [
+      {
+        "label": "Target",
+        "unit": "usd"
+      },
+      {
+        "label": "Real return",
+        "unit": "ratio"
+      },
+      {
+        "label": "Years to target",
+        "unit": "years"
+      },
+      {
+        "label": "Target date",
+        "unit": "date"
+      }
+    ],
+    "options": [
+      {
+        "label": "Real return 3%",
+        "cells": [
+          {
+            "t": "fig",
+            "fig": {
+              "value": 1450000,
+              "unit": "usd",
+              "label": "Retirement target",
+              "kind": "p",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "retirement.target",
+                "assumptions": [
+                  {
+                    "name": "realReturn",
+                    "stated": "Real return 3%"
+                  }
+                ]
+              },
+              "source": "Retirement target"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 0.03,
+              "unit": "ratio",
+              "label": "Real return",
+              "kind": "a",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Retirement target"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 19,
+              "unit": "years",
+              "label": "Years to target",
+              "kind": "p",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Retirement target"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": "2045-06-01",
+              "unit": "date",
+              "label": "Target date",
+              "kind": "p",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Retirement target"
+            }
+          }
+        ]
+      },
+      {
+        "label": "Real return 4%",
+        "cells": [
+          {
+            "t": "fig",
+            "fig": {
+              "value": 1210000,
+              "unit": "usd",
+              "label": "Retirement target",
+              "kind": "p",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "retirement.target",
+                "assumptions": [
+                  {
+                    "name": "realReturn",
+                    "stated": "Real return 4%"
+                  }
+                ]
+              },
+              "source": "Retirement target"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 0.04,
+              "unit": "ratio",
+              "label": "Real return",
+              "kind": "a",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Retirement target"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 16,
+              "unit": "years",
+              "label": "Years to target",
+              "kind": "p",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Retirement target"
+            }
+          },
+          {
+            "t": "none",
+            "fig": {
+              "value": null,
+              "unit": "date",
+              "label": "Target date",
+              "kind": "p",
+              "asOf": "2026-10-31",
+              "gaps": [
+                {
+                  "code": "missing_fact",
+                  "message": "No charges are stored for this category yet."
+                }
+              ],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Retirement target"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "asOf": "2026-10-31",
+  "builtAt": "2026-11-01T12:00:00.000Z"
+}
