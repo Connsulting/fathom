@@ -33,7 +33,8 @@ import { sendToAdvisor } from '../advisor/index.mjs';
 import { liftStaleVetoes } from '../advisor/index.mjs';
 import { autoResolve } from '../ingest/auto.mjs';
 import { autoDecideCategories } from '../categories/guess.mjs';
-import { observedPayments } from '../ingest/transaction-payments.mjs';
+import { refreshDependencies } from '../ingest/coverage.mjs';
+import { reconcileTransactionPayments, observedPayments } from '../ingest/transaction-payments.mjs';
 
 export const PLAN_JOB_ID = 'plan';
 
@@ -74,6 +75,7 @@ async function run(db, engine, { now, packDirs, runId, household }) {
 }
 
 async function plan(db, engine, { clock, runId, packDirs }) {
+  reconcileTransactionPayments(db, { now: clock });
   autoResolve(db, { now: clock });
   autoDecideCategories(db,{now:clock});
   const packs = loadPacks(packDirs);
@@ -116,6 +118,7 @@ async function plan(db, engine, { clock, runId, packDirs }) {
   const ctx = {
     clock, year: data.taxYear, facts: merged.values, owner, fig,
     names, model: computed.model, data, packs, packStatus, mortgage: recFacts.mortgage,
+    refreshNeeds: refreshDependencies(db, computed.figures, clock),
     assumptions: recFacts.assumptions, info: computed.info, freshness: data.freshness, warnings: [...warnings], entities, goals: prefs.goals, curve: prefs.curve,
   };
   const results = evaluateCatalog(ctx);

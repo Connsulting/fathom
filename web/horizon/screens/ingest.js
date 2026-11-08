@@ -411,7 +411,7 @@ export function ingestScreens(h) {
   // One upload result. Another unresolved status shows the same cause as Waiting files.
   function fileRow(f) {
     const s = String(f.status || '');
-    const summary = s === 'imported' || s === 'duplicate' ? countsText(f.counts)
+    const summary = f.restored ? 'Restored this previously removed file.' : s === 'imported' || s === 'duplicate' ? countsText(f.counts)
       : s === 'needs_confirmation' || s === 'needs_clarification' ? 'Review it under Waiting files.' : proposalCause(f);
     const rid = s === 'imported' && f.receipt?.id && !st.undone[f.receipt.id] ? String(f.receipt.id) : '';
     return `<li class="${esc(s)}">${icon('doc')}<div class="h-ing-f"><div class="h-ing-f-h"><span class="h-ing-f-n">${esc(f.name)}</span><em>${esc(STATUS[s] || s)}</em></div>${summary ? `<p>${esc(summary)}</p>` : ''}${warningLines(f.counts)}</div>${rid ? undoBtn(rid) : ''}</li>`;

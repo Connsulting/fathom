@@ -4,6 +4,8 @@ import { readFileSync, rmSync } from 'node:fs';
 import { tempDb } from './helpers/server.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
+import { refreshDependencies } from '../src/ingest/coverage.mjs';
+import { computeFigures } from '../src/jobs/planner/figures.mjs';
 import { loadPlanningData } from '../src/jobs/planner/data.mjs';
 import { healthLine } from '../web/horizon/screens/home-model.js';
 import * as missing from '../src/jobs/triggers/missing-data.mjs';
@@ -22,7 +24,7 @@ async function store(t) {
   setSetting(s.db, 'mode', 'real');
   return s;
 }
-const context = data => ({ clock, year: 2026, facts: {}, warnings: [], info: { blocked: [] }, data, freshness: data.freshness });
+const context = (data, db) => ({ refreshNeeds: db ? refreshDependencies(db, computeFigures(data, {}, { clock, entities: [] }).figures, clock) : { accounts: [], sourceIds: new Set() }, clock, year: 2026, facts: {}, warnings: [], info: { blocked: [] }, data, freshness: data.freshness });
 
 function seedAccounts(db) {
   db.prepare("INSERT INTO sources (id, label, kind, as_of) VALUES ('ing:bank', 'Synthetic bank', 'balances', '2026-11-04')").run();
@@ -38,17 +40,17 @@ test('Home and missing-data identify the same stale account despite a newer hous
   seedAccounts(db);
   const sc = buildScenario(db, { clock });
   const data = loadPlanningData(db, clock);
-  const gaps = missing.items(context(data)).filter(i => ['balances', 'transactions'].includes(i.code));
+  const gaps = missing.items(context(data, db)).filter(i => i.code.startsWith('balances:'));
   assert.equal(healthLine({ accounts: sc.accounts }).staleAccounts, 1);
-  const rec = missing.build(context(data), missing.evaluate(context(data)));
-  assert.deepEqual(rec.tasks.filter(t => ['balances', 'transactions'].includes(t.code)).map(t => t.accountIds), [['stale-account'], ['stale-account']]);
+  const rec = missing.build(context(data, db), missing.evaluate(context(data, db)));
+  assert.deepEqual(rec.tasks.filter(t => t.code?.startsWith('balances:')).map(t => t.accountIds), [['stale-account']]);
   assert.deepEqual(gaps.map(i => [i.code, i.accountIds]), [
-    ['balances', ['stale-account']], ['transactions', ['stale-account']],
+    ['balances:stale-account', ['stale-account']],
   ]);
   db.prepare("UPDATE balances SET date = '2026-11-04' WHERE account_id = 'stale-account'").run();
   const after = loadPlanningData(db, clock);
   assert.equal(healthLine({ accounts: buildScenario(db, { clock }).accounts }).staleAccounts, 0);
-  assert.equal(missing.items(context(after)).filter(i => ['balances', 'transactions'].includes(i.code)).length, 0);
+  assert.equal(missing.items(context(after, db)).filter(i => i.code.startsWith('balances:')).length, 0);
 });
 
 test('missing-data prose has no stored count while Steps renders progress from current task data', () => {
@@ -176,7 +178,7 @@ test('a connection mapping without newer account data cannot make that account f
   assert.equal(sc.accounts.find(a => a.id === 'stale-account').fresh, 'stale');
   assert.equal(healthLine({ accounts: sc.accounts }).staleAccounts, 1);
   const data = loadPlanningData(db, clock);
-  assert.deepEqual(missing.items(context(data)).find(i => i.code === 'balances').accountIds, ['stale-account']);
+  assert.ok(!missing.items(context(data, db)).some(i => i.accountIds?.includes('stale-account')), 'the feed remains stale, but a connected account needs no upload');
 });
 
 test('a named payroll blocker selects that employer rather than another question of the same kind', () => {

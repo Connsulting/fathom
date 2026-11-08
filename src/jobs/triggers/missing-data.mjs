@@ -7,7 +7,7 @@ import { ledgerDisplayName, summaryPerson, looksLikeSpending } from '../../pnl/l
 import { ADVISOR_KEYS } from '../../facts/derive.mjs';
 import { addDays } from '../planner/data.mjs';
 import { confirmItemFor } from '../../shared/rec-steps.mjs';
-import { staleAccountIds } from '../../../web/core/account-freshness.js';
+import { accountLabel } from '../../shared/account-label.mjs';
 import { dataText, confirmTask, ANSWER_SHAPES, questionFor } from './common.mjs';
 
 export const id = 'missing-data';
@@ -131,13 +131,27 @@ export function reasonText(ctx, code) {
 export function items(ctx) {
   const out = rankGaps(ctx.info?.gaps || []).filter(g => !g.code.startsWith('entity_unclassified:')).map(g => gapItem(g));
   const business = BUSINESS_FACTS.some(k => ctx.facts[k] === true);
-  const stale = staleAccountIds(ctx.data?.accounts ?? []);
+  const institutions = new Map();
+  for (const account of ctx.refreshNeeds?.accounts ?? []) {
+    const key = normalizeName(account.inst) || account.id;
+    if (!institutions.has(key)) institutions.set(key, []);
+    institutions.get(key).push(account);
+  }
+  for (const [institution, accounts] of institutions) {
+    const names = accounts.map(a => accountLabel(a)).join(', ');
+    const name = accounts[0].inst || names;
+    out.push({ code: `balances:${institution}`, accountIds: accounts.map(a => a.id), tax: false,
+      text: `${dataText(name)}: the plan uses out of date account data for ${dataText(names)}.`,
+      task: `Upload the latest statement for ${dataText(name)}, covering ${dataText(names)}`, kind: 'upload', link: 'upload', noun: 'an account statement',
+      fix: fixForCode('balances'),
+    });
+  }
   for (const s of ctx.freshness || []) {
-    if (s.state === 'current') continue;
+    if (s.state === 'current' || ['balances', 'transactions'].includes(s.id)) continue;
+    if (ctx.refreshNeeds && s.state !== 'missing' && ![...ctx.refreshNeeds.sourceIds].some(id => ctx.data.files.some(f => f.source_id === id && (s.id === 'pnl' ? f.source_kind === 'pnl_workbook' : f.source_kind === s.id)))) continue;
     if ((s.id === 'pnl' || s.id === 'tax_payments') && !business) continue;
     out.push({
       code: s.id, tax: TAX_CODES.has(s.id),
-      ...(['balances', 'transactions'].includes(s.id) ? { accountIds: stale } : {}),
       text: s.state === 'missing' ? `${s.label}: nothing uploaded yet.` : `${s.label}: out of date.`,
       task: `Upload the latest ${s.label.toLowerCase()}`, kind: 'upload', link: 'upload', noun: `the latest ${s.label.toLowerCase()}`,
     });

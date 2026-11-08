@@ -558,7 +558,7 @@ describe('recs', () => {
   test('AC4: the synthetic household includes missing-data for its account with old data', () => {
     assert.deepEqual(activeRecIds(base), EXPECTED_ACTIVE);
     assert.equal(recRow(base, 'dependent-care-fsa'), null);
-    assert.ok(recRow(base, 'missing-data').def.tasks.some(t => t.code === 'balances'));
+    assert.ok(recRow(base, 'missing-data').def.tasks.some(t => t.code?.startsWith('balances:')));
     for (const id of EXPECTED_ACTIVE) {
       const r = recRow(base, id);
       assert.equal(r.status, 'proposed', `${id} starts proposed`);

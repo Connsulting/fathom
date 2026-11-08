@@ -145,7 +145,7 @@ export function loadPlanningData(db, clock) {
       return entry ? [{ ...t, section: entry.section, originalCategory: entry.category, category: entry.section === 'income' ? 'Income' : entry.category, period: t.date.slice(0, 7), sourceTable: 'transactions' }] : [];
     }),
   }));
-  const files = db.prepare('SELECT id, name, source_kind, uploaded_at, status FROM files WHERE removed_at IS NULL ORDER BY uploaded_at, id').all().map(r => ({ ...r }));
+  const files = db.prepare('SELECT id, name, source_id, source_kind, uploaded_at, status FROM files WHERE removed_at IS NULL ORDER BY uploaded_at, id').all().map(r => ({ ...r }));
 
   return {
     clock, year, taxYear, accounts, pnl, pnlHistory, businessActivity, categoryInput, taxPayments, taxPaymentsNext, withholding, documents, transactions, files,
@@ -192,8 +192,8 @@ function freshness(db, clock, accounts, businessActivity) {
   const tracked = sourceStates(db, clock).accounts.size > 0;
   return Object.entries(latest).map(([id, date]) => {
     let state = 'current';
-    if (!date) state = 'missing';
-    else if (tracked && ['balances', 'transactions'].includes(id)) state = stale.length ? 'stale' : 'current';
+    if (tracked && ['balances', 'transactions'].includes(id)) state = stale.length ? 'stale' : 'current';
+    else if (!date) state = 'missing';
     else if (id === 'tax_payments') state = date < lastInstallmentDue(clock) ? 'stale' : 'current';
     else if (daysBetween(date, clock) > STALE_DAYS) state = 'stale';
     return { id, label: SOURCE_LABELS[id], latest: date, state };

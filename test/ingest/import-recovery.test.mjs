@@ -982,3 +982,11 @@ test('healthLine leaves failed files to the Imports service line', () => {
   const asked = healthLine({ pace: null, ingest: { ...ingest, pending: 2 }, accounts: [], metaDataThrough: null });
   assert.deepEqual(asked.owner, [{ key: 'confirm', text: '2 questions to confirm', go: 'confirm' }]);
 });
+
+
+test('re-upload restoration says the removed file was restored and offers no second Undo of that removal', async () => {
+  const html = await uploadResultHtml({ fileId: 'synthetic-restored', name: 'Balances.csv', status: 'imported', restored: true, counts: { rows: { balance: 1 } } });
+  assert.match(text(html), /Restored this previously removed file/);
+  assert.doesNotMatch(text(html), /Already imported/);
+  assert.doesNotMatch(html, /data-review-undo/);
+});

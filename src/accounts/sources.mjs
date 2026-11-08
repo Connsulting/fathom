@@ -14,7 +14,7 @@
 
 import { tx } from '../store/db.mjs';
 import { ToolError } from '../tools/errors.mjs';
-import { requireActor, saveReceipt, registerReceiptKind } from '../actions/receipts.mjs';
+import { requireActor, saveReceipt, registerReceiptKind, undoAction } from '../actions/receipts.mjs';
 import { captureChanges, revertChanges } from '../ingest/undo.mjs';
 import { connectedAccountIds } from '../ingest/coverage.mjs';
 import { ConfirmError, reopenItemInTx } from '../ingest/confirm.mjs';
@@ -105,6 +105,14 @@ export function removeFile(ctx, id) {
     db.prepare('INSERT INTO source_changes (receipt_id, changes) VALUES (?, ?)').run(receipt.id, JSON.stringify(changes));
     return { receipt, id, name: file.name, archived };
   });
+}
+
+export async function restoreRemovedFile(ctx, id) {
+  const actor = requireActor(ctx);
+  const receipt = ctx.db.prepare(`SELECT id FROM action_receipts WHERE kind='file' AND entity_id=?
+    AND actor_id=? AND undone_at IS NULL ORDER BY rowid DESC LIMIT 1`).get(id, actor);
+  if (!receipt) throw new ToolError('conflict', 'The removal receipt for this file is not available.');
+  return undoAction(ctx, receipt.id, SOURCES_SCOPE);
 }
 
 export function mergeAccounts(ctx, id, withId) {

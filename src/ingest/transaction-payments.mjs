@@ -17,6 +17,13 @@ const current = (db, t) => {
   return row && Object.entries(t).every(([k, value]) => row[k] === value) ? row : null;
 };
 
+export function estimatedTaxYear(date, jurisdiction, quarter = null) {
+  if (!/^(?:federal|va|virginia)$/i.test(jurisdiction ?? '') || !/^\d{4}-\d{2}-\d{2}$/.test(date ?? '')) return null;
+  const year = Number(date.slice(0, 4));
+  // Both jurisdictions' fourth installment falls in January of the following calendar year.
+  return year - (date.slice(5, 7) === '01' && (quarter === null || quarter === 4) ? 1 : 0);
+}
+
 function classify(t) {
   if (t.amount >= 0) return null;
   const text = String(t.description ?? '');
@@ -27,9 +34,8 @@ function classify(t) {
   const j = federal && !state ? 'federal' : !federal && state ? (virginia ? 'VA' : 'state') : null;
   const explicit = /\b(?:estimated?|1040\s*[- ]?es)\b/i.test(text);
   const years = [...new Set(text.match(/\b20\d{2}\b/g) ?? [])].map(Number);
-  const year = Number(t.date.slice(0, 4));
-  const taxYear = years.length === 1 ? years[0] : years.length === 0 && !t.date.slice(5).startsWith('01-') ? year : null;
   const quarter = Number(/\bq([1-4])\b/i.exec(text)?.[1]) || null;
+  const taxYear = years.length === 1 ? years[0] : years.length === 0 ? estimatedTaxYear(t.date, j, quarter) : null;
   return { jurisdiction: j, taxYear, quarter, years, sure: explicit && !!j && j !== 'state' && taxYear !== null
     && !/\b(?:extension|balance due|return balance|penalty|amended)\b/i.test(text) };
 }
@@ -69,7 +75,7 @@ export function applyTransactionPayment(db, item, optionId) {
   db.prepare(`INSERT INTO tax_payments (jurisdiction,tax_year,date,amount,kind,file_id,parser,locator,dedupe_key,source_slot,payer,date_precision,tax_year_basis,recipient)
     VALUES (?,?,?,?,'estimate',?,?,?,?,?,?,'day',?,?)`).run(j, taxYear, t.date, -cents(t.amount) / 100, t.file_id, PARSER,
     JSON.stringify(locator), `transaction-payment:${t.dedupe_key}`, `transaction:${t.dedupe_key}`, item.context.payer ?? 'unknown',
-    year ? 'confirmed_tax_year' : 'transaction', item.context.recipient ?? 'unknown');
+    year ? 'confirmed_tax_year' : item.context.years?.length === 0 ? 'inferred_payment_date' : 'transaction', item.context.recipient ?? 'unknown');
   return {};
 }
 
@@ -108,10 +114,11 @@ export function reconcileTransactionPayments(db, { now = new Date().toISOString(
       const transaction = snapshot(t);
       const signature = createHash('sha256').update(JSON.stringify(transaction)).digest('hex').slice(0, 24);
       const subject = `${t.dedupe_key}:${signature}`;
-      if (contexts.has(subject)) continue;
+      const existing = contexts.get(subject);
+      if (existing && (existing.status !== 'pending' || db.prepare('SELECT 1 FROM confirm_auto_declined WHERE item_id=?').get(existing.id))) continue;
       for (const prior of contexts.values()) {
         const old = parseJson(prior.context, {}).transaction;
-        if (old?.id === t.id && prior.status === 'pending') db.prepare("UPDATE confirm_items SET status='answered',answer='superseded',answered_at=? WHERE id=?").run(now, prior.id);
+        if (prior.id !== existing?.id && old?.id === t.id && prior.status === 'pending') db.prepare("UPDATE confirm_items SET status='answered',answer='superseded',answered_at=? WHERE id=?").run(now, prior.id);
       }
       const logs = c.jurisdiction ? logsFor(db, t, c.jurisdiction) : [];
       const overlapping = logs.length === 1 && rows.filter(other => {
@@ -123,12 +130,14 @@ export function reconcileTransactionPayments(db, { now = new Date().toISOString(
         .concat({ id: 'separate', label: 'A separate estimated payment' }, { id: 'not_estimate', label: 'Not an estimated tax payment' }) : choices(c, t);
       const owner = /^(you|owner)$/i.test(t.owner ?? '') ? 'owner' : /^(your spouse|spouse)$/i.test(t.owner ?? '') ? 'spouse' : 'unknown';
       const amount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(-t.amount);
+      const context = { ...c, transaction, payer: owner, recipient: owner, amount: -t.amount, date: t.date };
+      if (existing) db.prepare('UPDATE confirm_items SET options=?,context=? WHERE id=?').run(JSON.stringify(options), JSON.stringify(context), existing.id);
       const out = ask(db, { kind: 'transaction_payment', subject,
         question: ambiguousLog ? `Is ${t.description}, ${amount} on ${t.date}, already in your estimated tax payment log?`
           : `Is ${t.description}, ${amount} on ${t.date}, an estimated tax payment?`, options,
-        context: { ...c, transaction, payer: owner, recipient: owner, amount: -t.amount, date: t.date }, fileId: t.file_id, now });
-      if (c.sure && !ambiguousLog && out.queued) recordAutoAnswer(db, out.id, 'estimate', { rule: 'transaction_payment', now,
-        evidence: { text: 'A posted connected-account transaction identifies an estimated tax payment.', refs: [{ table: 'transactions', id: t.id }] } });
+        context, fileId: t.file_id, now });
+      if (c.sure && !ambiguousLog && (out.queued || existing)) recordAutoAnswer(db, existing?.id ?? out.id, 'estimate', { rule: 'transaction_payment', now,
+        evidence: { text: 'A posted connected-account transaction identifies an estimated tax payment. Federal and Virginia fourth installments are due in January for the prior tax year; an explicit tax year takes precedence.', refs: [{ table: 'transactions', id: t.id }] } });
     }
   });
 }

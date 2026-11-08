@@ -207,10 +207,11 @@ test('missing data names its work without prose counts, and each task links to w
 });
 
 test('missing data that is only uploads is titled as uploads', () => {
-  const ctx = baseCtx({ freshness: [{ id: 'balances', label: 'Account balances', state: 'stale' }, { id: 'transactions', label: 'Account transactions', state: 'missing' }] });
+  const ctx = baseCtx({ refreshNeeds: { accounts: [{ id: 'cash', inst: 'Example Bank', name: 'Checking' }], sourceIds: new Set() }, freshness: [] });
   const hit = evaluateTriggers(ctx).find(h => h.rec.id === 'missing-data');
-  assert.equal(hit.rec.title, 'Upload the latest files');
-  assert.ok(hit.rec.tasks.filter(t => t.link === 'upload').length >= 2);
+  assert.equal(hit.rec.title, 'Upload an account statement');
+  assert.equal(hit.rec.tasks.filter(t => t.link === 'upload').length, 1);
+  assert.match(hit.rec.tasks[0].t, /Example Bank.*Checking/);
 });
 
 // ---------------------------------------------------------------- SimpleFIN coverage

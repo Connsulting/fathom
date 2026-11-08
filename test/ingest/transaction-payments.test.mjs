@@ -249,14 +249,15 @@ test('uncertain payees need one answer and a non-estimate never enters the estim
   assert.equal(pendingItems(s.db).filter(i => i.kind === 'transaction_payment').length, 0);
 }));
 
-test('January without a tax year asks before writing; refunds and payroll taxes never become estimates', () => fixture(async (s, opts) => {
+test('January estimates infer the prior tax year; refunds and payroll taxes never become estimates', () => fixture(async (s, opts) => {
   await syncSimplefin(s.db, opts);
-  assert.equal(payments(s.db).length, 0);
-  const items = pendingItems(s.db).filter(i => i.kind === 'transaction_payment');
-  assert.equal(items.length, 1);
-  assert.ok(items[0].options.some(o => o.id === 'estimate:2025'));
-  answer(s.db, items[0].id, 'estimate:2025', { now: NOW });
+  assert.equal(payments(s.db).length, 1);
+  assert.equal(pendingItems(s.db).filter(i => i.kind === 'transaction_payment').length, 0);
   assert.equal(payments(s.db)[0].tax_year, 2025);
+  const id = JSON.parse(payments(s.db)[0].locator).confirmId;
+  assert.ok(autoInfo(s.db, id));
+  reopenItem(s.db, id, { now: NOW });
+  assert.equal(payments(s.db).length, 0);
 }, [posting('january', '2026-01-15', -125, 'IRS ESTIMATED TAX'),
   posting('refund', '2026-09-01', 125, 'IRS TAX REFUND'),
   posting('payroll', '2026-09-02', -125, 'IRS EFTPS FORM 941 PAYROLL TAX')]));
