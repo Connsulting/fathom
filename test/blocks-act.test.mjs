@@ -5,14 +5,15 @@ import { tempDb, serveAppFixture } from './helpers/server.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { callTool } from '../src/tools/index.mjs';
 import { buildSnapshot } from '../src/blocks/snapshot.mjs';
-import { getSetting } from '../src/store/db.mjs';
+import { getSetting, setSetting } from '../src/store/db.mjs';
 import { pickWargame } from '../src/decisions/write.mjs';
 
-async function fixture(t, name = 'deferral') {
+async function fixture(t, name = 'deferral', real = false) {
   const s = await tempDb(); seedDemo(s.db);
+  if (real) setSetting(s.db, 'mode', 'real');
   s.db.prepare("UPDATE decisions SET status = 'open', decided_line = NULL WHERE wargame = ?").run(name);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', FATHOM_CLOCK: '2026-11-05' });
-  const app = await serveAppFixture({ db: s.db, config });
+  const app = await serveAppFixture({ db: s.db, config, authenticated: real });
   t.after(async () => { await app.close(); s.close(); });
   const args = { operation: 'wargame', name };
   const result = await callTool('recommendations', args, { db: s.db, clock: config.clock });
@@ -40,7 +41,8 @@ test('pick uses stored point ids and one receipt survives Undo and reload', asyn
   const prior = getSetting(f.db, 'wargame.picks', null);
   pickWargame(f.db, 'deferral', f.snapshot.options[1].id);
   const want = getSetting(f.db, 'wargame.picks');
-  f.db.prepare("DELETE FROM settings WHERE key = 'wargame.picks'").run();
+  if (prior) setSetting(f.db, 'wargame.picks', prior);
+  else f.db.prepare("DELETE FROM settings WHERE key = 'wargame.picks'").run();
   const res = await f.app.postJson(f.path, { action: 'pick', option: 1 });
   assert.equal(res.status, 200, JSON.stringify(res.json));
   assert.deepEqual(getSetting(f.db, 'wargame.picks'), want);
@@ -91,4 +93,23 @@ test('a message in another conversation and a block without actions cannot write
   const pv = JSON.parse(row.provenance); delete pv.blocks[0].snapshot.action;
   f.db.prepare('UPDATE messages SET provenance = ? WHERE id = ?').run(JSON.stringify(pv), row.id);
   assert.equal((await f.app.postJson(f.path, { action: 'pick', option: 1 })).status, 400);
+});
+
+
+test('the active salary decision is bound when an earlier salary year is already decided', async t => {
+  const f = await fixture(t, 'salary');
+  f.db.prepare("UPDATE decisions SET status = 'decided' WHERE id = 'salary26'").run();
+  const args = { operation: 'wargame', name: 'salary' };
+  const result = await callTool('recommendations', args, { db: f.db, clock: '2027-01-05' });
+  const snap = buildSnapshot('compare', { source: { tool: 'recommendations', args, path: 'salary.points' }, fields: ['figures.salary'] }, [{ name: 'recommendations', args, result }]);
+  assert.equal(snap.action.decisionId, 'salary27');
+});
+
+test('a real signed-in actor owns the receipt and can undo the pick', async t => {
+  const f = await fixture(t, 'deferral', true);
+  const res = await f.app.postJson(f.path, { action: 'pick', option: 1 });
+  assert.equal(res.status, 200, JSON.stringify(res.json));
+  const receipt = res.json.message.provenance.actions[0];
+  assert.equal(receipt.actorId, f.app.session.user.id);
+  assert.equal((await f.app.postJson(`/api/actions/${receipt.id}/undo`)).status, 200);
 });

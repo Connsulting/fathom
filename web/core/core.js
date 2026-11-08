@@ -892,6 +892,11 @@ function preferenceDelete(id) {
   return send('/api/preferences/' + encodeURIComponent(id) + '/delete', {});
 }
 
+function blockAct(threadId, messageId, blockId, body) {
+  return send('/api/threads/' + encodeURIComponent(threadId) + '/messages/' + encodeURIComponent(messageId) + '/blocks/' + encodeURIComponent(blockId) + '/act', body,
+    d => d.message || null, null, 'Could not save that choice. ');
+}
+
 function actionUndo(id) {
   return send('/api/actions/' + encodeURIComponent(id) + '/undo', {}, null, null, 'Could not undo that change. ');
 }
@@ -1373,7 +1378,7 @@ const api = {
   preferenceSave,
   tourSeen,
   preferenceDelete,
-  actionUndo,
+  actionUndo, blockAct,
   proposalDecide,
   accountMask,
   accountOwner,

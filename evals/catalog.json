@@ -4305,6 +4305,174 @@
           "op": "compare"
         }
       ]
+    },
+    {
+      "id": "wargame-salary",
+      "family": "business",
+      "requires": {
+        "operations": [
+          "recommendations.wargame",
+          "show.chart",
+          "show.compare"
+        ],
+        "script": true
+      },
+      "turns": [
+        {
+          "question": "Compare the salary options for my S corp side by side.",
+          "required": [
+            {
+              "name": "recommendations",
+              "operation": "wargame",
+              "predicates": [
+                {
+                  "path": "name",
+                  "op": "eq",
+                  "value": "salary"
+                }
+              ]
+            },
+            {
+              "name": "show",
+              "operation": "chart",
+              "predicates": []
+            },
+            {
+              "name": "show",
+              "operation": "compare",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "rubric": "Compare stored war-game figures with no invented values."
+        }
+      ],
+      "blocks": [
+        {
+          "op": "chart",
+          "kind": "scatter"
+        },
+        {
+          "op": "compare"
+        }
+      ]
+    },
+    {
+      "id": "wargame-deferral",
+      "family": "business",
+      "requires": {
+        "operations": [
+          "recommendations.wargame",
+          "show.compare"
+        ],
+        "script": true
+      },
+      "turns": [
+        {
+          "question": "Should I move some December invoices into January? Compare the options.",
+          "required": [
+            {
+              "name": "recommendations",
+              "operation": "wargame",
+              "predicates": [
+                {
+                  "path": "name",
+                  "op": "eq",
+                  "value": "deferral"
+                }
+              ]
+            },
+            {
+              "name": "show",
+              "operation": "compare",
+              "predicates": []
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "rubric": "Compare stored war-game figures with no invented values."
+        }
+      ],
+      "blocks": [
+        {
+          "op": "compare"
+        }
+      ]
+    },
+    {
+      "id": "wargame-pick-typed",
+      "family": "business",
+      "requires": {
+        "operations": [
+          "recommendations.wargame",
+          "act_on_recommendation.pick_point"
+        ],
+        "script": true
+      },
+      "turns": [
+        {
+          "question": "What are the invoice-deferral options?",
+          "required": [
+            {
+              "name": "recommendations",
+              "operation": "wargame",
+              "predicates": [
+                {
+                  "path": "name",
+                  "op": "eq",
+                  "value": "deferral"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "rubric": "Read the stored options and pass a point id to the registry write."
+        },
+        {
+          "question": "Pick the second deferral option.",
+          "required": [
+            {
+              "name": "recommendations",
+              "operation": "wargame",
+              "predicates": [
+                {
+                  "path": "name",
+                  "op": "eq",
+                  "value": "deferral"
+                }
+              ]
+            },
+            {
+              "name": "act_on_recommendation",
+              "operation": "pick_point",
+              "predicates": [
+                {
+                  "path": "name",
+                  "op": "eq",
+                  "value": "deferral"
+                }
+              ]
+            }
+          ],
+          "forbidden": [
+            "unsourced-figure",
+            "self-computed-figure"
+          ],
+          "expected": [],
+          "rubric": "Read the stored options and pass a point id to the registry write."
+        }
+      ]
     }
   ]
 }
