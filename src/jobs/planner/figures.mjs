@@ -11,7 +11,7 @@ import { isCollegeAccount } from '../../shared/account-kinds.mjs';
 import { ageAtYearEnd, accountOwnerAge } from '../../shared/ages.mjs';
 import { activeInference } from '../../shared/va529-plan.mjs';
 import { estimatedPaymentSafeHarbor, solo401kRoom, sepRoom, hsaLimit, payrollTax, TAX_2026 } from '../../calc/index.mjs';
-import { cents } from '../../store/db.mjs';
+import { cents, parseJson } from '../../store/db.mjs';
 import { accountLabel, sourceLabel } from '../../shared/account-label.mjs';
 import {
   pnlSums, ytd, dateLabel, monthLabel, cleanLabel, sum, addDays,
@@ -274,6 +274,14 @@ export function computeFigures(data, facts, ctx) {
     const code = part.blocked;
     const gap = taxGap(code, { employer: keys[0].startsWith('tax.fed.') ? 'federal payments' : 'Virginia payments' });
     gap.figureKeys = keys;
+    if (code === 'estimated_payer_unknown') {
+      const accounts = new Set(part.rows.filter(r => r.parser === 'transaction-payment').map(r => parseJson(r.locator, {}).transaction?.accountId));
+      const question = data.confirm.find(i => i.kind === 'account_owner' && i.status === 'pending' && accounts.has(i.subject));
+      if (question) {
+        gap.message = 'Excluded connected-account estimates until we know whose account paid them.';
+        gap.action = { screen: 'confirm', id: question.id, label: 'Name the account owner' };
+      }
+    }
     if (code === 'withholding_recipient_unknown' && keys[0] === 'tax.va.withheld') gap.action = {
       screen: 'ask', key: 'tax.withholding.virginia', label: 'Enter the withholding total', prompt: 'Record my total Virginia withholding for this tax year. Ask me for the amount.',
     };

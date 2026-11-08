@@ -15,6 +15,7 @@ import { build as buildFederal } from '../../src/jobs/triggers/fed-q4-estimate.m
 import { applyRecs } from '../../src/jobs/planner/recs.mjs';
 import { removeFile } from '../../src/accounts/sources.mjs';
 import { undoAction } from '../../src/actions/receipts.mjs';
+import { gapControl } from '../../web/core/gap-control.js';
 
 const NOW = '2026-09-20T12:00:00.000Z';
 const CLOCK = NOW.slice(0, 10);
@@ -227,6 +228,12 @@ test('a single filer sees a payer gap until the connected account owner is known
   const transaction = s.db.prepare("SELECT * FROM transactions WHERE external_id='fed-q2'").get();
   const question = pendingItems(s.db).find(i => i.kind === 'account_owner' && i.subject === transaction.account_id);
   assert.ok(question);
+  const gap = compute().info.gaps.find(g => g.code === 'estimated_payer_unknown');
+  assert.deepEqual(gap.action, { screen: 'confirm', id: question.id, label: 'Name the account owner' });
+  const html = gapControl(gap.action, String);
+  assert.match(html, new RegExp(`href="#/confirm/${question.id}"`));
+  assert.match(html, /data-go="confirm"/);
+  assert.doesNotMatch(html, /upload/i);
   answer(s.db, question.id, 'owner', { now: NOW });
   assert.equal(compute().figures['tax.fed.paid'].v, 1200);
   assert.ok(!compute().info.gaps.some(g => g.code === 'estimated_payer_unknown'));
