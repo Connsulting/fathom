@@ -10,7 +10,7 @@ import { writeRec } from '../src/store/recs.mjs';
 import { evaluateTriggers } from '../src/jobs/triggers/index.mjs';
 import { deriveSteps, isVerifiable } from '../src/shared/rec-steps.mjs';
 import * as recSteps from '../web/horizon/screens/rec-steps.js';
-import { scenario as demoScenario } from '../demo/scenario.mjs';
+import demoScenario from '../demo/scenario.mjs';
 
 const s = scratch('fathom-steps-');
 after(() => s.cleanup());
