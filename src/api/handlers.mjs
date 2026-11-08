@@ -1,4 +1,5 @@
 import { writePreference } from '../actions/preferences.mjs';
+import { adoptSuggestions } from '../goals/write.mjs';
 import { randomUUID } from 'node:crypto';
 import { requireActor, undoAction, ensureActionConversation, receiptsFor, receiptMessages } from '../actions/receipts.mjs';
 import { writeRec } from '../store/recs.mjs';
@@ -797,6 +798,7 @@ export function preferenceSave(ctx) {
   try {
     const out = writePreference({ db: ctx.db, now: stamp(ctx), actorId: ctx.identity?.id },
       { ...ctx.body, id: ctx.params.id }, { remove: ctx.removePreference === true });
+    adoptSuggestions(ctx.db, { now: stamp(ctx), clock: ctx.config && ctx.config.clock });
     return { ...out, scenario: scenarioOf(ctx) };
   } catch (e) { if (e instanceof ToolError) throw new HttpError(400, e.message); throw e; }
 }

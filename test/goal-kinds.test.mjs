@@ -69,8 +69,9 @@ test('kindOf reads the model kind and treats a missing kind or a legacy topic as
   assert.equal(G.kindOf({ kind: 'education' }), 'balance', 'a legacy topic is not a model kind');
 });
 
-test('goalStatusOf derives archived, done or open from the row columns', () => {
-  assert.equal(G.goalStatusOf({ archived_at: '2026-11-01T00:00:00Z', done_at: '2026-10-01T00:00:00Z' }), 'archived');
+test('goalStatusOf derives done, archived or open from the row columns', () => {
+  assert.equal(G.goalStatusOf({ archived_at: '2026-11-01T00:00:00Z', done_at: '2026-10-01T00:00:00Z' }), 'done', 'a done goal archives itself and reads done');
+  assert.equal(G.goalStatusOf({ archived_at: '2026-11-01T00:00:00Z', done_at: null }), 'archived');
   assert.equal(G.goalStatusOf({ archived_at: null, done_at: '2026-10-01T00:00:00Z' }), 'done');
   assert.equal(G.goalStatusOf({ archived_at: null, done_at: null }), 'open');
   assert.equal(G.goalStatusOf({}), 'open', 'a row from before migration 026 has no done_at');

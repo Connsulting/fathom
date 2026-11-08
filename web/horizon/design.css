@@ -475,7 +475,6 @@
 .d-horizon .h-goal.watch .h-goal-h span { color: var(--tx); }
 .d-horizon .h-goal p { color: var(--mu); font-size: 13.5px; margin-top: 6px; }
 .d-horizon .h-goal .h-prog { margin: 12px 0 0; }
-.d-horizon .h-curves { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px 56px; margin-top: 20px; }
 .d-horizon .h-curve-ends { display: flex; justify-content: space-between; gap: 16px; font-size: 13.5px; color: var(--mu); }
 .d-horizon .h-curve-ends span.lean { color: var(--tx); }
 .d-horizon .h-curve p { color: var(--fa); font-size: 13px; margin-top: 4px; }
@@ -1018,6 +1017,7 @@ a.h-dec-t:hover { color: var(--ac2); }
 .d-horizon .h-gerr { color: #f0a59a; font-size: 13px; }
 .d-horizon .h-gform .h-ob-nav { margin-top: 2px; flex-wrap: wrap; }
 .d-horizon .h-gform-end { display: flex; gap: 10px; margin-left: auto; }
+.d-horizon .h-gform-life { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .d-horizon .h-goal p.h-gkind { margin-top: 10px; font-size: 13px; color: var(--fa); }
 .d-horizon .h-goal .h-gpeople, .d-horizon .h-goal .h-gkind + .h-gpeople { margin-top: 6px; }
 .d-horizon .h-gnone { color: var(--fa); font-size: 13px; margin-top: 10px; }

@@ -28,7 +28,8 @@ export const horizonLabel = id => (HORIZONS.find(h => h.id === id) || HORIZONS[0
 export const CURVE_AXES = Object.freeze([
   Object.freeze({ id: 'tax_cash', left: 'Pay less tax this year', right: 'Keep cash flexible' }),
   Object.freeze({ id: 'ret_life', left: 'Max retirement room', right: 'Lifestyle now' }),
-  Object.freeze({ id: 'effort', left: 'Optimize everything', right: 'Do not make me think' }),
+  // Defaults to the right end: the owner changes it by telling Ask, not with a slider.
+  Object.freeze({ id: 'effort', left: 'Optimize everything', right: 'Do not make me think', value: 1 }),
   Object.freeze({ id: 'human', left: 'Lean on the AI', right: 'Lean on the human' }),
 ]);
 export const CURVE_DEFAULT = 0.5;
@@ -69,7 +70,8 @@ export const isDependentKey = v => typeof v === 'string' && /^kid\d{0,2}$/.test(
 // Whose goal: the owner, the spouse, both (joint) or a dependent. Not origin 'owner'.
 export const isGoalOwner = v => v === 'owner' || v === 'spouse' || v === 'joint' || isDependentKey(v);
 export const kindOf = def => (def && GOAL_KINDS.includes(def.kind) ? def.kind : 'balance');
-export const goalStatusOf = row => (row?.archived_at ? 'archived' : row?.done_at ? 'done' : 'open');
+// Done wins over archived: a done goal archives itself and still reads as done.
+export const goalStatusOf = row => (row?.done_at ? 'done' : row?.archived_at ? 'archived' : 'open');
 
 const nameOf = (names, key) => (names && typeof names[key] === 'string' && names[key].trim() ? names[key] : '');
 
