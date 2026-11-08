@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { tools, getTool, callTool, buildRegistry, instructions, parity } from '../src/tools/index.mjs';
+import { tools, getTool, callTool, buildRegistry, instructions, mcpInstructions, parity } from '../src/tools/index.mjs';
 import { toolsForScopes, SCOPES } from '../src/mcp/keys.mjs';
 import { createRegistryServer } from '../src/engine/tools.mjs';
 
@@ -82,10 +82,10 @@ test('catalog and instructions stay within the context budget', t => {
   const listed = toolsForScopes(SCOPES).map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
   const chars = JSON.stringify(listed).length;
   const longest = Math.max(...listed.map(t => t.description.length));
-  t.diagnostic(`catalog=${chars} max-description=${longest} instructions=${instructions.length}`);
+  t.diagnostic(`catalog=${chars} max-description=${longest} mcp-instructions=${mcpInstructions.length}`);
   assert.ok(chars <= 30000);
   assert.ok(longest <= 900);
-  assert.ok(instructions.length <= 8000);
+  assert.ok(mcpInstructions.length <= 8000);
 });
 
 test('tracked callers contain no retired tool names', () => {

@@ -114,3 +114,22 @@ test('show cannot be referenced by another block or a calculation', async t => {
   assert.equal(reply.provenance.blocks.length, 1);
   assert.equal(reply.provenance.blockNotes[0].reason, 'not_a_read');
 });
+
+test('a block-only answer retains its snapshot at the beginning', async t => {
+  const { reply } = await answer(t, [[{ toolCalls: [read, { name: 'show', args: table }] }, { text: '{b:b1}' }]]);
+  assert.equal(reply.notice, undefined);
+  assert.deepEqual(reply.paragraphs, []);
+  assert.equal(reply.provenance.blocks[0].after, 0);
+});
+
+test('the stored block size includes its copied source arguments', async t => {
+  const call = { name: 'spending', args: { operation: 'total', groupBy: 'month', limit: 1,
+    exclude: { categories: ['Synthetic unused category '.repeat(1600)] } } };
+  const { reply, results } = await answer(t, [[
+    { toolCalls: [call, { name: 'show', args: { operation: 'table', source: { tool: call.name, args: call.args, path: 'groups' }, columns: ['key', 'figure'] } }] },
+    { text: 'The stored results are available.' },
+  ]]);
+  assert.equal(results[0].toolResults[0].isError, undefined);
+  assert.deepEqual(reply.provenance.blocks, []);
+  assert.equal(reply.provenance.blockNotes[0].reason, 'too_large');
+});
