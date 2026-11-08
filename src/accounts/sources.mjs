@@ -18,7 +18,8 @@ import { requireActor, saveReceipt, registerReceiptKind } from '../actions/recei
 import { captureChanges, revertChanges } from '../ingest/undo.mjs';
 import { connectedAccountIds } from '../ingest/coverage.mjs';
 import { ConfirmError, reopenItemInTx } from '../ingest/confirm.mjs';
-import { mergePlan, manualMerge } from '../ingest/account-merge.mjs';
+import { mergeAccountPair } from './write.mjs';
+import { mergePlan } from '../ingest/account-merge.mjs';
 import { refreshFigures } from '../ingest/pipeline.mjs';
 import { accountNaming } from './naming.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
@@ -113,7 +114,7 @@ export function mergeAccounts(ctx, id, withId) {
   const plan = mergePlan(db, row.id, withId);
   if (plan.refused) throw new ToolError('conflict', plan.refused);
   const label = `Merge ${labelOf(db, plan.ownId)} into ${labelOf(db, plan.keepId)}`;
-  const merged = manualMerge(db, row.id, withId, { now: stampOf(ctx) });
+  const merged = mergeAccountPair(db, row.id, withId, { now: stampOf(ctx) });
   // A merge needs no signed-in person (its confirm item can always be reopened); the receipt and
   // its Undo are recorded for the person who made it.
   const receipt = !hasActor(ctx) ? null : saveReceipt(ctx, { scope: SOURCES_SCOPE, kind: 'merge', id: String(merged.item.id), label,

@@ -260,3 +260,18 @@ test('repair questions use shared labels and preserve the imported display name 
   assert.equal(s.db.prepare('SELECT display_name FROM accounts WHERE id=?').get(p.keep).display_name,'Household reserve');
   assert.equal(s.db.prepare('SELECT display_name FROM accounts WHERE id=?').get(p.own).display_name,'Bridge reserve');
 }));
+
+test('merge moves expected payments and merge Undo restores their original account', () => withStore(async s => {
+  const { expectedTransaction } = await import('../../src/actions/expected-transaction.mjs');
+  const p = await seedDuplicate(s, { sure: true });
+  const out = expectedTransaction({ subject: 'Synthetic payer', direction: 'inflow', dueDate: '2032-03-19', datePrecision: 'day',
+    amount: null, accountId: p.own, evidence: 'Synthetic payer pays on 2032-03-19' },
+  { db: s.db, actorId: 'synthetic-owner', ownerText: 'Synthetic payer pays on 2032-03-19', now: NOW });
+  M.queueAccountPairs(s.db, { now: NOW });
+  const q = pending(s.db)[0];
+  C.answer(s.db, q.id, 'same', { now: NOW });
+  assert.equal(s.db.prepare('SELECT account_id FROM expected_transactions WHERE id=?').get(out.expectedTransaction.id).account_id, p.keep);
+  C.reopenItem(s.db, q.id, { now: NOW });
+  assert.equal(s.db.prepare('SELECT account_id FROM expected_transactions WHERE id=?').get(out.expectedTransaction.id).account_id, p.own);
+  assert.deepEqual(s.db.prepare('PRAGMA foreign_key_check').all(), []);
+}));

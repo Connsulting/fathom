@@ -16,10 +16,10 @@ import { householdStoreFile, localDataDir } from './local-store.mjs';
 const STORE = () => householdStoreFile(localDataDir());
 
 const STARTERS = [
+  ['wargame-deferral', 'Should I move some December invoices into January? Compare the options.'],
   ['attention', 'What needs my attention right now?'],
   ['taxes', 'How are our tax payments tracking this year?'],
-  ['scorp', 'How is the S corp doing this year?'],
-  ['yearend', 'What should we do before the year ends?']
+  ['scorp', 'How is the S corp doing this year?']
 ];
 const FREE_Q = 'Give me a quick read on where the household stands right now';
 // A thread is named after its first answer; the fake engine's title is the first question cut to 48 characters.
@@ -230,7 +230,7 @@ test('AC2: the starter chips are the four figure-free starters in order', async 
   const n = await chips.count();
   expect(n).toBeGreaterThanOrEqual(3);
   expect(n).toBeLessThanOrEqual(4);
-  // The demo store has open recs, tax payments and S corp income, so all four show.
+  // The open deferral decision leads the demo’s four visible starters.
   await expect(chips).toHaveCount(4);
   const got = await chips.evaluateAll((els) => els.map((e) => [e.getAttribute('data-starter'), e.textContent.trim()]));
   expect(got).toEqual(STARTERS);
@@ -241,7 +241,7 @@ test('AC2: the starter chips are the four figure-free starters in order', async 
 });
 
 test('AC2: a starter chip sends; the owner bubble is right-aligned and the composer docks at the bottom', async ({ page }) => {
-  const [id, text] = STARTERS[0];
+  const [id, text] = STARTERS.find(([id]) => id === 'attention');
   await gotoRoute(page, 'ask');
   await expectH1(page, ASK_HELLO);
   await page.locator(`button.h-chip[data-starter="${id}"]`).click();

@@ -7,7 +7,7 @@ test('MCP action scopes deny before validation and permit only matching writes a
   await withServer({ env: { FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' } }, async s => {
     const read = (await createKey(s.baseUrl, 'Read actions')).key;
     const scopes = [
-      ['write:facts', 'answer', 'fact'], ['write:steps', 'act_on_recommendation', 'step'], ['write:goals', 'update_goal', 'create'],
+      ['write:imports', 'answer', 'expected_transaction'], ['write:facts', 'answer', 'fact'], ['write:steps', 'act_on_recommendation', 'step'], ['write:goals', 'update_goal', 'create'],
       ['write:recs', 'act_on_recommendation', 'start_over'],
       ...['decide', 'revisit', 'pick_point'].map(operation => ['write:decisions', 'act_on_recommendation', operation]),
       ...['send', 'verdict', 'checkin', 'packet'].map(operation => ['write:recs', 'advisor_review', operation]),
@@ -15,6 +15,10 @@ test('MCP action scopes deny before validation and permit only matching writes a
       ...['curve', 'forget', 'save_definition', 'delete_definition', 'pack'].map(operation => ['write:preferences', 'update_preferences', operation]),
       ...['import_file', 'retry_import', 'build_your_plans'].map(operation => ['write:imports', 'refresh', operation]),
       ['write:jobs', 'refresh', 'run_job'],
+      ...['rename', 'mask', 'owner', 'kind', 'merge'].map(operation => ['write:accounts', 'update_account', operation]),
+      ...['transaction', 'merchant_rule'].map(operation => ['write:categories', 'categorize', operation]),
+      ['write:facts', 'answer', 'rec_questions'],
+      ...['confirm', 'reopen', 'yearend_mark'].map(operation => ['write:confirm', 'answer', operation]),
     ];
     for (const [scope, tool, operation] of scopes) {
       const denied = rpcResult(await callToolRpc(s.baseUrl, read, tool, { operation, malformed: true }));

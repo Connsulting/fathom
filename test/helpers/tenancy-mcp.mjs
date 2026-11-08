@@ -15,6 +15,18 @@ export const mcp = (baseUrl, key, method, params = {}, headers = {}) => mcpPost(
 
 export const refreshImportFixture = household => ({ operation: 'import_file', name: `Synthetic ${household.canary} notes.md`, mime: 'text/markdown', text: `# ${household.canary}\n\nKeep answers short.` });
 
+export const expectedTransactionFixture = household => ({ operation: 'expected_transaction', subject: household.canary,
+  direction: 'inflow', dueDate: '2032-06-19', datePrecision: 'day', amount: null,
+  evidence: `${household.canary} pays on 2032-06-19` });
+
+export function accountCategoryFixtures(household) {
+  const transactionId = Number(household.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('colliding-account','2026-11-01',-25,'Synthetic store')").run().lastInsertRowid);
+  return {
+    categorize: { operation: 'transaction', transactionId, category: 'Groceries' },
+    update_account: { operation: 'rename', id: 'colliding-account', displayName: household.canary + ' reserve' },
+  };
+}
+
 export async function mcpHouseholds() {
   const root = await tempDir('fathom-mt06-');
   let server;
@@ -52,7 +64,7 @@ export async function mcpHouseholds() {
       hh.db = hh.ctx.db;
       hh.db.prepare('INSERT INTO facts (key, value, updated_at) VALUES (?, ?, ?)').run('synthetic.canary', JSON.stringify(hh.canary), '2026-11-05');
       hh.db.prepare('INSERT INTO recs (id, def, status, updated_at) VALUES (?, ?, ?, ?)')
-        .run('colliding-rec', JSON.stringify({ id: 'colliding-rec', title: hh.canary, tasks: ['Synthetic task'] }), 'proposed', '2026-11-05');
+        .run('colliding-rec', JSON.stringify({ id: 'colliding-rec', title: hh.canary, tasks: [{ t: 'Synthetic task' }] }), 'proposed', '2026-11-05');
       hh.db.prepare('INSERT INTO recs (id, def, status, updated_at) VALUES (?, ?, ?, ?)')
         .run(`${hh.canary}-only`, JSON.stringify({ title: hh.canary }), 'proposed', '2026-11-05');
       hh.db.prepare('INSERT INTO accounts (id, name, kind) VALUES (?, ?, ?)').run('colliding-account', hh.canary, 'checking');

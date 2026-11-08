@@ -1003,6 +1003,7 @@ function dlgHtml(id) {
   const adv = advisorScreen.recBox(r);
 
   const chips = arr(r.qa).map((q, i) => asked(msgs, q.q) ? '' : `<button type="button" class="h-chip" data-askrec="${esc(r.id)}" data-i="${i}"${busy ? ' disabled' : ''}>${T(q.q)}</button>`).join('');
+  const tradeoff = ['salary', 'deferral'].includes(r.scenario) ? `<button type="button" class="h-btn" data-wargame-ask="${esc(r.scenario)}" data-rec-id="${esc(r.id)}">Ask about this tradeoff</button>` : '';
   const wg = r.scenario && api.s.wargame?.[r.scenario]?.status !== 'unavailable' ? `<a class="h-wglink" href="${href('wargame', { name: r.scenario })}" data-go="wargame" data-name="${esc(r.scenario)}"><div><b>War-game this</b><span>${T(api.s.wargame?.[r.scenario]?.title || '')}</span></div>${icon('arrow')}</a>` : '';
 
   const convAside = th
@@ -1031,7 +1032,7 @@ function dlgHtml(id) {
       <div class="h-dside">
         ${r.question?.primary && !tasks.length ? '' : section('Steps', check)}
         ${section('Advisor', adv)}
-        ${wg}
+        ${tradeoff}${wg}
       </div>
     </div>`);
 }
@@ -2227,6 +2228,16 @@ function saveAccountRename(id, raw) {
 }
 
 function onClick(e) {
+  const tradeoff = e.target.closest('[data-wargame-ask]');
+  if (tradeoff) {
+    e.preventDefault();
+    const r = recById(tradeoff.dataset.recId);
+    const q = tradeoff.dataset.wargameAsk === 'salary' ? 'Compare the salary options for my S corp side by side.' : 'Should I move some December invoices into January? Compare the options.';
+    askPanel.addChip({ kind: 'rec', id: r.id, label: api.txt(r.title) });
+    askPanel.open();
+    chatScreen.askWargame(q);
+    return;
+  }
   const ren = e.target.closest?.('[data-acc-rename]');
   if (ren && root.contains(ren)) {
     e.preventDefault();

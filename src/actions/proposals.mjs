@@ -8,13 +8,16 @@
 // goals table (a value may come from another goal's note); plus every goal, every fact and every
 // figure value. A changed basis makes the proposal stale.
 
+import { queueCategoryChecks } from '../categories/store.mjs';
+import { resolveClock } from '../scenario/build.mjs';
+import { queueAccountPairs } from '../ingest/account-merge.mjs';
 import { createHash } from 'node:crypto';
 import { parseJson as parse, tx } from '../store/db.mjs';
 import { ToolError } from '../tools/errors.mjs';
 import { getTool, callTool } from '../tools/index.mjs';
 import { operationScopes } from '../tools/tools.mjs';
 import { WRITE_SCOPES } from '../shared/action-scopes.mjs';
-import { requireActor } from './receipts.mjs';
+import { requireActor, receiptScopes } from './receipts.mjs';
 
 // The reply rule lives in evidence.mjs (confirmedProposal uses it); the tool catalog imports
 // evidence.mjs, so it cannot import this module without a cycle through the registry.
@@ -38,10 +41,33 @@ export const allowedScopes = scopes => (Array.isArray(scopes) ? WRITE_SCOPES.fil
 const TABLES = { 'write:goals': ['goals', 'id'], 'write:facts': ['facts', 'key'], 'write:recs': ['recs', 'id'],
   'write:steps': ['recs', 'id'], 'write:preferences': ['preferences', 'id'], 'write:decisions': ['decisions', 'id'], 'write:imports': ['files', 'id'], 'write:jobs': ['jobs', 'id'] };
 
+const DOMAIN_TABLES = {
+  'write:sources': ['accounts','files','transactions','balances','positions','pnl_lines','tax_payments','documents','held_facts','entity_aliases','sources','source_changes','confirm_items','confirm_undo','ingest_epoch','transaction_category_corrections','transaction_category_imports','transaction_category_guesses'],
+  'write:accounts': ['accounts','transactions','balances','positions','simplefin_accounts','simplefin_snapshots','confirm_items','confirm_undo','confirm_auto','confirm_auto_declined','ingest_epoch','sources','superseded_rows','transaction_category_corrections','transaction_category_imports','transaction_category_guesses'],
+  'write:categories': ['accounts','transactions','transaction_category_corrections','category_merchant_rules','category_source_rules','confirm_items','confirm_undo','confirm_auto'],
+  'write:confirm': ['accounts','transactions','balances','positions','documents','tax_payments','pnl_lines','sources','files','confirm_items','confirm_undo','confirm_auto','confirm_auto_declined','ingest_epoch','held_facts','entity_aliases','category_source_rules','category_merchant_rules','transaction_category_corrections','yearend_marks'],
+};
+
 export function proposalBasis(db, tool, scopes, args = {}) {
   const parts = [];
-  if (tool === 'undo') parts.push(['action_receipts', db.prepare('SELECT * FROM action_receipts WHERE id = ?').all(args.id)]);
+  if (tool === 'undo') {
+    const selected = db.prepare('SELECT * FROM action_receipts WHERE id=?').get(args.id);
+    const receipts = selected?.kind === 'receipt_group' ? [selected, ...(parse(selected.after_state, {}).childIds ?? [])
+      .map(id => db.prepare('SELECT * FROM action_receipts WHERE id=?').get(id))] : [selected];
+    for (const receipt of receipts) {
+      parts.push(['receipt', receipt ?? null]);
+      if (!receipt) continue;
+      const target = { fact: ['facts', 'key'], goal: ['goals', 'id'], step: ['recs', 'id'], status: ['recs', 'id'],
+        owner: ['recs', 'id'], expected_transaction: ['expected_transactions', 'id'] }[receipt.kind];
+      if (target) parts.push([target[0], db.prepare(`SELECT * FROM ${target[0]} WHERE ${target[1]}=?`).get(receipt.entity_id) ?? null]);
+    }
+    return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+  }
   else for (const scope of scopes) {
+    if (DOMAIN_TABLES[scope]) {
+      for (const table of DOMAIN_TABLES[scope]) parts.push([table, db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]);
+      continue;
+    }
     const [table, pk] = TABLES[scope];
     if (scope === 'write:preferences') {
       parts.push(['preferences', db.prepare('SELECT * FROM preferences ORDER BY id').all()]);
@@ -51,6 +77,8 @@ export function proposalBasis(db, tool, scopes, args = {}) {
       continue;
     }
     if (scope === 'write:imports' || scope === 'write:jobs') {
+      parts.push(['expected_transactions', db.prepare('SELECT * FROM expected_transactions ORDER BY id').all()]);
+      parts.push(['accounts', db.prepare('SELECT id,kind FROM accounts ORDER BY id').all()]);
       parts.push(['files', db.prepare('SELECT * FROM files ORDER BY id').all()]);
       parts.push(['settings', db.prepare('SELECT * FROM settings ORDER BY key').all()]);
       parts.push(['job_runs', db.prepare('SELECT * FROM job_runs ORDER BY id').all()]);
@@ -62,6 +90,7 @@ export function proposalBasis(db, tool, scopes, args = {}) {
       ? db.prepare(`SELECT * FROM ${table} WHERE ${pk} = ?`).all(target)
       : db.prepare(`SELECT * FROM ${table} ORDER BY ${pk}`).all()]);
   }
+  if (args.recId) parts.push(['recs', db.prepare('SELECT * FROM recs WHERE id=?').all(args.recId)]);
   const rows = (table, order) => parts.push([table, db.prepare(`SELECT * FROM ${table} ORDER BY ${order}`).all()]);
   if (tool === 'act_on_recommendation') {
     parts.push(['rec_threads', db.prepare('SELECT key, rec_id, rec_detached_at FROM conversations WHERE rec_id = ? ORDER BY key').all(args.id ?? null)]);
@@ -104,7 +133,7 @@ function refusal(pending, scopes) {
   if (!tool || tool.kind !== 'write' || tool.mcpOnly || !op) return 'This change is no longer available.';
   const allowed = allowedScopes(scopes);
   const needed = tool.name === 'undo' ? pending.scopes : operationScopes(op);
-  if (!Array.isArray(needed) || !needed.length || (tool.name === 'undo' && (needed.length !== 1 || !operationScopes(op).includes(needed[0])))) return 'This change is no longer available.';
+  if (!Array.isArray(needed) || !needed.length || (tool.name === 'undo' && needed.some(scope => !operationScopes(op).includes(scope)))) return 'This change is no longer available.';
   const missing = needed.find(s => !allowed.includes(s));
   return missing ? `Permission denied: this change needs ${missing}.` : null;
 }
@@ -116,15 +145,19 @@ async function propose(tool, args, ctx) {
   const op = tool.validateArgs(input);
   let scopes = operationScopes(op);
   if (tool.name === 'undo') {
-    const receipt = ctx.db.prepare('SELECT scope, actor_id FROM action_receipts WHERE id = ?').get(input.id);
+    const receipt = ctx.db.prepare('SELECT * FROM action_receipts WHERE id = ?').get(input.id);
     if (!receipt || receipt.actor_id !== actor) throw new ToolError('forbidden', 'This change is not available to you.');
-    scopes = [receipt.scope];
+    scopes = receiptScopes(receipt);
   }
   const allowed = allowedScopes(ctx.scopes);
   const missing = scopes.find(s => !allowed.includes(s));
   if (missing) throw new ToolError('forbidden', `Permission denied: ${tool.name}.${op.name} needs ${missing}.`);
   const { operation, ...params } = input;
   await op.preflight?.(params, ctx);
+  if (scopes.some(scope => DOMAIN_TABLES[scope])) {
+    queueAccountPairs(ctx.db);
+    queueCategoryChecks(ctx.db, { clock: resolveClock(ctx.db, ctx.clock ?? ctx.services?.config?.clock ?? ctx.config?.clock) });
+  }
   ctx.onProposal({ tool: tool.name, operation, args: params, scopes, basis: proposalBasis(ctx.db, tool.name, scopes, params) });
   // No argument values in the result: a tool result is grounding evidence, and a proposal must
   // never source its own amounts or dates.
@@ -176,7 +209,7 @@ export function claimProposal(db, { key, id, decision, scopes, at }) {
     if (decision === 'confirm') {
       const latest = db.prepare('SELECT max(id) AS id FROM messages WHERE conversation_key = ?').get(key).id;
       status = latest === row.id && !refusal(pending, scopes) && Array.isArray(pending.scopes)
-        && pending.scopes.every(s => pending.tool === 'undo' ? WRITE_SCOPES.includes(s) : TABLES[s])
+        && pending.scopes.every(s => pending.tool === 'undo' ? WRITE_SCOPES.includes(s) : TABLES[s] || DOMAIN_TABLES[s])
         && pending.basis === proposalBasis(db, pending.tool, pending.scopes, pending.args ?? {}) ? 'confirmed' : 'stale';
     }
     markProposal(db, row.id, status, at);
@@ -190,5 +223,7 @@ export function claimProposal(db, { key, id, decision, scopes, at }) {
 export async function executeProposal(pending, ctx) {
   const reason = refusal(pending, ctx.scopes);
   if (reason) throw new ToolError('forbidden', reason);
-  return callTool(pending.tool, { operation: pending.operation, ...(pending.args ?? {}) }, ctx);
+  const args = { operation: pending.operation, ...(pending.args ?? {}) };
+  if (pending.tool === 'update_account' && pending.operation === 'merge' && isExplicitYes(ctx.ownerText)) args.evidence = ctx.ownerText;
+  return callTool(pending.tool, args, ctx);
 }

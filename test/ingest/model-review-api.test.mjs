@@ -5,6 +5,7 @@ import { once } from 'node:events';
 import { fixture, recipe } from '../helpers/model-import.mjs';
 import { createSessionFixture } from '../helpers/server.mjs';
 import { applyLayout } from '../../src/ingest/model-layout.mjs';
+import { stageUpdate } from '../../src/ingest/model-updates.mjs';
 import { stageImport, reviewImport } from '../../src/ingest/model-review.mjs';
 import { createHandler } from '../../src/api/router.mjs';
 import { createAuthService } from '../../src/auth/service.mjs';
@@ -46,6 +47,21 @@ test('authenticated HTTP review guards, exact owner statement, versions, foreign
     const correction = await post(p.proposalId, { version: 1, decision: 'correct', evidence: 'Change the sign.' });
     assert.equal(correction.status, 200); assert.equal(correction.body.status, 'queued'); assert.equal(correction.body.version, 2);
     await assert.rejects(reviewImport({ ...x.ctx, scopes: [] }, { proposalId: p.proposalId, version: 2, decision: 'correct', evidence: 'yes' }), e => e.code === 'forbidden');
+    const note = await x.source('The payroll provider pays next Tuesday.', 'text');
+    const span = { fileId: note.fileId, sha256: note.sha256, byteStart: 0, byteEnd: note.bytes.length };
+    const update = stageUpdate({ ...x.ctx, actorId: session.user.id }, { source: note, capturedAt: '2032-03-02T14:00:00Z', actions: [
+      { tool: 'answer', operation: 'expected_transaction', span, args: { subject: 'payroll provider', direction: 'inflow', amount: null,
+        dueDate: '2032-03-09', datePrecision: 'day', relativeDate: 'next Tuesday', evidence: 'The payroll provider pays next Tuesday.' } },
+    ] });
+    assert.equal(x.db.prepare('SELECT count(*) n FROM expected_transactions').get().n, 0);
+    const committed = await post(update.proposalId, args);
+    assert.equal(committed.status, 200, JSON.stringify(committed.body));
+    assert.equal(x.db.prepare('SELECT count(*) n FROM expected_transactions').get().n, 1);
+    const undo = await fetch(base + '/api/actions/' + committed.body.receipt.id + '/undo', { method: 'POST', headers: {
+      'content-type': 'application/json', cookie: session.cookie, origin: config.publicUrl }, body: '{}' });
+    assert.equal(undo.status, 200, await undo.text());
+    assert.equal(x.db.prepare('SELECT count(*) n FROM expected_transactions').get().n, 0);
+    assert.equal(x.db.prepare('SELECT count(*) n FROM files WHERE id=?').get(note.fileId).n, 1);
   } finally {
     await new Promise(resolve => server.close(resolve)); runtimes.close(); x.close();
   }

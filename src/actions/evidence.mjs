@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { ownerTimezone } from '../shared/timezone.mjs';
+import { isoDate } from '../ingest/format.mjs';
 import { parseJson as parse } from '../store/db.mjs';
 import { ToolError } from '../tools/errors.mjs';
 import { checkGrounding } from '../engine/grounding.mjs';
@@ -107,8 +110,66 @@ function confirmedProposal(ctx, value, shape) {
     && typeof l.text === 'string' && previous.text.includes(l.text) && goalTextStates(value, previous.text, shape, l.text));
 }
 
-export function requireEvidence(ctx, value, { evidence, stored = [], shape, argument = 'value', household = false } = {}) {
-  const statements = ownerStatements(ctx);
+export function sourceStatement(ctx, span = ctx.sourceEvidence?.span) {
+  const input = ctx.sourceEvidence, source = input?.source;
+  if (!source || input.actorId !== ctx.actorId || !span || span.fileId !== source.fileId || span.sha256 !== source.sha256 ||
+    createHash('sha256').update(source.bytes).digest('hex') !== source.sha256 || !Number.isInteger(span.byteStart) ||
+    !Number.isInteger(span.byteEnd) || span.byteStart < 0 || span.byteEnd <= span.byteStart || span.byteEnd > source.bytes.length) {
+    throw new ToolError('bad_input', 'Invalid authenticated source span.');
+  }
+  try {
+    const decode = bytes => new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    decode(source.bytes.subarray(0, span.byteStart));
+    return decode(source.bytes.subarray(span.byteStart, span.byteEnd));
+  } catch { throw new ToolError('bad_input', 'Invalid UTF-8 source span.'); }
+}
+
+function evidenceStatements(ctx) {
+  if (!ctx.sourceEvidence) return ownerStatements(ctx);
+  const statements = [sourceStatement(ctx)];
+  const correction = ctx.sourceEvidence.correction;
+  if (correction?.actorId === ctx.actorId && typeof correction.evidence === 'string') statements.push(correction.evidence);
+  return statements;
+}
+
+export function relativeDateEvidence(ctx, phrase) {
+  const words = evidenceStatements(ctx);
+  const match = /^next (Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday)$/i.exec(phrase ?? '');
+  if (!match || !words.some(text => text.toLowerCase().includes(phrase.toLowerCase()))) throw new ToolError('bad_input', 'Use the stated relative date phrase as evidence.');
+  let captured = ctx.sourceEvidence ? ctx.sourceEvidence.capturedAt : ctx.now ?? Date.now();
+  const correction = ctx.sourceEvidence?.correction;
+  if (correction?.actorId === ctx.actorId && !sourceStatement(ctx).toLowerCase().includes(phrase.toLowerCase()) && correction.evidence.toLowerCase().includes(phrase.toLowerCase())) captured = correction.capturedAt;
+  if (!ctx.sourceEvidence && !ctx.ownerText && ctx.conversationKey) {
+    const row = ctx.db.prepare("SELECT ts, text, provenance FROM messages WHERE conversation_key=? AND role='me' ORDER BY id DESC").all(ctx.conversationKey)
+      .find(r => parse(r.provenance, null)?.ownerInput?.actorId === ctx.actorId && r.text.toLowerCase().includes(phrase.toLowerCase()));
+    captured = row?.ts ?? null;
+  }
+  if (captured == null) throw new ToolError('needs_date_anchor', 'What date was this note written?');
+  const timezone = ownerTimezone(ctx.db);
+  let anchor;
+  if (typeof captured === 'string' && isoDate(captured) === captured) anchor = captured;
+  else {
+    const instant = new Date(captured);
+    if (!Number.isFinite(instant.getTime())) throw new ToolError('bad_input', 'Invalid source date anchor.');
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(instant);
+    const get = key => parts.find(p => p.type === key).value;
+    anchor = `${get('year')}-${get('month')}-${get('day')}`;
+  }
+  const day = new Date(anchor + 'T12:00:00Z');
+  const weekday = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'].indexOf(match[1].toLowerCase());
+  day.setUTCDate(day.getUTCDate() + ((weekday - day.getUTCDay() + 7) % 7 || 7));
+  return { kind: 'relative_date', phrase, anchor, timezone, rule: 'next_weekday', date: day.toISOString().slice(0, 10),
+    ...(ctx.sourceEvidence ? { span: ctx.sourceEvidence.span } : {}) };
+}
+
+export function requireEvidence(ctx, value, { evidence, stored = [], shape, argument = 'value', household = false, derivation } = {}) {
+  const statements = evidenceStatements(ctx);
+  if (derivation) {
+    const expected = relativeDateEvidence(ctx, derivation.phrase);
+    if (derivation.kind === 'relative_date' && derivation.rule === expected.rule && derivation.anchor === expected.anchor &&
+      derivation.timezone === expected.timezone && derivation.date === expected.date && value === expected.date) return;
+    throw new ToolError('bad_input', 'Invalid derived date evidence.');
+  }
   const words = evidence ? statements.filter(s => s.includes(evidence)) : statements;
   if (household && typeof value === 'number') shape = { unit: argument === 'taxYear' ? 'year' : 'USD' };
   const same = v => JSON.stringify(v) === JSON.stringify(value);
