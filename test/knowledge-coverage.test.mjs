@@ -11,6 +11,7 @@ import { createRuntimeEngine } from '../src/engine/runtime.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
+import { callTool } from '../src/tools/index.mjs';
 import { ModelCallError } from '../src/engine/errors.mjs';
 
 const ID = 'coverage-plan';
@@ -90,6 +91,9 @@ test('a failed rebuild excludes older document knowledge, and an explicitly disa
   assert.equal(packs.entry('your-plans', '01-dental-coverage').title, 'Dental coverage');
   await buildYourPlans({ db, household, engine: scripted(runtime, 'extraction'), clock: CLOCK });
   assert.equal(packs.entry('your-plans', '01-dental-coverage'), null, 'an older successful build cannot silently supply a failed document');
+  const toolContext = { db, dataDir: household.root };
+  await assert.rejects(callTool('knowledge', { operation: 'entry', packId: 'your-plans', file: '01-dental-coverage.md' }, toolContext), error => error.code === 'not_found');
+  assert.equal((await callTool('knowledge', { operation: 'search', query: 'routine dental' }, toolContext)).total, 0);
   db.prepare("UPDATE packs_state SET active = 0 WHERE id = 'your-plans'").run();
   const engine = scripted(runtime);
   const answerer = createLiveAnswerer({ engine, packs, root: household.root, services: { engine, household, config: s.config } });
