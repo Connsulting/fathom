@@ -32,7 +32,7 @@ export function checkGoal(db, fields, id = null) {
   return valid(db, fields, true, parse(row.def, {}));
 }
 
-export function createGoal(db, fields, { now, onWrite } = {}) {
+export function createGoal(db, fields, { now, clock, onWrite } = {}) {
   return tx(db, () => {
     const value = valid(db, fields, false);
     if (db.prepare('SELECT count(*) n FROM goals').get().n >= 200) throw new ToolError('conflict', 'at most 200 goals');
@@ -42,14 +42,16 @@ export function createGoal(db, fields, { now, onWrite } = {}) {
     def.pace = PATH_KINDS.includes(def.kind) ? captureGoalPath(db, def, now.slice(0, 10)) : null;
     const sort = db.prepare('SELECT coalesce(max(sort), -1) + 1 s FROM goals').get().s;
     db.prepare("INSERT INTO goals (id, def, sort, origin, created_at, updated_at, archived_at, done_at) VALUES (?, ?, ?, 'owner', ?, ?, ?, ?)")
-      .run(id, JSON.stringify(def), sort, now, now, status === 'archived' ? now : null, status === 'done' ? now : null);
+      .run(id, JSON.stringify(def), sort, now, now, status === 'archived' || status === 'done' ? now : null, status === 'done' ? now : null);
+    // Fathom sets the calculator's target before the receipt sees the row, so Undo matches it.
+    adoptIn(db, { now, clock, only: id });
     const row = db.prepare('SELECT * FROM goals WHERE id = ?').get(id);
     onWrite?.(null, row);
     return row;
   });
 }
 
-export function updateGoal(db, id, fields, { now, onWrite } = {}) {
+export function updateGoal(db, id, fields, { now, clock, onWrite } = {}) {
   return tx(db, () => {
     const row = db.prepare('SELECT * FROM goals WHERE id = ?').get(id);
     if (!row) throw new ToolError('not_found', 'no such goal');
@@ -58,8 +60,18 @@ export function updateGoal(db, id, fields, { now, onWrite } = {}) {
     const value = valid(db, fields, true, previous);
     const { status, ...rest } = value;
     const def = defFor({ ...previous, ...rest, id }, kindOf({ ...previous, ...rest }));
-    // The owner changing a target Fathom set takes it over; clearing a target declines the suggestion.
-    if (def.adopted && !samePlan(previous, def)) delete def.adopted;
+    // The owner changing a target Fathom set takes it over (and a goal that is no longer a balance
+    // goal has no suggestion); a new date or tracking is kept on later passes, with the target still
+    // Fathom's. Clearing a target declines the suggestion.
+    if (def.adopted) {
+      if (def.kind !== 'balance' || (def.target ?? null) !== (previous.target ?? null)) delete def.adopted;
+      else {
+        const kept = new Set(Array.isArray(def.adopted.kept) ? def.adopted.kept : []);
+        if ((def.targetDate ?? null) !== (previous.targetDate ?? null)) kept.add('targetDate');
+        if (trackKey(def.track) !== trackKey(previous.track)) kept.add('track');
+        if (kept.size) def.adopted = { ...def.adopted, kept: [...kept].sort() };
+      }
+    }
     if (Number.isFinite(previous.target) && Object.hasOwn(fields, 'target') && fields.target == null) declineSuggestion(db, id);
     if (!PATH_KINDS.includes(def.kind)) def.pace = null;
     else if (!previous.pace || goalPathChanged(previous, def)) def.pace = captureGoalPath(db, def, now.slice(0, 10));
@@ -71,6 +83,7 @@ export function updateGoal(db, id, fields, { now, onWrite } = {}) {
     else if (status === 'archived') archivedAt = row.archived_at || now;
     db.prepare('UPDATE goals SET def = ?, updated_at = ?, archived_at = ?, done_at = ? WHERE id = ?')
       .run(JSON.stringify(def), now, archivedAt, doneAt, id);
+    adoptIn(db, { now, clock, only: id });
     const after = db.prepare('SELECT * FROM goals WHERE id = ?').get(id);
     onWrite?.(row, after);
     return after;
@@ -79,14 +92,14 @@ export function updateGoal(db, id, fields, { now, onWrite } = {}) {
 
 // ---------------------------------------------------------------- adopted targets
 // Fathom sets a suggested target by itself (src/suggest/build.mjs). The goal def records it as
-// adopted = {at, previous: {target, targetDate, track}, figure}: previous is what the owner had
-// before the first adoption (what Undo restores), figure the calc:targets figure the target came
-// from. A target Fathom set follows the calculator on later passes; one the owner typed never
+// adopted = {at, previous: {target, targetDate, track}, figure, kept?}: previous is what the owner
+// had before the first adoption (what Undo restores), figure the calc:targets figure the target came
+// from, kept the fields the owner changed since (targetDate, track), which later passes and Undo
+// leave as the owner set them. A target Fathom set follows the calculator on later passes; one the owner typed never
 // changes. Undo restores previous and declines the suggestion: settings 'goals.suggestions'
 // {<goalId>: {declined: true}}, and a declined suggestion is never adopted again.
 
 const trackKey = t => JSON.stringify(t && Array.isArray(t.accounts) ? { accounts: [...t.accounts].sort() } : t && t.figure ? { figure: t.figure } : null);
-const samePlan = (a, b) => (a.target ?? null) === (b.target ?? null) && (a.targetDate ?? null) === (b.targetDate ?? null) && trackKey(a.track) === trackKey(b.track);
 
 function suggestSettings(db) {
   const stored = getSetting(db, SUGGEST_SETTING, null);
@@ -109,28 +122,38 @@ function writeDef(db, row, previous, def, now) {
 // The planner pass: adopt every live suggestion that is not declined, and move a target Fathom set
 // to the calculator's current value. Returns the ids of the goals it changed.
 export function adoptSuggestions(db, { now, clock } = {}) {
-  return tx(db, () => {
-    const settings = suggestSettings(db);
-    const goals = loadGoals(db).map(g => (g.adopted ? { ...g, target: null } : g));
-    const { suggestions, figures } = buildSuggestions(db, { clock, goals });
-    const changed = [];
+  return tx(db, () => adoptIn(db, { now, clock }));
+}
+
+// The pass itself, inside the caller's transaction; `only` limits it to one goal.
+function adoptIn(db, { now, clock, only = null }) {
+  const settings = suggestSettings(db);
+  const goals = loadGoals(db).filter(g => only === null || g.id === only).map(g => (g.adopted ? { ...g, target: null } : g));
+  const { suggestions, figures } = buildSuggestions(db, { clock, goals });
+  const changed = [];
+  {
     for (const rec of suggestions) {
       if (rec.state !== 'suggested' || !rec.accept || settings[rec.goalId]?.declined) continue;
       const row = db.prepare('SELECT * FROM goals WHERE id = ?').get(rec.goalId);
       const previous = parse(row.def, {});
       const a = rec.accept;
-      const plan = { target: a.target, targetDate: a.targetDate ?? null, track: a.track ?? null };
-      if (previous.adopted && samePlan(previous, plan)) continue;
+      const kept = previous.adopted && Array.isArray(previous.adopted.kept) ? previous.adopted.kept : [];
+      const plan = {
+        target: a.target,
+        targetDate: kept.includes('targetDate') ? previous.targetDate ?? null : a.targetDate ?? null,
+        track: kept.includes('track') ? previous.track ?? null : a.track ?? null,
+      };
+      if (previous.adopted && (previous.target ?? null) === plan.target && (previous.targetDate ?? null) === plan.targetDate && trackKey(previous.track) === trackKey(plan.track)) continue;
       const before = previous.adopted ? previous.adopted.previous
         : { target: previous.target ?? null, targetDate: previous.targetDate ?? null, track: previous.track ?? null };
-      const def = { ...previous, ...plan, adopted: { at: now, previous: before, figure: figures[`suggest.${rec.goalId}.target`] ?? null } };
+      const def = { ...previous, ...plan, adopted: { at: now, previous: before, figure: figures[`suggest.${rec.goalId}.target`] ?? null, ...(kept.length ? { kept } : {}) } };
       if (def.track === null) delete def.track;
       if (def.targetDate === null) delete def.targetDate;
       writeDef(db, row, previous, def, now);
       changed.push(rec.goalId);
     }
-    return changed;
-  });
+  }
+  return changed;
 }
 
 // Undo: the goal's values from before Fathom set its target, and the suggestion declined.
@@ -141,7 +164,10 @@ export function undoAdoption(db, id, { now } = {}) {
     const previous = parse(row.def, {});
     if (!previous.adopted) throw new ToolError('conflict', 'Fathom did not set this target, so there is nothing to undo');
     const p = previous.adopted.previous || {};
-    const def = { ...previous, target: p.target ?? null, targetDate: p.targetDate ?? null, track: p.track ?? null };
+    // A date or tracking the owner changed after adoption stays theirs.
+    const kept = Array.isArray(previous.adopted.kept) ? previous.adopted.kept : [];
+    const def = { ...previous, target: p.target ?? null };
+    for (const k of ['targetDate', 'track']) def[k] = kept.includes(k) ? previous[k] ?? null : p[k] ?? null;
     delete def.adopted;
     for (const k of ['target', 'targetDate', 'track']) if (def[k] === null) delete def[k];
     writeDef(db, row, previous, def, now);

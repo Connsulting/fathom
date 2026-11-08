@@ -11,8 +11,8 @@
 // GET  /api/goals/suggestions                                                     -> {clock, suggestions}
 // POST /api/goals/:id/suggestion  {action: 'undo'}: undo a target Fathom set, declining it  -> {scenario}
 //
-// Every goal write ends with the adoption pass (src/goals/write.mjs adoptSuggestions): a goal with
-// no target gets the calculator's, recorded as set by Fathom.
+// Every goal write runs the adoption pass for that goal (src/goals/write.mjs): a goal with no
+// target gets the calculator's, recorded as set by Fathom.
 //
 // Owner goal text is stored as typed (trimmed) and rendered escaped, never token-resolved. A seed
 // goal (the demo's) can be archived or deleted, not edited: its text carries scenario tokens.
@@ -39,8 +39,7 @@ const goalOut = (scenario, id) => scenario.goals.find(g => g.id === id) || null;
 
 export function goalCreate(ctx) {
   try {
-    const row = createGoal(ctx.db, ctx.body, { now: stamp(ctx) });
-    adopt(ctx);
+    const row = createGoal(ctx.db, ctx.body, { now: stamp(ctx), clock: ctx.config && ctx.config.clock });
     const scenario = scenarioOf(ctx);
     return { scenario, goal: goalOut(scenario, row.id) };
   } catch (e) { if (e instanceof ToolError) throw toolHttp(e); throw e; }
@@ -48,8 +47,7 @@ export function goalCreate(ctx) {
 
 export function goalUpdate(ctx) {
   try {
-    const row = updateGoal(ctx.db, ctx.params.id, ctx.body, { now: stamp(ctx) });
-    adopt(ctx);
+    const row = updateGoal(ctx.db, ctx.params.id, ctx.body, { now: stamp(ctx), clock: ctx.config && ctx.config.clock });
     const scenario = scenarioOf(ctx);
     return { scenario, goal: goalOut(scenario, row.id) };
   } catch (e) { if (e instanceof ToolError) throw toolHttp(e); throw e; }
