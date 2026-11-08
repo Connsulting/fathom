@@ -1,3 +1,5 @@
+import { staleAccountIds } from '../../core/account-freshness.js';
+
 /* Home view model: goals first, pace per goal, the next action per goal, one data-health line.
    Pure functions over the scenario (pace, goals, recs, suggestions, ingest, accounts); no DOM and no api, so
    node can import it. Every number it returns is a count or a ratio of stored figures. */
@@ -317,7 +319,7 @@ export function windowSpan(w) {
 export function healthLine({ pace, ingest, accounts, metaDataThrough } = {}) {
   const dataThrough = typeof pace?.rollup?.dataThrough === 'string' && shortDate(pace.rollup.dataThrough) ? pace.rollup.dataThrough : null;
   const dataLabel = dataThrough ? `Data through ${shortDate(dataThrough)}` : metaDataThrough ? `Data through ${metaDataThrough}` : 'No data yet';
-  const staleAccounts = arr(accounts).filter((a) => a?.fresh === 'stale').length;
+  const staleAccounts = staleAccountIds(arr(accounts)).length;
   const staleGoals = included(pace).filter((g) => g.stale).length;
   const pending = Math.max(0, Number(ingest?.pending) || 0);
   const failed = arr(ingest?.files).filter((x) => x?.status === 'failed').length;

@@ -95,7 +95,7 @@ import { needsYou as needsYouOf, packStatus } from '/shared/rules.mjs';
 import { isOwner } from '/shared/rec-links.mjs';
 import { ROUTES, LAST_STEP, movedRoute, onboardStepOf } from '/shared/route-moves.mjs';
 
-const PARAM_KEY = { rec: 'id', onboarding: 'step', wargame: 'name', packs: 'id', ask: 'id', account: 'id', pnl: 'state', pnlrows: 'id' };
+const PARAM_KEY = { confirm: 'id', rec: 'id', onboarding: 'step', wargame: 'name', packs: 'id', ask: 'id', account: 'id', pnl: 'state', pnlrows: 'id' };
 // Routes whose param is a URLSearchParams string: kept as written in the hash ('=', '&' and the
 // string's own percent escapes literal), never decoded as one value.
 const QUERY_PARAM = new Set(['pnl', 'pnlrows']);
@@ -269,6 +269,7 @@ function normalizeRoute(r) {
   if (r.name === 'rec') return p.id && rawRec(String(p.id)) ? { name: 'rec', params: { id: String(p.id) } } : { name: 'plan', params: {} };
   // The account dialog is a route like the rec dialog; an account that is gone lands on Money.
   if (r.name === 'account') return p.id && arr(S && S.accounts).some(a => a.id === String(p.id)) ? { name: 'account', params: { id: String(p.id) } } : { name: 'money', params: {} };
+  if (r.name === 'confirm') return p.id && /^[1-9]\d*$/.test(String(p.id)) ? { name: 'confirm', params: { id: String(p.id) } } : { name: 'confirm', params: {} };
   if (r.name === 'ask') return p.id && rawThread(String(p.id)) ? { name: 'ask', params: { id: String(p.id) } } : { name: 'ask', params: {} };
   if (r.name === 'packs') return p.id && rawPack(String(p.id)) ? { name: 'packs', params: { id: String(p.id) } } : { name: 'packs', params: {} };
   // The P&L keeps its sort and filter as one state string; its rows dialog needs a spec.

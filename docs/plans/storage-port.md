@@ -15,7 +15,8 @@ change a deployed store, file issues or dispatch implementation.
 2. Scheduler and model-budget work changes precisely these callers. MT-04 is
    still open as PR #111 at the inspected base; MT-05 is PR #125. IMP-1 and IMP-2
    merged, including migrations 029 and 030. Refresh before dispatch. Household
-   migration 031 is next free here, not reserved; platform numbering is separate.
+   migrations are numbered in merge order. The next free number follows the
+   highest file in `src/store/migrations`; platform numbering is separate.
 3. Postgres is an optional external service. Its availability, volume, secrets,
    TLS and operator backup custody are deployment prerequisites, not a reason to
    make local development depend on it. This spec authorizes no deployment.

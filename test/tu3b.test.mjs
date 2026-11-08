@@ -10,6 +10,7 @@ import * as missing from '../src/jobs/triggers/missing-data.mjs';
 import * as steps from '../web/horizon/screens/rec-steps.js';
 import { createScheduler } from '../src/jobs/scheduler.mjs';
 import { createJobDispatcher } from '../src/jobs/dispatch.mjs';
+import { planRun } from './helpers/plan.mjs';
 import { householdArg } from '../src/platform/cli.mjs';
 
 const clock = '2026-11-05';
@@ -133,4 +134,36 @@ test('shutdown of work queued behind occupied dispatcher slots is bounded and ne
   assert.equal((await live.runNow('plan')).status, 'ok');
   assert.equal(calls, 1);
   await live.stop();
+});
+
+test('the first planner run links a newly created ledger confirmation and readback follows replacements', async t => {
+  const { db } = await store(t);
+  for (const category of ['Medical', 'Shopping', 'Groceries', 'HSA', 'Dining']) {
+    db.prepare('INSERT INTO pnl_lines (entity, period, category, amount) VALUES (?, ?, ?, ?)').run('Synthetic ledger', '2026-10', category, -100);
+  }
+  await planRun(db, { now: clock });
+  const item = db.prepare("SELECT id FROM confirm_items WHERE kind = 'fact_check' AND status = 'pending'").get();
+  assert.ok(item);
+  let sc = buildScenario(db, { clock });
+  const step = () => sc.recs.find(r => r.id === 'missing-data').tasks.find(t => t.kind === 'confirm');
+  assert.equal(step().confirmId, item.id);
+  assert.equal(step().link, 'confirm');
+  const old = db.prepare('SELECT * FROM confirm_items WHERE id = ?').get(item.id);
+  db.prepare("UPDATE confirm_items SET status = 'answered', answer = 'superseded' WHERE id = ?").run(item.id);
+  const replacement = db.prepare("INSERT INTO confirm_items (kind, subject, question, options, context, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?) RETURNING id")
+    .get(old.kind, 'replacement-ledger', old.question, old.options, old.context, old.created_at);
+  sc = buildScenario(db, { clock });
+  assert.equal(step().confirmId, replacement.id);
+});
+
+test('a connection mapping without newer account data cannot make that account fresh', async t => {
+  const { db } = await store(t);
+  seedAccounts(db);
+  db.prepare("INSERT INTO simplefin_connection (id, access_blob, connected_at) VALUES (1, 'synthetic', '2026-11-04')").run();
+  db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at) VALUES ('synthetic-key', 'stale-account', 'mapped', 'Synthetic', '2026-11-04')").run();
+  const sc = buildScenario(db, { clock });
+  assert.equal(sc.accounts.find(a => a.id === 'stale-account').fresh, 'stale');
+  assert.equal(healthLine({ accounts: sc.accounts }).staleAccounts, 1);
+  const data = loadPlanningData(db, clock);
+  assert.deepEqual(missing.items(context(data)).find(i => i.code === 'balances').accountIds, ['stale-account']);
 });

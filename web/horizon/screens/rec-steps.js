@@ -34,12 +34,13 @@ function control(r, t, i) {
     return `<span class="h-ing-ctl"><button type="button" class="h-btn sm" data-upload-open="1" aria-label="${esc(`Upload ${t.noun || 'a file'}`)}">Upload</button><input type="file" multiple data-upload="1" hidden tabindex="-1"></span>`;
   }
   if (t.fact) return `<button type="button" class="h-btn sm" data-step-answer="${rid}" data-fact="${esc(t.fact)}">Answer</button>`;
-  return goLink(r, t.link || 'ask');
+  return goLink(r, t.link || 'ask', t.confirmId);
 }
 
-function goLink(r, link) {
+function goLink(r, link, confirmId) {
   const { esc } = H;
   if (link === 'ask') return `<button type="button" class="h-btn sm" data-ask-next="${esc(r.id)}">Ask about it</button>`;
+  if (link === 'confirm' && Number.isSafeInteger(confirmId) && confirmId > 0) return `<a class="h-btn sm" href="#/confirm/${confirmId}" data-go="confirm" data-id="${confirmId}">Open Confirm</a>`;
   const page = { upload: ['add', 'Open Files'], confirm: ['confirm', 'Open Confirm'], accounts: ['money', 'Open Accounts'] }[link];
   return page ? `<a class="h-btn sm" href="#/${page[0]}" data-go="${page[0]}">${page[1]}</a>` : '';
 }
