@@ -330,9 +330,9 @@ test('addButtonHtml works for every kind', () => {
   }
 });
 
-test('routeContext: the P&L route names the entity on screen (view.pnl), else the P&L page', () => {
+test('routeContext: the P&L route names the page and then the entity on screen (view.pnl), else the P&L page', () => {
   assert.deepEqual(routeContext({ name: 'pnl', params: {} }, { view: { pnl: { id: 'entity:fieldandfern', label: 'Field and Fern' } } }),
-    { route: 'pnl', kind: 'pnl', id: 'entity:fieldandfern', title: 'Field and Fern', label: 'Money > Field and Fern', q: '' });
+    { route: 'pnl', kind: 'pnl', id: 'entity:fieldandfern', title: 'Field and Fern', label: 'Money > P&L > Field and Fern', q: '' });
   assert.deepEqual(routeContext({ name: 'pnl', params: {} }, { view: { pnl: null } }),
     { route: 'pnl', kind: 'page', id: 'pnl', title: 'P&L', label: 'Money > P&L', q: '' });
   assert.deepEqual(routeContext({ name: 'pnl', params: {} }, {}),
@@ -349,9 +349,9 @@ const shown = (r, view, extra = {}) => {
 
 test('routeContext view: a P&L entity with a selected month names the month and qualifies the id', () => {
   assert.deepEqual(shown(route('pnl'), { pnl: { id: 'entity:studio', label: 'Studio LLC' }, month: '2026-03' }),
-    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, March 2026', q: 'month=2026-03' });
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > P&L > Studio LLC, March 2026', q: 'month=2026-03' });
   assert.deepEqual(shown(route('pnl'), { pnl: { id: 'entity:studio', label: 'Studio LLC' }, month: '2025-12' }),
-    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, December 2025', q: 'month=2025-12' });
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > P&L > Studio LLC, December 2025', q: 'month=2025-12' });
 });
 
 test('routeContext view: household P&L reads Money > P&L, March 2026', () => {
@@ -409,14 +409,14 @@ test('routeContext view: each route keeps only the view fields it owns', () => {
   };
   assert.deepEqual(shown(route('money'), all), { kind: 'money', id: 'overview', label: 'Money > Overview, last 3 months', q: 'range=3M' });
   assert.deepEqual(shown(route('pnl'), all),
-    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, March 2026, housing left out', q: 'month=2026-03;housing=off' });
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > P&L > Studio LLC, March 2026, housing left out', q: 'month=2026-03;housing=off' });
   // The P&L rows dialog sits over the P&L and keeps its fields.
   assert.deepEqual(shown(route('pnlrows'), all),
-    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, March 2026, housing left out', q: 'month=2026-03;housing=off' });
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > P&L > Studio LLC, March 2026, housing left out', q: 'month=2026-03;housing=off' });
   assert.deepEqual(shown(route('pnl'), { ...all, filters: [{ key: 'type', value: 'income' }] }),
-    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, March 2026, income only', q: 'month=2026-03;type=income' });
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > P&L > Studio LLC, March 2026, income only', q: 'month=2026-03;type=income' });
   assert.deepEqual(shown(route('pnl'), { ...all, filters: [{ key: 'type', value: 'all' }] }),
-    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, March 2026', q: 'month=2026-03' });
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > P&L > Studio LLC, March 2026', q: 'month=2026-03' });
   assert.deepEqual(shown(route('home'), all), { kind: 'page', id: 'home', label: 'Home, my actions', q: 'owner=me' });
   assert.deepEqual(shown(route('goals'), all), { kind: 'goal', id: 'g_synth', label: 'Home > Goals > Synthetic reserve', q: '' });
   // The account dialog over Money: the trend range of the page beneath is not the dialog's.
@@ -471,7 +471,7 @@ test('routeContext view: the Ask page still has no page chip', () => {
 
 test('chipPayload appends @q to the id when the chip has a nonempty q', () => {
   assert.deepEqual(chipPayload([
-    { kind: 'pnl', id: 'entity:studio', label: 'Money > Studio LLC, March 2026', q: 'month=2026-03' },
+    { kind: 'pnl', id: 'entity:studio', label: 'Money > P&L > Studio LLC, March 2026', q: 'month=2026-03' },
     { kind: 'money', id: 'overview', q: 'range=1Y' },
     { kind: 'page', id: 'home', q: '' },
     { kind: 'account', id: 'acc_plain', q: 7 },

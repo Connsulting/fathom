@@ -31,7 +31,7 @@ const scenarioAccount = async (request, id) => (await (await request.get('/api/s
 const posted = (page, path) => page.waitForResponse((r) => new URL(r.url()).pathname === path && r.request().method() === 'POST');
 
 async function openFromAccounts(page, id) {
-  await gotoRoute(page, 'accounts');
+  await gotoRoute(page, 'money');
   await accountRow(page, id).locator('.h-acc-m').click();
   await expect(recDialog(page)).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`#/account/${id}$`));
@@ -108,7 +108,7 @@ async function addLastFour(page, request) {
   await expect(dlg.locator('.h-ad-last4')).toHaveText('Last 4 1234');
   await expect(dlg.locator('[data-ad="mask-open"]')).toHaveCount(0);
   await expect(accountRow(page, A).locator('.h-acc-name')).toHaveText(`${A_NAME} (1234)`);
-  await gotoRoute(page, 'accounts');
+  await gotoRoute(page, 'money');
   await expect(accountRow(page, A).locator('.h-acc-name')).toHaveText(`${A_NAME} (1234)`);
 }
 
