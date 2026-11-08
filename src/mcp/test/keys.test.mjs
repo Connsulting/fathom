@@ -61,7 +61,7 @@ describe('constants and scopes', () => {
   test('prefix and scope list', () => {
     assert.equal(KEY_PREFIX, 'fathom_');
     assert.deepEqual([...SCOPES], ['read', 'write:recs', 'write:preferences', 'write:facts', 'write:steps', 'write:goals',
-      'write:accounts', 'write:categories', 'write:confirm', 'write:imports', 'write:jobs', 'write:decisions']);
+      'write:accounts', 'write:categories', 'write:confirm', 'write:imports', 'write:jobs', 'write:decisions', 'write:sources']);
   });
 
   test('keys accept and retain every new write scope without widening older keys', () => {
