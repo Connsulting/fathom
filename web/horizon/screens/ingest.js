@@ -723,8 +723,9 @@ export function ingestScreens(h) {
     const ctl = fin
       ? `<p class="h-decided-final">${esc(fin)}</p>`
       : btn('Undo', `data-decided-undo="${esc(id)}"${st.undoing[id] ? ' disabled' : ''}`, 'ghost');
-    const ev = evidenceText(d.evidence);
-    const why = t ? `Fathom's categorization.${ev ? ` ${ev}` : ''}` : ev;
+    const ev = evidenceText(d.evidence).trim();
+    const repeatsLabel = ev.replace(/[.!?]+$/, '').trim().toLowerCase() === CAT_LABEL.toLowerCase();
+    const why = t ? `${CAT_LABEL}.${ev && !repeatsLabel ? ` ${ev}` : ''}` : ev;
     const amount = t ? cash(t.amount) : '';
     const when = t ? dateText(t.date) : '';
     const side = amount || when ? `<div class="h-decided-s">${amount ? `<span class="h-decided-amt">${esc(amount)}</span>` : ''}${when ? `<span>${esc(when)}</span>` : ''}</div>` : '';
