@@ -1,16 +1,35 @@
+import { isDeepStrictEqual } from 'node:util';
 import { archiveGoal, deleteGoal } from '../../goals/write.mjs';
 import { setCurvePositions } from '../../goals/curve.mjs';
 import { setGoalSuggestion } from '../../suggest/write.mjs';
 import { buildSuggestions, SUGGEST_SETTING } from '../../suggest/build.mjs';
-import { checkAssumption } from '../assumption-evidence.mjs';
 import { requireActor, saveReceipt, registerReceiptKind } from '../../actions/receipts.mjs';
 import { clockOf } from './figures.mjs';
 import { goalStatusOf } from '../../shared/goals.mjs';
+import { ToolError } from '../errors.mjs';
 
 registerReceiptKind('goal_row', { table: 'goals', pk: 'id' });
 const id = { type: 'string', minLength: 1 };
-const assumption = { type: 'object', properties: { value: { type: 'number' }, source: { type: 'string', enum: ['owner', 'preference', 'fact', 'default'] },
-  evidence: { type: 'string' }, factKey: { type: 'string' }, preferenceId: { type: 'string' }, note: { type: 'string', maxLength: 200 } }, required: ['value', 'source'], additionalProperties: false };
+const same = (a, b) => isDeepStrictEqual(JSON.parse(JSON.stringify(a ?? null)), b);
+const changed = () => { throw new ToolError('conflict', 'This item changed since that action. Ask for a new change instead.'); };
+function restoreRow(db, table, pk, id, row) {
+  if (!row) { db.prepare(`DELETE FROM ${table} WHERE ${pk} = ?`).run(id); return; }
+  const keys = Object.keys(row);
+  db.prepare(`INSERT INTO ${table} (${keys.join(',')}) VALUES (${keys.map(() => '?').join(',')})
+    ON CONFLICT(${pk}) DO UPDATE SET ${keys.filter(k => k !== pk).map(k => `${k} = excluded.${k}`).join(',')}`).run(...keys.map(k => row[k]));
+}
+registerReceiptKind('goal_suggestion', { restore(ctx, { id, before, after }) {
+  const goal = ctx.db.prepare('SELECT * FROM goals WHERE id = ?').get(id) ?? null;
+  const setting = ctx.db.prepare('SELECT * FROM settings WHERE key = ?').get(SUGGEST_SETTING) ?? null;
+  if (!same({ goal, setting }, after)) changed();
+  restoreRow(ctx.db, 'goals', 'id', id, before.goal);
+  restoreRow(ctx.db, 'settings', 'key', SUGGEST_SETTING, before.setting);
+} });
+registerReceiptKind('curve_preferences', { restore(ctx, { after }) {
+  for (const row of after) if (!same(ctx.db.prepare('SELECT * FROM preferences WHERE id = ?').get(row.id), row)) changed();
+  for (const row of after) ctx.db.prepare('DELETE FROM preferences WHERE id = ?').run(row.id);
+} });
+
 
 function writing(ctx, { scope, kind, id: entityId, label }, fn) {
   requireActor(ctx);
@@ -42,22 +61,31 @@ export const operations = [
         onWrite => deleteGoal(ctx.db, args.id, { ownerOnly: true, onWrite }));
       return { deleted: args.id, receipt };
     } },
-  { tool: 'update_goal', name: 'suggestion', scope: 'write:goals', summary: 'Dismiss or restore a suggestion, or set a sourced withdrawal rate.',
-    route: 'Change a suggested goal target', routes: ['POST /api/goals/:id/suggestion'],
-    params: { id, action: { type: 'string', enum: ['dismiss', 'restore'] }, withdrawalRate: assumption }, required: ['id'],
+  { tool: 'update_goal', name: 'suggestion', scope: 'write:goals', summary: 'Undo a target Fathom set and decline it so automatic passes cannot adopt it again.',
+    route: 'Undo a target Fathom set', routes: ['POST /api/goals/:id/suggestion'],
+    params: { id, action: { type: 'string', enum: ['undo'] } }, required: ['id', 'action'],
     handler({ id: goalId, ...args }, ctx) {
-      if (args.withdrawalRate !== undefined) args.withdrawalRate = checkAssumption(args.withdrawalRate,
-        { name: 'withdrawalRate', unit: 'ratio', min: 0.02, max: 0.06 }, ctx).value;
-      const { result, receipt } = writing(ctx, { scope: 'write:goals', kind: 'setting', id: SUGGEST_SETTING, label: 'Goal suggestion' },
-        onWrite => setGoalSuggestion(ctx.db, goalId, args, { clock: clockOf(ctx), onWrite }));
-      return { suggestion: result, receipt };
+      requireActor(ctx);
+      let receipt;
+      setGoalSuggestion(ctx.db, goalId, args, { now: new Date(ctx.now ?? Date.now()).toISOString(), onWrite(before, after) {
+        receipt = saveReceipt(ctx, { scope: 'write:goals', kind: 'goal_suggestion', id: goalId, label: 'Undo Fathom target', before, after,
+          from: { adopted: true }, to: { adopted: false, declined: true } });
+      } });
+      ctx.onReceipt?.(receipt);
+      return { suggestion: { goalId, adopted: false, declined: true }, receipt };
     } },
-  { tool: 'update_preferences', name: 'curve', scope: 'write:preferences', summary: 'Set one to twenty known tradeoff axes between zero and one.',
+  { tool: 'update_preferences', name: 'curve', scope: 'write:preferences', summary: 'Remember positions on known tradeoff axes between zero and one.',
     route: 'Change tradeoff curve positions', routes: ['POST /api/curve'],
     params: { positions: { type: 'object', minProperties: 1, maxProperties: 20, additionalProperties: { type: 'number', minimum: 0, maximum: 1 } } }, required: ['positions'],
     handler(args, ctx) {
-      const { result, receipt } = writing(ctx, { scope: 'write:preferences', kind: 'setting', id: 'curve.positions', label: 'Tradeoff curve' },
-        onWrite => setCurvePositions(ctx.db, args.positions, { onWrite }));
-      return { positions: result, receipt };
+      const actorId = requireActor(ctx);
+      let receipt;
+      const positions = setCurvePositions(ctx.db, args.positions, { now: new Date(ctx.now ?? Date.now()).toISOString(), actorId,
+        conversationKey: ctx.conversationKey, origin: ctx.channel === 'ask' ? 'ask' : 'you', onWrite(before, after) {
+          receipt = saveReceipt(ctx, { scope: 'write:preferences', kind: 'curve_preferences', id: actorId, label: 'Tradeoff curve',
+            before, after, from: null, to: args.positions });
+        } });
+      ctx.onReceipt?.(receipt);
+      return { positions, receipt };
     } },
 ];

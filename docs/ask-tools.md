@@ -1001,7 +1001,9 @@ data. Progress label "Saving your goal". Scope: `write:goals`.
 | edit | `id` plus any changed field above | the `edit_goal` result, unchanged | `goal` (existing) | live `edit_goal` |
 | archive | `id` | `{ goal: { id, archived: true }, receipt }` | `goal` | planned `archive_goal` |
 | delete | `id` (the owner's own goals only, as the route allows) | `{ deleted: id, receipt }` | `goal_row`, restore reinserts every column | planned `delete_goal` |
-| suggestion | `id`, exactly one of `action` (`dismiss`, `restore`) or `withdrawalRate` (Assumption, 0.02..0.06) | `{ suggestion: { goalId, dismissed, withdrawalRate }, receipt }` | `setting` | planned `set_goal_suggestion` |
+| suggestion | `id`, `action` (`undo`) | `{ suggestion: { goalId, adopted: false, declined: true }, receipt }` | `goal_suggestion`, restores the goal and decline state | planned `set_goal_suggestion` |
+
+SX3 reconciliation: Fathom adopts calculator targets automatically. `suggestion` undoes that adoption and marks it declined, so automatic passes never adopt it again. Withdrawal-rate changes use `update_preferences.remember`.
 
 Tickets: C1 for `create` and `edit`, C9 for the rest. The consolidated tool is deliberately not
 named `edit_goal`, so no live name keeps a new meaning. Writes move into `src/goals/write.mjs`
@@ -1043,7 +1045,9 @@ on its tradeoff curves. Progress label "Saving your preference". Scope: `write:p
 | save_definition | `definitionId` (slug 2..40, not a built-in), `name` (1..60), `def` (`{ include?: Selector, exclude?: Selector }`), `evidence` | `{ definition: { id, name, def, preferenceId }, receipt }`; at most 50 saved | `spending_definition`, restore puts back both rows as they were or removes both | planned `save_spending_definition` |
 | delete_definition | `definitionId` (built-ins refused) | `{ deleted, receipt }` | `spending_definition` | planned `delete_spending_definition` |
 | pack | `packId`, `active` (idempotent, unlike the toggle route) | `{ pack: { id, status }, wasActive, receipt }` | `pack_active`, restore sets `wasActive` back (the toggle also hides and unhides recs) | planned `set_pack_active` |
-| curve | `positions` (`{ [axisId]: 0..1 }`, 1..20 axes) | `{ positions, receipt }` | `setting` | planned `set_curve_position` |
+| curve | `positions` (`{ [axisId]: 0..1 }`, 1..20 axes) | `{ positions, receipt }` | `curve_preferences`, removes the remembered positions it wrote | planned `set_curve_position` |
+
+Curve writes create remembered preferences naming the axis end and its numeric position. `rememberedCurve` reads those same preferences, with ordinary end-label memories and negation handling preserved; the tool never writes a second position store. Undo removes only the preferences from that action.
 
 Tickets: C1 for `remember`, C9 for `curve`, C10 for the rest. Definition linkage, pinned (C10):
 
@@ -1973,7 +1977,7 @@ Test command: `node --test test/tools-account-writes.test.mjs test/tools-categor
 
 Size: about 550 production lines, 600 test lines.
 
-Depends on: C2, C3 (the Assumption validation `update_goal.suggestion` uses for `withdrawalRate`).
+Depends on: C2. Reconciled with SX3: suggested targets are adopted automatically, Undo restores prior values and declines them, and rates come from remembered preferences.
 
 Files: `src/decisions/write.mjs` (new), `src/store/recs.mjs` (`detachRecThreads`),
 `src/goals/write.mjs` (new), `src/goals/curve.mjs` (`setCurvePositions`),
@@ -1994,7 +1998,7 @@ Done when:
    the rec; `checkin` undoes; the other three return `undo.available: false` with the reasons in
    section 3. Verified by `test/tools-advisor-writes.test.mjs`.
 3. `update_goal.archive`, `delete` and `suggestion` and `update_preferences.curve` match their
-   routes and undo (`delete` restores every column); `goals.suggestions` returns what
+   routes and undo (`delete` restores every column). Suggestion Undo declines a Fathom-set target; curve positions are remembered preferences read by the Goals screen. `goals.suggestions` returns what
    `GET /api/goals/suggestions` returns. Verified by `test/tools-goal-writes.test.mjs`.
 
 Test command: `node --test test/tools-rec-writes.test.mjs test/tools-advisor-writes.test.mjs test/tools-goal-writes.test.mjs test/goals.test.mjs test/rec-threads.test.mjs test/tools-parity.test.mjs test/tools-registry.test.mjs && npm run eval:ask`

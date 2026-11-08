@@ -211,10 +211,10 @@ test('status done and open mark a goal done and reopen it', async t => {
   const done = goalUpdate(s.ctx({ status: 'done' }, { id: g.id }));
   assert.equal(done.goal.status, 'done');
   assert.ok(done.goal.doneAt, 'doneAt is the done time');
-  assert.equal(done.goal.archived, false);
+  assert.equal(done.goal.archived, true, 'a done goal archives itself');
   const doneRow = rowOf(s.db, g.id);
   assert.ok(doneRow.done_at, 'done_at is set');
-  assert.equal(doneRow.archived_at, null);
+  assert.ok(doneRow.archived_at, 'archived_at is set too');
   assert.equal(Object.hasOwn(JSON.parse(doneRow.def), 'status'), false, 'status is a column, not def text');
   assert.ok(done.scenario.goals.some(x => x.id === g.id && x.status === 'done'), 'a done goal stays in the scenario goals');
   assert.ok(!done.scenario.pace.goals.some(p => p.id === g.id), 'a done goal leaves pace');
@@ -238,9 +238,9 @@ test('status done and open mark a goal done and reopen it', async t => {
   assert.equal(archived.goal.archived, true);
   assert.ok(rowOf(s.db, g.id).archived_at);
   goalUpdate(s.ctx({ status: 'done' }, { id: g.id }));
-  assert.equal(rowOf(s.db, g.id).archived_at, null, 'done clears archived');
-  assert.equal(goalArchive(s.ctx({}, { id: g.id })).goal.status, 'archived', 'a done goal that is archived reads archived');
-  assert.equal(goalArchive(s.ctx({ archived: false }, { id: g.id })).goal.status, 'done', 'restoring it returns it to done');
+  assert.ok(rowOf(s.db, g.id).archived_at, 'done keeps it archived');
+  assert.equal(goalArchive(s.ctx({}, { id: g.id })).goal.status, 'done', 'a done goal that is archived reads done');
+  assert.equal(goalArchive(s.ctx({ archived: false }, { id: g.id })).goal.status, 'open', 'restoring it reopens it');
 
   // Seed goals stay non-editable, status included.
   rejects(() => goalUpdate(s.ctx({ status: 'done' }, { id: 'reserve' })), 409, /demo/);

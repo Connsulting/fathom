@@ -537,8 +537,16 @@ export function loadGoals(db, { fig = {}, accounts = [] } = {}) {
     delete g.progress;
     const tKey = `goal.${r.id}.target`;
     const cKey = `goal.${r.id}.current`;
+    // A target Fathom set (src/goals/write.mjs adoptSuggestions) keeps the calculator's provenance
+    // and says so; the goal carries adopted {at} for its Undo.
+    delete g.adopted;
     if (typeof def.target === 'number' && Number.isFinite(def.target)) {
-      fig[tKey] = { v: def.target, src: 'goal-target', kind: 't', label: 'Goal target' };
+      const a = def.adopted && typeof def.adopted === 'object' ? def.adopted : null;
+      const f = a && a.figure && typeof a.figure === 'object' ? a.figure : null;
+      fig[tKey] = a
+        ? { ...(f || {}), v: def.target, src: 'calc:targets', kind: f?.kind || 'e', label: 'Goal target', notes: ['Fathom set this target.', ...(Array.isArray(f?.notes) ? f.notes : [])] }
+        : { v: def.target, src: 'goal-target', kind: 't', label: 'Goal target' };
+      if (a) g.adopted = { at: a.at ?? null };
     }
     const tr = def.track;
     let cur = null;
@@ -587,11 +595,41 @@ export function loadGoals(db, { fig = {}, accounts = [] } = {}) {
 }
 
 // The tradeoff curve: the content axes (the demo) or the default axes (a real store), each with
-// its position from settings 'curve.positions'.
+// its position from settings 'curve.positions' (onboarding's priorities), unless a remembered
+// preference names one end of the axis: the owner changes the curve by telling Ask.
 export function loadCurve(db, content) {
   const positions = getSetting(db, 'curve.positions', null) || {};
   const axes = Array.isArray(content.curve) && content.curve.length ? content.curve : CURVE_AXES;
-  return axes.map(a => ({ ...a, value: curvePosition(positions, a) }));
+  const told = rememberedCurve(db, axes);
+  return axes.map(a => ({ ...a, value: Object.hasOwn(told, a.id) ? told[a.id] : curvePosition(positions, a) }));
+}
+
+// The newest remembered position for an axis: an end label selects 0 or 1, and an explicit
+// "Tradeoff toward <right label>: <position>." preference retains a position between them.
+// A label with a negation shortly before it ("I do not want to optimize everything") is not a
+// choice of that end, so that preference is skipped rather than read either way.
+const NEGATED = /\b(?:not|no|never|don'?t|without|stop|less|rather than|instead of|over)\b[^.;]{0,30}$/;
+const names = (t, label) => {
+  const i = label ? t.indexOf(label) : -1;
+  return i >= 0 && !NEGATED.test(t.slice(Math.max(0, i - 40), i));
+};
+export function rememberedCurve(db, axes) {
+  const texts = db.prepare('SELECT text FROM preferences ORDER BY updated_at DESC, created_at DESC, rowid DESC').all().map(r => String(r.text).toLowerCase());
+  const out = {};
+  for (const a of axes) {
+    const [l, r] = [a.left, a.right].map(x => String(x ?? '').trim().toLowerCase());
+    for (const t of texts) {
+      const prefix = `tradeoff toward ${JSON.stringify(r)}: `;
+      if (r && t.startsWith(prefix)) {
+        const numeric = /^(0(?:\.\d+)?|1(?:\.0+)?)\.$/.exec(t.slice(prefix.length));
+        if (numeric) { out[a.id] = Number(numeric[1]); break; }
+        continue;
+      }
+      const hasL = names(t, l), hasR = names(t, r);
+      if (hasL !== hasR) { out[a.id] = hasL ? 0 : 1; break; }
+    }
+  }
+  return out;
 }
 
 // Onboarding priorities: the content's (the demo) or one per curve axis, at the stored positions.
@@ -599,7 +637,7 @@ function onboardingWithPriorities(onboarding, curve, positions) {
   const ob = structuredClone(onboarding);
   const list = Array.isArray(ob.priorities) && ob.priorities.length ? ob.priorities
     : curve.map(c => ({ id: c.id, label: `${c.left} vs ${c.right}`, value: c.value }));
-  ob.priorities = list.map(p => ({ ...p, value: curvePosition(positions, p) }));
+  ob.priorities = list.map(p => ({ ...p, value: curve.find(a => a.id === p.id)?.value ?? curvePosition(positions, p) }));
   return ob;
 }
 
