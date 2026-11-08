@@ -877,8 +877,12 @@ a.h-dec-t:hover { color: var(--ac2); }
 @keyframes h-dlg-fade { from { opacity: 0; } to { opacity: 1; } }
 .d-horizon .h-dlg-host.enter .h-dlg { animation: h-dlg-in 0.16s ease-out; }
 .d-horizon .h-dlg-host.enter .h-dlg-back { animation: h-dlg-fade 0.16s ease-out; }
+/* A new Ask answer fades in once (chat.js revealAge); opacity only, so layout never moves. */
+@keyframes h-reveal { from { opacity: 0; } to { opacity: 1; } }
+.d-horizon .h-msg-b.h-reveal { animation: h-reveal 300ms ease-out both; }
 @media (prefers-reduced-motion: reduce) {
   .d-horizon .h-dlg-host.enter .h-dlg, .d-horizon .h-dlg-host.enter .h-dlg-back { animation: none; }
+  .d-horizon .h-msg-b.h-reveal { animation: none; }
 }
 
 /* ---------- responsive ---------- */

@@ -1,7 +1,9 @@
 import { tools as REGISTRY } from '../src/tools/index.mjs';
-// Item 19: Ask answers stream. The event protocol over HTTP (start, progress, text, reset, final,
-// error), the rule that nothing streamed is ever styled as verified, the trailing Sources strip and
-// the markdown subset over escaped text.
+// Item 19: Ask answers stream. The event protocol over HTTP (start, progress, interim, final,
+// error; ST2: no answer text and no reset, so a replaced draft never reaches the page), the rule
+// that nothing streamed is ever styled as verified, the trailing Sources strip and the markdown
+// subset over escaped text. The engine still emits text events to the answerer; the answerer's
+// emitter drops them.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -36,7 +38,7 @@ const streamPost = (s, path, body, headers = {}) =>
 
 /* ---------- the stream protocol over HTTP ---------- */
 
-test('POST /api/threads streams start, progress, text and a final event equal to the JSON answer', T, () => withServer({ env: FAKE }, async s => {
+test('POST /api/threads streams start, progress and a final event equal to the JSON answer, and no text', T, () => withServer({ env: FAKE }, async s => {
   const r = await streamPost(s, '/api/threads', { text: QUICK });
   assert.equal(r.status, 200);
   assert.match(r.headers['content-type'], /^text\/event-stream/);
@@ -48,18 +50,15 @@ test('POST /api/threads streams start, progress, text and a final event equal to
   assert.equal(names[1], 'progress');
   assert.equal(evs[1].data.label, PROGRESS_START);
   assert.equal(names.at(-1), 'final');
-  const firstText = names.indexOf('text');
-  assert.ok(firstText > 1, 'progress comes before any text');
-  assert.ok(names.filter(n => n === 'text').length > 2, 'the text arrives in several chunks');
+  assert.equal(names.includes('text'), false, `no answer text streams: ${names.join(' ')}`);
+  assert.equal(names.includes('reset'), false, 'no reset streams');
+  assert.deepEqual([...new Set(names)].sort(), ['final', 'progress', 'start']);
   // Progress labels are the fixed plain labels only.
   const labels = new Set(REGISTRY.map(t => t.progress));
   for (const e of evs.filter(x => x.name === 'progress')) {
     assert.ok(labels.has(e.data.label) || /^[A-Z][a-z ]+$/.test(e.data.label), e.data.label);
     assert.deepEqual(Object.keys(e.data), ['label']);
   }
-  // Streamed text is the raw model text: never HTML, never a verified span.
-  const streamed = evs.filter(e => e.name === 'text').map(e => e.data.text).join('');
-  assert.doesNotMatch(streamed, /<|fx-/);
   const final = evs.at(-1).data;
   assert.equal(final.thread.key, evs[0].data.key);
   assert.equal(final.message.role, 'fathom');
@@ -171,7 +170,7 @@ async function demoAnswerer(t) {
   return { s, engine, packs, root: s.dataDir };
 }
 
-test('a regeneration streams its revision step, then a plain reset, before the new answer streams', async t => {
+test('a regeneration streams its revision step and no text or reset events', async t => {
   const { s, engine, packs, root } = await demoAnswerer(t);
   let n = 0;
   const wrapped = { ...engine, mode: engine.mode, isOn: () => engine.isOn(), call: req => engine.call({ ...req,
@@ -180,14 +179,12 @@ test('a regeneration streams its revision step, then a plain reset, before the n
   const reply = await createLiveAnswerer({ engine: wrapped, packs, root, services: { engine: wrapped, config: { dataDir: root } } }).answer({ db: s.db, key: 'ask:0123456789ab', text: 'How much?', onEvent: e => seen.push(e) });
   assert.equal(reply.provenance.grounding.retried, true);
   const types = seen.map(e => e.type);
-  const reset = types.indexOf('reset');
-  assert.ok(reset > types.indexOf('text'), 'the first answer streamed, then was reset');
-  assert.deepEqual(seen.filter(e => e.type === 'reset'), [{ type: 'reset' }], 'one plain reset, no draft flag');
-  const revised = seen.findIndex(e => e.type === 'progress' && e.label === 'Revised to remove 2 unchecked figures');
-  assert.ok(revised > types.indexOf('text') && revised < reset, 'the revision step comes after the first answer and before the reset');
-  assert.equal(seen.slice(reset + 1).filter(e => e.type === 'text').map(e => e.text).join(''), 'Nothing to add.');
-  // The reply itself is the only grounded output; streamed text never carries spans.
-  for (const e of seen.filter(x => x.type === 'text')) assert.doesNotMatch(e.text, /</);
+  assert.equal(types.includes('text'), false, 'no answer text streams');
+  assert.equal(types.includes('reset'), false, 'no reset streams');
+  assert.ok(seen.some(e => e.type === 'progress' && e.label === 'Revised to remove 2 unchecked figures'), JSON.stringify(seen));
+  assert.doesNotMatch(JSON.stringify(seen), /987,654|876,543|You owe/, 'the replaced draft never streams');
+  // The reply is the only answer output.
+  assert.deepEqual(reply.paragraphs, ['Nothing to add.']);
   // Engine off keeps today's notice and streams nothing.
   const off = [];
   const offEngine = { ...wrapped, isOn: () => false, mode: 'fake' };

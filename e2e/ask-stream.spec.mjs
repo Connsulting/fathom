@@ -1,8 +1,9 @@
 // Ask answers stream (item 19), at desktop and 390px (every title carries @mobile). The demo's fake
-// engine streams its scripted answer in deterministic chunks (FATHOM_FAKE_STREAM_MS apart), so the
-// page sees the real event stream: progress labels first, then text whose numbers are still being
-// checked, then the grounded answer. A recorder in the page watches the pending block between
-// events; nothing in the app is stubbed except where a test breaks the stream on purpose.
+// engine runs its scripted answer in deterministic chunks (FATHOM_FAKE_STREAM_MS apart), so the
+// page sees the real event stream: progress labels while the answer is worked out, then the
+// grounded answer, once. No answer text streams (ST2). A recorder in the page watches the pending
+// block between events; nothing in the app is stubbed except where a test breaks the stream on
+// purpose.
 
 import { test, expect, resetDemo, gotoRoute, ASK_THREAD_URL, askInput } from './helpers.mjs';
 
@@ -15,30 +16,34 @@ test.beforeEach(async ({ request }) => {
   await resetDemo(request);
 });
 
-// Records what the pending block showed while the answer streamed.
+// Records what the pending block showed while the answer was in flight, and the answer as it
+// landed. pinned is measured when the first step shows.
 async function record(page) {
   await page.evaluate(() => {
-    const log = { order: [], steps: [], texts: [], checking: false, verifiedEarly: false, pinned: null };
+    const before = document.querySelectorAll('.h-askx-msgs .h-msg.fathom').length;
+    const log = { order: [], steps: [], answers: [], stream: false, verifiedEarly: false, pinned: null };
     window.__askLog = log;
     const look = () => {
       const pend = document.querySelector('.h-askx-pend');
-      if (!pend) return;
-      for (const li of pend.querySelectorAll('.h-work-items li.step span')) {
-        if (!log.steps.includes(li.textContent)) log.steps.push(li.textContent);
+      if (document.querySelector('.h-askx-stream')) log.stream = true;
+      if (pend) {
+        for (const li of pend.querySelectorAll('.h-work-items li.step span')) {
+          if (!log.steps.includes(li.textContent)) log.steps.push(li.textContent);
+        }
+        if (pend.querySelector('.h-work-items li.step') && !log.order.includes('steps')) {
+          log.order.push('steps');
+          const me = pend.querySelector('.h-msg.me');
+          const head = document.querySelector('.h-askx-head');
+          if (me && head) log.pinned = { me: me.getBoundingClientRect().top, head: head.getBoundingClientRect().bottom, y: window.scrollY };
+        }
+        if (pend.querySelector('.h-askx-live .fx-src, .h-askx-live .fx-fig, .h-askx-live .fx-unverified, .h-askx-live [data-fig]')) log.verifiedEarly = true;
       }
-      if (pend.querySelector('.h-work-items') && !log.order.includes('steps')) log.order.push('steps');
-      const st = pend.querySelector('.h-askx-stream');
-      if (!st) return;
-      if (!log.order.includes('text')) {
-        log.order.push('text');
-        const me = pend.querySelector('.h-msg.me');
-        const head = document.querySelector('.h-askx-head');
-        if (me && head) log.pinned = { me: me.getBoundingClientRect().top, head: head.getBoundingClientRect().bottom, y: window.scrollY };
+      const all = document.querySelectorAll('.h-askx-msgs .h-msg.fathom .h-msg-b');
+      if (all.length > before) {
+        if (!log.order.includes('answer')) log.order.push('answer');
+        const t = all[all.length - 1].textContent.replace(/\s+/g, ' ').trim();
+        if (t && log.answers[log.answers.length - 1] !== t) log.answers.push(t);
       }
-      const t = st.textContent;
-      if (log.texts[log.texts.length - 1] !== t) log.texts.push(t);
-      if (st.querySelector('.fx-checking')) log.checking = true;
-      if (st.querySelector('.fx-src, .fx-fig, .fx-unverified, [data-fig]')) log.verifiedEarly = true;
     };
     new MutationObserver(look).observe(document.body, { subtree: true, childList: true, characterData: true });
   });
@@ -60,7 +65,7 @@ async function headBottom(page) {
   return page.locator('.h-askx-head').evaluate((el) => el.getBoundingClientRect().bottom);
 }
 
-test('@mobile progress shows before text, text streams, and numbers flip from checking to sourced', async ({ page }) => {
+test('@mobile progress shows before the answer, and the answer appears once with its numbers sourced', async ({ page }) => {
   await gotoRoute(page, 'ask');
   await record(page);
   await send(page, QUICK);
@@ -70,17 +75,17 @@ test('@mobile progress shows before text, text streams, and numbers flip from ch
   await expect(page.locator('.h-askx-pend')).toHaveCount(0);
 
   const log = await askLog(page);
-  expect(log.order).toEqual(['steps', 'text']);
+  expect(log.order, JSON.stringify(log)).toEqual(['steps', 'answer']);
   expect(log.steps[0]).toBe('Looking at your household');
   // Labels are fixed plain text: no tool names, arguments or values.
   for (const s of log.steps) expect(s).toMatch(/^[A-Z][a-z ]+$/);
-  // The text grew over several paints, and its numbers were only ever in the checking style.
-  expect(log.texts.length).toBeGreaterThan(2);
-  expect(log.texts[0].length).toBeLessThan(log.texts[log.texts.length - 1].length);
-  expect(log.checking).toBe(true);
+  // No answer text streamed; the answer was set once and stayed as it landed.
+  expect(log.stream, JSON.stringify(log)).toBe(false);
   expect(log.verifiedEarly).toBe(false);
+  const shown = (await answer.locator('.h-msg-b').textContent()).replace(/\s+/g, ' ').trim();
+  expect(log.answers, JSON.stringify(log)).toEqual([shown]);
 
-  // The grounded answer replaced the stream: the number is sourced now, nothing is still checking.
+  // The grounded answer: the number is sourced, nothing is still checking.
   await expect(answer.locator('.fx-src').first()).toBeVisible();
   await expect(page.locator('.fx-checking')).toHaveCount(0);
   await expect(answer.locator('details.h-src')).toHaveCount(1);
@@ -168,9 +173,10 @@ test('@mobile a broken stream falls back to fetching the stored answer', async (
   await expect(page.locator('.h-askx-msgs .h-msg.me')).toHaveCount(1);
   const log = await askLog(page);
   expect(log.verifiedEarly).toBe(false);
+  expect(log.stream).toBe(false);
 });
 
-test('@mobile-only a streamed answer at 390px', async ({ page }, info) => {
+test('@mobile-only an answer at 390px, and the work block while one is in flight', async ({ page }, info) => {
   await gotoRoute(page, 'ask');
   await send(page, 'What should we do before the year ends? Please list the steps.');
   await expect(page).toHaveURL(ASK_THREAD_URL);
@@ -179,10 +185,11 @@ test('@mobile-only a streamed answer at 390px', async ({ page }, info) => {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(0);
 
-  // Mid-stream: a long answer streams for a few seconds; its numbers are still in the checking style.
+  // In flight: a long answer takes a few seconds; the pending block shows the live work block only.
   const many = Array.from({ length: 300 }, (_, i) => String(5000 + i * 3)).join(', ');
   await send(page, `Compare ${many} for me`);
-  await expect(page.locator('.h-askx-stream .fx-checking').first()).toBeVisible();
+  await expect(page.locator('.h-askx-pend .h-work.live').first()).toBeVisible();
+  await expect(page.locator('.h-askx-stream')).toHaveCount(0);
   await page.locator('.h-askx-live').evaluate((el) => el.scrollIntoView({ block: 'center' }));
   await page.screenshot({ path: info.outputPath('ask-stream-390-live.png') });
   await expect(page.locator('.h-askx-msgs .h-msg.fathom')).toHaveCount(2);

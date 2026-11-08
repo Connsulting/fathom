@@ -497,7 +497,7 @@ async function fails(resPromise, status) {
 const threadsOf = s => ok(request(s.baseUrl, { path: '/api/threads' }));
 const startOver = (s, id) => postJson(s.baseUrl, `/api/recs/${id}/start-over`, {});
 
-test('POST /api/threads with recId streams start with the thread key, then progress and text, then final', T, () => withServer({ env: FAKE }, async s => {
+test('POST /api/threads with recId streams start with the thread key, then progress, then final', T, () => withServer({ env: FAKE }, async s => {
   const r = await postJson(s.baseUrl, '/api/threads', { recId: 'deferral', text: 'Give me a quick read on this one' }, { accept: 'text/event-stream' });
   assert.equal(r.status, 200);
   assert.match(r.headers['content-type'], /^text\/event-stream/);
@@ -506,8 +506,8 @@ test('POST /api/threads with recId streams start with the thread key, then progr
   assert.equal(names[0], 'start');
   assert.match(evs[0].data.key, THREAD_KEY);
   assert.equal(names[1], 'progress');
-  const firstText = names.indexOf('text');
-  assert.ok(firstText > 1, `progress before text: ${names}`);
+  // Only progress streams; the answer arrives once, in the final event.
+  assert.equal(names.includes('text'), false, `no answer text streams: ${names}`);
   assert.equal(names.at(-1), 'final');
   const final = evs.at(-1).data;
   assert.equal(final.thread.key, evs[0].data.key);
