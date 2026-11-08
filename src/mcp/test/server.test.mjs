@@ -309,6 +309,13 @@ test('show is neither listed nor callable and its rules are absent from MCP inst
   seenKeys.push(key.key);
   const listed = await mcpPost(s.baseUrl, { auth: bearer(key.key), method: 'tools/list' });
   assert.ok(!rpcResult(listed).tools.some(t => t.name === 'show'));
+  const info = await request(s.baseUrl, { path: '/api/mcp' });
+  assert.equal(info.status, 200);
+  assert.ok(info.json.tools.some(t => t.name === 'household'));
+  assert.ok(!info.json.tools.some(t => t.name === 'show'));
+  assert.deepEqual(info.json.tools, rpcResult(listed).tools.map(t => ({
+    name: t.name, description: t.description, kind: t.annotations.readOnlyHint ? 'read' : 'write',
+  })));
   const called = await callToolRpc(s.baseUrl, key.key, 'show', { operation: 'table' });
   assert.equal(rpcResult(called).isError, true);
   const initialized = await mcpPost(s.baseUrl, { auth: bearer(key.key), method: 'initialize', params: initializeParams() });
