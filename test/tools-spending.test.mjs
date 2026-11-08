@@ -1,3 +1,4 @@
+import { createRegistryServer } from '../src/engine/tools.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { seedDemo } from '../demo/seed.mjs';
@@ -189,8 +190,7 @@ test('available eval scripts call valid operations through the Ask tool boundary
   t.after(() => store.close());
   const { tools } = await import('../src/tools/index.mjs');
   const { proposalTools } = await import('../src/actions/proposals.mjs');
-  const { createRegistryServer } = await import('../src/engine/tools.mjs');
-  const server = createRegistryServer(proposalTools(tools), { purpose: 'chat', ctx: { db: store.db, dataDir: store.root, clock: '2026-11-05', actorId: 'demo', onProposal() {} } });
+  const server = createRegistryServer(proposalTools(tools), { purpose: 'chat', ctx: { db: store.db, dataDir: store.root, clock: '2026-11-05', now: '2026-11-05T00:00:00.000Z', actorId: 'demo', onProposal() {}, onBlock() {} } });
   for (const c of await loadCases()) {
     if (!c.requires?.script || c.expectedFail || c.requires.operations.some(pair => getTool(pair.split('.')[0])?.kind === 'write')) continue;
     const { script, setup } = await import(`../evals/scripts/${c.id}.mjs`);

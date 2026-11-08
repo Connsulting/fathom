@@ -17,6 +17,7 @@ const expected = { type: 'object', additionalProperties: false, required: ['kind
 export const caseSchema = {
   type: 'array', minItems: 1, items: { type: 'object', additionalProperties: false, required: ['id', 'family', 'turns'], properties: {
     id: { type: 'string', pattern: '^[a-z][a-z0-9-]+$' },
+    blocks: { type: 'array', minItems: 1, items: { type: 'object', additionalProperties: false, required: ['op'], properties: { op: { enum: ['chart', 'table', 'compare', 'timeline'] }, kind: { enum: ['line', 'bar', 'area', 'scatter'] } } } },
     checkTitle: { type: 'boolean', const: true },
     family: { enum: ['spending', 'cash-flow', 'business', 'net-worth', 'retirement', 'taxes', 'goals', 'freshness', 'unavailable'] },
     storedGoal: { type: 'object', additionalProperties: false, required: ['title', 'note'], properties: {

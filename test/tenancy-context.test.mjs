@@ -170,6 +170,7 @@ describe('household A sees only its own data on every financial route', T, () =>
     '/api/confirm': { own: true },
     '/api/confirm/:id': { path: `/api/confirm/${A.confirmId}`, own: true },
     '/api/email': {},
+    '/api/email/subscriptions': {},
     '/api/jobs': {},
     '/api/advisor/packets/:id': { path: `/api/advisor/packets/${A.packetId}`, own: true },
     '/api/yearend/packet': { zip: true },

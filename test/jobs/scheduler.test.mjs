@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
-import { tempDb } from '../helpers/server.mjs';
+import { tempDb, tempInstance } from '../helpers/server.mjs';
 import { openDb, setSetting } from '../../src/store/db.mjs';
 import { seedDemo } from '../../demo/seed.mjs';
 import { createRuntimeEngine } from '../../src/engine/runtime.mjs';
@@ -434,7 +434,7 @@ test('start() and stop() leave no timer running', async () => {
 });
 
 test('engine off: the default brief-email handler still sends the brief through the transport', async () => {
-  const t = await store();
+  const t = await tempInstance({ mode: 'demo' });
   try {
     seedDemo(t.db);
     setSetting(t.db, 'engine', { on: false });
@@ -445,8 +445,8 @@ test('engine off: the default brief-email handler still sends the brief through 
     const transport = captureTransport();
     const handlers = defaultHandlers({ publicUrl: null });
     assert.deepEqual(Object.keys(handlers).sort(), ['brief-email', 'confirm-guess', 'deadline-alerts', 'freshness', 'plan', 'simplefin-sync', 'trash-purge']);
-    const s = schedulerFor(t, { handlers, clock: clockAt('2026-11-05T15:00:00Z'), config, engine, transport });
-    await s.runNow('brief-email');
+    const household = await t.household(config, { engine, transport });
+    await household.scheduler.runNow('brief-email');
     assert.equal(transport.sent.length, 1, 'the brief went out');
     const msg = transport.sent[0];
     for (const k of ['subject', 'text', 'html']) assert.ok(typeof msg[k] === 'string' && msg[k].length > 0, k);
@@ -457,7 +457,7 @@ test('engine off: the default brief-email handler still sends the brief through 
     assert.equal(send.length, 1);
     assert.equal(send[0].status, 'sent');
     assert.equal(t.db.prepare('SELECT count(*) AS n FROM spend_ledger').get().n, spendBefore, 'no model spend with the engine off');
-  } finally { t.done(); }
+  } finally { t.close(); rmSync(t.dataDir, { recursive: true, force: true }); }
 });
 
 const realClock = { now: () => new Date() };
