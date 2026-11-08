@@ -15,6 +15,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInstance } from '../src/platform/db.mjs';
+import { callTool } from '../src/tools/index.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import { accountLabel } from '../src/shared/account-label.mjs';
 import { serveAppFixture, tempDb } from './helpers/server.mjs';
@@ -404,7 +405,7 @@ test('pl-ac1 prior year present when it has data and null otherwise; default ran
   assert.equal(val(early, early.expenses.total), 9150, 'the Jul 20 cost is after that clock');
 });
 
-test('pl-ac1 errors: unknown entity, from after to, more than 36 months, malformed months; nearby valid input is accepted', (t) => {
+test('pl-ac1 errors: unknown entity, from after to, more than 120 months, malformed months; nearby valid input is accepted', (t) => {
   const { db } = store(t);
   business(db);
   assert.equal(code(() => businessPnl({ db, entity: 'entity:nosuchname' })), 'unknown_entity');
@@ -413,8 +414,8 @@ test('pl-ac1 errors: unknown entity, from after to, more than 36 months, malform
   assert.equal(code(() => businessPnl({ db, entity: 'Example Studio' })), 'ok');
   assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2032-05', to: '2032-04' })), 'bad_range');
   assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2032-04', to: '2032-04' })), 'ok');
-  assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2029-08', to: '2032-08' })), 'bad_range', '37 months');
-  assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2029-09', to: '2032-08' })), 'ok', '36 months');
+  assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2022-08', to: '2032-08' })), 'bad_range', '121 months');
+  assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2022-09', to: '2032-08' })), 'ok', '120 months');
   for (const bad of ['2032-13', '2032-1', '2032/01', 'soon', '2032-00']) {
     assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: bad, to: '2032-08' })), 'bad_range', bad);
     assert.equal(code(() => businessPnl({ db, entity: STUDIO, from: '2032-01', to: bad })), 'bad_range', bad);
@@ -423,7 +424,7 @@ test('pl-ac1 errors: unknown entity, from after to, more than 36 months, malform
   assert.equal(code(() => businessPnlRows({ db, entity: STUDIO, section: 'income', category: 'Income', from: '2032-13' })), 'bad_range');
 });
 
-test('pl-ac1 demo store: two workbook entities and the unassigned business checking account', async (t) => {
+test('pl-ac1 demo store: workbook entities own their mapped business checking account', async (t) => {
   const s = await tempDb();
   t.after(() => s.close());
   seedDemo(s.db);
@@ -431,9 +432,10 @@ test('pl-ac1 demo store: two workbook entities and the unassigned business check
   const ents = list.filter((e) => e.kind === 'entity');
   assert.equal(ents.length, 2);
   for (const e of ents) assert.ok(e.workbook && e.workbook.lines > 0, e.key);
-  const own = list.find((e) => e.key === 'account:a_biz');
-  assert.ok(own, 'a_biz is its own P&L');
-  assert.equal(own.kind, 'account');
+  const own = list.find((e) => e.accounts.some(a => a.id === 'a_biz'));
+  assert.ok(own, 'a_biz belongs to a workbook entity');
+  assert.equal(own.kind, 'entity');
+  assert.equal(list.length, 2);
   assert.ok(own.transactions.rows > 0);
   for (const e of list) {
     const p = businessPnl({ db: s.db, entity: e.key });
@@ -631,7 +633,9 @@ test('pnl2-ac2 a capped rows read still sums every matching row, not just the li
   const c = cat(p.expenses, 'Business');
   const r = businessPnlRows({ db, entity, section: 'expenses', category: 'Business', month: '2032-05' });
   assert.equal(r.total, n);
-  assert.equal(r.items.length, ITEM_LIMIT, 'items are capped');
+  assert.ok(r.items.length <= ITEM_LIMIT && r.items.length > 0, 'items are capped');
+  assert.ok(Buffer.byteLength(JSON.stringify(r)) <= 256 * 1024);
+  assert.equal(r.truncated, true);
   assert.equal(val(r, r.sum), val(p, c.months['2032-05']), 'the sum counts every row');
   assert.notEqual(r2(r.items.reduce((a, i) => a + i.value, 0)), val(r, r.sum), 'the listed items alone fall short');
   const all = businessPnlRows({ db, entity, section: 'expenses', category: 'Business' });
@@ -694,10 +698,39 @@ test('pl-ac4 the module exports the contract, takes one object, never writes, an
   await get(`/api/pnl?entity=${encodeURIComponent('entity:nosuchname')}`, 404);
   await get(`/api/pnl?entity=${encodeURIComponent(STUDIO)}&from=2032-13`, 400);
   await get(`/api/pnl?entity=${encodeURIComponent(STUDIO)}&from=2032-06&to=2032-05`, 400);
-  await get(`/api/pnl?entity=${encodeURIComponent(STUDIO)}&from=2029-08&to=2032-08`, 400);
-  await get(`/api/pnl?entity=${encodeURIComponent(STUDIO)}&from=2029-09&to=2032-08`, 200);
+  await get(`/api/pnl?entity=${encodeURIComponent(STUDIO)}&from=2022-08&to=2032-08`, 400);
+  await get(`/api/pnl?entity=${encodeURIComponent(STUDIO)}&from=2022-09&to=2032-08`, 200);
   await get(`/api/pnl/rows?entity=${encodeURIComponent('entity:nosuchname')}&section=income&category=Income`, 404);
   await get(`/api/pnl/rows?entity=${encodeURIComponent(STUDIO)}&section=sideways&category=Income`, 400);
   await get(`/api/pnl/rows?entity=${encodeURIComponent(STUDIO)}&section=income&category=Income&month=2032-7`, 400);
   assert.equal(changes(), before, 'the HTTP reads never write the store');
+});
+
+
+test('PN1: P&L lists spending ledgers separately and restores original tab names from locators', async t => {
+  const { db, root } = store(t);
+  file(db);
+  const id = line(db, 'Asters', '2032-03', 'Medical', -120);
+  db.prepare('UPDATE pnl_lines SET locator = ? WHERE id = ?').run(JSON.stringify({ sheet: "Aster's - (Actual Expenses)", cells: ['D2'] }), id);
+  line(db, 'Example Studio', '2032-03', 'Income', 500);
+  fact(db, 'pnl.ledgers', { "Aster's": { kind: 'spending' } });
+  const entities = pnlEntities({ db, clock: CLOCK });
+  assert.equal(entities.find(e => e.key === 'entity:asters').label, "Aster's");
+  assert.equal(entities.find(e => e.key === 'entity:asters').kind, 'spending');
+  assert.equal(entities.find(e => e.key === STUDIO).kind, 'entity');
+  const p = businessPnl({ db, entity: "Aster's", clock: CLOCK });
+  assert.equal(p.entity.kind, 'spending');
+  assert.equal(p.entity.label, "Aster's");
+  assert.equal(p.figures[p.expenses.total].v, 120);
+  const ctx = { db, dataDir: root, clock: CLOCK };
+  const tool = await callTool('business', { operation: 'pnl', from: '2032-03', to: '2032-03' }, ctx);
+  assert.deepEqual(tool.entities.map(e => e.entity.key), [STUDIO]);
+  assert.equal(tool.totals.expenses.value, 0);
+  assert.equal(tool.totals.profit.value, 500);
+  for (const entity of [p.entity.key, p.entity.label]) {
+    await assert.rejects(callTool('business', { operation: 'pnl', entity }, ctx), e => e.code === 'bad_input');
+    await assert.rejects(callTool('business', { operation: 'rows', entity, section: 'expenses', category: 'Medical' }, ctx), e => e.code === 'bad_input');
+  }
+  const rows = await callTool('business', { operation: 'rows', entity: STUDIO, section: 'income', category: 'Income', from: '2032-03', to: '2032-03' }, ctx);
+  assert.equal(rows.figures[rows.sum].v, 500);
 });

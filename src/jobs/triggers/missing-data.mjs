@@ -1,8 +1,10 @@
 // Missing data: stale or missing sources, unclassified businesses, blocked figures and missing
 // tax inputs (R1, R14, R19, T9.5). Evaluated last so it sees every other trigger's block.
 
+import { ADVISOR_KEYS } from '../../facts/derive.mjs';
+import { looksLikeSpending, spendingStatement } from '../../pnl/ledgers.mjs';
 import { addDays } from '../planner/data.mjs';
-import { padTasks, dataText, confirmTask, ANSWER_SHAPES } from './common.mjs';
+import { padTasks, dataText, confirmTask, ANSWER_SHAPES, questionFor } from './common.mjs';
 
 export const id = 'missing-data';
 export const domain = 'data';
@@ -101,7 +103,8 @@ function rawReasonItem(ctx, reason, name) {
   if (reason.startsWith('entity_unclassified:')) {
     const slug = reason.slice('entity_unclassified:'.length);
     const e = (ctx.entities || []).find(x => x.slug === slug);
-    const who = e ? name(e.name) : 'a business in your profit and loss';
+    if (e && !ctx.declinedLedgerGuess && looksLikeSpending(e, ctx.facts)) return { code: reason, tax: true, text: name(spendingStatement(e)), task: 'Confirm the spending ledger classification in Confirm' };
+    const who = e ? name(e.displayName || e.name) : 'a business in your profit and loss';
     return { code: reason, tax: true, text: `We do not know how ${who} is taxed.`, task: `Tell us how ${who} is taxed` };
   }
   if (reason === 'partnership_incomplete') {
@@ -149,7 +152,7 @@ export function items(ctx) {
     out.push({ code: 'filing_status_assumed', tax: true, text: 'Your filing status is not set, so we assumed single.', task: 'Tell us your filing status', kind: 'question', link: 'ask' });
   }
   const reasons = [...(ctx.info.blocked || []), ...(ctx.info.heldReasons || []), ...(ctx.blockedReasons || []).map(b => b.reason)];
-  for (const r of reasons) out.push(reasonItem(ctx, r));
+  for (const r of reasons) if (!ADVISOR_KEYS.has(r)) out.push(reasonItem(ctx, r));
   const seen = new Set();
   return out.filter(i => (seen.has(i.code) ? false : (seen.add(i.code), true)));
 }
@@ -169,7 +172,7 @@ export function evaluate(ctx) {
   const list = items(ctx).map(i => {
     const answerKey = factFor[i.code] || (Object.hasOwn(ANSWER_SHAPES, i.code) ? i.code : null);
     return { ...i, answerKey, ...(answerKey ? { kind: 'question', link: 'ask' } : {}) };
-  }).filter(i => !i.answerKey || !ctx.questionKeys?.has(i.answerKey));
+  }).filter(i => (!i.answerKey || !ctx.questionKeys?.has(i.answerKey)) && (!i.answerKey || !questionFor([i.answerKey], { accounts: ctx.data?.accounts || [], facts: ctx.facts }).answered));
   if (!list.length) return null;
   const questions = [...new Set(list.map(i => i.answerKey).filter(Boolean))];
   const answers = questions.length ? list.every(i => i.answerKey) ? { confirm: questions } : { questions } : {};

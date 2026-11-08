@@ -17,7 +17,8 @@ test('catalog validates at least thirty cases and all question families', async 
   const titleCase = cases.find(c => c.id === 'goals-conversation-title-529');
   assert.equal(titleCase.checkTitle, true);
   assert.ok(titleCase.turns.some(t => /529/.test(t.question) && /\$/.test(t.question)));
-  for (const id of ['spending-annual-exclusions', 'spending-portfolio-withdrawal']) {
+  assert.equal(cases.find(c => c.id === 'spending-annual-exclusions').expectedFail, undefined);
+  for (const id of ['spending-portfolio-withdrawal']) {
     const c = cases.find(c => c.id === id);
     assert.ok(c.expectedFail.missingOperations.length);
     assert.ok(c.turns[0].expected.length);
@@ -144,7 +145,7 @@ test('percent fractions compare at relative tolerance while money permits rounde
 
 test('a case is required only when its tool and capability are both present', () => {
   const turn = { question: 'What is elective spending?', required: [{ name: 'spending', operation: 'total', predicates: [] }],
-    forbidden: ['unsourced-figure', 'self-computed-figure', 'owner-assumption-not-in-messages'], expected: [], maxWords: 40, rubric: 'Use the tool.' };
+    forbidden: ['unsourced-figure', 'self-computed-figure', 'owner-assumption-not-in-messages'], expected: [], maxWords: 40, wordLimitReason: 'Keep fixture brief.', rubric: 'Use the tool.' };
   const c = { id: 'q09-elective-definition', family: 'spending', requires: { operations: ['spending.total'], capabilities: ['definitions'] }, turns: [turn] };
   const absent = applyAvailability(c, { hasOperation: () => false, hasScript: () => false, capabilities: [] });
   assert.ok(absent.expectedFail.missingOperations.includes('spending.total'));

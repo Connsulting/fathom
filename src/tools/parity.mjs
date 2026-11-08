@@ -30,6 +30,7 @@ export const PARITY_EXCLUDED = Object.freeze({
   "POST /api/threads/:id/trash": "conversation chrome",
   "POST /api/threads/:id/restore": "conversation chrome",
   "POST /api/threads/:id/delete": "conversation chrome",
+  "POST /api/threads/:id/proposals/:messageId": "conversation chrome",
   "POST /api/onboarding": "onboarding wizard",
   "POST /api/tour/seen": "onboarding wizard",
   "POST /api/demo/reset": "demo reset",

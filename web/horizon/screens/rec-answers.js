@@ -20,11 +20,12 @@ function active(field, draft) {
 }
 
 export function html(r, surface) {
-  if (!r.question) return '';
   const { esc } = H;
+  const assumptions = (r.assumptions || []).map((a, i) => `<div class="h-answer-inferred"><p>${esc(a.evidence)}</p><button type="button" class="h-btn ghost" data-default-undo="${i}" data-rec="${esc(r.id)}"${busy.has(r.id) ? ' disabled' : ''}>Undo</button></div>`).join('');
+  if (!r.question) return assumptions;
   // Every answer is saved: say so and keep the questions out of the way (Edit answers reopens them).
   if (r.question.answered && !editing.has(r.id)) {
-    return `<div class="h-answered" data-rec-answered="${esc(r.id)}"><span class="h-answered-t">Answered</span><button type="button" class="h-btn ghost" data-qr-edit="${esc(r.id)}">Edit answers</button></div>`;
+    return assumptions + `<div class="h-answered" data-rec-answered="${esc(r.id)}"><span class="h-answered-t">Answered</span><button type="button" class="h-btn ghost" data-qr-edit="${esc(r.id)}">Edit answers</button></div>`;
   }
   const draft = draftFor(r);
   const pending = busy.has(r.id);
@@ -49,7 +50,7 @@ export function html(r, surface) {
     }
     return `<fieldset class="h-answer-field" data-qr-wrap="${esc(f.id)}"${on ? '' : ' hidden'}><legend>${group}${esc(f.label)}</legend>${f.type === 'boolean' ? '' : `<label class="sr-only" for="${esc(id)}">${esc(f.label)}${f.unit ? ` (${esc(f.unit)})` : ''}</label>`}${control}</fieldset>`;
   }).join('');
-  return `<form class="h-answers" data-rec-answers="${esc(r.id)}" aria-label="Answer questions for your plan" aria-busy="${pending}">${fields}<p class="h-answer-note">Your answers update the plan automatically.</p><div class="h-answer-acts"><button type="submit" class="h-btn pri"${pending ? ' disabled' : ''}>${pending ? 'Saving...' : r.question.primary ? 'Save' : 'Save answers'}</button>${r.question.primary ? `<button type="button" class="h-btn" data-act="snooze" data-rec="${esc(r.id)}" data-arg="${esc(H.snoozeLabel())}"${pending ? ' disabled' : ''}>Not now</button><button type="button" class="h-btn" data-ask-next="${esc(r.id)}">Ask</button>` : ''}</div></form>`;
+  return assumptions + `<form class="h-answers" data-rec-answers="${esc(r.id)}" aria-label="Answer questions for your plan" aria-busy="${pending}">${fields}<p class="h-answer-note">Your answers update the plan automatically.</p><div class="h-answer-acts"><button type="submit" class="h-btn pri"${pending ? ' disabled' : ''}>${pending ? 'Saving...' : r.question.primary ? 'Save' : 'Save answers'}</button>${r.question.primary ? `<button type="button" class="h-btn" data-act="snooze" data-rec="${esc(r.id)}" data-arg="${esc(H.snoozeLabel())}"${pending ? ' disabled' : ''}>Not now</button><button type="button" class="h-btn" data-ask-next="${esc(r.id)}">Ask</button>` : ''}</div></form>`;
 }
 
 export function onChange(e) {
@@ -103,6 +104,21 @@ export function onSubmit(e) {
 // Edit answers opens the saved questions; Undo drops an inferred Virginia plan answer so the
 // account is asked. Returns true when the click was one of these.
 export function onClick(e) {
+  const defaultUndo = e.target.closest?.('[data-default-undo]');
+  if (defaultUndo) {
+    e.preventDefault();
+    const id = defaultUndo.dataset.rec;
+    if (busy.has(id)) return true;
+    const a = H.recById(id)?.assumptions?.[Number(defaultUndo.dataset.defaultUndo)];
+    if (!a) return true;
+    busy.add(id);
+    H.draw();
+    const value = a.path.length ? { [a.path[0]]: { undone: true } } : true;
+    Promise.resolve(H.api.answerRec(id, [{ key: a.undoKey, value }])).finally(() => {
+      busy.delete(id); drafts.delete(id); H.draw();
+    });
+    return true;
+  }
   const edit = e.target.closest?.('[data-qr-edit]');
   if (edit) {
     e.preventDefault();

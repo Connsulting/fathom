@@ -9,11 +9,14 @@
 //   segment 0700, no symlink); store_identity must name householdId before and after migrate()
 //   (household_store_mismatch). Closed again on any failure.
 // createHouseholdContext({ householdId, generation, mode, db, relativeRoot, config, platform,
-//   secrets, transport, transportOptions, engine, packs, answerer, answererFactory, scheduler, handlers, now })
+//   secrets, transport, transportOptions, engine, packs, answerer, answererFactory, scheduler, handlers, now,
+//   engineOptions })
 //   builds, in order, the outbound guard, the vault accessor, the financial transport, packs,
-//   engine (allowed: outbound engine; funded: platform setting instance_model_cap_usd > 0),
-//   answerer and scheduler (allowed: outbound jobs; ctx.household is this context); tests may
-//   inject any of transport, engine, packs, answerer, scheduler. Returns a frozen
+//   engine (allowed: outbound engine; funded: platform setting instance_model_cap_usd > 0; live
+//   rounds reserve in the platform ledger under this household and generation), answerer and
+//   scheduler (allowed: outbound jobs; ctx.household is this context); tests may inject any of
+//   transport, engine, packs, answerer, scheduler, and engineOptions ({ testTransport,
+//   fundingNow }, programmatic only: startServer's second argument). Returns a frozen
 //   { householdId, generation, mode, db, root, config, inFlight, vault(), packs, engine, answerer,
 //   scheduler, transport, outbound, services, funded(), close() } where root is the absolute household root
 //   path and funded() is the instance funding check (instance_model_cap_usd > 0) for model calls
@@ -22,7 +25,9 @@
 //   handle); a refusal is a VaultError with code platform_key_missing | platform_key_invalid |
 //   data_key_missing (or the root's code) and clears the cache. A household with no data key row
 //   gets one provisioned here only while its store holds no vault object.
-// createRuntimeRegistry({ platform, config, secrets, transportOptions, build }) -> { get(id), demo(),
+// buildHouseholdContext({ householdId, generation, mode, relativeRoot, platform, config, secrets,
+//   transportOptions, engineOptions }) opens the household's store, then its context.
+// createRuntimeRegistry({ platform, config, secrets, transportOptions, engineOptions, build }) -> { get(id), demo(),
 //   forIdentity(identity), acquire(ctx), release(ctx), list(), startAll(), close() }.
 //   get(id) returns the context of an `active` household with a storage_root, rebuilt when the
 //   platform generation changed (the old one closes once every acquire has been released), else
@@ -45,10 +50,11 @@ import { createRuntimeEngine } from '../engine/runtime.mjs';
 import { createLiveAnswerer } from '../api/answerer.mjs';
 import { createScheduler, defaultHandlers } from '../jobs/scheduler.mjs';
 import { createHouseholdTransport } from '../email/transport.mjs';
+import { FUNDING_SETTING, instanceCapUsd } from './model-budget.mjs';
 
 const SEGMENT = /^[A-Za-z0-9_-]{1,128}$/;
 const MAX_ROOT_SEGMENTS = 4;
-export const FUNDING_SETTING = 'instance_model_cap_usd';
+export { FUNDING_SETTING };
 
 // Log-safe code of an error: its code or name when it is a plain identifier.
 const codeOf = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(v)) || 'unknown';
@@ -99,14 +105,8 @@ export function openHouseholdDb({ dataDir, householdId, storageRoot }) {
   }
 }
 
-// The instance funding authority for live model calls (MT-05 adds the operator command that sets it).
-export function instanceFunded(platform) {
-  const row = platform.prepare('SELECT value FROM platform_settings WHERE key = ?').get(FUNDING_SETTING);
-  if (!row) return false;
-  let v;
-  try { v = JSON.parse(row.value); } catch { return false; }
-  return typeof v === 'number' && Number.isFinite(v) && v > 0;
-}
+// Whether the instance funds live model calls at all (node scripts/model-budget.mjs sets the cap).
+export const instanceFunded = platform => instanceCapUsd(platform) > 0;
 
 // Whether the store holds any object sealed under a data key (so a new key must never replace a lost one).
 function holdsVaultObjects(db) {
@@ -174,6 +174,7 @@ function refreshPacks(packs) {
 export function createHouseholdContext({
   householdId, generation = 1, mode, db, relativeRoot = householdRootRel(householdId), config, platform, secrets,
   transport = null, transportOptions = {}, engine = null, packs = null, answerer = null, answererFactory = createLiveAnswerer, scheduler = null, handlers = null, now = null,
+  engineOptions = {},
 } = {}) {
   if (typeof householdId !== 'string' || !db || !platform || !config || !secrets) throw new TypeError('createHouseholdContext needs a household, store, platform, config and secrets');
   if (mode !== 'real' && mode !== 'demo') throw new TypeError('createHouseholdContext mode must be real or demo');
@@ -189,9 +190,11 @@ export function createHouseholdContext({
   const livePacks = packs ?? createLivePacks(db, { dataDir: root });
   let householdEngine = engine;
   if (!householdEngine) {
+    const { testTransport = null, fundingNow = Date.now } = engineOptions ?? {};
     householdEngine = createRuntimeEngine({
       db, config, now: now ?? (() => new Date(clockNow(db, config.clock))),
       allowed: () => outbound.enabled('engine'), funded: () => instanceFunded(platform),
+      platform, householdId, generation, fundingNow, testTransport,
     });
     householdEngine.init().then(() => {
       if (householdEngine.credentialState === 'failed') console.error('fathom: engine credential unavailable');
@@ -214,6 +217,7 @@ export function createHouseholdContext({
     householdId, generation, mode, db, root, config, inFlight: new Set(), vault, packs: livePacks, engine: householdEngine,
     answerer: householdAnswerer, scheduler: householdScheduler, transport: householdTransport, outbound, services,
     funded: () => instanceFunded(platform),
+    isCurrent: () => { const row = platform.prepare('SELECT status, generation FROM households WHERE id = ?').get(householdId); return row?.status === 'active' && Number(row.generation) === generation; },
     close() {
       closing ??= (async () => {
         try { await householdScheduler?.stop(); } catch { /* stop never rejects; close anyway */ }
@@ -226,17 +230,17 @@ export function createHouseholdContext({
 }
 
 // The production builder: open the household's store, then its context (store closed on failure).
-export function buildHouseholdContext({ householdId, generation, mode, relativeRoot, platform, config, secrets, transportOptions }) {
+export function buildHouseholdContext({ householdId, generation, mode, relativeRoot, platform, config, secrets, transportOptions, engineOptions }) {
   const db = openHouseholdDb({ dataDir: config.dataDir, householdId, storageRoot: relativeRoot });
   try {
-    return createHouseholdContext({ householdId, generation, mode, db, relativeRoot, config, platform, secrets, transportOptions });
+    return createHouseholdContext({ householdId, generation, mode, db, relativeRoot, config, platform, secrets, transportOptions, engineOptions });
   } catch (e) {
     try { db.close(); } catch { /* already closed */ }
     throw e;
   }
 }
 
-export function createRuntimeRegistry({ platform, config, secrets, transportOptions = {}, build = buildHouseholdContext } = {}) {
+export function createRuntimeRegistry({ platform, config, secrets, transportOptions = {}, engineOptions = {}, build = buildHouseholdContext } = {}) {
   if (!platform || !config || !secrets) throw new TypeError('createRuntimeRegistry needs the platform, config and secrets');
   const rowOf = platform.prepare('SELECT id, status, mode, storage_root, generation FROM households WHERE id = ?');
   const servable = platform.prepare("SELECT id FROM households WHERE status = 'active' AND storage_root IS NOT NULL ORDER BY created_at, id");
@@ -279,7 +283,7 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
     }
     let context;
     try {
-      context = build({ householdId, generation, mode: row.mode, relativeRoot: row.storage_root, platform, config, secrets, transportOptions });
+      context = build({ householdId, generation, mode: row.mode, relativeRoot: row.storage_root, platform, config, secrets, transportOptions, engineOptions });
     } catch (err) {
       console.error('fathom: household runtime unavailable', codeOf(err));
       return null;

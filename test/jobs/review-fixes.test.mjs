@@ -337,6 +337,7 @@ describe('review fixes, round three', () => {
     recAction(ctxOf(db, { id: 'scorp-salary' }, { action: 'start' }));
     const prior = { 'scorp-salary': 'doing', 'invoice-deferral': 'proposed' };
 
+    db.prepare("UPDATE transactions SET category = 'Uncategorized' WHERE lower(category) LIKE '%charit%' OR lower(category) LIKE '%donat%'").run();
     addFact(db, 'tax.itemizedEstimate', 40000); // federal itemizes, Virginia estimate missing
     await plan(db);
     for (const id of Object.keys(prior)) {

@@ -337,9 +337,40 @@ purpose's model. Prices live in `src/engine/pricing.mjs` with the date they were
 pricing page; Haiku 5.5 has a base row for prompts up to 100,000 tokens (input plus cache read plus
 cache write) and a long row above that. It checks on/off and month-to-date spend below the cap BEFORE every model
 call (throws `EngineOffError` or `BudgetExceededError`) and records cost to the ledger after.
-Ledger adapter: `{monthSpendUsd(yyyymm), record({ts, purpose, costUsd, model, tokens})}` over the
+Ledger adapter: `{monthSpendUsd(yyyymm), record({ts, purpose, costUsd, model, tokens, roundId?})}` over the
 `spend_ledger` table (`yyyymm` stored as `'YYYY-MM'`). Default cap 200 USD (`settings.cap`).
 `FATHOM_ENGINE=fake` in tests.
+
+Live mode reserves every paid round in the platform ledger (see Model budgets): a household's
+runtime engine (`createRuntimeEngine`, `src/engine/runtime.mjs`) refuses to build in live mode
+without `{platform, householdId, generation}`, and passes `createEngine` a `reservations` adapter.
+At construction it records the household's `carry` row for the current funding month when it has
+pre-MT-05 spend, so that spend counts against the instance cap before it ever reserves. In live
+mode `startServer` and `openCliHousehold` first carry every non-deleted household with a storage
+root (`carryAllHouseholds`, `src/platform/model-carry.mjs`, reading each store read-only), so
+whichever process opens the instance first, no household's pre-MT-05 spend is invisible to the
+instance cap; an unreadable store refuses `household_store_unavailable`. Before
+each round, tool continuations and retries included, the engine reserves the round's worst-case
+bound. The per-response bound E (`estimateUnknownCost` over its system text, transcript and tools) is the
+round's `maxBudgetUsd`. An extract of a PDF document (an image-only PDF, billed per page as an
+image plus its text) must carry its page count (`pages`, 1 to 100, else TypeError and nothing is
+reserved), and E adds `pages * PDF_PAGE_INPUT_TOKENS` (5000, `src/engine/pricing.mjs`) input
+tokens to the serialized-byte estimate. A Messages API round makes one paid response and reserves E. An SDK round
+(`sdkRound`, the production chat and job path) can make more than one paid response (refusal and
+fallback retries) and stops only once its cumulative cost exceeds `maxBudgetUsd`, so it reserves
+`SDK_RESPONSE_BOUND` (2) times E: the cost before its last response is at most E and that response
+adds at most E. A refused reservation dispatches nothing. A cost up to the reservation settles; a
+cost above it, an unknown cost or a transport failure is held in the platform ledger and the call
+throws `ModelAccountingError` (`accounting_hold`) without latching the engine, so once the round is
+reconciled the same serving engine admits the next call. Only a failed platform settle or hold
+write latches the engine (`accounting_unrecorded`). The settled cost is mirrored into
+`spend_ledger` with its `round_id`. Live `engine.status()` reports `capUsd` as the lower of
+`settings.cap` and the operator allocation and `spentUsd` as the platform's committed spend for the actual UTC month. `createEngine`'s
+`testTransport: {baseURL}` (a loopback http origin with a port, else TypeError) sends every round
+to a local Messages API emulator; it is passed only programmatically, as
+`startServer(config, {engineOptions: {testTransport, fundingNow}})`, and no config or environment
+key sets it. Without it requests go to `https://api.anthropic.com` and the SDK env never carries
+`ANTHROPIC_BASE_URL`.
 
 ### 10. Config
 
@@ -416,9 +447,9 @@ FTHM2 vault (see Encryption at rest) under the household's data key, wrapped by
 
 Each household has outbound pause flags (`jobs`, `email`, `simplefin`, `engine`; 1 enabled, a
 missing row means every kind is paused). A paused kind does no work that can leave the instance:
-no scheduled jobs, no email, no bank sync, no model calls. Live model calls also need the platform
-setting `instance_model_cap_usd`, set by a later operator command (MT-05), so live calls stay off
-on a migrated instance until then.
+no scheduled jobs, no email, no bank sync, no model calls. Live model calls also need instance
+funding (`instance_model_cap_usd`) and a household allocation, both set by the operator (see Model
+budgets).
 
 An instance that predates households is converted offline by `node scripts/migrate-tenancy.mjs`,
 which reads the old `fathom.sqlite`, `files/` and (as an input only) `FATHOM_DATA_KEY_FILE`, and
@@ -463,7 +494,7 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `deadline_alerts` | `key`, `threshold` (14, 7 or 1), `deadline_date`, `sent_at`, `send_id`; PK (`key`, `threshold`) |
 | `api_keys` | `id` PK, `name`, `key_hash`, `scopes` JSON, `created_at`, `last_used_at`, `revoked_at`, `user_id` (the creator's platform user id, no foreign key; NULL for keys made before accounts). A key whose creator is not an active member of the served household fails closed (`creatorActive` in `src/mcp/keys.mjs`). `/mcp` keys stay in the financial store until a later package. |
 | `store_identity` | `id` PK (always 1), `household_id` (the platform household this store serves), `platform_operation` (the operation that bound it, NULL for a synthetic demo binding). Migration 022 and the offline migration create it with identical DDL. |
-| `spend_ledger` | `id` PK, `ts`, `yyyymm` `'YYYY-MM'`, `purpose`, `cost_usd` (full precision), `model`, `tokens` JSON (usage counts only, never prompt text) |
+| `spend_ledger` | `id` PK, `ts`, `yyyymm` `'YYYY-MM'`, `purpose`, `cost_usd` (full precision), `model`, `tokens` JSON (usage counts only, never prompt text), `round_id` (migration 031: the platform `model_rounds.id` a live row mirrors, unique when set; NULL for earlier and fake-mode rows) |
 | `superseded_rows` | `id` PK, `table_name`, `dedupe_key`, `row` JSON (the archived row), `file_id`, `superseded_by` (references `files.id`), `reason` (`revised`, `removed`, `older_snapshot`, `alias_merged`, `duplicate_confirmed`, `duplicate_cross_format`, `duplicate`, `summarized`), `at`, `survivor_key` (for `duplicate_confirmed`, the dedupe key of the row it was confirmed against) |
 | `confirm_items` | `id` PK, `kind`, `subject`, `question`, `options` JSON `[{id, label}]`, `context` JSON, `status` in pending, answered, `answer`, `file_id`, `created_at`, `answered_at`; unique (`kind`, `subject`) |
 | `confirm_undo` | `item_id` PK (references `confirm_items.id`, cascade delete), `ingest_epoch` (the epoch when the answer was recorded), `changes` JSON `[{table, op, rowid, before, after}]` (the answer's change log, row images as JSON text), `created_at`, `used_at` (set when a later import or planning run re-applied the answer). One row per revisable answer (migration 009). |
@@ -474,6 +505,9 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `simplefin_snapshots` | `sf_key` PK (references `simplefin_accounts.sf_key`, cascade delete), `snapshot` JSON `{inst, name, mask, maskSure, balance, balanceDate, from, to, count, recent}` (what the last sync saw of the bridge account; the 3 latest postings; no account or connection ids), `at`. Gives a pending `account_match` card its SimpleFIN side (migration 017). |
 | `ingest_epoch` | `id` PK (always 1), `n`. Bumped by triggers on every `files` insert and update (migration 009); readers treat a missing row as 0. |
 | `column_mappings` | `signature` PK (header signature), `mapping` JSON, `src`, `created_at`, `uses` |
+| `import_proposals` | Household-local `(id, version)` PK, file/hash binding, typed proposal JSON, interpreter/mapping versions, status, actor and approval evidence |
+| `import_model_spend` | Household-local `(file_id, call)` PK, source hash, correlation, model, token counts, actual or conservative cost, retry and dispatch state (migration 030) |
+| `import_batches` | Household-local commit and Undo before/after images, receipt id, unique proposal/version FK |
 | `entity_aliases` | `alias` PK (normalized alias name), `entity` (canonical display name), `created_at` |
 | `held_facts` | `id` PK, `hold` (`employer:<employerKey>`), `key`, `value` JSON, `file_id`, `parser`, `locator`, `confidence`, `created_at` |
 | `simplefin_connection` | `id` PK (always 1), `access_blob` (the SimpleFIN access URL encrypted with the data key, base64; never plaintext), `connected_at`, `last_sync_at`, `status` (`ok`, `reconnect` or `error`), `error_code`, `messages` JSON (sanitized bridge messages from the last sync), `accounts` (count). Migration 014. |
@@ -484,6 +518,10 @@ Money columns are dollars rounded to cents; JSON columns hold JSON text. The pro
 | `advisor_checkin` | `id` PK (always 1), `date`, `time` (`HH:MM` or NULL), `length_min`, `updated_at`. The owner-set next check-in (migration 011). |
 | `advisor_packets` | `id` PK (`advpkt-` and 16 hex), `created_at`, `clock` (the scenario date it was built for), `rec_ids` JSON, `stored_path` (encrypted under the data key, `files/<id>.bin`), `bytes`, `sha256` (migration 011) |
 | `planner_recs` | `rec_id` PK (references `recs.id`), `trigger_id`, `grounding_hash`, `prose_src` in model, template, `first_run`, `last_run` (reference `job_runs.id`), `retired_at`, `retired_reason`, `retired_from`, `held_from`. Bookkeeping for planner-owned recs (migration 007). |
+
+Migration 030 adds durable per-file engine accounting. The internal interpreter indexes every sheet or text span and sends scrubbed reference tokens through the household engine with no tools. File limits are USD 0.50, four dispatched calls, 32,768 input tokens and 8,192 output tokens, with 4,096 output tokens per call, a 120-second attempt deadline and one explicit retry. Each dispatch also requires current household generation, outbound permission, funding, engine admission and remaining monthly cap. Unknown or interrupted calls retain conservative reservations after restart; upload routing is unchanged until the later cutover.
+
+Migration 029 adds `schema_version`, `mapping_version`, `approval_status`, `approved_by`, `approved_at`, and `structural_context` to `column_mappings`. Existing mappings are unapproved; historical financial rows and locators remain intact. The new proposal contract is internal until upload cutover. It accepts cited fields and declarative transforms only, with complete source-region coverage required for completeness claims. This migration does not change live mapping reuse.
 
 Migration 002 (`002-ingest.sql`) adds the ingest columns above (`files.parser` through
 `files.coverage`, `accounts.source_id` and `identity`, `transactions.occurrence`, every
@@ -885,11 +923,12 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/threads/:id/trash` | `{}` | `{scenario, thread}`. Sets `trashedAt`, keeps `archivedAt`. |
 | `POST /api/threads/:id/restore` | `{}` | `{scenario, thread}`. Clears `trashedAt` when trashed, else `archivedAt`. |
 | `POST /api/threads/:id/delete` | `{}` | `{scenario}`. Deletes the thread and its messages forever; 409 unless it is in Trash. |
+| `POST /api/threads/:id/proposals/:messageId` | `{decision: "confirm" \| "decline"}` | `{scenario, thread, message}`. Decides the stored proposal (`provenance.pendingAction`) on message `m<id>`: confirm stores the owner text "Confirmed" and runs the operation through the registry with no model call (a stale proposal writes nothing and is answered by the model with a leading note); decline stores "Not now" and a fixed reply. 400 bad decision; 404 unknown thread or message, or no proposal on it; 409 trashed thread or already decided. |
 | `POST /api/your-plans/build` | `{fileIds?: string[]}` (at most 50) | `{scenario, result: {written, entries, sources, warnings, dropped}}`. Builds the Your plans pack (`dropped` counts the extracted sections that did not match their document); 400 for a bad body; 409 while the engine is off, over the cap, or when the data directory is inside the repository. |
 | `GET /api/accounts/:id` | none | `{account, fresh, asOf, balance: {asOf}, trendKey, txn: {count, from, to}, feeds, syncable}` for the account dialog. `balance.asOf` is the newest balance or positions date, which can be older than `asOf` (the newest row of any kind). `fresh` and `asOf` are the account's entry in `live.ingest.accounts` (the rule the Home health line counts). Each feed is a file source or SimpleFIN with its last data date, freshness state, cadence and how to refresh it; a SimpleFIN feed adds `lastSyncAt` and `balanceDate`. `syncable` is true when SimpleFIN is connected, maps this account and does not need a reconnect. `account` also carries the edit controls: `maskEditable`, `ownerKey` and `kindKey` (confirm option ids or null) and `ownerOptions` and `kindOptions`. 400 for a missing id, 404 unknown. Read-only. |
 | `GET /api/accounts/:id/transactions` | query `q` (at most 100 characters, matched against description and category), `from` and `to` (YYYY-MM-DD, `from` not after `to`), `limit` (1 to 200, default 50), `cursor` (the previous page's `next`) | `{items, next, total, figures, sources}`. Newest first, only this account's rows. `next` is null on the last page; `total` counts every row the filters match. Each item names a figure in `figures` whose source is in `sources`. 400 for any bad parameter, 404 unknown. Read-only. |
-| `GET /api/pnl` | query `entity` (a key from `entities` or a plain entity name; default the first entry), `from` and `to` (YYYY-MM, `from` not after `to`, at most 36 months; default January to the entity's latest month with data) | `{entities, pnl, figures, sources}`. `entities` is `pnlEntities`; `pnl` is `businessPnl` without its `figures` and `sources` (those are top level), or null when there are no entities. 400 for a bad range, 404 unknown entity. Read-only, no model calls. |
-| `GET /api/pnl/rows` | query `entity`, `from`, `to` as above, `section` (`income` or `expenses`), `category`, optional `month` (inside the range) | `businessPnlRows`: `{items, total, sum, figures, sources, note}`, exactly the workbook lines or transactions behind that cell, newest first, at most 500 items (`total` counts all). `sum` is a figure over every matching row, not just the listed items, equal to the cell (or the category total without `month`). Each item has `amount` (the raw signed amount), `value` (the counted value: income as is, expenses negated, so a refund is negative) and `fig`, a figure at `value`. 400 for any bad parameter, 404 unknown entity. Read-only. |
+| `GET /api/pnl` | query `entity` (a key from `entities` or a plain entity name; default the first entry), `from` and `to` (YYYY-MM, `from` not after `to`, at most 120 months; default January to the entity's latest month with data) | `{entities, pnl, figures, sources}`. `entities` is `pnlEntities`; `pnl` is `businessPnl` without its `figures` and `sources` (those are top level), or null when there are no entities. 400 for a bad range, 404 unknown entity. Read-only, no model calls. |
+| `GET /api/pnl/rows` | query `entity`, `from`, `to` as above, `section` (`income` or `expenses`), `category`, optional `month` (inside the range) | `businessPnlRows`: `{items, total, sum, figures, sources, note}`, exactly the workbook lines or transactions behind that cell, newest first, at most 500 items, or fewer with `truncated: true` when the response reaches its byte limit (`total` counts all). `sum` is a figure over every matching row, not just the listed items, equal to the cell (or the category total without `month`). Each item has `amount` (the raw signed amount), `value` (the counted value: income as is, expenses negated, so a refund is negative) and `fig`, a figure at `value`. 400 for any bad parameter, 404 unknown entity. Read-only. |
 | `GET /api/spending` | query `from` and `to` (YYYY-MM; default the trailing twelve months ending at the latest complete month), `include` (comma separated, only `tax`), `exclude` (comma separated, only `housing`) | `{spending, figures, sources}`. `spending` is `householdSpending` without its `figures` and `sources`. 400 for a bad range or option. Read-only, no model calls. |
 | `GET /api/spending/rows` | query `from`, `to`, `include`, `exclude` as above, `bucket` (`household` or `tax`), `category`, optional `month` (inside the range) | `householdSpendingRows`: `{items, total, sum, figures, sources, note}`, exactly the transactions behind that cell, newest first, at most 500 items. `sum` is a figure over every matching row, equal to the cell (or the category total without `month`). Each item has `amount` (raw signed), `value` (the counted outflow, a refund negative) and `fig`, a figure at `value`. 400 for any bad parameter. Read-only. |
 | `POST /api/accounts/:id/name` | `{displayName}` | `{scenario, account}`. Sets the owner's display name for that account (trimmed, at most 120 characters, no line breaks or control characters). Empty or null clears it and the screens use the default label. 400 for a bad name, 404 unknown. Imports and SimpleFIN refreshes do not write this column. |
@@ -1030,6 +1069,37 @@ CLIs.
 | `audit_events` | `id` PK, `at`, `actor_user_id`, `household_id`, `target_user_id`, fixed `action` and `outcome` codes. No payloads, emails or tokens. |
 | `platform_operations` | `id` PK, `kind`, `phase`, `status` in running, done, `started_at`, `updated_at`, `detail` JSON (counts and hashes only) |
 | `household_data_keys` | (`household_id`, `key_version`) PK, `wrapped_key` BLOB (the household data key wrapped under the platform key, never raw), `status` in active, retired (a unique partial index allows one active key per household), `created_at`. Written only by `provisionDataKey` (`src/platform/household-vault.mjs`); the server does not read it before MT-03. |
+| `household_model_budgets` | `household_id` PK, `allocation_usd` (0 to 10000, cents), `updated_at`. No row is a zero allocation. Platform migration 005 seeds every non-deleted household from the hand-set `instance_model_cap_usd` (else 0). |
+| `model_rounds` | `id` PK, `household_id`, `month` (actual UTC `'YYYY-MM'`), `kind` in round, carry, `purpose`, `model`, `state` in reserved, settled, held, `hold_code` in cost_unknown, interrupted, reservation_bound_exceeded, `reserved_usd`, `cost_usd`, `input_tokens`, `output_tokens`, `receipt_ref`, `reserved_at`, `expires_at`, `settled_at`. One `carry` row per household and month holds its pre-MT-05 spend. No prompts, results or credential bytes. |
+
+Model budgets (`src/platform/model-budget.mjs`, platform migration 005).
+
+1. Every paid live round reserves in `model_rounds` in one `BEGIN IMMEDIATE` platform transaction,
+   across the server and CLI processes. Committed spend is a settled row's cost, or a reserved or
+   held row's larger of reservation and recorded cost. Admission refuses, before dispatch: a
+   household that is not active or whose generation changed (`EngineOffError` code
+   `household_unavailable`); a request principal no longer authorized (`authorization_revoked`;
+   the router re-resolves the session's identity, membership and household per round, and jobs
+   run with no principal); any held round of the household (`ModelAccountingError` code
+   `accounting_hold`); a zero instance cap (`funding_unavailable`); and a bound over the remaining
+   household budget (lower of `settings.cap` and the allocation) or instance cap
+   (`BudgetExceededError`). The funding month is the actual UTC month, never `FATHOM_CLOCK`.
+2. A reserved round older than 10 minutes becomes held `interrupted` at the household's next
+   reserve or reconcile. A held round keeps its full reservation, survives restarts and blocks only
+   its own household until an operator reconciles it; other households keep their unreserved credit.
+3. `node scripts/model-budget.mjs --instance-cap-usd <n>` and `--household <id> --allocation-usd <n>`
+   set the instance cap and a household's allocation (dollars 0 to 10000, cents). Changes are
+   audited (`model.instance_cap`, `model.allocation`); repeats print `unchanged`. Before any
+   change it records every non-deleted household's `carry` row for the month from its store
+   (read-only, `carryAllHouseholds`), so a household that never reserved, active or suspended,
+   still counts. Refusals: `bad_usd`, `no_such_household`,
+   `allocation_above_cap`, `below_committed`, `household_store_unavailable` (a store it cannot read).
+4. `node scripts/reconcile-spend.mjs --household <id> --round <id> --cost-usd <amount> --receipt-ref <id>`
+   settles a held round at the receipt's cost (audited `model.reconcile`; the receipt reference is
+   kept on the round, never in audit rows). A cost above the reservation records the debt and keeps
+   the hold as `reservation_bound_exceeded`. Refusals: `bad_receipt_ref`, `bad_cost`,
+   `no_such_round`, `foreign_round`, `round_in_flight`, `already_settled`,
+   `reservation_bound_exceeded`. Neither command changes pause flags.
 
 Memberships and invitations.
 
@@ -1358,7 +1428,7 @@ the Advisor screen for re-download. The packet is not emailed.
 7. Email: `src/email` sends through `FATHOM_EMAIL_TRANSPORT` and the router passes the transport
    as `ctx.transport`; see "Email" below.
 
-## Jobs
+## Proactive jobs
 
 `src/jobs/scheduler.mjs` runs in process. `src/server.mjs` builds it after the engine is
 initialized with `createScheduler({db, config, engine, handlers: defaultHandlers({publicUrl}),
@@ -1400,16 +1470,37 @@ serves) and stops it before closing the store.
    refused with 409 before the scheduler, so nothing changes. `npm run plan` builds a scheduler
    with only the plan handler and runs it now; it exits 3, telling the owner to use Run now in the
    app or `POST /api/jobs/plan/run`, when another process (the running server) holds the lease.
-8. Confirm-guess job: `defaultHandlers` includes `confirm-guess`, the only code path that asks the
-   engine for confirm guesses. Nightly at 03:00, manual (Run now, `POST /api/jobs/confirm-guess/run`,
-   `npm run confirm:guess`) and ingest (`trigger('confirm-guess', 'ingest')` beside the plan trigger
-   after an upload or retry imports a file) runs share it. It calls `guessPending(db, engine, {now:
-   ctx.now})` until nothing is left. When that skips (engine off, not a live engine, nothing
-   pending) the run is `skipped` with note `{pending}`; otherwise it is `ok` with the batch cost
-   sum and note `{batches, items, guessed, stopped}`, also when an engine error stopped it.
-   `npm run confirm:guess` builds a scheduler with only this handler, runs it now and prints one
-   JSON line `{status, note}`; it exits 1 when there is no store and 3 when another process holds
-   the lease.
+8. In-product resolver: the stable `confirm-guess` job id now runs `resolvePending` from
+   `src/resolve/index.mjs`. Its Engine screen name is "Resolve open questions". Nightly at 03:00,
+   Run now (`POST /api/jobs/confirm-guess/run`), `npm run confirm:guess`, and the existing ingest
+   triggers share this handler. Local `autoResolve` and `deterministicGuess` rules run first, even
+   with the engine off. Categorizer proposals for fixed choices apply only at the policy's
+   auto-apply threshold. Remaining fixed choices and yes/no recommendation questions go through
+   one household engine call per batch, under purpose `job`, with stored facts, masked accounts,
+   answered history and active pack excerpts. Model results select option ids and named stored-row
+   or pack-entry refs; missing, changed, unknown and pack-only references are rejected. Number,
+   date and composite numeric answer shapes remain open.
+
+   Answers use `recordAutoAnswer`, including `resolver_fact` Confirm items that use the shared
+   fact-answer writer with channel `resolver`. The normal evidence and Undo ledger applies;
+   Undo restores pending state and declines the item permanently. Recommendation facts re-plan
+   deterministically after a run, without another model call. Evidence uses fixed plain language,
+   without categorization provider names, model names or confidence percentages.
+
+   Household outbound engine pause, engine off and unavailable instance funding stop external
+   calls. `settings.resolver.maxCostUsd` defaults to two dollars per run. Categorization and engine
+   calls share that ceiling and the monthly cap; each engine request reserves conservative input
+   and maximum output cost before dispatch, and carries its remaining call budget into the engine.
+   Unresolved items stay pending. Fingerprints in `settings.resolver.sent` record attempted items
+   and their supplied evidence, preventing repeated payment for unchanged inputs, including
+   malformed responses and billed failed calls.
+   Changed evidence permits another attempt. Unanswered recommendation items stay on their
+   recommendation instead of duplicating the pending Confirm deck. Demo jobs are skipped. A no-work run records `{pending}`; other
+   runs record cost and counts `{batches, items, guessed, stopped}`, where guessed counts answers.
+   The CLI prints only `{status, note}` and keeps its existing exit codes.
+
+   This deliberately replaces plan D6/D7's rule "A guess never answers anything" for the resolver.
+   The old suggestion reader remains for stored suggestions and card evidence.
 9. Triggers during a run: `trigger(jobId, reason)` for a job that is already running remembers the
    request, and when the current run finishes exactly one more run starts with that reason, so
    several triggers during one run coalesce into one rerun. `trigger` never rejects.
@@ -1971,7 +2062,7 @@ item's options, and its basis is one of six fixed codes (`REASON_CODES`); the st
 the fixed sentence for that code (`REASON_TEXT`), never model text, so no model-written figure
 reaches the card; every item sent gets a row (`option_id` NULL otherwise). It runs only on a live
 engine (or with a per-call fake script in tests) that is on; engine errors stop the run as
-`stopped`. Guesses never answer. It runs only as the scheduler job `confirm-guess` (see "Jobs"):
+`stopped`. The resolver supersedes this suggestion-only scheduler path (see "Proactive jobs"). Its stable job id is `confirm-guess`:
 daily at 03:00, after an upload or retry that imports a file, Run now, and `npm run confirm:guess`
 (`src/jobs/guess-cli.mjs`).
 
@@ -2887,7 +2978,7 @@ Category persistence uses `transaction_category_corrections` for personal transa
 
 `src/categories/jev.mjs` uses the pinned TypeSafe model `jev-1.14.0` through the optional `FATHOM_TYPESAFE_KEY_FILE` private key file. A missing file disables this provider. Requests contain redacted transaction descriptions, amount, account kind and date, with the household category vocabulary as choice criteria. Imported categories, source mappings and personal Confirm answers become training labels immediately. Retrieval ranks the nearest six prior dated labels by normalized merchant, description-token overlap, signed amount band and account. Automatic history application requires at least three unanimous examples, all with the exact normalized merchant, account, sign and an adjacent amount band. Disagreement sends those labeled examples to the model instead. No merchant rule is required. Household member names and account masks are removed locally; description digits are masked. Owner questions send local name-match fractions rather than holder names. Deterministic best guesses retain priority.
 
-`src/categories/policy.mjs` is the confidence-policy table. Only the model auto band changes calculator categories from model proposals; agreed history and structural rules can also classify locally. Review proposals remain Uncategorized and appear as Check these cards outside the spending-window and amount filters. Lower-confidence attempts remain Uncategorized and are not sent again; ordinary spending-window checks still apply. Uncalibrated older markers are replaced on the first Jev attempt. The existing `transaction_category_guesses.category` TEXT stores a JSON proposal containing category, confidence and probabilities; its model column remains the exact model id. Uncalibrated older suggestions are not applied. Jev review proposals persist independently of the queue limit, so the deck can contain more than ten of them. The ten-card limit applies only to deterministic category checks and mappings; answered auto items consume no queue slots. Auto application uses Confirm auto answers, plain category options and normal undo/revise. The resolver joins auto provenance, retains personal correction and import priority, and never learns history from automatic answers. Jev auto answers remain undoable after unrelated imports; row-change conflict checks still apply. Duplicate consolidation moves the proposal but drops its automatic correction, so the surviving row can be reviewed without creating owner-derived merchant memory; undo restores the original auto correction.
+`src/categories/policy.mjs` is the confidence-policy table. Only the categorizer auto band applies its proposals directly; remaining fixed choices can be answered by the household resolver when stored references support them. Resolver category answers retain automatic provenance and never teach history. Agreed history and structural rules can also classify locally. Review proposals remain Uncategorized and appear as Check these cards outside the spending-window and amount filters. Lower-confidence attempts remain Uncategorized and are not sent again; ordinary spending-window checks still apply. Uncalibrated older markers are replaced on the first Jev attempt. The existing `transaction_category_guesses.category` TEXT stores a JSON proposal containing category, confidence and probabilities; its model column remains the exact model id. Uncalibrated older suggestions are not applied. Jev review proposals persist independently of the queue limit, so the deck can contain more than ten of them. The ten-card limit applies only to deterministic category checks and mappings; answered auto items consume no queue slots. Auto application uses Confirm auto answers, plain category options and normal undo/revise. The resolver joins auto provenance, retains personal correction and import priority, and never learns history from automatic answers. Jev auto answers remain undoable after unrelated imports; row-change conflict checks still apply. Duplicate consolidation moves the proposal but drops its automatic correction, so the surviving row can be reviewed without creating owner-derived merchant memory; undo restores the original auto correction.
 
 Categorizer calls derive their token cap from the run dollar cap, defaulting to five cents, and reserve serialized UTF-8 bytes once plus per-question framing and shared context. Before each attempt, including retries, they recheck the household engine pause and both run and monthly caps. Actual usage replaces the reservation; a failed request with unknown usage is conservatively charged. Spend is recorded under purpose `categorize` with the pinned model. The scheduler shares one budget between category and closed-option guesses. Demo and disabled-engine jobs never call Jev.
 

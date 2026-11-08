@@ -83,6 +83,46 @@ test('goals share screen validation, require target evidence and undo create/edi
   assert.equal(db.prepare('SELECT id FROM goals WHERE id = ?').get(created.goal.id), undefined);
 });
 
+test('SEC2: identifier and date evidence refuses facts and goals without writes or receipts', async () => {
+  const db = await s.store();
+  db.prepare('DELETE FROM facts').run();
+  db.prepare('DELETE FROM figures').run();
+  db.prepare('DELETE FROM goals').run();
+  const ctx = context(db);
+  for (const [ownerText, value, evidence = ownerText] of [
+    ['Create a savings goal for the account ending in 4821. Ask me for its target.', 4821],
+    ['Create a savings goal for the card ending with 4821. Ask me for its target.', 4821],
+    ['The account ends in 4821.', 4821],
+    ['The account ends with 4821.', 4821],
+    ['The last four digits are 4821.', 4821],
+    ['The last 4 digits is 4821.', 4821],
+    ['Use account x4821.', 4821],
+    ['Use account ...4821.', 4821],
+    ['Use account 4821 (last4).', 4821],
+    ['Use reference #4821.', 4821],
+    ['Due 2028-09-17.', 2028],
+    ['Due September 17, 2028.', 17],
+    ['The loss is -4821.', 4821],
+    ['The rate is 4821%.', 4821],
+    ['Use account ending in 4821.', 4821, '4821'],
+  ]) {
+    ctx.ownerText = ownerText;
+    await assert.rejects(callTool('update_goal', { operation: 'create', title: 'Savings', target: value }, ctx), /target:.*stated/);
+    await assert.rejects(callTool('answer', { operation: 'fact', key: 'tax.vaItemizedEstimate', value, evidence }, ctx), /value:.*stated/);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM facts').get().n, 0);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM goals').get().n, 0);
+    assert.equal(db.prepare('SELECT count(*) AS n FROM action_receipts').get().n, 0);
+  }
+  ctx.ownerText = 'For account ending in 4821, create a savings target of $4,821 due September 17, 2028.';
+  const saved = await callTool('update_goal', { operation: 'create', title: 'Savings', target: 4821, targetDate: '2028-09-17' }, ctx);
+  assert.equal(saved.goal.target, 4821);
+  assert.equal(saved.goal.targetDate, '2028-09-17');
+  assert.ok(saved.receipt);
+  const fact = await callTool('answer', { operation: 'fact', key: 'tax.vaItemizedEstimate', value: 4821, evidence: '$4,821' }, ctx);
+  assert.equal(fact.value, 4821);
+  assert.ok(fact.receipt);
+});
+
 test('step, status and owner tools each persist an attributed receipt and undo', async () => {
   const db = await s.store();
   await planRun(db);
