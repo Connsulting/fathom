@@ -77,10 +77,10 @@ export async function accountDetail(ctx) {
   // Per file: the newest row date this account has from it. Rows from the SimpleFIN parser are one
   // feed whatever file carried them; a file feed groups by its ingest source, else by the file.
   const perFile = await db.prepare(`SELECT x.file_id, x.parser, max(x.d) AS last, f.name, f.source_kind, f.source_id, f.uploaded_at FROM (
-      SELECT file_id, parser, date AS d FROM transactions WHERE account_id = ?1
-      UNION ALL SELECT file_id, parser, date FROM balances WHERE account_id = ?1
-      UNION ALL SELECT file_id, parser, as_of FROM positions WHERE account_id = ?1) x
-    LEFT JOIN files f ON f.id = x.file_id GROUP BY x.file_id, x.parser`).all(id);
+      SELECT file_id, parser, date AS d FROM transactions WHERE account_id = ?
+      UNION ALL SELECT file_id, parser, date FROM balances WHERE account_id = ?
+      UNION ALL SELECT file_id, parser, as_of FROM positions WHERE account_id = ?) x
+    LEFT JOIN files f ON f.id = x.file_id GROUP BY x.file_id, x.parser`).all(id, id, id);
   const sourceOf = db.prepare('SELECT label, kind, as_of FROM sources WHERE id = ?');
   const feedsByKey = new Map();
   const sourceKeys = new Set();

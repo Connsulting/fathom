@@ -65,8 +65,8 @@ async function accountAnswer(ctx, field) {
 export const accountOwner = async (ctx) => await accountAnswer(ctx, 'owner');
 export const accountKind = async (ctx) => await accountAnswer(ctx, 'kind');
 
-const lastDataDate = async (db, id) => (await db.prepare(`SELECT max(d) AS d FROM (SELECT max(date) AS d FROM transactions WHERE account_id = ?1
-  UNION ALL SELECT max(date) FROM balances WHERE account_id = ?1 UNION ALL SELECT max(as_of) FROM positions WHERE account_id = ?1)`).get(id)).d || null;
+const lastDataDate = async (db, id) => (await db.prepare(`SELECT max(d) AS d FROM (SELECT max(date) AS d FROM transactions WHERE account_id = ?
+  UNION ALL SELECT max(date) FROM balances WHERE account_id = ? UNION ALL SELECT max(as_of) FROM positions WHERE account_id = ?)`).get(id, id, id)).d || null;
 
 export async function accountMergeCandidates(ctx) {
   const row = await accountOf(ctx);

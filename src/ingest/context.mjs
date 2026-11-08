@@ -62,11 +62,11 @@ async function accountView(db, id) {
   const bal = await db.prepare('SELECT count(*) AS n, min(date) AS f, max(date) AS t FROM balances WHERE account_id = ?').get(id);
   const pos = await db.prepare('SELECT count(*) AS n, min(as_of) AS f, max(as_of) AS t FROM positions WHERE account_id = ?').get(id);
   const files = (await db.prepare(`SELECT id, name FROM files WHERE id IN (
-      SELECT file_id FROM accounts WHERE id = ?1
-      UNION SELECT file_id FROM transactions WHERE account_id = ?1
-      UNION SELECT file_id FROM balances WHERE account_id = ?1
-      UNION SELECT file_id FROM positions WHERE account_id = ?1)
-    ORDER BY uploaded_at, rowid`).all(id)).map((f) => ({ id: f.id, name: f.name }));
+      SELECT file_id FROM accounts WHERE id = ?
+      UNION SELECT file_id FROM transactions WHERE account_id = ?
+      UNION SELECT file_id FROM balances WHERE account_id = ?
+      UNION SELECT file_id FROM positions WHERE account_id = ?)
+    ORDER BY uploaded_at, rowid`).all(id, id, id, id)).map((f) => ({ id: f.id, name: f.name }));
   const recent = (await db.prepare(`SELECT t.date, t.amount, t.description, f.name AS file_name FROM transactions t
                              LEFT JOIN files f ON f.id = t.file_id WHERE t.account_id = ? ORDER BY t.date DESC, t.id DESC LIMIT ?`)
     .all(id, RECENT)).map((r) => ({ date: r.date, amount: num(r.amount), description: r.description ?? '', name: transactionDisplayName(r.description ?? ''), fileName: r.file_name ?? null }));
@@ -106,7 +106,7 @@ async function latestBalance(db, id) {
                         WHERE b.account_id = ? ORDER BY b.date DESC, b.id DESC LIMIT 1`).get(id);
   if (b) return withSources(num(b.amount), b.date, 'balance', b.file_id != null ? [b] : []);
   const p = await db.prepare(`SELECT as_of, sum(value) AS total FROM positions
-                        WHERE account_id = ?1 AND as_of = (SELECT max(as_of) FROM positions WHERE account_id = ?1) GROUP BY as_of`).get(id);
+                        WHERE account_id = ? AND as_of = (SELECT max(as_of) FROM positions WHERE account_id = ?) GROUP BY as_of`).get(id, id);
   if (!p || p.total == null) return null;
   const files = await db.prepare(`SELECT p.file_id, f.name FROM positions p LEFT JOIN files f ON f.id = p.file_id
                             WHERE p.account_id = ? AND p.as_of = ? AND p.file_id IS NOT NULL GROUP BY p.file_id ORDER BY min(p.id)`).all(id, p.as_of);

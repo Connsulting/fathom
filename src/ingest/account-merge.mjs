@@ -220,7 +220,7 @@ export async function mergeAccounts(db, item, { now = new Date().toISOString() }
   }
   if (own.mirror === 'connected') await db.prepare("UPDATE accounts SET mirror='connected' WHERE id=?").run(keepId);
   // The survivor's figure key is set inside the logged merge, so undo clears it again.
-  const valued = await db.prepare('SELECT 1 FROM balances WHERE account_id=?1 UNION ALL SELECT 1 FROM positions WHERE account_id=?1 LIMIT 1').get(keepId);
+  const valued = await db.prepare('SELECT 1 FROM balances WHERE account_id=? UNION ALL SELECT 1 FROM positions WHERE account_id=? LIMIT 1').get(keepId, keepId);
   if (!keep.fig_key && (own.fig_key || valued)) await db.prepare('UPDATE accounts SET fig_key=? WHERE id=?').run(`acct.${keepId}.balance`,keepId);
   await db.prepare('UPDATE expected_transactions SET account_id=? WHERE account_id=?').run(keepId, ownId);
   await db.prepare('DELETE FROM accounts WHERE id=?').run(ownId);
@@ -285,13 +285,13 @@ export async function mergePlan(db, openId, otherId) {
   // file, because imports find accounts by their own identity.
   if (!isConnected(open) && !isConnected(other)) return { keepId: openId, ownId: otherId, refused: 'Two imported accounts cannot be merged yet, because the next import of the removed one would bring it back. Merge an imported account with its connected copy.' };
   const [keep, own] = isConnected(open) ? [other, open] : [open, other];
-  const count = async (sql) => (await db.prepare(sql).get(own.id)).n;
+  const count = async (sql, uses = 1) => (await db.prepare(sql).get(...Array(uses).fill(own.id))).n;
   const moves = {
     transactions: await count('SELECT count(*) n FROM transactions WHERE account_id=?'),
     balances: await count('SELECT count(*) n FROM balances WHERE account_id=?'),
     positions: await count('SELECT count(*) n FROM positions WHERE account_id=?'),
-    sources: await count(`SELECT count(DISTINCT file_id) n FROM (SELECT file_id FROM transactions WHERE account_id=?1
-      UNION ALL SELECT file_id FROM balances WHERE account_id=?1 UNION ALL SELECT file_id FROM positions WHERE account_id=?1)`),
+    sources: await count(`SELECT count(DISTINCT file_id) n FROM (SELECT file_id FROM transactions WHERE account_id=?
+      UNION ALL SELECT file_id FROM balances WHERE account_id=? UNION ALL SELECT file_id FROM positions WHERE account_id=?)`, 3),
   };
   return { keepId: keep.id, ownId: own.id, moves };
 }

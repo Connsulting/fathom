@@ -60,8 +60,8 @@ export async function archiveAccount(ctx, id, archived = true) {
 // Documents (W-2s, paystubs, statements) and held facts go too, so the planner stops reading them.
 const ROW_TABLES = ['transactions', 'balances', 'positions', 'pnl_lines', 'tax_payments', 'facts', 'held_facts', 'documents'];
 const CATEGORY_TABLES = ['transaction_category_corrections', 'transaction_category_guesses', 'transaction_category_imports'];
-const hasRows = async (db, id) => !!await db.prepare(`SELECT 1 FROM transactions WHERE account_id = ?1
-  UNION ALL SELECT 1 FROM balances WHERE account_id = ?1 UNION ALL SELECT 1 FROM positions WHERE account_id = ?1 LIMIT 1`).get(id);
+const hasRows = async (db, id) => !!await db.prepare(`SELECT 1 FROM transactions WHERE account_id = ?
+  UNION ALL SELECT 1 FROM balances WHERE account_id = ? UNION ALL SELECT 1 FROM positions WHERE account_id = ? LIMIT 1`).get(id, id, id);
 
 export async function removeFile(ctx, id) {
   await requireActor(ctx);
@@ -73,9 +73,9 @@ export async function removeFile(ctx, id) {
   if (file.stored_path == null) throw new ToolError('bad_input', 'That file was not uploaded, so it cannot be removed.');
   const stamp = stampOf(ctx);
   return await tx(db, async (db) => {
-    const fed = (await db.prepare(`SELECT account_id FROM transactions WHERE file_id = ?1 UNION SELECT account_id FROM balances WHERE file_id = ?1
-      UNION SELECT account_id FROM positions WHERE file_id = ?1
-      UNION SELECT id FROM accounts WHERE fig_key IN (SELECT key FROM figures WHERE file_id = ?1)`).all(id)).map((r) => r.account_id).filter(Boolean);
+    const fed = (await db.prepare(`SELECT account_id FROM transactions WHERE file_id = ? UNION SELECT account_id FROM balances WHERE file_id = ?
+      UNION SELECT account_id FROM positions WHERE file_id = ?
+      UNION SELECT id FROM accounts WHERE fig_key IN (SELECT key FROM figures WHERE file_id = ?)`).all(id, id, id, id)).map((r) => r.account_id).filter(Boolean);
     const connected = await connectedAccountIds(db);
     const archived = [];
     const { changes } = await captureChanges(db, async (db) => {
