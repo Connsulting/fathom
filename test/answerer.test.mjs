@@ -1098,7 +1098,11 @@ async function offeredTools(s) {
 function leaves(v, key, out = []) {
   if (Array.isArray(v)) for (const x of v) leaves(x, key, out);
   else if (v && typeof v === 'object') {
-    for (const [k, x] of Object.entries(v)) { out.push({ key, value: k, isKey: true }); leaves(x, k, out); }
+    for (const [k, x] of Object.entries(v)) {
+      // Grounding drops figure reference metadata as a whole.
+      if (k === 'ref') continue;
+      out.push({ key, value: k, isKey: true }); leaves(x, k, out);
+    }
   } else out.push({ key, value: v });
   return out;
 }
@@ -1126,6 +1130,7 @@ function candidates(schema, name, intSentinel) {
   }
   if (type === 'array') return candidates(schema.items || { type: 'string' }, name, intSentinel).map(c => ({ value: [c.value], sentinel: c.sentinel }));
   if (type === 'boolean') return [{ value: true, sentinel: false }];
+  if (type === 'object' && name === 'whatIf') return [{ value: { incomeType: 'business' }, sentinel: false }];
   if (type === 'object' && ['ref', 'assumption', 'expr'].every(k => schema.properties?.[k])) return [{ value: sentinelOperand, sentinel: true }];
   return assert.fail(`extend the contract test: ${name} has type ${type}`);
 }
@@ -1152,7 +1157,7 @@ test('R3 A contract: no tool the answerer offers returns a sentinel argument out
     for (const name of required) {
       const schema = props[name];
       if (schema.enum) base[name] = schema.enum[0];
-      else if (name === 'id') base[name] = recId;
+      else if (name === 'id') base[name] = tool.name === 'accounts' ? s.db.prepare('SELECT id FROM accounts ORDER BY id LIMIT 1').get().id : recId;
       else if (name === 'packId') base[name] = realPack.id;
       else if (name === 'file') base[name] = realPack.entries[0].file;
       else if (name === 'query') base[name] = 'tax';

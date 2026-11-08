@@ -91,3 +91,47 @@ test('room uses current-year stored figures and calculator limits without assumi
   assert.equal(only.rows[0].person, 'spouse');
   assert.ok(out.rows.every(r => r.deadline.unit === 'date' && r.packRefs.length));
 });
+
+test('wage, other ordinary income and itemized deduction what-ifs use householdTax lines', async () => {
+  const parts = compute().tax.parts;
+  for (const [incomeType,field,amount] of [['wages','extraIncome',1300],['other','extraIncome',1300],['other','extraDeduction',65000]]) {
+    const changed = structuredClone(parts);
+    if (field === 'extraDeduction') changed.itemized += amount;
+    else if (incomeType === 'other') changed.otherIncome = amount;
+    else {
+      assert.equal(changed.w2.length, 1);
+      changed.w2[0].agi += amount; changed.w2[0].gross += amount;
+      if (changed.w2[0].comp != null) changed.w2[0].comp += amount;
+    }
+    const a = householdTax(parts), b = householdTax(changed);
+    const out = await callTool('tax', { operation: 'estimate', whatIf: { incomeType, [field]: { value: amount, source: 'owner', evidence: `$${amount}` } } }, ctx);
+    assert.equal(out.whatIf.totalDelta.value, round(b.fedTotal-a.fedTotal+b.va-a.va), `${incomeType} ${field}`);
+  }
+});
+
+test('room does not assign one persons HSA or solo room to the other person', async () => {
+  const key = 'room.hsa';
+  const original = db.prepare('SELECT locator FROM figures WHERE key=?').get(key).locator;
+  try {
+    const locator = JSON.parse(original); locator.person = 'spouse';
+    db.prepare('UPDATE figures SET locator=? WHERE key=?').run(JSON.stringify(locator),key);
+    const both = await callTool('tax', { operation: 'room', types: ['hsa'] }, ctx);
+    assert.equal(both.rows.length, 1);
+    assert.equal(both.rows[0].person, 'spouse');
+    assert.equal(both.rows[0].basis, 'planner');
+    const owner = await callTool('tax', { operation: 'room', person: 'owner', types: ['hsa'] }, ctx);
+    assert.equal(owner.rows[0].remaining, null);
+    assert.equal(owner.rows[0].used, null);
+  } finally { db.prepare('UPDATE figures SET locator=? WHERE key=?').run(original,key); }
+});
+
+test('missing and withheld tax inputs stay unavailable, including what-if totals', async () => {
+  const row = db.prepare("SELECT unavailable_reason FROM figures WHERE key='tax.fed.proj'").get();
+  try {
+    db.prepare("UPDATE figures SET unavailable_reason='missing_fact' WHERE key='tax.fed.proj'").run();
+    const out = await callTool('tax', { operation: 'estimate' }, ctx);
+    assert.equal(out.federal.projected.value, null);
+    assert.equal(out.federal.remaining.value, null);
+    assert.ok(out.gaps.some(g => g.code === 'missing_fact'));
+  } finally { db.prepare("UPDATE figures SET unavailable_reason=? WHERE key='tax.fed.proj'").run(row.unavailable_reason); }
+});
