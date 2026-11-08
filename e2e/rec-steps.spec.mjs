@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { mkdirSync, rmSync, existsSync } from 'node:fs';
 import { resolve, basename, dirname } from 'node:path';
 import { createServer } from 'node:net';
-import { buildRealStore } from '../test/helpers/real-store.mjs';
+import { buildRealStore, addPayroll, paystubDoc } from '../test/helpers/real-store.mjs';
 import { secretEnv, secretsFor } from '../test/helpers/server.mjs';
 import { planRun } from '../test/helpers/plan.mjs';
 import { startServer } from '../src/server.mjs';
@@ -11,6 +11,7 @@ import { ask, FACT_CHECK_OPTIONS } from '../src/ingest/confirm.mjs';
 import { createAuthStore } from '../src/auth/store.mjs';
 
 let app, session, origin, dataDir;
+
 const supplied = !!(process.env.BASE_URL || process.env.FATHOM_SMOKE_BASE_URL);
 const clock = '2026-12-28';
 const variant = { facts: { 'household.filingStatus': undefined, 'household.birthYears': { owner: 1984 }, 'household.names': undefined } };
@@ -27,12 +28,10 @@ test.describe('product-managed steps on the missing-data rec', () => {
     const db = await buildRealStore(dataDir, { clock, variant });
     ask(db, { kind: 'fact_check', subject: 'unrelated-synthetic-check', question: 'An unrelated synthetic question',
       options: FACT_CHECK_OPTIONS, context: { key: 'synthetic.unrelated', value: true }, now: clock });
-    for (const category of ['Medical', 'Shopping', 'Groceries', 'HSA', 'Dining']) {
-      db.prepare('INSERT INTO pnl_lines (entity, period, category, amount) VALUES (?, ?, ?, ?)').run('Synthetic spending ledger', '2026-10', category, -100);
-    }
+    await addPayroll(db, paystubDoc({ person: 'owner', employerName: 'Sample Outside Employer',
+      payDate: '2026-12-15', ytdGross: 60000, federalWithholding: 6000 }));
     await planRun(db, { now: clock, dataDir });
-    const pendingLedger = db.prepare("SELECT id FROM confirm_items WHERE kind = 'fact_check' AND context LIKE '%ledger-confirm%' AND status = 'pending'").get();
-    expect(pendingLedger).toBeTruthy();
+
     db.prepare("UPDATE recs SET status = CASE WHEN id = 'missing-data' THEN 'proposed' ELSE 'dismissed' END").run();
     db.close();
     const socket = createServer();
@@ -77,12 +76,13 @@ test.describe('product-managed steps on the missing-data rec', () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });
 
-  test('@mobile @st1 a ledger gap prefills Ask with its own ledger', async ({ page }) => {
+  test('@mobile @st1 an employer gap prefills Ask with its own employer', async ({ page }) => {
     await page.goto(`${origin}/#/rec/missing-data`);
-    await page.locator('.h-dlg').getByRole('button', { name: 'Describe the ledger', exact: true }).click();
+    await page.locator('.h-dlg').getByRole('button', { name: 'Describe the employer', exact: true }).click();
     await expect(page).toHaveURL(/#\/ask$/);
     const draft = page.locator('textarea[name="q"]');
-    await expect(draft).toHaveValue(/Synthetic spending ledger/);
+    await expect(draft).toHaveValue(/Sample Outside Employer/);
     await expect(draft).not.toHaveValue(/unrelated synthetic/);
+
   });
 });

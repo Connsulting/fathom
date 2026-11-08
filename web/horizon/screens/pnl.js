@@ -1,5 +1,6 @@
-/* Horizon P&L (Money, #/pnl): a business P&L for each entity (or unassigned business account) and
-   household spending. A chooser picks the view; each view shows its totals, where the numbers come
+/* Horizon P&L (Money, #/pnl): a business P&L for each entity (or unassigned business account),
+   personal summaries, past income history and connected-account household spending.
+   A chooser picks the view; each view shows its totals, where the numbers come
    from, what they leave out, a month strip and a month by category table that sorts from its
    headers and filters by text, type and empty rows. The view, the selected month, the sort and the
    filter live in the hash (#/pnl/<state>, see pnl-model.js). A category name or a month cell opens
@@ -170,12 +171,23 @@ const failedNow = (key) => P.failed.has(key);
 
 /* ---------- shared pieces ---------- */
 
+function plCaption(e) {
+  const who = e?.person === 'owner' ? 'owner' : e?.person === 'spouse' ? 'spouse' : null;
+  if (e?.kind === 'spending') return who === 'owner' ? 'Your summary' : who === 'spouse' ? 'Spouse summary' : 'Person not assigned';
+  if (e?.kind === 'income_history') return who === 'owner' ? 'Your past income' : who === 'spouse' ? 'Spouse past income' : 'Past income, person not assigned';
+  return e?.kind === 'account' ? 'Business account' : 'Business';
+}
+
 function chooser() {
   const { esc } = H;
   const ents = H.arr(P.entities);
   const one = (key, label, sub) => `<button type="button" class="pl-view${P.view === key ? ' on' : ''}" data-pl-view="${esc(key)}" aria-pressed="${P.view === key}"><span>${label}</span>${sub ? `<small>${sub}</small>` : ''}</button>`;
-  const group = (label, list) => list.length ? `<div class="pl-view-group" role="group" aria-label="${label}"><span class="pl-view-heading">${label}</span>${list.map(e => one(e.key, esc(e.label), e.kind === 'spending' ? 'Card spending' : e.kind === 'account' ? 'Business account' : 'Business')).join('')}</div>` : '';
-  const btns = [group('Businesses', ents.filter(e => e.kind !== 'spending')), group('Spending ledgers', ents.filter(e => e.kind === 'spending'))];
+  const group = (label, list) => list.length ? `<div class="pl-view-group" role="group" aria-label="${label}"><span class="pl-view-heading">${label}</span>${list.map(e => one(e.key, esc(e.label), plCaption(e))).join('')}</div>` : '';
+  const btns = [
+    group('Businesses', ents.filter(e => e.kind === 'entity' || e.kind === 'account')),
+    group('Personal summaries', ents.filter(e => e.kind === 'spending')),
+    group('Income history', ents.filter(e => e.kind === 'income_history'))
+  ];
   btns.push(one(PL_HOUSEHOLD, 'Household spending', 'Personal accounts'));
   return `<div class="pl-views" data-pl-views role="group" aria-label="Choose a P&amp;L">${btns.join('')}</div>`;
 }
@@ -359,7 +371,8 @@ function businessView() {
   const p = d.pnl;
   if (!p) return '<div data-pl-business><p class="h-mute">No business data.</p></div>';
   const sel = selMonth(p);
-  const ytd = p.from === `${p.to.slice(0, 4)}-01`;
+  const kind = p.entity.kind;
+  const ytd = kind !== 'income_history' && p.from === `${p.to.slice(0, 4)}-01`;
   const rangeName = ytd ? 'Year to date' : 'Range';
   const prior = p.prior;
   const pri = (k) => (prior ? `<span class="pl-tile-p" data-pl-prior>Last year ${prior[k] ? H.figHtml(prior[k]) : 'none'}</span>` : '');
@@ -369,6 +382,11 @@ function businessView() {
     : '<p class="pl-line">No data for the same months last year.</p>';
   const accounts = H.arr(p.entity?.accounts).map((a) => esc(a.label)).join(', ');
   const meta = `<div class="h-meta pl-meta"><span>${esc(plRange(p.from, p.to))}${ytd ? ', year to date' : ''}</span>${accounts ? `<span>${p.entity.kind === 'account' ? 'Account' : 'Accounts'}: ${accounts}</span>` : ''}</div>`;
+  const scopeNote = kind === 'spending'
+    ? `<p class="pl-line" data-pl-scope>${plCaption(p.entity)}. Personal summaries are shown separately from connected-account household totals.</p>`
+    : kind === 'income_history'
+      ? `<p class="pl-line" data-pl-scope>${plCaption(p.entity)}. Past income is excluded from current business figures.</p>`
+      : '';
   const ms = new Map(H.arr(p.monthSources).map((m) => [m.month, m]));
   const TAG = { workbook: ['wb', 'Workbook'], transactions: ['tx', 'Transactions'], none: ['no', 'No data'] };
   const strip = monthStrip(p.months, sel, p.net?.total, (m) => p.net?.months?.[m], (m) => TAG[ms.get(m)?.source] || TAG.none);
@@ -378,6 +396,7 @@ function businessView() {
     : '';
   return `<div class="pl-body" data-pl-business${busy(bizReq(key)) ? ' aria-busy="true"' : ''}>
     ${meta}
+    ${scopeNote}
     <div class="pl-sum">${tiles}${priorLine}${sourcesLine(p)}${bizGaps(p)}</div>
     ${section('Months', `${strip}${selNote}`, 'Net for each month. Pick one to list its rows and scope Ask to it.', 'pl-sec')}
     ${section('Categories', bizTable(p, sel, rangeName), 'Pick a category or a month cell to see its rows.', 'pl-sec')}
@@ -583,7 +602,7 @@ export function render() {
     });
   }
   afterDraw();
-  return shell(`<section class="pl">${pageHead('Money', 'P&amp;L', 'Business profit and loss, imported spending ledgers, and household spending. Every amount opens to where it came from.')}${body}</section>`);
+  return shell(`<section class="pl">${pageHead('Money', 'P&amp;L', 'Business profit and loss, personal summaries, income history, and connected-account household spending. Every amount opens to where it came from.')}${body}</section>`);
 }
 
 // Before the entities are known (their read failed), household spending is still reachable.

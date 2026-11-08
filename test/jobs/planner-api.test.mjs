@@ -273,7 +273,7 @@ describe('npm run plan (src/jobs/plan-cli.mjs)', () => {
 });
 
 
-test('PN1: HTTP planning, ledger confirmation and P&L reads resume tax projections', async () => {
+test('INF1: HTTP planning infers personal ledgers and P&L reads preserve spending provenance', async () => {
   const dir = S.dir();
   const db = S.track(await buildRealStore(dir));
   for (const category of ['Medical', 'Groceries', 'Dining & Drinks']) {
@@ -284,25 +284,27 @@ test('PN1: HTTP planning, ledger confirmation and P&L reads resume tax projectio
   try {
     const before = await app.postJson('/api/jobs/plan/run');
     assert.equal(before.status, 200);
-    assert.ok(before.json.scenario.fig['agi.est'].gaps.some(g => g.code.startsWith('entity_unclassified:')));
+    assert.ok(before.json.scenario.fig['agi.est'], 'tax projections use the inferred classification immediately');
+
     const pending = await app.request({ path: '/api/confirm' });
     assert.equal(pending.status, 200);
-    const check = pending.json.items.find(i => i.context.key === 'pnl.ledgers');
-    assert.ok(check, JSON.stringify(pending.json));
-    assert.match(check.question, /Aster's looks like card spending/);
-    assert.equal(db.prepare("SELECT value FROM facts WHERE key = 'pnl.ledgers'").get(), undefined);
-    const answered = await app.postJson(`/api/confirm/${check.id}/answer`, { answer: 'yes' });
-    assert.equal(answered.status, 200, answered.text);
-    const replanned = await app.postJson('/api/jobs/plan/run');
-    assert.equal(replanned.status, 200, replanned.text);
-    const after = await app.getScenario();
-    assert.ok(after.fig['agi.est'], 'tax projections stay visible');
-    assert.ok(!after.fig['agi.est'].gaps.some(g => g.code.startsWith('entity_unclassified:')), 'answer removes the ledger gap');
+    assert.ok(!pending.json.items.some(i => i.context.key === 'pnl.ledgers'));
+    const inferred = JSON.parse(db.prepare("SELECT value FROM facts WHERE key='business.entities'").get().value).find(e => e.name === 'Asters');
+    assert.equal(inferred.type, 'personal');
+    assert.equal(inferred.inferred, true);
+
     const pnl = await app.request({ path: '/api/pnl?entity=entity:asters' });
     assert.equal(pnl.status, 200, pnl.text);
     assert.equal(pnl.json.pnl.entity.kind, 'spending');
     assert.equal(pnl.json.pnl.entity.label, "Aster's");
     assert.equal(pnl.json.figures[pnl.json.pnl.expenses.total].v, 360);
     assert.ok(pnl.json.figures[pnl.json.pnl.expenses.total].src);
+    const scenario = await app.getScenario();
+    const rec = scenario.recs.find(r => r.assumptions?.some(a => a.key === 'business.entities' && a.path[0] === 'Asters'));
+    assert.ok(rec, 'the inferred classification exposes Undo through a recommendation');
+    const undone = await app.postJson(`/api/recs/${rec.id}/answers`, { answers: [{ key: 'business.entityInference', value: { Asters: { undone: true } } }] });
+    assert.equal(undone.status, 200, undone.text);
+    assert.ok(!JSON.parse(db.prepare("SELECT value FROM facts WHERE key='business.entities'").get().value).some(e => e.name === 'Asters'));
+    assert.ok(undone.json.scenario.recs.find(r => r.id === 'missing-data').tasks.some(t => t.code?.startsWith('entity_unclassified:') && /Aster/.test(t.t)));
   } finally { await app.close(); }
 });

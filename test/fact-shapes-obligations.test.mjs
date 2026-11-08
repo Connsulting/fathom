@@ -15,7 +15,7 @@ test('C7 facts accept their declared shapes and reject malformed neighbors atomi
     ['household.ownerBirthDate','1980-02-29','1980-02-30'],
     ['household.spouseBirthDate','1982-06-15','soon'],
     ['household.retireAge',{owner:50,spouse:59.5},{child:50}],
-    ['obligations.mortgage',{balance:10000,rate:0,monthlyPayment:500,escrowMonthly:100,payoffDate:'2028-06-01'},{balance:10000,rate:0,monthlyPayment:500}],
+    ['obligations.mortgage',{balance:10000,rate:0,monthlyPayment:500,escrowMonthly:100,payoffDate:'2028-06-01'},{monthlyPayment:-1}],
     ['obligations.childcare',{schoolAgeMonthly:400,afterCareEndMonthly:0},{schoolAgeMonthly:-1}],
     ['obligations.childcareChangeDate','2030-09-01','2030-13-01'],
     ['accounts.planType',{ret:'401k',ira:'roth_ira'},{checking:'401k'}],

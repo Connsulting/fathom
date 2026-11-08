@@ -269,13 +269,18 @@ test('MGI1: a W-2 with no withholding rows asks its recipient through ingest', a
 // "Northwind Advisory, LLC" normalizes differently from the entity "Northwind Advisory", so ingest
 // asks employer_relation. 'household' plus an entity alias (made through ingest's own entity_alias
 // question on a P&L sheet named for the alias) maps it to the S corp: not outside wages. Without
-// the alias, 'household' matches nothing and blocks.
+// the alias, the household employer creates an inferred business and its known payroll still counts.
 const NW_LLC = 'Northwind Advisory, LLC';
 const nwLlcW2 = () => W2(NW_LLC, { wages: 60000, medicareWages: 60000, federalWithheld: 6000 }, { recipient: 'owner', relation: 'household' });
 
 test('MGI1: a household employer is matched by name or alias', async () => {
   const unmatched = await planned({ payroll: [nwLlcW2()] });
-  assertGap(unmatched.db, unmatched.info, 'household_employer_unmatched', ['agi.est']);
+  assertNotBlocked(unmatched.info, 'household_employer_unmatched');
+  assert.ok(fig(unmatched.db, 'agi.est'));
+  const inferred = factRow(unmatched.db, 'business.entities').value.find(e => e.name === NW_LLC);
+  assert.equal(inferred.inferred, true);
+  assert.equal(inferred.accountId, undefined, 'the existing owner-assigned business ledger is not reassigned to another employer name');
+
 
   const db = await S.store({ variant: { payroll: [nwLlcW2()] } });
   await seedHistoricalRows({ db, household: householdOf(db) }, { name: 'historical-alias.xlsx', bytes: Buffer.from('synthetic historical alias') }, [

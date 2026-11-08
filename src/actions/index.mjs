@@ -3,7 +3,7 @@ import { recordFactAnswers } from '../facts/answers.mjs';
 import { createGoal, updateGoal } from '../goals/write.mjs';
 import { writeRec } from '../store/recs.mjs';
 import { requireActor, requireScope, saveReceipt } from './receipts.mjs';
-import { requireEvidence } from './evidence.mjs';
+import { requireEvidence, requireEntityEvidence } from './evidence.mjs';
 import { answerShape } from '../jobs/triggers/common.mjs';
 import { goalStatusOf } from '../shared/goals.mjs';
 
@@ -39,7 +39,8 @@ export function recordFact(args, ctx) {
   const actorId = requireActor(ctx);
   const shape = answerShape(args.key);
   const prior = ctx.db.prepare('SELECT value FROM facts WHERE key = ?').get(args.key);
-  requireEvidence(ctx, args.value, { evidence: args.evidence, shape, stored: prior ? [parse(prior.value, null)] : [] });
+  if (args.key === 'business.entities') requireEntityEvidence(ctx, args.value, { evidence: args.evidence, shape });
+  else requireEvidence(ctx, args.value, { evidence: args.evidence, shape, stored: prior ? [parse(prior.value, null)] : [] });
   let receipt = null;
   recordFactAnswers(ctx.db, [{ key: args.key, value: args.value }], { now: new Date(ctx.now ?? Date.now()).toISOString(),
     channel: ctx.channel === 'mcp' ? 'mcp' : 'ask', actorId, sourceEvidence: ctx.sourceEvidence,

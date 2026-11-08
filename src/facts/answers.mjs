@@ -12,8 +12,11 @@ const fail = () => { throw new FactAnswerError('Check the answer type, required 
 
 function validate(value, shape, year) {
   if (shape.type === 'array') {
-    if (!Array.isArray(value) || !value.length || value.length > shape.maxItems) fail();
+    if (!Array.isArray(value) || value.length < shape.minItems || value.length > shape.maxItems) fail();
     for (const entry of value) validate(entry, shape.items, year);
+    if (shape.items.fields.name && new Set(value.map(e => normalizeName(e.name))).size !== value.length) fail();
+  } else if (shape.type === 'string') {
+    if (typeof value !== 'string' || !normalizeName(value) || value.length > shape.maxLength) fail();
   } else if (shape.type === 'map') {
     if (!object(value) || !Object.keys(value).length || Object.keys(value).some(k => !normalizeName(k)) || new Set(Object.keys(value).map(normalizeName)).size !== Object.keys(value).length) fail();
     for (const entry of Object.values(value)) validate(entry, shape.values, year);
@@ -29,8 +32,6 @@ function validate(value, shape, year) {
   } else if (shape.type === 'years') {
     if (!Array.isArray(value) || !value.length || value.length > shape.maxItems
       || value.some(y => !Number.isInteger(y) || y < shape.min || y > shape.max)) fail();
-  } else if (shape.type === 'string') {
-    if (typeof value !== 'string' || !value.trim() || value.length > 200) fail();
   } else if (shape.type === 'boolean') {
     if (typeof value !== 'boolean') fail();
   } else if (shape.type === 'number') {
@@ -71,11 +72,29 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
       value = { ...(object(prior) ? prior : {}), ...value };
     } else {
       // Birth years are told a person at a time: a later answer keeps the years it does not name.
-      if (a.key === 'household.birthYears' && object(value)) {
+      if (['household.birthYears', 'obligations.mortgage'].includes(a.key) && object(value)) {
         const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
         value = { ...(object(prior) ? prior : {}), ...value };
       }
       validate(value, shape, year);
+      if (a.key === 'business.entities') {
+        const links = value.map(e => e.accountId).filter(Boolean);
+        if (new Set(links).size !== links.length) fail();
+        for (const entry of value) {
+          if ((entry.status === 'final_year') !== (entry.finalYear !== undefined)) fail();
+          if (entry.accountId && (!['s_corp', 'sole_prop', 'llc_single', 'partnership', 'c_corp'].includes(entry.type)
+            || !db.prepare("SELECT id FROM accounts WHERE id=? AND kind='business' AND archived_at IS NULL").get(entry.accountId))) fail();
+        }
+        const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, []);
+        const names = new Set(value.map(e => normalizeName(e.name)));
+        value = [...(Array.isArray(prior) ? prior : []).filter(e => !names.has(normalizeName(e?.name))
+          && !(e?.inferred && (links.includes(e.accountId) || e.accountIds?.some(id => links.includes(id)))))
+          .map(e => {
+            if (!links.includes(e?.accountId)) return e;
+            const { accountId, ...unlinked } = e;
+            return unlinked;
+          }), ...value];
+      }
       if (shape.type === 'map') {
         const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
         const changed = new Set(Object.keys(value).map(normalizeName));
@@ -84,7 +103,7 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
       }
     }
     if (a.key === 'income.payrollYtd' && Object.values(value).some(v => v.asOf > date)) fail();
-    if (a.key === 'obligations.mortgage' && value.escrowMonthly >= value.monthlyPayment) fail();
+    if (a.key === 'obligations.mortgage' && (!Object.keys(value).length || value.escrowMonthly >= value.monthlyPayment)) fail();
     if (/^household\.(owner|spouse)BirthDate$/.test(a.key) && value > date) fail();
     if (a.key === 'business.salaryRange' && value.min > value.max) fail();
     // A birth year in the future is a typo, not an answer.

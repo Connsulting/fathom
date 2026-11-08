@@ -837,7 +837,8 @@ test('PN1: a confirmed spending ledger clears the tax block without business fig
   db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES ('Asters', '2026-10', 'Groceries', -120, ?)")
     .run(JSON.stringify({ sheet: "Aster's Expenses", cells: ['D2'] }));
   await plan(db);
-  assert.equal(fig(db, 'agi.est').locator.partial, true, 'an unknown ledger is excluded');
+  assert.ok(figureRow(db, 'agi.est'), 'a personal ledger is inferred before asking');
+
   addFact(db, 'pnl.ledgers', { "Aster's": { kind: 'spending' } });
   await plan(db);
   assert.ok(figureRow(db, 'agi.est'), 'tax projection resumes');
@@ -845,7 +846,7 @@ test('PN1: a confirmed spending ledger clears the tax block without business fig
   assert.ok(!JSON.stringify(recRow(db, 'missing-data')?.def).includes('how Aster'));
 });
 
-test('PN1: personal-category inference includes refunds, preserves display text and records nothing before yes', async () => {
+test('INF1: personal-category inference includes refunds and saves classifications without a confirmation form', async () => {
   const db = await S.store();
   for (const [entity, sheet] of [['Asters', "Aster's Expenses"], ['Birchs', "Birch's Expenses"]]) {
     for (const category of ['Medical', 'Shopping', 'Groceries', 'HSA', 'Dining', 'Software']) {
@@ -855,21 +856,13 @@ test('PN1: personal-category inference includes refunds, preserves display text 
   }
   await plan(db);
   assert.equal(factRow(db, 'pnl.ledgers'), null);
-  assert.equal(fig(db, 'agi.est').locator.partial, true);
-  const rec = recRow(db, 'missing-data').def;
-  assert.match(JSON.stringify(rec), /Aster(?:&#39;|')s/);
-  assert.doesNotMatch(JSON.stringify(rec), /Tell us how Asters is taxed/);
-  const checks = db.prepare("SELECT * FROM confirm_items WHERE kind = 'fact_check' AND status = 'pending'").all()
-    .filter(x => JSON.parse(x.context).key === 'pnl.ledgers');
-  assert.equal(checks.length, 1, 'one confirmation covers the proposed ledger map');
-  assert.match(checks[0].question, /no income, mostly personal categories/);
-  await plan(db);
-  assert.equal(db.prepare("SELECT count(*) n FROM confirm_items WHERE id = ?").get(checks[0].id).n, 1);
-  assert.equal(factRow(db, 'pnl.ledgers'), null, 'replanning does not accept the guess');
-  assert.equal(answerItem(db, checks[0].id, 'yes').factsChanged, true);
-  assert.deepEqual(factRow(db, 'pnl.ledgers').value, { "Aster's": { kind: 'spending' }, "Birch's": { kind: 'spending' } });
-  await plan(db);
+
   assert.ok(figureRow(db, 'agi.est'));
+  const inferred = factRow(db, 'business.entities').value.filter(e => e.inferred);
+  assert.deepEqual(inferred.map(e => [e.name, e.type]), [['Asters', 'personal'], ['Birchs', 'personal']]);
+  assert.equal(db.prepare("SELECT count(*) n FROM confirm_items WHERE context LIKE '%pnl.ledgers%' AND status='pending'").get().n, 0);
+  await plan(db);
+  assert.deepEqual(factRow(db, 'business.entities').value.filter(e => e.inferred), inferred);
 });
 
 test('PN1: income rows, mostly business categories and an explicit business answer suppress the spending guess', async () => {
@@ -880,34 +873,35 @@ test('PN1: income rows, mostly business categories and an explicit business answ
     if (marked) addFact(db, 'pnl.ledgers', { Cedar: { kind: 'business' } });
     await plan(db);
     assert.equal(fig(db, 'agi.est').locator.partial, true);
-    assert.match(JSON.stringify(recRow(db, 'missing-data').def), /Cedar.*not included/);
+    assert.match(JSON.stringify(recRow(db, 'missing-data').def), /Cedar/);
+
     assert.ok(!db.prepare("SELECT context FROM confirm_items WHERE status = 'pending'").all().some(x => JSON.parse(x.context).key === 'pnl.ledgers'));
   }
 });
 
-test('PN1: declining the spending guess keeps classification unknown and does not ask it again', async () => {
+test('INF1: undoing a spending classification keeps it unknown on later planning runs', async () => {
   const db = await S.store();
   db.prepare("INSERT INTO pnl_lines (entity, period, category, amount) VALUES ('Cedar', '2026-10', 'Groceries', -100)").run();
   await plan(db);
-  const q = db.prepare("SELECT id FROM confirm_items WHERE context LIKE '%pnl.ledgers%' AND status = 'pending'").get();
-  answerItem(db, q.id, 'no');
-  await plan(db);
-  assert.equal(factRow(db, 'pnl.ledgers'), null);
+  await answerFacts(db, [{ key: 'business.entityInference', value: { Cedar: { undone: true } } }], { replan: () => plan(db) });
+  assert.ok(!factRow(db, 'business.entities').value.some(e => e.name === 'Cedar'));
   assert.equal(fig(db, 'agi.est').locator.partial, true);
-  assert.match(JSON.stringify(recRow(db, 'missing-data').def), /Cedar.*not included/);
-  assert.equal(db.prepare("SELECT count(*) n FROM confirm_items WHERE context LIKE '%pnl.ledgers%' AND status = 'pending'").get().n, 0);
+  assert.match(JSON.stringify(recRow(db, 'missing-data').def), /Cedar.*(?:S corp|taxed)/);
+  await plan(db);
+  assert.ok(!factRow(db, 'business.entities').value.some(e => e.name === 'Cedar'));
+
 });
 
-test('PN1: ledger answers validate and merge entries, and invalidate a pending guess after an owner correction', async () => {
+test('PN1: ledger answers validate and merge entries, and override an inferred classification', async () => {
   const db = await S.store();
   db.prepare("INSERT INTO pnl_lines (entity, period, category, amount) VALUES ('Cedar', '2026-10', 'Groceries', -100)").run();
   await plan(db);
-  const q = db.prepare("SELECT id FROM confirm_items WHERE context LIKE '%pnl.ledgers%' AND status = 'pending'").get();
   for (const value of [{ Cedar: { kind: 'unknown' } }, { Cedar: { kind: 'spending', extra: true } }, []]) {
     await assert.rejects(answerFacts(db, [{ key: 'pnl.ledgers', value }], { replan: async () => {} }), FactAnswerError);
   }
   await answerFacts(db, [{ key: 'pnl.ledgers', value: { Cedar: { kind: 'business' } } }], { replan: async () => {} });
-  assert.throws(() => answerItem(db, q.id, 'yes'), /stale/);
+  await plan(db);
+  assert.match(JSON.stringify(recRow(db, 'missing-data').def), /Cedar.*(?:S corp|taxed)/);
   await answerFacts(db, [{ key: 'pnl.ledgers', value: { Elm: { kind: 'spending' } } }], { replan: async () => {} });
   assert.deepEqual(factRow(db, 'pnl.ledgers').value, { Cedar: { kind: 'business' }, Elm: { kind: 'spending' } });
   await answerFacts(db, [{ key: 'pnl.ledgers', value: { CEDAR: { kind: 'spending' } } }], { replan: async () => {} });

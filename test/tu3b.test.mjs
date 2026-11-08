@@ -149,22 +149,22 @@ test('shutdown of work queued behind occupied dispatcher slots is bounded and ne
   await live.stop();
 });
 
-test('a new ledger gap opens Ask and its recorded classification clears the gap', async t => {
+test('the first planner run classifies a personal summary without creating a ledger confirmation', async t => {
+
   const { db } = await store(t);
   for (const category of ['Medical', 'Shopping', 'Groceries', 'HSA', 'Dining']) {
     db.prepare('INSERT INTO pnl_lines (entity, period, category, amount) VALUES (?, ?, ?, ?)').run('Synthetic ledger', '2026-10', category, -100);
   }
   await planRun(db, { now: clock });
-  let sc = buildScenario(db, { clock });
-  const task = sc.recs.find(r => r.id === 'missing-data').tasks.find(t => t.code?.startsWith('entity_unclassified:'));
-  assert.equal(task.fix.key, 'pnl.ledgers');
-  assert.equal(task.link, 'ask');
-  assert.match(task.fix.prompt, /Synthetic ledger/);
-  const { answerFacts } = await import('../src/facts/answers.mjs');
-  await answerFacts(db, [{ key: task.fix.key, value: { 'Synthetic ledger': { kind: 'spending' } } }], { now: clock, replan: () => planRun(db, { now: clock }) });
-  sc = buildScenario(db, { clock });
-  assert.ok(!sc.recs.find(r => r.id === 'missing-data')?.tasks.some(t => t.code === task.code && !t.done));
-  assert.ok(!sc.fig['tax.fed.proj'].gaps.some(g => g.code === task.code));
+  const item = db.prepare("SELECT id FROM confirm_items WHERE kind = 'fact_check' AND status = 'pending'").get();
+  assert.equal(item, undefined);
+  const fact = JSON.parse(db.prepare("SELECT value FROM facts WHERE key='business.entities'").get().value);
+  assert.equal(fact.find(e => e.name === 'Synthetic ledger').type, 'personal');
+  const sc = buildScenario(db, { clock });
+  assert.ok(!sc.recs.find(r => r.id === 'missing-data').tasks.some(t => t.kind === 'confirm'));
+  assert.ok(sc.recs.some(r => r.assumptions?.some(a => a.key === 'business.entities' && a.path[0] === 'Synthetic ledger')));
+
+
 });
 
 test('a connection mapping without newer account data cannot make that account fresh', async t => {

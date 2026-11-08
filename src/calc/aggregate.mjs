@@ -250,7 +250,7 @@ export function aggregate(input, args = {}, definition = null) {
   }
   const included = base.filter((t) => Object.entries(selectors.include).every(([f, vs]) => matches(t, f, vs)));
   const removed = (t) => Object.entries(selectors.exclude).some(([f, vs]) => matches(t, f, vs));
-  const counted = included.filter((t) => !removed(t));
+  const counted = included.filter((t) => !removed(t) && (!input.transactionIds || input.transactionIds.has(t.id)));
   const value = (t) => (['spending', 'outflow'].includes(measure) ? -t.amount : t.amount);
   const raw = sumRows(counted, value),
     scale = args.annualize && window ? 12 / window.months : 1;
@@ -322,11 +322,12 @@ export function aggregate(input, args = {}, definition = null) {
       ],
       ...extra,
     });
-  const total = f(window ? raw * scale : null, 'Selected total', counted, {
+  const allDebt = selectors.include.classes?.length === 1 && selectors.include.classes[0] === 'debt_service';
+  const total = f(window ? raw * scale : null, allDebt ? 'All debt payments' : 'Selected total', counted, {
     unit: args.annualize ? 'usd_per_year' : 'usd',
     unavailable: window ? undefined : 'incomplete_month',
   });
-  const perMonth = f(window ? raw / window.months : null, 'Monthly average', counted, {
+  const perMonth = f(window ? raw / window.months : null, allDebt ? 'All debt payments per month' : 'Monthly average', counted, {
     unit: 'usd_per_month',
     formula: 'selected total divided by calendar months',
     unavailable: window ? undefined : 'incomplete_month',
@@ -342,7 +343,7 @@ export function aggregate(input, args = {}, definition = null) {
   const allGroups = [...map]
     .map(([key, rs]) => ({
       key,
-      label: groupBy === 'account' ? byId.get(key).name : key,
+      label: groupBy === 'account' ? byId.get(key).name : groupBy === 'class' && key === 'debt_service' ? 'All debt payments' : key,
       figure: f(sumRows(rs, value) * scale, 'Selected group', rs, { unit: total.unit }),
     }))
     .sort((a, b) => Math.abs(b.figure.value) - Math.abs(a.figure.value) || String(a.key).localeCompare(String(b.key)));

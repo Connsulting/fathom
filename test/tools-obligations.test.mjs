@@ -1,8 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spendingStore } from './helpers/spending.mjs';
+import { spendingStore as baseStore } from './helpers/spending.mjs';
 import { assertRefsResolve } from './helpers/figures.mjs';
 const mortgage = {balance:10000,rate:0,monthlyPayment:500,escrowMonthly:100};
+async function spendingStore(t) {
+ const s=await baseStore(t);
+ s.account('mortgage','loan');
+ s.db.prepare("INSERT INTO balances(account_id,date,amount) VALUES ('mortgage','2026-10-31',10000)").run();
+ return s;
+}
 
 test('mortgage payoff uses the stated date, then amortization net of escrow, with missing facts explicit',async t=>{
  const s=await spendingStore(t);

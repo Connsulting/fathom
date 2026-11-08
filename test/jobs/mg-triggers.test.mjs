@@ -770,6 +770,7 @@ test('MG12: federal targets expose the excluded unclassified business as a preci
   assert.ok(Number.isFinite(f.v));
   assert.equal(f.unavailable, undefined);
   assert.ok(f.gaps.some(g => g.code.startsWith('entity_unclassified:') && /Quill Works/.test(g.employer)));
+
 });
 
 test('MG12: restoring the data clears the marker', async () => {

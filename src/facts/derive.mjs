@@ -1,18 +1,19 @@
 import { cents, parseJson } from '../store/db.mjs';
 import { upsertFact } from '../store/facts.mjs';
-import { resolveEntities } from '../jobs/planner/data.mjs';
-import { docRecipient, payrollRecords, sameEmployer, inferHouseholdEmployer } from '../jobs/planner/payroll.mjs';
+import { resolveEntities, inferEntities } from '../jobs/planner/data.mjs';
+import { inferMortgage } from '../calc/mortgage-inference.mjs';
+import { docRecipient, payrollRecords, sameEmployer } from '../jobs/planner/payroll.mjs';
 import { TAX_2026 } from '../calc/index.mjs';
 import { activeInference } from '../shared/va529-plan.mjs';
 import { isCollegeAccount } from '../shared/account-kinds.mjs';
+import { ownerEntityIdentity } from '../pnl/ledgers.mjs';
 
 export const ADVISOR_KEYS = new Set(['retirement.planTermsConfirmed', 'retirement.aggregationConfirmed', 'business.salaryRange']);
 export const DEFAULT_UNDO = Object.freeze({
   'household.filingStatusDefault': 'household.filingStatus',
   'business.cashBasisDefault': 'business.cashBasis',
-  'business.entitiesDefault': 'business.entities',
-  'business.employerEntityDefault': 'business.employerEntity',
   'accounts.va529CarryforwardDefault': 'accounts.va529',
+  'business.entityInference': 'business.entities',
 });
 const amount = v => typeof v === 'number' && Number.isFinite(v) && v >= 0;
 const ev = d => ({ table: 'documents', id: d.id, fileId: d.fileId ?? null });
@@ -101,15 +102,13 @@ export function prepareRecFacts(db, data) {
   for (const [key, row] of Object.entries(stored)) if (automatic(row)) {
     delete values[key];
   }
-  let entities = resolveEntities(data, values);
-  const employer = inferHouseholdEmployer(data, values, entities);
-  if (employer) { values[employer.key] = employer.value; entities = resolveEntities(data, values); }
+  const entityInference = inferEntities(data, values);
+  if (entityInference.value.length) values['business.entities'] = entityInference.value;
+  const mortgage = inferMortgage(db, data.clock, values['obligations.mortgage']);
+  if (mortgage.present) values['obligations.mortgage'] = mortgage.values;
+  const entities = resolveEntities(data, values);
   const candidates = deriveRecFacts(data, values, { entities });
   const defaults = [];
-  if (employer) {
-    candidates[employer.key] = sourceFact(data, employer.value, employer.evidence, employer.rows, true);
-    defaults.push({ key: employer.key, path: [], value: employer.value, undoKey: employer.undoKey, evidence: employer.evidence });
-  }
   const addDefault = (key, value, undoKey, evidence, path = []) => {
     const flag = values[undoKey];
     if (path.length ? flag?.[path[0]]?.undone : flag === true) return;
@@ -134,26 +133,44 @@ export function prepareRecFacts(db, data) {
   const writes = [];
   for (const [key, candidate] of Object.entries(candidates)) {
     const row = stored[key];
-    if (row && !automatic(row) && !(key === 'business.entities' && Array.isArray(row.value) && row.value.length === 0)) continue;
+    if (row && !automatic(row)) continue;
     values[key] = candidate.value;
     writes.push({ key, ...candidate });
   }
   const deletes = Object.entries(stored).filter(([key, r]) => automatic(r) && !candidates[key]).map(([key]) => key);
   const assumptions = defaults.filter(a => a.path.length ? !values[a.undoKey]?.[a.path[0]]?.undone : values[a.undoKey] !== true);
-  return { values, assumptions, writes, deletes, write() {
+  for (const entity of entityInference.value.filter(e => e?.inferred)) assumptions.push({
+    key: 'business.entities', path: [entity.name], value: entity.type, undoKey: 'business.entityInference',
+    evidence: `${entity.name}: inferred ${entity.type === 'personal' ? 'personal spending and income summary' : entity.type === 'income_history' ? 'past client income history' : entity.type === 'inactive' ? 'inactive past business' : entity.type === null ? 'household business with tax type pending' : 'S corp'} from stored ${entity.inferenceKind === 'household_payroll' ? 'household employer and payroll evidence' : 'ledger activity'}.${entity.type === 'personal' ? entity.owner ? ` Attributed to ${entity.owner === 'spouse' ? 'your spouse' : 'you'}.` : ' Tell Fathom who this summary belongs to.' : ''} Not right? Tell Fathom which one is the S corp or correct this summary's person.`,
+  });
+  return { values, assumptions, writes, deletes, mortgage, write() {
     let changed = 0;
+    if (entityInference.changed) {
+      const src = `inferred:entities:${data.clock}`;
+      db.prepare('INSERT OR IGNORE INTO sources (id,label,as_of,kind,note) VALUES (?,?,?,?,?)')
+        .run(src, 'Entity classifications inferred from ledger line counts and kinds', data.clock, 'derived', '');
+      if (upsertFact(db, { key: 'business.entities', value: entityInference.value, src, asOf: data.clock,
+        confirmed: !!stored['business.entities']?.confirmed, provenance: { parser: 'entity-inference', locator: { rule: 'entity_classification', rows: entityInference.rows } } }).changed) changed++;
+    }
     for (const key of deletes) changed += db.prepare("DELETE FROM facts WHERE key = ? AND src LIKE 'derived:%' AND confirmed = 0").run(key).changes;
     if (writes.length) db.prepare('INSERT OR IGNORE INTO sources (id, label, as_of, kind, note) VALUES (?, ?, ?, ?, ?)')
       .run(`derived:${data.clock}`, 'Derived from stored data and stated assumptions', data.clock, 'derived', '');
-    for (const w of writes) {
-      if (w.key === 'business.entities' && employer) db.prepare("DELETE FROM facts WHERE key = 'business.entities' AND value = '[]'").run();
-      if (upsertFact(db, { ...w, confirmed: false }).changed) changed++;
-    }
+    for (const w of writes) if (upsertFact(db, { ...w, confirmed: false }).changed) changed++;
     return changed;
   } };
 }
 
 export function undoDefault(db, key, value) {
+  if (key === 'business.entityInference') {
+    const row = db.prepare("SELECT value FROM facts WHERE key='business.entities'").get();
+    const prior = parseJson(row?.value, []);
+    if (Array.isArray(prior)) {
+      const names = new Set(Object.entries(value).filter(([, flag]) => flag.undone).map(([name]) => name.trim().toLowerCase()));
+      db.prepare("UPDATE facts SET value=? WHERE key='business.entities'").run(JSON.stringify(prior.flatMap(e => !e?.inferred || !names.has(e.name.trim().toLowerCase()) ? [e]
+        : e.nameSource === 'owner' ? [ownerEntityIdentity(e)] : [])));
+    }
+    return;
+  }
   const target = DEFAULT_UNDO[key];
   if (!target || (target !== 'accounts.va529' && value !== true)) return;
   if (target === 'accounts.va529') {

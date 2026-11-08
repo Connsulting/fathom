@@ -87,33 +87,30 @@ test('AC2: household employer creates an evidenced inferred entity and Undo prev
   const db = await store({ missing: false });
   await planRun(db);
   const f = factRow(db, 'business.entities');
-  assert.deepEqual(f.value, [{ name: 'Juniper Studio', type: 's_corp', owner: 'owner' }]);
-  assert.equal(f.confirmed, 0);
-  assert.match(f.src, /^derived:/);
+  assert.ok(f.value.some(e => e.name === 'Juniper Studio' && e.type === 's_corp' && e.owner === 'owner' && e.inferred));
+  assert.ok(f.value.find(e => e.name === 'Juniper Studio').inferred);
+  assert.match(f.src, /^inferred:/);
   assert.ok(f.locator.rows.some(r => r.table === 'documents'));
-  const rec = buildScenario(db).recs.find(r => r.assumptions?.some(a => a.undoKey === 'business.entitiesDefault'));
+  const rec = buildScenario(db).recs.find(r => r.assumptions?.some(a => a.undoKey === 'business.entityInference'));
   assert.ok(rec, 'inference exposes existing assumption Undo');
-  await answerFacts(db, [{ key: 'business.entitiesDefault', value: true }], { replan: () => planRun(db), now });
-  assert.equal(getFacts(db)['business.entities'], undefined);
+  await answerFacts(db, [{ key: 'business.entityInference', value: { 'Juniper Studio': { undone: true } } }], { replan: () => planRun(db), now });
+  assert.ok(!getFacts(db)['business.entities'].some(e => e.name === 'Juniper Studio'));
   assert.ok(payroll(db).blocks.some(b => b.code === 'household_employer_unmatched'));
   assert.equal(projection(db).locator.partial, true);
 });
 
-test('AC2: one stated business is preserved and two candidates keep one specific question', async () => {
-  const entities = [{ name: 'Juniper Holdings', type: 's_corp', owner: 'spouse' }];
+test('AC2: owner-entered businesses are preserved and declined inference leaves a labeled question', async () => {
+  const entities = [{ name: 'Juniper Studio', type: 's_corp', owner: 'owner' }];
   const db = await store({ missing: false });
   addFact(db, 'business.entities', entities);
   await planRun(db);
   assert.deepEqual(getFacts(db)['business.entities'], entities);
   assert.equal(payroll(db).blocks.length, 0);
-  assert.deepEqual(factRow(db, 'business.employerEntity').value, { 'Juniper Studio': 'Juniper Holdings' });
-  assert.ok(buildScenario(db).recs.some(r => r.assumptions?.some(a => a.undoKey === 'business.employerEntityDefault')));
-  addFact(db, 'business.entities', [...entities, { name: 'Aspen Studio', type: 's_corp', owner: 'owner' }]);
+  addFact(db, 'business.entities', [{ name: 'First Candidate', type: 's_corp', owner: 'owner' }, { name: 'Second Candidate', type: 's_corp', owner: 'owner' }]);
+  addFact(db, 'business.entityInference', { 'Juniper Studio': { undone: true } });
   await planRun(db);
-  assert.equal(payroll(db).blocks.filter(b => b.code === 'household_employer_unmatched').length, 1);
-  assert.equal(projection(db).locator.partial, true);
-  const rec = buildScenario(db).recs.find(r => r.id === 'missing-data');
-  assert.match(JSON.stringify(rec), /Juniper Studio/);
+  assert.ok(projection(db).locator.gaps.some(g => g.code === 'household_employer_unmatched'));
+  assert.match(JSON.stringify(buildScenario(db).recs.find(r => r.id === 'missing-data')), /Juniper Studio/);
 });
 
 test('AC3: earlier YTD stub for the same employer and person supplies the projection', async () => {
@@ -306,9 +303,10 @@ test('typed Ask corrections for business classification and contribution sponsor
   assert.ok(result.receipt);
   assert.ok(!projection(db).locator.gaps.some(g => g.code === 'retirement_contribution_unattributed'));
   db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES ('CypressStudio', '2026-10', 'Income', 20000, ?)").run(JSON.stringify({ sheet: "Cypress Studio's Income" }));
+  addFact(db, 'business.entityInference', { CypressStudio: { undone: true } });
   await planRun(db);
   assert.ok(projection(db).locator.gaps.some(g => g.code.startsWith('entity_unclassified:')));
-  await answerFacts(db, [{ key: 'business.entityTypes', value: { "Cypress Studio's": 'sole_prop' } }], { now, replan: () => planRun(db) });
+  await answerFacts(db, [{ key: 'business.entities', value: [{ name: 'CypressStudio', type: 'sole_prop', owner: 'owner' }] }], { now, replan: () => planRun(db) });
   assert.ok(!projection(db).locator.gaps.some(g => g.code.startsWith('entity_unclassified:')));
 });
 

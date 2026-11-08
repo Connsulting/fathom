@@ -1,3 +1,5 @@
+import { retryIncompletePaystubs } from '../ingest/pipeline.mjs';
+import { planningYear } from './planner/data.mjs';
 // The planning run over a real-mode store: derive facts, compute figures and war-game models,
 // evaluate the trigger catalog, write prose (model when accepted, else template), then write
 // everything in one transaction. Runs are serialized per db handle and idempotent: a second run
@@ -7,13 +9,10 @@
 //
 // runPlanning(db, engine, {now, packDirs, runId}) -> {runId, status, counts, warnings, costUsd}
 
-import { retryIncompletePaystubs } from '../ingest/pipeline.mjs';
-import { planningYear } from './planner/data.mjs';
-import { looksLikeSpending, spendingStatement } from '../pnl/ledgers.mjs';
 import { getSetting, tx, parseJson } from '../store/db.mjs';
 import { withLabelHints } from '../accounts/naming.mjs';
 import { upsertFact } from '../store/facts.mjs';
-import { withholdingRecipient, ask, canonicalJson, FACT_CHECK_OPTIONS, normalizeName } from '../ingest/confirm.mjs';
+import { withholdingRecipient, ask, canonicalJson, FACT_CHECK_OPTIONS } from '../ingest/confirm.mjs';
 import { loadPacks, activePacks } from '../packs/index.mjs';
 import { refreshPackState, defaultPackDirs } from '../packs/state.mjs';
 import { resolveClock, loadGoals, loadCurve, loadContent } from '../scenario/build.mjs';
@@ -85,21 +84,6 @@ async function plan(db, engine, { clock, runId, packDirs }) {
   const owner = ownerFactsOf(stored);
   const storedValues = Object.fromEntries(Object.entries(stored).map(([k, r]) => [k, r.value]));
   const entities = resolveEntities(data, storedValues);
-  for (const e of entities) {
-    const type = Object.entries(storedValues['business.entityTypes'] || {}).find(([name]) => normalizeName(name) === normalizeName(e.name) || normalizeName(name) === normalizeName(e.displayName))?.[1];
-    if (type && !e.classified) { e.type = type; e.classified = true; }
-  }
-
-  const candidates = entities.filter(e => looksLikeSpending(e, storedValues));
-  const ledgerChecks = candidates.length ? [{
-    key: 'pnl.ledgers', value: { ...(storedValues['pnl.ledgers'] || {}), ...Object.fromEntries(candidates.map(e => [e.displayName || e.name, { kind: 'spending' }])) },
-    stored: storedValues['pnl.ledgers'] ?? null, src: 'ledger-confirm',
-    question: `${candidates.map(spendingStatement).join(' ')} Confirm these are spending ledgers.`,
-    rule: 'personal_spending_ledger',
-    rows: candidates.flatMap(e => e.lines.map(l => ({ table: 'pnl_lines', id: l.id, fileId: l.file_id }))),
-  }] : [];
-  const declinedLedgerGuess = ledgerChecks.some(c => db.prepare("SELECT answer FROM confirm_items WHERE kind = 'fact_check' AND subject = ? AND status = 'answered'")
-    .get(`ledger-confirm|${c.key}|${canonicalJson(c.value)}`)?.answer === 'no');
 
   // Facts from the data, then figures over the merged facts, then the facts read off figures.
   const dataFacts = deriveFacts(data, { entities });
@@ -127,14 +111,14 @@ async function plan(db, engine, { clock, runId, packDirs }) {
   };
   const ctx = {
     clock, year: data.taxYear, facts: merged.values, owner, fig,
-    names, model: computed.model, data, packs, packStatus, declinedLedgerGuess,
+    names, model: computed.model, data, packs, packStatus, mortgage: recFacts.mortgage,
     assumptions: recFacts.assumptions, info: computed.info, freshness: data.freshness, warnings: [...warnings], entities, goals: prefs.goals, curve: prefs.curve,
   };
   const results = evaluateCatalog(ctx);
   // The data codes still open after this run: every missing-data item and every verifiable step a
   // trigger emitted (a trigger emits one only while its gap holds). A step naming a code no longer
   // here reads done.
-  const openData = [...new Set([...missingItems(ctx).map(i => i.code),
+  const openData = [...new Set([...missingItems(ctx).map(i => i.code), ...computed.info.blocked.filter(code => code.startsWith('entity_unclassified:')),
     ...results.filter(r => r.state === 'hit').flatMap(r => r.hit.rec.tasks || []).map(t => t.code).filter(c => typeof c === 'string')])];
 
   // Prose, outside the write transaction (it may call the engine).
@@ -171,7 +155,7 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     // D9: a payroll document nobody has said is whose gets ingest's own recipient question (an
     // existing or answered question is left as it is).
     for (const q of computed.info.ask || []) withholdingRecipient(db, { ...q, now });
-    askFactChecks(db, [...merged.checks, ...ledgerChecks], { clock, now });
+    askFactChecks(db, merged.checks, { clock, now });
     const delFact = db.prepare('DELETE FROM facts WHERE key = ? AND src = ? AND confirmed = 0');
     for (const key of merged.deletes) {
       delFact.run(key, PLANNER_SRC);

@@ -1,7 +1,9 @@
 import { OBLIGATION_RULES } from '../../calc/classes.mjs';
 import { addMonths, mortgagePayoff, dependentChanges } from '../../calc/obligations.mjs';
 import { envelope } from '../../calc/figure.mjs';
-import { bindFigures } from '../../calc/aggregate.mjs';
+import { bindFigures, aggregate } from '../../calc/aggregate.mjs';
+import { inferMortgage } from '../../calc/mortgage-inference.mjs';
+import { resolveDefinition } from '../../spending/definitions.mjs';
 import { readInput } from './spending.mjs';
 import { bounded, uniqueGaps } from './balances.mjs';
 import { checkAssumption } from '../assumption-evidence.mjs';
@@ -26,27 +28,30 @@ async function schedule(args,ctx) {
   const assumptions=(args.changes ?? []).map(c=>({...c,record:checkAssumption(c.newMonthly,{name:`${c.kind} ${c.stage ?? 'change'}`,unit:'usd_per_month',min:0},ctx)}));
   const seen=new Set();
   for (const a of assumptions) { const key=`${a.kind}:${a.stage ?? ''}`; if(seen.has(key))bad('Duplicate change assumption');seen.add(key); }
-  const rows=[];
+  const rows=[],inactive=[],unmatched=[];
   for (const kind of [...new Set(args.obligations ?? kinds)]) {
-    const key=`obligations.${kind}`, missing=[], gaps=[], keys=[key], balanceInputs=[];
+    const key=`obligations.${kind}`, missing=[], gaps=[], keys=[key];
+    const mortgage=kind==='mortgage'?inferMortgage(ctx.db,clock,facts[key]):null;
+    if(mortgage && !mortgage.present) {
+      const state={kind,status:mortgage.status,message:mortgage.message,provenance:{sources:mortgage.sources}};
+      if(mortgage.status==='paid_off')inactive.push(state);else unmatched.push(state);
+      continue;
+    }
     let observed;
     if(kind==='plan529') observed=await total(ctx,{measure:'inflow',scope:'all',include:{accounts:accounts.filter(a=>a.kind==='529'&&!a.archived_at).map(a=>a.id)}});
-    else observed=await total(ctx,{include:{classes:[kind==='mortgage'?'debt_service':'childcare']}});
-    const stored=facts[key];
-    const monthly=kind==='mortgage'&&stored ? stored.monthlyPayment : observed.perMonth.value;
+    else if(mortgage) observed={perMonth:figure(mortgage.observedMonthly,'usd_per_month','Observed mortgage payments',mortgage.asOf,
+      {calc:'matchedMortgagePayments',sources:mortgage.sources,assumptions:mortgage.assumptions},[])};
+    else observed=await total(ctx,{include:{classes:['childcare']}});
+    const stored=mortgage?.values ?? facts[key];
+    const monthly=kind==='mortgage' ? stored.monthlyPayment ?? null : observed.perMonth.value;
     let events=[];
     if(kind==='mortgage') {
       let date=stored?.payoffDate ?? null,derivedFrom='fact';
-      if(!date && stored) {
-        let balance=stored.balance;
-        const loans=accounts.filter(a=>a.kind==='loan'&&!a.archived_at && /mortgage/i.test(a.name));
-        if(loans.length===1) {
-          const row=ctx.db.prepare('SELECT id,amount,date FROM balances WHERE account_id=? AND date<=? ORDER BY date DESC LIMIT 1').get(loans[0].id,clock);
-          if(row) {balance=Math.abs(row.amount); balanceInputs.push({value:balance,unit:'usd',label:'Mirrored mortgage balance',asOf:row.date,provenance:{sources:[{table:'balances',ids:[row.id],count:1}]}});}
-        }
-        date=mortgagePayoff({...stored,balance},clock,(args.horizonYears ?? 30)*12);derivedFrom='amortization';
+      for(const field of mortgage.missing) {missing.push(`${key}.${field}`);gaps.push(gap(`Missing ${key}.${field}; tell Fathom only this mortgage term.`));}
+      if(!date) {
+        date=mortgagePayoff({...stored,monthlyPayment:mortgage.principalAndInterest,escrowMonthly:0},clock,(args.horizonYears ?? 30)*12);derivedFrom='amortization';
       }
-      if(!date || !stored) {missing.push(key);gaps.push(gap('Mortgage payoff needs obligations.mortgage with balance, rate, payment, escrow and a payoff date or an amortizing payment within the horizon.'));}
+      if(!date && !mortgage.missing.some(k=>k!=='escrowMonthly')) gaps.push(gap('The known mortgage payment does not amortize the loan within the requested horizon; confirm the payment, rate or payoff date.'));
       if(date)events=[{stage:'payoff',date,newValue:stored?.escrowMonthly ?? null,derivedFrom,reason:'Mortgage principal and interest end; stated escrow continues as housing.'}];
     } else {
       const birthDates=facts['household.dependentBirthDates'];
@@ -68,15 +73,18 @@ async function schedule(args,ctx) {
           assumption:stored?.[field]===undefined?override?.record:null,reason:kind==='plan529'?'Contributions stop at the default college age.':e.stage==='school_age'?'School begins at the pack entry age and cutoff.':'After-school care ends at the pack age.'};
       });
     }
-    const sources=factSources(ctx,keys),asOf=latest([observed.perMonth.asOf,...sources.map(s=>s.as_of),...balanceInputs.map(b=>b.asOf)]);
-    const prov={calc:'obligationSchedule',formula:'Stored obligation amounts and dates, amortization or dependent age rules',inputs:[observed.perMonth,...balanceInputs],sources:sources.map(s=>({table:'facts',ids:[s.key],count:1})),packRefs:[pack(kind)]};
+    const sources=factSources(ctx,keys),asOf=latest([observed.perMonth.asOf,...sources.map(s=>s.as_of)]);
+    const prov={calc:'obligationSchedule',formula:'Stored obligation amounts and dates, amortization or dependent age rules',inputs:[observed.perMonth],
+      sources:[...sources.map(s=>({table:'facts',ids:[s.key],count:1})),...(mortgage?.sources ?? [])],assumptions:mortgage?.assumptions ?? [],packRefs:[pack(kind)]};
     const f=(value,unit,label,extra={})=>figure(value,unit,label,asOf,{...prov,...extra},gaps);
     const eventRows=events.map(e=>({stage:e.stage,...(e.dependent===undefined?{}:{dependent:e.dependent}),unattributed:e.unattributed ?? false,date:f(e.date,'date','Obligation change date'),
-      newMonthly:f(e.newValue,'usd_per_month','New monthly obligation',{assumptions:e.assumption?[e.assumption]:[]}),reason:e.reason,derivedFrom:e.derivedFrom,amountSource:e.amountSource ?? 'fact'}));
+      newMonthly:f(e.newValue,'usd_per_month','New monthly obligation',{assumptions:e.assumption?[e.assumption]:prov.assumptions}),reason:e.reason,derivedFrom:e.derivedFrom,amountSource:e.amountSource ?? 'fact'}));
     rows.push({kind,label:kind==='plan529'?'Education contributions':kind==='mortgage'?'Mortgage':'Childcare',monthly:f(monthly,'usd_per_month','Current monthly obligation'),
-      observedMonthly:observed.perMonth,changes:eventRows,endDate:f(events.at(-1)?.date ?? null,'date','Obligation end date'),missing:[...new Set(missing)],gaps});
+      observedMonthly:observed.perMonth,changes:eventRows,endDate:f(events.at(-1)?.date ?? null,'date','Obligation end date'),missing:[...new Set(missing)],gaps,
+      ...(mortgage?{terms:Object.fromEntries(['balance','rate','monthlyPayment','escrowMonthly'].map(key=>[key,f(stored[key] ?? null,key==='rate'?'ratio':key==='balance'?'usd':'usd_per_month',`Mortgage ${key}`)])),
+        note:mortgage.assumptions.length?`Mortgage terms are inferred assumptions from matched loan data; tell Fathom to correct them.${stored.escrowMonthly===undefined?' Escrow remains unknown.':''}`:'Mortgage terms use your stated values; observed payments use only this loan.'}:{})});
   }
-  return {obligations:rows,gaps:uniqueGaps(rows.flatMap(r=>[...r.gaps,...r.observedMonthly.gaps]))};
+  return {obligations:rows,...(inactive.length?{inactive}:{}),...(unmatched.length?{unmatched}:{}),gaps:uniqueGaps([...rows.flatMap(r=>[...r.gaps,...r.observedMonthly.gaps]),...unmatched.map(s=>gap(s.message))])};
 }
 
 async function projection(args,ctx) {
@@ -87,11 +95,13 @@ async function projection(args,ctx) {
   const base=args.base ? await resolveRef(args.base,ctx,'base') : (await total(ctx,baseArgs)).total;
   if(Array.isArray(base)||base.unit!=='usd_per_year'||(args.base&&args.base.path!=='total'))bad('base must be the annualized spending.total total figure');
   if((baseArgs.measure ?? 'spending')!=='spending')bad('base must measure spending');
-  const {clock}=readInput(ctx),years=args.years ?? 10;
+  const input=readInput(ctx),{clock}=input,years=args.years ?? 10;
   const sched=await schedule({...args,horizonYears:years},ctx);
   const selected=await total(ctx,{...baseArgs,groupBy:'class',annualize:true,limit:200});
   const gaps=uniqueGaps([...base.gaps,...sched.gaps]);
-  const states=sched.obligations.map(row=>({row,remaining:row.kind==='plan529'?0:(selected.groups.find(g=>g.key===(row.kind==='mortgage'?'debt_service':'childcare'))?.figure.value ?? (base.value===null?null:0))/12}));
+  const mortgage=inferMortgage(ctx.db,clock,input.facts['obligations.mortgage']);
+  const mortgageSelected=aggregate({...input,transactionIds:new Set(mortgage.payments.map(t=>t.id))},baseArgs,resolveDefinition(ctx.db,baseArgs.definition));
+  const states=sched.obligations.map(row=>({row,remaining:row.kind==='plan529'?0:row.kind==='mortgage'?mortgageSelected.perMonth.value:(selected.groups.find(g=>g.key==='childcare')?.figure.value ?? (base.value===null?null:0))/12}));
   const events=states.flatMap(state=>state.row.changes.filter(c=>c.date.value>clock).map(change=>({state,change}))).sort((a,b)=>a.change.date.value.localeCompare(b.change.date.value));
   const output=[];let annual=base.value;
   for(let i=0;i<years;i++) {
@@ -113,7 +123,7 @@ async function projection(args,ctx) {
     if(value!==null)value+=adjustment;
     output.push({year,spending:figure(value,'usd_per_year','Projected annual spending',latest([base.asOf,...sched.obligations.map(r=>r.monthly.asOf)]),{calc:'spendingProjection',formula:'Base spending plus dated changes, prorated by days in the calendar year; removals capped to the selected obligation amount',inputs:[base,...sched.obligations.map(r=>r.monthly)]},gaps),changes:applied});
   }
-  return {years:output,notes:["Today's dollars; no inflation. Changes apply on their dates and remove only the obligation portion inside the base."],gaps};
+  return {years:output,notes:["Today's dollars; no inflation. Changes apply on their dates and remove only the obligation portion inside the base.",...(sched.inactive ?? []).map(s=>s.message)],gaps};
 }
 
 export const operations=[

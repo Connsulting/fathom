@@ -71,15 +71,16 @@ export function docRecipient(data, doc) {
 // R6-1 item 2.3: household when the employer is a household entity (by name or alias); otherwise the
 // employer_relation answer decides, and an employer ingest asked about and nobody answered blocks.
 function docKind(data, entities, doc, owner) {
-  const named = Object.entries(owner['business.employerEntity'] || {}).find(([name]) => sameEmployer(data, name, doc.fields.employerName))?.[1];
-  const entity = matchEntity(data, entities, named || doc.fields.employerName);
+  const entity = matchEntity(data, entities, doc.fields.employerName);
   if (entity) return { household: true, entity };
   const stated = Object.entries(owner['income.employerRelation'] || {}).find(([name]) => sameEmployer(data, name, doc.fields.employerName))?.[1];
   const relation = stated ? { status: 'answered', answer: stated } : (data.confirm || []).find(i => i.kind === 'employer_relation' && i.subject === nameKey(doc.fields.employerName));
   if (relation && relation.status === 'answered' && relation.answer === 'household') {
-    if (entities.length === 1 && entities[0].classified && owner['business.entitiesDefault'] !== true && owner['business.employerEntityDefault'] !== true) return { household: true, entity: entities[0] };
-    return { blocked: 'household_employer_unmatched' };
+    const linked = entities.filter(e => e.ownerAccountLink && e.classified);
+    if (data.accounts.filter(a => a.kind === 'business').length === 1 && linked.length === 1) return { household: true, entity: linked[0] };
+    return { household: true, classificationPending: true, entity: null };
   }
+
   if (relation && relation.status === 'answered' && relation.answer === 'outside') return { household: false };
   if (relation && relation.status === 'pending') return { blocked: 'employer_relation_pending' };
   return { household: false };
@@ -232,10 +233,11 @@ export function payrollRecords(data, entities, owner = {}) {
         medicare: projectedGross, comp: projectedGross, pretax, elective402g: 0, deferral457: 0, roth: 0, hsa: 0, deferralKnown: !deferring, projected: true, section125Unknown: !deferring,
       };
     }
-    const corp = g.kind.household && g.kind.entity.classified && g.kind.entity.type === 's_corp' ? g.kind.entity : null;
+    if (g.kind.classificationPending) blocks.push({ code: 'household_employer_unmatched', employer: g.employer, person: g.person });
+    const corp = g.kind.household && g.kind.entity?.classified && g.kind.entity.type === 's_corp' ? g.kind.entity : null;
     records.push({
       ...r, docId: r.docIds[0], person: g.person, employer: g.employer, key: g.key, deferral: 0, catchUp: 0,
-      corp: corp ? corp.slug : null, household: !!g.kind.household,
+      corp: corp ? corp.slug : null, household: !!g.kind.household, classificationPending: !!g.kind.classificationPending || !!(g.kind.household && !g.kind.entity?.classified),
     });
   }
 
@@ -311,31 +313,4 @@ function paystubIncome(data, group, stubs, owner) {
     method: 'period_gross', assumption: true, asOf: fl.payDate, docId: last.id, gross: fl.gross, periodsPerYear: periods, periodsToDate: toDate,
     note: `Projected wages from ${group.employer} using gross pay times pay periods; assumed ${frequency} pay and unchanged gross throughout the year.`,
   } };
-}
-
-export function inferHouseholdEmployer(data, facts, entities) {
-  if (facts['business.entitiesDefault'] === true || facts['business.employerEntityDefault'] === true || entities.length > 1) return null;
-  const docs = data.documents.filter(d => (d.docType === 'w2' && Number(d.taxYear) === data.taxYear)
-    || (d.docType === 'paystub' && yearOf(d.fields.payDate) === data.taxYear && d.fields.payDate <= data.clock));
-  const household = docs.filter(d => answered(data, 'employer_relation', nameKey(d.fields.employerName))?.answer === 'household');
-  if (entities.length === 1) {
-    const entity = entities[0];
-    const unmatched = household.filter(d => !matchEntity(data, entities, d.fields.employerName));
-    if (!entity.classified || !unmatched.length || facts['business.employerEntity'] !== undefined) return null;
-    return { key: 'business.employerEntity', undoKey: 'business.employerEntityDefault',
-      value: Object.fromEntries(unmatched.map(d => [d.fields.employerName.trim(), entity.name])),
-      evidence: `Inferred the household employer names as ${entity.name}, the only household business on file.`,
-      rows: unmatched.map(d => ({ table: 'documents', id: d.id, fileId: d.fileId })),
-    };
-  }
-  if (facts['income.sCorp'] !== true) return null;
-  const names = [...new Set(household.map(d => nameKey(d.fields.employerName)))];
-  if (names.length !== 1) return null;
-  const people = [...new Set(household.map(d => docRecipient(data, d).person))];
-  if (people.length !== 1 || !people[0]) return null;
-  const doc = household[0];
-  return { key: 'business.entities', undoKey: 'business.entitiesDefault', value: [{ name: doc.fields.employerName.trim(), type: 's_corp', owner: people[0] }],
-    evidence: `Inferred ${doc.fields.employerName} as the household S corporation from your employer answer and S corporation fact.`,
-    rows: household.map(d => ({ table: 'documents', id: d.id, fileId: d.fileId })),
-  };
 }

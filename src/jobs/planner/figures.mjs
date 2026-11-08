@@ -23,7 +23,6 @@ import {
 } from './household.mjs';
 import { sameEmployer, docRecipient } from './payroll.mjs';
 import { classifyPayments } from './payments.mjs';
-import { looksLikeSpending } from '../../pnl/ledgers.mjs';
 import { notesFor } from './assumptions.mjs';
 import { trailingCharitable } from './facts.mjs';
 import { buildWargames } from './wargame.mjs';
@@ -154,16 +153,20 @@ export function computeFigures(data, facts, ctx) {
     const proj = x => cents(x * 12 / m);
     e.sums = s;
     e.proj = proj;
-    const loc = ids => rowsLoc('pnl_lines', ids);
-    out.put(`pnl.${e.slug}.income`, s.income, 'a', `${e.displayName || e.name} income, year to date`, 'pnl', loc(s.ids.income), s.fileId);
-    out.put(`pnl.${e.slug}.expenses`, s.expenses, 'a', `${e.displayName || e.name} expenses, year to date`, 'pnl', loc(s.ids.all), s.fileId);
-    out.put(`pnl.${e.slug}.net`, s.net, 'a', `${e.displayName || e.name} net profit, year to date`, 'pnl', loc(s.ids.all), s.fileId);
-    out.put(`inc.ytd.${e.slug}`, s.income, 'a', `${e.displayName || e.name} income received this year`, 'pnl', loc(s.ids.income), s.fileId);
+    const loc = rows => {
+      const sources = [...new Set(rows.map(r => r.sourceTable || 'pnl_lines'))].map(table => ({ table, ids: rows.filter(r => (r.sourceTable || 'pnl_lines') === table).map(r => r.id) }));
+      return sources.length <= 1 ? rowsLoc(sources[0]?.table || 'pnl_lines', sources[0]?.ids || [])
+        : { sources: sources.map(s => ({ table: s.table, ids: s.ids.slice(0, 50), count: s.ids.length })) };
+    };
+    out.put(`pnl.${e.slug}.income`, s.income, 'a', `${e.displayName || e.name} income, year to date`, 'pnl', loc(s.rows.income), s.fileId);
+    out.put(`pnl.${e.slug}.expenses`, s.expenses, 'a', `${e.displayName || e.name} expenses, year to date`, 'pnl', loc(s.rows.all), s.fileId);
+    out.put(`pnl.${e.slug}.net`, s.net, 'a', `${e.displayName || e.name} net profit, year to date`, 'pnl', loc(s.rows.all), s.fileId);
+    out.put(`inc.ytd.${e.slug}`, s.income, 'a', `${e.displayName || e.name} income received this year`, 'pnl', loc(s.rows.income), s.fileId);
     const projLoc = (what, value) => ({ calc: 'straightLineProjection', inputs: { ytd: value, months: m }, steps: [{ label: what, formula: 'year to date * twelve / months of data', value: proj(value) }] });
     out.put(`pnl.${e.slug}.netProj`, proj(s.net), 'p', `${e.displayName || e.name} net profit, projected for the year`, 'plan-projection', projLoc('Projected net', s.net));
     if (e.classified && e.type === 's_corp') {
-      out.put(`pnl.${e.slug}.salary`, s.salary, 'a', `${e.displayName || e.name} officer salary, year to date`, 'pnl', loc(s.ids.salary), s.fileId);
-      out.put(`pnl.${e.slug}.payrollTax`, s.payrollTax, 'a', `${e.displayName || e.name} employer payroll tax, year to date`, 'pnl', loc(s.ids.payrollTax), s.fileId);
+      out.put(`pnl.${e.slug}.salary`, s.salary, 'a', `${e.displayName || e.name} officer salary, year to date`, 'pnl', loc(s.rows.salary), s.fileId);
+      out.put(`pnl.${e.slug}.payrollTax`, s.payrollTax, 'a', `${e.displayName || e.name} employer payroll tax, year to date`, 'pnl', loc(s.rows.payrollTax), s.fileId);
       // A salary the owner decided in Decide is the payroll assumption: it replaces the straight-line
       // P&L projection. The second pass below drops it when a W-2 exists or the salary leaves no
       // distributions; profit before salary still comes from the P&L.
@@ -182,7 +185,7 @@ export function computeFigures(data, facts, ctx) {
     }
   }
   if (pnlEntities.length) {
-    const lastPeriod = data.pnl.map(l => l.period).sort().at(-1);
+    const lastPeriod = pnlEntities.flatMap(e => e.lines.map(l => l.period)).sort().at(-1);
     out.source('pnl', SOURCES.pnl.label, `through ${monthLabel(lastPeriod)}`, SOURCES.pnl.kind);
   } else if (TY) {
     out.warn('no_pnl');
@@ -387,11 +390,16 @@ export function computeFigures(data, facts, ctx) {
       w2.push({ person: r.person, src, gross: r.medicare, comp: r.comp, agi: r.wages });
       continue;
     }
-    if (r.household && r.corp) continue;
-    w2.push({ person: r.person, src: 'outside', gross: r.medicare, comp: r.comp, agi: r.wages });
+    if (r.household && !r.classificationPending) continue;
+    w2.push({ person: r.person, src: r.classificationPending ? `household:${r.key}` : 'outside', gross: r.medicare, comp: r.comp, agi: r.wages });
+
   }
   for (const e of pnlEntities) {
-    if (!e.classified) { blocked.push(`entity_unclassified:${e.slug}`); out.warn('entity_unclassified'); continue; }
+    if (!e.classified) {
+      if (e.payrollEmployer) { out.info.heldReasons.push(`entity_unclassified:${e.slug}`); out.warn('household_business_tax_pending'); }
+      else { blocked.push(`entity_unclassified:${e.slug}`); out.warn('entity_unclassified'); }
+      continue;
+    }
     if ((e.type === 'sole_prop' || e.type === 'llc_single') && inUnit(e.owner)) {
       const S = e.proj(e.sums.net);
       biz.push({ id: e.slug, kind: 'sole', person: e.owner, agi: S, qbi: S, seInput: S, w2Wages: 0, sstb: sstbOf(e) });
@@ -539,14 +547,10 @@ export function computeFigures(data, facts, ctx) {
   const hasIncome = biz.length > 0 || w2.length > 0;
   if (!hasIncome) out.info.gaps.push(taxGap('no_income_inputs'));
   if (out.warnings.has('filing_status_assumed')) out.info.gaps.push(taxGap('filing_status_assumed'));
-  for (const code of blocked.filter(code => code !== 'mfs_unsupported')) {
+  for (const code of [...new Set([...blocked, ...out.info.heldReasons])].filter(code => code !== 'mfs_unsupported')) {
     const entity = entities.find(e => e.slug === code.split(':')[1]);
     const gap = taxGap(code, { employer: entity?.displayName || entity?.name || out.info.partnershipsMissing?.join(', ') || undefined,
       impact: entity?.sums ? Math.abs(entity.proj(entity.sums.net)) : null });
-    if (entity && looksLikeSpending(entity, facts)) gap.action = {
-      screen: 'ask', key: 'pnl.ledgers', label: 'Describe the ledger',
-      prompt: `Record whether ${entity.displayName || entity.name} is spending or a business. Ask me which it tracks.`,
-    };
     out.info.gaps.push(gap);
   }
   blocked.splice(0, blocked.length, ...blocked.filter(code => code === 'mfs_unsupported'));
@@ -696,7 +700,9 @@ export function computeFigures(data, facts, ctx) {
     // R3-7: with no household tax neither game can be built from current inputs. With no S corp
     // on file the salary game's missing input is the S corp itself, whatever else blocks tax.
     const code = out.info.blocked[0] || vaBlocked || 'inputs_changed';
-    out.info.wargameInvalid.salary = corps.length ? code : 'inputs_changed';
+    const unclassified = pnlEntities.find(e => !e.classified);
+    out.info.wargameInvalid.salary = unclassified ? `entity_unclassified:${unclassified.slug}` : corps.length ? code
+      : facts['income.sCorp'] === true && data.pnl.length ? 'scorp_identity_missing' : 'inputs_changed';
     out.info.wargameInvalid.deferral = code;
   }
 
@@ -704,6 +710,12 @@ export function computeFigures(data, facts, ctx) {
   if (out.info.blocked.length) out.withhold([...TAX_KEYS, ...persons.map(p => `room.ira.${p}`), 'room.ira.household'], out.info.blocked[0]);
   else if (vaBlocked) out.withhold(VA_KEYS, vaBlocked);
   if (!sizing && out.info.blocked.length) out.withhold([...SOLO_KEYS, 'room.sep'], out.info.blocked[0]);
+  if (records.some(r => r.classificationPending)) for (const key of TAX_KEYS.filter(k => !k.includes('prior') && !k.startsWith('va529.deduction'))) {
+    const figure = out.figures[key];
+    if (!figure) continue;
+    figure.locator.assumptions = [...(figure.locator.assumptions || []), 'household_business_tax_pending'];
+    figure.locator.notes = [...(figure.locator.notes || []), ...notesFor(['household_business_tax_pending'])];
+  }
   for (const k of Object.keys(out.info.withheld)) if (out.figures[k]) delete out.info.withheld[k];
   return finish(out);
 }
@@ -972,7 +984,7 @@ function writeTax(data, out, { hh, parts, owner, f, isVa, pay, section125 }) {
 function summarizeParts(parts, hh) {
   return {
     filingStatus: parts.f, state: parts.state,
-    wages: parts.w2.map(w => ({ person: w.person, source: w.src.startsWith('corp:') ? 'own S corp' : 'outside employer', gross: w.gross, agi: w.agi })),
+    wages: parts.w2.map(w => ({ person: w.person, source: w.src.startsWith('corp:') ? 'own S corp' : w.src.startsWith('household:') ? 'household employer with tax type pending' : 'outside employer', gross: w.gross, agi: w.agi })),
     businesses: parts.biz.map(b => ({ id: b.id, kind: b.kind, person: b.person, income: b.agi, qbi: b.qbi, seInput: b.seInput, retire: hh.retireByBiz[b.id] || 0 })),
     hsaPersonal: parts.hsaPersonal, itemized: parts.itemized || null, va529Deduction: parts.va529Deduction, children: parts.children,
     qbiLossCarryforward: parts.qbiLossCarryforward ?? null,

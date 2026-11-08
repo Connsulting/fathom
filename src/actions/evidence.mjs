@@ -32,6 +32,7 @@ function dates(text) {
 
 function stated(value, text, shape, evidence) {
   if (typeof value === 'number') return statedAmounts(text, { unit: shape?.unit, evidence }).includes(value);
+  if (shape?.type === 'array' && Array.isArray(value)) return value.every(v => stated(v, text, shape.items, evidence));
   if (shape?.type === 'map' && value && typeof value === 'object') return Object.entries(value).every(([k, v]) =>
     (evidence || text).toLowerCase().includes(k.toLowerCase()) && stated(v, text, shape.values, evidence));
   if (Array.isArray(value)) return value.every(v => stated(v, text, shape?.items, evidence));
@@ -181,4 +182,29 @@ export function requireEvidence(ctx, value, { evidence, stored = [], shape, argu
   const reason = household ? 'Use a value you stated, a stored household value, or a value from a sourced earlier proposal you explicitly confirmed.'
     : 'Use a value you stated in this conversation or a stored value. Include the exact words as evidence.';
   throw new ToolError('bad_input', `${argument}: ${reason}`);
+}
+
+export function requireEntityEvidence(ctx, value, { evidence, shape }) {
+  requireEvidence(ctx, evidence, { evidence, argument: 'evidence' });
+  if (!Array.isArray(value)) throw new ToolError('bad_input', 'Business classifications must be a list.');
+  const facts = Object.fromEntries(ctx.db.prepare('SELECT key,value FROM facts').all().map(r => [r.key, parse(r.value, null)]));
+  const names = [
+    ...(Array.isArray(facts['business.entities']) ? facts['business.entities'].map(e => e?.name) : []),
+    ...Object.values(facts['accounts.businessEntity'] || {}),
+    ...ctx.db.prepare('SELECT fields FROM documents').all().map(r => parse(r.fields, {}).employerName),
+  ].filter(n => typeof n === 'string');
+  const fields = shape.items.fields;
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') throw new ToolError('bad_input', 'Each business needs a name and tax type.');
+    const provisional = entry.owner === 'spouse' && /\bspouse(?:'s)?\b/i.test(evidence)
+      && ((entry.name === 'Spouse LLC' && entry.type === 'llc_single' && /\bLLC\b/i.test(evidence))
+        || (entry.name === 'Spouse partnership' && entry.type === 'partnership' && /\bpartnership\b/i.test(evidence)));
+    for (const [key, field] of Object.entries(entry)) {
+      let stored = [];
+      if (key === 'name') stored = provisional ? [...names, entry.name] : names;
+      if (key === 'accountId') stored = ctx.db.prepare("SELECT id FROM accounts WHERE kind='business' AND archived_at IS NULL").all().map(a => a.id);
+      if (key === 'finalYear' && entry.status === 'final_year' && /\bthis year\b/i.test(evidence)) stored = [Number(String(ctx.now || ctx.clock || new Date().toISOString()).slice(0, 4))];
+      requireEvidence(ctx, field, { evidence, shape: fields[key], stored, argument: key });
+    }
+  }
 }
