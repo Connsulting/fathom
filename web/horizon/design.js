@@ -917,6 +917,21 @@ function recRow(r, ny) {
   </article>`;
 }
 
+function planDecisions() {
+  const list = decisionList();
+  const unbuilt = notBuiltRows();
+  const open = list.filter((d) => d.status === 'open');
+  const soon = list.filter((d) => d.status === 'upcoming');
+  const done = list.filter((d) => d.status === 'decided');
+  const gone = list.filter((d) => d.status === 'unavailable');
+  return section('Decisions', `
+    ${section(`Open <em>${open.length}</em>`, open.length ? `<div class="h-decs">${open.map(decRow).join('')}</div>` : '<p class="h-mute">Nothing is waiting on a decision.</p>')}
+    ${unbuilt.length ? section(`Not built yet <em>${unbuilt.length}</em>`, `<div class="h-decs">${unbuilt.join('')}</div>`, 'Needs data') : ''}
+    ${soon.length ? section(`Coming up <em>${soon.length}</em>`, `<div class="h-decs">${soon.map(decRow).join('')}</div>`, 'Not open yet') : ''}
+    ${done.length ? `<details class="h-details" data-det="decided"${ui.det.decided ? ' open' : ''}><summary>Decided <em>${done.length}</em></summary><div class="h-decs">${done.map(decRow).join('')}</div></details>` : ''}
+    ${gone.length ? `<details class="h-details" data-det="unavailable"${ui.det.unavailable ? ' open' : ''}><summary>No longer current <em>${gone.length}</em></summary><div class="h-decs">${gone.map(decRow).join('')}</div></details>` : ''}`);
+}
+
 function pPlan() {
   const ny = api.needsYou();
   const recs = planOrder(visibleRecs(), arr(api.s.goals));
@@ -954,7 +969,7 @@ function pPlan() {
         <div class="h-mailnote">${icon('doc')}<div>This brief also went out as your monthly email. ${goA('email', 'Read the email')}</div></div></div>
     </div>`;
   return shell(`${pageHead('Plan', 'Everything on the calendar', 'Each item sits at the date its window closes. Decide, do it, or set it aside.')}${stats}
-    ${section('Timeline', timeline('plan'))}${body || '<p class="h-mute">No recommendations yet.</p>'}${more}`);
+    ${section('Timeline', timeline('plan'))}${planDecisions()}${body || '<p class="h-mute">No recommendations yet.</p>'}${more}`);
 }
 
 /* ---------- rec detail ---------- */
