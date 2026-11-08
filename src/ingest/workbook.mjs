@@ -131,7 +131,7 @@ function sharedStrings(bytes) {
 // one empty map, which readers never write.
 const NO_CELLS = new Map();
 function worksheetRows(bytes, strings) {
-  const rows = [], columns = new Map();
+  const rows = [], columns = new Map(), merges = [], hiddenColumns = [];
   let depth = 0, sheetData = 0, row = null, cell = null, target = null;
   const finish = ({ address, type, v, inline, formula }) => {
     if (!/^[A-Z]+[1-9]\d*$/.test(address ?? '')) throw new Error('Invalid cell address');
@@ -140,17 +140,21 @@ function worksheetRows(bytes, strings) {
       if (!/^\d+$/.test(value) || Number(value) >= strings.length) throw new Error('Invalid shared string');
       value = strings[Number(value)];
     } else if (type === 'inlineStr') value = inline ?? '';
+    else if (type === 'b') value = value === '1';
     else if ((!type || type === 'n') && v !== null && value.trim()) value = Number(value);
+    if (typeof value === 'number' && !Number.isFinite(value)) throw new Error('Invalid cell number');
     const letters = address.replace(/\d/g, '');
     if (!columns.has(letters)) columns.set(letters, letters);
     if (row.cells === NO_CELLS) row.cells = new Map();
-    row.cells.set(columns.get(letters), { value, address, missingCache: formula && v === null, error: type === 'e' });
+    row.cells.set(columns.get(letters), { value, address, missingCache: formula && v === null, error: type === 'e', formula, cached: v !== null, valueType: type === 'e' ? 'error' : type === 'd' ? 'date' : typeof value === 'number' ? 'number' : typeof value === 'boolean' ? 'boolean' : value === '' ? 'empty' : 'text', hidden: row.hidden });
   };
   walkXml(bytes, {
     open(name, attrs) {
       depth++;
+      if (name === 'mergeCell') merges.push(attrs.ref);
+      if (name === 'col' && ['1', 'true'].includes(attrs.hidden)) hiddenColumns.push([Number(attrs.min), Number(attrs.max)]);
       if (depth === 2 && name === 'sheetData' && sheetData === 0) sheetData = 1;
-      else if (depth === 3 && sheetData === 1 && name === 'row') row = { number: Number(attrs.r), cells: NO_CELLS };
+      else if (depth === 3 && sheetData === 1 && name === 'row') row = { number: Number(attrs.r), cells: NO_CELLS, hidden: ['1', 'true'].includes(attrs.hidden) };
       else if (depth === 4 && row && name === 'c') cell = { address: attrs.r, type: attrs.t, v: null, inline: null, formula: false };
       else if (depth === 5 && cell) {
         if (name === 'v' && cell.v === null) { cell.v = ''; target = 'v'; }
@@ -170,7 +174,7 @@ function worksheetRows(bytes, strings) {
       depth--;
     },
   });
-  return rows;
+  return { rows, merges, hiddenColumns };
 }
 
 // Checks one XML part against the parse limits on its raw bytes, before it is decoded or read,
@@ -287,7 +291,7 @@ export function readWorkbook(file, { limits = WORKBOOK_LIMITS } = {}) {
   });
   for (const name of ['xl/sharedStrings.xml', ...sheetParts.map((item) => item.path)]) if (parts.has(name)) scanned(name);
   const strings = parts.has('xl/sharedStrings.xml') ? sharedStrings(parts.get('xl/sharedStrings.xml')) : [];
-  const sheets = sheetParts.map(({ sheet, path }) => ({ name: sheet.attrs.name, rows: worksheetRows(part(path), strings) }));
+  const sheets = sheetParts.map(({ sheet, path }) => ({ name: sheet.attrs.name, hidden: ['hidden', 'veryHidden'].includes(sheet.attrs.state), ...worksheetRows(part(path), strings) }));
   const parsed = { sheets, date1904 };
   cache.set(file.bytes, parsed);
   return parsed;

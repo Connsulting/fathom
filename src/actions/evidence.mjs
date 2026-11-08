@@ -1,12 +1,9 @@
 import { parseJson as parse } from '../store/db.mjs';
 import { ToolError } from '../tools/errors.mjs';
 import { checkGrounding } from '../engine/grounding.mjs';
+import { statedAmounts } from '../shared/numeric-evidence.mjs';
 
-const AMOUNT = /\$?(\d[\d,]*(?:\.\d+)?)\s*(k|m|thousand|million)?\b/gi;
-export function statedAmounts(text) {
-  return [...String(text ?? '').matchAll(AMOUNT)].map(m => Math.round(Number(m[1].replace(/,/g, ''))
-    * ({ k: 1e3, thousand: 1e3, m: 1e6, million: 1e6 }[(m[2] || '').toLowerCase()] || 1) * 100) / 100);
-}
+export { statedAmounts };
 
 export function ownerStatements(ctx) {
   const out = ctx.ownerText ? [ctx.ownerText] : [];
@@ -30,9 +27,13 @@ function dates(text) {
   return out;
 }
 
-function stated(value, text, shape) {
+function stated(value, text, shape, evidence) {
+  if (typeof value === 'number') return statedAmounts(text, { unit: shape?.unit, evidence }).includes(value);
+  if (shape?.type === 'map' && value && typeof value === 'object') return Object.entries(value).every(([k, v]) =>
+    (evidence || text).toLowerCase().includes(k.toLowerCase()) && stated(v, text, shape.values, evidence));
+  if (value && typeof value === 'object') return Object.entries(value).every(([k, v]) => stated(v, text, shape?.fields?.[k], evidence));
+  if (evidence) text = evidence;
   if (value === null) return /\b(clear|remove|unset|no target|no date)\b/i.test(text);
-  if (typeof value === 'number') return statedAmounts(text).includes(value);
   if (typeof value === 'boolean') {
     if (new RegExp(`\\b${value}\\b`, 'i').test(text)) return true;
     const yes = /\byes\b/i.test(text), no = /\bno\b/i.test(text);
@@ -46,8 +47,6 @@ function stated(value, text, shape) {
   }
   if (typeof value === 'string') return /^\d{4}-\d{2}-\d{2}$/.test(value)
     ? dates(text).includes(value) : text.toLowerCase().includes(value.toLowerCase());
-  if (shape?.type === 'map' && value && typeof value === 'object') return Object.entries(value).every(([k, v]) => text.toLowerCase().includes(k.toLowerCase()) && stated(v, text, shape.values));
-  if (value && typeof value === 'object') return Object.entries(value).every(([k, v]) => stated(v, text, shape?.fields?.[k]));
   return false;
 }
 
@@ -67,8 +66,18 @@ function householdValues(db) {
   return values;
 }
 
-const goalTextStates = (value, text, shape) => typeof value === 'number'
-  ? statedAmounts(text).includes(value) && checkGrounding(`$${value}`, { data: [text] }).ok : stated(value, text, shape);
+const goalTextStates = (value, text, shape, evidence) => typeof value === 'number'
+  ? statedAmounts(text, { unit: shape?.unit, evidence }).includes(value) && checkGrounding(`$${value}`, { data: [text] }).ok
+  : stated(value, text, shape, evidence);
+
+const YES = /^(?:yes|yeah|yep|yup|sure|ok(?:ay)?|do it|go ahead|absolutely|correct|confirmed)\b/i;
+const HEDGE = /\b(?:no|not|don't|wait|hold|later|maybe|except|but|however|unless|instead|change)\b/i;
+
+// A short, unhedged confirmation such as "yes" or "go ahead" (re-exported by proposals.mjs).
+export function isExplicitYes(text) {
+  const t = String(text ?? '').trim();
+  return t.length <= 160 && YES.test(t) && !HEDGE.test(t);
+}
 
 function confirmedProposal(ctx, value, shape) {
   if (!ctx.conversationKey || !ctx.actorId) return false;
@@ -81,20 +90,19 @@ function confirmedProposal(ctx, value, shape) {
     reply = previous.text;
     previous = rows[1];
   }
-  const text = String(reply).trim();
-  if (text.length > 160 || !/^(?:yes|yeah|yep|yup|sure|ok(?:ay)?|do it|go ahead|absolutely|correct|confirmed)\b/i.test(text)
-    || /\b(?:no|not|don't|wait|hold|later|maybe|except|but|however|unless|instead|change)\b/i.test(text)) return false;
+  if (!isExplicitYes(reply)) return false;
   if (previous?.role !== 'fathom') return false;
   const provenance = parse(previous.provenance, null);
   return (provenance?.literals ?? []).some(l => typeof l.source === 'string' && l.source.trim()
-    && typeof l.text === 'string' && previous.text.includes(l.text) && goalTextStates(value, l.text, shape));
+    && typeof l.text === 'string' && previous.text.includes(l.text) && goalTextStates(value, previous.text, shape, l.text));
 }
 
 export function requireEvidence(ctx, value, { evidence, stored = [], shape, argument = 'value', household = false } = {}) {
   const statements = ownerStatements(ctx);
-  const words = evidence ? statements.filter(s => s.includes(evidence)).map(() => evidence) : statements;
+  const words = evidence ? statements.filter(s => s.includes(evidence)) : statements;
+  if (household && typeof value === 'number') shape = { unit: argument === 'taxYear' ? 'year' : 'USD' };
   const same = v => JSON.stringify(v) === JSON.stringify(value);
-  if (stored.some(same) || words.some(text => stated(value, text, shape))) return;
+  if (stored.some(same) || words.some(text => stated(value, text, shape, evidence))) return;
   const quantity = typeof value === 'number' || (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value));
   if (household && quantity && (householdValues(ctx.db).some(v => same(v) || (typeof v === 'string' && goalTextStates(value, v, shape)))
     || confirmedProposal(ctx, value, shape))) return;

@@ -3947,10 +3947,46 @@
               "name": "goals",
               "predicates": [],
               "operation": "list"
+            },
+            {
+              "name": "update_goal",
+              "predicates": [
+                {
+                  "path": "title",
+                  "op": "eq",
+                  "value": "Parent contribution"
+                },
+                {
+                  "path": "horizon",
+                  "op": "eq",
+                  "value": "now"
+                },
+                {
+                  "path": "target",
+                  "op": "eq",
+                  "value": 4000
+                },
+                {
+                  "path": "targetDate",
+                  "op": "eq",
+                  "value": "2026-12-31"
+                },
+                {
+                  "path": "track",
+                  "op": "eq",
+                  "value": null
+                },
+                {
+                  "path": "propose",
+                  "op": "eq",
+                  "value": true
+                }
+              ],
+              "operation": "create"
             }
           ],
           "scriptedReply": "Create a parent contribution goal for $4,000 by 2026-12-31?",
-          "rubric": "Read the stored goal note before proposing the exact target and date, with their source recorded by grounding."
+          "rubric": "Read the stored goal note before proposing the exact target and date, with their source recorded by grounding, and store the create as a proposal for confirmation instead of writing it."
         },
         {
           "forbidden": [
@@ -3992,7 +4028,7 @@
               "operation": "create"
             }
           ],
-          "rubric": "Treat the short confirmation as approval of the sourced preceding proposal. Save the exact target and date with a canonical horizon and no balance tracking, and return a receipt."
+          "rubric": "Treat the short confirmation as approval of the stored preceding proposal and execute it without the model. Save the exact target and date with a canonical horizon and no balance tracking, and return a receipt."
         }
       ],
       "requires": {

@@ -45,7 +45,7 @@ const SUBNAV = {
 // Every Go to destination in the quick switcher (pinned decision 10).
 const GO_TITLES = ['Home', 'Plan', 'Decide', 'Ask', 'Confirm', 'Packs', 'Files', 'Engine', 'Email', 'Connect',
   'Money', 'Settings', 'Goals', 'Accounts', 'P&L', 'Advisor', 'Year end', 'Memories'];
-const G = [['h', 'home'], ['p', 'plan'], ['d', 'wargame'], ['a', 'ask'], ['c', 'confirm'], ['k', 'packs'],
+const G = [['h', 'home'], ['p', 'plan'], ['d', 'plan'], ['a', 'ask'], ['c', 'confirm'], ['k', 'packs'],
   ['f', 'add'], ['e', 'engine'], ['m', 'email'], ['n', 'connect'], ['o', 'money'], ['s', 'settings']];
 
 /* ---------- page helpers ---------- */
