@@ -55,6 +55,14 @@ function stated(value, text, shape, evidence) {
   return false;
 }
 
+// Whether a quoted sentence states this value for this answer shape; for an object every field
+// must be stated.
+export function statedIn(value, quote, shape) {
+  if (typeof quote !== 'string' || !quote.trim() || value === undefined) return false;
+  if (shape?.type === 'object' && (!value || typeof value !== 'object' || !Object.keys(value).length)) return false;
+  return stated(value, quote, shape);
+}
+
 function householdValues(db) {
   const values = [];
   const add = value => {

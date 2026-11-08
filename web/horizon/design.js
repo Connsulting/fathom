@@ -30,6 +30,7 @@ import { addButtonHtml } from './screens/ask-context.js';
 import * as pnlScreen from './screens/pnl.js';
 import * as tour from './screens/tour.js';
 import { createKeys } from './keys.js';
+import { ownWordsInput, ownWordsSend } from './own-words.js';
 import { createSwipe } from './screens/swipe.js';
 import { homeModel, homeHeadline, healthChip, healthLine, paceMeters, paceReason, boardCharts, reasonText, goalReasonFix, goalReasonControl, servedGoalIds, shortDate, longDate, windowSpan, kindLine, orderGoals, orderServes, planOrder, enteredDraft, enteredFields, enteredInputs } from './screens/home-model.js';
 import { STARTERS, existingStarterIds, otherGoals, goalsToCreate, inviteLine } from './screens/onboard-model.js';
@@ -2282,6 +2283,8 @@ function onClick(e) {
     beginAccountRename(ren.dataset.accRename);
     return;
   }
+  const own = ownWordsSend(e);
+  if (own) { e.preventDefault(); if (own.text) tellFathom(own, e.target); return; }
   if (SCREENS.some((s) => s.onClick?.(e))) return;
   // An account row, or its Details link, opens the account dialog. A control inside the row (the
   // rename field, a figure, a link elsewhere) keeps its own click.
@@ -2394,6 +2397,15 @@ function goalsStartClick(e) {
   return true;
 }
 
+// The own-words box: a rec's sentence goes into its Ask thread (the rec dialog shows it), a Confirm
+// card's opens Ask with the card as context.
+function tellFathom({ kind, id, text }, trigger) {
+  if (kind === 'rec') {
+    if (!trigger?.closest?.('.h-dlg')) openRec(id, trigger);
+    chatScreen.askFromRec({ recId: id, text });
+  } else if (kind === 'confirm') chatScreen.askNew(text, { context: [{ kind: 'confirm', id }] });
+}
+
 // Ask on the Home next-thing card: the rec's Ask thread when it has one, else the rec dialog with
 // its composer focused.
 function askNext(id, trigger) {
@@ -2463,6 +2475,7 @@ function onSubmit(e) {
 }
 
 function onInput(e) {
+  if (ownWordsInput(e)) return;
   if (recAnswers.onChange(e)) return;
   if (SCREENS.some((s) => s.onInput?.(e))) return;
   if (ingest.handleChange(e)) return;

@@ -28,6 +28,7 @@ import { REPO_PACKS_DIR, refreshPackState } from './state.mjs';
 import { getFacts } from '../store/facts.mjs';
 import { getSetting, parseJson, tx } from '../store/db.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
+import { planCoverage, saveLoadFailure, coveredPacks } from './coverage.mjs';
 
 const YOUR_PLANS_WARNING = 'The Your plans pack could not be loaded and was skipped. Rebuild it from the Packs screen.';
 
@@ -43,6 +44,7 @@ export function loadLivePacks(dataDir) {
   if (existsSync(dir)) {
     try {
       const plans = loadPacks([dir]);
+      if (!plans.length) throw new Error('empty pack');
       if (plans.some(p => packs.some(q => q.id === p.id))) throw new Error('duplicate pack id');
       packs.push(...plans);
       dirs.push(dir);
@@ -55,6 +57,7 @@ export function loadLivePacks(dataDir) {
 
 export function refreshLivePacks(db, { dataDir, now } = {}) {
   const { packs, dirs, warnings } = loadLivePacks(dataDir);
+  saveLoadFailure(db, warnings.length > 0 || (!!getSetting(db, 'yourPlans', null) && !packs.some(p => p.id === 'your-plans')));
   const stamp = now || new Date().toISOString();
   tx(db, () => {
     refreshPackState(db, { packDirs: dirs, now: stamp });
@@ -98,7 +101,11 @@ export function createLivePacks(db, { dataDir } = {}) {
     let plans = 'none';
     try {
       const st = statSync(dir);
-      plans = `${st.ino}:${st.mtimeMs}`;
+      const files = ['manifest.json', ...packs.filter(p => resolve(p.directory) === dir).flatMap(p => p.entries.map(e => e.file))];
+      plans = JSON.stringify([st.ino, st.mtimeMs, ...files.map(file => {
+        try { const s = statSync(join(dir, file)); return [file, s.ino, s.mtimeMs, s.size]; }
+        catch { return [file, 'missing']; }
+      })]);
     } catch { /* no Your plans pack */ }
     return JSON.stringify([generation, plans]);
   };
@@ -109,9 +116,10 @@ export function createLivePacks(db, { dataDir } = {}) {
       const result = loadLivePacks(dataDir);
       for (const w of result.warnings) console.warn(`fathom: ${w}`);
       packs = result.packs;
-      seen = now;
+      saveLoadFailure(db, result.warnings.length > 0 || (!!getSetting(db, 'yourPlans', null) && !packs.some(p => p.id === 'your-plans')));
+      seen = fingerprint();
     }
-    return packs;
+    return coveredPacks(db, packs);
   }
 
   function backing(rowId, def) {
@@ -121,11 +129,13 @@ export function createLivePacks(db, { dataDir } = {}) {
 
   function view(rowId, def) {
     const pack = backing(rowId, def);
-    if (!pack) return def;
+    const coverage = rowId === 'your-plans' || manifestIdOf(rowId, def) === 'your-plans' ? planCoverage(db) : [];
+    if (!pack) return coverage.length ? { ...def, coverage, entries: 0, entryList: [] } : def;
     const whatIf = def.whatIf && typeof def.whatIf === 'object' ? def.whatIf : {};
     const [{ why }] = activePacks([pack], getFacts(db));
     return {
       ...def,
+      ...(coverage.length ? { coverage } : {}),
       manifest: pack.id,
       why: escapeUserText(why),
       covers: [...pack.covers],

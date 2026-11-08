@@ -701,6 +701,14 @@ export function whatIfOwnerText(def) {
   return typeof def.manifest === 'string' ? escapeUserText(prompt) : prompt;
 }
 
+export function knowledgeCoverageDisclosure(scenario, context) {
+  const plans = scenario.packs.find(p => p.id === 'your-plans' || p.manifest === 'your-plans');
+  const override = plans ? scenario.live.packs[plans.id] : null;
+  if (context?.pack?.id !== 'your-plans' && plans && packStatus(plans.status, override) !== 'active') return [];
+  const lines = [...new Set((scenario.live.yourPlans?.coverage || []).map(issue => issue.disclosure))];
+  return lines.length ? [lines.join(' ')] : [];
+}
+
 export function createLiveAnswerer({ engine, packs, root, services, onRead } = {}) {
   if (!engine || typeof engine.call !== 'function') throw new TypeError('createLiveAnswerer needs an engine');
   if (typeof root !== 'string' || !root) throw new TypeError('createLiveAnswerer needs the household root');
@@ -829,6 +837,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
     if (queuedImport && !text.includes(queuedImport.result.message)) paragraphs.unshift(escapeUserText(queuedImport.result.message));
     if (!paragraphs.length && !placement.blocks.length && !blockNotes.length) return actionReply({ ...noticeReply(NOTICES.modelError),
       provenance: { discipline: { violations: discipline.violations, triggeredBy } } });
+    paragraphs.push(...knowledgeCoverageDisclosure(scenario, context).map(escapeUserText));
     const lower = text.toLowerCase();
     const leftOut = leftOutOf(toolResults);
     const seenReads = new Set();

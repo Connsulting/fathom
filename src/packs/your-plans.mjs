@@ -33,6 +33,8 @@ import { resolveClock } from '../scenario/build.mjs';
 import { checkGrounding } from '../engine/grounding.mjs';
 import { openVault, readStoredFile, VaultError } from '../ingest/vault.mjs';
 import { pdfText } from '../ingest/pdftext.mjs';
+import { knowledgeGap } from './coverage.mjs';
+import { EngineOffError, BudgetExceededError, ModelAccountingError } from '../engine/errors.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('../../', import.meta.url)).replace(/[\\/]$/, '');
 const CITE_HOST = 'https://your-plans.invalid/';
@@ -211,24 +213,41 @@ async function readFileSource(file, vault, warnings) {
   return null;
 }
 
-async function gatherSources(db, vault, fileIds, warnings) {
+async function gatherSources(db, vault, fileIds, warnings, coverage, excludedDocuments) {
   const sources = [];
-  const fileRow = db.prepare('SELECT id, name, mime, stored_path FROM files WHERE id = ?');
+  const fileRow = db.prepare('SELECT id, name, mime, stored_path FROM files WHERE id = ? AND removed_at IS NULL');
   const seen = new Set();
   const addFile = async id => {
     if (seen.has(id)) return;
     seen.add(id);
     const file = fileRow.get(id);
-    if (!file) { warnings.push(`No file with id ${id}; it was skipped.`); return; }
+    if (!file) {
+      const reason = `No file with id ${id}; it was skipped.`;
+      warnings.push(reason);
+      coverage.push(knowledgeGap({ stage: 'source-read', name: id, fileId: id, reason }));
+      return;
+    }
+    const before = warnings.length;
     const source = await readFileSource(file, vault, warnings);
+    for (const reason of warnings.slice(before)) coverage.push(knowledgeGap({ stage: 'source-read', name: file.name || id, fileId: id, reason }));
     if (source) sources.push(source);
   };
   const docs = db.prepare("SELECT id, fields, file_id FROM documents WHERE doc_type IN ('plan', 'benefits') ORDER BY id").all();
   for (const doc of docs) {
-    if (doc.file_id) { await addFile(doc.file_id); continue; }
+    if (excludedDocuments.includes(doc.id)) continue;
+    if (doc.file_id) {
+      const removed = db.prepare('SELECT removed_at FROM files WHERE id = ?').get(doc.file_id);
+      if (!removed?.removed_at) await addFile(doc.file_id);
+      continue;
+    }
     const fields = parseJson(doc.fields, {});
     if (fields && typeof fields.text === 'string' && fields.text.trim()) {
       sources.push({ fileId: null, name: `document-${doc.id}`, ...textSource(fields.text) });
+    } else {
+      const name = `document-${doc.id}`;
+      const reason = 'The document has no readable text. Replace it with a readable copy.';
+      warnings.push(`${name}: ${reason}`);
+      coverage.push(knowledgeGap({ stage: 'source-read', name, documentId: doc.id, reason }));
     }
   }
   for (const id of fileIds) await addFile(id);
@@ -291,28 +310,57 @@ function writePack(dir, { entries, clock }) {
 
 // `household` is the context that owns `db`: its root holds the pack and its vault reads the
 // uploads (a vault refusal propagates as VaultError before any model call).
-export async function buildYourPlans({ db, engine, household, fileIds = [], clock } = {}) {
+export async function buildYourPlans({ db, engine, household, fileIds = [], excludeDocumentIds = [], clock } = {}) {
   if (!db || !engine || !household || typeof household.root !== 'string' || !household.root) throw new TypeError('buildYourPlans needs db, engine and household');
   if (household.db !== db) throw new TypeError('buildYourPlans household must own the db');
   if (!Array.isArray(fileIds) || !fileIds.every(id => typeof id === 'string')) throw new TypeError('fileIds must be strings');
+  if (!Array.isArray(excludeDocumentIds) || !excludeDocumentIds.every(id => Number.isSafeInteger(id) && id > 0)) throw new TypeError('excludeDocumentIds must be document ids');
+  for (const id of excludeDocumentIds) {
+    if (!db.prepare("SELECT 1 FROM documents WHERE id = ? AND file_id IS NULL AND doc_type IN ('plan', 'benefits')").get(id)) {
+      throw new YourPlansRefusal('Only a text-only plan or benefits document can be removed from this pack.');
+    }
+  }
   const root = household.root;
   guardTarget(root);
   const vault = await openVault(household);
   const day = resolveClock(db, clock);
   const dir = yourPlansDir(resolve(root));
   const warnings = [];
-  const sources = await gatherSources(db, vault, fileIds, warnings);
+  const coverage = [];
+  const excludedDocuments = [...new Set([...getSetting(db, 'yourPlans.excludedDocuments', []), ...excludeDocumentIds])];
+  if (excludeDocumentIds.length) setSetting(db, 'yourPlans.excludedDocuments', excludedDocuments);
+  const sources = await gatherSources(db, vault, fileIds, warnings, coverage, excludedDocuments);
   const entries = [];
   let dropped = 0;
   for (const source of sources) {
     const fake = engine.mode === 'fake' ? [{ text: JSON.stringify({ rows: fakeExtractRows(source.document.text) }) }] : undefined;
-    const rows = await engine.extract({ document: source.document, schema: ROW_SCHEMA, system: EXTRACT_SYSTEM, maxTokens: 4096,
-      ...(fake ? { fake } : {}) });
+    let rows;
+    try {
+      rows = await engine.extract({ document: source.document, schema: ROW_SCHEMA, system: EXTRACT_SYSTEM, maxTokens: 4096,
+        ...(fake ? { fake } : {}) });
+    } catch (error) {
+      const reason = 'Document extraction could not finish. Rebuild the pack to try again.';
+      warnings.push(`${source.name}: ${reason}`);
+      coverage.push(knowledgeGap({ stage: 'extraction', name: source.name, fileId: source.fileId, reason }));
+      setSetting(db, 'yourPlans.coverage', coverage);
+      if (error instanceof EngineOffError || error instanceof BudgetExceededError || error instanceof ModelAccountingError) throw error;
+      continue;
+    }
+    if (!rows.length) {
+      const reason = 'No readable plan sections were found. Replace the document or rebuild the pack.';
+      warnings.push(`${source.name}: ${reason}`);
+      coverage.push(knowledgeGap({ stage: 'extraction', name: source.name, fileId: source.fileId, reason }));
+    }
     let mismatched = 0;
     for (const row of rows) {
       const clean = cleanRow(row, warnings, source.name);
-      if (!clean) continue;
-      if (!matchesSource(clean, source.pages)) { mismatched++; continue; }
+      const section = neutralTitle(row.title ?? '').slice(0, MAX_TITLE) || UNTITLED;
+      if (!clean || !matchesSource(clean, source.pages)) {
+        coverage.push(knowledgeGap({ stage: 'grounding', name: source.name, fileId: source.fileId, section,
+          reason: clean ? 'This section did not match the document and was excluded.' : 'This section had no readable text or page and was excluded.' }));
+        if (clean) mismatched++;
+        continue;
+      }
       entries.push({ title: clean.title, body: clean.body, page: clean.page, taxYear: clean.taxYear, fileId: source.fileId, name: source.name });
     }
     if (mismatched) {
@@ -321,10 +369,11 @@ export async function buildYourPlans({ db, engine, household, fileIds = [], cloc
     }
   }
   const named = sources.map(s => ({ fileId: s.fileId, name: s.name }));
-  if (!entries.length) return { written: false, dir, entries: 0, sources: named, warnings, dropped };
+  setSetting(db, 'yourPlans.coverage', coverage);
+  if (!entries.length) return { written: false, dir, entries: 0, sources: named, warnings, dropped, coverage };
   writePack(dir, { entries, clock: day });
-  setSetting(db, 'yourPlans', { builtAt: new Date().toISOString(), entries: entries.length, dropped, sources: named.map(s => s.name) });
+  setSetting(db, 'yourPlans', { builtAt: new Date().toISOString(), entries: entries.length, dropped, sources: named.map(s => s.name), fileIds });
   const generation = getSetting(db, 'packs.generation', 0);
   setSetting(db, 'packs.generation', (Number.isInteger(generation) ? generation : 0) + 1);
-  return { written: true, dir, entries: entries.length, sources: named, warnings, dropped };
+  return { written: true, dir, entries: entries.length, sources: named, warnings, dropped, coverage };
 }

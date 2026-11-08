@@ -67,6 +67,7 @@ import { runDeadlineAlerts } from './alerts.mjs';
 import { runPlanning } from './planner.mjs';
 import { purgeTrash } from '../api/threads.mjs';
 import { resolvePending } from '../resolve/index.mjs';
+import { readOwnerNotes } from '../resolve/owner-said.mjs';
 import { defaultPackDirs } from '../packs/state.mjs';
 import { syncSimplefin, createFakeSimplefin } from '../ingest/simplefin.mjs';
 import { withoutPrincipal } from '../platform/model-budget.mjs';
@@ -649,6 +650,10 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
       const funded = () => ctx.household?.funded?.() === true;
       const out = await resolvePending(ctx.db, ctx.engine, {
         now: ctx.now, packDirs, allowed, funded,
+        async readNotes() {
+          const vault = ctx.household?.vault ? await ctx.household.vault() : null;
+          return vault ? readOwnerNotes(ctx.db, vault) : [];
+        },
         async categorize({ maxCostUsd, admit }) {
           const cap = getSetting(ctx.db, 'cap', { usd: 200 })?.usd;
           const selection = selectionFor(ctx.config?.modelPorts, 'categorize');

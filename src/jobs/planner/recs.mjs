@@ -119,7 +119,8 @@ export function applyRecs(db, results, ctx) {
           const old = oldTasks.find(t => t.t === task.t && t.payment?.taxYear === task.payment.taxYear && t.payment?.quarter === task.payment.quarter);
           return old && checkCleared(old, ctx.stepEnv) ? old : task;
         });
-        def.tasks = withClearedSteps(def.tasks, oldTasks, ctx.stepEnv);
+        def.tasks = withClearedSteps(def.tasks, id === 'missing-data'
+          ? oldTasks.filter(t => !t.code?.startsWith('entity_unclassified:')) : oldTasks, ctx.stepEnv);
       }
       const defText = JSON.stringify(def);
       const goalKinds = JSON.stringify(hit.rec.goalKinds);

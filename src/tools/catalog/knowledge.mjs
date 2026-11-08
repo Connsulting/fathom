@@ -7,6 +7,8 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createLivePacks } from '../../packs/live.mjs';
+import { coveredPacks } from '../../packs/coverage.mjs';
 import { loadPacks, activePacks, manifestIdOf } from '../../packs/index.mjs';
 import { parseJson } from '../../store/db.mjs';
 import { getFacts } from '../../store/facts.mjs';
@@ -49,7 +51,7 @@ function rowsByManifest(db) {
 // keeps the status derived from the facts.
 function loadPackView(ctx) {
   const { db } = ctx;
-  const packs = loadPacks(ctx.packDirs ?? packDirsFor(ctx.dataDir));
+  const packs = ctx.packDirs ? coveredPacks(db, loadPacks(ctx.packDirs)) : createLivePacks(db, { dataDir: ctx.dataDir }).loaded();
   const rows = rowsByManifest(db);
   const views = activePacks(packs, getFacts(db));
   if (!rows.size) return views;
