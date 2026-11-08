@@ -212,6 +212,24 @@ test('SEC2: stored notes and sourced proposals keep identifier context for numer
   assert.equal(receipts(), 1);
 });
 
+test('SEC2: owner-stated range bounds persist through the Ask registry', async t => {
+  const { db, ctx, registry } = await setup(t);
+  db.prepare('DELETE FROM facts').run();
+  db.prepare('DELETE FROM figures').run();
+  db.prepare('DELETE FROM goals').run();
+  for (const range of ['$4,000-$8,000', '$4,000 - $8,000', '4000-8000', '4000 - 8000']) {
+    ctx.ownerText = `Save ${range} by 2028-12-31.`;
+    const out = await registry().invoke('update_goal', { operation: 'create', kind: 'range', title: 'Savings',
+      targetLow: 4000, targetHigh: 8000, targetDate: '2028-12-31' });
+    assert.ok(!out.isError, `${range}: ${out.content[0].text}`);
+    const saved = JSON.parse(out.content[0].text);
+    assert.equal(saved.goal.targetLow, 4000);
+    assert.equal(saved.goal.targetHigh, 8000);
+    assert.ok(saved.receipt.id);
+  }
+  assert.equal(db.prepare('SELECT count(*) AS n FROM action_receipts').get().n, 4);
+});
+
 test('AC4: the merged goal model keeps evidence for ranges, floors and contribution details', async t => {
   const { db, registry } = await setup(t);
   const account = db.prepare('SELECT id FROM accounts LIMIT 1').get().id;

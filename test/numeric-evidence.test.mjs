@@ -41,3 +41,10 @@ test('SEC2: evidence excerpts cannot turn identifiers, date parts or partial qua
   ]) assert.throws(() => requireEvidence({ ownerText }, value, { evidence }), /stated|evidence/, ownerText);
   assert.doesNotThrow(() => requireEvidence({ ownerText: 'account ending in 4821, target $4,821' }, 4821, { evidence: 'target $4,821' }));
 });
+
+test('SEC2: range separators preserve both bounds without reversing a loss', () => {
+  for (const text of ['$4,000-$8,000', '$4,000 - $8,000', '4000-8000', '4000 - 8000']) {
+    assert.deepEqual(statedAmounts(text), [4000, 8000], text);
+  }
+  assert.deepEqual(statedAmounts('-$4,000 to -$2,000'), [-4000, -2000]);
+});
