@@ -8,8 +8,9 @@
 //   docs/images/demo.gif   1280x720, 12 to 15 fps, palette optimized, under 10 MB
 //   docs/images/demo.mp4   1920x1080, H.264, yuv420p, faststart, no audio
 //
-// The story: Home, a recommendation, Ask with a sourced figure, the deferral war game, and one
-// Confirm card answered with Fathom's best guess. A drawn cursor and caption pills are annotation
+// The story: Home, a recommendation, Ask with a sourced figure, and one Confirm card answered with
+// Fathom's best guess. No war game or decision card: the demo build never runs the planner, so
+// their figures would not be calculator output. A drawn cursor and caption pills are annotation
 // injected for the recording; they are not product UI.
 //
 // Run:   node scripts/demo-gif.mjs --port <n> [--out <dir>]     (or DEMO_GIF_PORT=<n>)
@@ -224,7 +225,7 @@ function overlayInit() {
       #demo-caption { position: fixed; left: 20px; bottom: 20px; max-width: calc(100vw - 140px); pointer-events: none; z-index: 2147483645;
         display: flex; align-items: center; gap: 9px; padding: 8px 15px 8px 12px; border-radius: 999px;
         background: rgba(12,14,16,.88); border: 1px solid rgba(62,207,170,.38); color: #e9edf0;
-        font: 500 15px/1.25 Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: .005em;
+        font: 500 15px/1.25 'Instrument Sans', system-ui, sans-serif; letter-spacing: .005em;
         box-shadow: 0 6px 20px rgba(0,0,0,.45); opacity: 0; transform: translateY(6px);
         transition: opacity .32s ease, transform .32s ease; white-space: nowrap; }
       #demo-caption::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #3ecfaa; flex: none; }
@@ -398,7 +399,6 @@ const CAPTIONS = {
   home: 'Home: what needs you, by when, and who',
   rec: 'A recommendation: why now, the window, your figures, the steps',
   ask: 'Ask in plain language. Every figure is sourced.',
-  wargame: 'War game: compare the options, pick one',
   confirm: 'Confirm what Fathom inferred in one tap',
   end: 'Fathom, on a synthetic demo household'
 };
@@ -438,7 +438,7 @@ async function story(page, d) {
   await d.hold(400);
   await d.glide(640, 520, 500);
   await d.scrollBy(null, 330, 850);
-  await d.hold(1500);
+  await d.hold(2200);
   await d.scrollTo(null, 0, 750);
   d.assertClean('home');
 
@@ -452,9 +452,9 @@ async function story(page, d) {
   await d.hold(400);
   // The dialog's right padding: nothing under the cursor changes while the body scrolls.
   await d.glide(1152, 420, 600);
-  await d.hold(1200);
+  await d.hold(1700);
   await d.scrollBy('.h-dlg-body', 330, 850);
-  await d.hold(1900);
+  await d.hold(2200);
   await d.click(dlg.locator('button.h-dlg-x'), 'dialog close', 700);
   await dlg.waitFor({ state: 'detached' });
   d.assertClean('recommendation');
@@ -476,50 +476,12 @@ async function story(page, d) {
   await d.hold(1100);
   await d.click(fig, 'answer figure', 700);
   await page.locator('.fx-pop').waitFor({ state: 'visible' });
-  await d.hold(2200);
+  await d.hold(2800);
   await page.keyboard.press('Escape');
   await page.locator('.fx-pop').waitFor({ state: 'hidden' });
   d.assertClean('ask');
 
-  // Beat 4: war game. The answer's card opens the deferral recommendation; its War-game link
-  // opens the war game.
-  d.beat('wargame');
-  await d.click(answer.locator('a[data-go="rec"][data-id="deferral"]'), 'answer rec card', 650, 0.3);
-  await dlg.waitFor({ state: 'visible' });
-  const wgLink = dlg.locator('a.h-wglink');
-  await wgLink.waitFor({ state: 'attached' });
-  const wgBox = await wgLink.boundingBox();
-  if (!wgBox || wgBox.y + wgBox.height > VIEWPORT.height - 20) {
-    await page.evaluate(() => {
-      const body = document.querySelector('.h-dlg-body');
-      const a = body.querySelector('a.h-wglink');
-      body.scrollTop += a.getBoundingClientRect().bottom - body.getBoundingClientRect().bottom + 40;
-    });
-  }
-  await d.caption(CAPTIONS.wargame);
-  await d.click(wgLink, 'War-game this', 650);
-  await page.waitForURL(/#\/wargame\/deferral$/);
-  const opts = page.locator('.h-seg [role="radio"][data-wg="deferral"]');
-  await opts.first().waitFor({ state: 'visible' });
-  await d.hold(700);
-  const skip = opts.filter({ hasText: 'skip the distribution' });
-  await d.click(skip, 'Defer all, skip the distribution', 700);
-  await page.locator('.h-seg [role="radio"][aria-checked="true"]', { hasText: 'skip the distribution' }).waitFor();
-  await d.hold(1000);
-  const decide = page.locator('button[data-decide="deferral"]');
-  await decide.waitFor({ state: 'visible' });
-  const decideTop = await decide.evaluate((el) => el.getBoundingClientRect().bottom + window.scrollY);
-  await d.scrollTo(null, decideTop + 70 - VIEWPORT.height, 850);
-  await d.hold(1200);
-  await d.click(decide, 'Decide on this', 650);
-  await page.locator('button[data-revisit="deferral"]').waitFor({ state: 'attached' });
-  await page.locator('.h-decided').waitFor({ state: 'visible' });
-  await d.glide(1000, 300, 500);
-  await d.scrollTo(null, 0, 700);
-  await d.hold(1100);
-  d.assertClean('war game');
-
-  // Beat 5: Confirm.
+  // Beat 4: Confirm.
   d.beat('confirm');
   await d.click(nav('home'), 'Home nav', 700);
   await page.locator('section.h-home h1').waitFor({ state: 'visible' });
@@ -530,11 +492,11 @@ async function story(page, d) {
   await card.waitFor({ state: 'visible' });
   const take = card.locator('button[data-take-guess]');
   await take.waitFor({ state: 'visible' });
-  await d.hold(1000);
+  await d.hold(1600);
   const progress = await page.locator('[data-deck-progress]').textContent();
   await d.click(take, 'Use best guess', 650);
   await page.waitForFunction((p) => document.querySelector('[data-deck-progress]')?.textContent !== p, progress);
-  await d.hold(1400);
+  await d.hold(2000);
   d.assertClean('confirm');
 
   // End: Home.
