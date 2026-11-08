@@ -388,9 +388,15 @@ test('a timeline with no figures reads as of the day its block was built', () =>
   const block = fx('timeline');
   assert.doesNotMatch(messageBodyHtml(msg([block])), /As of /, 'a timeline with values has its figures as-of dates');
   block.snapshot.events = block.snapshot.events.map(({ date, label }) => ({ date, label }));
-  const html = messageBodyHtml(msg([block]));
-  assert.ok(strip(html).includes(`As of ${formatByUnit(block.builtAt.slice(0, 10), 'date')}`), 'as of builtAt');
+  const m = msg([block]);
+  const want = `As of ${formatByUnit(block.builtAt.slice(0, 10), 'date')}`;
+  const html = messageBodyHtml(m);
+  assert.ok(strip(html).includes(want), 'as of builtAt');
   assert.equal(figKeys(html).length, 0);
+  blockState(m.id, block.id).table = true;
+  const table = messageBodyHtml(m);
+  assert.match(table, /<table class="h-blk-table">/);
+  assert.ok(strip(table).includes(want), 'the Table view keeps the as-of line');
 });
 
 test('bars stand on a zero baseline; the scatter draws its frontier and marks the current point', () => {
