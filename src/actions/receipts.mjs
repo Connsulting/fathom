@@ -78,8 +78,17 @@ export function registerReceiptKind(kind, definition) {
 
 for (const [kind, table, pk] of [
   ['preference', 'preferences', 'id'], ['fact', 'facts', 'key'], ['goal', 'goals', 'id'],
-  ['step', 'recs', 'id'], ['status', 'recs', 'id'], ['owner', 'recs', 'id'], ['setting', 'settings', 'key'],
+  ['status', 'recs', 'id'], ['owner', 'recs', 'id'], ['setting', 'settings', 'key'],
 ]) registerReceiptKind(kind, { table, pk });
+
+registerReceiptKind('step', { restore(ctx, { id, before, after, checkOnly }) {
+  const current = ctx.db.prepare('SELECT def,tasks_done FROM recs WHERE id=?').get(id);
+  if (!current || current.tasks_done !== after.tasks_done ||
+    !isDeepStrictEqual(parse(current.def, {}).tasks, parse(after.def, {}).tasks)) {
+    throw new ToolError('conflict', 'This step changed since that action.');
+  }
+  if (!checkOnly) ctx.db.prepare('UPDATE recs SET tasks_done=? WHERE id=?').run(before.tasks_done, id);
+} });
 
 export function restoreReceipt(ctx, id, scope, checkOnly = false) {
   const actor = requireActor(ctx);
@@ -90,7 +99,7 @@ export function restoreReceipt(ctx, id, scope, checkOnly = false) {
   const before = parse(row.before_state, null), after = parse(row.after_state, null);
   const definition = KINDS.get(row.kind);
   if (!definition) throw new ToolError('bad_input', 'This receipt kind does not support Undo.');
-  let current;
+  let current = ['status', 'owner', 'step'].includes(row.kind) ? ctx.db.prepare('SELECT * FROM recs WHERE id=?').get(row.entity_id) : null;
   if (definition.restore) {
     const restored = definition.restore(ctx, { id: row.entity_id, before, after, receipt: receiptOut(row), checkOnly });
     if (restored && typeof restored.then === 'function') throw new TypeError('Receipt kind restore must be synchronous');
@@ -163,6 +172,9 @@ export async function undoAction(ctx, id, scope) {
   let receipt, scopes, decisionChanged = false;
   tx(ctx.db, () => {
     const row = ctx.db.prepare('SELECT * FROM action_receipts WHERE id=?').get(id);
+    const parent = ctx.db.prepare("SELECT after_state FROM action_receipts WHERE kind='receipt_group' AND undone_at IS NULL").all()
+      .find(group => parse(group.after_state, {}).childIds?.includes(id));
+    if (parent) throw new ToolError('conflict', 'Use the grouped Undo to restore this change together with its other actions.');
     scopes = row ? receiptScopes(row) : [scope];
     decisionChanged = row?.kind === 'decision_decide' || row?.kind === 'decision_revisit';
     receipt = restoreReceipt(ctx, id, scope);

@@ -41,9 +41,17 @@ const TABLES = { 'write:goals': ['goals', 'id'], 'write:facts': ['facts', 'key']
 export function proposalBasis(db, tool, scopes, args = {}) {
   const parts = [];
   if (tool === 'undo') {
-    parts.push(['action_receipts', db.prepare('SELECT * FROM action_receipts ORDER BY id').all()]);
-    parts.push(['expected_transactions', db.prepare('SELECT * FROM expected_transactions ORDER BY id').all()]);
-    parts.push(['recs', db.prepare('SELECT * FROM recs ORDER BY id').all()]);
+    const selected = db.prepare('SELECT * FROM action_receipts WHERE id=?').get(args.id);
+    const receipts = selected?.kind === 'receipt_group' ? [selected, ...(parse(selected.after_state, {}).childIds ?? [])
+      .map(id => db.prepare('SELECT * FROM action_receipts WHERE id=?').get(id))] : [selected];
+    for (const receipt of receipts) {
+      parts.push(['receipt', receipt ?? null]);
+      if (!receipt) continue;
+      const target = { fact: ['facts', 'key'], goal: ['goals', 'id'], step: ['recs', 'id'], status: ['recs', 'id'],
+        owner: ['recs', 'id'], expected_transaction: ['expected_transactions', 'id'] }[receipt.kind];
+      if (target) parts.push([target[0], db.prepare(`SELECT * FROM ${target[0]} WHERE ${target[1]}=?`).get(receipt.entity_id) ?? null]);
+    }
+    return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
   }
   else for (const scope of scopes) {
     const [table, pk] = TABLES[scope];

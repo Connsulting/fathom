@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { planRun } from './helpers/plan.mjs';
 import { updateFixture } from './helpers/model-updates.mjs';
 import { stageUpdate } from '../src/ingest/model-updates.mjs';
 import { reviewImport } from '../src/ingest/model-review.mjs';
@@ -101,6 +102,7 @@ test('unrelated household activity leaves a waiting note approvable, but source 
     x.db.prepare("INSERT INTO facts (key,value,updated_at) VALUES ('household.state','\"VA\"',?)").run(x.ctx.now);
     x.db.prepare("INSERT INTO settings (key,value,updated_at) VALUES ('unrelated','true',?)").run(x.ctx.now);
     x.db.prepare("INSERT INTO files (id,name,sha256,size,mime,uploaded_at,status) VALUES ('unrelated','synthetic.txt',?,1,'text/plain',?,'imported')").run('a'.repeat(64), x.ctx.now);
+    await planRun(x.db, { now: '2032-03-03' });
     await approve(x, p);
     assert.equal(x.db.prepare('SELECT count(*) n FROM expected_transactions').get().n, 1);
   } finally { x.close(); }

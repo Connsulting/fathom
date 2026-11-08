@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { updateFixture } from './helpers/model-updates.mjs';
 import { stageUpdate } from '../src/ingest/model-updates.mjs';
 import { reviewImport } from '../src/ingest/model-review.mjs';
+import { proposalBasis } from '../src/actions/proposals.mjs';
 import { callTool } from '../src/tools/index.mjs';
 
 async function apply(x, actions = [x.step, x.expected]) {
@@ -38,7 +39,8 @@ test('stale child Undo and a later direct child Undo refuse the whole group', as
       if (stale === 'step') x.db.prepare("UPDATE recs SET tasks_done='[false]' WHERE id='payroll'").run();
       else {
         const child = x.db.prepare("SELECT id FROM action_receipts WHERE kind='expected_transaction'").get();
-        await callTool('undo', { operation: 'undo', id: child.id }, x.ctx);
+        await assert.rejects(callTool('undo', { operation: 'undo', id: child.id }, x.ctx), /grouped Undo/);
+        x.db.prepare('UPDATE action_receipts SET undone_at=? WHERE id=?').run(x.ctx.now, child.id);
       }
       await assert.rejects(callTool('undo', { operation: 'undo', id: result.receipt.id }, x.ctx), /changed|undone/);
       assert.equal(x.db.prepare('SELECT undone_at FROM action_receipts WHERE id=?').get(result.receipt.id).undone_at, null);
@@ -85,5 +87,30 @@ test('several steps in one recommendation undo in reverse order with one visible
     const result = await apply(x, [x.step, { ...x.step, args: { ...x.step.args, index: 1 } }, x.expected]);
     await callTool('undo', { operation: 'undo', id: result.receipt.id }, x.ctx);
     assert.deepEqual(JSON.parse(x.db.prepare("SELECT tasks_done FROM recs WHERE id='payroll'").get().tasks_done), []);
+  } finally { x.close(); }
+});
+
+test('routine recommendation prose changes preserve step Undo while task changes still refuse', async () => {
+  const x = await updateFixture();
+  try {
+    const result = await apply(x);
+    x.db.prepare("UPDATE recs SET def=json_set(def,'$.title','Updated plan prose') WHERE id='payroll'").run();
+    await callTool('undo', { operation: 'undo', id: result.receipt.id }, x.ctx);
+    assert.equal(JSON.parse(x.db.prepare("SELECT def FROM recs WHERE id='payroll'").get().def).title, 'Updated plan prose');
+    assert.deepEqual(JSON.parse(x.db.prepare("SELECT tasks_done FROM recs WHERE id='payroll'").get().tasks_done), []);
+  } finally { x.close(); }
+});
+
+test('pending grouped Undo depends on its children and target rows rather than unrelated activity', async () => {
+  const x = await updateFixture();
+  try {
+    const result = await apply(x);
+    const input = { id: result.receipt.id };
+    const before = proposalBasis(x.db, 'undo', result.receipt.scopes, input);
+    x.db.prepare("INSERT INTO facts (key,value,updated_at) VALUES ('household.state','\"VA\"',?)").run(x.ctx.now);
+    x.db.prepare("INSERT INTO recs (id,def,status,updated_at) VALUES ('unrelated','{}','proposed',?)").run(x.ctx.now);
+    assert.equal(proposalBasis(x.db, 'undo', result.receipt.scopes, input), before);
+    x.db.prepare("UPDATE recs SET tasks_done='[false]' WHERE id='payroll'").run();
+    assert.notEqual(proposalBasis(x.db, 'undo', result.receipt.scopes, input), before);
   } finally { x.close(); }
 });
