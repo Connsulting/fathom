@@ -1,7 +1,9 @@
 import { isDeepStrictEqual } from 'node:util';
 import { validateBlock } from '../../blocks/validate.mjs';
 import { buildSnapshot } from '../../blocks/snapshot.mjs';
-import { sources } from '../../blocks/paths.mjs';
+import { sources, findCall, isObject } from '../../blocks/paths.mjs';
+import { sourceLabel, validTitle } from '../../blocks/labels.mjs';
+import { dropNoteText } from '../../../web/core/block-notes.js';
 
 const path = { type: 'string', pattern: '^(?:[A-Za-z_][A-Za-z0-9_]*|0|[1-9][0-9]*)(?:\\.(?:[A-Za-z_][A-Za-z0-9_]*|0|[1-9][0-9]*)){0,5}$' };
 const ref = { type: 'object', additionalProperties: false, required: ['tool', 'args', 'path'], properties: {
@@ -21,9 +23,21 @@ const definitions = {
     items: { type: 'object', additionalProperties: false, required: ['source'], properties: { source: ref } } }, fields, title } },
   timeline: { required: ['source', 'date'], params: { source: ref, date: path, value: path, title } },
 };
-export function droppedBlock(op, reason) {
-  const name = { chart: 'chart', table: 'table', compare: 'comparison', timeline: 'timeline' }[op] || 'chart';
-  return { op: Object.hasOwn(definitions, op) ? op : 'chart', reason, text: `A ${name} was left out because its data did not check out.` };
+// The block's name for its note: a valid spec title, else its source read's own title, else the
+// source's label; none when the spec names no source.
+function blockName(spec, results) {
+  if (!isObject(spec)) return undefined;
+  if (validTitle(spec.title)) return spec.title;
+  const source = isObject(spec.source) ? spec.source : Array.isArray(spec.options) && isObject(spec.options[0]) ? spec.options[0].source : null;
+  if (!isObject(source) || typeof source.tool !== 'string' || !source.tool) return undefined;
+  const title = Array.isArray(results) && isObject(source.args) ? findCall(source, results)?.result?.title : undefined;
+  return validTitle(title) ? title : sourceLabel(source);
+}
+// The note for a block that was left out: which block, and why in plain words (web/core/block-notes.js).
+export function droppedBlock(op, reason, { spec, results } = {}) {
+  const kind = Object.hasOwn(definitions, op) ? op : 'chart';
+  const name = blockName(spec, results);
+  return { op: kind, reason, ...(name ? { name } : {}), text: dropNoteText(kind, reason, name) };
 }
 function dates(value) {
   if (!value || typeof value !== 'object') return [];
@@ -48,7 +62,7 @@ export const operations = Object.entries(definitions).map(([name, shape]) => ({
     const id = `b${results.filter(c => c.name === 'show' && !c.isError && c.result?.status === 'shown').length + 1}`;
     const made = makeBlock(name, spec, results, { id, now: ctx.now, origin: 'model' });
     if (!made.ok) {
-      const note = droppedBlock(name, made.reason);
+      const note = droppedBlock(name, made.reason, { spec, results });
       return { status: 'dropped', reason: note.reason, note: note.text };
     }
     ctx.onBlock(made.block);

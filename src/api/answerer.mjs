@@ -829,7 +829,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
     const placement = placeBlocks(stripSources(chosen.text), blocks);
     const text = placement.text;
     const blockNotes = toolResults.filter(r => r.name === 'show' && (r.isError || r.result?.status === 'dropped'))
-      .map(r => droppedBlock(r.args?.operation, r.isError ? 'bad_input' : r.result.reason));
+      .map(r => droppedBlock(r.args?.operation, r.isError ? 'bad_input' : r.result.reason, { spec: r.args, results: toolResults }));
     if (retried && pendingAction && !proposalStillOffered(text, pendingAction))
       pendingAction = null;
     const queuedImport = toolResults.find(r => !r.isError && r.name === 'refresh' && r.result?.status === 'queued' && r.result.message);

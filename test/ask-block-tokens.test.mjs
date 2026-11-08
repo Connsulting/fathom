@@ -29,11 +29,15 @@ useKit({ esc, money, registerFigures: (map) => { for (const [k, v] of Object.ent
 
 // Synthetic stored war-game figures (the planner's figure keys), so the options carry values.
 const WARGAME_FIELDS = { salary: ['salary', 'payroll', 'dist', 'tax', 'x', 'y'], deferral: ['amount', 'net', 'decCash', 'need', 'gap', 'tax2026', 'tax2027'] };
+// The planner labels each deferral figure "<option label>: <what it is>" (src/jobs/planner/wargame.mjs).
+const DEFERRAL_LABELS = { amount: 'amount moved to January', net: 'net tax change', decCash: 'December business cash',
+  need: 'December payroll need', gap: 'December need less cash', tax2026: 'this year tax change', tax2027: 'next year tax change' };
 function plantWargames(db) {
   const { wargame } = buildScenario(db);
   const put = db.prepare(`INSERT OR REPLACE INTO figures (key, v, kind, label, parser, updated_at) VALUES (?, ?, 'm', ?, 'planner', '2026-11-05')`);
   for (const name of ['salary', 'deferral']) (name === 'salary' ? wargame.salary.points : wargame.deferral.options).forEach((item, i) =>
-    WARGAME_FIELDS[name].forEach((field, j) => put.run(`wg.${name}.${item.id}.${field}`, 1000 * (i + 1) + 10 * j, field)));
+    WARGAME_FIELDS[name].forEach((field, j) => put.run(`wg.${name}.${item.id}.${field}`, 1000 * (i + 1) + 10 * j,
+      name === 'deferral' ? `${item.label}: ${DEFERRAL_LABELS[field]}` : field)));
   put.run('wg.deferral.base.income', 5000, 'income');
 }
 
@@ -79,6 +83,12 @@ test('AC1 the deferral comparison stores no token and renders every figure forma
 
   const fields = block.spec.fields;
   assert.equal(fields.length, 6);
+  // Each row is labeled by what the figures share once the option's own name is taken off, never
+  // by the generic source name.
+  const suffix = { 'figures.amount': 'amount', 'figures.taxThisYear': 'tax2026', 'figures.taxNextYear': 'tax2027', 'figures.net': 'net',
+    'figures.decemberCash': 'decCash', 'figures.payrollNeed': 'need' };
+  assert.deepEqual(block.snapshot.fields.map(f => f.label),
+    fields.map(f => DEFERRAL_LABELS[suffix[f]].replace(/^./, c => c.toUpperCase())), 'row labels');
   registered = new Map();
   const m = { id: 'tk-ac1', role: 'fathom', html: '<p>x</p>', provenance: reply.provenance };
   const html = messageBodyHtml(m);

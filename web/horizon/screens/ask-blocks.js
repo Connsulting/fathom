@@ -29,11 +29,14 @@ import * as compare from './ask-block-compare.js';
 import * as chart from './ask-block-chart.js';
 import * as timeline from './ask-block-timeline.js';
 import { gapControl } from '../../core/gap-control.js';
+import { DROP_REASONS, dropNoteText } from '../../core/block-notes.js';
 
 export const RENDERERS = { table, compare, chart, timeline };
 
-const OP_NOUN = { chart: 'A chart', table: 'A table', compare: 'A comparison', timeline: 'A timeline' };
-export const dropNote = (op) => `${OP_NOUN[op] || 'A block'} was left out because its data did not check out.`;
+// The note for a block this client cannot draw (an op with no renderer): names the block kind.
+export const dropNote = (op) => dropNoteText(op);
+// A stored note with a known reason reads its plain cause; any other keeps its stored text.
+const noteText = (n) => (DROP_REASONS.includes(n.reason) ? dropNoteText(n.op, n.reason, typeof n.name === 'string' && n.name ? n.name : undefined) : n.text);
 
 let K = { esc: (v) => String(v == null ? '' : v), money: (n) => String(n), registerFigures: () => {} };
 export function useKit(kit) { K = { ...K, ...kit }; }
@@ -54,6 +57,13 @@ function dateText(v) {
   const m = /^(\d{4})-(\d{2})(?:-(\d{2}))?$/.exec(String(v));
   if (!m || Number(m[2]) < 1 || Number(m[2]) > 12) return String(v);
   return m[3] ? `${MON[Number(m[2]) - 1]} ${Number(m[3])}, ${m[1]}` : `${MON[Number(m[2]) - 1]} ${m[1]}`;
+}
+
+// The text a figure reads as: its quote, else its value by unit; null is Unavailable. A quote
+// carrying a stored figure token ({f:<key>}, older stored snapshots) is prose markup, not text.
+export function figureText(f) {
+  if (!isObj(f) || f.value === null || f.value === undefined) return 'Unavailable';
+  return typeof f.quote === 'string' && f.quote && !f.quote.includes('{f:') ? f.quote : formatByUnit(f.value, f.unit);
 }
 
 // A value as text for its unit; short writes money as $45K. Null is Unavailable.
@@ -81,7 +91,7 @@ function figureList(snapshot) {
   const add = (holder, f) => out.push([holder, {
     value: f.value ?? null, unit: f.unit, label: f.label || '', kind: f.kind || 'e', asOf: f.asOf || '',
     source: f.source || '', gaps: arr(f.gaps), provenance: isObj(f.provenance) ? f.provenance : {},
-    ...(typeof f.quote === 'string' ? { quote: f.quote } : {}),
+    ...(typeof f.quote === 'string' && !f.quote.includes('{f:') ? { quote: f.quote } : {}),
   }]);
   for (const r of arr(snapshot.rows).concat(arr(snapshot.options))) {
     for (const c of arr(r && r.cells)) {
@@ -129,11 +139,11 @@ function ctxFor(messageId, block) {
     const i = index.get(holder);
     if (i == null) return '';
     const e = figs[i][1];
-    const text = e.value === null ? 'Unavailable' : (typeof e.quote === 'string' && e.quote ? e.quote : formatByUnit(e.value, e.unit));
+    const text = figureText(e);
     return `<span class="fx-fig" data-fig="${K.esc(`blk:${key}:${i}`)}" data-kind="${K.esc(e.kind)}"${e.value === null ? ' data-unavailable="1"' : ''} tabindex="0">${K.esc(text)}</span>`;
   };
   return {
-    key, esc: K.esc, fig, formatByUnit,
+    key, esc: K.esc, fig, formatByUnit, figureText,
     figKey: (holder) => (index.has(holder) ? `blk:${key}:${index.get(holder)}` : ''),
     builtAt: typeof block.builtAt === 'string' ? block.builtAt : '',
     state: blockState(messageId, block.id),
@@ -207,7 +217,7 @@ export function messageBodyHtml(m) {
   }
   let out = arr(after.get(0)).map((b) => blockHtml(m.id, b)).join('');
   parts.forEach((p, i) => { out += p + arr(after.get(i + 1)).map((b) => blockHtml(m.id, b)).join(''); });
-  return out + notes.map((n) => `<p class="h-blk-note">${K.esc(n.text)}</p>`).join('') + leftOutHtml;
+  return out + notes.map((n) => `<p class="h-blk-note">${K.esc(noteText(n))}</p>`).join('') + leftOutHtml;
 }
 
 /* ---------- binding (browser only) ---------- */

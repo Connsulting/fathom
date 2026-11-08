@@ -28,6 +28,8 @@ function figure(fig, ref, field) {
   const out = { value: fig.value, unit: fig.unit, label: figureLabel(fig, ref, field), kind: fig.kind ?? 'e', asOf: fig.asOf ?? null,
     gaps: structuredClone(fig.gaps || []), provenance: provenanceOf(fig.provenance), source: sourceLabel(ref) };
   for (const key of ['window', 'quote', 'direction']) if (fig[key] !== undefined) out[key] = structuredClone(fig[key]);
+  // A stored figure's quote is its prose token ({f:<key>}); the block shows the value by unit instead.
+  if (typeof out.quote === 'string' && out.quote.includes('{f:')) delete out.quote;
   return out;
 }
 // A bank description keeps its raw text (checks compare it) and gains the readable name beside it.
@@ -115,6 +117,15 @@ function assumptionLabels(refs, items, fields) {
   const records = assumptions.map(list => list.find(a => a.name === name));
   return records.every(a => typeof a?.stated === 'string') ? records.map(a => `${name.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/_/g, ' ').toLowerCase().replace(/^./, c => c.toUpperCase())} ${a.stated}`) : null;
 }
+// Per-option figure labels of the form "<option label>: <what it is>" (the war-game planner's)
+// share their tail; the row reads that tail, so it never falls back to the source's generic name.
+function sharedLabel(items, refs, labels) {
+  const tails = labels.map((label, i) => {
+    const head = `${itemLabel(items[i], refs[i])}: `;
+    return label.startsWith(head) ? label.slice(head.length).trim() : null;
+  });
+  return tails[0] && tails.every(t => t === tails[0]) ? tails[0].replace(/^./, c => c.toUpperCase()) : null;
+}
 function compare(spec, results, accountLabels) {
   const refs = spec.options ? spec.options.map(o => o.source) : resolve(spec.source, results).map(() => spec.source);
   const items = spec.options ? refs.map(ref => resolve(ref, results)) : resolve(spec.source, results);
@@ -123,7 +134,7 @@ function compare(spec, results, accountLabels) {
   return { ...(action ? { action } : {}), title: spec.title ?? sourceLabel(refs[0]), fields: spec.fields.map(field => {
     const c = cell(items[0], refs[0], field, accountLabels);
     const labels = items.map((item, i) => columnLabel([item], refs[i], field));
-    return { label: labels.every(label => label === labels[0]) ? labels[0] : fieldLabel(refs[0], field), ...(c.t === 'fig' ? { unit: c.fig.unit } : c.t === 'row' ? { unit: c.unit } : {}) };
+    return { label: labels.every(label => label === labels[0]) ? labels[0] : sharedLabel(items, refs, labels) ?? fieldLabel(refs[0], field),...(c.t === 'fig' ? { unit: c.fig.unit } : c.t === 'row' ? { unit: c.unit } : {}) };
   }), options: items.map((item, i) => ({ ...(typeof item.id === 'string' ? { id: item.id } : {}),
     label: labels?.[i] ?? itemLabel(item, refs[i]), cells: spec.fields.map(field => cell(item, refs[i], field, accountLabels)) })) };
 }
