@@ -185,6 +185,101 @@ describe('every paid round reserves against both caps', T, () => {
   }));
 });
 
+// ---------------------------------------------------------------------------------- SDK-path bound
+
+// The production chat and job path (live mode, no testTransport, roundRunner sdkRound) can make
+// more than one paid provider response in one round (SDK refusal and fallback retries), and the
+// SDK's maxBudgetUsd stops only once cumulative cost exceeds it. So an SDK-runner round passes
+// maxBudgetUsd = E (the unknown-cost estimate) and reserves SDK_RESPONSE_BOUND * E; each response
+// is at most E, so the round's total is at most 2E. The round runner is injected (createEngine's
+// roundRunner option), so no SDK subprocess runs and nothing leaves the process.
+describe('an SDK-runner round reserves SDK_RESPONSE_BOUND times its per-response budget', T, () => {
+  const SYSTEM = 'Synthetic static system.';
+  const DYNAMIC = 'Synthetic dynamic context.';
+  const REQUEST = Object.freeze({ system: SYSTEM, systemDynamic: DYNAMIC, messages: QUESTION, maxTokens: 64 });
+
+  // A recording reservations adapter and an injected round runner reporting `costOf(maxBudgetUsd)`.
+  async function sdkEngine({ costOf = () => 0.001, settleThrows = false } = {}) {
+    const { engine: E } = await mods();
+    const log = { reserve: [], settle: [], hold: [], runner: [] };
+    const reservations = {
+      async reserve(args) { log.reserve.push(args); return { roundId: 'r-1', boundUsd: args.boundUsd }; },
+      async settle(roundId, result) {
+        log.settle.push([roundId, result]);
+        if (settleThrows) throw new Error('synthetic platform write failure');
+      },
+      async hold(roundId, code) { log.hold.push([roundId, code]); },
+    };
+    const roundRunner = async args => {
+      log.runner.push({ maxBudgetUsd: args.maxBudgetUsd, model: args.model, maxTokens: args.maxTokens });
+      return { text: 'ok', content: [{ type: 'text', text: 'ok' }], tokens: { input_tokens: 10, output_tokens: 5 },
+        costUsd: costOf(args.maxBudgetUsd), model: args.model, status: 'success', is_error: false, toolResults: [], details: {} };
+    };
+    const engine = E.createEngine({ mode: 'live', credential: 'synthetic-credential-not-valid', reservations, roundRunner });
+    return { E, engine, log };
+  }
+
+  const estimate = (pricing, purpose, tools = []) => pricing.estimateUnknownCost({ model: pricing.modelFor(purpose), maxTokens: REQUEST.maxTokens,
+    system: `${SYSTEM}\n${DYNAMIC}`, messages: QUESTION, tools }).costUsd;
+
+  test('SDK_RESPONSE_BOUND is exported as 2', async () => {
+    const { engine: E } = await mods();
+    assert.equal(E.SDK_RESPONSE_BOUND, 2);
+  });
+
+  for (const purpose of ['chat', 'job']) {
+    test(`${purpose}: reserves SDK_RESPONSE_BOUND * E and hands the runner maxBudgetUsd = E`, async () => {
+      const { pricing } = await mods();
+      const tools = [PROBE('synthetic_probe')];
+      const { engine, log } = await sdkEngine();
+      const e = estimate(pricing, purpose, tools);
+      const res = await engine.call({ purpose, ...REQUEST, tools });
+      assert.equal(res.text, 'ok');
+      assert.equal(log.reserve.length, 1, 'one reservation');
+      assert.equal(log.reserve[0].purpose, purpose);
+      assert.equal(log.reserve[0].model, pricing.modelFor(purpose));
+      near(log.reserve[0].boundUsd, 2 * e, `${purpose} reservation is SDK_RESPONSE_BOUND (2) * E`);
+      assert.equal(log.runner.length, 1);
+      near(log.runner[0].maxBudgetUsd, e, `${purpose} per-response budget`);
+      assert.equal(log.settle.length, 1);
+      assert.equal(log.hold.length, 0);
+    });
+  }
+
+  test('a round reporting two responses\' worth (between E and 2E) settles within its reservation and resolves', async () => {
+    const { pricing } = await mods();
+    const e = estimate(pricing, 'chat');
+    const cost = Number((1.5 * e).toFixed(12));
+    const { engine, log } = await sdkEngine({ costOf: () => cost });
+    const res = await engine.call({ purpose: 'chat', ...REQUEST });
+    assert.equal(res.text, 'ok');
+    near(res.costUsd, cost, 'the round cost is reported');
+    assert.equal(log.settle.length, 1, 'settled once');
+    assert.equal(log.settle[0][0], 'r-1');
+    near(log.settle[0][1].costUsd, cost, 'settled at the reported cost');
+    assert.equal(log.hold.length, 0, 'no hold');
+    // Liveness: the engine is not latched; the next round is admitted.
+    await engine.call({ purpose: 'chat', ...REQUEST });
+    assert.equal(log.runner.length, 2);
+  });
+
+  test('liveness: a normal small-cost chat round resolves and settles', async () => {
+    const { engine, log } = await sdkEngine({ costOf: () => 0.0004 });
+    const res = await engine.call({ purpose: 'chat', ...REQUEST });
+    assert.equal(res.text, 'ok');
+    near(log.settle[0][1].costUsd, 0.0004, 'settled cost');
+    assert.equal(log.hold.length, 0);
+  });
+
+  test('a failed platform settle write latches the engine: the next call dispatches nothing', async () => {
+    const { engine, log } = await sdkEngine({ settleThrows: true });
+    await assert.rejects(engine.call({ purpose: 'chat', ...REQUEST }), refused('ModelAccountingError'));
+    await assert.rejects(engine.call({ purpose: 'chat', ...REQUEST }), refused('ModelAccountingError'));
+    assert.equal(log.runner.length, 1, 'the latched engine dispatched nothing more');
+    assert.equal(log.reserve.length, 1, 'and reserved nothing more');
+  });
+});
+
 // ---------------------------------------------------------------------------------- caps
 
 describe('admission refuses a round whose bound exceeds either remaining budget', T, () => {
@@ -510,6 +605,88 @@ describe('funding months and legacy spend', T, () => {
     await two.ctx(B).engine.call(CALL);
     assert.equal(emulator.requests.length, 2, 'with more instance credit B is admitted');
   }));
+
+  // An upgraded instance: the household has pre-MT-05 spend in its store and no carry row yet
+  // (the fixture's server may already have built A's runtime, so its carry row is removed to
+  // reproduce the state before the first post-upgrade construction).
+  const upgradedLegacy = (two, id, usd) => {
+    two.platform.prepare("DELETE FROM model_rounds WHERE household_id = ? AND kind = 'carry'").run(id);
+    legacy(two.ctx(id).db, usd);
+  };
+
+  test('building a household runtime records its carry, so another household is refused before it ever reserves', T,
+    () => withLive({ instanceCapUsd: 10, allocationUsd: 10 }, async ({ two, emulator, A, B }) => {
+      const { budget, engine: E, pricing } = await mods();
+      const big = { purpose: 'chat', messages: QUESTION, maxTokens: 60_000 };
+      assert.ok(bound(pricing, big) > 1 && bound(pricing, big) < 10, 'precondition: the big bound exceeds the remaining 1');
+      assert.ok(bound(pricing, CALL) < 1, 'precondition: the small bound fits the remaining 1');
+      upgradedLegacy(two, A, 9);
+      // A's runtime is constructed (the way a CLI or a restarted server builds it); A never calls.
+      await two.side(A);
+      const carries = carriesOf(two.platform, A).filter(c => c.month === month());
+      assert.equal(carries.length, 1, 'construction recorded one carry row for the funding month');
+      near(carries[0].cost_usd, 9, 'the carry is the legacy spend');
+      assert.equal(roundsOf(two.platform, A).length, 0, 'A reserved nothing');
+      near(await budget.committedUsd(two.platform, { month: month() }), 9, 'the instance sees A\'s legacy spend');
+
+      await assert.rejects(two.ctx(B).engine.call(big), err => err instanceof E.BudgetExceededError);
+      assert.equal(emulator.requests.length, 0, 'B dispatched nothing');
+      assert.equal(roundsOf(two.platform, B).length, 0, 'no round recorded for the refusal');
+
+      // Liveness: a bound under the remaining instance credit is admitted.
+      await two.ctx(B).engine.call(CALL);
+      assert.equal(emulator.requests.length, 1, 'the small round is admitted');
+      // Idempotent: a second construction records no second carry.
+      await two.side(A);
+      assert.equal(carriesOf(two.platform, A).filter(c => c.month === month()).length, 1);
+    }));
+
+  test('ensureCarry records one carry row per household and month, idempotently', T, () => withLive({}, async ({ two, A }) => {
+    const { budget } = await mods();
+    two.platform.prepare("DELETE FROM model_rounds WHERE household_id = ? AND kind = 'carry'").run(A);
+    const now = Date.now();
+    assert.equal(typeof budget.ensureCarry, 'function', 'ensureCarry is exported');
+    await budget.ensureCarry(two.platform, { householdId: A, month: month(), legacySpendUsd: 1.25, now });
+    await budget.ensureCarry(two.platform, { householdId: A, month: month(), legacySpendUsd: 1.25, now });
+    const carries = carriesOf(two.platform, A).filter(c => c.month === month());
+    assert.equal(carries.length, 1);
+    assert.equal(carries[0].state, 'settled');
+    near(carries[0].cost_usd, 1.25, 'carried');
+    near(await budget.committedUsd(two.platform, { householdId: A, month: month() }), 1.25, 'committed');
+  }));
+});
+
+describe('node scripts/model-budget.mjs counts every household\'s legacy spend', T, () => {
+  test('reductions below a never-reserved household\'s legacy spend are refused', T, async () => {
+    const emulator = await startModelEmulator();
+    let two;
+    try {
+      two = await liveTwoHouseholds({ emulator, instanceCapUsd: 100, allocationUsd: 50 });
+      const A = two.A.id;
+      two.platform.prepare("DELETE FROM model_rounds WHERE household_id = ? AND kind = 'carry'").run(A);
+      const ts = new Date().toISOString();
+      two.ctx(A).db.prepare('INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(ts, ts.slice(0, 7), 'chat', 9, 'claude-opus-5-5', '{}');
+      assert.equal(roundsOf(two.platform, A).length, 0, 'precondition: A never reserved');
+      const run = (...args) => runCommand(process.execPath, ['scripts/model-budget.mjs', ...args], { env: { FATHOM_DATA: two.dataDir } });
+      const no = (r, code) => { assert.equal(r.code, 1, r.stdout + r.stderr); assert.equal(r.stderr, `model-budget: ${code}\n`); assert.equal(r.stdout, ''); };
+      no(await run('--instance-cap-usd', '5'), 'below_committed');
+      no(await run('--household', A, '--allocation-usd', '5'), 'below_committed');
+      const capValue = two.platform.prepare("SELECT value FROM platform_settings WHERE key = 'instance_model_cap_usd'").get()?.value;
+      assert.equal(JSON.parse(capValue), 100, 'the cap is unchanged');
+      assert.equal(two.platform.prepare('SELECT allocation_usd FROM household_model_budgets WHERE household_id = ?').get(A).allocation_usd, 50);
+      const carries = carriesOf(two.platform, A).filter(c => c.month === month());
+      assert.equal(carries.length, 1, 'the command recorded A\'s carry');
+      near(carries[0].cost_usd, 9, 'carry');
+      // Liveness: a cap above the committed spend is set.
+      const r = await run('--instance-cap-usd', '12');
+      assert.equal(r.code, 0, r.stdout + r.stderr);
+      assert.equal(r.stdout, 'model-budget: set\n');
+    } finally {
+      await emulator.close();
+      await two?.close();
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------------- operator budget command

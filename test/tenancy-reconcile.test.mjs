@@ -184,6 +184,37 @@ describe('node scripts/reconcile-spend.mjs', T, () => {
     noReceiptInAudit(two.platform, RECEIPT, 'rcpt-synthetic-0002');
   }));
 
+  test('the serving runtime refuses while the hold lasts and answers again once the round is reconciled', T, () => withLive({}, async ({ two, emulator, A }) => {
+    const serving = two.server.app.runtimes.get(A).engine;
+    const flags = outboundRows(two.platform);
+    const held = await heldRound(two, emulator, A);
+    assert.equal(two.server.app.runtimes.get(A).engine, serving, 'the same serving engine');
+    const sent = emulator.requests.length;
+    await assert.rejects(serving.call(CALL), refused('ModelAccountingError'));
+    assert.equal(serving.isOn(), false, 'off while the platform hold lasts');
+    assert.equal(emulator.requests.length, sent, 'nothing dispatched while held');
+
+    ok(await reconcile(two, { household: A, round: held.id, cost: '0.01', receipt: RECEIPT }), 'settled');
+    assert.equal(two.server.app.runtimes.get(A).engine, serving, 'still the same serving engine');
+    assert.equal(serving.isOn(), true, 'on again once the hold is settled');
+    const res = await serving.call(CALL);
+    assert.equal(res.text, 'Synthetic answer with no figures.');
+    assert.equal(emulator.requests.length, sent + 1, 'the serving engine dispatched the round');
+    assert.equal(roundsOf(two.platform, A).at(-1).state, 'settled');
+    assert.equal(serving.isOn(), true);
+    assert.deepEqual(outboundRows(two.platform), flags, 'household_outbound unchanged');
+  }));
+
+  test('the serving runtime stays refused after an over-bound reconcile', T, () => withLive({}, async ({ two, emulator, A }) => {
+    const serving = two.server.app.runtimes.get(A).engine;
+    const held = await heldRound(two, emulator, A);
+    no(await reconcile(two, { household: A, round: held.id, cost: '5', receipt: RECEIPT }), 'reservation_bound_exceeded');
+    const sent = emulator.requests.length;
+    await assert.rejects(serving.call(CALL), refused('ModelAccountingError'));
+    assert.equal(serving.isOn(), false);
+    assert.equal(emulator.requests.length, sent, 'nothing dispatched');
+  }));
+
   test('a round still in flight is refused; an expired reservation is reconciled', T, () => withLive({}, async ({ two, emulator, B }) => {
     const budget = await src('src/platform/model-budget.mjs');
     emulator.script([{ hang: true }, { hang: true }]);
