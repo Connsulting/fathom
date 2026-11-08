@@ -6,6 +6,7 @@ const mortgage = {balance:10000,rate:0,monthlyPayment:500,escrowMonthly:100};
 async function spendingStore(t) {
  const s=await baseStore(t);
  s.account('mortgage','loan');
+ s.db.prepare("INSERT INTO balances(account_id,date,amount) VALUES ('mortgage','2026-10-31',10000)").run();
  return s;
 }
 

@@ -28,10 +28,15 @@ async function schedule(args,ctx) {
   const assumptions=(args.changes ?? []).map(c=>({...c,record:checkAssumption(c.newMonthly,{name:`${c.kind} ${c.stage ?? 'change'}`,unit:'usd_per_month',min:0},ctx)}));
   const seen=new Set();
   for (const a of assumptions) { const key=`${a.kind}:${a.stage ?? ''}`; if(seen.has(key))bad('Duplicate change assumption');seen.add(key); }
-  const rows=[];
+  const rows=[],inactive=[],unmatched=[];
   for (const kind of [...new Set(args.obligations ?? kinds)]) {
     const key=`obligations.${kind}`, missing=[], gaps=[], keys=[key];
     const mortgage=kind==='mortgage'?inferMortgage(ctx.db,clock,facts[key]):null;
+    if(mortgage && !mortgage.present) {
+      const state={kind,status:mortgage.status,message:mortgage.message,provenance:{sources:mortgage.sources}};
+      if(mortgage.status==='paid_off')inactive.push(state);else unmatched.push(state);
+      continue;
+    }
     let observed;
     if(kind==='plan529') observed=await total(ctx,{measure:'inflow',scope:'all',include:{accounts:accounts.filter(a=>a.kind==='529'&&!a.archived_at).map(a=>a.id)}});
     else if(mortgage) observed={perMonth:figure(mortgage.observedMonthly,'usd_per_month','Observed mortgage payments',mortgage.asOf,
@@ -79,7 +84,7 @@ async function schedule(args,ctx) {
       ...(mortgage?{terms:Object.fromEntries(['balance','rate','monthlyPayment','escrowMonthly'].map(key=>[key,f(stored[key] ?? null,key==='rate'?'ratio':key==='balance'?'usd':'usd_per_month',`Mortgage ${key}`)])),
         note:mortgage.assumptions.length?`Mortgage terms are inferred assumptions from matched loan data; tell Fathom to correct them.${stored.escrowMonthly===undefined?' Escrow remains unknown.':''}`:'Mortgage terms use your stated values; observed payments use only this loan.'}:{})});
   }
-  return {obligations:rows,gaps:uniqueGaps(rows.flatMap(r=>[...r.gaps,...r.observedMonthly.gaps]))};
+  return {obligations:rows,...(inactive.length?{inactive}:{}),...(unmatched.length?{unmatched}:{}),gaps:uniqueGaps([...rows.flatMap(r=>[...r.gaps,...r.observedMonthly.gaps]),...unmatched.map(s=>gap(s.message))])};
 }
 
 async function projection(args,ctx) {
@@ -118,7 +123,7 @@ async function projection(args,ctx) {
     if(value!==null)value+=adjustment;
     output.push({year,spending:figure(value,'usd_per_year','Projected annual spending',latest([base.asOf,...sched.obligations.map(r=>r.monthly.asOf)]),{calc:'spendingProjection',formula:'Base spending plus dated changes, prorated by days in the calendar year; removals capped to the selected obligation amount',inputs:[base,...sched.obligations.map(r=>r.monthly)]},gaps),changes:applied});
   }
-  return {years:output,notes:["Today's dollars; no inflation. Changes apply on their dates and remove only the obligation portion inside the base."],gaps};
+  return {years:output,notes:["Today's dollars; no inflation. Changes apply on their dates and remove only the obligation portion inside the base.",...(sched.inactive ?? []).map(s=>s.message)],gaps};
 }
 
 export const operations=[

@@ -228,6 +228,11 @@ export function loadRecs(db, clock) {
   const blockers = parse(db.prepare("SELECT value FROM content WHERE key = 'rec.blockers'").get()?.value, null) || {};
   for (const r of recs) if (r.status === 'waiting' && Object.hasOwn(blockers, r.id)) r.blocker = blockers[r.id];
   for (const r of recs) if (r.question) {
+    if (mortgage.status === 'paid_off') {
+      r.question.keys = r.question.keys.filter(key => key !== 'obligations.mortgage');
+      r.tasks = r.tasks.filter(t => t.fact !== 'obligations.mortgage');
+      if (!r.question.keys.length) { delete r.question; continue; }
+    }
     r.question = { ...questionFor(r.question.keys, { accounts, facts, names: facts['household.names'], people: r.question.people, mortgage }), primary: r.question.primary };
     if (r.question.primary && !LISTED_RECS.has(r.id)) {
       r.title = dataText(r.question.title);

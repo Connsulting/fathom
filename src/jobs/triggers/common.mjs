@@ -90,6 +90,7 @@ export const ANSWER_SHAPES = Object.freeze({
   'household.spouseBirthDate': { scope: 'household', type: 'date', label: 'Your spouse birth date' },
   'household.retireAge': { scope: 'person', type: 'number', min: 18, max: 100, half: true, unit: 'age', label: 'Retirement age for {person}' },
   'obligations.mortgage': { scope: 'household', type: 'object', fields: {
+    paidOff: { ...yesNo('Mortgage is paid off'), optional: true, ask: false },
     balance: { ...dollars('Mortgage balance'), optional: true }, rate: { type: 'number', min: 0, max: 1, unit: 'ratio', optional: true, label: 'Annual mortgage rate' },
     monthlyPayment: { ...dollars('Monthly mortgage payment including escrow'), exclusiveMin: 0, optional: true },
     escrowMonthly: { ...dollars('Monthly escrow continuing after payoff'), optional: true }, payoffDate: { type: 'date', optional: true, ask: false, label: 'Mortgage payoff date' },

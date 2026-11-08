@@ -1,15 +1,30 @@
 import { matchTransfers, normalizeMerchant, spendingAccount } from '../categories/resolve.mjs';
 import { round } from './figure.mjs';
 import { monthIndex, monthAt } from './aggregate.mjs';
+import { listPreferences } from '../actions/preferences.mjs';
 
 const sum = rows => rows.reduce((s, r) => s + r.amount, 0);
 const source = (table, rows) => ({ table, ids: rows.map(r => r.id).slice(0, 50), count: rows.length });
 const paymentText = text => /\b(?:pay(?:ment)?|pmt|autopay|transfer)\b/i.test(text || '');
+const paidOffStatement = text => /^(?:(?:my|our|the)\s+)?(?:home\s+)?mortgage\s+(?:(?:is|was|has been)\s+)?(?:(?:already|fully|completely)\s+)*paid[ -]+off(?:\s+(?:in|since)\s+\d{4})?[.!]?$/i.test(text.trim())
+  || /^(?:i|we)\s+(?:have\s+)?(?:already\s+)?paid\s+off\s+(?:my|our|the)\s+(?:home\s+)?mortgage[.!]?$/i.test(text.trim());
 
 export function inferMortgage(db, clock, stated) {
   const values = { ...(stated || {}) }, assumptions = [], sources = [], inferred = {};
+  const inactive = (status, message, evidence = []) => ({ status, message, values: status === 'paid_off' ? { paidOff: true } : values,
+    sources: evidence, assumptions: [], inferred: {}, missing: [], observedMonthly: null, principalAndInterest: null,
+    present: false, loan: null, payments: [], asOf: null });
+  const memory = listPreferences(db).find(m => paidOffStatement(m.text));
+  if (values.paidOff === true || values.status === 'paid_off' || values.balance === 0 || memory) return inactive('paid_off',
+    'Your mortgage is paid off. There is no mortgage obligation or future mortgage payoff to project. Other debt payments are not a mortgage payment.',
+    memory ? [source('preferences', [memory])] : [{ table: 'facts', ids: ['obligations.mortgage'], count: 1 }]);
   const accounts = db.prepare('SELECT * FROM accounts WHERE archived_at IS NULL ORDER BY id').all();
-  const loans = accounts.filter(a => a.kind === 'loan' && /mortgage|home loan|housing loan/i.test(`${a.name || ''} ${a.display_name || ''}`));
+  const namedLoans = accounts.filter(a => a.kind === 'loan' && /mortgage|home loan|housing loan/i.test(`${a.name || ''} ${a.display_name || ''}`));
+  const balances = new Map(namedLoans.map(a => [a.id, db.prepare('SELECT id,date,amount FROM balances WHERE account_id=? AND date<=? ORDER BY date DESC,id DESC LIMIT 1').get(a.id, clock)]));
+  const loans = namedLoans.filter(a => Math.abs(balances.get(a.id)?.amount ?? 0) > 0);
+  if (namedLoans.length && namedLoans.every(a => balances.get(a.id)?.amount === 0)) return inactive('paid_off',
+    'The mortgage loan balance is zero. There is no mortgage obligation or future mortgage payoff to project.',
+    [source('accounts', namedLoans), source('balances', [...balances.values()])]);
   const loan = loans.length === 1 ? loans[0] : null;
   const active = new Map(accounts.map(a => [a.id, a]));
   const firstMonth = monthIndex(clock.slice(0, 7)) - 12;
@@ -26,6 +41,11 @@ export function inferMortgage(db, clock, stated) {
   };
   const funding = loan ? outflows.filter(t => matches.has(t.id) || payeeMatches(t)) : [];
   const payments = funding.length ? funding : credits;
+  const canInfer = !!loan && payments.length > 0;
+  const statedActive = values.balance > 0 || values.monthlyPayment > 0 || !!values.payoffDate;
+  if (!canInfer && !statedActive) return inactive('unmatched', loans.length > 1
+    ? 'Match the mortgage loan account and its payments before inferring mortgage terms. Tell Fathom which loan is the mortgage.'
+    : 'Cannot match payments to an active positive-balance mortgage loan. Tell Fathom which loan and payments belong to the mortgage.');
   const complete = payments.filter(t => t.date.slice(0, 7) < clock.slice(0, 7));
   const months = new Set(complete.map(t => t.date.slice(0, 7)));
   const observedMonthly = months.size ? round(complete.reduce((s, t) => s + Math.abs(t.amount), 0) / months.size) : null;
@@ -35,7 +55,7 @@ export function inferMortgage(db, clock, stated) {
   const newest = snapshots.at(-1);
   if (newest) sources.push(source('balances', snapshots));
   const add = (key, value, explanation) => {
-    if (values[key] !== undefined || value === null) return;
+    if (!canInfer || values[key] !== undefined || value === null) return;
     values[key] = value;
     inferred[key] = true;
     assumptions.push({ name: `Inferred mortgage ${key}`, value, unit: key === 'rate' ? 'ratio' : key === 'monthlyPayment' ? 'usd_per_month' : 'usd', source: 'inferred', stated: explanation });
@@ -78,5 +98,5 @@ export function inferMortgage(db, clock, stated) {
   });
   const missing = ['balance', 'rate', 'monthlyPayment', 'escrowMonthly'].filter(k => values[k] === undefined);
   return { values, inferred, sources, assumptions, missing, observedMonthly, principalAndInterest,
-    present: !!stated || loans.length > 0, loan, payments: funding, asOf: newest?.date ?? complete.at(-1)?.date ?? null };
+    status: canInfer ? 'active' : 'stated', present: true, loan, payments: funding, asOf: newest?.date ?? complete.at(-1)?.date ?? null };
 }

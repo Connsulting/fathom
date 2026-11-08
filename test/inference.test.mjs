@@ -177,12 +177,20 @@ test('unmatched payments do not establish a mortgage or use all debt payments', 
   const out = await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, ctx);
   assert.equal(out.obligations.length, 0);
   assert.ok(out.gaps.some(g => /match.*payment/i.test(g.message)));
+  const recent = await store(t);
+  loan(recent.db, { months: 2 });
+  const row = (await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, recent.ctx)).obligations[0];
+  assert.equal(row.monthly.value, 900);
+  assert.equal(row.terms.rate.value, null, 'a matched loan with too little history cannot establish a rate');
+  assert.deepEqual(row.missing, ['obligations.mortgage.rate', 'obligations.mortgage.escrowMonthly']);
 });
 
 test('AC6/AC8: a paid-off mortgage memory overrides stale positive loan data throughout planner, Ask and projections', async t => {
   const { db, ctx } = await store(t);
   loan(db);
+  addFact(db, 'obligations.mortgage', { balance: 19000, monthlyPayment: 1300 });
   await planRun(db);
+  assert.ok(buildScenario(db).recs.some(r => r.question?.keys.includes('obligations.mortgage')));
   const text = 'Our mortgage is already paid off.';
   const memory = writePreference({ ...ctx, ownerText: text }, { text, evidence: text }, { fromAsk: true });
   const out = await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, ctx);
@@ -193,6 +201,7 @@ test('AC6/AC8: a paid-off mortgage memory overrides stale positive loan data thr
   assert.ok(out.inactive[0].provenance.sources.some(s => s.table === 'preferences' && s.ids.includes(memory.preference.id)));
   const summary = await callTool('household', { operation: 'summary' }, ctx);
   assert.equal(summary.mortgage.status, 'paid_off');
+  assert.deepEqual(summary.facts['obligations.mortgage'], { paidOff: true });
   assert.ok(!buildScenario(db).recs.some(r => r.question?.keys.includes('obligations.mortgage')), 'a saved memory clears an old payoff question immediately');
   await planRun(db);
   assert.ok(!buildScenario(db).recs.some(r => r.question?.keys.includes('obligations.mortgage')));
@@ -272,8 +281,8 @@ test('stated escrow and payment corrections override inferred mortgage terms and
   assert.equal(row.terms.balance.value, 12000);
   db.prepare("DELETE FROM facts WHERE key='obligations.mortgage'").run();
   db.prepare("INSERT INTO accounts(id,name,kind) VALUES ('second-loan','Other home mortgage','loan')").run();
-  row = (await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, ctx)).obligations[0];
-  assert.equal(row.monthly.value, null);
-  assert.equal(row.observedMonthly.value, null);
-  assert.equal(row.endDate.value, null);
+  const ambiguous = await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, ctx);
+  assert.equal(ambiguous.obligations.length, 1, 'a second loan without a positive balance is not an active mortgage candidate');
+  db.prepare("INSERT INTO balances(account_id,date,amount) VALUES ('second-loan','2026-10-31',20000)").run();
+  assert.equal((await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, ctx)).obligations.length, 0);
 });
