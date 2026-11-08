@@ -384,7 +384,10 @@ export function ingestScreens(h) {
     const control = `<div class="h-ing-ctl">${btn(label, `data-upload-open="1"${busy ? ' disabled aria-busy="true"' : ''}`, onboarding ? 'ghost' : '')}
       <input type="file" multiple data-upload="1" hidden tabindex="-1"></div>`;
     if (onboarding) return `<div class="h-ing-add ob">${list}${control}</div>`;
-    const lede = '<p class="h-mute sm">Exports from banks, cards, brokerages and payroll, profit and loss workbooks, statements and tax forms. Rows already imported are skipped.</p>';
+    const selected = st.gapKind;
+    const format = ing().formats.find(f => f.id === selected);
+    const type = format ? `<p class="h-mute sm" data-upload-kind="${esc(format.id)}">Selected document: ${esc(format.title)}</p>` : '';
+    const lede = type + '<p class="h-mute sm">Exports from banks, cards, brokerages and payroll, profit and loss workbooks, statements and tax forms. Rows already imported are skipped.</p>';
     return section('Add files', `<div class="h-ing-add">${lede}${control}${list}</div>`) + waitingSection();
   }
 
@@ -908,7 +911,10 @@ export function ingestScreens(h) {
     const more = list.length > DECIDED_VISIBLE;
     const rows = (more && !st.decidedAll ? list.slice(0, DECIDED_VISIBLE) : list).map(decidedRow).join('');
     const toggle = more ? `<p class="h-decided-more">${btn(st.decidedAll ? 'Show fewer' : `Show all ${list.length}`, 'data-decided-more="1"', 'ghost')}</p>` : '';
-    const lede = '<p class="h-mute sm">Fathom answered these from your files and your own answers. Undo puts one back in the deck, and Fathom will not answer it again.</p>';
+    const selected = st.gapKind;
+    const format = ing().formats.find(f => f.id === selected);
+    const type = format ? `<p class="h-mute sm" data-upload-kind="${esc(format.id)}">Selected document: ${esc(format.title)}</p>` : '';
+    const lede = type + '<p class="h-mute sm">Fathom answered these from your files and your own answers. Undo puts one back in the deck, and Fathom will not answer it again.</p>';
     return section('Decided for you', `${lede}<ul class="h-decided-l">${rows}</ul>${toggle}`, plural(list.length, 'answer'), 'h-cf-decided');
   }
 
@@ -1182,6 +1188,15 @@ export function ingestScreens(h) {
     onSwipe: (dir) => move(dir)
   });
 
+  function openUpload(kind) {
+    const format = ing().formats.find(f => f.id === kind);
+    if (!format) return;
+    st.gapKind = kind;
+    draw();
+    const input = document.querySelector('input[type=file][data-upload]');
+    if (input) { input.accept = ['pnl', 'estimates'].includes(kind) ? '.xlsx,.csv' : kind === 'paystub' || kind === 'taxforms' ? '.pdf,.txt' : '.csv,.pdf,.xlsx'; input.click(); }
+  }
+
   function upload(input) {
     const files = Array.from(input.files || []);
     input.value = '';
@@ -1393,5 +1408,5 @@ export function ingestScreens(h) {
     st.origin = o && o.name ? { name: o.name, params: o.params } : null;
   }
 
-  return { setOrigin, confirmPage, pendingBanner, accountRepairs, accountRepairsFor, addFiles, accountMeta, sourcesSection, decidedSection, handleClick, handleChange, deckAction, handlePointer };
+  return { openUpload, setOrigin, confirmPage, pendingBanner, accountRepairs, accountRepairsFor, addFiles, accountMeta, sourcesSection, decidedSection, handleClick, handleChange, deckAction, handlePointer };
 }

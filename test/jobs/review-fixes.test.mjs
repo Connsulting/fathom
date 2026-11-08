@@ -5,6 +5,8 @@ import test, { after, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { planRun } from '../helpers/plan.mjs';
 import { buildScenario } from '../../src/scenario/build.mjs';
+import { gapControl } from '../../web/core/gap-control.js';
+import * as recBlocker from '../../web/horizon/screens/rec-blocker.js';
 import { resolveTokens } from '../../src/shared/tokens.mjs';
 import { sepRoom } from '../../src/calc/index.mjs';
 import { recAction } from '../../src/api/handlers.mjs';
@@ -43,15 +45,19 @@ function strings(value, out = []) {
 const EVIL = '<img src=x onerror=alert(1)>';
 
 function assertNoRawMarkup(db) {
-  for (const r of db.prepare('SELECT id, def FROM recs').all()) {
-    assert.ok(!r.def.includes('<img'), `stored def of ${r.id} carries raw markup`);
-  }
-  for (const m of db.prepare('SELECT conversation_key, text FROM messages').all()) {
-    assert.ok(!m.text.includes('<img'), `message in ${m.conversation_key} carries raw markup`);
-  }
-  for (const rec of buildScenario(db, { clock: NOW }).recs) {
-    assert.ok(!JSON.stringify(rec).includes('<img'), `scenario rec ${rec.id} carries raw markup`);
-  }
+  const esc = v => String(v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  recBlocker.bind({ esc });
+  const check = (def, id) => {
+    const { gaps, tasks, ...htmlFields } = def;
+    assert.ok(!JSON.stringify({ ...htmlFields, tasks: (tasks || []).map(({ fix, ...task }) => task) }).includes('<img'), `${id} HTML fields carry no raw markup`);
+    assert.ok(!recBlocker.html({ ...def, gaps }, 'plan').includes('<img'), `${id} gap text is escaped when rendered`);
+    for (const action of [...(gaps || []).map(g => g.action), ...(tasks || []).map(t => t.fix)].filter(Boolean)) {
+      assert.ok(!gapControl(action, esc).includes('<img'), `${id} fix control escapes its prompt`);
+    }
+  };
+  for (const r of db.prepare('SELECT id, def FROM recs').all()) check(JSON.parse(r.def), r.id);
+  for (const m of db.prepare('SELECT conversation_key, text FROM messages').all()) assert.ok(!m.text.includes('<img'), `message in ${m.conversation_key} carries raw markup`);
+  for (const rec of buildScenario(db, { clock: NOW }).recs) check(rec, rec.id);
 }
 
 describe('review fixes', () => {
@@ -86,7 +92,7 @@ describe('review fixes', () => {
     assert.ok(recRow(db, 'va529').def.tasks.some(t => t.t.includes('&lt;img')), 'the age-70 task names the account, escaped');
   });
 
-  test('AC3: a second partnership with no K-1 blocks household tax figures and missing-data lists it (F2)', async () => {
+  test('AC3: unmatched partnership statements are excluded from tax estimates and listed as gaps (F2)', async () => {
     const partners = [
       { name: 'Alder Partners', type: 'partnership', owner: 'owner', income: 0, expenses: {} },
       { name: 'Birch Partners', type: 'partnership', owner: 'owner', income: 0, expenses: {} },
@@ -98,8 +104,8 @@ describe('review fixes', () => {
     const k1Docs = db => db.prepare("SELECT count(*) AS n FROM documents WHERE doc_type = 'k1'").get().n;
     const db = await S.store({ variant: { entities: [SCORP, SOLE_PROP, ...partners], payroll: [alderK1] } });
     const result = await plan(db);
-    assert.equal(figureRow(db, 'agi.est'), null, 'agi.est not produced');
-    assert.equal(figureRow(db, 'tax.fed.proj'), null, 'tax.fed.proj not produced');
+    assert.ok(figureRow(db, 'agi.est').locator.gaps.some(g => g.code === 'k1_unmatched'));
+    assert.ok(figureRow(db, 'tax.fed.proj').locator.partial);
     assert.ok(activeRecIds(db).includes('missing-data'));
     const md = JSON.stringify(recRow(db, 'missing-data').def);
     assert.ok(result.warnings.includes('partnership_incomplete') || /K-1|partnership/i.test(md), 'missing-data names the incomplete partnership');
@@ -109,7 +115,7 @@ describe('review fixes', () => {
     const both = await S.store({ variant: { entities: [SCORP, SOLE_PROP, ...partners], payroll: [alderK1, birchK1] } });
     await plan(both);
     assert.equal(k1Docs(both), 2, 'ingest stores both K-1s');
-    assert.equal(figureRow(both, 'agi.est'), null, 'two unnamed K-1s for two partnerships stay blocked');
+    assert.ok(figureRow(both, 'agi.est').locator.gaps.some(g => g.code === 'k1_unmatched'));
     assert.ok(activeRecIds(both).includes('missing-data'));
     // liveness: one partnership with its one complete K-1 produces the figures
     const one = await S.store({ variant: { entities: [SCORP, SOLE_PROP, partners[0]], payroll: [alderK1] } });
@@ -330,31 +336,27 @@ describe('review fixes, round two', () => {
 });
 
 describe('review fixes, round three', () => {
-  test('AC4: a Virginia itemized gap parks the salary and deferral recs as waiting and restores them (H1)', async () => {
+  test('AC4: a Virginia itemized gap preserves salary and deferral rec status while estimates continue', async () => {
     const db = await S.store();
     await plan(db);
-    for (const id of ['scorp-salary', 'invoice-deferral']) assert.ok(activeRecIds(db).includes(id), `${id} fires first`);
+    for (const id of ['scorp-salary', 'invoice-deferral']) assert.ok(activeRecIds(db).includes(id));
     recAction(ctxOf(db, { id: 'scorp-salary' }, { action: 'start' }));
     const prior = { 'scorp-salary': 'doing', 'invoice-deferral': 'proposed' };
-
     db.prepare("UPDATE transactions SET category = 'Uncategorized' WHERE lower(category) LIKE '%charit%' OR lower(category) LIKE '%donat%'").run();
-    addFact(db, 'tax.itemizedEstimate', 40000); // federal itemizes, Virginia estimate missing
+    addFact(db, 'tax.itemizedEstimate', 40000);
     await plan(db);
-    for (const id of Object.keys(prior)) {
+    for (const [id, status] of Object.entries(prior)) {
       const row = recRow(db, id);
-      assert.equal(row.status, 'waiting', `${id} waiting`);
-      assert.equal(row.waiting_on, 'data', `${id} waits on data`);
-      assert.equal(plannerRec(db, id).retired_at, null, `${id} not retired`);
-      const ev = recEvents(db, id).at(-1);
-      assert.deepEqual([ev.action, ev.actor, ev.from_status, ev.to_status], ['block', 'planner', prior[id], 'waiting']);
+      assert.equal(row.status, status);
+      assert.ok(row.def.gaps.some(g => g.code === 'va_itemized_missing'));
+      assert.equal(plannerRec(db, id).retired_at, null);
     }
-
     addFact(db, 'tax.vaItemizedEstimate', 20000);
     await plan(db);
     for (const [id, status] of Object.entries(prior)) {
-      assert.equal(recRow(db, id).status, status, `${id} back to ${status}`);
-      const ev = recEvents(db, id).at(-1);
-      assert.deepEqual([ev.action, ev.actor, ev.to_status], ['unblock', 'planner', status]);
+      const row = recRow(db, id);
+      assert.equal(row.status, status);
+      assert.ok(!row.def.gaps?.some(g => g.code === 'va_itemized_missing'));
     }
   });
 

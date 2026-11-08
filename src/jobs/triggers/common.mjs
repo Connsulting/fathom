@@ -111,6 +111,18 @@ export const ANSWER_SHAPES = Object.freeze({
   'accounts.separationDate': { scope: 'account', accountEligibility: 'employer', type: 'date', label: 'Separation date for {account}' },
 
   'household.filingStatusDefault': { scope: 'household', ...yesNo('Undo the joint filing assumption?') },
+  'retirement.contributions': { scope: 'household', type: 'array', minItems: 1, label: 'Retirement contributions', maxItems: 100, items: { type: 'object', fields: {
+    person: { type: 'choice', label: 'Person', choices: [{ value: 'owner', label: 'Owner' }, { value: 'spouse', label: 'Spouse' }] },
+    plan: { type: 'choice', ownerInterpreted: true, label: 'Plan', choices: ['own-corp-401k', 'outside-401k', 'sep', 'ira'].map(value => ({ value, label: value })) },
+    type: { type: 'choice', ownerInterpreted: true, label: 'Contribution type', choices: ['deferral', 'catchup', 'employer'].map(value => ({ value, label: value })) },
+    amount: dollars('Contribution amount'), entity: { type: 'string', maxLength: 200, label: 'Sponsoring business', optional: true },
+    employer: { type: 'string', maxLength: 200, label: 'Employer', optional: true }, roth: { ...yesNo('Roth contribution?'), optional: true },
+  } } },
+  'income.payrollRecipient': { scope: 'household', type: 'map', label: 'Payroll recipient by employer', values: { type: 'choice', label: 'Recipient', choices: [{ value: 'owner', label: 'You' }, { value: 'spouse', label: 'Spouse' }] } },
+  'tax.withholding.federal': { scope: 'household', ...dollars('Federal withholding total this year') },
+  'tax.withholding.virginia': { scope: 'household', ...dollars('Virginia withholding total this year') },
+  'income.employerRelation': { scope: 'household', type: 'map', label: 'Employer relationship', values: { type: 'choice', label: 'Relationship', choices: [{ value: 'household', label: 'Household business' }, { value: 'outside', label: 'Outside employer' }] } },
+  'income.payrollYtd': { scope: 'household', type: 'map', label: 'Year-to-date gross by employer', values: { type: 'object', fields: { person: { type: 'choice', optional: true, label: 'Whose pay?', choices: [{ value: 'owner', label: 'You' }, { value: 'spouse', label: 'Spouse' }] }, asOf: { type: 'date', label: 'Pay date' }, ytdGross: dollars('Year-to-date gross pay') } } },
   'business.cashBasisDefault': { scope: 'household', ...yesNo('Undo the cash-basis assumption?') },
   'accounts.va529CarryforwardDefault': { scope: 'account', accountKind: '529', type: 'object', fields: { undone: yesNo('Undo the carryforward assumption?') } },
   'pnl.ledgers': { scope: 'household', type: 'map', label: 'Which imported ledgers are spending or businesses?', values: {

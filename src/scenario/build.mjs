@@ -168,6 +168,14 @@ export function loadFigures(db) {
     const loc = parse(r.locator, null);
     const notes = loc && Array.isArray(loc.notes) ? loc.notes.filter(n => typeof n === 'string' && n.trim()) : [];
     if (notes.length) f.notes = notes.slice(0, 5);
+    if (loc?.completeness) {
+      f.completeness = loc.completeness;
+      f.partial = loc.partial;
+      f.rough = loc.rough;
+      f.gaps = loc.gaps || [];
+      f.notes = (f.notes || []).filter(n => !f.gaps.some(g => g.message === n));
+      f.detail = [{ k: 'Completeness', v: `${loc.rough ? 'Rough ' : ''}${loc.completeness}` }];
+    }
     if (typeof r.unavailable_reason === 'string' && r.unavailable_reason) f.unavailable = r.unavailable_reason;
     fig[r.key] = f;
   }

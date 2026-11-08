@@ -67,7 +67,7 @@ test('missing-data prose has no stored count while Steps renders progress from c
   assert.equal(missing.template({}, { items: uploads.slice(0, 2) }).summary, stored.summary);
 });
 
-test('a Confirm step carries the matching pending item and renders its exact destination', () => {
+test('an employer gap renders the accepted Ask control', () => {
   const data = { accounts: [], freshness: [], confirm: [
     { id: 4, kind: 'tax_year', status: 'pending' },
     { id: 21, kind: 'employer_relation', status: 'answered' },
@@ -77,12 +77,13 @@ test('a Confirm step carries the matching pending item and renders its exact des
   ctx.info.blocked = ['employer_relation_pending'];
   const hit = missing.evaluate(ctx);
   const task = missing.build(ctx, hit).tasks[0];
-  assert.equal(task.confirmId, 22);
+  assert.equal(task.fix.key, 'income.employerRelation');
+  assert.equal(task.link, 'ask');
   steps.bind({ esc: String, T: String, icon: () => '', addBtn: () => '', api: { txt: String } });
   const rec = { id: 'missing-data', tasks: [{ ...task, auto: true, done: false }] };
   for (const html of [steps.html(rec), steps.nextHtml(rec)]) {
-    assert.match(html, /href="#\/confirm\/22"/);
-    assert.match(html, /data-go="confirm" data-id="22"/);
+    assert.match(html, /data-tax-gap-fix=/);
+    assert.match(html, /income.employerRelation/);
   }
 });
 
@@ -149,6 +150,7 @@ test('shutdown of work queued behind occupied dispatcher slots is bounded and ne
 });
 
 test('the first planner run classifies a personal summary without creating a ledger confirmation', async t => {
+
   const { db } = await store(t);
   for (const category of ['Medical', 'Shopping', 'Groceries', 'HSA', 'Dining']) {
     db.prepare('INSERT INTO pnl_lines (entity, period, category, amount) VALUES (?, ?, ?, ?)').run('Synthetic ledger', '2026-10', category, -100);
@@ -161,6 +163,7 @@ test('the first planner run classifies a personal summary without creating a led
   const sc = buildScenario(db, { clock });
   assert.ok(!sc.recs.find(r => r.id === 'missing-data').tasks.some(t => t.kind === 'confirm'));
   assert.ok(sc.recs.some(r => r.assumptions?.some(a => a.key === 'business.entities' && a.path[0] === 'Synthetic ledger')));
+
 
 });
 
@@ -184,7 +187,8 @@ test('a named payroll blocker selects that employer rather than another question
   const ctx = context(data);
   ctx.info = { blocked: ['employer_relation_pending'], payrollBlocks: [{ code: 'employer_relation_pending', employer: 'Relevant Employer' }] };
   const task = missing.build(ctx, missing.evaluate(ctx)).tasks[0];
-  assert.equal(task.confirmId, 12);
+  assert.match(task.fix.prompt, /Relevant Employer/);
+  assert.doesNotMatch(task.fix.prompt, /Unrelated Employer/);
 });
 
 test('an answered Confirm target cannot retarget a step to an unrelated pending employer', () => {

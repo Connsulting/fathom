@@ -12,7 +12,7 @@ import { readWorkbook } from './workbook.mjs';
 import { delimitedCells } from './format.mjs';
 import { sourceFormat } from './model-source.mjs';
 import {
-  ask, recordFact, archive, normalizeName, OWNER_OPTIONS, KIND_OPTIONS, NEAR_DUPLICATE_OPTIONS, EMPLOYER_OPTIONS, taxYearOptions,
+  ask, recordFact, archive, normalizeName, CONFIDENCE_FLOOR, OWNER_OPTIONS, KIND_OPTIONS, NEAR_DUPLICATE_OPTIONS, EMPLOYER_OPTIONS, taxYearOptions,
   withholdingRecipient, withRecipient, recipientPayer, summarizeSlot, conflictPayer, conflictAsked, askConflict, askSlotConflict,
 } from './confirm.mjs';
 import { storeFile, readStoredFile, openVault } from './vault.mjs';
@@ -135,6 +135,35 @@ export async function retryFile(db, fileId, opts = {}) {
     return out;
   } finally {
     inFlight.delete(row.id);
+  }
+}
+
+export async function retryIncompletePaystubs(db, { household, engine, now, taxYear }) {
+  if (!household?.vault || household.db !== db || !engine?.isOn?.()) return;
+  const docs = db.prepare("SELECT d.*, f.name, f.mime, f.stored_path FROM documents d JOIN files f ON f.id = d.file_id WHERE d.doc_type = 'paystub' AND f.removed_at IS NULL").all();
+  for (const doc of docs) {
+    const fields = parseJson(doc.fields, {}), locator = parseJson(doc.locator, {});
+    if (Number(fields.payDate?.slice(0, 4)) !== taxYear || fields.payDate > now.slice(0, 10)
+      || !(fields.confidence < CONFIDENCE_FLOOR) || (Number.isFinite(fields.gross) && Number.isFinite(fields.ytdGross)) || locator.paystubRetry) continue;
+    if (household.inFlight.has(doc.file_id)) continue;
+    household.inFlight.add(doc.file_id);
+    try {
+      const vault = await openVault(household);
+      const bytes = await readStoredFile({ vault, id: doc.file_id, storedPath: doc.stored_path, purpose: 'upload' });
+      const file = { fileId: doc.file_id, name: doc.name, mime: doc.mime, bytes: toBytes(bytes) };
+      file.format = sourceFormat(file);
+      const { interpretFile } = await import('./model-parse.mjs');
+      const { validateImport } = await import('./model-validation.mjs');
+      const ctx = { db, household, now };
+      const interpretation = await interpretFile({ ctx, file });
+      const checked = interpretation.valid ? validateImport(ctx, interpretation.proposal, interpretation.source) : null;
+      const fresh = checked?.valid ? checked.rows.find(r => r.kind === 'document' && r.docType === 'paystub') : null;
+      const same = fresh && fresh.fields.payDate === fields.payDate && normalizeName(fresh.fields.employerName) === normalizeName(fields.employerName);
+      db.prepare('UPDATE documents SET fields = ?, locator = ? WHERE id = ?').run(JSON.stringify(same ? { ...fields, ...fresh.fields } : fields), JSON.stringify({ ...locator,
+        paystubRetry: { attemptedAt: now, status: same ? 'extracted' : interpretation.status, ...(same ? { evidence: fresh.locator } : {}) } }), doc.id);
+    } catch {
+      db.prepare('UPDATE documents SET locator = ? WHERE id = ?').run(JSON.stringify({ ...locator, paystubRetry: { attemptedAt: now, status: 'failed' } }), doc.id);
+    } finally { household.inFlight.delete(doc.file_id); }
   }
 }
 

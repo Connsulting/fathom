@@ -1,3 +1,5 @@
+import { retryIncompletePaystubs } from '../ingest/pipeline.mjs';
+import { planningYear } from './planner/data.mjs';
 // The planning run over a real-mode store: derive facts, compute figures and war-game models,
 // evaluate the trigger catalog, write prose (model when accepted, else template), then write
 // everything in one transaction. Runs are serialized per db handle and idempotent: a second run
@@ -59,11 +61,12 @@ function storedFacts(db) {
   return out;
 }
 
-async function run(db, engine, { now, packDirs, runId }) {
+async function run(db, engine, { now, packDirs, runId, household }) {
   if (getSetting(db, 'mode', null) === 'demo') throw new PlannerError('demo_store', 'planning runs on real stores only');
   const claim = db.prepare('SELECT job_id, status FROM job_runs WHERE id = ?').get(runId);
   if (claim?.job_id !== PLAN_JOB_ID || claim.status !== 'running') throw new PlannerError('invalid_run', 'runId must identify a running local plan claim');
   const clock = resolveClock(db, isoDateOf(now));
+  await retryIncompletePaystubs(db, { household, engine, now: clock, taxYear: planningYear(clock) });
   return plan(db, engine, { clock, runId, packDirs: packDirs ?? defaultPackDirs() });
 }
 

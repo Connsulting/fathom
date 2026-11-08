@@ -683,17 +683,15 @@ test('MG12: a decided salary decision stays decided when the game becomes unavai
 
 // Source: IRC 402(g)(1) (one regular deferral limit per person across plans, so unknown outside
 // deferrals leave every dependent room figure unknown).
-test('MG12: a built salary game becomes unavailable when outside deferrals become unknown', async () => {
+test('MG12: a salary game remains available with a labeled unreadable-deferral assumption', async () => {
   const db = await S.store();
   await plan(db);
-  assert.ok(contentValue(db, 'wargame').salary);
   await addPayroll(db, w2Doc({ employerName: 'Example Employer Inc', person: 'owner', relation: 'outside', wages: 200000, medicareWages: 200000 }));
   await plan(db);
-  const g = contentValue(db, 'wargame').salary;
-  assert.equal(typeof g.unavailable, 'string');
-  assert.match(g.unavailable, /deferral/i, g.unavailable);
-  assert.equal(getScenario(api(db)).wargame.salary.status, 'unavailable');
-  pickRefused(db, 'salary');
+  const scenario = getScenario(api(db));
+  assert.ok(contentValue(db, 'wargame').salary.points.length);
+  assert.notEqual(scenario.wargame.salary.status, 'unavailable');
+  assert.ok(scenario.fig['tax.fed.proj'].gaps.some(g => g.code === 'w2_box12_unreadable'));
 });
 
 const vaAnswersMissing = db => {
@@ -705,23 +703,20 @@ const vaAnswersComplete = db => addFact(db, 'accounts.va529', { [accountIdByMask
 const JAN = '2027-01-10';
 
 // Source: Va. Code 58.1-322.03(7) (the carryforward is needed to know the Virginia deduction).
-test('MG12: a deferral game valid in October becomes unavailable in January when its inputs break', async () => {
+test('MG12: seasonal deferral history remains visible while current tax names missing college savings details', async () => {
   const db = await S.store();
   await plan(db, '2026-10-31');
   const october = contentValue(db, 'wargame').deferral;
-  assert.ok(october && october.options.length === 3, 'the October run built the deferral game');
+  assert.ok(october.options.length === 3);
   vaAnswersMissing(db);
   await plan(db, JAN);
   const g = contentValue(db, 'wargame').deferral;
-  assert.deepEqual(g.options, october.options, 'options kept as history');
-  assert.match(g.unavailable || '', /college savings/i, 'the reason names the 529 answers');
-  const row = decisionRow(db, 'deferral-2026');
-  assert.ok(row, 'decision row kept');
-  assert.ok(row.unavailable_reason && row.unavailable_reason.length > 0);
+  assert.deepEqual(g.options, october.options, 'seasonal options stay as history');
+  assert.equal(g.unavailable, undefined);
+  assert.equal(decisionRow(db, 'deferral-2026').unavailable_reason, null);
   const scenario = getScenario(api(db, { clock: JAN }));
-  assert.equal(scenario.wargame.deferral.status, 'unavailable');
-  assert.equal(scenario.decisions.find(d => d.id === 'deferral-2026').status, 'unavailable', 'unavailable wins over a retired rec');
-  pickRefused(db, 'deferral', JAN);
+  assert.notEqual(scenario.wargame.deferral.status, 'unavailable');
+  assert.ok(scenario.fig['tax.va.proj'].gaps.some(g => g.code === 'va529_answers_missing'));
 });
 
 test('MG12: the same January run without broken inputs keeps the October game as is', async () => {
@@ -739,49 +734,43 @@ const quillWorks = async db => {
   await addFile(db, f);
 };
 
-test('MG12: an unclassified business in January also marks it unavailable', async () => {
+test('MG12: an unclassified January business leaves the tax estimate visible with a named gap', async () => {
   const db = await S.store();
   await plan(db, '2026-10-31');
-  assert.ok(contentValue(db, 'wargame').deferral);
   await quillWorks(db);
   await plan(db, JAN);
-  const g = contentValue(db, 'wargame').deferral;
-  assert.match(g.unavailable || '', /Quill Works/, 'the reason names the unclassified business');
-  assert.equal(getScenario(api(db, { clock: JAN })).wargame.deferral.status, 'unavailable');
+  const scenario = getScenario(api(db, { clock: JAN }));
+  assert.equal(contentValue(db, 'wargame').deferral.unavailable, undefined);
+  assert.ok(scenario.fig['tax.fed.proj'].gaps.some(g => g.code.startsWith('entity_unclassified:') && /Quill Works/.test(g.employer)));
 });
 
-test('MG12: a Virginia target turns unavailable when the 529 answers go missing', async () => {
+test('MG12: Virginia targets remain current estimates when college savings details are missing', async () => {
   const db = await S.store();
   await plan(db);
-  const before = buildScenario(db, { clock: NOW }).fig['sh.va.remaining'];
-  assert.ok(before && before.v > 0, 'the Virginia target exists on valid data');
-  assert.ok(!('unavailable' in before));
   vaAnswersMissing(db);
   await plan(db);
   const scenario = getScenario(api(db));
   const f = scenario.fig['sh.va.remaining'];
-  assert.equal(f.v, before.v, 'the retained value is kept for reference');
-  assert.match(f.unavailable || '', /college savings/i);
-  assert.equal(recRow(db, 'va-q4-estimate').status, 'waiting');
-  assert.ok(resolveTokens(scenario, '{f:sh.va.remaining}', false).endsWith(' (not current)'));
-  assert.match(resolveTokens(scenario, '{f:sh.va.remaining}', true), /data-unavailable="1"/);
-  const tool = await callTool('household', { operation: 'figures',  keys: ['sh.va.remaining'] }, { db });
+  assert.ok(Number.isFinite(f.v));
+  assert.equal(f.unavailable, undefined);
+  assert.ok(f.gaps.some(g => g.code === 'va529_answers_missing' && g.action.key === 'accounts.va529'));
+  assert.equal(recRow(db, 'va-q4-estimate').status, 'proposed');
+  assert.doesNotMatch(resolveTokens(scenario, '{f:sh.va.remaining}', false), /not current/);
+  const tool = await callTool('household', { operation: 'figures', keys: ['sh.va.remaining'] }, { db });
   assert.equal(tool.length, 1);
-  assert.equal(tool[0].unavailable, f.unavailable);
-  // Triggers read only this run's figures: no rec the run rewrote cites the retained key.
-  for (const r of db.prepare("SELECT id, def, status FROM recs WHERE status <> 'waiting'").all()) {
-    assert.ok(!r.def.includes('sh.va.remaining'), `${r.id} cites a retained figure`);
-  }
+  assert.match(JSON.stringify(tool), /va529_answers_missing/);
 });
 
-test('MG12: federal targets turn unavailable when household tax is blocked', async () => {
+test('MG12: federal targets expose the excluded unclassified business as a precision gap', async () => {
   const db = await S.store();
   await plan(db);
   await quillWorks(db);
   await plan(db);
   const f = getScenario(api(db)).fig['sh.fed.remaining'];
-  assert.ok(f, 'retained while the fed-q4 rec cites it');
-  assert.match(f.unavailable || '', /How is Quill Works taxed/);
+  assert.ok(Number.isFinite(f.v));
+  assert.equal(f.unavailable, undefined);
+  assert.ok(f.gaps.some(g => g.code.startsWith('entity_unclassified:') && /Quill Works/.test(g.employer)));
+
 });
 
 test('MG12: restoring the data clears the marker', async () => {

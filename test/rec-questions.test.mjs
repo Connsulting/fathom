@@ -144,12 +144,12 @@ test('va529 blocked by the Virginia projection carries the blocker the planner a
   assert.equal(result.state, 'blocked');
   assert.equal(result.reason, 'va_itemized_missing');
   assert.equal(result.blocker.code, 'va_itemized_missing');
-  assert.match(result.blocker.text, /Virginia needs your Virginia itemized estimate/);
-  assert.match(result.blocker.task, /Enter your Virginia itemized deduction estimate/);
+  assert.match(result.blocker.text, /Virginia standard deduction/);
+  assert.match(result.blocker.task, /Enter Virginia deductions/);
   assert.ok(['ask', 'upload', 'confirm', 'accounts'].includes(result.blocker.link));
 });
 
-test('a rec waiting on missing data names the blocker on the card and in the dialog', async () => {
+test('a rec with a precision gap names its direct fix on the card and in the dialog', async () => {
   const db = await S.store();
   await planRun(db, { now: NOW });
   assert.equal(recRow(db, 'va529').status, 'proposed');
@@ -157,17 +157,17 @@ test('a rec waiting on missing data names the blocker on the card and in the dia
   db.prepare("UPDATE transactions SET category = 'Uncategorized' WHERE lower(category) LIKE '%charit%' OR lower(category) LIKE '%donat%'").run();
   await planRun(db, { now: NOW });
   const row = recRow(db, 'va529');
-  assert.equal(row.status, 'waiting');
+  assert.equal(row.status, 'proposed');
   const rec = buildScenario(db, { clock: NOW }).recs.find(r => r.id === 'va529');
-  assert.equal(rec.status, 'waiting');
-  assert.equal(rec.blocker.code, 'va_itemized_missing');
+  assert.equal(rec.status, 'proposed');
+  assert.ok(rec.gaps.some(g => g.code === 'va_itemized_missing'));
   recBlocker.bind(kit);
   for (const surface of ['plan', 'dialog']) {
     const html = recBlocker.html(rec, surface);
-    assert.match(html, /Waiting on/);
-    assert.match(html, /Virginia needs your Virginia itemized estimate/);
-    assert.match(html, /Enter your Virginia itemized deduction estimate/);
-    assert.match(html, /href="#\/|data-ask-next/);
+    assert.match(html, /Optional estimate improvements/);
+    assert.match(html, /Virginia standard deduction/);
+    assert.match(html, /Enter Virginia deductions/);
+    assert.match(html, /data-tax-gap-fix/);
   }
   addFact(db, 'tax.vaItemizedEstimate', 80000);
   await planRun(db, { now: NOW });
@@ -196,13 +196,13 @@ test('missing data names its work without prose counts, and each task links to w
     questionKeys: new Set(),
   });
   const hit = evaluateTriggers(ctx).find(h => h.rec.id === 'missing-data');
-  assert.equal(hit.rec.title, 'Answer tax questions and upload a paystub');
+  assert.equal(hit.rec.title, 'Improve the precision of your estimates');
   const prose = await writeProse(hit, ctx);
-  assert.match(prose.fields.summary, /^Update the missing data/);
+  assert.match(prose.fields.summary, /^Your estimates use the information on file/);
   assert.doesNotMatch(prose.fields.summary, /\d/);
   const linked = hit.rec.tasks.filter(t => t.link);
-  assert.ok(linked.some(t => t.link === 'upload' && /paystub/i.test(t.t)));
-  assert.ok(linked.some(t => t.link === 'confirm' && t.kind === 'confirm' && t.code === 'tax_year_unconfirmed' && t.confirmId === 17), 'a Confirm question links to its pending item');
+  assert.ok(linked.some(t => t.link === 'ask' && t.fix?.key === 'income.payrollYtd'));
+  assert.ok(linked.some(t => t.link === 'upload' && t.code === 'tax_year_unconfirmed' && t.fix?.kind === 'estimates'), 'the gap opens the payment-log upload');
   assert.ok(hit.rec.tasks.some(t => t.kind === 'answer' && t.fact === 'household.filingStatus'), 'the form question is a step that clears when answered');
 });
 
@@ -278,7 +278,7 @@ test('missing data that is only questions keeps its title and count-free summary
   const hit = evaluateTriggers(ctx).find(h => h.rec.id === 'missing-data');
   assert.equal(hit.rec.question.primary, true);
   assert.equal(hit.rec.title, 'Answer a tax question');
-  assert.match((await writeProse(hit, ctx)).fields.summary, /^Update the missing data/);
+  assert.match((await writeProse(hit, ctx)).fields.summary, /^Your estimates use the information on file/);
 });
 
 test('saved dependent birth years set the child count, and the planner reads one source for ages', async () => {

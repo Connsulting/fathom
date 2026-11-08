@@ -322,9 +322,9 @@ test('MG12: D2 D3 every householdTax path blocks an over-limit contribution and 
   for (const c of PATHS) await t.test(c.name, async () => {
     const { db, clock, info } = await twoRuns(c, c.over);
     if (c.currentBlocked) {
-      assert.ok(info.blocked.length > 0, `${c.name}: the current-year run reports blocked`);
+      assert.ok(info.gaps.some(g => g.code === 'retirement_contribution_over_limit'), `${c.name}: the current-year run reports the excluded contribution`);
       const proj = getScenario(api(db, clock)).fig['tax.fed.proj'];
-      assert.ok(!proj || nonEmpty(proj.unavailable), `${c.name}: federal tax is absent or unavailable: ${JSON.stringify(proj)}`);
+      assert.ok(proj && Number.isFinite(proj.v) && proj.partial && !proj.unavailable, `${c.name}: federal tax remains available with the contribution gap`);
     }
     const scenario = getScenario(api(db, clock));
     const g = scenario.wargame && scenario.wargame[c.game];

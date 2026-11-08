@@ -175,14 +175,15 @@ describe('an owner override survives planning (AC2)', () => {
     assert.deepEqual(ownerOf(db, 'va529'), { owner: 'advisor', owner_override: 1 });
   });
 
-  test('the override survives block then unblock', async () => {
+  test('the override survives a precision gap and its resolution', async () => {
     const db = await S.store();
     await plan(db);
     act(db, 'va-q4-estimate', 'owner', 'automatic');
     db.prepare("UPDATE transactions SET category = 'Uncategorized' WHERE lower(category) LIKE '%charit%' OR lower(category) LIKE '%donat%'").run();
     addFact(db, 'tax.itemizedEstimate', 40000);
     await plan(db, '2026-11-20');
-    assert.equal(recRow(db, 'va-q4-estimate').status, 'waiting', 'precondition: blocked');
+    assert.equal(recRow(db, 'va-q4-estimate').status, 'proposed', 'estimate remains actionable');
+    assert.ok(recRow(db, 'va-q4-estimate').def.gaps.some(g => g.code === 'va_itemized_missing'));
     assert.deepEqual(ownerOf(db, 'va-q4-estimate'), { owner: 'automatic', owner_override: 1 });
     addFact(db, 'tax.vaItemizedEstimate', 20000);
     await plan(db, '2026-11-20');

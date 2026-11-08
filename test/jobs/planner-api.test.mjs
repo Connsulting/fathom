@@ -285,12 +285,14 @@ test('INF1: HTTP planning infers personal ledgers and P&L reads preserve spendin
     const before = await app.postJson('/api/jobs/plan/run');
     assert.equal(before.status, 200);
     assert.ok(before.json.scenario.fig['agi.est'], 'tax projections use the inferred classification immediately');
+
     const pending = await app.request({ path: '/api/confirm' });
     assert.equal(pending.status, 200);
     assert.ok(!pending.json.items.some(i => i.context.key === 'pnl.ledgers'));
     const inferred = JSON.parse(db.prepare("SELECT value FROM facts WHERE key='business.entities'").get().value).find(e => e.name === 'Asters');
     assert.equal(inferred.type, 'personal');
     assert.equal(inferred.inferred, true);
+
     const pnl = await app.request({ path: '/api/pnl?entity=entity:asters' });
     assert.equal(pnl.status, 200, pnl.text);
     assert.equal(pnl.json.pnl.entity.kind, 'spending');

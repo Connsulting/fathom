@@ -1,9 +1,4 @@
-// Merge-gate fix round, the human-visible outcomes on a real-mode store. beforeAll builds the
-// synthetic household in an owned temporary store with an advisor name that carries markup and an
-// ampersand, plans it, adds an advisor message to a rec conversation, then leaves the Virginia
-// 529 answers incomplete and plans again, so both war games and the Virginia targets go
-// unavailable while staying on file. The server runs in process on a reserved localhost port,
-// so it never collides with another spec's server. Skipped when BASE_URL targets a remote server.
+// Missing salary range keeps its war game as history; tax estimates continue with named gaps.
 
 import { test, expect } from './helpers.mjs';
 import { createLocalData, removeLocalData, startEnrolledServer } from './local-store.mjs';
@@ -46,7 +41,7 @@ test.beforeEach(async ({ context }) => {
 });
 
 test.beforeAll(async () => {
-  const { buildRealStore, addFact, accountIdByMask, MASKS } = await import('../test/helpers/real-store.mjs');
+  const { buildRealStore, addFact, removeFact, accountIdByMask, MASKS } = await import('../test/helpers/real-store.mjs');
   const { planRun } = await import('../test/helpers/plan.mjs');
   const { resolveTokens } = await import('../src/shared/tokens.mjs');
 
@@ -64,6 +59,7 @@ test.beforeAll(async () => {
     const collegeId = accountIdByMask(db, MASKS.college);
     addFact(db, 'accounts.va529', { [collegeId]: { virginiaPlan: true } });
     addFact(db, 'accounts.va529CarryforwardDefault', { [collegeId]: { undone: true } });
+    removeFact(db, 'business.salaryRange');
     expect((await planRun(db, { now: CLOCK, dataDir: DIR })).status).toBe('ok');
   } finally {
     db.close();
@@ -119,19 +115,18 @@ test('MG12: an unavailable war game is listed as history on Decide and cannot be
   expect(pick.status).toBe(409);
 });
 
-test('MG12: a retained figure popover says it is not current and why', async ({ page }) => {
-  expect(scenario.fig['sh.va.remaining'] && scenario.fig['sh.va.remaining'].unavailable).toMatch(/\S/);
-  const found = recWithFigure((f) => typeof f.unavailable === 'string' && f.unavailable.length > 0);
-  expect(found, 'a rec on the plan cites a retained figure').toBeTruthy();
+test('MG12: a current tax figure popover names the precision gap and its fix', async ({ page }) => {
+  expect(scenario.fig['sh.va.remaining'].gaps.some(g => g.code === 'va529_answers_missing')).toBe(true);
+  const found = recWithFigure(f => f.gaps?.some(g => g.code === 'va529_answers_missing'));
+  expect(found).toBeTruthy();
   await go(page, `rec/${found.rec.id}`);
   const fig = page.locator(`.h-dlg .h-mine .fx-fig[data-fig="${found.key}"]`);
-  await expect(fig).toHaveAttribute('data-unavailable', '1');
+  await expect(fig).not.toHaveAttribute('data-unavailable', '1');
   await fig.click();
   const pop = page.locator('.fx-pop');
-  await expect(pop).toBeVisible();
-  const row = pop.locator('.fx-pop-row', { hasText: 'Not current' });
-  await expect(row).toHaveCount(1);
-  await expect(row.locator('.fx-pop-v')).toHaveText(scenario.fig[found.key].unavailable);
+  await expect(pop).toContainText('Completeness');
+  await expect(pop).toContainText(/estimate with/);
+  await expect(pop.getByRole('button', { name: 'Enter college savings details' })).toBeVisible();
 });
 
 test('MGN1: a figure popover shows its readable assumption', async ({ page }) => {

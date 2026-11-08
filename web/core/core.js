@@ -1,3 +1,4 @@
+import { gapControl } from './gap-control.js';
 import { signInTarget } from '../auth/return-path.js';
 
 // Fathom client core: window.Fathom, hash router, API-backed store, figure popover.
@@ -1233,8 +1234,7 @@ function registerFigures(map) {
     const notes = arr(provenance.assumptions).map(a => (a && typeof a.stated === 'string' ? a.stated : '')).filter(Boolean);
     extraFig.set(k, { v: e.value ?? null, unit: typeof e.unit === 'string' ? e.unit : 'usd', label: e.label || '', kind: e.kind || 'e', src,
       gaps: arr(e.gaps), provenance, ...(notes.length ? { notes } : {}), ...(e.stale ? { stale: true } : {}),
-      // Plain { k, v } lines the popover lists, such as a transaction's raw bank text.
-      ...(Array.isArray(e.detail) && e.detail.length ? { detail: e.detail } : {}) });
+      detail: [...arr(e.detail), ...(provenance.stored?.locator?.completeness ? [{ k: 'Completeness', v: `${provenance.stored.locator.rough ? 'Rough ' : ''}${provenance.stored.locator.completeness}` }] : [])] });
     extraSrc.set(src, { label: e.source || '', asOf: e.asOf || '' });
   }
 }
@@ -1676,11 +1676,13 @@ const api = {
   registerFigures,
   figPopover: el => openPopover(el),
   setFigAction: fn => { figAction = typeof fn === 'function' ? fn : null; },
+  setGapAction: fn => { gapAction = typeof fn === 'function' ? fn : null; },
 };
 
 // ---------------------------------------------------------------- figure popover
 
 let pop = null;   // { el, anchor }
+let gapAction = null;
 let figAction = null;   // the design's Add to chat handler, or null
 
 // A figure's value as the popover writes it. A figure without a unit (the scenario's) is money; a
@@ -1730,7 +1732,7 @@ function openPopover(anchor, fromKey) {
     '<div class="fx-pop-row"><span class="fx-pop-k">Kind</span><span class="fx-pop-v">' + esc(kind) + '</span></div>' +
     // An Ask block figure: why it is unavailable or incomplete, and whether its data changed since.
     (Array.isArray(f.gaps) ? f.gaps.filter(g => g && typeof g.message === 'string' && g.message).map(g =>
-      '<div class="fx-pop-row"><span class="fx-pop-k">' + (f.v == null ? 'Why' : 'Gap') + '</span><span class="fx-pop-v">' + esc(g.message) + '</span></div>').join('') : '') +
+      '<div class="fx-pop-row"><span class="fx-pop-k">' + (f.v == null ? 'Why' : 'Gap') + '</span><span class="fx-pop-v">' + esc(g.message) + (g.action ? gapControl(g.action, esc, 'fx-pop-add') : '') + '</span></div>').join('') : '') +
     (f.stale ? '<div class="fx-pop-row"><span class="fx-pop-k">Note</span><span class="fx-pop-v">Changed since this answer</span></div>' : '') +
     // Kept only for reference (R2-9), then readable assumptions (MGN1); both are stored plain text.
     (typeof f.unavailable === 'string' && f.unavailable ? '<div class="fx-pop-row"><span class="fx-pop-k">Not current</span><span class="fx-pop-v">' + esc(f.unavailable) + '</span></div>' : '') +
@@ -1745,6 +1747,12 @@ function openPopover(anchor, fromKey) {
         '</span><span class="fx-pop-n">' + esc(moneyCents(a.v)) + ', ' + esc(a.asOf) + '</span></div>').join('') + '</div>'
       : '') +
     (figAction ? '<button type="button" class="fx-pop-add" data-fig-add>Add to chat</button>' : '');
+  for (const button of el.querySelectorAll('[data-tax-gap-fix]')) button.addEventListener('click', e => {
+    e.preventDefault();
+    const action = JSON.parse(button.dataset.taxGapFix);
+    closePopover();
+    if (gapAction) gapAction(action);
+  });
   const add = el.querySelector('[data-fig-add]');
   if (add) {
     add.addEventListener('click', e => {

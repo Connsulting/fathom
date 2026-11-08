@@ -590,7 +590,7 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
     async plan(ctx) {
       if (getSetting(ctx.db, 'mode', null) === 'demo') return { status: 'skipped' };
       const planning = await runPlanning(ctx.db, ctx.trigger === 'resolve' ? null : (ctx.engine || null), {
-        now: ctx.clock, packDirs: defaultPackDirs(ctx.household.root), runId: ctx.jobRunId,
+        now: ctx.clock, packDirs: defaultPackDirs(ctx.household.root), runId: ctx.jobRunId, household: ctx.household,
       });
       ctx.db.prepare('UPDATE action_receipts SET planning_pending = 0 WHERE planning_pending = 1').run();
       const warned = [...new Set(Array.isArray(planning.warnings) ? planning.warnings : [])].filter((c) => typeof c === 'string' && IDENT.test(c));

@@ -14,7 +14,7 @@ function validate(value, shape, year) {
   if (shape.type === 'array') {
     if (!Array.isArray(value) || value.length < shape.minItems || value.length > shape.maxItems) fail();
     for (const entry of value) validate(entry, shape.items, year);
-    if (new Set(value.map(e => normalizeName(e.name))).size !== value.length) fail();
+    if (shape.items.fields.name && new Set(value.map(e => normalizeName(e.name))).size !== value.length) fail();
   } else if (shape.type === 'string') {
     if (typeof value !== 'string' || !normalizeName(value) || value.length > shape.maxLength) fail();
   } else if (shape.type === 'map') {
@@ -102,6 +102,7 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
         value = { ...Object.fromEntries(keep), ...value };
       }
     }
+    if (a.key === 'income.payrollYtd' && Object.values(value).some(v => v.asOf > date)) fail();
     if (a.key === 'obligations.mortgage' && (!Object.keys(value).length || value.escrowMonthly >= value.monthlyPayment)) fail();
     if (/^household\.(owner|spouse)BirthDate$/.test(a.key) && value > date) fail();
     if (a.key === 'business.salaryRange' && value.min > value.max) fail();

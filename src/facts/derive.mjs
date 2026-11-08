@@ -43,7 +43,7 @@ export function deriveRecFacts(data, facts = {}, { entities = [] } = {}) {
   }
   if (wageRows.length) out['retirement.priorYearFicaWages'] = sourceFact(data, wages, 'Prior-year sponsor W-2 box three, by recipient', wageRows);
 
-  const payroll = payrollRecords(data, entities, {});
+  const payroll = payrollRecords(data, entities, facts);
   const other = {};
   const otherRows = [];
   for (const person of ['owner', 'spouse']) {

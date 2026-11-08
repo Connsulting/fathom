@@ -118,6 +118,8 @@ const storedFields = def => ({
 
 export async function writeProse(hit, ctx, { engine = null, stored = null } = {}) {
   const hash = groundingHash(hit, ctx);
+  const valid = fields => checkProse(fields, allowedFor(hit, ctx)).ok
+    && !((hit.rec.id === 'missing-data' || hit.rec.gaps?.length) && strings(fields).some(text => /\bon hold\b/i.test(text)));
   if (hit.rec.question?.primary && !LISTED_RECS.has(hit.rec.id)) {
     const draft = hit.trigger.template(ctx, hit.vars);
     const fields = { ...draft, summary: hit.rec.question.summary };
@@ -126,7 +128,7 @@ export async function writeProse(hit, ctx, { engine = null, stored = null } = {}
   }
   // R2-7: stored prose is reused only while it still passes today's checks, whatever its source.
   if (stored && stored.hash === hash && stored.def && typeof stored.def.summary === 'string'
-    && checkProse(storedFields(stored.def), allowedFor(hit, ctx)).ok) {
+    && valid(storedFields(stored.def))) {
     return { fields: { summary: stored.def.summary, why: stored.def.why || [], qa: stored.def.qa || [] }, src: stored.src, kept: true, hash, costUsd: 0 };
   }
   const draft = hit.trigger.template(ctx, hit.vars);
@@ -149,7 +151,7 @@ export async function writeProse(hit, ctx, { engine = null, stored = null } = {}
       if (response && Number.isFinite(response.costUsd)) costUsd += response.costUsd;
       let parsed = null;
       try { parsed = JSON.parse(String(response.text ?? '').trim()); } catch { parsed = null; }
-      if (parsed && response.grounding && response.grounding.ok && checkProse(parsed, allowed).ok) {
+      if (parsed && response.grounding && response.grounding.ok && valid(parsed)) {
         return { fields: escapeFields(pickFields(parsed)), src: 'model', kept: false, hash, costUsd };
       }
     } catch (e) {

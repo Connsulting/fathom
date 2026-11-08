@@ -7,7 +7,7 @@
 // payrollRecords(data, entities, owner) -> {records, blocks, ask}
 //   records: [{docId, docIds, fileId, person, employer, key, kind, wages, ytdWages, medicare, comp,
 //     deferral, catchUp, roth, pretax, hsa, deferral457, elective402g, deferralKnown, corp, household, projected}]
-//   blocks:  [{code, employer, person}] each blocks household tax (and the dependent wage figures)
+//   blocks:  [{code, employer, person}] precision gaps and the assumptions or exclusions they need
 //   ask:     [{employerKey, employer, payer, fileId}] recipient questions to raise through ingest (D9)
 // employerKeyOf(name) -> ingest's employer key
 // sameEmployer(data, a, b) -> normalized names equal, after mapping entity aliases
@@ -55,15 +55,14 @@ const pendingItem = (data, kind, subject) => (data.confirm || []).find(i => i.ki
 
 // R6-1 item 2.2: the active withholding rows of the document decide; else the answers; else unknown.
 export function docRecipient(data, doc) {
-  const identity = docPayer(doc);
-  const rows = (data.withholding || []).filter(r => r.file_id === doc.fileId && startsPayer(r.payer, identity));
+  const rows = (data.withholding || []).filter(r => r.file_id === doc.fileId && String(r.payer).startsWith(`${doc.docType}:${nameKey(doc.fields.employerName)}:`));
   const known = [...new Set(rows.map(r => r.recipient).filter(r => r === 'owner' || r === 'spouse'))];
   if (known.length > 1) return { blocked: 'payroll_recipient_conflict' };
   if (known.length === 1) return { person: known[0] };
   const byEmployer = answered(data, 'employer_recipient', nameKey(doc.fields.employerName));
   if (byEmployer && (byEmployer.answer === 'owner' || byEmployer.answer === 'spouse')) return { person: byEmployer.answer };
   if (byEmployer && byEmployer.answer === 'both') {
-    const byDoc = answered(data, 'document_recipient', `${identity}:doc:${doc.fileId}`);
+    const byDoc = (data.confirm || []).find(i => i.kind === 'document_recipient' && i.status === 'answered' && String(i.subject).endsWith(`:doc:${doc.fileId}`));
     if (byDoc && (byDoc.answer === 'owner' || byDoc.answer === 'spouse')) return { person: byDoc.answer };
   }
   return { unknown: true };
@@ -71,15 +70,17 @@ export function docRecipient(data, doc) {
 
 // R6-1 item 2.3: household when the employer is a household entity (by name or alias); otherwise the
 // employer_relation answer decides, and an employer ingest asked about and nobody answered blocks.
-function docKind(data, entities, doc) {
+function docKind(data, entities, doc, owner) {
   const entity = matchEntity(data, entities, doc.fields.employerName);
   if (entity) return { household: true, entity };
-  const relation = (data.confirm || []).find(i => i.kind === 'employer_relation' && i.subject === nameKey(doc.fields.employerName));
+  const stated = Object.entries(owner['income.employerRelation'] || {}).find(([name]) => sameEmployer(data, name, doc.fields.employerName))?.[1];
+  const relation = stated ? { status: 'answered', answer: stated } : (data.confirm || []).find(i => i.kind === 'employer_relation' && i.subject === nameKey(doc.fields.employerName));
   if (relation && relation.status === 'answered' && relation.answer === 'household') {
     const linked = entities.filter(e => e.ownerAccountLink && e.classified);
     if (data.accounts.filter(a => a.kind === 'business').length === 1 && linked.length === 1) return { household: true, entity: linked[0] };
     return { household: true, classificationPending: true, entity: null };
   }
+
   if (relation && relation.status === 'answered' && relation.answer === 'outside') return { household: false };
   if (relation && relation.status === 'pending') return { blocked: 'employer_relation_pending' };
   return { household: false };
@@ -146,23 +147,25 @@ export function payrollRecords(data, entities, owner = {}) {
   const blocks = [];
   const ask = [];
   const docs = data.documents.filter(d => (d.docType === 'w2' && Number(d.taxYear) === TY)
-    || (d.docType === 'paystub' && typeof d.fields.payDate === 'string' && yearOf(d.fields.payDate) === TY));
+    || (d.docType === 'paystub' && typeof d.fields.payDate === 'string' && yearOf(d.fields.payDate) === TY && d.fields.payDate <= data.clock));
   const fix = corrections(data, docs.filter(d => d.docType === 'w2'));
   blocks.push(...fix.blocks);
-  const held = new Set(fix.blocks.flatMap(b => b.docs));
+  
 
   const groups = new Map();
   for (const d of docs) {
-    if (fix.dropped.has(d.id) || held.has(d.id)) continue;
+    if (fix.dropped.has(d.id)) continue;
     const employer = String(d.fields.employerName ?? '').trim();
-    const who = docRecipient(data, d);
+    const statedPerson = Object.entries(owner['income.payrollRecipient'] || {}).find(([name]) => sameEmployer(data, name, employer))?.[1];
+    const who = ['owner', 'spouse'].includes(statedPerson) ? { person: statedPerson } : docRecipient(data, d);
     if (who.blocked) { blocks.push({ code: who.blocked, employer }); continue; }
     if (who.unknown) {
       blocks.push({ code: 'w2_recipient_unknown', employer });
       ask.push({ employerKey: nameKey(employer), employer, payer: `${docPayer(d)}:doc:${d.fileId}`, fileId: d.fileId });
       continue;
     }
-    const kind = docKind(data, entities, d);
+    let kind = docKind(data, entities, d, owner);
+    if (kind.blocked === 'employer_relation_pending') { blocks.push({ code: kind.blocked, employer, person: who.person }); kind = { household: false }; }
     if (kind.blocked) { blocks.push({ code: kind.blocked, employer, person: who.person }); continue; }
     const key = `${who.person}|${nameKey(employer)}`;
     if (!groups.has(key)) groups.set(key, { person: who.person, employer, key: nameKey(employer), kind, docs: [] });
@@ -171,17 +174,27 @@ export function payrollRecords(data, entities, owner = {}) {
 
   const records = [];
   for (const g of groups.values()) {
-    const w2s = g.docs.filter(d => d.docType === 'w2');
+    let w2s = g.docs.filter(d => d.docType === 'w2');
     let r;
     if (w2s.length) {
+      if (fix.blocks.some(b => b.docs?.some(id => w2s.some(d => d.id === id)))) w2s = [w2s.reduce((a, b) => a.id > b.id ? a : b)];
       // R6-5 item 5: two W-2s of one employer, year and person that no answer reconciled.
       const pair = w2s.find((a, i) => w2s.slice(i + 1).some(b => !fix.settled(a, b)));
-      if (pair) { blocks.push({ code: 'w2_duplicate_unresolved', employer: g.employer, person: g.person }); continue; }
-      const parts = w2s.map(d => ({ d, box: box12Of(d.fields), wages: d.fields.wages }));
-      if (parts.some(p => !p.box)) { blocks.push({ code: 'w2_box12_unreadable', employer: g.employer, person: g.person }); continue; }
+      if (pair) {
+        if (!fix.blocks.some(b => b.docs?.some(id => w2s.some(d => d.id === id)))) blocks.push({ code: 'w2_duplicate_unresolved', employer: g.employer, person: g.person });
+        w2s = [w2s.reduce((a, b) => a.id > b.id ? a : b)];
+      }
+      const parts = w2s.map(d => {
+        let box = box12Of(d.fields);
+        if (!box || box.unread) {
+          blocks.push({ code: 'w2_box12_unreadable', employer: g.employer, person: g.person });
+          box = { pretax: 0, elective402g: 0, deferral457: 0, roth: 0, hsa: 0 };
+        }
+        return { d, box, wages: d.fields.wages };
+      });
       if (parts.some(p => !isAmount(p.wages))) { blocks.push({ code: 'w2_wages_missing', employer: g.employer, person: g.person }); continue; }
-      // E4: box 5 (Medicare wages, Form 8959 line 1) has no stand-in; unread, it blocks.
-      if (parts.some(p => !isAmount(p.d.fields.medicareWages))) { blocks.push({ code: 'w2_medicare_wages_missing', employer: g.employer, person: g.person }); continue; }
+      // An unread Medicare base uses taxable wages as a labeled estimate.
+      if (parts.some(p => !isAmount(p.d.fields.medicareWages))) blocks.push({ code: 'w2_medicare_wages_missing', employer: g.employer, person: g.person });
       const total = k => cents(sum(parts.map(p => p.box[k])));
       const wages = cents(sum(parts.map(p => p.wages)));
       // E1, E5: each base is read on its own. Box 1 is income tax wages (already net of pretax
@@ -190,16 +203,17 @@ export function payrollRecords(data, entities, owner = {}) {
       r = {
         kind: 'w2', docIds: w2s.map(d => d.id), fileId: w2s[0].fileId, wages, ytdWages: wages, pretax: total('pretax'),
         // E6: box 12 unread leaves the deferrals, and so the compensation, unknown (null), never zero.
-        medicare: cents(sum(parts.map(p => p.d.fields.medicareWages))), comp: parts.some(p => p.box.unread) ? null : cents(wages + total('pretax')),
+        medicare: cents(sum(parts.map(p => isAmount(p.d.fields.medicareWages) ? p.d.fields.medicareWages : p.wages))), comp: parts.some(p => p.box.unread) ? null : cents(wages + total('pretax')),
         elective402g: total('elective402g'), deferral457: total('deferral457'), roth: total('roth'), hsa: total('hsa'),
         deferralKnown: !parts.some(p => p.box.unread), projected: false,
       };
     } else {
-      // R6-1 item 2.7: paystub-only, the latest pay date carries the year-to-date gross.
+      // Prefer the latest readable YTD for this person and employer, then project per-period gross.
       const stubs = [...g.docs].sort((a, b) => String(a.fields.payDate).localeCompare(String(b.fields.payDate)) || a.id - b.id);
-      const last = stubs.at(-1);
-      if (!isAmount(last.fields.ytdGross)) { blocks.push({ code: 'paystub_ytd_missing', employer: g.employer, person: g.person }); continue; }
-      const projectedGross = cents(last.fields.ytdGross * 12 / monthOf(last.fields.payDate));
+      const input = paystubIncome(data, g, stubs, owner);
+      if (!input) { blocks.push({ code: 'paystub_ytd_missing', employer: g.employer, person: g.person }); continue; }
+      const { last, ytdGross, projectedGross, provenance } = input;
+      if (provenance.assumption) blocks.push({ code: 'paystub_gross_assumed', employer: g.employer, person: g.person, message: provenance.note });
       const deferring = stubs.some(s => Number(s.fields.retirementDeferral) > 0 || Number(s.fields.hsaDeferral) > 0);
       let pretax = 0;
       if (deferring) {
@@ -210,15 +224,16 @@ export function payrollRecords(data, entities, owner = {}) {
         const soleOutside = [...groups.values()].filter(x => x.person === g.person && !x.kind.household).length === 1;
         const stated = entries.filter(c => c && c.person === g.person && c.plan === 'outside-401k' && c.type === 'deferral' && isAmount(Number(c.amount))
           && (named(c) ? sameEmployer(data, c.employer, g.employer) : soleOutside));
-        if (g.kind.household || !stated.length) { blocks.push({ code: 'paystub_deferrals_unknown', employer: g.employer, person: g.person }); continue; }
+        if (g.kind.household || !stated.length) blocks.push({ code: 'paystub_deferrals_unknown', employer: g.employer, person: g.person });
         pretax = cents(sum(stated.filter(c => c.roth !== true).map(c => Number(c.amount))));
       }
       r = {
         // Gross pay keeps 401(k) deferrals in it, so it is the Medicare wage and the plan compensation.
-        kind: 'paystub', docIds: [last.id], fileId: last.fileId, wages: Math.max(0, cents(projectedGross - pretax)), ytdWages: cents(last.fields.ytdGross),
+        kind: 'paystub', docIds: [last.id], fileId: last.fileId, wages: Math.max(0, cents(projectedGross - pretax)), ytdWages: cents(ytdGross), payrollProvenance: provenance,
         medicare: projectedGross, comp: projectedGross, pretax, elective402g: 0, deferral457: 0, roth: 0, hsa: 0, deferralKnown: !deferring, projected: true, section125Unknown: !deferring,
       };
     }
+    if (g.kind.classificationPending) blocks.push({ code: 'household_employer_unmatched', employer: g.employer, person: g.person });
     const corp = g.kind.household && g.kind.entity?.classified && g.kind.entity.type === 's_corp' ? g.kind.entity : null;
     records.push({
       ...r, docId: r.docIds[0], person: g.person, employer: g.employer, key: g.key, deferral: 0, catchUp: 0,
@@ -252,10 +267,50 @@ export function payrollRecords(data, entities, owner = {}) {
         fill(other, cents(R.employeeDeferral - sum(household.map(r => r.deferral))));
       } else {
         blocks.push({ code: 'deferral_split_unknown', employer: household[0].employer, person: p });
+        fill(mine, R.employeeDeferral);
       }
       continue;
     }
     fill(mine, R.employeeDeferral);
   }
   return { records, blocks, ask };
+}
+
+function paystubIncome(data, group, stubs, owner) {
+  const recipientAnswer = Object.entries(owner['income.payrollRecipient'] || {}).find(([employer]) => sameEmployer(data, employer, group.employer))?.[1];
+  const people = new Set(data.documents.filter(d => sameEmployer(data, d.fields.employerName, group.employer)
+    && ((d.docType === 'w2' && Number(d.taxYear) === data.taxYear) || (d.docType === 'paystub' && yearOf(d.fields.payDate) === data.taxYear)))
+    .map(d => recipientAnswer || docRecipient(data, d).person));
+  const stated = Object.entries(owner['income.payrollYtd'] || {}).find(([employer, v]) => sameEmployer(data, employer, group.employer)
+    && (v.person === group.person || (v.person == null && people.size === 1 && people.has(group.person))) && isAmount(v.ytdGross) && typeof v.asOf === 'string'
+    && yearOf(v.asOf) === data.taxYear && v.asOf <= data.clock)?.[1];
+  const observed = stubs.filter(d => isAmount(d.fields.ytdGross)).at(-1);
+  if (stated && (!observed || stated.asOf >= observed.fields.payDate)) return {
+    last: stubs.at(-1), ytdGross: stated.ytdGross, projectedGross: cents(stated.ytdGross * 12 / monthOf(stated.asOf)),
+    provenance: { method: 'owner_ytd', fact: 'income.payrollYtd', employer: group.employer, person: group.person, asOf: stated.asOf, ytdGross: stated.ytdGross },
+  };
+  if (observed) return { last: observed, ytdGross: observed.fields.ytdGross,
+    projectedGross: cents(observed.fields.ytdGross * 12 / monthOf(observed.fields.payDate)),
+    provenance: { method: 'document_ytd', asOf: observed.fields.payDate, docId: observed.id, ytdGross: observed.fields.ytdGross },
+  };
+  const last = stubs.filter(d => isAmount(d.fields.gross)).at(-1);
+  if (!last) return null;
+  const fl = last.fields;
+  const day = date => Date.parse(`${date}T00:00:00Z`);
+  const length = (day(fl.periodEnd) - day(fl.periodStart)) / 86400000 + 1;
+  const endDay = Number(fl.periodEnd?.slice(8));
+  const startDay = Number(fl.periodStart?.slice(8));
+  let periods = 12, toDate = monthOf(fl.payDate), frequency = 'monthly (assumed)';
+  if (length === 7 || length === 14) {
+    periods = length === 7 ? 52 : 26;
+    toDate = Math.max(1, Math.floor(((day(fl.payDate) - day(`${data.taxYear}-01-01`)) / 86400000 + 1) / length));
+    frequency = length === 7 ? 'weekly' : 'every other week';
+  } else if ((startDay === 1 && endDay === 15) || (startDay === 16 && endDay >= 28)) {
+    periods = 24; toDate = (monthOf(fl.payDate) - 1) * 2 + (Number(fl.payDate.slice(8)) >= 16 ? 2 : 1); frequency = 'twice monthly';
+  } else if (startDay === 1 && endDay >= 28) frequency = 'monthly';
+  const ytdGross = cents(fl.gross * toDate);
+  return { last, ytdGross, projectedGross: cents(fl.gross * periods), provenance: {
+    method: 'period_gross', assumption: true, asOf: fl.payDate, docId: last.id, gross: fl.gross, periodsPerYear: periods, periodsToDate: toDate,
+    note: `Projected wages from ${group.employer} using gross pay times pay periods; assumed ${frequency} pay and unchanged gross throughout the year.`,
+  } };
 }
