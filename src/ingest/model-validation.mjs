@@ -5,11 +5,7 @@ import { resolveField } from './model-source.mjs';
 import { persistImport } from './pipeline.mjs';
 import { isoDate, number, cents } from './format.mjs';
 
-export const REVIEW_TABLES = Object.freeze(['accounts', 'account_holders', 'simplefin_accounts', 'transactions', 'balances', 'positions', 'pnl_lines', 'tax_payments',
-  'documents', 'facts', 'held_facts', 'entity_aliases', 'superseded_rows', 'confirm_items', 'figures', 'sources', 'files', 'column_mappings']);
-export function importBasis(db) {
-  return Object.fromEntries(REVIEW_TABLES.map(table => [table, createHash('sha256').update(JSON.stringify(db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all())).digest('hex')]));
-}
+export const importEffect = validation => Object.fromEntries(['valid', 'errors', 'rows', 'counts', 'bindings', 'identities', 'questions', 'summary'].map(key => [key, validation[key] ?? null]));
 const collect = (value, out = []) => {
   if (value?.refs && value.transform) out.push(...value.refs);
   else if (value && typeof value === 'object') Object.values(value).forEach(v => collect(v, out));
@@ -35,8 +31,8 @@ export function importPlan(rows) {
 
 export function validateImport(ctx, proposal, source) {
   const checked = validateProposal(proposal, source);
-  const errors = [...checked.errors], rows = [], bindings = [];
-  const fail = reason => ({ valid: false, errors: [...new Set([...errors, reason])], rows, bindings, counts: null, summary: null });
+  const errors = [...checked.errors], rows = [], bindings = [], identities = [];
+  const fail = reason => ({ valid: false, errors: [...new Set([...errors, reason])], rows, bindings, identities, counts: null, summary: null });
   if (!checked.valid) return fail('invalid_proposal');
   if (source.status !== 'indexed') return fail('needs_source_text');
   const parsed = parseInterpretation({ rows: proposal.rows, coverage: proposal.coverage, completeness: proposal.completeness, controls: proposal.controls ?? [] }, source);
@@ -56,6 +52,7 @@ export function validateImport(ctx, proposal, source) {
     if (region.refs.length !== expected.length || expected.some(id => !region.refs.includes(id))) errors.push('incomplete_region');
     if (region.refs.some(id => source.refs[id].rawHash !== createHash('sha256').update(JSON.stringify(source.values[id])).digest('hex'))) errors.push('source_value_changed');
     if (region.disposition === 'unresolved') errors.push('unresolved_coverage');
+    if (['imported_detail', 'control_total'].includes(region.disposition) && region.refs.some(id => source.refs[id].valueType === 'error' || source.refs[id].formula && !source.refs[id].cached)) errors.push('unusable_coverage');
     if (region.reason) {
       try { if (typeof resolveField(source, region.reason) !== 'string' || !resolveField(source, region.reason).trim()) errors.push('invalid_exclusion_reason'); }
       catch { errors.push('invalid_exclusion_reason'); }
@@ -72,7 +69,10 @@ export function validateImport(ctx, proposal, source) {
     if (Object.hasOwn(f, 'accountId')) {
       account = accountFor(ctx.db, f.accountId);
       if (!account) errors.push('account_unresolved');
-      else bindings.push(account.id);
+      else {
+        bindings.push(account.id);
+        identities.push(Object.fromEntries(['id', 'inst', 'mask', 'name', 'owner', 'kind', 'identity'].map(key => [key, account[key]])));
+      }
     }
     const base = { locator, ...(account ? { accountId: account.id, account: { inst: account.inst, mask: account.mask, name: account.name },
       ...(account.identity?.startsWith('simplefin:') ? { identity: account.identity } : {}) } : {}) };
@@ -106,6 +106,7 @@ export function validateImport(ctx, proposal, source) {
   }
   for (const control of controls) {
     try {
+      if (control.precision === 'dollar' && !control.field.refs.every(id => source.refs[id]?.precision === 'dollar')) errors.push('rounding_precision_unproven');
       if (!control.field.refs.every(id => proposal.coverage.some(c => c.disposition === 'control_total' && c.refs.includes(id)))) throw new TypeError();
       const total = resolveField(source, control.field);
       const detail = control.rows.reduce((sum, index) => {
@@ -133,14 +134,15 @@ export function validateImport(ctx, proposal, source) {
     first.transform = { op: 'sum', signs: [...signs(initial), ...signs(second)] };
     return false;
   });
-  let counts;
+  let counts, questions;
   ctx.db.exec('SAVEPOINT import_preview');
   try {
     counts = persistImport(ctx.db, source.fileId, { name: 'Reviewed import', bytes: source.bytes }, importPlan(structuredClone(persisted)), { now: new Date(typeof ctx.now === 'function' ? ctx.now() : ctx.now ?? Date.now()).toISOString() }).result.counts;
+    questions = ctx.db.prepare('SELECT kind,subject,question,options,context,status FROM confirm_items WHERE file_id=? ORDER BY kind,subject').all(source.fileId).map(row => ({ ...row }));
   } catch { errors.push('persistence_refused'); }
   finally { ctx.db.exec('ROLLBACK TO import_preview'); ctx.db.exec('RELEASE import_preview'); }
   if (errors.length) return fail('validation_failed');
-  return { valid: true, errors: [], rows: persisted, bindings: [...new Set(bindings)].sort(), counts,
+  return { valid: true, errors: [], rows: persisted, bindings: [...new Set(bindings)].sort(), identities, questions, counts,
     summary: { rows: proposal.rows.length, amount: parsed.resolved.reduce((n, row) => n + toCents(row.fields.amount ?? 0), 0) / 100,
       totalStatus: controls.length ? 'totals_match' : 'no_sheet_total', totalMessage: controls.length ? 'Totals match the sheet' : 'No sheet total to check' } };
 }

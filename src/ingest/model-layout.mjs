@@ -13,11 +13,13 @@ const tableSchema = object({ sheet: { type: ['integer', 'null'], minimum: 0 }, h
     purpose: { enum: ['business', 'household_spending'] }, kind: { enum: ['estimate', 'withholding', 'extension', 'return', 'other'] },
     status: { enum: ['paid', 'required'] },
   }, additionalProperties: false },
-  roles: { type: 'array', items: object({ column, equals: { type: 'string', minLength: 1 },
-    disposition: { enum: ['control_total', 'duplicate_summary', 'forecast', 'explanatory_text', 'excluded'] }, amountColumn: column }) },
+  roles: { type: 'array', items: { ...object({ column, equals: { type: 'string', minLength: 1, pattern: '^[^0-9]+$' },
+    disposition: { enum: ['control_total', 'duplicate_summary', 'forecast', 'explanatory_text', 'excluded'] }, amountColumn: column,
+    groupColumns: { type: 'array', minItems: 1, items: column, uniqueItems: true } }), required: ['column', 'equals', 'disposition', 'amountColumn'] } },
 });
-const check = new Ajv({ strict: true, allowUnionTypes: true }).compile(object({ schemaVersion: { const: 1 }, currency: { const: 'USD' },
-  tables: { type: 'array', minItems: 1, items: tableSchema } }));
+export const LAYOUT_SCHEMA = object({ schemaVersion: { const: 1 }, currency: { const: 'USD' }, tables: { type: 'array', minItems: 1, items: tableSchema } });
+const check = new Ajv({ strict: true, allowUnionTypes: true }).compile(LAYOUT_SCHEMA);
+export const validLayout = layout => check(layout);
 const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
 export const layoutDigest = value => createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
@@ -54,7 +56,7 @@ export function applyLayout(source, layout) {
   if (new Set(layout.tables.map(t => `${t.sheet}:${t.headerRow}`)).size !== layout.tables.length) throw new TypeError('Overlapping layout tables');
   for (const table of layout.tables) {
     const end = Math.min(...layout.tables.filter(t => t.sheet === table.sheet && t.headerRow > table.headerRow).map(t => t.headerRow), Infinity);
-    const indices = [], pending = [];
+    const indices = [], pending = [], data = [];
     const numbers = [...(grid(source).get(table.sheet)?.keys() ?? [])].filter(row => row >= table.headerRow && row < end).sort((a, b) => a - b);
     for (const row of numbers) {
       const ids = idsAt(source, table.sheet, row);
@@ -63,12 +65,15 @@ export function applyLayout(source, layout) {
       if (roles.length > 1) throw new TypeError('Ambiguous row role');
       const role = roles[0], disposition = row === table.headerRow ? 'explanatory_text' : role?.disposition ?? 'imported_detail';
       for (const id of ids) covered.set(id, { disposition, reason: field([row === table.headerRow ? ids[0] : at(role?.column) ?? ids[0]]) });
-      if (disposition === 'control_total') pending.push(field([at(role.amountColumn)], { op: 'currency_decode', currency: 'USD' }));
+      if (disposition === 'control_total') pending.push({ field: field([at(role.amountColumn)], { op: 'currency_decode', currency: 'USD' }),
+        groups: (role.groupColumns ?? []).map(column => [column, source.values[at(column)]]) });
       if (disposition !== 'imported_detail') continue;
       const fields = Object.fromEntries(Object.entries(table.fields).map(([key, selector]) => [key, field(selector.columns.map(at), selector.transform)]));
       indices.push(rows.length); rows.push({ target: table.target, fields, ...table.attributes });
+      data.push({ index: rows.length - 1, values: new Map(ids.map(id => [source.refs[id].column, source.values[id]])) });
     }
-    for (const total of pending) controls.push({ field: total, rows: indices, precision: 'cent' });
+    for (const total of pending) controls.push({ field: total.field, rows: total.groups.length
+      ? data.filter(row => total.groups.every(([column, value]) => row.values.get(column) === value)).map(row => row.index) : indices, precision: 'cent' });
   }
   const coverage = source.regions.map(regionId => {
     const refs = source.inventory[regionId].refs, roles = refs.map(id => covered.get(id));
