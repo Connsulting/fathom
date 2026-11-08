@@ -6,13 +6,16 @@
 // basis is a sha256 hex digest of the rows the operation and its sources depend on: its target row
 // (the `id` or `key` argument) or, without one, the whole target table; for goals always the whole
 // goals table (a value may come from another goal's note); plus every goal, every fact and every
-// figure value. Account field, category and account Confirm proposals use their affected rows
+// figure value. Account, category and Confirm proposals use their affected rows and Undo logs
 // instead. A changed basis makes the proposal stale.
 
 import { queueCategoryChecks } from '../categories/store.mjs';
 import { normalizeMerchant } from '../categories/resolve.mjs';
 import { resolveClock } from '../scenario/build.mjs';
-import { queueAccountPairs } from '../ingest/account-merge.mjs';
+import { queueAccountPairs, mergePlan } from '../ingest/account-merge.mjs';
+import { normalizeName } from '../ingest/confirm.mjs';
+import { dedupeKey } from '../ingest/dedupe.mjs';
+import { DEFAULT_UNDO } from '../facts/derive.mjs';
 import { createHash } from 'node:crypto';
 import { parseJson as parse, tx } from '../store/db.mjs';
 import { ToolError } from '../tools/errors.mjs';
@@ -56,6 +59,62 @@ function localProposalRows(db, tool, args) {
     const ids = [...new Set(values)].filter(v => v !== undefined && v !== null).sort();
     parts.push([table, ids.length ? db.prepare(`SELECT * FROM ${table} WHERE ${column} IN (${ids.map(() => '?').join(',')}) ORDER BY rowid`).all(...ids) : []]);
   };
+  const select = (table, where, ...params) => {
+    const selected = db.prepare(`SELECT * FROM ${table} WHERE ${where} ORDER BY rowid`).all(...params);
+    parts.push([table, selected]);
+    return selected;
+  };
+  const filtered = (table, predicate) => {
+    const selected = db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all().filter(predicate);
+    parts.push([table, selected]);
+    return selected;
+  };
+  const refers = (value, id) => value === id || (value && typeof value === 'object' && Object.values(value).some(v => refers(v, id)));
+  const categoryRows = ids => {
+    for (const table of ['transaction_category_corrections', 'transaction_category_imports', 'transaction_category_guesses']) rows(table, 'transaction_id', ids);
+  };
+  const undoRows = ids => {
+    for (const table of ['confirm_undo', 'confirm_auto', 'confirm_auto_declined', 'confirm_guesses']) rows(table, 'item_id', ids);
+    for (const id of ids) {
+      const changes = parse(db.prepare('SELECT changes FROM confirm_undo WHERE item_id=?').get(id)?.changes, []);
+      for (const change of changes) {
+        const table = '"' + change.table.replaceAll('"', '""') + '"';
+        parts.push([change.table, change.rowid, db.prepare(`SELECT * FROM ${table} WHERE rowid=?`).get(change.rowid) ?? null]);
+      }
+    }
+  };
+  const mergeRows = (keepId, ownId) => {
+    const accounts = select('accounts', 'id IN (?, ?)', keepId, ownId);
+    const moved = select('transactions', 'account_id=?', ownId);
+    const targets = filtered('transactions', r => r.account_id === keepId && moved.some(m => Math.round(r.amount * 100) === Math.round(m.amount * 100)
+      && ((m.external_id && r.external_id === m.external_id) || Math.abs(Date.parse(r.date) - Date.parse(m.date)) <= 3 * 86400000)));
+    const transactions = [...moved, ...targets];
+    const snapshots = ['balances', 'positions'].flatMap(table => {
+      const source = select(table, 'account_id=?', ownId);
+      return [...source, ...filtered(table, r => r.account_id === keepId && source.some(m => table === 'balances'
+        ? m.date === r.date : m.as_of === r.as_of && m.symbol === r.symbol))];
+    });
+    rows('files', 'id', snapshots.map(r => r.file_id));
+    categoryRows(transactions.map(r => r.id));
+    select('account_holders', 'account_id IN (?, ?)', keepId, ownId);
+    select('expected_transactions', 'account_id=?', ownId);
+    const mappings = select('simplefin_accounts', 'account_id=? OR candidate_id=?', ownId, ownId);
+    rows('simplefin_snapshots', 'sf_key', mappings.map(r => r.sf_key));
+    const keys = new Set(moved.map(r => r.dedupe_key));
+    filtered('superseded_rows', r => parse(r.row, {})?.account_id === ownId || keys.has(r.survivor_key));
+    const ownFigure = accounts.find(a => a.id === ownId)?.fig_key;
+    for (const table of ['goals', 'recs']) filtered(table, r => refers(parse(r.def, {}), ownId) || (ownFigure && refers(parse(r.def, {}), ownFigure)));
+    const items = filtered('confirm_items', r => r.subject === `merge:${keepId}:${ownId}` || (r.kind === 'transaction_category' && transactions.some(t => String(t.id) === r.subject)) || (r.kind === 'near_duplicate' && parse(r.context, {}).accountId === keepId) || (r.status === 'pending'
+      && (r.subject === ownId || refers(parse(r.context, {}), ownId) || (parse(r.context, {}).keys ?? []).some(k => keys.has(k)))));
+    undoRows(items.map(i => i.id));
+  };
+  if (tool === 'update_account' && args.withId) {
+    if (select('accounts', 'id IN (?, ?)', args.id, args.withId).length === 2) {
+      const plan = mergePlan(db, args.id, args.withId);
+      mergeRows(plan.keepId, plan.ownId);
+    }
+    return parts;
+  }
   if (tool === 'update_account' && !args.withId) {
     rows('accounts', 'id', [args.id]);
     if (args.owner !== undefined || args.kind !== undefined) {
@@ -79,12 +138,79 @@ function localProposalRows(db, tool, args) {
   }
   if (tool === 'answer' && (args.items || args.ids)) {
     const ids = args.ids ?? args.items.map(i => i.id);
-    const items = ids.map(id => db.prepare('SELECT * FROM confirm_items WHERE id=?').get(id) ?? null);
-    if (items.some(i => i && !['account_owner', 'account_kind'].includes(i.kind))) return null;
+    const dependents = filtered('confirm_auto', r => (parse(r.evidence, {}).ancestors ?? []).some(id => ids.includes(id)));
+    const allIds = [...new Set([...ids, ...dependents.map(r => r.item_id)])];
+    const items = allIds.map(id => db.prepare('SELECT * FROM confirm_items WHERE id=?').get(id) ?? null);
     parts.push(['confirm_items', items]);
-    rows('accounts', 'id', items.map(i => i?.subject));
-    for (const table of ['confirm_undo', 'confirm_auto', 'confirm_auto_declined']) rows(table, 'item_id', ids);
-    if (args.ids) parts.push(['ingest_epoch', db.prepare('SELECT * FROM ingest_epoch ORDER BY rowid').all()]);
+    undoRows(allIds);
+    if (args.ids || args.revise) select('ingest_epoch', 'id=1');
+    for (const item of items.filter(Boolean)) {
+      const c = parse(item.context, {}), answer = args.items?.find(a => a.id === item.id)?.answer ?? item.answer;
+      switch (item.kind) {
+        case 'account_owner': case 'account_kind': rows('accounts', 'id', [item.subject]); break;
+        case 'fact_check': case 'resolver_fact':
+          rows('facts', 'key', [c.key, ...(item.kind === 'resolver_fact' ? [DEFAULT_UNDO[c.key]] : [])]);
+          break;
+        case 'entity_alias': {
+          rows('entity_aliases', 'alias', [item.subject]);
+          const entity = answer?.startsWith('entity:') ? answer.slice(7) : null;
+          const source = filtered('pnl_lines', r => normalizeName(r.entity) === item.subject && r.entity !== entity);
+          rows('pnl_lines', 'dedupe_key', source.map(r => dedupeKey({kind:'pnl_line',entity,period:r.period,category:r.category})));
+          break;
+        }
+        case 'tax_year': select('tax_payments', 'source_slot LIKE ?', `${item.subject}:%`); break;
+        case 'near_duplicate': {
+          const transactions = select('transactions', 'dedupe_key IN (?, ?)', ...item.subject.split('|'));
+          categoryRows(transactions.map(r => r.id));
+          const questions = filtered('confirm_items', r => r.kind === 'transaction_category' && transactions.some(t => String(t.id) === r.subject));
+          undoRows(questions.map(r => r.id));
+          break;
+        }
+        case 'employer_relation': {
+          const held = select('held_facts', 'hold=?', `employer:${item.subject}`);
+          rows('files', 'id', held.map(r => r.file_id));
+          const keys = new Set(answer === 'household' ? ['income.sCorp'] : held.map(r => r.key));
+          rows('facts', 'key', [...keys]);
+          const checks = filtered('confirm_items', r => r.kind === 'fact_check' && keys.has(parse(r.context, {}).key));
+          undoRows(checks.map(r => r.id));
+          break;
+        }
+        case 'withholding_conflict': case 'employer_recipient': case 'document_recipient': {
+          const payments = item.kind === 'withholding_conflict' ? select('tax_payments', 'id IN (?, ?)', c.first?.id ?? null, c.second?.id ?? null)
+            : item.kind === 'document_recipient' ? select('tax_payments', 'payer=?', item.subject)
+            : select('tax_payments', "source_slot LIKE ? AND (payer LIKE 'paystub:%' OR payer LIKE 'w2:%')", `wh:${item.subject}:%:unknown`);
+          const slots = new Set(payments.map(r => String(r.source_slot).replace(/:[^:]*$/, `:${answer}`)));
+          const rekeyed = new Set(payments.filter(r => r.source_slot?.startsWith('wh:') && r.source_slot.endsWith(':unknown')).map(r => dedupeKey({
+            kind:'tax_payment', jurisdiction:r.jurisdiction, sheetYear:r.tax_year, date:r.date,
+            payer:`${String(r.payer).replace(/:doc:[^:]*$/, '')}:${answer}`,
+          })));
+          const related = filtered('tax_payments', r => slots.has(r.source_slot) || rekeyed.has(r.dedupe_key));
+          const paymentIds = new Set([...payments, ...related].map(r => r.id));
+          const payers = new Set(payments.map(r => r.payer));
+          const checks = filtered('confirm_items', r => (r.kind === 'document_recipient' && payers.has(r.subject))
+            || (r.kind === 'withholding_conflict' && [parse(r.context, {}).first, parse(r.context, {}).second].some(ref => {
+              const row = ref && db.prepare('SELECT * FROM tax_payments WHERE id=?').get(ref.id);
+              return paymentIds.has(ref?.id) || (r.status === 'pending' && (!row || row.dedupe_key !== ref.key
+                || (row.file_id ?? null) !== ref.fileId || Math.round(row.amount * 100) !== ref.cents));
+            })));
+          undoRows(checks.map(r => r.id));
+          break;
+        }
+        case 'account_match':
+          rows('simplefin_accounts', 'sf_key', [c.sfKey]);
+          if (c.repair) mergeRows(c.candidateId, c.ownId);
+          break;
+        case 'transaction_category': {
+          const transactions = select('transactions', 'id=?', c.transactionId);
+          categoryRows(transactions.map(r => r.id));
+          if (answer?.startsWith('always:')) rows('category_merchant_rules', 'merchant', transactions.map(r => normalizeMerchant(r.description)));
+          const category = answer?.replace(/^always:/, '');
+          select('category_source_rules', 'category=?', category ?? null);
+          break;
+        }
+        case 'category_mapping': select('category_source_rules', 'parser=? AND category=?', c.parser, c.category); break;
+      }
+    }
     return parts;
   }
   return null;

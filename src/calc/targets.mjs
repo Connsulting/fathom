@@ -298,13 +298,17 @@ export function monthsToReach({ target, invested, monthly, monthlyRate }) {
   return Math.log((target * monthlyRate + monthly) / (invested * monthlyRate + monthly)) / Math.log(1 + monthlyRate);
 }
 
+export function independenceProjection({ spending, invested, horizon, clock, withdrawalRate, parameters = TARGET_PARAMETERS, roundTo = 1000 }) {
+  const target = Math.ceil(round(spending.annualSpend / withdrawalRate) / roundTo) * roundTo;
+  const date = dated({ need: target - invested.total, savings: spending.monthlySavings, clock, horizon, P: parameters,
+    monthsFor: () => monthsToReach({ target, invested: invested.total, monthly: spending.monthlySavings, monthlyRate: parameters.realReturn / 12 }) });
+  return { target, ...date };
+}
+
 export function independencePlan({ spending, invested, horizon, clock, goalId, withdrawalRate, parameters = TARGET_PARAMETERS }) {
   const P = parameters;
   const rate = withdrawalRate;
-  const target = Math.ceil(round(spending.annualSpend / rate) / 1000) * 1000;
-  const monthlyRate = P.realReturn / 12;
-  const date = dated({ need: target - invested.total, savings: spending.monthlySavings, clock, horizon, P,
-    monthsFor: () => monthsToReach({ target, invested: invested.total, monthly: spending.monthlySavings, monthlyRate }) });
+  const { target, ...date } = independenceProjection({ spending, invested, horizon, clock, withdrawalRate, parameters });
   const windowNote = `Spending window: ${windowText(spending.window)}.`;
   const targetFig = figure(target, { clock, label: 'Suggested amount invested', kind: 'm', calc: 'independenceTarget', window: spending.window,
     inputs: { annualSpend: spending.annualSpend, monthlySavings: spending.monthlySavings, current: invested.total, horizon: horizonOf(horizon),

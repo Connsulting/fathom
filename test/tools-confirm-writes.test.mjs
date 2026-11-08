@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { realStore, NOW } from './helpers/ingest.mjs';
 import { callTool, tools } from '../src/tools/index.mjs';
 import { createToolServer } from '../src/mcp/server.mjs';
-import { ask, OWNER_OPTIONS, KIND_OPTIONS, getItem } from '../src/ingest/confirm.mjs';
+import { ask, OWNER_OPTIONS, KIND_OPTIONS, getItem, answerItem, recordAutoAnswer } from '../src/ingest/confirm.mjs';
 import { listPendingConfirm, getConfirm, answerConfirm, reopenConfirm } from '../src/api/ingest-handlers.mjs';
 import { accountMergeCandidates } from '../src/api/accounts.mjs';
 import { recAnswers } from '../src/api/fact-answers.mjs';
@@ -161,7 +161,7 @@ for (const kind of ['entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 
   } else if (kind === 'fact_check' || kind === 'resolver_fact') {
    context = { key:'benefits.hsaCoverage', value:'family', values:{family:'family'} };
    answer = kind === 'fact_check' ? 'yes' : 'family';
-   change = () => db.prepare("INSERT INTO facts(key,value,confirmed) VALUES ('benefits.hsaCoverage','\"individual\"',1)").run();
+   change = () => db.prepare("INSERT INTO facts(key,value,confirmed,updated_at) VALUES ('benefits.hsaCoverage','\"individual\"',1,?)").run(NOW);
   } else if (kind === 'near_duplicate') {
    transaction('near-first'); const id = transaction('near-second');
    subject = 'near-first|near-second'; context = { keys:subject.split('|') }; answer = 'same';
@@ -192,6 +192,7 @@ for (const kind of ['entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 
    change = () => db.prepare("UPDATE category_source_rules SET bucket='excluded' WHERE parser='synthetic'").run();
   }
   const id = ask(db, {kind,subject,context,options:[{id:answer,label:answer}],question:'Synthetic question',now:NOW}).id;
+  if (['transaction_category','category_mapping'].includes(kind)) db.prepare('INSERT INTO confirm_auto_declined(item_id,at) VALUES (?,?)').run(id,NOW);
   let pending;
   await proposalTools(tools).find(t => t.name === 'answer').handler({operation:'confirm',items:[{id,answer}],propose:true},{...s.ctx,onProposal:p => {pending=p;}});
   const basis = () => proposalBasis(db,pending.tool,pending.scopes,pending.args);
@@ -201,3 +202,21 @@ for (const kind of ['entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 
   assert.notEqual(basis(),pending.basis);
  });
 }
+
+
+test('reopen and revise proposals retain dependent answers and their Undo rows', async t => {
+ const s=await setup(t), root=s.q('account_owner');
+ answerItem(s.db,root,'owner',{now:NOW});
+ const transaction=Number(s.db.prepare("INSERT INTO transactions(account_id,date,amount,description) VALUES ('manual','2032-03-01',-20,'Synthetic market')").run().lastInsertRowid);
+ const dependent=ask(s.db,{kind:'transaction_category',subject:String(transaction),question:'Synthetic category',options:[{id:'Groceries',label:'Groceries'}],context:{transactionId:transaction},now:NOW}).id;
+ recordAutoAnswer(s.db,dependent,'Groceries',{rule:'synthetic',evidence:{text:'Synthetic evidence',basis:[root],ancestors:[root]},now:NOW});
+ for(const args of [{ids:[root]},{items:[{id:root,answer:'joint'}],revise:true}]){
+  const basis=()=>proposalBasis(s.db,'answer',['write:confirm'],args),before=basis();
+  s.db.prepare("INSERT INTO transactions(account_id,date,amount,description) VALUES ('manual','2032-03-02',-7,'Unrelated posting')").run();
+  assert.equal(basis(),before);
+  s.db.exec('SAVEPOINT dependent_change');
+  s.db.prepare("UPDATE transaction_category_corrections SET category='Medical' WHERE transaction_id=?").run(transaction);
+  assert.notEqual(basis(),before);
+  s.db.exec('ROLLBACK TO dependent_change');s.db.exec('RELEASE dependent_change');
+ }
+});

@@ -175,8 +175,8 @@ test('readable descriptions retain literal wording, argument boundaries and shar
   ];
   const description = buildRegistry([{ operations }], header).tools[0].description;
   assert.ok(description.startsWith(header[0].purpose));
-  assert.ok(description.includes('\nlist(first?, second?): Exact list summary.'));
-  assert.ok(description.includes('\ndetail(id, kind, limit?): Exact detail summary.'));
+  assert.ok(description.includes('\nlist(first?,second?): Exact list summary.'));
+  assert.ok(description.includes('\ndetail(id,kind,limit?): Exact detail summary.'));
   assert.ok(description.includes('\ncount(): Exact count summary.'));
   for (const operation of operations) assert.ok(description.includes(operation.summary));
   for (const listed of toolsForScopes(SCOPES)) {

@@ -2,7 +2,7 @@ import { envelope } from '../../calc/figure.mjs';
 import { bindFigures } from '../../calc/aggregate.mjs';
 import { futureValue, requiredMonthly } from '../../calc/growth.mjs';
 import { ACCOUNT_TREATMENT, ACCESS_RULES } from '../../calc/treatment.mjs';
-import { TARGET_PARAMETERS, INVESTMENT_KINDS, spendingInputs, holdingsTotal, monthsToReach, monthEndAfter } from '../../calc/targets.mjs';
+import { TARGET_PARAMETERS, INVESTMENT_KINDS, independenceProjection, spendingInputs, holdingsTotal, monthsToReach, monthEndAfter } from '../../calc/targets.mjs';
 import { accountHistory } from '../../pace/build.mjs';
 import { ownerOf } from '../../jobs/planner/data.mjs';
 import { tokenScope } from '../../scenario/build.mjs';
@@ -97,12 +97,16 @@ async function target(args,ctx) {
   const gaps = uniqueGaps([...(spend.gaps ?? []),...savings.gaps,...hgaps]);
   const annual = spend.value;
   const rounding = args.roundTo ?? 1000;
-  const amount = annual === null || wr.value === null ? null : Math.ceil(annual / wr.value / rounding - 1e-9) * rounding;
+  const plan = annual === null || wr.value === null ? null : independenceProjection({
+    spending:{...sp,annualSpend:annual,monthlySavings:savings.value}, invested:{...total,total:invested},
+    horizon:'now', clock, withdrawalRate:wr.value, parameters:{...TARGET_PARAMETERS,realReturn:rr.value}, roundTo:rounding,
+  });
+  const amount = plan?.target ?? null;
   const need = amount === null || invested === null ? null : Math.max(0,amount - invested);
-  const n = need === 0 ? 0 : need === null || savings.value === null || rr.value === null ? Infinity : monthsToReach({target:amount,invested,monthly:savings.value,monthlyRate:rr.value/12});
-  const status = need === 0 ? 'covered' : !(savings.value > 0) ? 'no_savings' : !Number.isFinite(n) || n > TARGET_PARAMETERS.maxProjectionMonths || n < 0 ? 'too_long' : 'projected';
-  const months = status === 'covered' ? 0 : status === 'projected' ? Math.ceil(n-1e-9) : null;
-  const date = months === null ? null : months === 0 ? clock : monthEndAfter(clock,Math.max(1,months));
+  const status = need === 0 ? 'covered' : !(savings.value > 0) ? 'no_savings'
+    : need === null || rr.value === null || plan?.dateSource !== 'projected' ? 'too_long' : 'projected';
+  const months = status === 'covered' ? 0 : status === 'projected' ? plan.months : null;
+  const date = months === null ? null : months === 0 ? clock : plan.targetDate;
   const holdingProv = {calc:'holdingsTotal',sources:holdings.flatMap(h => h.sources),accounts:holdings.map(h => ({id:h.account.id,label:h.label}))};
   const investedNow = figure(invested,'usd','Invested now',latest(holdings.map(h => h.asOf)),holdingProv,hgaps,'a');
   const monthlySavings = figure(savings.value,'usd_per_month','Monthly savings',savings.asOf,provenance('spendingInputs',[savings],{
