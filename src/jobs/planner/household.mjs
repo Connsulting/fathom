@@ -356,8 +356,8 @@ export function attributeContributions(owner, businesses) {
     const mine = businesses.filter(b => b.person === c.person);
     const entity = typeof c.entity === 'string' ? c.entity.trim() : '';
     const named = entity ? mine.filter(b => b.slug === entity || sameName(b.name, entity)) : null;
-    const sponsor = named ? (named.length === 1 ? named[0] : null) : mine.length === 1 ? mine[0] : null;
-    if (sponsor) entries.push({ ...c, sponsor: { kind: sponsor.kind, slug: sponsor.slug } });
+    const sponsor = named?.length === 1 ? named[0] : !named?.length && mine.length === 1 ? mine[0] : null;
+    if (sponsor) entries.push({ ...c, sponsor: { kind: sponsor.kind, slug: sponsor.slug }, sponsorAssumed: !named?.length });
     else unattributed.push(c);
   }
   return { entries, unattributed };

@@ -114,6 +114,8 @@ export const ANSWER_SHAPES = Object.freeze({
   'business.employerEntity': { scope: 'household', type: 'map', label: 'Household business by employer name', values: { type: 'string', label: 'Business name' } },
   'business.entityTypes': { scope: 'household', type: 'map', label: 'Business tax types', values: { type: 'choice', ownerInterpreted: true, label: 'Tax type', choices: ['s_corp', 'sole_prop', 'llc_single', 'partnership', 'c_corp'].map(value => ({ value, label: value })) } },
   'income.payrollRecipient': { scope: 'household', type: 'map', label: 'Payroll recipient by employer', values: { type: 'choice', label: 'Recipient', choices: [{ value: 'owner', label: 'You' }, { value: 'spouse', label: 'Spouse' }] } },
+  'tax.withholding.federal': { scope: 'household', ...dollars('Federal withholding total this year') },
+  'tax.withholding.virginia': { scope: 'household', ...dollars('Virginia withholding total this year') },
   'income.employerRelation': { scope: 'household', type: 'map', label: 'Employer relationship', values: { type: 'choice', label: 'Relationship', choices: [{ value: 'household', label: 'Household business' }, { value: 'outside', label: 'Outside employer' }] } },
   'income.payrollYtd': { scope: 'household', type: 'map', label: 'Year-to-date gross by employer', values: { type: 'object', fields: { person: { type: 'choice', optional: true, label: 'Whose pay?', choices: [{ value: 'owner', label: 'You' }, { value: 'spouse', label: 'Spouse' }] }, asOf: { type: 'date', label: 'Pay date' }, ytdGross: dollars('Year-to-date gross pay') } } },
   'business.cashBasisDefault': { scope: 'household', ...yesNo('Undo the cash-basis assumption?') },

@@ -268,8 +268,13 @@ export function computeFigures(data, facts, ctx) {
   const holdPayment = (part, keys) => {
     if (!part.blocked) return false;
     const code = part.blocked;
-    out.info.gaps.push({ code, message: 'Unresolved tax payments or withholding are excluded until their source is clarified.',
-      action: { screen: 'upload', kind: code === 'tax_year_unconfirmed' || code === 'tax_payment_kind_unknown' ? 'estimates' : 'taxforms', label: 'Upload the clarified tax record' }, rough: false, impact: null });
+    const gap = taxGap(code, { employer: keys[0].startsWith('tax.fed.') ? 'federal payments' : 'Virginia payments' });
+    gap.figureKeys = keys;
+    if (code === 'withholding_recipient_unknown' && keys[0] === 'tax.va.withheld') gap.action = {
+      screen: 'ask', key: 'tax.withholding.virginia', label: 'Enter the withholding total', prompt: 'Record my total Virginia withholding for this tax year. Ask me for the amount.',
+    };
+    out.info.gaps.push(gap);
+    part.hasGap = true;
     const conflicted = new Set(data.confirm.filter(i => i.kind === 'withholding_conflict' && i.status === 'pending')
       .flatMap(i => [i.context?.first?.id, i.context?.second?.id]).filter(id => id != null));
     part.rows = code === 'estimated_payer_unknown' ? [] : part.rows.filter(r => !conflicted.has(r.id) && r.tax_year_basis !== 'sheet_label');
@@ -280,7 +285,7 @@ export function computeFigures(data, facts, ctx) {
   };
   if (pay.lastPaidDate) out.source('tax-payments', SOURCES['tax-payments'].label, `through ${monthLabel(pay.lastPaidDate.slice(0, 7))}`, SOURCES['tax-payments'].kind);
   const putPaid = (key, label, part, shKeys) => {
-    if (holdPayment(part, [key, ...shKeys]) || !part.rows.length) return;
+    if (holdPayment(part, [key, ...shKeys]) || (!part.rows.length && !part.hasGap)) return;
     out.put(key, part.total, 'a', label, 'tax-payments', rowsLoc('tax_payments', part.ids, { assumptions: part.rows.some(row => row.kind === 'paid') ? ['paid_rows_as_estimates'] : [] }));
   };
   putPaid('tax.fed.paid', 'Federal estimated payments logged this year', pay.fed.paid, SH_FED_PAID);
@@ -299,7 +304,8 @@ export function computeFigures(data, facts, ctx) {
   out.info.payroll = records.map(r => ({ employer: r.employer, person: r.person, docIds: r.docIds, wages: r.wages, ytdWages: r.ytdWages, ...r.payrollProvenance }));
   out.info.ask = payroll.ask;
   for (const b of payroll.blocks) if (!b.person || inUnit(b.person)) {
-    const docs = data.documents.filter(d => sameEmployer(data, d.fields.employerName, b.employer));
+    const docs = data.documents.filter(d => (d.docType === 'w2' ? d.taxYear === data.year : Number(d.fields.payDate?.slice(0, 4)) === data.year)
+      && sameEmployer(data, d.fields.employerName, b.employer));
     const amounts = docs.flatMap(d => d.docType === 'w2' ? [d.fields.wages, d.fields.medicareWages]
       : [typeof d.fields.ytdGross === 'number' ? d.fields.ytdGross * 12 / Number(d.fields.payDate.slice(5, 7)) : null]);
     const observed = amounts.filter(v => typeof v === 'number' && Number.isFinite(v) && v >= 0);
@@ -436,6 +442,10 @@ export function computeFigures(data, facts, ctx) {
     ...biz.filter(b => b.kind !== 'scorp').map(b => ({ kind: b.kind, slug: b.id, name: bizNames[b.id] ?? null, person: b.person })),
   ];
   const attributed = attributeContributions(owner, businesses);
+  for (const c of attributed.entries.filter(c => c.sponsorAssumed && inUnit(c.person))) {
+    const business = businesses.find(b => b.slug === c.sponsor.slug && b.person === c.person);
+    out.info.gaps.push(taxGap('retirement_sponsor_assumed', { employer: business.name, person: c.person, impact: Number(c.amount) }));
+  }
   if (attributed.unattributed.some(c => inUnit(c.person))) { blocked.push('retirement_contribution_unattributed'); out.warn('retirement_contribution_unattributed'); }
   // E6: an own-corp W-2 whose box 12 was not read has unknown compensation, unless the owner states
   // that sponsor's deferrals (K4: a document that carries none leaves the type to the owner's
@@ -777,18 +787,24 @@ function incomeTotal(out) {
 }
 
 function finish(out) {
-  const gaps = rankGaps(out.info.gaps.filter((gap, i, all) => all.findIndex(g => g.code === gap.code && g.employer === gap.employer && g.person === gap.person) === i));
+  const unique = [];
+  for (const gap of out.info.gaps) {
+    const prior = unique.find(g => g.code === gap.code && g.employer === gap.employer && g.person === gap.person);
+    if (!prior) unique.push(gap);
+    else if (gap.figureKeys) prior.figureKeys = [...new Set([...(prior.figureKeys || []), ...gap.figureKeys])];
+  }
+  const gaps = rankGaps(unique);
   out.info.gaps = gaps;
   out.info.partial = gaps.length > 0;
   out.info.rough = gaps.some(g => g.rough);
   for (const f of Object.values(out.figures)) {
     if (!/^(agi\.|tax\.|sh\.|room\.|wg\.|va529\.(deduction|taxSaved)|inc\.ytd\.(w2|total))/.test(f.key)) continue;
     const dependent = !/^(tax\.[^.]+\.(paid|withheld)|sh\.fed\.priorTarget)$/.test(f.key);
-    const applicable = dependent ? gaps : [];
+    const applicable = dependent ? gaps : gaps.filter(g => g.figureKeys?.includes(f.key));
     f.locator = { ...f.locator, completeness: applicable.length ? `estimate with ${applicable.length} gap${applicable.length === 1 ? '' : 's'}` : 'complete',
       partial: applicable.length > 0, rough: dependent && out.info.rough, gaps: applicable,
       payroll: dependent ? out.info.payroll : [], notes: [...applicable.map(g => g.message), ...(f.locator.notes || [])].slice(0, 5) };
-    if (applicable.length) f.label += out.info.rough ? ' (rough partial estimate)' : ' (partial estimate)';
+    if (applicable.length) f.label += applicable.some(g => g.rough) ? ' (rough partial estimate)' : ' (partial estimate)';
   }
   return { tax: out.tax || null, figures: out.figures, sources: out.sources, model: out.model, warnings: [...out.warnings].sort(), info: out.info };
 }
@@ -870,11 +886,11 @@ function writeTax(data, out, { hh, parts, owner, f, isVa, pay, section125 }) {
   };
   const fedW = withheld('tax.withholding.federal', pay.fed.withheld, { assumptions: ['addl_medicare_withholding_not_read'] });
   const vaW = isVa ? withheld('tax.withholding.virginia', pay.va.withheld, {}) : { v: 0 };
-  if ((fedW.src === 'tax-withholding' && fedW.v > 0) || (vaW.src === 'tax-withholding' && vaW.v > 0)) {
+  if ((fedW.src === 'tax-withholding' && (fedW.v > 0 || pay.fed.withheld.hasGap)) || (vaW.src === 'tax-withholding' && (vaW.v > 0 || pay.va.withheld.hasGap))) {
     out.source('tax-withholding', SOURCES['tax-withholding'].label, dateLabel(pay.lastWithheldDate || data.clock), SOURCES['tax-withholding'].kind);
   }
-  if (!fedW.blocked && fedW.v > 0) out.put('tax.fed.withheld', fedW.v, 'a', 'Federal tax withheld from wages', fedW.src, fedW.loc);
-  if (!vaW.blocked && vaW.v > 0) out.put('tax.va.withheld', vaW.v, 'a', 'Virginia tax withheld from wages', vaW.src, vaW.loc);
+  if (!fedW.blocked && (fedW.v > 0 || pay.fed.withheld.hasGap)) out.put('tax.fed.withheld', fedW.v, 'a', 'Federal tax withheld from wages', fedW.src, fedW.loc);
+  if (!vaW.blocked && (vaW.v > 0 || pay.va.withheld.hasGap)) out.put('tax.va.withheld', vaW.v, 'a', 'Virginia tax withheld from wages', vaW.src, vaW.loc);
   if (out.figures['tax.fed.withheld'] && out.figures['tax.fed.withheld'].src === 'docs') out.source('docs', SOURCES.docs.label, dateLabel(data.clock), SOURCES.docs.kind);
   if (out.figures['tax.va.withheld'] && out.figures['tax.va.withheld'].src === 'docs') out.source('docs', SOURCES.docs.label, dateLabel(data.clock), SOURCES.docs.kind);
   // A blocked payment or withholding figure holds the safe-harbor figures that use it (already

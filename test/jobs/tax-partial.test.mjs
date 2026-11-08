@@ -261,6 +261,9 @@ test('every former payroll and income block produces federal and state estimates
     }
     assert.ok(gap.message && gap.action.label);
     assert.ok(['upload', 'ask'].includes(gap.action.screen));
+    if (code === 'tax_payment_kind_unknown') for (const key of ['tax.fed.paid', 'tax.fed.withheld']) {
+      assert.ok(computed.figures[key].locator.gaps.some(g => g.code === code), `${key} explains the excluded unlabeled payment`);
+    }
   });
 });
 

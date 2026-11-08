@@ -89,6 +89,11 @@ function assertGap(db, info, code, keys = []) {
   for (const k of keys) {
     const row = figureRow(db, k);
     if (/^(agi\.|tax\.fed\.proj|sh\.)/.test(k)) assert.ok(row && row.locator.gaps.some(g => g.code === code), `${k} carries the precision gap`);
+    if (/^tax\.[^.]+\.(paid|withheld)$/.test(k)) {
+      const expected = code === 'w2_correction_pending' ? 'withholding_conflict_pending' : code;
+      assert.ok(row && row.locator.gaps.some(g => g.code === expected), `${k} carries the excluded-payment gap`);
+      assert.match(row.locator.completeness, /^estimate with/);
+    }
   }
 }
 function assertNotBlocked(info, code) {
@@ -847,6 +852,23 @@ test('MGI2: unknown recipients mixing paystub and W-2 rows block', async () => {
   answerPending(db, 'employer_recipient', 'owner', i => i.subject === nameKey(OUT_A));
   await replan(db);
   near(fig(db, 'tax.fed.withheld').v, 9000, 'summarized once the recipient is known');
+});
+
+test('an excluded withholding gap opens an accepted Ask total that clears the gap', async () => {
+  const { db } = await planned({ payroll: STUBS_THEN_W2({ relation: 'outside' }) });
+  const gap = fig(db, 'tax.fed.withheld').locator.gaps.find(g => g.code === 'withholding_recipient_unknown');
+  assert.equal(gap.action.screen, 'ask');
+  assert.equal(gap.action.key, 'tax.withholding.federal');
+  const { callTool } = await import('../../src/tools/index.mjs');
+  const words = 'My total federal withholding this year is $9000.';
+  const result = await callTool('answer', { operation: 'fact', key: gap.action.key, value: 9000, evidence: words }, {
+    db, ownerText: words, actorId: 'person-a', conversationKey: 'ask:0123456789ab', turnId: 'turn-a', replan: () => replan(db),
+  });
+  assert.ok(result.receipt);
+  const figure = fig(db, 'tax.fed.withheld');
+  near(figure.v, 9000, 'the stated total replaces ambiguous withholding rows');
+  assert.equal(figure.locator.completeness, 'complete');
+  assert.ok(!figure.locator.gaps.some(g => g.code === 'withholding_recipient_unknown'));
 });
 
 test('MGI2: jurisdictions normalize', async () => {
