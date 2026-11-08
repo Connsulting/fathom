@@ -44,6 +44,7 @@ test('health recomputes ages and exposes category, Confirm, year-end and job sta
   assert.ok(out.unavailableFigures.some(f => f.key === 'missing'));
   await assertRefsResolve(out, ctx);
   const later = await callTool('household', { operation: 'health', accounts: ['fresh'] }, { ...ctx, clock: '2027-02-01' });
+  assert.equal(later.categories.queueSize.value, categoryCoverage(db, { clock: '2027-02-01', accountIds: ['fresh'] }).queueSize);
   assert.equal(later.accounts.length, 1);
   assert.equal(later.accounts[0].freshness, 'stale');
   assert.ok(later.accounts[0].ageDays.value > out.accounts.find(a => a.id === 'fresh').ageDays.value);

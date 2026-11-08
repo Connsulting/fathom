@@ -103,3 +103,18 @@ test('monthly positions fill missing balances and respect the clock and balance 
   db.prepare("INSERT INTO balances (account_id,date,amount) VALUES ('positions','2026-10-01',12.34)").run();
   assert.equal((await callTool('accounts', { operation: 'net_worth', accounts: ['positions'] }, ctx)).total.value, 12.34);
 });
+
+test('unpriced positions stay unavailable and unknown treatment strings remain explicit gaps', async t => {
+  const { db, ctx } = await fixture(t);
+  db.prepare("INSERT INTO accounts (id,name,kind) VALUES ('unpriced','Synthetic unpriced','brokerage')").run();
+  db.prepare("INSERT INTO positions (account_id,symbol,as_of) VALUES ('unpriced','SYN','2026-10-31')").run();
+  const unpriced = await callTool('accounts', { operation: 'detail', id: 'unpriced' }, ctx);
+  assert.equal(unpriced.balance.value, null);
+  assert.ok(unpriced.balance.gaps.some(g => g.code === 'missing_fact'));
+  db.prepare("UPDATE accounts SET kind='constructor' WHERE id='retire'").run();
+  const out = await callTool('accounts', { operation: 'net_worth', accounts: ['retire'], groupBy: 'treatment' }, ctx);
+  assert.equal(out.total.value, 3100.43);
+  assert.equal(out.groups[0].key, 'unknown');
+  assert.ok(out.gaps.some(g => g.code === 'missing_fact'));
+  await assertRefsResolve(out, ctx);
+});

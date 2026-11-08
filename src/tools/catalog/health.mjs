@@ -1,6 +1,5 @@
 import { accountFreshness, freshnessOf } from '../../ingest/freshness.mjs';
 import { categoryCoverage, loadCategoryInputs } from '../../categories/store.mjs';
-import { resolveCategories } from '../../categories/resolve.mjs';
 import { pendingItems } from '../../ingest/confirm.mjs';
 import { yearendChecklist, taxYearFor } from '../../yearend/expected.mjs';
 import { accountNaming } from '../../accounts/naming.mjs';
@@ -30,14 +29,10 @@ function health(args, ctx) {
     return { id: a.id, label, mask: a.mask, kind: a.kind, lastData: f.asOf || null, freshness: f.fresh,
       ageDays: figure(`accounts.${i}.ageDays`, age, 'Age of account data', f.asOf || null, source('accounts',[a.id]), 'days', ageGaps), source: f.sourceId };
   });
-  const coverage = categoryCoverage(db, { clock });
+  const coverage = categoryCoverage(db, { clock, accountIds: args.accounts });
   const input = loadCategoryInputs(db);
   if (args.accounts !== undefined) input.transactions = input.transactions.filter(t => args.accounts.includes(t.account_id));
-  const resolved = resolveCategories(input);
-  const layers = Object.fromEntries(['guess','uncategorized','correction'].map(layer => [layer, [...resolved.values()].filter(c => c.layer === layer).length]));
-  const cats = args.accounts === undefined ? { rows: coverage.rows, uncategorized: coverage.uncategorized, guessed: coverage.layers.guess, corrected: coverage.layers.correction, queueSize: coverage.queueSize }
-    : { rows: resolved.size, uncategorized: layers.uncategorized, guessed: layers.guess, corrected: layers.correction,
-      queueSize: pendingItems(db).filter(p => p.kind === 'transaction_category' && input.transactions.some(t => String(t.id) === p.subject)).length };
+  const cats = { rows: coverage.rows, uncategorized: coverage.uncategorized, guessed: coverage.layers.guess, corrected: coverage.layers.correction, queueSize: coverage.queueSize };
   const dataDate = input.transactions.map(t => t.date).sort().at(-1) || null;
   const categories = Object.fromEntries(Object.entries(cats).map(([key,value]) => [key, figure(`categories.${key}`, value, `Category ${key}`, dataDate, source('transactions',input.transactions.map(t => t.id)))]));
   if (cats.uncategorized) gaps.push({ code: 'uncategorized_rows', message: 'Some transactions have no category.', count: cats.uncategorized });

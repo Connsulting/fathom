@@ -50,9 +50,9 @@ function netWorth(args, ctx) {
   const rows = selectedAccounts(ctx.db, args.accounts).filter(a => args.includeBusiness !== false || groupOfKind(a.kind) !== 'Business');
   const missing = [];
   const stored = rows.map(a => {
-    const group = groupOfKind(a.kind), label = plain(labels.get(a.id));
-    const plan = ACCOUNT_TREATMENT.byPlanType[plans[a.id]];
-    const treatment = plan || ACCOUNT_TREATMENT.byKind[a.kind];
+    const group = groupOfKind(a.kind), label = a.parser === 'demo-seed' ? plain(labels.get(a.id)) : labels.get(a.id);
+    const plan = Object.hasOwn(ACCOUNT_TREATMENT.byPlanType,plans[a.id]) ? ACCOUNT_TREATMENT.byPlanType[plans[a.id]] : null;
+    const treatment = plan || (Object.hasOwn(ACCOUNT_TREATMENT.byKind,a.kind) ? ACCOUNT_TREATMENT.byKind[a.kind] : null);
     const key = groupBy === 'part' ? partOf.get(group) : groupBy === 'group' ? group : treatment?.id || 'unknown';
     const gaps = groupBy === 'treatment' && (!treatment || treatment.id === 'needs plan type')
       ? [{ code: 'missing_fact', message: `${label} needs an accounts.planType fact to identify tax treatment.` }] : [];
@@ -128,7 +128,8 @@ function detail(args, ctx) {
   const date = result.balance.asOf;
   const positions = date ? db.prepare('SELECT id,value, quantity, price FROM positions WHERE account_id=? AND as_of=?').all(args.id,date) : [];
   const emptyHoldings = row?.v === 0 && parseJson(row.locator, {})?.field === 'holdings' && row.period_to === date;
-  const amount = balance ? balance.amount : emptyHoldings ? 0 : positions.length ? positions.reduce((sum,p) => sum + (p.value ?? p.quantity * p.price),0) : null;
+  const positionValues = positions.map(p => Number.isFinite(p.value) ? p.value : Number.isFinite(p.quantity) && Number.isFinite(p.price) ? p.quantity*p.price : null);
+  const amount = balance ? balance.amount : emptyHoldings ? 0 : positions.length && positionValues.every(v => v !== null) ? positionValues.reduce((sum,v) => sum+v,0) : null;
   const gaps = amount === null || row?.unavailable_reason ? [{ code: 'missing_fact', message: 'No available account balance on file.' }] : [];
   result.balance = makeFigure('accounts', { operation: 'detail', ...args }, 'balance', gaps.length ? null : amount, 'usd', 'Account balance', date,
     { calc: 'accountBalance', sources: [{ table: balance ? 'balances' : 'positions', ids: balance ? [balance.id] : positions.map(p => p.id).slice(0,50), count: balance ? 1 : positions.length }], accounts: [{ id: args.id, label: result.account.label }] }, gaps);
