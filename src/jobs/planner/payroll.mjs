@@ -275,8 +275,12 @@ export function payrollRecords(data, entities, owner = {}) {
 }
 
 function paystubIncome(data, group, stubs, owner) {
+  const recipientAnswer = Object.entries(owner['income.payrollRecipient'] || {}).find(([employer]) => sameEmployer(data, employer, group.employer))?.[1];
+  const people = new Set(data.documents.filter(d => sameEmployer(data, d.fields.employerName, group.employer)
+    && ((d.docType === 'w2' && Number(d.taxYear) === data.taxYear) || (d.docType === 'paystub' && yearOf(d.fields.payDate) === data.taxYear)))
+    .map(d => recipientAnswer || docRecipient(data, d).person));
   const stated = Object.entries(owner['income.payrollYtd'] || {}).find(([employer, v]) => sameEmployer(data, employer, group.employer)
-    && v.person === group.person && isAmount(v.ytdGross) && typeof v.asOf === 'string'
+    && (v.person === group.person || (v.person == null && people.size === 1 && people.has(group.person))) && isAmount(v.ytdGross) && typeof v.asOf === 'string'
     && yearOf(v.asOf) === data.taxYear && v.asOf <= data.clock)?.[1];
   const observed = stubs.filter(d => isAmount(d.fields.ytdGross)).at(-1);
   if (stated && (!observed || stated.asOf >= observed.fields.payDate)) return {

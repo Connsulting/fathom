@@ -111,8 +111,8 @@ test('AC5: scripted Ask records YTD with a receipt, removes the partial mark, an
   const db = await store();
   await planRun(db);
   assert.equal(projection(db).locator.partial, true);
-  const words = 'For spouse, my YTD gross at Cedar Labs is $30,000 as of 2026-10-31.';
-  const args = { operation: 'fact', key: 'income.payrollYtd', value: { 'Cedar Labs': { person: 'spouse', asOf: '2026-10-31', ytdGross: 30000 } }, evidence: words };
+  const words = 'My YTD gross at Cedar Labs is $30,000 as of 2026-10-31.';
+  const args = { operation: 'fact', key: 'income.payrollYtd', value: { 'Cedar Labs': { asOf: '2026-10-31', ytdGross: 30000 } }, evidence: words };
   const transport = createEngine({ mode: 'fake' });
   const engine = { mode: 'live', isOn: () => true, call: request => request.purpose === 'title'
     ? Promise.resolve({ text: 'Payroll update', toolResults: [] })
