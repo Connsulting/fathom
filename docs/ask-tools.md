@@ -491,7 +491,7 @@ Twenty tools: eleven read, nine write. "Ticket" is the ticket that adds the oper
 | `tax` | read | estimate, room (C5) |
 | `retirement` | read | target, growth, after_tax (C6); access, bridge (C7) |
 | `goals` | read | list, pace (C1); suggestions (C9) |
-| `recommendations` | read | list, detail, advisor (C1) |
+| `recommendations` | read | list, detail, advisor (C1), wargame (B5) |
 | `knowledge` | read | packs, search, entry (C1) |
 | `calculate` | read | add, subtract, multiply, divide, sum, min, max, negate, annualize, monthly, percent_of, round_up, compound (C3) |
 | `update_account` | write | rename, mask, owner, kind, merge (C8) |
@@ -849,6 +849,7 @@ Purpose: the recommendations in the plan. Hidden recommendations never appear. P
 | list | `status?` (a status or a list) | recommendations with live status, window, tasks, owner and goals served, unchanged | live `list_recommendations` |
 | detail | `id` | one recommendation with figures, pack excerpts, owner, goals, unchanged | live `get_recommendation` |
 | advisor | none | the advisor workflow: next check-in, waiting reviews, verdicts, packets, unchanged | live `advisor_status` |
+| wargame | `name` (`salary` or `deferral`) | stored model options with referenceable figure envelopes, planner date, scenario status and decision, and the picked point id; missing stored fields are unavailable, not recomputed; `not_built` carries the planner reason and no points | stored war-game model |
 
 Scope: read.
 
@@ -1299,8 +1300,7 @@ Household facts the tools need:
 
 | Key | Type | Exists today | Collectable by `answer.fact` |
 |---|---|---|---|
-| `household.ownerAge` | age | yes, `ANSWER_SHAPES` | yes |
-| `household.spouseAge` | age | yes, `ANSWER_SHAPES` | yes |
+| `household.birthYears` | object `{ owner, spouse?, dependents? }` of birth years | yes, `ANSWER_SHAPES` | yes |
 | `household.expectedDate` | date | yes, `ANSWER_SHAPES` | yes |
 | `household.dependentAges` | int list | frozen key, no answer shape | after C7 adds the shape |
 | `household.dependentBirthDates` | date list (new `dates` shape type, 1..10) | no | after C7 |

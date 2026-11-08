@@ -26,7 +26,7 @@ const SECTIONS = {
 
 const FACT_KEYS = [
   'household.state', 'household.filingStatus', 'household.dependents', 'household.expectingChild',
-  'household.dependentAges', 'income.w2', 'income.sCorp', 'income.selfEmployed', 'income.partnership',
+  'household.dependentAges', 'household.birthYears', 'income.w2', 'income.sCorp', 'income.selfEmployed', 'income.partnership',
   'income.agiEstimate', 'benefits.hsa', 'benefits.employer401k', 'retirement.solo401k', 'retirement.ira',
   'retirement.backdoorRothCandidate', 'accounts.has529', 'giving.charitable', 'giving.annualEstimate',
 ];
