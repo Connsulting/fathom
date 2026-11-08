@@ -16,6 +16,7 @@ import { test as base } from '@playwright/test';
 import { rmSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, resetDemo, gotoRoute } from './helpers.mjs';
+import { dataDir } from './data-dir.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { startServer } from '../src/server.mjs';
 import { TOUR_STOPS } from '../web/horizon/screens/tour.js';
@@ -276,7 +277,7 @@ async function everyAnchorRenders(page) {
 test.describe('tour on a public demo', () => {
   const port = Number(process.env.E2E_TOUR_PUBLIC_PORT || 5051);
   const origin = `http://localhost:${port}`;
-  const data = resolve('.e2e-data-tourpub');
+  const data = dataDir('tourpub');
   let app;
   test.use({ baseURL: origin, viewport: DESKTOP });
 

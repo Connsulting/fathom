@@ -1,12 +1,12 @@
 import { test, expect } from '@playwright/test';
 import { rmSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { loadConfig } from '../src/config.mjs';
 import { startServer } from '../src/server.mjs';
+import { dataDir } from './data-dir.mjs';
 
 const port = Number(process.env.E2E_PUBLIC_DEMO_PORT || 5031);
 const origin = `http://localhost:${port}`;
-const data = resolve('.e2e-data-pubdemo');
+const data = dataDir('pubdemo');
 let app;
 test.use({ baseURL: origin });
 
