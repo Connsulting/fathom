@@ -1,11 +1,11 @@
 import { getSetting, setSetting } from '../store/db.mjs';
 
-export function knowledgeGap({ stage, name, fileId = null, section = null, reason }) {
+export function knowledgeGap({ stage, name, fileId = null, documentId = null, section = null, reason }) {
   const subject = section ? `Section "${section}" of ${name}` : name;
   return {
-    stage, name, fileId, section,
+    stage, name, fileId, documentId, section,
     explanation: `${subject}: ${reason}`,
-    action: stage === 'source-read' ? 'replace' : 'rebuild',
+    action: stage === 'source-read' ? (fileId ? 'replace' : 'remove') : 'rebuild',
     disclosure: stage === 'pack-load'
       ? `${name} could not be loaded, so this answer does not use that pack.`
       : section
@@ -29,7 +29,9 @@ export function saveLoadFailure(db, failed) {
 }
 
 export function coveredPacks(db, packs) {
-  const gaps = planCoverage(db).filter(issue => issue.stage !== 'pack-load');
+  const gaps = [...planCoverage(db).filter(issue => issue.stage !== 'pack-load'),
+    ...getSetting(db, 'yourPlans.excludedDocuments', []).map(id => ({ name: `document-${id}` })),
+    ...db.prepare('SELECT id AS fileId FROM files WHERE removed_at IS NOT NULL').all()];
   if (!gaps.length) return packs;
   return packs.map(pack => {
     if (pack.id !== 'your-plans') return pack;

@@ -38,6 +38,7 @@ function scripted(runtime, stage) {
     if (key === 'extract' && stage === 'grounding') return request => target.extract({ ...request, fake: [{ text: JSON.stringify({ rows: [
       { title: 'Dental coverage', body: 'The plan covers routine dental care.', excerpt: 'The plan covers routine dental care.', page: 1 },
       { title: 'Vision coverage', body: 'The plan covers lenses.', excerpt: 'The plan covers lenses.', page: 1 },
+      { title: 'Hearing coverage', body: 'The plan covers hearing care.', excerpt: 'The plan covers hearing care.', page: 1 },
     ] }) }] });
     if (key === 'call') return request => target.call({ ...request, fake: [{ text: 'Compare the available plan choices.' }] });
     const value = Reflect.get(target, key, target);
@@ -70,6 +71,9 @@ for (const stage of ['source-read', 'extraction', 'grounding', 'pack-load']) {
     if (stage === 'grounding') {
       assert.ok(reply.provenance.packIds.includes('your-plans'), 'valid neighboring sections still inform answers');
       assert.ok(issues[0].explanation.includes('Vision coverage'));
+      const disclosures = reply.paragraphs.filter(p => p.includes('does not use'));
+      assert.equal(disclosures.length, 1, 'missing sections share one plain disclosure line');
+      assert.ok(disclosures[0].includes('Hearing coverage'));
     }
     await storeFile({ vault: await household.vault(), id: ID, bytes: Buffer.from(TEXT), purpose: 'upload' });
     result = await buildYourPlans({ db, household, engine: runtime, clock: CLOCK });
@@ -141,4 +145,18 @@ test('an unreadable text-only document can be removed from the pack without dele
   assert.deepEqual(repaired.coverage, []);
   assert.ok(db.prepare('SELECT 1 FROM documents WHERE id = ?').get(documentId));
   assert.deepEqual((await buildYourPlans({ db, household, engine: runtime, clock: CLOCK })).coverage, [], 'the exclusion survives later builds');
+});
+
+test('removing the last document does not restore its older pack entries on an empty rebuild', async t => {
+  const s = await fixture(t);
+  const { db, household, runtime } = s;
+  await buildYourPlans({ db, household, engine: runtime, clock: CLOCK });
+  const packs = createLivePacks(db, { dataDir: household.root });
+  packs.refresh();
+  db.prepare('UPDATE files SET removed_at = ? WHERE id = ?').run(CLOCK, ID);
+  const rebuilt = await buildYourPlans({ db, household, engine: runtime, clock: CLOCK });
+  assert.deepEqual(rebuilt.coverage, []);
+  assert.equal(packs.entry('your-plans', '01-dental-coverage'), null);
+  const result = await callTool('knowledge', { operation: 'search', query: 'routine dental' }, { db, dataDir: household.root });
+  assert.equal(result.total, 0);
 });

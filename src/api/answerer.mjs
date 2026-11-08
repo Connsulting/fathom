@@ -702,7 +702,8 @@ export function knowledgeCoverageDisclosure(scenario, context) {
   const plans = scenario.packs.find(p => p.id === 'your-plans' || p.manifest === 'your-plans');
   const override = plans ? scenario.live.packs[plans.id] : null;
   if (context?.pack?.id !== 'your-plans' && plans && packStatus(plans.status, override) !== 'active') return [];
-  return [...new Set((scenario.live.yourPlans?.coverage || []).map(issue => issue.disclosure))];
+  const lines = [...new Set((scenario.live.yourPlans?.coverage || []).map(issue => issue.disclosure))];
+  return lines.length ? [lines.join(' ')] : [];
 }
 
 export function createLiveAnswerer({ engine, packs, root, services, onRead } = {}) {
@@ -830,10 +831,10 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
       pendingAction = null;
     const queuedImport = toolResults.find(r => !r.isError && r.name === 'refresh' && r.result?.status === 'queued' && r.result.message);
     const paragraphs = renderAnswer(text, grounding.violations, grounding.literals);
-    paragraphs.push(...knowledgeCoverageDisclosure(scenario, context).map(escapeUserText));
     if (queuedImport && !text.includes(queuedImport.result.message)) paragraphs.unshift(escapeUserText(queuedImport.result.message));
     if (!paragraphs.length && !placement.blocks.length && !blockNotes.length) return actionReply({ ...noticeReply(NOTICES.modelError),
       provenance: { discipline: { violations: discipline.violations, triggeredBy } } });
+    paragraphs.push(...knowledgeCoverageDisclosure(scenario, context).map(escapeUserText));
     const lower = text.toLowerCase();
     const seenReads = new Set();
     const sources = [...sourceReads, ...toolResults].filter(r => {

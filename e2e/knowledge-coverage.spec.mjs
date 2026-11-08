@@ -73,6 +73,13 @@ for (const stage of ['source-read', 'extraction', 'pack-load']) {
       await page.locator('.h-yp [data-yp-rebuild]').click();
     }
     await expect(page.locator('.h-pack-gap')).toHaveCount(0, { timeout: 30_000 });
+    if (stage === 'source-read') {
+      await expect(page.locator('.h-yp')).toContainText('replacement-benefits.txt');
+      await withLocalHousehold(new Date().toISOString(), async ({ db }) => {
+        expect(db.prepare('SELECT removed_at FROM files WHERE id = ?').get(ID).removed_at).toBeTruthy();
+        expect(db.prepare('SELECT count(*) AS n FROM documents WHERE file_id = ?').get(ID).n).toBe(0);
+      }, { dataDir });
+    }
     await page.reload();
     await expect(page.locator('.h-pack-gap')).toHaveCount(0);
   });

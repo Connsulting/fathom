@@ -194,9 +194,17 @@ function metaHtml(p) {
 
 function coverageHtml(issues) {
   const yp = H.api.s.live?.yourPlans || {};
-  return H.arr(issues).map((issue) => `<div class="h-pack-gap" role="status"><p>${lit(issue.explanation)}</p><div class="h-acts">${issue.action === 'rebuild' && ypCandidates(yp).length
-    ? `<button type="button" class="h-btn" data-yp-rebuild${S.yp.building ? ' disabled' : ''}>Rebuild pack</button>`
-    : H.goA('add', 'Replace document', {}, 'h-btn')}</div></div>`).join('');
+  return H.arr(issues).map((issue) => {
+    const disabled = S.yp.building ? ' disabled' : '';
+    const control = issue.action === 'replace' && issue.fileId
+      ? `<button type="button" class="h-btn" data-yp-replace-open${disabled}>Replace document</button><input type="file" data-yp-replace-for="${H.esc(issue.fileId)}" hidden tabindex="-1">`
+      : issue.action === 'remove' && issue.documentId
+        ? `<button type="button" class="h-btn" data-yp-remove="${H.esc(issue.documentId)}"${disabled}>Remove from pack</button>`
+        : ypCandidates(yp).length
+          ? `<button type="button" class="h-btn" data-yp-rebuild${disabled}>Rebuild pack</button>`
+          : H.goA('add', 'Add plan documents', {}, 'h-btn');
+    return `<div class="h-pack-gap" role="status"><p>${lit(issue.explanation)}</p><div class="h-acts">${control}</div></div>`;
+  }).join('');
 }
 
 function packPage(p) {
@@ -355,7 +363,7 @@ export function render(id) {
 
 /* ---------- events ---------- */
 
-function build(retry = false) {
+function build(retry = false, excludeDocumentIds = []) {
   const { api } = H;
   if (S.yp.building || typeof api.buildYourPlans !== 'function') return;
   const list = ypCandidates(api.s.live?.yourPlans || {});
@@ -365,18 +373,49 @@ function build(retry = false) {
   S.yp.building = true;
   S.yp.result = null;
   H.draw();
-  Promise.resolve(api.buildYourPlans(ids)).catch(() => null).then((res) => {
+  Promise.resolve(api.buildYourPlans({ fileIds: ids, excludeDocumentIds })).catch(() => null).then((res) => {
     S.yp.building = false;
     if (res) { S.yp.result = res; S.entries.clear(); }
     if (H.api) H.draw();
   });
 }
 
+async function replaceDocument(input) {
+  const file = input.files?.[0];
+  const oldId = input.getAttribute('data-yp-replace-for');
+  input.value = '';
+  if (!file || S.yp.building) return;
+  S.yp.building = true;
+  H.draw();
+  let ready = false;
+  try {
+    const uploaded = await H.api.upload([file]);
+    const replacement = uploaded?.files?.[0];
+    if (!replacement?.fileId || replacement.fileId === oldId || ['failed', 'unsupported', 'too_large'].includes(replacement.status)) return;
+    const removed = await H.api.removeFile(oldId);
+    if (!removed) return;
+    S.yp.on.add(replacement.fileId);
+    ready = true;
+  } finally {
+    S.yp.building = false;
+    H.draw();
+  }
+  if (ready) build(true);
+}
+
 // Returns true when the click was handled here.
 export function onClick(e) {
-  const t = e.target.closest && e.target.closest('[data-entry][data-pack],[data-yp-build],[data-yp-rebuild]');
+  const t = e.target.closest && e.target.closest('[data-entry][data-pack],[data-yp-build],[data-yp-rebuild],[data-yp-replace-open],[data-yp-remove]');
   if (!t || !H.root || !H.root.contains(t)) return false;
   e.preventDefault();
+  if (t.hasAttribute('data-yp-replace-open')) {
+    if (!t.disabled) t.parentElement.querySelector('input[data-yp-replace-for]')?.click();
+    return true;
+  }
+  if (t.hasAttribute('data-yp-remove')) {
+    if (!t.disabled) build(true, [Number(t.getAttribute('data-yp-remove'))]);
+    return true;
+  }
   if (t.hasAttribute('data-yp-build') || t.hasAttribute('data-yp-rebuild')) {
     if (!t.disabled) build(t.hasAttribute('data-yp-rebuild'));
     return true;
@@ -387,6 +426,7 @@ export function onClick(e) {
 
 export function onInput(e) {
   const t = e.target;
+  if (t?.matches?.('input[data-yp-replace-for]')) return true;
   if (!t || !t.matches || !t.matches('input[data-yp-file]')) return false;
   const id = t.getAttribute('data-yp-file');
   const c = ypCandidates(H.api.s.live?.yourPlans || {}).find((x) => x.id === id);
@@ -396,6 +436,12 @@ export function onInput(e) {
   const list = ypCandidates(H.api.s.live?.yourPlans || {});
   const btn = H.root && H.root.querySelector('button[data-yp-build]');
   if (btn) btn.disabled = !!S.yp.building || !(list.some((x) => x.source) || list.some(isPicked));
+  return true;
+}
+
+export function onChange(e) {
+  if (!e.target?.matches?.('input[data-yp-replace-for]')) return false;
+  replaceDocument(e.target);
   return true;
 }
 

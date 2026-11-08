@@ -213,7 +213,7 @@ async function readFileSource(file, vault, warnings) {
   return null;
 }
 
-async function gatherSources(db, vault, fileIds, warnings, coverage) {
+async function gatherSources(db, vault, fileIds, warnings, coverage, excludedDocuments) {
   const sources = [];
   const fileRow = db.prepare('SELECT id, name, mime, stored_path FROM files WHERE id = ? AND removed_at IS NULL');
   const seen = new Set();
@@ -234,6 +234,7 @@ async function gatherSources(db, vault, fileIds, warnings, coverage) {
   };
   const docs = db.prepare("SELECT id, fields, file_id FROM documents WHERE doc_type IN ('plan', 'benefits') ORDER BY id").all();
   for (const doc of docs) {
+    if (excludedDocuments.includes(doc.id)) continue;
     if (doc.file_id) {
       const removed = db.prepare('SELECT removed_at FROM files WHERE id = ?').get(doc.file_id);
       if (!removed?.removed_at) await addFile(doc.file_id);
@@ -246,7 +247,7 @@ async function gatherSources(db, vault, fileIds, warnings, coverage) {
       const name = `document-${doc.id}`;
       const reason = 'The document has no readable text. Replace it with a readable copy.';
       warnings.push(`${name}: ${reason}`);
-      coverage.push(knowledgeGap({ stage: 'source-read', name, reason }));
+      coverage.push(knowledgeGap({ stage: 'source-read', name, documentId: doc.id, reason }));
     }
   }
   for (const id of fileIds) await addFile(id);
@@ -309,10 +310,16 @@ function writePack(dir, { entries, clock }) {
 
 // `household` is the context that owns `db`: its root holds the pack and its vault reads the
 // uploads (a vault refusal propagates as VaultError before any model call).
-export async function buildYourPlans({ db, engine, household, fileIds = [], clock } = {}) {
+export async function buildYourPlans({ db, engine, household, fileIds = [], excludeDocumentIds = [], clock } = {}) {
   if (!db || !engine || !household || typeof household.root !== 'string' || !household.root) throw new TypeError('buildYourPlans needs db, engine and household');
   if (household.db !== db) throw new TypeError('buildYourPlans household must own the db');
   if (!Array.isArray(fileIds) || !fileIds.every(id => typeof id === 'string')) throw new TypeError('fileIds must be strings');
+  if (!Array.isArray(excludeDocumentIds) || !excludeDocumentIds.every(id => Number.isSafeInteger(id) && id > 0)) throw new TypeError('excludeDocumentIds must be document ids');
+  for (const id of excludeDocumentIds) {
+    if (!db.prepare("SELECT 1 FROM documents WHERE id = ? AND file_id IS NULL AND doc_type IN ('plan', 'benefits')").get(id)) {
+      throw new YourPlansRefusal('Only a text-only plan or benefits document can be removed from this pack.');
+    }
+  }
   const root = household.root;
   guardTarget(root);
   const vault = await openVault(household);
@@ -320,7 +327,9 @@ export async function buildYourPlans({ db, engine, household, fileIds = [], cloc
   const dir = yourPlansDir(resolve(root));
   const warnings = [];
   const coverage = [];
-  const sources = await gatherSources(db, vault, fileIds, warnings, coverage);
+  const excludedDocuments = [...new Set([...getSetting(db, 'yourPlans.excludedDocuments', []), ...excludeDocumentIds])];
+  if (excludeDocumentIds.length) setSetting(db, 'yourPlans.excludedDocuments', excludedDocuments);
+  const sources = await gatherSources(db, vault, fileIds, warnings, coverage, excludedDocuments);
   const entries = [];
   let dropped = 0;
   for (const source of sources) {
