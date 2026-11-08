@@ -175,7 +175,7 @@ export async function resolvePending(db, engine, { now = new Date().toISOString(
     if (budgetUsd < reserve) { stopped = 'budget'; break; }
     let response;
     const beforeCall = cost();
-    try { response = await engine.call({ ...request, budgetUsd }); }
+    try { response = await engine.call({ ...request, budget: { maxCostUsd: budgetUsd } }); }
     catch (error) {
       if (cost() > beforeCall) remember();
       stopped = error.code ?? error.name ?? 'engine_error'; break;

@@ -1,4 +1,4 @@
-// Rich Ask answers, B3: the block shell (web/horizon/screens/ask-blocks.js) and the table and
+// Rich Ask answers, B3 and B4: the block shell (web/horizon/screens/ask-blocks.js) and the table and
 // compare renderers (ask-block-table.js, ask-block-compare.js) draw stored block snapshots
 // (docs/plans/rich-ask-answers.md sections 2 and 5). Synthetic fixtures under test/fixtures/blocks;
 // no DOM. Every expected value is read from the fixture, never typed here.
@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { esc, money } from '../src/shared/tokens.mjs';
 import { useKit, messageBodyHtml, blockState, formatByUnit, dropNote } from '../web/horizon/screens/ask-blocks.js';
+import { niceTicks } from '../web/horizon/screens/ask-block-chart.js';
 
 const fx = (name) => JSON.parse(readFileSync(new URL(`./fixtures/blocks/${name}.json`, import.meta.url), 'utf8'));
 
@@ -255,4 +256,197 @@ test('formatByUnit writes each unit in words people read', () => {
   assert.equal(formatByUnit(1210000, 'usd', { short: true }), money(1210000, { k: true }));
   assert.equal(formatByUnit(250, 'usd_per_month'), `${money(250)} a month`);
   assert.equal(formatByUnit(null, 'usd'), 'Unavailable');
+});
+
+// ---------- B4: chart and timeline renderers (ask-block-chart.js, ask-block-timeline.js) ----------
+// Both export render(snapshot, ctx) and bind(root, snapshot, ctx) and sit in the shell's renderer
+// map. Their view state lives in blockState: table (the Table toggle is on), at ({ s, i }: the
+// active series and point) and w (the measured plot width in px; 560 until bind measures it).
+
+const CHARTS = ['chart-line', 'chart-bar', 'chart-area', 'chart-scatter'];
+const DRAWN = [...CHARTS, 'timeline'];
+
+// Every figure envelope a chart or timeline snapshot draws, in snapshot order.
+function drawnFigures(s) {
+  if (s.series) return s.series.flatMap((x) => x.points.filter(Boolean));
+  if (s.points) return s.points.flatMap((p) => [p.x, p.y]);
+  return s.events.map((e) => e.value).filter(Boolean);
+}
+const svgOf = (html) => (/<svg[\s\S]*?<\/svg>/.exec(html) || [''])[0];
+const dataFigs = (html) => [...html.matchAll(/data-fig="([^"]+)"/g)].map((x) => x[1]);
+const fmt = (f) => (f.value === null ? 'Unavailable' : formatByUnit(f.value, f.unit));
+const attr = (html, re) => decode((re.exec(html) || [])[1] || '');
+
+test('charts and the timeline register every value under a blk: key and draw it', () => {
+  for (const name of DRAWN) {
+    registered = new Map();
+    const block = fx(name);
+    const m = msg([block]);
+    const html = messageBodyHtml(m);
+    const figs = drawnFigures(block.snapshot);
+    const keys = [...registered.keys()].filter((k) => k.startsWith(`blk:${m.id}:${block.id}:`));
+    assert.equal(keys.length, figs.length, `${name}: one registered figure per drawn value`);
+    for (const f of figs) {
+      assert.ok([...registered.values()].some((r) => r.value === f.value && r.unit === f.unit && r.label === f.label
+        && r.source === f.source && r.asOf === f.asOf && JSON.stringify(r.provenance) === JSON.stringify(f.provenance)), `${name}: ${f.label} ${f.value}`);
+    }
+    // A scatter mark carries its y figure (data-fig, Enter opens it) and its x figure (data-fig2,
+    // in the readout when the point is active).
+    const drawn = new Set([...(name === 'timeline' ? html : svgOf(html)).matchAll(/data-fig2?="([^"]+)"/g)].map((x) => x[1]));
+    for (const k of keys) assert.ok(drawn.has(k), `${name}: ${k} is drawn`);
+  }
+});
+
+test('each chart is an img with an aria-label summary built from its data', () => {
+  const words = { 'chart-line': 'Line chart', 'chart-bar': 'Stacked bar chart', 'chart-area': 'Area chart' };
+  for (const name of ['chart-line', 'chart-bar', 'chart-area']) {
+    const block = fx(name);
+    const s = block.snapshot;
+    const html = messageBodyHtml(msg([block]));
+    const label = attr(svgOf(html), /<svg[^>]*role="img"[^>]*aria-label="([^"]*)"/);
+    assert.ok(label.startsWith(`${words[name]} of `), `${name}: ${label}`);
+    for (const ser of s.series) {
+      assert.ok(label.includes(ser.label), `${name}: names ${ser.label}`);
+      const vals = ser.points.filter((p) => p && p.value !== null).map((p) => p.value);
+      assert.ok(label.includes(formatByUnit(Math.min(...vals), ser.unit)), `${name}: low of ${ser.label}`);
+      assert.ok(label.includes(formatByUnit(Math.max(...vals), ser.unit)), `${name}: high of ${ser.label}`);
+    }
+    assert.ok(label.includes(s.x[0].text) && label.includes(s.x.at(-1).text), `${name}: first and last x`);
+  }
+  const sc = fx('chart-scatter');
+  const sl = attr(svgOf(messageBodyHtml(msg([sc]))), /<svg[^>]*role="img"[^>]*aria-label="([^"]*)"/);
+  assert.ok(sl.startsWith(`Scatter chart of ${sc.snapshot.yLabel} against ${sc.snapshot.xLabel}`), sl);
+  assert.ok(sl.includes(`${sc.snapshot.points.length} points`), sl);
+  assert.ok(sl.includes(`${sc.snapshot.points.filter((p) => p.frontier).length} on the frontier`), sl);
+});
+
+test('the timeline is an ordered list with a summary, dates, labels and values', () => {
+  registered = new Map();
+  const block = fx('timeline');
+  const ev = block.snapshot.events;
+  const html = messageBodyHtml(msg([block]));
+  const label = attr(html, /<ol[^>]*aria-label="([^"]*)"/);
+  assert.ok(label.includes(`${ev.length} events`), label);
+  assert.ok(label.includes(formatByUnit(ev[0].date, 'date')) && label.includes(formatByUnit(ev.at(-1).date, 'date')), label);
+  const items = between(html, '<li[^>]*>', '</li>');
+  assert.equal(items.length, ev.length);
+  ev.forEach((e, i) => {
+    assert.match(items[i], new RegExp(`<time datetime="${e.date}">${esc(formatByUnit(e.date, 'date'))}</time>`));
+    assert.ok(strip(items[i]).includes(e.label), e.label);
+    if (e.value) assert.ok(strip(items[i]).includes(fmt(e.value)), `${e.label} value`);
+    else assert.doesNotMatch(items[i], /fx-fig/);
+  });
+});
+
+test('a Table toggle swaps in the same values as an accessible table', () => {
+  for (const name of DRAWN) {
+    registered = new Map();
+    const block = fx(name);
+    const s = block.snapshot;
+    const m = msg([block]);
+    let html = messageBodyHtml(m);
+    const ctl = `${m.id}:${block.id}:table`;
+    assert.match(html, new RegExp(`<button type="button"[^>]*aria-pressed="false"[^>]*data-blk-ctl="${ctl}"[^>]*>Table</button>`), name);
+    const chartKeys = new Set([...registered.keys()].filter((k) => k.startsWith(`blk:${m.id}:${block.id}:`)));
+    blockState(m.id, block.id).table = true;
+    html = messageBodyHtml(m);
+    assert.match(html, new RegExp(`aria-pressed="true"[^>]*data-blk-ctl="${ctl}"`), name);
+    assert.match(html, /<table class="h-blk-table">/, name);
+    assert.equal(svgOf(html), '', `${name}: the chart gives way to the table`);
+    assert.deepEqual(new Set(dataFigs(html)), chartKeys, `${name}: the table carries every value`);
+    if (s.series) {
+      assert.deepEqual(headers(html).slice(1), s.series.map((x) => x.label));
+      assert.deepEqual(column(html, 0), s.x.map((x) => x.text));
+      s.series.forEach((ser, j) => assert.deepEqual(column(html, j + 1), ser.points.map((p) => (p ? fmt(p) : 'Unavailable')), `${name} ${ser.label}`));
+    } else if (s.points) {
+      assert.deepEqual(headers(html).slice(1), [s.xLabel, s.yLabel]);
+      assert.deepEqual(column(html, 0), s.points.map((p) => p.label));
+      assert.deepEqual(column(html, 1), s.points.map((p) => fmt(p.x)));
+      assert.deepEqual(column(html, 2), s.points.map((p) => fmt(p.y)));
+    } else {
+      assert.deepEqual(column(html, 0), s.events.map((e) => formatByUnit(e.date, 'date')));
+      assert.deepEqual(column(html, 1), s.events.map((e) => e.label));
+      assert.deepEqual(column(html, 2), s.events.map((e) => (e.value ? fmt(e.value) : '')));
+    }
+  }
+});
+
+test('a missing point and an unavailable figure leave a gap in the line', () => {
+  const block = fx('chart-line');
+  const svg = svgOf(messageBodyHtml(msg([block])));
+  block.snapshot.series.forEach((ser, j) => {
+    // One run per stretch of points that have a value.
+    const has = ser.points.map((p) => !!p && p.value !== null);
+    const runs = has.filter((h, i) => h && (i === 0 || !has[i - 1])).length;
+    assert.ok(has.includes(false), `${ser.label} has a gap in the fixture`);
+    const d = attr(svg, new RegExp(`<path class="h-blk-ln[^"]*" data-s="${j}" d="([^"]*)"`));
+    assert.equal((d.match(/M/g) || []).length, runs, `${ser.label} draws as ${runs} runs`);
+  });
+});
+
+test('a timeline with no figures reads as of the day its block was built', () => {
+  const block = fx('timeline');
+  assert.doesNotMatch(messageBodyHtml(msg([block])), /As of /, 'a timeline with values has its figures as-of dates');
+  block.snapshot.events = block.snapshot.events.map(({ date, label }) => ({ date, label }));
+  const m = msg([block]);
+  const want = `As of ${formatByUnit(block.builtAt.slice(0, 10), 'date')}`;
+  const html = messageBodyHtml(m);
+  assert.ok(strip(html).includes(want), 'as of builtAt');
+  assert.equal(figKeys(html).length, 0);
+  blockState(m.id, block.id).table = true;
+  const table = messageBodyHtml(m);
+  assert.match(table, /<table class="h-blk-table">/);
+  assert.ok(strip(table).includes(want), 'the Table view keeps the as-of line');
+});
+
+test('bars stand on a zero baseline; the scatter draws its frontier and marks the current point', () => {
+  assert.match(svgOf(messageBodyHtml(msg([fx('chart-bar')]))), /class="h-blk-zero"/);
+  const sc = fx('chart-scatter');
+  const svg = svgOf(messageBodyHtml(msg([sc])));
+  const poly = attr(svg, /<polyline class="h-blk-front" points="([^"]*)"/);
+  assert.equal(poly.trim().split(/\s+/).length, sc.snapshot.points.filter((p) => p.frontier).length);
+  assert.equal((svg.match(/class="[^"]*h-blk-pt[^"]*\bcur\b/g) || []).length, sc.snapshot.points.filter((p) => p.current).length);
+});
+
+test('the plot is one tab stop and the live region reads the active point', () => {
+  const block = fx('chart-line');
+  const s = block.snapshot;
+  const m = msg([block]);
+  let html = messageBodyHtml(m);
+  assert.match(html, new RegExp(`<div class="h-blk-plot"[^>]*tabindex="0"[^>]*data-blk-ctl="${m.id}:${block.id}:plot"`));
+  assert.doesNotMatch(svgOf(html), /tabindex/, 'marks are not tab stops');
+  assert.match(html, /<p class="h-blk-read"[^>]*aria-live="polite"/);
+  blockState(m.id, block.id).at = { s: 1, i: 2 };
+  html = messageBodyHtml(m);
+  const read = strip(between(html, '<p class="h-blk-read"[^>]*>', '</p>')[0]);
+  assert.ok(read.includes(s.series[1].label) && read.includes(s.x[2].text) && read.includes(fmt(s.series[1].points[2])), read);
+  const sc = fx('chart-scatter');
+  const m2 = msg([sc]);
+  blockState(m2.id, sc.id).at = { s: 0, i: 4 };
+  const p = sc.snapshot.points[4];
+  const r2 = strip(between(messageBodyHtml(m2), '<p class="h-blk-read"[^>]*>', '</p>')[0]);
+  assert.ok(r2.includes(p.label) && r2.includes(fmt(p.x)) && r2.includes(fmt(p.y)), r2);
+});
+
+test('the plot is 200px tall up to 480px wide and at most 240px (16:9) above', () => {
+  const block = fx('chart-area');
+  const m = msg([block]);
+  const st = blockState(m.id, block.id);
+  for (const [w, h] of [[288, 200], [480, 200], [400, 200], [560, 240], [720, 240]]) {
+    st.w = w;
+    assert.match(svgOf(messageBodyHtml(m)), new RegExp(`viewBox="0 0 ${w} ${h}"`), `${w}px`);
+  }
+});
+
+test('series labels and titles are escaped', () => {
+  const block = fx('chart-line');
+  block.snapshot.series[0].label = '<img src=x onerror=alert(1)>';
+  const html = messageBodyHtml(msg([block]));
+  assert.ok(!html.includes('<img'));
+});
+
+test('niceTicks keeps design.js scale marks', () => {
+  assert.deepEqual(niceTicks(0, 95, 4), [0, 25, 50, 75, 100]);
+  assert.deepEqual(niceTicks(-120, 480, 4), [-200, 0, 200, 400, 600]);
+  assert.deepEqual(niceTicks(0.095, 0.207, 4), [0.05, 0.1, 0.15, 0.2, 0.25]);
 });

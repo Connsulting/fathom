@@ -230,7 +230,7 @@ test.describe('keys', () => {
   });
 
   // 9
-  const G = [['h', 'home'], ['p', 'plan'], ['d', 'wargame'], ['a', 'ask'], ['c', 'confirm'], ['k', 'packs'], ['f', 'add'], ['e', 'engine'], ['m', 'email'], ['n', 'connect']];
+  const G = [['h', 'home'], ['p', 'plan'], ['d', 'plan'], ['a', 'ask'], ['c', 'confirm'], ['k', 'packs'], ['f', 'add'], ['e', 'engine'], ['m', 'email'], ['n', 'connect']];
   test('every G sequence reaches its route', async ({ page }) => {
     for (const [k, route] of G) {
       await gotoRoute(page, 'goals');
