@@ -309,3 +309,30 @@ test('transactions.search names credit cards and categories, business.pnl names 
   assert.match(byName.get('business').description, /business/i);
   assert.deepEqual(REGISTRY.map(x => x.name), TOOL_NAMES.toSorted());
 });
+
+
+for (const [rule, names, pattern] of [
+  ['stored figures', ['household'], /call household\.figures[^\n]*\{f:key\}[^\n]*summary/i],
+  ['arithmetic', ['calculate'], /(?:call|use) calculate[^\n]*sum[^\n]*difference[^\n]*ratio[^\n]*change/i],
+  ['spending and purchases', ['spending', 'transactions'], /spending\.total[^\n]*spending[^\n]*transactions\.search[^\n]*recent purchases/i],
+  ['digits', ['calculate'], /write every figure as digits/i],
+]) {
+  test(`first-draft ${rule} steer reaches the prompt and offered descriptions once`, async t => {
+    const s = await cardStore(t);
+    const { calls } = await ask(s, [[{ text: 'The requested information is unavailable.' }]]);
+    const { system, tools } = calls[0];
+    assert.match(system, pattern);
+    assert.equal(system.split('\n').filter(line => pattern.test(line)).length, 1);
+    const descriptions = tools.filter(tool => names.includes(tool.name)).map(tool => tool.description).join(' ');
+    assert.match(descriptions, pattern);
+  });
+}
+
+test('correction provenance keeps the triggering kinds after a clean replacement without figures', async t => {
+  const s = await cardStore(t);
+  const { reply } = await ask(s, [[{ text: 'The total is forty dollars.' }], [{ text: 'The total is unavailable.' }]]);
+  assert.equal(reply.provenance.grounding.retried, true);
+  assert.deepEqual(reply.provenance.discipline, { violations: [], triggeredBy: ['figures.spelled_out'] });
+  const clean = await ask(s, [[{ text: 'The total is unavailable.' }]]);
+  assert.deepEqual(clean.reply.provenance.discipline, { violations: [], triggeredBy: [] });
+});
