@@ -236,13 +236,12 @@ test.describe('connect', () => {
     const tools = page.getByTestId('tool-row');
     const writeTool = tools.filter({ has: page.locator('code', { hasText: /^act_on_recommendation$/ }) });
     await expect(writeTool).toHaveCount(1);
-    await expect(writeTool).toContainText(/\bwrite\b/i);
-    for (const t of ['household', 'knowledge', 'knowledge', 'knowledge']) {
+    await expect(writeTool.locator('.cn-scope')).toHaveText('write');
+    for (const t of ['household', 'calculate', 'spending', 'transactions', 'knowledge']) {
       // Match the tool by its name element: descriptions may mention other tools by name.
       const r = tools.filter({ has: page.locator('code', { hasText: new RegExp(`^${t}$`) }) });
       await expect(r, `${t} tool row`).toHaveCount(1);
-      await expect(r).toContainText(/\bread\b/i);
-      await expect(r).not.toContainText(/\bwrite\b/i);
+      await expect(r.locator('.cn-scope')).toHaveText('read');
     }
   });
 

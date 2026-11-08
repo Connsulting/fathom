@@ -1,11 +1,8 @@
-import { usageCostUsd } from '../src/engine/pricing.mjs';
+import { estimateUnknownCost } from '../src/engine/pricing.mjs';
+import { SDK_RESPONSE_BOUND } from '../src/engine/index.mjs';
 
-// Eval admission is calibrated separately from fail-closed production accounting.
-export function estimateEvalCost({ model, maxTokens, system, messages, tools }) {
-  const definitions = tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
-  const bytes = Buffer.byteLength(JSON.stringify({ system, messages, tools: definitions }), 'utf8');
-  const inputTokens = Math.ceil(bytes / 3) + 1024;
-  const costUsd = usageCostUsd(model, { input_tokens: 0, output_tokens: maxTokens,
-    cache_creation_input_tokens: inputTokens });
-  return { costUsd, inputTokens, outputTokens: maxTokens };
+export function estimateEvalCost(request) {
+  const estimate = estimateUnknownCost(request);
+  // Ask uses the SDK runner, whose retries can bill multiple responses in one round.
+  return { ...estimate, costUsd: Number((estimate.costUsd * SDK_RESPONSE_BOUND).toFixed(12)) };
 }
