@@ -8,7 +8,7 @@
 //   sum: a figure over every matching row (not just the capped items), equal to the cell it opens from.
 //   Each item: amount (raw signed), value (counted: income as is, expenses negated) and fig (at value).
 
-import { ledgerDisplayName, ledgerKind, businessEntry, summaryPerson, accountEntityLink } from './ledgers.mjs';
+import { ledgerDisplayName, ledgerKind, businessEntry, summaryPerson, accountEntityLink, summaryTransfer, summaryIncomeAssumption } from './ledgers.mjs';
 import { normalizeName } from '../ingest/confirm.mjs';
 import { businessAccount } from '../categories/resolve.mjs';
 import {
@@ -80,13 +80,14 @@ function loadBusiness(db, clock) {
     const totals = new Map();
     for (const l of entityLines) totals.set(l.category, (totals.get(l.category) ?? 0) + l.amount);
     const lineSection = new Map([...totals].map(([c, s]) => [c, s > 0 ? 'income' : 'expenses']));
+    const inference = Array.isArray(listed) ? listed.find(e => canon(e.name).norm === canon(entityLines[0]?.entity || label).norm) : null;
     const byMonth = (rows, monthOf) => {
       const m = new Map();
       for (const r of rows) { const k = monthOf(r); if (!m.has(k)) m.set(k, []); m.get(k).push(r); }
       return m;
     };
     return {
-      key, label, kind, accounts: accountIds.map(accountRef), lines: entityLines, txns, lineSection,
+      key, label, kind, accounts: accountIds.map(accountRef), lines: entityLines, txns, lineSection, inference,
       ...(['spending', 'income_history'].includes(kind) ? { person: summaryPerson({ name: entityLines[0]?.entity || label, displayName: label }, ledgerFacts)?.person ?? (kind === 'income_history' ? 'owner' : null) } : {}),
       linesByMonth: byMonth(entityLines, (l) => l.period), txnsByMonth: byMonth(txns, (t) => t.date.slice(0, 7)),
     };
@@ -165,8 +166,15 @@ function analyze(entity, months, resolved) {
   for (const pm of perMonth) {
     if (pm.source === 'workbook') {
       for (const l of pm.lines) {
+        if (entity.kind === 'spending' && summaryTransfer(l)) {
+          if (!left.has('transfer')) left.set('transfer', []);
+          left.get('transfer').push({ ...lineRow(l), value: -l.amount, category: l.category });
+          continue;
+        }
         const section = entity.lineSection.get(l.category);
-        put(section, l.category, pm.month, { ...lineRow(l), value: section === 'income' ? l.amount : -l.amount, section });
+        const incomeAssumption = entity.kind === 'spending' ? summaryIncomeAssumption(entity.inference, l.category) : null;
+        put(section, l.category, pm.month, { ...lineRow(l), value: section === 'income' ? l.amount : -l.amount, section,
+          ...(incomeAssumption ? { incomeAssumption } : {}) });
       }
     } else if (pm.source === 'transactions') {
       for (const t of pm.txns) {
@@ -356,7 +364,7 @@ export function businessPnl({ db, entity, from, to, clock } = {}) {
     : `${runsLabel(wbMonths)} ${use(wbMonths)} the imported workbook.`);
   if (txMonths.length) notes.push(`${runsLabel(txMonths)} ${use(txMonths)} categorized business transactions.`);
   if (!wbMonths.length && !txMonths.length) notes.push(`There is no business data for ${span}.`);
-  if (leftOut.length) notes.push(`${leftOut.map((l) => l.label).join(', ')} on the business accounts are left out.`);
+  if (leftOut.length) notes.push(`${leftOut.map((l) => l.label).join(', ')} in this ledger are left out.`);
   if (uncategorized.rows) notes.push('Uncategorized outflows count as expenses until they are categorized.');
 
   return {

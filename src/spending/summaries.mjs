@@ -1,4 +1,4 @@
-import { ledgerKind, ledgerDisplayName, summaryPerson, personalIncomeCategory, payrollIncomeCategory } from '../pnl/ledgers.mjs';
+import { ledgerKind, ledgerDisplayName, summaryPerson, personalIncomeCategory, payrollIncomeCategory, summaryTransfer, summaryIncomeAssumption } from '../pnl/ledgers.mjs';
 import { resolveCategories, spendingAccount, sourceBucket } from '../categories/resolve.mjs';
 import { ownerOf, resolveEntities, isOfficer } from '../jobs/planner/data.mjs';
 import { payrollRecords } from '../jobs/planner/payroll.mjs';
@@ -24,14 +24,17 @@ export function personalSummaryInput(data, facts, categoryInput) {
     if (Array.isArray(facts['business.entities']) && facts['business.entities'].some(e => !e.inferred && e.type && e.type !== 'personal' && names.has(normalizeName(e.name)))) continue;
     const attribution = summaryPerson({ name, displayName: ledgerDisplayName(rows[0]), lines: rows }, facts);
     if (!attribution) continue;
+    const entry = (facts['business.entities'] || []).find(e => names.has(normalizeName(e.name)));
     for (const line of rows) {
       if (!Number.isFinite(line.amount) || line.period > data.clock.slice(0, 7)) continue;
-      const income = personalIncomeCategory(line.category);
+      const transfer = summaryTransfer(line);
+      const incomeAssumption = transfer ? null : summaryIncomeAssumption(entry, line.category);
+      const income = !transfer && (personalIncomeCategory(line.category) || !!incomeAssumption);
       const locator = typeof line.locator === 'string' ? parseJson(line.locator, {}) : line.locator;
       lines.push({ ...line, id: `summary:${line.id}`, sourceId: line.id, sourceTable: 'pnl_lines',
-        person: attribution.person, date: monthEnd(line.period), bucket: income ? 'income' : sourceBucket('aggregator', line.category) || 'household',
+        person: attribution.person, date: monthEnd(line.period), bucket: transfer ? 'transfer' : income ? 'income' : sourceBucket('aggregator', line.category) || 'household',
         layer: 'summary', sheet: locator?.sheet || ledgerDisplayName(line), fileId: line.file_id, account_id: null,
-        description: ledgerDisplayName(line), income });
+        description: ledgerDisplayName(line), income, ...(incomeAssumption ? { incomeAssumption } : {}) });
     }
   }
   const people = new Set(lines.filter(l => payrollIncomeCategory(l.category)).map(l => l.person));
