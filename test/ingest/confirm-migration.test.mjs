@@ -173,6 +173,12 @@ test('migrate applies the confirm-context migration, creates exactly its four ta
   later.accounts = later.accounts.map((s) => {
     const row = JSON.parse(s);
     if (row.display_name == null) delete row.display_name;
+    if (row.archived_at == null) delete row.archived_at;
+    return JSON.stringify(row);
+  });
+  later.files = later.files.map((s) => {
+    const row = JSON.parse(s);
+    if (row.removed_at == null) delete row.removed_at;
     return JSON.stringify(row);
   });
   assert.deepEqual(later, before, 'later migrations keep every stored row');

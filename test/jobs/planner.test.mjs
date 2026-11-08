@@ -84,7 +84,7 @@ function household() {
 }
 
 const EXPECTED_ACTIVE = [
-  'backdoor-roth', 'charitable-bunching', 'fed-q4-estimate', 'hsa-room', 'invoice-deferral', 'missing-data', 'new-child',
+  'backdoor-roth', 'charitable-bunching', 'fed-q4-estimate', 'hsa-room', 'invoice-deferral', 'new-child',
   'scorp-salary', 'solo401k-setup', 'va-q4-estimate', 'va529', 'year-end-retirement',
 ];
 
@@ -549,11 +549,9 @@ function lastStatusEvent(db, id) {
 }
 
 describe('recs', () => {
-  // missing-data fires because the College 529 account's last data is its March inflow: stale under
-  // the shared rule (src/ingest/coverage.mjs sourceStates), the same account Home's Cash card counts.
-  test('AC4: the synthetic household gets exactly the expected recs; dependent-care-fsa does not fire', () => {
+  test('AC4: the synthetic household gets exactly the expected recs; dependent-care-fsa and missing-data do not fire', () => {
     assert.deepEqual(activeRecIds(base), EXPECTED_ACTIVE);
-    for (const id of ['dependent-care-fsa']) assert.equal(recRow(base, id), null, `${id} has no rec`);
+    for (const id of ['dependent-care-fsa', 'missing-data']) assert.equal(recRow(base, id), null, `${id} has no rec`);
     for (const id of EXPECTED_ACTIVE) {
       const r = recRow(base, id);
       assert.equal(r.status, 'proposed', `${id} starts proposed`);
@@ -720,11 +718,8 @@ describe('recs', () => {
     await plan(db, { now: '2027-01-10' });
     assert.ok(activeRecIds(db).includes('missing-data'));
     assert.equal(recRow(db, 'missing-data').def.domain, 'data');
-    // liveness: at the November clock, with the one stale account (the 529) archived, it does not fire
-    const quiet = await S.store();
-    quiet.prepare("UPDATE accounts SET archived_at = '2026-11-01T00:00:00.000Z' WHERE kind = '529'").run();
-    await plan(quiet);
-    assert.ok(!activeRecIds(quiet).includes('missing-data'));
+    // liveness: the same data at the November clock does not fire it
+    assert.ok(!activeRecIds(base).includes('missing-data'));
   });
 
   test('AC4: an empty real store plans cleanly: only missing-data fires and no figures are written', async () => {
