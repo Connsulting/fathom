@@ -17,3 +17,17 @@ export class ModelCallError extends Error {
 export class ModelAccountingError extends Error {
   constructor() { super('Model cost is incomplete; this engine refuses further calls'); this.name = 'ModelAccountingError'; }
 }
+
+// A live round the instance does not fund (no instance model cap).
+export function fundingUnavailable() {
+  const error = new ModelCallError('Model calls are not funded on this instance');
+  error.code = 'funding_unavailable';
+  return error;
+}
+
+// An engine refusal carrying a fixed code (household_unavailable, authorization_revoked, accounting_hold,
+// accounting_unrecorded).
+export function withCode(error, code) {
+  error.code = code;
+  return error;
+}

@@ -15,9 +15,14 @@
 // `mode` is the original household's mode (instance mode: demo or real). Financial stores are
 // opened per household by src/platform/runtime.mjs openHouseholdDb.
 // Refusals are StartupError with a fixed `.code` that also leads the message; no path or value.
+//
+// openOperatorPlatform(env) -> the opened, migrated platform.sqlite of FATHOM_DATA (default
+// ./data) for an OS-operator command that touches only the platform (scripts/operator.mjs,
+// scripts/model-budget.mjs, scripts/reconcile-spend.mjs). Refuses while either migration lock
+// exists and platform_migration_required without a platform. The caller closes it.
 
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { readStoreMode, DB_FILE } from '../store/db.mjs';
 import { PLATFORM_FILE, LOCK_FILE, householdRootRel, openPlatform, servedHousehold, storeIdentity } from './db.mjs';
@@ -97,6 +102,15 @@ export function openInstance(config) {
 
 
 // Columns scripts/category-eval.mjs reads; a store without them refuses store_schema_required.
+export function openOperatorPlatform(env = process.env) {
+  const dataDir = resolve(env.FATHOM_DATA == null || env.FATHOM_DATA === '' ? 'data' : env.FATHOM_DATA);
+  if (existsSync(join(dataDir, LOCK_FILE))) throw refuse('platform_migration_in_progress');
+  if (existsSync(join(dataDir, TENANCY_LOCK_FILE))) throw refuse('tenancy_migration_in_progress');
+  const file = join(dataDir, PLATFORM_FILE);
+  if (!existsSync(file)) throw refuse('platform_migration_required');
+  return openPlatform(file);
+}
+
 const EVAL_COLUMNS = Object.freeze({
   transactions: ['id', 'account_id', 'date', 'amount', 'description', 'category', 'parser'],
   accounts: ['id', 'kind', 'mask'],

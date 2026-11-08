@@ -151,27 +151,79 @@ export function wireSchema(schema) {
   return out;
 }
 
-export async function messagesRound({ credential, system, systemDynamic, messages, maxTokens, model, schema, timeoutMs = 120000 }) {
-  const client = new Anthropic({ apiKey: credential.value, authToken: null,
-    baseURL: 'https://api.anthropic.com', maxRetries: 0, timeout: timeoutMs });
-  let response;
+// The only production endpoint. A loopback base URL comes only from createEngine's programmatic
+// testTransport option (tests); no config or environment key sets one.
+export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
+
+const messagesClient = (credential, baseURL, timeoutMs = 120000) => new Anthropic({ apiKey: credential.value, authToken: null,
+  baseURL, maxRetries: 0, timeout: timeoutMs });
+
+// An HTTP error response means the API rejected the request without generating, so its cost is a
+// known zero. Only failures with no response (network, timeout) keep the conservative unknown path.
+async function createMessage(client, body, { model, registry }) {
   try {
-    response = await client.messages.create({ model, max_tokens: maxTokens,
-      system: [{ type: 'text', text: system || 'Extract only documented rows.', cache_control: { type: 'ephemeral' } },
-        ...(systemDynamic ? [{ type: 'text', text: systemDynamic }] : [])],
-      messages, output_config: { effort: 'low', format: { type: 'json_schema', schema: wireSchema(schema) } } });
+    return { response: await client.messages.create(body) };
   } catch (error) {
-    // An HTTP error response means the API rejected the request without generating, so its cost is a
-    // known zero. Only failures with no response (network, timeout) keep the conservative unknown path.
     if (error instanceof Anthropic.APIError && Number.isInteger(error.status)) {
-      return { text: '', content: [], tokens: {}, costUsd: 0, model, status: 'api_error', is_error: true,
-        api_error_status: error.status, details: {}, toolResults: [] };
+      return { round: { text: '', content: [], tokens: {}, costUsd: 0, model, status: 'api_error', is_error: true,
+        api_error_status: error.status, details: {}, toolResults: registry?.results ?? [] } };
     }
     throw error;
   }
-  let costUsd;
-  try { costUsd = usageCostUsd(response.model, response.usage); } catch { costUsd = undefined; }
-  return { text: response.content.filter(block => block.type === 'text').map(block => block.text).join(''),
-    content: response.content, tokens: response.usage, costUsd, model: response.model,
+}
+
+function pricedUsage(model, usage) {
+  try { return usageCostUsd(model, usage); } catch { return undefined; }
+}
+
+const textOf = content => content.filter(block => block.type === 'text').map(block => block.text).join('');
+
+export async function messagesRound({ credential, system, systemDynamic, messages, maxTokens, model, schema, baseURL = ANTHROPIC_BASE_URL,
+  timeoutMs = 120000 }) {
+  const { response, round } = await createMessage(messagesClient(credential, baseURL, timeoutMs), { model, max_tokens: maxTokens,
+    system: [{ type: 'text', text: system || 'Extract only documented rows.', cache_control: { type: 'ephemeral' } },
+      ...(systemDynamic ? [{ type: 'text', text: systemDynamic }] : [])],
+    messages, output_config: { effort: 'low', ...(schema ? { format: { type: 'json_schema', schema: wireSchema(schema) } } : {}) } }, { model });
+  if (round) return round;
+  const costUsd = pricedUsage(response.model, response.usage);
+  return { text: textOf(response.content), content: response.content, tokens: response.usage, costUsd, model: response.model,
     status: response.stop_reason === 'end_turn' ? 'success' : response.stop_reason, details: {}, toolResults: [] };
+}
+
+// The engine transcript on the Messages API wire: a { role: 'tool' } entry becomes the user turn of
+// tool_result blocks answering the previous assistant turn's tool_use blocks.
+export function wireMessages(messages) {
+  return messages.map((message, i) => {
+    if (message.role !== 'tool') return message;
+    const uses = messages[i - 1].content.filter(block => block.type === 'tool_use');
+    return { role: 'user', content: uses.map((use, index) => ({ type: 'tool_result', tool_use_id: use.id,
+      content: JSON.stringify(message.content[index]?.result ?? null), is_error: message.content[index]?.isError === true })) };
+  });
+}
+
+// One chat or job round on the Messages API with the registry's offered tools (the testTransport
+// path; production chat and job rounds run on the SDK). Tool calls run through the registry, so a
+// round that ran tools returns status 'error_max_turns' like an SDK round ending at its turn limit.
+export async function messagesToolRound({ credential, system, systemDynamic, messages, tools = [], maxTokens, model, registry, onEvent,
+  baseURL = ANTHROPIC_BASE_URL }) {
+  const offered = tools.filter(tool => registry.names.includes(tool.name));
+  const { response, round } = await createMessage(messagesClient(credential, baseURL), { model, max_tokens: maxTokens,
+    system: [{ type: 'text', text: system || 'Answer from the supplied context.', cache_control: { type: 'ephemeral' } },
+      ...(systemDynamic ? [{ type: 'text', text: systemDynamic }] : [])],
+    messages: wireMessages(messages),
+    ...(offered.length ? { tools: offered.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema })) } : {}) },
+  { model, registry });
+  if (round) return round;
+  for (const block of response.content) {
+    if (block.type === 'tool_use') {
+      try { onEvent?.({ type: 'tool', name: block.name }); } catch { /* listeners never fail a round */ }
+      await registry.invoke(block.name, block.input ?? {});
+    } else if (block.type === 'text') {
+      try { onEvent?.({ type: 'text', text: block.text }); } catch { /* listeners never fail a round */ }
+    }
+  }
+  const costUsd = pricedUsage(response.model, response.usage);
+  return { text: textOf(response.content), content: response.content, tokens: response.usage, costUsd, model: response.model,
+    status: registry.results.length ? 'error_max_turns' : 'success', is_error: false, api_error_status: null,
+    accountingUnknown: costUsd === undefined, details: { maxTokens }, toolResults: registry.results };
 }
