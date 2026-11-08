@@ -4,6 +4,8 @@
 import { ADVISOR_KEYS } from '../../facts/derive.mjs';
 import { looksLikeSpending, spendingStatement } from '../../pnl/ledgers.mjs';
 import { addDays } from '../planner/data.mjs';
+import { confirmItemFor } from '../../shared/rec-steps.mjs';
+import { staleAccountIds } from '../../../web/core/account-freshness.js';
 import { dataText, confirmTask, ANSWER_SHAPES, questionFor } from './common.mjs';
 
 export const id = 'missing-data';
@@ -136,11 +138,13 @@ export function reasonText(ctx, code) {
 export function items(ctx) {
   const out = [];
   const business = BUSINESS_FACTS.some(k => ctx.facts[k] === true);
+  const stale = staleAccountIds(ctx.data?.accounts ?? []);
   for (const s of ctx.freshness || []) {
     if (s.state === 'current') continue;
     if ((s.id === 'pnl' || s.id === 'tax_payments') && !business) continue;
     out.push({
       code: s.id, tax: TAX_CODES.has(s.id),
+      ...(['balances', 'transactions'].includes(s.id) ? { accountIds: stale } : {}),
       text: s.state === 'missing' ? `${s.label}: nothing uploaded yet.` : `${s.label}: out of date.`,
       task: `Upload the latest ${s.label.toLowerCase()}`, kind: 'upload', link: 'upload', noun: `the latest ${s.label.toLowerCase()}`,
     });
@@ -171,7 +175,8 @@ export function evaluate(ctx) {
   const factFor = { va529_answers_missing: 'accounts.va529', retirement_other_deferrals_missing: 'retirement.otherPlanDeferrals', deferral_split_unknown: 'retirement.otherPlanDeferrals', va_itemized_missing: 'tax.vaItemizedEstimate', filing_status_assumed: 'household.filingStatus' };
   const list = items(ctx).map(i => {
     const answerKey = factFor[i.code] || (Object.hasOwn(ANSWER_SHAPES, i.code) ? i.code : null);
-    return { ...i, answerKey, ...(answerKey ? { kind: 'question', link: 'ask' } : {}) };
+    const confirmId = /\bin Confirm$/.test(i.task) ? confirmItemFor(i.code, ctx.data?.confirm)?.id : null;
+    return { ...i, answerKey, ...(confirmId ? { confirmId } : {}), ...(answerKey ? { kind: 'question', link: 'ask' } : {}) };
   }).filter(i => (!i.answerKey || !ctx.questionKeys?.has(i.answerKey)) && (!i.answerKey || !questionFor([i.answerKey], { accounts: ctx.data?.accounts || [], facts: ctx.facts }).answered));
   if (!list.length) return null;
   const questions = [...new Set(list.map(i => i.answerKey).filter(Boolean))];
@@ -209,7 +214,7 @@ export function listTitle(list) {
 export function stepOf(i) {
   if (i.answerKey) return { t: i.task, kind: 'answer', fact: i.answerKey };
   if (i.kind === 'upload') return { t: i.task, kind: 'upload', code: i.code, noun: i.noun, link: 'upload' };
-  if (/\bin Confirm$/.test(i.task)) return { t: i.task, kind: 'confirm', code: i.code, link: 'confirm' };
+  if (/\bin Confirm$/.test(i.task)) return { t: i.task, kind: 'confirm', code: i.code, link: i.confirmId ? 'confirm' : 'ask', ...(i.confirmId ? { confirmId: i.confirmId } : {}) };
   if (i.code.startsWith('entity_unclassified:')) return { t: i.task, kind: 'classify', code: i.code, link: 'ask' };
   return { t: i.task, kind: i.kind === 'question' ? 'answer' : 'review', code: i.code, link: 'ask' };
 }
@@ -227,7 +232,7 @@ export function build(ctx, hit) {
 
 export function template(ctx, hit) {
   return {
-    summary: `${listTitle(hit.items)} so the parts of your plan that are on hold can update.`,
+    summary: 'Update the missing data so the parts of your plan that are on hold can update.',
     why: hit.items.slice(0, 4).map(i => i.text),
     qa: [{ q: 'What happens to recommendations in the meantime?', a: ['They keep their last figures and wait for the data. Nothing is retired because a file is late.'] }],
   };

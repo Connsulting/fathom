@@ -412,6 +412,8 @@ export function ingestScreens(h) {
       if (dk.cur != null && !unitOpen(dk, dk.cur)) dk.cur = nextOpen(dk, dk.cur);
     }
     if (dk.cur == null && added.length) dk.cur = added[0];
+    const target = String(api.route?.params?.id ?? '');
+    if (entering && pset.has(target)) dk.cur = unitOf(dk, target);
     return dk;
   }
 

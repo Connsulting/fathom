@@ -50,11 +50,15 @@ test('an upload step completes itself when the file lands and stays listed as do
   assert.ok(balances && balances.kind === 'upload' && balances.auto && !balances.done, JSON.stringify(rec.tasks));
   const i = rec.tasks.indexOf(balances);
   assert.throws(() => writeRec(db, 'missing-data', 'step', { index: i, checked: true }, { now: LATE }), /completes itself/);
-  // The upload lands: a balance as of yesterday makes the balances source current.
+  // Updating one account cannot clear a step while the others are stale.
   db.prepare('UPDATE balances SET date = ? WHERE id = (SELECT max(id) FROM balances)').run('2026-12-27');
   await planRun(db, { now: LATE });
   rec = missingOf(buildScenario(db, { clock: LATE }));
   assert.ok(rec, 'other sources are still stale');
+  assert.equal(rec.tasks.find(t => t.code === 'balances').done, false);
+  db.prepare("INSERT INTO balances (account_id, date, amount) SELECT id, '2026-12-27', 100 FROM accounts WHERE archived_at IS NULL ON CONFLICT(account_id, date) DO NOTHING").run();
+  await planRun(db, { now: LATE });
+  rec = missingOf(buildScenario(db, { clock: LATE }));
   const after = rec.tasks.find(t => t.code === 'balances');
   assert.ok(after, 'the cleared step is still listed');
   assert.equal(after.done, true);

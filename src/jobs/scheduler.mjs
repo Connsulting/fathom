@@ -236,6 +236,7 @@ export function createScheduler({
   const byId = new Map(handled.map((j) => [j.id, j]));
   const fixed = config && isIsoDate(config.clock) ? config.clock : null;
   const running = new Set();
+  const lockRefusals = new Map();
   // Triggers that arrived while their job was running: jobId -> reason, coalesced to one rerun.
   const pending = new Map();
   // Promises of executions in flight, awaited by stop().
@@ -277,6 +278,15 @@ export function createScheduler({
     return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
   }
 
+  function lockRefused(jobId) {
+    const id = household()?.householdId ?? holder;
+    if (!lockRefusals.has(id)) lockRefusals.set(id, new Set());
+    const jobs = lockRefusals.get(id);
+    if (jobs.has(jobId)) return;
+    jobs.add(jobId);
+    log.info?.(`fathom: job ${jobId} locked`, { householdId: id });
+  }
+
   function lease(t) {
     const iso = t.toISOString();
     return !!q.take.get(holder, new Date(t.getTime() + leaseMs).toISOString(), iso);
@@ -309,7 +319,7 @@ export function createScheduler({
     const p = dispatcher.run(captured?.householdId ?? holder, () => {
       if (stopping) throw new SchedulerError('locked');
       if (allowed() !== true) throw new SchedulerError('paused');
-      if (!lease(at())) throw new SchedulerError('locked');
+      if (!lease(at())) { lockRefused(job.id); throw new SchedulerError('locked'); }
       executing++;
       return executeOnce(job, { ...opts, household: captured }).finally(() => {
         if (--executing === 0) stopRenewing();
@@ -368,7 +378,10 @@ export function createScheduler({
     const t = at();
     if (allowed() !== true) return;
     ensureJobs(t);
-    if (!lease(t)) return;
+    if (!lease(t)) {
+      for (const job of handled) if (!running.has(job.id)) lockRefused(job.id);
+      return;
+    }
     const zone = tz();
     for (const job of handled) {
       if (stopping) break;
@@ -377,6 +390,7 @@ export function createScheduler({
         await execute(job, { key: periodKey(job.schedule, partsAt(t, zone)), trigger: 'scheduled', t, zone });
       } catch (e) {
         if (e instanceof SchedulerError && e.code === 'paused') break;
+        if (e instanceof SchedulerError && e.code === 'locked') continue;
         log.log(`fathom: job ${job.id} error store`);
       }
     }
@@ -394,7 +408,8 @@ export function createScheduler({
     if (running.has(jobId)) throw new SchedulerError('running');
     const t = at();
     if (allowed() !== true) throw new SchedulerError('paused');
-    if (stopping || !lease(t)) throw new SchedulerError('locked');
+    if (stopping) throw new SchedulerError('locked');
+    if (!lease(t)) { lockRefused(jobId); throw new SchedulerError('locked'); }
     ensureJobs(t);
     const zone = tz();
     const base = `${reason}:${t.toISOString()}`;

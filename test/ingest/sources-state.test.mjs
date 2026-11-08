@@ -51,10 +51,11 @@ const accountOfFile = (s, file) => one(s.db, `SELECT a.* FROM accounts a WHERE a
   UNION SELECT account_id FROM positions WHERE file_id = ?)`, file.id, file.id, file.id);
 
 // A live SimpleFIN connection with `accountId` mapped to it, written the way the sync records a
-// mapping. No new rows: a synced account with no recent activity is still current.
+// mapping and newest balance from a successful sync.
 function connect(db, accountId) {
   db.prepare("INSERT OR IGNORE INTO simplefin_connection (id, access_blob, connected_at) VALUES (1, 'synthetic', ?)").run(NOW);
   db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at) VALUES (?, ?, 'mapped', 'Synthetic', ?)").run(`sf-${accountId}`, accountId, NOW);
+  db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, 100)').run(accountId, '2032-08-31');
 }
 const disconnect = (db) => db.prepare('DELETE FROM simplefin_connection').run();
 
@@ -135,11 +136,11 @@ test('a file source whose accounts a live SimpleFIN connection covers is history
   assert.notEqual(c.planner('transactions'), 'stale', 'the missing-data rec does not ask for a fresh export');
   assert.ok(!c.state.sources.some((x) => x.state === 'covered'), 'covered is gone; history replaces it');
 
-  // A disconnected bridge covers nothing, though its mapping stays.
+  // Disconnecting keeps the balance already received; the older export is history.
   disconnect(s.db);
   c = assertAgree(s.db, OLD_CLOCK);
-  assert.equal(c.source(file.source_id).state, 'stale');
-  assert.equal(c.ingestAccount(acct.id), 'stale');
+  assert.equal(c.source(file.source_id).state, 'history');
+  assert.equal(c.ingestAccount(acct.id), 'fresh');
 }));
 
 test('an account with no newer source and old data is stale in every caller; a covered one beside it is not', () => withStore(async (s) => {

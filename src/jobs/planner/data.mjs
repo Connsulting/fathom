@@ -14,6 +14,7 @@ import { accountNaming } from '../../accounts/naming.mjs';
 import { addDays, daysBetween } from '../../scenario/build.mjs';
 import { monthEnd } from '../../ingest/format.mjs';
 import { ledgerDisplayName, ledgerKind } from '../../pnl/ledgers.mjs';
+import { staleAccountIds } from '../../../web/core/account-freshness.js';
 import { connectedThrough, sourceStates } from '../../ingest/coverage.mjs';
 import { OWNER_OPTIONS, normalizeName } from '../../ingest/confirm.mjs';
 
@@ -82,7 +83,7 @@ export function ownerOf(value) {
   return option ? option.id : null;
 }
 
-const CONFIRM_KINDS = ['employer_recipient', 'document_recipient', 'withholding_conflict', 'employer_relation', 'tax_year'];
+const CONFIRM_KINDS = ['employer_recipient', 'document_recipient', 'withholding_conflict', 'employer_relation', 'tax_year', 'fact_check'];
 
 // An owner fact's value (any src but the planner's own), or undefined.
 function ownerFact(db, key) {
@@ -107,6 +108,7 @@ export function loadPlanningData(db, clock) {
   const householdNames = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {};
   const holders = new Map(db.prepare('SELECT account_id, holder FROM account_holders').all().map((r) => [r.account_id, r.holder]));
   const naming = accountNaming(db);
+  const accountStates = sourceStates(db, clock).accounts;
   const accounts = db.prepare('SELECT * FROM accounts WHERE archived_at IS NULL ORDER BY sort, id').all().map(a => {
     const kind = String(a.kind || '').toLowerCase();
     const stated = typeof byAccount[a.id] === 'string' && byAccount[a.id].trim() ? byAccount[a.id].trim() : null;
@@ -114,7 +116,7 @@ export function loadPlanningData(db, clock) {
       id: a.id, inst: a.inst, mask: a.mask, name: a.name || '', display_name: a.display_name || null,
       holder: holders.get(a.id) || null, householdNames, ...naming.hint(a.id), owner: ownerOf(a.owner), kind,
       fileId: a.file_id, entity: stated ?? (kind === 'business' && businessNames.length === 1 ? businessNames[0] : null),
-      latest: latestBalance(db, a.id, clock),
+      latest: latestBalance(db, a.id, clock), fresh: accountStates.get(a.id)?.state ?? 'unknown',
     };
   });
 
@@ -134,7 +136,7 @@ export function loadPlanningData(db, clock) {
 
   return {
     clock, year, taxYear, accounts, pnl, taxPayments, taxPaymentsNext, withholding, documents, transactions, files,
-    confirm, conflictArchive, aliases, freshness: freshness(db, clock),
+    confirm, conflictArchive, aliases, freshness: freshness(db, clock, accounts),
   };
 }
 
@@ -161,7 +163,7 @@ export const SOURCE_LABELS = Object.freeze({
   tax_payments: 'Estimated tax payment log',
 });
 
-function freshness(db, clock) {
+function freshness(db, clock, accounts) {
   const one = sql => (db.prepare(sql).get(clock) || {}).d || null;
   const bal = one('SELECT max(date) AS d FROM balances WHERE date <= ?');
   const pos = one('SELECT max(as_of) AS d FROM positions WHERE as_of <= ?');
@@ -173,16 +175,14 @@ function freshness(db, clock) {
     pnl: period ? monthEnd(period) : null,
     tax_payments: one('SELECT max(date) AS d FROM tax_payments WHERE date <= ?'),
   };
-  // With ingest accounts, balances and transactions are stale only when an active account is
-  // stale under the shared rule (coverage.mjs), the accounts the Cash card counts: an archived,
-  // connected or covered account never asks for a fresh export.
-  const accounts = [...sourceStates(db, clock).accounts.values()];
-  const anyStale = accounts.some(a => a.state === 'stale');
+  const stale = staleAccountIds(accounts);
+  const tracked = sourceStates(db, clock).accounts.size > 0;
   return Object.entries(latest).map(([id, date]) => {
     let state = 'current';
     if (!date) state = 'missing';
+    else if (tracked && ['balances', 'transactions'].includes(id)) state = stale.length ? 'stale' : 'current';
     else if (id === 'tax_payments') state = date < lastInstallmentDue(clock) ? 'stale' : 'current';
-    else if (daysBetween(date, clock) > STALE_DAYS && !(accounts.length && ['balances', 'transactions'].includes(id) && !anyStale)) state = 'stale';
+    else if (daysBetween(date, clock) > STALE_DAYS) state = 'stale';
     return { id, label: SOURCE_LABELS[id], latest: date, state };
   });
 }
