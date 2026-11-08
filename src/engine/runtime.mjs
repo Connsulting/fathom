@@ -3,7 +3,10 @@
 // settings.engine.on and allowed() (either false throws EngineOffError; a paused household behaves
 // as engine off in every mode) and settings.cap.usd (default 200), rebuilding the inner engine when
 // the cap changes; the inner engine re-checks allowed() and, in live mode, funded() before every
-// round. Once any call throws ModelAccountingError the runtime refuses every further call. The live
+// round. Outside live mode, once any call throws ModelAccountingError the runtime refuses every
+// further call; in live mode only an engine that could not record a round in the platform ledger
+// (ModelAccountingError code accounting_unrecorded) latches, and a held round refuses through the
+// platform hold until it is reconciled (see below). The live
 // credential is read exactly once, by init(), from config.claudeCredentialFile. credentialState is
 // 'loaded', 'failed' or 'none' (fake and off modes never read it). After a failure every live call
 // rejects with ModelCallError('engine credential unavailable') and the file is never read again.
@@ -15,17 +18,21 @@
 // Live mode needs the platform reservation ledger (MT-05; src/platform/model-budget.mjs):
 // { platform, householdId, generation } (else TypeError; there is no unreserved live path), with
 // fundingNow() (epoch ms, default Date.now) choosing the actual UTC funding month and
-// testTransport passed through to createEngine (programmatic only, tests). Every round reserves
+// testTransport passed through to createEngine (programmatic only, tests). At construction the
+// household's carry row for the current funding month is recorded (ensureCarry) when it has
+// pre-MT-05 spend, so that spend counts against the instance cap before it ever reserves. Every round reserves
 // with adminCapUsd = settings.cap.usd, legacySpendUsd = the funding month's spend_ledger rows with
 // no round_id (carried once per month) and the AsyncLocalStorage principal of the request. Before
 // each reserve and in status() the household's final platform rounds of the funding month are
 // mirrored into spend_ledger by round_id (idempotent). Live status(): capUsd = min(settings cap,
 // allocation), spentUsd = the platform committed spend of the funding month; isOn() is also false
-// while the household has a held round.
+// while the household has a held round. A round held by this engine (unknown cost or over its
+// reservation) throws ModelAccountingError without latching: the platform hold is the authority,
+// so once node scripts/reconcile-spend.mjs settles it the same engine admits the next call.
 
 import { getSetting } from '../store/db.mjs';
 import { createEngine, loadCredential, EngineOffError, ModelAccountingError, ModelCallError } from './index.mjs';
-import { createModelLedger, currentPrincipal, fundingMonth } from '../platform/model-budget.mjs';
+import { createModelLedger, currentPrincipal, ensureCarry, fundingMonth } from '../platform/model-budget.mjs';
 
 export const DEFAULT_CAP_USD = 200;
 const MONTH = /^(\d{4})-?(\d{2})$/;
@@ -83,6 +90,12 @@ export function createRuntimeEngine({ db, config = {}, now, allowed = () => true
   const ledger = createSpendLedger(db);
   const platformLedger = mode === 'live' ? createModelLedger(platform, { householdId, generation, now: fundingNow }) : null;
   const month = () => fundingMonth(fundingNow());
+  // A zero carry is left to the first reserve, so it is never frozen ahead of the month's rows.
+  if (platformLedger) {
+    const at = fundingNow();
+    const legacySpendUsd = ledger.legacySpendUsd(fundingMonth(at));
+    if (legacySpendUsd > 0) ensureCarry(platform, { householdId, month: fundingMonth(at), legacySpendUsd, now: at });
+  }
   // Mirror this household's final platform rounds of the funding month into spend_ledger.
   function syncMirror() {
     for (const row of platformLedger.rounds(month())) {
@@ -139,8 +152,10 @@ export function createRuntimeEngine({ db, config = {}, now, allowed = () => true
     try {
       return await fn(await engine());
     } catch (error) {
-      // A platform accounting hold refuses while it lasts; only this engine's own failure latches.
-      if (error instanceof ModelAccountingError && error.code !== 'accounting_hold') refused = true;
+      // Live: a platform hold refuses while it lasts; only a round this engine could not record
+      // latches. Fake and off: any accounting failure latches.
+      if (error instanceof ModelAccountingError
+        && (platformLedger ? error.code === 'accounting_unrecorded' : error.code !== 'accounting_hold')) refused = true;
       throw error;
     }
   }

@@ -11,6 +11,12 @@
 // parseUsd(text) -> dollars rounded to cents (strict decimal, 0..10000), else codeError bad_usd.
 // fundingMonth(nowMs) -> 'YYYY-MM' (UTC). instanceCapUsd(platform), allocationUsd(platform, id),
 // committedUsd(platform, { householdId?, month }).
+// ensureCarry(platform, { householdId, month, legacySpendUsd, now }) records the household's carry
+//   row for the month (its pre-MT-05 spend, settled) unless one exists; an existing row is never
+//   changed. A household's runtime engine records it at construction in live mode, reserve records
+//   it for its own household, and scripts/model-budget.mjs records every active household's before
+//   any change, so pre-MT-05 spend of a household that never reserved still counts against the
+//   instance cap and against reductions.
 // createModelLedger(platform, { householdId, generation, now }) -> { reserve, settle, hold, rounds,
 //   status, held }:
 //   reserve({ purpose, model, boundUsd, adminCapUsd, legacySpendUsd, principal }) -> { roundId,
@@ -118,6 +124,21 @@ const hasHold = (platform, householdId) =>
 
 const count = v => (Number.isInteger(v) && v >= 0 ? v : null);
 
+// The month's carry row (inside the caller's transaction); an existing row is never changed.
+const insertCarry = (platform, { householdId, month, legacySpendUsd, at }) => platform.prepare(`INSERT INTO model_rounds
+  (id, household_id, month, kind, state, reserved_usd, cost_usd, reserved_at, expires_at, settled_at)
+  VALUES (?, ?, ?, 'carry', 'settled', ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`)
+  .run(`mr-${randomUUID()}`, householdId, month, money(legacySpendUsd), money(legacySpendUsd), at, at, at);
+
+export function ensureCarry(platform, { householdId, month, legacySpendUsd = 0, now = Date.now() } = {}) {
+  if (!platform || typeof householdId !== 'string' || typeof month !== 'string' || !/^\d{4}-\d{2}$/.test(month)
+    || !Number.isFinite(legacySpendUsd) || legacySpendUsd < 0 || !Number.isFinite(now)) throw new TypeError('Invalid carry');
+  return immediate(platform, () => {
+    insertCarry(platform, { householdId, month, legacySpendUsd, at: now });
+    return { value: undefined };
+  });
+}
+
 export function createModelLedger(platform, { householdId, generation, now = Date.now } = {}) {
   if (!platform || typeof householdId !== 'string' || !Number.isInteger(generation) || typeof now !== 'function') {
     throw new TypeError('createModelLedger needs the platform, a household, its generation and a clock');
@@ -140,9 +161,7 @@ export function createModelLedger(platform, { householdId, generation, now = Dat
         }
         if (!authorized) return { refuse: withCode(new EngineOffError(), 'authorization_revoked') };
         if (hasHold(platform, householdId)) return { refuse: withCode(new ModelAccountingError(), 'accounting_hold') };
-        platform.prepare(`INSERT INTO model_rounds (id, household_id, month, kind, state, reserved_usd, cost_usd, reserved_at, expires_at, settled_at)
-          VALUES (?, ?, ?, 'carry', 'settled', ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`)
-          .run(`mr-${randomUUID()}`, householdId, month, money(legacySpendUsd), money(legacySpendUsd), at, at, at);
+        insertCarry(platform, { householdId, month, legacySpendUsd, at });
         const instanceCap = instanceCapUsd(platform);
         if (!(instanceCap > 0)) return { refuse: fundingUnavailable() };
         const limit = Math.min(adminCapUsd, allocationUsd(platform, householdId));

@@ -25,7 +25,8 @@ export function fundingUnavailable() {
   return error;
 }
 
-// An engine refusal carrying a fixed code (household_unavailable, authorization_revoked, accounting_hold).
+// An engine refusal carrying a fixed code (household_unavailable, authorization_revoked, accounting_hold,
+// accounting_unrecorded).
 export function withCode(error, code) {
   error.code = code;
   return error;

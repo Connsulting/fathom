@@ -344,13 +344,21 @@ Ledger adapter: `{monthSpendUsd(yyyymm), record({ts, purpose, costUsd, model, to
 Live mode reserves every paid round in the platform ledger (see Model budgets): a household's
 runtime engine (`createRuntimeEngine`, `src/engine/runtime.mjs`) refuses to build in live mode
 without `{platform, householdId, generation}`, and passes `createEngine` a `reservations` adapter.
-Before each round, tool continuations and retries included, the engine reserves the round's
-worst-case bound (`estimateUnknownCost` over its system text, transcript and tools), which is
-also the round's `maxBudgetUsd`; a refused reservation dispatches nothing. A known cost settles;
-a cost above the bound, an unknown cost or a transport failure leaves the household on an
-accounting hold. The settled cost is mirrored into `spend_ledger` with its `round_id`. Live
-`engine.status()` reports `capUsd` as the lower of `settings.cap` and the operator allocation and
-`spentUsd` as the platform's committed spend for the actual UTC month. `createEngine`'s
+At construction it records the household's `carry` row for the current funding month when it has
+pre-MT-05 spend, so that spend counts against the instance cap before it ever reserves. Before
+each round, tool continuations and retries included, the engine reserves the round's worst-case
+bound. The per-response bound E (`estimateUnknownCost` over its system text, transcript and tools) is the
+round's `maxBudgetUsd`. A Messages API round makes one paid response and reserves E. An SDK round
+(`sdkRound`, the production chat and job path) can make more than one paid response (refusal and
+fallback retries) and stops only once its cumulative cost exceeds `maxBudgetUsd`, so it reserves
+`SDK_RESPONSE_BOUND` (2) times E: the cost before its last response is at most E and that response
+adds at most E. A refused reservation dispatches nothing. A cost up to the reservation settles; a
+cost above it, an unknown cost or a transport failure is held in the platform ledger and the call
+throws `ModelAccountingError` (`accounting_hold`) without latching the engine, so once the round is
+reconciled the same serving engine admits the next call. Only a failed platform settle or hold
+write latches the engine (`accounting_unrecorded`). The settled cost is mirrored into
+`spend_ledger` with its `round_id`. Live `engine.status()` reports `capUsd` as the lower of
+`settings.cap` and the operator allocation and `spentUsd` as the platform's committed spend for the actual UTC month. `createEngine`'s
 `testTransport: {baseURL}` (a loopback http origin with a port, else TypeError) sends every round
 to a local Messages API emulator; it is passed only programmatically, as
 `startServer(config, {engineOptions: {testTransport, fundingNow}})`, and no config or environment
@@ -1070,8 +1078,10 @@ Model budgets (`src/platform/model-budget.mjs`, platform migration 005).
    its own household until an operator reconciles it; other households keep their unreserved credit.
 3. `node scripts/model-budget.mjs --instance-cap-usd <n>` and `--household <id> --allocation-usd <n>`
    set the instance cap and a household's allocation (dollars 0 to 10000, cents). Changes are
-   audited (`model.instance_cap`, `model.allocation`); repeats print `unchanged`. Refusals:
-   `bad_usd`, `no_such_household`, `allocation_above_cap`, `below_committed`.
+   audited (`model.instance_cap`, `model.allocation`); repeats print `unchanged`. Before any
+   change it records every active household's `carry` row for the month from its store (read-only),
+   so a household that never reserved still counts. Refusals: `bad_usd`, `no_such_household`,
+   `allocation_above_cap`, `below_committed`, `household_store_unavailable` (a store it cannot read).
 4. `node scripts/reconcile-spend.mjs --household <id> --round <id> --cost-usd <amount> --receipt-ref <id>`
    settles a held round at the receipt's cost (audited `model.reconcile`; the receipt reference is
    kept on the round, never in audit rows). A cost above the reservation records the debt and keeps
