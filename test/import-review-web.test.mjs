@@ -6,7 +6,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { WAITING } from '../src/ingest/pipeline.mjs';
-import { ingestScreens, PROPOSAL_STATES, proposalControl, proposalCause, proposalStatus, deltaText, proposalSummary } from '../web/horizon/screens/ingest.js';
+import { ingestScreens, PROPOSAL_STATES, proposalControl, proposalCause, proposalStatus, proposalReason, deltaText, proposalSummary, expectedText } from '../web/horizon/screens/ingest.js';
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const text = (html) => html.replace(/<[^>]*>/g, ' ').replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/\s+/g, ' ').trim();
@@ -19,14 +19,15 @@ const importProposal = (status, patch = {}) => ({
   counts: { rows: { transaction: 2 }, duplicates: 0 }, delta: [], errors: [], question: null, actions: [], notes: 0, permission: null,
   columns: [{ ordinal: 1, label: 'account', field: 'accountId' }, { ordinal: 2, label: 'memo', field: null }], ...patch,
 });
-const waitingFile = (status, proposal) => ({ id: 'f-synthetic', name: 'synthetic.csv', status, ...(proposal ? { proposal } : {}) });
+const waitingFile = (status, proposal, reasonCode = null) => ({ id: 'f-synthetic', name: 'synthetic.csv', status, reasonCode, ...(proposal ? { proposal } : {}) });
+const FILE_LIMIT_CAUSE = 'File saved. This file needs more interpretation than one file is allowed; add a smaller file or split it.';
 
-function harness(waiting, { engineOn = false, uploadResult = null } = {}) {
+function harness(waiting, { engineOn = false, uploadResult = null, review = null } = {}) {
   const calls = [];
   const api = {
     s: {}, route: { name: 'add' }, go() {}, engineOn: () => engineOn,
     ingest: () => ({ pending: 0, items: [], decided: [], files: [], waiting, sources: [], accounts: {}, staleNotes: [], formats: [] }),
-    reviewImport: (...args) => { calls.push(['reviewImport', ...args]); return Promise.resolve(args[2] === 'approve' ? { status: 'imported', counts: { rows: { transaction: 2 } }, receipt: { id: 'r-approve' } } : { status: 'queued' }); },
+    reviewImport: (...args) => { calls.push(['reviewImport', ...args]); return Promise.resolve(review ?? (args[2] === 'approve' ? { status: 'imported', counts: { rows: { transaction: 2 } }, receipt: { id: 'r-approve' } } : { status: 'queued' })); },
     retryFile: (id) => { calls.push(['retryFile', id]); return Promise.resolve({}); },
     actionUndo: (id) => { calls.push(['actionUndo', id]); return Promise.resolve({ ok: true }); },
     upload: (files) => { calls.push(['upload', files.length]); return Promise.resolve(uploadResult); },
@@ -43,27 +44,36 @@ function harness(waiting, { engineOn = false, uploadResult = null } = {}) {
 const click = (screens, dataset, extra = {}) => screens.handleClick({ target: { closest: () => ({ tagName: 'BUTTON', dataset, ...extra }) }, preventDefault() {} });
 const typeDraft = (screens, id, value) => screens.handleChange({ type: 'input', target: { matches: (sel) => sel === 'textarea[data-proposal-text]', dataset: { proposalText: id }, value } });
 
+// Every status once with no stored reason, plus each budget reason: the file's own allowance
+// (a smaller file is the control) and the engine's or household's budget (Retry or the engine link).
+const CASES = [...STATUSES.map((s) => [s, null]), ...['file_limit', 'output_limit', 'request_does_not_fit', 'engine_or_file_limit'].map((r) => ['budget_exhausted', r])];
+
 test('every waiting status has a label, a plain cause and one live control', async () => {
-  for (const status of STATUSES) {
+  for (const [status, reasonCode] of CASES) {
     const row = PROPOSAL_STATES[status];
     assert.ok(row && row.label && row.cause && row.control, status);
     assert.doesNotMatch(row.cause, new RegExp('\\u2014'), 'no em dash');
     for (const engineOn of [false, true]) {
       const proposal = ['needs_confirmation', 'needs_clarification'].includes(status) ? importProposal(status) : null;
-      const { screens, calls } = harness([waitingFile(status, proposal)], { engineOn });
+      const file = waitingFile(status, proposal, reasonCode);
+      const { screens, calls } = harness([file], { engineOn });
       const html = screens.addFiles('add');
       const plain = text(html);
-      const control = proposalControl(status, { engineOn });
-      const where = `${status} engineOn=${engineOn}`;
+      const control = proposalControl(status, { engineOn, reasonCode: proposalReason(file) });
+      const where = `${status} ${reasonCode} engineOn=${engineOn}`;
+      const ownLimit = ['file_limit', 'output_limit', 'request_does_not_fit'].includes(reasonCode);
+      assert.equal(proposalCause(file), ownLimit ? FILE_LIMIT_CAUSE : row.cause, where);
+      if (status === 'budget_exhausted') assert.equal(control, ownLimit ? 'upload' : engineOn ? 'retry' : 'engine', where);
       assert.ok(plain.includes(row.label), where);
-      assert.ok(plain.includes(row.cause), where);
+      assert.ok(plain.includes(proposalCause(file)), where);
       assert.match(html, /data-proposal-file="f-synthetic"/, where);
       if (control === 'approve') {
         assert.match(html, /data-proposal-approve="p-synthetic" data-version="2"/, where);
         assert.match(html, /<textarea data-proposal-text="p-synthetic"/, where);
         assert.ok(plain.includes('2 transactions, -$10 in total. Totals match the sheet.'), where);
-        click(screens, { proposalApprove: 'p-synthetic', version: '2' });
-        assert.deepEqual(calls.at(-1), ['reviewImport', 'p-synthetic', 2, 'approve', 'Looks right'], where);
+        assert.match(html, /data-proposal-approve="p-synthetic" data-version="2" data-file="f-synthetic"/, where);
+        click(screens, { proposalApprove: 'p-synthetic', version: '2', file: 'f-synthetic' });
+        assert.deepEqual(calls.at(-1), ['reviewImport', 'p-synthetic', 2, 'approve', 'Looks right', 'f-synthetic'], where);
         await settle();
         const after = screens.addFiles('add');
         assert.match(after, /data-review-note/, where);
@@ -81,8 +91,8 @@ test('every waiting status has a label, a plain cause and one live control', asy
         click(screens, { proposalCorrect: 'p-synthetic', version: '2' });
         assert.equal(calls.length, 0, 'an empty correction is not sent');
         assert.equal(typeDraft(screens, 'p-synthetic', '  Column B is the spouse income  '), true);
-        click(screens, { proposalCorrect: 'p-synthetic', version: '2' });
-        assert.deepEqual(calls.at(-1), ['reviewImport', 'p-synthetic', 2, 'correct', 'Column B is the spouse income'], where);
+        click(screens, { proposalCorrect: 'p-synthetic', version: '2', file: 'f-synthetic' });
+        assert.deepEqual(calls.at(-1), ['reviewImport', 'p-synthetic', 2, 'correct', 'Column B is the spouse income', 'f-synthetic'], where);
         await settle();
         const after = screens.addFiles('add');
         assert.ok(text(after).includes('Correction saved. Fathom reads the file again with it when the engine runs.'), where);
@@ -95,7 +105,7 @@ test('every waiting status has a label, a plain cause and one live control', asy
         click(screens, { retry: 'f-synthetic' });
         assert.deepEqual(calls.at(-1), ['retryFile', 'f-synthetic'], where);
       } else if (control === 'upload') {
-        const row = /<li class="needs_source_text"[\s\S]*?<\/li>/.exec(html)[0];
+        const row = new RegExp(`<li class="${status}"[\\s\\S]*?</li>`).exec(html)[0];
         assert.match(row, /data-upload-open="1"/, where);
         assert.match(row, /<input type="file" multiple data-upload="1" hidden/, where);
         let opened = 0;
@@ -110,7 +120,12 @@ test('every waiting status has a label, a plain cause and one live control', asy
 test('controls and causes follow the proposal over the file', () => {
   assert.equal(proposalControl('waiting_for_engine', { engineOn: false }), 'engine');
   assert.equal(proposalControl('waiting_for_engine', { engineOn: true }), 'retry');
-  assert.equal(proposalControl('budget_exhausted', { engineOn: true }), 'engine');
+  assert.equal(proposalControl('budget_exhausted', { engineOn: true }), 'retry');
+  assert.equal(proposalControl('budget_exhausted', { engineOn: false }), 'engine');
+  assert.equal(proposalControl('budget_exhausted', { engineOn: true, reasonCode: 'file_limit' }), 'upload');
+  assert.equal(proposalReason(waitingFile('budget_exhausted', null, 'output_limit')), 'output_limit');
+  assert.equal(proposalReason(waitingFile('needs_confirmation', importProposal('needs_confirmation', { reasonCode: null }), 'file_limit')), null, 'the proposal reason wins');
+  assert.equal(proposalCause(waitingFile('budget_exhausted', null, 'request_does_not_fit')), FILE_LIMIT_CAUSE);
   assert.equal(proposalControl('something_else'), 'retry');
   const corrected = waitingFile('needs_confirmation', importProposal('waiting_for_engine', { reasonCode: 'owner_correction' }));
   assert.equal(proposalStatus(corrected), 'waiting_for_engine');
@@ -141,11 +156,19 @@ test('proposalSummary reads only server values', () => {
     summary: { rows: 3, amount: null, totalStatus: 'no_sheet_total', totalMessage: 'No sheet total to check' }, counts: { rows: { transaction: 3 }, duplicates: 1 },
   }))), '3 transactions, 1 duplicate skipped. No sheet total to check.');
   const note = (actions, notes = 0) => waitingFile('waiting_for_engine', { id: 'p-note', version: 1, status: 'needs_confirmation', kind: 'actions', actions, notes, summary: null, counts: null });
-  assert.equal(proposalSummary(note([{ label: 'Recommendation step 1', subject: null, dueDate: null, amount: null },
-    { label: 'Expected payment', subject: 'payroll provider', dueDate: '2032-03-09', amount: null }], 1)),
-  'From your note: Recommendation step 1; expected payment from payroll provider on Mar 9, 2032, amount unknown. 1 line kept as a note.');
-  assert.equal(proposalSummary(note([{ label: 'Expected payment', subject: 'synthetic client', dueDate: '2032-04-01', amount: 1250.5 }])),
-    'From your note: expected payment from synthetic client on Apr 1, 2032, $1,250.50.');
+  const expected = (patch) => ({ kind: 'expected', subject: 'payroll provider', direction: 'inflow', dueDate: '2032-03-09', datePrecision: 'day', amount: null, phrase: null, timezone: null, ...patch });
+  assert.equal(proposalSummary(note([{ text: 'Synthetic payroll true-up marked done' },
+    expected({ phrase: 'next Tuesday', timezone: 'America/New_York' })], 1)),
+  'From your note: Synthetic payroll true-up marked done; expected incoming payment from payroll provider on Mar 9, 2032 (from "next Tuesday", America/New_York), amount unknown. 1 line kept as a note.');
+  assert.equal(proposalSummary(note([expected({ subject: 'synthetic client', dueDate: '2032-04-01', amount: 1250.5 })])),
+    'From your note: expected incoming payment from synthetic client on Apr 1, 2032, $1,250.50.');
+  assert.equal(expectedText(expected({ direction: 'outflow', subject: 'synthetic lender', datePrecision: 'month', dueDate: '2032-04-01', amount: 300 })),
+    'expected outgoing payment to synthetic lender in Apr 2032, $300');
+  assert.equal(expectedText(expected({ datePrecision: 'year', dueDate: '2033-01-01' })), 'expected incoming payment from payroll provider in 2033, amount unknown');
+  assert.equal(expectedText(expected({ datePrecision: 'unknown' })), 'expected incoming payment from payroll provider, date unknown, amount unknown');
+  assert.equal(expectedText(expected({ dueDate: null })), 'expected incoming payment from payroll provider, date unknown, amount unknown');
+  assert.equal(expectedText(expected({ direction: 'outflow', datePrecision: 'day', phrase: 'next Friday', timezone: 'UTC' })),
+    'expected outgoing payment to payroll provider on Mar 9, 2032 (from "next Friday", UTC), amount unknown');
   assert.equal(proposalSummary(note([])), '');
   assert.equal(proposalSummary(waitingFile('needs_mapping')), '');
   assert.equal(proposalSummary(waitingFile('needs_confirmation', importProposal('needs_confirmation', { summary: null }))), '');
@@ -211,5 +234,56 @@ test('waiting rows carry the review fields, with each column bound to its layout
     assert.ok(summary.startsWith('2 transactions'), summary);
     assert.ok(summary.includes('-$10 in total.'), summary);
     assert.ok(summary.endsWith('Totals match the sheet.'), summary);
+  } finally { x.close(); }
+});
+
+test('a stale proposal redraws with its current summary and a plain status line', async () => {
+  const { screens, calls } = harness([waitingFile('needs_confirmation', importProposal('needs_confirmation'))], { review: { stale: true } });
+  click(screens, { proposalApprove: 'p-synthetic', version: '2', file: 'f-synthetic' });
+  assert.deepEqual(calls.at(-1), ['reviewImport', 'p-synthetic', 2, 'approve', 'Looks right', 'f-synthetic']);
+  await settle();
+  const html = screens.addFiles('add');
+  assert.ok(text(html).includes('This file changed since its summary was written. Here is the current one.'));
+  assert.doesNotMatch(html, /data-review-undo/);
+  click(screens, { proposalApprove: 'p-synthetic', version: '3', file: 'f-synthetic' });
+  assert.deepEqual(calls.at(-1), ['reviewImport', 'p-synthetic', 3, 'approve', 'Looks right', 'f-synthetic'], 'the review is free again');
+});
+
+test('note actions state each change from the stored proposal and the expected payment stays structured', async () => {
+  const { updateFixture } = await import('./helpers/model-updates.mjs');
+  const { stageUpdate } = await import('../src/ingest/model-updates.mjs');
+  const { ingestState } = await import('../src/ingest/freshness.mjs');
+  const x = await updateFixture();
+  try {
+    stageUpdate(x.ctx, { source: x.source, actions: [x.step, x.expected], capturedAt: '2032-03-02T14:00:00Z' });
+    const file = ingestState(x.db).waiting.find((f) => f.id === x.source.fileId);
+    assert.equal(file.proposal.kind, 'actions');
+    assert.deepEqual(file.proposal.actions, [{ text: 'Payroll true-up marked done' }, { kind: 'expected', subject: 'payroll provider', direction: 'inflow',
+      dueDate: '2032-03-09', datePrecision: 'day', amount: null, phrase: 'next Tuesday', timezone: 'America/New_York' }]);
+    assert.equal(proposalSummary(file), 'From your note: Payroll true-up marked done; expected incoming payment from payroll provider on Mar 9, 2032 (from "next Tuesday", America/New_York), amount unknown.');
+  } finally { x.close(); }
+  const y = await updateFixture();
+  try {
+    stageUpdate(y.ctx, { source: y.source, actions: [{ ...y.step, args: { ...y.step.args, checked: false } }, y.expected] });
+    const file = ingestState(y.db).waiting.find((f) => f.id === y.source.fileId);
+    assert.equal(file.proposal.status, 'needs_clarification');
+    assert.equal(file.proposal.actions[0].text, 'Payroll true-up reopened');
+    assert.equal(file.proposal.actions[1].phrase, null, 'an unresolved relative date is not shown as resolved');
+  } finally { y.close(); }
+});
+
+test('a waiting file carries its stored reason as reasonCode', async () => {
+  const { setup } = await import('./helpers/model-cutover.mjs');
+  const { ingestState } = await import('../src/ingest/freshness.mjs');
+  const x = await setup();
+  try {
+    const { ingestFile } = await import('../src/ingest/pipeline.mjs');
+    const { setSetting } = await import('../src/store/db.mjs');
+    setSetting(x.db, 'engine', { on: false });
+    const r = await ingestFile(x.db, { name: 'unknown.csv', bytes: Buffer.from('One,Two\na,b\n') }, x.opts);
+    x.db.prepare("UPDATE files SET status='budget_exhausted', note='file_limit' WHERE id=?").run(r.fileId);
+    const file = ingestState(x.db).waiting.find((f) => f.id === r.fileId);
+    assert.equal(file.reasonCode, 'file_limit');
+    assert.equal(proposalControl(proposalStatus(file), { engineOn: true, reasonCode: proposalReason(file) }), 'upload');
   } finally { x.close(); }
 });

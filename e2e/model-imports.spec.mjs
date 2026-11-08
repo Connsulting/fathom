@@ -5,6 +5,7 @@
 // the only faked component is the engine's interpretation response.
 
 import { createHash } from 'node:crypto';
+import { test as plainTest } from '@playwright/test';
 import { test, expect, resetDemo, gotoRoute, REMOTE } from './helpers.mjs';
 import { withLocalHousehold } from './local-store.mjs';
 import { getSetting, setSetting } from '../src/store/db.mjs';
@@ -20,6 +21,8 @@ const NOW = '2032-03-10T12:00:00.000Z';
 const HEADER = 'Account,Date,Amount USD,Description';
 const firstCsv = (account) => `${HEADER}\n${account},2032-03-02,-12.25,Synthetic purchase\n${account},2032-03-03,2.25,Synthetic refund\nTotal,,-10.00,Control total\n`;
 const repeatCsv = (account) => `${HEADER}\n${account},2032-03-05,-20.50,Synthetic repeat purchase\n${account},2032-03-06,5.50,Synthetic repeat refund\nTotal,,-15.00,Control total\n`;
+// The first file's two detail rows plus one more, with an updated total: overlaps the first file.
+const overlapCsv = (account) => `${HEADER}\n${account},2032-03-02,-12.25,Synthetic purchase\n${account},2032-03-03,2.25,Synthetic refund\n${account},2032-03-04,-3.00,Synthetic extra purchase\nTotal,,-13.00,Control total\n`;
 const referenceCsv = (account) => `${HEADER},Reference\n${account},2032-03-07,-7.25,Synthetic delta purchase,Synthetic ref A\nTotal,,-7.25,Control total,\n`;
 
 const pathOf = (r) => new URL(r.url()).pathname;
@@ -30,13 +33,13 @@ test.afterEach(async ({ request }) => { await resetDemo(request); });
 
 // Stage a first-use layout proposal for a synthetic CSV on the first live demo account, through the
 // real pipeline with a fake-mode engine whose single response is the layout's interpretation.
-async function seed() {
+async function seed({ csv = firstCsv, name = 'synthetic-first.csv' } = {}) {
   return withLocalHousehold(NOW, async (s) => {
     const account = s.db.prepare('SELECT id FROM accounts WHERE archived_at IS NULL ORDER BY rowid LIMIT 1').get().id;
     const previous = getSetting(s.db, 'engine', null);
     setSetting(s.db, 'engine', { on: true });
     try {
-      const bytes = Buffer.from(firstCsv(account)), name = 'synthetic-first.csv';
+      const bytes = Buffer.from(csv(account));
       const fileId = 'f-' + createHash('sha256').update(bytes).digest('hex').slice(0, 24);
       const layout = recipe();
       const proposal = applyLayout(await indexSource({ fileId, bytes, name, format: 'csv' }), layout);
@@ -183,13 +186,56 @@ test('review row keeps summary, status, source and Undo visible @mobile', async 
   await inside(r.locator('textarea[data-proposal-text]'));
   await page.screenshot({ path: testInfo.outputPath(`review-before-${testInfo.project.name}.png`), fullPage: true });
 
+  // Confirm's Waiting files shows the same pending row; compare it with the Confirm layout.
+  await gotoRoute(page, 'confirm');
+  const side = page.locator('.h-col-side').locator(`[data-proposal-file="${seeded.fileId}"]`);
+  await expect(side.locator('[data-proposal-status]')).toHaveText('Ready for review');
+  await expect(side.locator('[data-proposal-summary]')).toBeVisible();
+  await expect(side.locator('[data-proposal-source] > summary')).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath(`confirm-compare-${testInfo.project.name}.png`), fullPage: true });
+
+  await gotoRoute(page, 'add');
   const reviewed = page.waitForResponse((res) => pathOf(res) === `/api/import-proposals/${seeded.proposalId}/review`);
   await r.locator('[data-proposal-approve]').click();
   expect((await reviewed).status()).toBe(200);
   await inside(page.locator('[data-review-note] [data-review-undo]').first());
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await page.screenshot({ path: testInfo.outputPath(`review-after-${testInfo.project.name}.png`), fullPage: true });
+});
 
-  await gotoRoute(page, 'confirm');
-  await page.screenshot({ path: testInfo.outputPath(`confirm-compare-${testInfo.project.name}.png`), fullPage: true });
+// The plain fixture: the browser logs the real 409 as a console error, which the shared fixture
+// treats as a failure.
+plainTest('a stale summary is restaged with its current counts and approves on the second try', async ({ page, request }) => {
+  plainTest.skip(REMOTE, 'requires a local synthetic store');
+  const first = await seed();
+  const overlap = await seed({ csv: overlapCsv, name: 'synthetic-overlap.csv' });
+  expect([first.status, overlap.status]).toEqual(['needs_confirmation', 'needs_confirmation']);
+  const approved = await request.post(`/api/import-proposals/${first.proposalId}/review`,
+    { data: { version: first.version, decision: 'approve', evidence: 'Looks right' } });
+  expect(approved.status()).toBe(200);
+
+  await gotoRoute(page, 'add');
+  const r = row(page, overlap.fileId);
+  const answers = [];
+  page.on('response', (res) => {
+    if ([`/api/import-proposals/${overlap.proposalId}/review`, `/api/files/${overlap.fileId}/retry`].includes(pathOf(res))) answers.push([pathOf(res), res.status()]);
+  });
+  const retried = page.waitForResponse((res) => pathOf(res) === `/api/files/${overlap.fileId}/retry`);
+  await r.locator('[data-proposal-approve]').click();
+  expect((await retried).status()).toBe(200);
+  expect(answers).toEqual([[`/api/import-proposals/${overlap.proposalId}/review`, 409], [`/api/files/${overlap.fileId}/retry`, 200]]);
+  await expect(page.locator('[data-review-note]').first()).toHaveText('This file changed since its summary was written. Here is the current one.');
+  const current = await waitingOf(request, overlap.fileId);
+  expect(current.proposal.version).toBeGreaterThan(overlap.version);
+  expect(current.proposal.status).toBe('needs_confirmation');
+  await expect(r.locator('[data-proposal-approve]')).toHaveAttribute('data-version', String(current.proposal.version));
+  await expect(r.locator('[data-proposal-summary]')).toContainText('duplicate');
+
+  const reviewed = page.waitForResponse((res) => pathOf(res) === `/api/import-proposals/${overlap.proposalId}/review`);
+  await r.locator('[data-proposal-approve]').click();
+  const done = await reviewed;
+  expect(done.status()).toBe(200);
+  expect((await done.json()).status).toBe('imported');
+  await expect(page.locator('[data-review-note]').first()).toContainText('Imported');
+  await expect(page.locator('.fx-err')).toHaveCount(0);
 });

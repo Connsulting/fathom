@@ -52,16 +52,17 @@ test('a note proposes its actions in one sentence, approves in plain words, and 
   const sc = await (await request.get('/api/scenario')).json();
   const waiting = sc.live.ingest.waiting.find((f) => f.id === seeded.fileId);
   expect(waiting.proposal.kind).toBe('actions');
-  const stepAction = waiting.proposal.actions.find((a) => !a.subject);
-  const payment = waiting.proposal.actions.find((a) => a.subject);
+  const payment = waiting.proposal.actions.find((a) => a.kind === 'expected');
   expect(payment.dueDate).toBe('2032-03-09');
+  expect(payment.phrase).toBe('next Tuesday');
+  expect(payment.timezone).toBeTruthy();
 
   await gotoRoute(page, 'add');
   const r = page.locator(`[data-proposal-file="${seeded.fileId}"]`);
   await expect(r.locator('[data-proposal-status]')).toHaveText('Ready for review');
   const summary = r.locator('[data-proposal-summary]');
-  await expect(summary).toContainText(stepAction.label);
-  await expect(summary).toContainText(`expected payment from payroll provider on ${day(payment.dueDate)}, amount unknown`);
+  await expect(summary).toContainText('Synthetic payroll true-up marked done');
+  await expect(summary).toContainText(`expected incoming payment from payroll provider on ${day(payment.dueDate)} (from "next Tuesday", ${payment.timezone}), amount unknown`);
 
   const reviewed = page.waitForResponse((res) => pathOf(res) === `/api/import-proposals/${seeded.proposalId}/review`);
   await r.locator('[data-proposal-approve]').click();

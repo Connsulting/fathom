@@ -61,15 +61,23 @@ const stateOf = (status) => (Object.hasOwn(PROPOSAL_STATES, String(status)) ? PR
 // The status a waiting file shows: its proposal's when that is a waiting state, else the file's.
 export const proposalStatus = (file) => (stateOf(file?.proposal?.status) ? file.proposal.status : String(file?.status ?? ''));
 
-// With the engine on, Retry is the working control for a file waiting on it. Unknown is Retry.
-export function proposalControl(status, { engineOn = false } = {}) {
-  if (status === 'waiting_for_engine' && engineOn) return 'retry';
+// The stored reason behind a waiting status: the proposal's when there is one, else the file's.
+export const proposalReason = (file) => (file?.proposal ? file.proposal.reasonCode : file?.reasonCode) ?? null;
+// Budget reasons that mean the file's own allowance is spent, so only a smaller file helps.
+const FILE_LIMIT = new Set(['file_limit', 'output_limit', 'request_does_not_fit']);
+
+// With the engine on, Retry is the working control for a file waiting on it (or on a budget that is
+// not the file's own). A file over its own allowance needs a smaller file. Unknown is Retry.
+export function proposalControl(status, { engineOn = false, reasonCode = null } = {}) {
+  if (status === 'budget_exhausted' && FILE_LIMIT.has(reasonCode)) return 'upload';
+  if ((status === 'waiting_for_engine' || status === 'budget_exhausted') && engineOn) return 'retry';
   return stateOf(status)?.control ?? 'retry';
 }
 
 export function proposalCause(file) {
-  const s = proposalStatus(file);
-  if (s === 'waiting_for_engine' && file?.proposal?.reasonCode === 'owner_correction') return 'Your correction is saved. Waiting for the engine to read the file again.';
+  const s = proposalStatus(file), reason = proposalReason(file);
+  if (s === 'waiting_for_engine' && reason === 'owner_correction') return 'Your correction is saved. Waiting for the engine to read the file again.';
+  if (s === 'budget_exhausted' && FILE_LIMIT.has(reason)) return 'File saved. This file needs more interpretation than one file is allowed; add a smaller file or split it.';
   return stateOf(s)?.cause ?? '';
 }
 
@@ -249,9 +257,7 @@ export function proposalSummary(file) {
   const p = file?.proposal;
   if (!p || typeof p !== 'object') return '';
   if (p.kind === 'actions') {
-    const acts = arr(p.actions).map((a) => (a?.subject && a?.dueDate
-      ? `expected payment from ${a.subject} on ${dateText(a.dueDate) || a.dueDate}, ${cash(a.amount) || 'amount unknown'}`
-      : String(a?.label ?? ''))).filter(Boolean);
+    const acts = arr(p.actions).map((a) => (a?.kind === 'expected' ? expectedText(a) : String(a?.text ?? ''))).filter(Boolean);
     if (!acts.length) return '';
     const n = num(p.notes);
     return `From your note: ${acts.join('; ')}.${n > 0 ? ` ${plural(n, 'line')} kept as a note.` : ''}`;
@@ -260,6 +266,17 @@ export function proposalSummary(file) {
   if (!s || typeof s !== 'object' || !p.counts) return '';
   const total = typeof s.amount === 'number' && Number.isFinite(s.amount) ? `, ${cash(s.amount)} in total` : '';
   return `${countsText(p.counts)}${total}.${s.totalMessage ? ` ${s.totalMessage}.` : ''}`;
+}
+
+// An expected payment as the note states it: direction, date at its stated precision, the relative
+// phrase it was resolved from (with the owner's timezone), and the amount or 'amount unknown'.
+export function expectedText(a) {
+  const who = a.direction === 'outflow' ? `expected outgoing payment to ${a.subject}`
+    : `expected ${a.direction === 'inflow' ? 'incoming ' : ''}payment from ${a.subject}`;
+  const date = { day: dateText, month: monthYearText, year: (d) => /^\d{4}/.exec(String(d ?? ''))?.[0] ?? '' }[a.datePrecision]?.(a.dueDate) ?? '';
+  const when = date ? ` ${a.datePrecision === 'day' ? 'on' : 'in'} ${date}` : ', date unknown';
+  const from = a.phrase ? ` (from "${a.phrase}"${a.timezone ? `, ${a.timezone}` : ''})` : '';
+  return `${who}${when}${from}, ${cash(a.amount) || 'amount unknown'}`;
 }
 
 // The status line after a review: imported row counts, or applied note changes.
@@ -435,7 +452,7 @@ export function ingestScreens(h) {
   function proposalRow(f) {
     const p = f.proposal && typeof f.proposal === 'object' ? f.proposal : {};
     const s = proposalStatus(f);
-    let ctl = proposalControl(s, { engineOn: !!api.engineOn?.() });
+    let ctl = proposalControl(s, { engineOn: !!api.engineOn?.(), reasonCode: proposalReason(f) });
     if ((ctl === 'approve' || ctl === 'answer') && (p.id == null || p.id === '')) ctl = 'retry';
     const summary = proposalSummary(f);
     const sum = summary ? `<p data-proposal-summary>${esc(summary)}</p>` : '';
@@ -443,10 +460,10 @@ export function ingestScreens(h) {
     const changed = delta ? `Only this changed since you approved this layout: ${delta}.` : '';
     let body = '';
     let side = '';
-    if (ctl === 'approve') body = `${changed ? `<p data-proposal-delta>${esc(changed)}</p>` : ''}${sum}${proposalSource(f)}${reviewBlock(p, true)}`;
+    if (ctl === 'approve') body = `${changed ? `<p data-proposal-delta>${esc(changed)}</p>` : ''}${sum}${proposalSource(f)}${reviewBlock(p, true, f.id)}`;
     else if (ctl === 'answer') {
       const q = p.question || changed || 'The file did not check out against its interpretation. Say what the columns mean.';
-      body = `<p data-proposal-question>${esc(q)}</p>${sum}${proposalSource(f)}${reviewBlock(p, false)}`;
+      body = `<p data-proposal-question>${esc(q)}</p>${sum}${proposalSource(f)}${reviewBlock(p, false, f.id)}`;
     }
     else if (ctl === 'engine') body = `<a class="h-btn ghost" href="#/engine" data-go="engine" data-proposal-engine>${s === 'budget_exhausted' ? 'Check the engine budget' : 'Turn on the engine'}</a>`;
     else if (ctl === 'upload') body = `<div class="h-ing-ctl">${btn(`${icon('plus')}Add files`, `data-upload-open="1"${st.busy ? ' disabled' : ''}`, 'ghost')}<input type="file" multiple data-upload="1" hidden tabindex="-1"></div>`;
@@ -456,9 +473,9 @@ export function ingestScreens(h) {
   }
 
   // Looks right (approve only) and a correction in the owner's own words. No per-column inputs.
-  function reviewBlock(p, approve) {
+  function reviewBlock(p, approve, fileId) {
     const id = esc(p.id);
-    const attrs = `data-version="${esc(p.version)}"${st.reviewBusy != null ? ' disabled' : ''}`;
+    const attrs = `data-version="${esc(p.version)}" data-file="${esc(fileId)}"${st.reviewBusy != null ? ' disabled' : ''}`;
     return `<div class="h-ing-review">${approve ? btn('Looks right', `data-proposal-approve="${id}" ${attrs}`, 'pri') : ''}
       <textarea data-proposal-text="${id}" rows="2" placeholder="Not quite: column C is the spouse's income" aria-label="Correction in your own words">${esc(st.drafts[p.id] ?? '')}</textarea>
       ${btn('Send correction', `data-proposal-correct="${id}" ${attrs}`, 'ghost')}</div>`;
@@ -1191,13 +1208,15 @@ export function ingestScreens(h) {
   }
 
   // One review or Undo in flight at a time; the status line reports the result.
-  function review(id, version, decision, evidence) {
+  // A stale proposal is restaged by the client and redrawn with its current summary.
+  function review(id, version, decision, evidence, fileId) {
     if (st.reviewBusy != null) return;
     st.reviewBusy = id;
     draw();
-    Promise.resolve(api.reviewImport(id, version, decision, evidence)).then((r) => {
+    Promise.resolve(api.reviewImport(id, version, decision, evidence, fileId)).then((r) => {
       st.reviewBusy = null;
-      if (r && decision === 'correct') {
+      if (r?.stale) st.reviewNote = { text: 'This file changed since its summary was written. Here is the current one.', receiptId: null };
+      else if (r && decision === 'correct') {
         delete st.drafts[id];
         st.reviewNote = { text: 'Correction saved. Fathom reads the file again with it when the engine runs.', receiptId: null };
       } else if (r) st.reviewNote = { text: reviewedText(r.counts), receiptId: r.receipt?.id ?? null };
@@ -1326,12 +1345,12 @@ export function ingestScreens(h) {
       return true;
     }
     if (d.proposalApprove) {
-      review(d.proposalApprove, Number(d.version), 'approve', 'Looks right');
+      review(d.proposalApprove, Number(d.version), 'approve', 'Looks right', d.file);
       return true;
     }
     if (d.proposalCorrect) {
       const text = String(st.drafts[d.proposalCorrect] ?? '').trim();
-      if (text) review(d.proposalCorrect, Number(d.version), 'correct', text);
+      if (text) review(d.proposalCorrect, Number(d.version), 'correct', text, d.file);
       return true;
     }
     if (d.reviewUndo) {
