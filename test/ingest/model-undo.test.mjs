@@ -46,3 +46,30 @@ test('Undo first approval makes the layout require approval again', async () => 
     assert.equal(next.status, 'needs_confirmation');
   } finally { x.close(); }
 });
+
+
+test('Undo survives the real category guessing job but refuses a later owner correction', async () => {
+  const { guessCategories } = await import('../../src/categories/guess.mjs');
+  const { setTransactionCategory } = await import('../../src/categories/store.mjs');
+  for (const ownerChange of [false,true]) {
+    const x = await setup();
+    try {
+      const approved = await approve(x,await upload(x,transactions()));
+      x.db.prepare("INSERT INTO category_source_rules VALUES ('aggregator','Groceries','household',?)").run(x.ctx.now);
+      x.db.prepare("INSERT INTO category_source_rules VALUES ('aggregator','Business','business',?)").run(x.ctx.now);
+      const guessed = await guessCategories(x.db,{isOn:()=>true,model:'synthetic-category-provider',choose:async questions=>questions.map(()=>({choice:'Groceries',confidence:0.8,probabilities:{Groceries:0.8,Business:0.2}}))},{now:x.ctx.now});
+      assert.equal(guessed.stopped,undefined);
+      assert.equal(x.db.prepare('SELECT count(*) n FROM transaction_category_guesses').get().n,2);
+      if (ownerChange) {
+        setTransactionCategory(x.db,x.db.prepare('SELECT min(id) id FROM transactions').get().id,'Business',{now:x.ctx.now});
+        await assert.rejects(undoAction(x.ctx,approved.receipt.id,'write:imports'), e=>e.code==='conflict');
+        assert.equal(x.db.prepare('SELECT count(*) n FROM transactions').get().n,2);
+      } else {
+        await undoAction(x.ctx,approved.receipt.id,'write:imports');
+        assert.equal(x.db.prepare('SELECT count(*) n FROM transactions').get().n,0);
+        assert.equal(x.db.prepare('SELECT count(*) n FROM transaction_category_guesses').get().n,0);
+        assert.equal(x.db.prepare("SELECT count(*) n FROM confirm_items WHERE kind='transaction_category'").get().n,0);
+      }
+    } finally { x.close(); }
+  }
+});

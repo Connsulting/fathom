@@ -64,3 +64,53 @@ test('position authority and omissions belong to each resolved account and date'
     assert.deepEqual(x.db.prepare('SELECT * FROM positions ORDER BY id').all(),before);
   } finally { x.close(); }
 });
+
+
+test('reinterpretation preserves owner category corrections and posting ids by source occurrence', async () => {
+  const { setTransactionCategory, loadCategoryInputs } = await import('../../src/categories/store.mjs');
+  const { resolveCategories } = await import('../../src/categories/resolve.mjs');
+  const x = await setup();
+  try {
+    await approve(x, await upload(x, transactions()));
+    const ids = x.db.prepare('SELECT id FROM transactions ORDER BY id').all().map(r => r.id);
+    setTransactionCategory(x.db, ids[0], 'Groceries', { now: x.ctx.now });
+    setTransactionCategory(x.db, ids[1], 'Business', { now: x.ctx.now });
+    const corrections = x.db.prepare('SELECT * FROM transaction_category_corrections ORDER BY transaction_id').all();
+    const layout = recipe(); layout.tables[0].fields.amount.transform = { op: 'sign', mode: 'negate' };
+    await approve(x, await upload(x, transactions(), layout, { reinterpret: true }));
+    assert.deepEqual(x.db.prepare('SELECT id,amount FROM transactions ORDER BY id').all().map(r => [r.id,r.amount]), ids.map(id => [id,12.25]));
+    assert.deepEqual(x.db.prepare('SELECT * FROM transaction_category_corrections ORDER BY transaction_id').all(), corrections);
+    const resolved = resolveCategories(loadCategoryInputs(x.db));
+    assert.deepEqual(ids.map(id => resolved.get(id).category), ['Groceries','Business']);
+  } finally { x.close(); }
+});
+
+test('older model exports cannot overwrite or remove newer P&L groups', async () => {
+  const x = await setup();
+  try {
+    x.db.prepare('INSERT INTO entity_aliases VALUES (?,?,?)').run('syntheticstudio','Synthetic studio',x.ctx.now);
+    await importProposedRows(x,[pnl('2032-02','Income',200),pnl('2032-02','Software',-10),pnl('2032-12','Income',200)]);
+    const before = x.db.prepare('SELECT * FROM pnl_lines ORDER BY id').all();
+    await importProposedRows(x,[pnl('2032-02','Income',100),pnl('2032-03','Income',100)]);
+    assert.deepEqual(x.db.prepare("SELECT * FROM pnl_lines WHERE period='2032-02' ORDER BY id").all(),before.filter(r => r.period==='2032-02'));
+  } finally { x.close(); }
+});
+
+test('newer model exports revise and recategorize historical P&L and tax groups without rewriting other months', async () => {
+  const { seedHistoricalRows } = await import('../helpers/historical-import.mjs');
+  const x = await setup();
+  const payment = (payer,amount,date) => ({ target:'tax_payment',kind:'estimate',status:'paid',datePrecision:'month',fields:{jurisdiction:'federal',payer,recipient:'you',amount,taxYear:2032,taxYearBasis:'confirmed_tax_year',paymentDate:date} });
+  try {
+    x.db.prepare('INSERT INTO entity_aliases VALUES (?,?,?)').run('syntheticstudio','Synthetic studio',x.ctx.now);
+    const old = await seedHistoricalRows(x,{ name:'historical.xlsx',bytes:Buffer.from('Synthetic historical source') },[
+      {kind:'pnl_line',entity:'Synthetic studio',period:'2032-09',category:'Travel',amount:-20,locator:{sheet:'Business',cells:['C2']}},
+      {kind:'pnl_line',entity:'Synthetic studio',period:'2032-08',category:'Income',amount:50,locator:{sheet:'Business',cells:['C3']}},
+      {kind:'tax_payment',jurisdiction:'federal',payer:'Synthetic payer',sheetYear:2032,taxYear:2032,date:'2032-09-30',datePrecision:'month',taxYearBasis:'confirmed_tax_year',paymentKind:'paid',amount:100,locator:{sheet:'Taxes',cell:'C2'}},
+    ],{parser:'historical',period:{from:'2032-01-01',to:'2032-10-31'}});
+    x.db.prepare('UPDATE files SET coverage=? WHERE id=?').run(JSON.stringify(['pnl:syntheticstudio:2032','tax:2032:federal:syntheticpayer']),old.fileId);
+    await importProposedRows(x,[pnl('2032-09','Software',-25),pnl('2032-11','Income',150),payment('Synthetic payer',120,'2032-09-30'),payment('Synthetic payer',10,'2032-11-30')]);
+    assert.deepEqual(x.db.prepare('SELECT period,category,amount FROM pnl_lines ORDER BY period,category').all().map(r=>[r.period,r.category,r.amount]),[['2032-08','Income',50],['2032-09','Software',-25],['2032-11','Income',150]]);
+    assert.equal(x.db.prepare("SELECT amount FROM tax_payments WHERE date='2032-09-30'").get().amount,120);
+    assert.ok(x.db.prepare("SELECT count(*) n FROM superseded_rows WHERE file_id=?").get(old.fileId).n>=2);
+  } finally { x.close(); }
+});
