@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
+import { redactTaxIdentifiers, redactProviderText } from '../ingest/redact.mjs';
 import { compileSchema } from './schema.mjs';
 import { operationScopes } from '../tools/tools.mjs';
 import { WRITE_SCOPES } from '../shared/action-scopes.mjs';
@@ -24,7 +25,7 @@ export function createRegistryServer(registry = [], { purpose, ctx } = {}) {
   const results = [];
   const reject = (name, args, error) => {
     results.push({ name, args: structuredClone(args), isError: true, result: { error } });
-    return { isError: true, content: [{ type: 'text', text: error }] };
+    return { isError: true, content: [{ type: 'text', text: redactTaxIdentifiers(error) }] };
   };
   const invoke = async (name, args) => {
     const found = offered.find(item => item.entry.name === name);
@@ -44,14 +45,14 @@ export function createRegistryServer(registry = [], { purpose, ctx } = {}) {
       const result = await found.entry.handler(args, ctx);
       const text = JSON.stringify(result ?? null);
       results.push({ name, args: structuredClone(args), result: JSON.parse(text) });
-      return { content: [{ type: 'text', text }] };
+      return { content: [{ type: 'text', text: JSON.stringify(redactProviderText(JSON.parse(text))) }] };
     } catch (err) {
       return reject(name, args, err?.name === 'ToolError' || err?.name === 'FactAnswerError' ? err.message : 'Tool execution failed');
     }
   };
   const instance = new McpServer({ name: 'fathom', version: '1.0.0' });
   instance.server.registerCapabilities({ tools: {} });
-  instance.server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: offered.map(({ entry }) => ({
+  instance.server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: offered.map(({ entry }) => redactProviderText({
     name: entry.name, description: entry.description, inputSchema: entry.inputSchema,
     annotations: { readOnlyHint: entry.kind === 'read', destructiveHint: false, openWorldHint: false },
   })) }));
