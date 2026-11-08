@@ -65,7 +65,7 @@ export function recOutById(db, clock, id) {
 export function goalsForModel(db) {
   const scope = tokenScope(db);
   const fig = loadFigures(db);
-  const accounts = withLabelHints(db, db.prepare('SELECT * FROM accounts').all());
+  const accounts = withLabelHints(db, db.prepare('SELECT * FROM accounts WHERE archived_at IS NULL').all());
   return loadGoals(db, { fig, accounts }).filter(g => !g.archived).map(g => {
     const owner = g.origin === 'owner';
     const source = owner ? 'you' : 'plan';

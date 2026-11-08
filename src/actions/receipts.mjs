@@ -51,11 +51,21 @@ export function receiptMessages(db, key, messages) {
   return messages;
 }
 
-const TABLES = { preference: ['preferences', 'id'], fact: ['facts', 'key'], goal: ['goals', 'id'], step: ['recs', 'id'], status: ['recs', 'id'], owner: ['recs', 'id'] };
+const TABLES = { preference: ['preferences', 'id'], fact: ['facts', 'key'], goal: ['goals', 'id'], step: ['recs', 'id'], status: ['recs', 'id'], owner: ['recs', 'id'], account: ['accounts', 'id'] };
+// Receipts whose Undo replays a change log or reopens a merge (accounts/sources.mjs), not a single row.
+const SOURCE_KINDS = new Set(['file', 'merge']);
 
 export async function undoAction(ctx, id, scope) {
   const actor = requireActor(ctx);
   if (ctx.scopes && !ctx.scopes.includes(scope)) throw new ToolError('forbidden', `Permission denied: Undo needs ${scope}.`);
+  const own = ctx.db.prepare('SELECT * FROM action_receipts WHERE id = ?').get(id);
+  if (own && SOURCE_KINDS.has(own.kind) && own.actor_id === actor && own.scope === scope) {
+    if (own.undone_at) throw new ToolError('bad_input', 'This change was already undone.');
+    const { undoSourceChange } = await import('../accounts/sources.mjs');
+    undoSourceChange(ctx, own);
+    ctx.queuePlan?.();
+    return { receipt: receiptOut(ctx.db.prepare('SELECT * FROM action_receipts WHERE id = ?').get(id)) };
+  }
   let receipt;
   tx(ctx.db, () => {
     const row = ctx.db.prepare('SELECT * FROM action_receipts WHERE id = ?').get(id);
@@ -87,6 +97,7 @@ export async function undoAction(ctx, id, scope) {
     receipt = receiptOut(ctx.db.prepare('SELECT * FROM action_receipts WHERE id = ?').get(id));
   });
   if (scope === 'write:facts') await replanAction(ctx, receipt);
+  else if (scope === 'write:sources') ctx.queuePlan?.();
   return { receipt };
 }
 

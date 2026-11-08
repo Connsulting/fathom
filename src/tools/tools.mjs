@@ -17,6 +17,7 @@ export const headers = [
   ['advisor_review', 'write', 'Manage advisor reviews.', 'Updating advisor review', 'advisor review changes'],
   ['update_goal', 'write', 'Create or update a goal.', 'Saving your goal', 'goal changes'],
   ['update_preferences', 'write', 'Remember household preferences.', 'Remembering your preference', 'your preferences'],
+  ['sources', 'write', 'Archive accounts, remove imported files and merge duplicate accounts.', 'Updating your sources', 'source changes'],
   ['refresh', 'write', 'Refresh household data and plans.', 'Refreshing your data', 'data refresh'],
   ['undo', 'write', 'Undo an earlier change by receipt.', 'Undoing your change', 'undone change'],
 ].map(([name, kind, purpose, progress, source]) => ({ name, kind, purpose, progress, source,

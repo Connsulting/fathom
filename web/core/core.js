@@ -1313,6 +1313,18 @@ function yearendMark(year, key, reason) {
   return send('/api/yearend/marks', { year, key, reason: reason == null ? null : String(reason) }, d => d);
 }
 
+// Sources on the Files page. Each resolves { receipt } (null when nothing changed) with the
+// scenario applied, or null on failure (error line shown). Undo is api.actionUndo(receipt.id).
+function archiveAccount(id, archived = true) {
+  if (id == null || id === '') return done();
+  return send(accountPath(id, 'archive'), { archived: archived !== false }, d => ({ receipt: d.receipt || null }), null, 'Could not change that account. ');
+}
+
+function removeFile(id) {
+  if (id == null || id === '') return done();
+  return send('/api/files/' + encodeURIComponent(id) + '/remove', {}, d => ({ receipt: d.receipt || null }), null, 'Could not remove that file. ');
+}
+
 function retryFile(id) {
   if (id == null || id === '') return done();
   return send('/api/files/' + encodeURIComponent(id) + '/retry', {}, d => d.file || null);
@@ -1417,6 +1429,8 @@ const api = {
   answerMany,
   reopenMany,
   retryFile,
+  archiveAccount,
+  removeFile,
   yearendMark,
   refresh: refetchScenario,
   sendToAdvisor,
