@@ -176,6 +176,7 @@ describe('household A sees only its own data on every financial route', T, () =>
     '/api/advisor/packets/:id': { path: `/api/advisor/packets/${A.packetId}`, own: true },
     '/api/yearend/packet': { zip: true },
     '/api/household/outbound': {},
+    '/api/household/backups/:id/status': { path: '/api/household/backups/synthetic-missing/status', status: 404 },
   });
 
   test('every GET route answers A with A\'s canary where it applies and none of B\'s data', async () => {

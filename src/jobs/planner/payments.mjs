@@ -1,7 +1,4 @@
-// Tax payments by kind and jurisdiction (plan Revision 6, R6-2). Ingest stores two kinds of rows in
-// tax_payments: 'withholding' (from W-2s, paystubs and 1099s, one row per document and
-// jurisdiction) and 'paid' (estimated payments from the payment workbook). Each counts once, in
-// its own figure. Pure: everything comes from loadPlanningData.
+// Withholding and estimates count once in separate figures. Historical 'paid' rows remain estimates.
 //
 // jurisdictionOf(value) -> 'federal' | 'virginia' | 'unknown-state' | 'other-state'
 // classifyPayments(data, {persons, f, isVa}) -> {fed: {paid, withheld}, va: {paid, withheld},
@@ -57,11 +54,11 @@ export function classifyPayments(data, { persons, f, isVa }) {
 
   for (const r of data.taxPayments) {
     const { j, b } = bucketOf(r);
-    if (r.kind !== 'paid' && r.kind !== 'withholding') {
+    if (!['paid', 'estimate', 'withholding'].includes(r.kind)) {
       if (b) { block(b.paid, 'tax_payment_kind_unknown'); block(b.withheld, 'tax_payment_kind_unknown'); }
       continue;
     }
-    if (r.kind === 'paid') {
+    if (r.kind === 'paid' || r.kind === 'estimate') {
       // Workbook groups are only federal or state; a state payment is Virginia's for a Virginia household.
       if (!b || (j === 'unknown-state' && !isVa)) continue;
       if (r.tax_year_basis === 'sheet_label') block(b.paid, 'tax_year_unconfirmed');
@@ -72,7 +69,7 @@ export function classifyPayments(data, { persons, f, isVa }) {
     if (j === 'unknown-state') { block(b.withheld, 'withholding_state_unknown'); continue; }
     if (conflicted.has(r.id)) block(b.withheld, 'withholding_conflict_pending');
     if (persons.includes(r.recipient)) { add(b.withheld, r); continue; }
-    if (r.recipient === 'unknown' || r.recipient == null) {
+    if (r.recipient === 'unknown' || r.recipient === 'joint' || r.recipient == null) {
       if (!mfj || mixed(r)) { block(b.withheld, 'withholding_recipient_unknown'); continue; }
       add(b.withheld, r);
     }
@@ -80,7 +77,7 @@ export function classifyPayments(data, { persons, f, isVa }) {
   }
   // Next year's sheet rows whose year is unconfirmed may belong to this year (January estimates).
   for (const r of data.taxPaymentsNext || []) {
-    if (r.kind !== 'paid' || r.tax_year_basis !== 'sheet_label') continue;
+    if (!['paid', 'estimate'].includes(r.kind) || r.tax_year_basis !== 'sheet_label') continue;
     const { j, b } = bucketOf(r);
     if (b && !(j === 'unknown-state' && !isVa)) block(b.paid, 'tax_year_unconfirmed');
   }

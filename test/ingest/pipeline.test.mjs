@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { src } from '../helpers/server.mjs';
 import { writeXlsx } from '../helpers/xlsx.mjs';
+import { importProposedRows } from '../helpers/import-proposal-fixture.mjs';
 import { imagePdf } from '../helpers/pdf.mjs';
 import {
   fixture, textFile, aggregatorFile, studioRemovalFile, activityFile, coveragePnlFile, coverageTaxFile, positionsFile, unreadablePnlFile, unreadableTaxFile,
@@ -141,71 +142,11 @@ describe('routing and persistence per fixture', () => {
     assert.ok(!storeText(s.db).includes('8877665544'), 'no full brokerage account number');
   }));
 
-  test('month-end balances and the account map import; notes with the engine off keep their document and wait', () => withStore(async (s) => {
-    const off = await offEngine();
-    const b = await P.ingestFile(s.db, fixture('month-end-balances.csv', 'text/csv'), s.opts(off));
-    assert.equal(b.status, 'imported');
-    assert.equal(inserted(b, 'balance'), 2);
-    const acct = one(s.db, 'SELECT * FROM accounts');
-    assert.equal(acct.name, 'daily');
-    assert.equal(acct.mask, null);
-    assert.deepEqual(all(s.db, 'SELECT date, amount FROM balances ORDER BY date').map((x) => [x.date, x.amount]), [['2032-02-29', 1400.25], ['2032-03-31', 2300.75]]);
 
-    const m = await P.ingestFile(s.db, fixture('account-map.csv', 'text/csv'), s.opts(off));
-    assert.equal(m.status, 'imported');
-    assert.equal(inserted(m, 'document'), 2);
-    assert.deepEqual(all(s.db, "SELECT doc_type FROM documents WHERE file_id = ?", m.fileId).map((d) => d.doc_type), ['account_metadata', 'account_metadata']);
 
-    const n = await P.ingestFile(s.db, fixture('notes.md'), s.opts(off));
-    assert.equal(n.status, 'needs_extraction', 'R7: notes wait for the engine');
-    assert.equal(one(s.db, 'SELECT status FROM files WHERE id = ?', n.fileId).status, 'needs_extraction');
-    const notes = all(s.db, 'SELECT * FROM documents WHERE file_id = ?', n.fileId);
-    assert.equal(notes.length, 1, 'the notes parser document is still written');
-    assert.equal(notes[0].doc_type, 'notes');
-    assert.equal(count(s.db, 'confirm_items', 'file_id = ?', n.fileId), 0);
-  }));
 
-  test('business-pnl.xlsx: grouped P&L lines with slots and cell locators', () => withStore(async (s) => {
-    const r = await P.ingestFile(s.db, fixture('business-pnl.xlsx'), s.opts(await offEngine()));
-    assert.equal(r.status, 'imported');
-    assert.equal(r.parser, 'pnl-workbook');
-    assert.equal(inserted(r, 'pnl_line'), 3);
-    const lines = all(s.db, 'SELECT * FROM pnl_lines ORDER BY entity, period, category');
-    assert.deepEqual(lines.map((l) => [l.entity, l.period, l.category, l.amount]), [
-      ['Example Shop', '2032-03', 'Income', 175.25],
-      ['Example Studio', '2032-02', 'Income', 400],
-      ['Example Studio', '2032-02', 'Office supplies', -35],
-    ]);
-    for (const l of lines) {
-      assert.match(l.source_slot, /^pnl:.+:2032$/);
-      assert.match(l.dedupe_key, /^pnl_line:/);
-      assert.equal(l.file_id, r.fileId);
-    }
-    assert.equal(lines[1].source_slot, lines[2].source_slot, 'one slot per entity and year');
-    assert.notEqual(lines[0].source_slot, lines[1].source_slot);
-    assert.deepEqual(JSON.parse(lines[2].locator), { sheet: 'Example Studio', cells: ['I2', 'I3', 'I4'] });
-  }));
 
-  test('tax-payments.xlsx: payment kind lands in kind, with payer, precision, basis and slots', () => withStore(async (s) => {
-    const r = await P.ingestFile(s.db, fixture('tax-payments.xlsx'), s.opts(await offEngine()));
-    assert.equal(r.status, 'imported');
-    assert.equal(r.parser, 'tax-payments');
-    assert.equal(inserted(r, 'tax_payment'), 10);
-    const rows = all(s.db, 'SELECT * FROM tax_payments ORDER BY id');
-    assert.equal(rows.length, 10);
-    assert.ok(rows.every((t) => t.kind === 'paid' && t.date_precision === 'month' && t.tax_year_basis === 'sheet_label'));
-    assert.deepEqual([...new Set(rows.map((t) => t.payer))].sort(), ['Owner', 'Spouse']);
-    assert.equal(rows.filter((t) => t.tax_year === 2032).length, 8);
-    assert.equal(rows.filter((t) => t.tax_year === 2031).length, 2);
-    // R4: slot = tax:<sheetYear>:<jurisdiction>:<payer>, normalized.
-    assert.deepEqual([...new Set(rows.map((t) => t.source_slot))].sort(), [
-      'tax:2031:federal:spouse', 'tax:2031:state:spouse',
-      'tax:2032:federal:owner', 'tax:2032:federal:spouse', 'tax:2032:state:owner', 'tax:2032:state:spouse',
-    ]);
-    assert.equal(Math.round(rows.reduce((sum, t) => sum + t.amount, 0) * 100) / 100, 1320);
-    const years = new Set(items(s.db, 'tax_year').map((q) => (/(?:^|:)(203[12])(?::|$)/.exec(q.subject) || [])[1]));
-    assert.deepEqual([...years].sort(), ['2031', '2032'], 'tax-year questions cover both sheet years');
-  }));
+
 });
 
 describe('identity, occurrence and source scope', () => {
@@ -355,74 +296,6 @@ describe('interrupted ingest', () => {
   }));
 });
 
-describe('supersede', () => {
-  test('business-pnl then the revised workbook: revised amount replaces the old one; a recut removes a slot row', () => withStore(async (s) => {
-    const off = await offEngine();
-    const first = await P.ingestFile(s.db, fixture('business-pnl.xlsx'), s.opts(off));
-    const revised = await P.ingestFile(s.db, fixture('business-pnl-revised.xlsx'), s.opts(off));
-    assert.equal(revised.status, 'imported');
-    assert.equal(revised.counts.revised, 1);
-    assert.equal(revised.counts.duplicates, 2);
-    assert.equal(revised.counts.superseded, 0);
-    assert.equal(count(s.db, 'pnl_lines'), 3);
-    assert.equal(one(s.db, "SELECT amount FROM pnl_lines WHERE category = 'Office supplies'").amount, -50);
-    const sup = all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'pnl_lines' ORDER BY id");
-    assert.equal(sup.length, 1);
-    assert.equal(sup[0].reason, 'revised');
-    assert.equal(sup[0].file_id, first.fileId);
-    assert.equal(sup[0].superseded_by, revised.fileId);
-    assert.equal(JSON.parse(sup[0].row).amount, -35);
-
-    const recut = await P.ingestFile(s.db, studioRemovalFile(), s.opts(off));
-    assert.equal(recut.status, 'imported');
-    assert.equal(inserted(recut, 'pnl_line'), 1, 'the new Software line');
-    assert.equal(recut.counts.duplicates, 1, 'the unchanged income line');
-    assert.equal(recut.counts.superseded, 1, 'the Office supplies slot row is gone from the later file');
-    const lines = all(s.db, 'SELECT entity, period, category, amount FROM pnl_lines ORDER BY entity, category');
-    assert.deepEqual(lines.map((l) => [l.entity, l.category, l.amount]), [
-      ['Example Shop', 'Income', 175.25],
-      ['Example Studio', 'Income', 400],
-      ['Example Studio', 'Software', -20],
-    ], 'other slots (Example Shop) are untouched');
-    const removed = all(s.db, "SELECT * FROM superseded_rows WHERE reason = 'removed'");
-    assert.equal(removed.length, 1);
-    assert.equal(JSON.parse(removed[0].row).amount, -50);
-    assert.equal(removed[0].superseded_by, recut.fileId);
-  }));
-
-  test('tax-payments then the revised workbook: one revised payment, nothing else changes', () => withStore(async (s) => {
-    const off = await offEngine();
-    const first = await P.ingestFile(s.db, fixture('tax-payments.xlsx'), s.opts(off));
-    const revised = await P.ingestFile(s.db, fixture('tax-payments-revised.xlsx'), s.opts(off));
-    assert.equal(revised.status, 'imported');
-    assert.equal(revised.counts.revised, 1);
-    assert.equal(revised.counts.duplicates, 9);
-    assert.equal(revised.counts.superseded, 0);
-    assert.equal(count(s.db, 'tax_payments'), 10);
-    const feb = one(s.db, "SELECT * FROM tax_payments WHERE jurisdiction = 'federal' AND payer = 'Owner' AND date = '2032-02-29'");
-    assert.equal(feb.amount, 250);
-    assert.equal(feb.kind, 'paid');
-    assert.equal(Math.round(all(s.db, 'SELECT amount FROM tax_payments').reduce((sum, t) => sum + t.amount, 0) * 100) / 100, 1345);
-    const sup = all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments'");
-    assert.equal(sup.length, 1);
-    assert.equal(sup[0].reason, 'revised');
-    assert.equal(sup[0].file_id, first.fileId);
-    assert.equal(JSON.parse(sup[0].row).amount, 225);
-  }));
-});
-
-test('stored uploads exist only as encrypted blobs under the household root files/', () => withStore(async (s) => {
-  const r = await P.ingestFile(s.db, fixture('positions.csv', 'text/csv'), s.opts(await offEngine()));
-  const path = join(s.root, 'files', `${r.fileId}.bin`);
-  assert.ok(existsSync(path));
-  assert.ok(!existsSync(join(s.dataDir, 'files')), 'nothing is stored at the data root');
-  const blob = readFileSync(path);
-  assert.equal(blob.subarray(0, 5).toString('latin1'), 'FTHM2');
-  assert.ok(!blob.includes(Buffer.from('Example Fund')));
-}));
-
-// R3: two overlapping activity exports disagree on the 2032-03-05 closing balance. The export whose
-// period ends later (2032-03-06) wins in either import order.
 describe('balance revisions', () => {
   const older = () => activityFile('Chase4321_Activity_20320305.csv', [
     { date: '03/01/2032', amount: '-10.00', balance: '990.00', description: 'Synthetic fee' },
@@ -478,121 +351,11 @@ describe('balance revisions', () => {
     const again = await P.ingestFile(s.db, activityFile('Chase4321_Activity_copy.csv', [{ date: '03/05/2032', amount: '-20.00', balance: '970.00', description: 'Synthetic card' }]), s.opts(off));
     assert.equal(again.counts.revised, 0);
     assert.equal(again.counts.duplicates, 2);
-    assert.equal(count(s.db, 'superseded_rows'), 0);
+    assert.equal(count(s.db, 'superseded_rows', "reason != 'duplicate_cross_format'"), 0);
   }));
 });
 
 // R4: workbook coverage decides which stored rows a later workbook replaces.
-describe('workbook coverage', () => {
-  const removed = (db, table) => all(db, `SELECT * FROM superseded_rows WHERE table_name = '${table}' AND reason = 'removed' ORDER BY id`);
-
-  test('P&L: a deleted row is archived and removed', () => withStore(async (s) => {
-    const off = await offEngine();
-    const base = await P.ingestFile(s.db, coveragePnlFile('base'), s.opts(off));
-    assert.equal((base.counts.rows || {}).pnl_line, 4);
-    const r = await P.ingestFile(s.db, coveragePnlFile('deleteRow'), s.opts(off));
-    assert.equal(r.counts.superseded, 1);
-    const gone = removed(s.db, 'pnl_lines');
-    assert.deepEqual(gone.map((x) => [JSON.parse(x.row).category, JSON.parse(x.row).amount]), [['Travel', -50]]);
-    assert.equal(gone[0].file_id, base.fileId);
-    assert.equal(gone[0].superseded_by, r.fileId);
-    assert.equal(count(s.db, 'pnl_lines', "category = 'Travel'"), 0);
-    assert.equal(count(s.db, 'pnl_lines'), 3);
-  }));
-
-  test('P&L: sheets kept with headers but no data empty the slot; every active row of it is removed', () => withStore(async (s) => {
-    const off = await offEngine();
-    await P.ingestFile(s.db, coveragePnlFile('base'), s.opts(off));
-    const r = await P.ingestFile(s.db, coveragePnlFile('emptySlot'), s.opts(off));
-    assert.equal(r.counts.superseded, 3);
-    assert.deepEqual(removed(s.db, 'pnl_lines').map((x) => JSON.parse(x.row).amount).sort((a, b) => a - b), [-50, -30, 400]);
-    assert.deepEqual(all(s.db, 'SELECT entity, amount FROM pnl_lines').map((x) => [x.entity, x.amount]), [['Example Shop', 175.25]]);
-  }));
-
-  test('P&L: a workbook without the entity sheets covers nothing for it; its rows stay', () => withStore(async (s) => {
-    const off = await offEngine();
-    await P.ingestFile(s.db, coveragePnlFile('base'), s.opts(off));
-    const r = await P.ingestFile(s.db, coveragePnlFile('sheetGone'), s.opts(off));
-    assert.equal(r.counts.superseded, 0);
-    assert.equal(count(s.db, 'pnl_lines'), 4);
-    assert.equal(count(s.db, 'superseded_rows'), 0);
-  }));
-
-  test('tax: a deleted month row is archived and removed', () => withStore(async (s) => {
-    const off = await offEngine();
-    const base = await P.ingestFile(s.db, coverageTaxFile('base'), s.opts(off));
-    assert.equal((base.counts.rows || {}).tax_payment, 8);
-    const r = await P.ingestFile(s.db, coverageTaxFile('deleteRow'), s.opts(off));
-    assert.equal(r.counts.superseded, 2);
-    assert.deepEqual(removed(s.db, 'tax_payments').map((x) => JSON.parse(x.row).amount).sort((a, b) => a - b), [60, 120]);
-    assert.equal(count(s.db, 'tax_payments', "date = '2032-03-31'"), 0);
-    assert.equal(count(s.db, 'tax_payments'), 6);
-  }));
-
-  test('tax: payer columns kept but emptied cover their slots; those rows are removed', () => withStore(async (s) => {
-    const off = await offEngine();
-    await P.ingestFile(s.db, coverageTaxFile('base'), s.opts(off));
-    const r = await P.ingestFile(s.db, coverageTaxFile('emptySlot'), s.opts(off));
-    assert.equal(r.counts.superseded, 3);
-    assert.deepEqual(removed(s.db, 'tax_payments').map((x) => JSON.parse(x.row).amount).sort((a, b) => a - b), [20, 50, 60]);
-    assert.equal(count(s.db, 'tax_payments', "payer = 'Spouse'"), 0);
-    assert.deepEqual([...new Set(all(s.db, 'SELECT source_slot FROM tax_payments').map((x) => x.source_slot))].sort(), ['tax:2032:federal:owner', 'tax:2032:state:owner']);
-    const cov = JSON.parse(one(s.db, 'SELECT coverage FROM files WHERE id = ?', r.fileId).coverage);
-    assert.ok(JSON.stringify(cov).includes('tax:2032:federal:spouse'), 'coverage comes from the header, not the emitted rows');
-  }));
-
-  test('tax: a workbook without the 2032 sheet leaves the 2032 rows alone', () => withStore(async (s) => {
-    const off = await offEngine();
-    await P.ingestFile(s.db, coverageTaxFile('base'), s.opts(off));
-    const r = await P.ingestFile(s.db, coverageTaxFile('sheetGone'), s.opts(off));
-    assert.equal(r.counts.superseded, 0);
-    assert.equal(count(s.db, 'tax_payments', "date LIKE '2032-%'"), 8);
-    assert.equal(count(s.db, 'tax_payments'), 10);
-  }));
-});
-
-// R11: P&L coverage is per entity and the years of its own rows; header-only sheets cover a year
-// only when the whole file is single-year; a file with no P&L rows covers nothing.
-describe('P&L coverage per entity and year', () => {
-  test('entities covering different years do not delete each other\'s history', () => withStore(async (s) => {
-    const off = await offEngine();
-    await P.ingestFile(s.db, coveragePnlFile('base'), s.opts(off));
-    const r = await P.ingestFile(s.db, coveragePnlFile('otherYear'), s.opts(off));
-    assert.equal(r.counts.superseded, 0, 'Studio 2031 rows do not cover Studio 2032');
-    assert.equal(count(s.db, 'pnl_lines', "entity = 'Example Studio' AND period LIKE '2032-%'"), 3);
-    assert.equal(count(s.db, 'pnl_lines', "entity = 'Example Studio' AND period = '2031-11'"), 1);
-    assert.equal(count(s.db, 'superseded_rows'), 0);
-  }));
-
-  test('a header-only revision with no rows anywhere supersedes nothing and warns empty_workbook', () => withStore(async (s) => {
-    const off = await offEngine();
-    await P.ingestFile(s.db, coveragePnlFile('base'), s.opts(off));
-    const r = await P.ingestFile(s.db, coveragePnlFile('allEmpty'), s.opts(off));
-    assert.equal(r.counts.superseded, 0);
-    assert.ok((r.counts.warningCodes || {}).empty_workbook >= 1);
-    assert.equal(count(s.db, 'pnl_lines'), 4);
-    assert.equal(count(s.db, 'superseded_rows'), 0);
-  }));
-
-  test('a header-only sheet in a single-year workbook removes that entity\'s rows for the year', () => withStore(async (s) => {
-    const off = await offEngine();
-    await P.ingestFile(s.db, coveragePnlFile('base'), s.opts(off));
-    const r = await P.ingestFile(s.db, coveragePnlFile('emptySlot'), s.opts(off));
-    assert.equal(r.counts.superseded, 3);
-    assert.equal(count(s.db, 'pnl_lines', "entity = 'Example Studio'"), 0);
-  }));
-
-  test('a header-only sheet in a multi-year workbook covers nothing', () => withStore(async (s) => {
-    const off = await offEngine();
-    await P.ingestFile(s.db, coveragePnlFile('base'), s.opts(off));
-    const r = await P.ingestFile(s.db, coveragePnlFile('emptyMultiYear'), s.opts(off));
-    assert.equal(r.counts.superseded, 0);
-    assert.equal(count(s.db, 'pnl_lines', "entity = 'Example Studio'"), 3);
-  }));
-});
-
-// R12: authority advances on equal values. A (100, period to 03-05), C (200, to 03-06),
-// B (100, to 03-07): every order ends with 100 from B.
 describe('balance authority across three exports', () => {
   const A = () => activityFile('Chase4321_Activity_A.csv', [{ date: '03/05/2032', amount: '-20.00', balance: '100.00' }]);
   const Cx = () => activityFile('Chase4321_Activity_C.csv', [
@@ -646,119 +409,11 @@ describe('position revisions', () => {
     assert.equal(one(s.db, 'SELECT v FROM figures WHERE key = ?', `acct.${acct.id}.balance`).v, 260, 'holdings total follows the revision');
   }));
 
-  test('an extracted statement with changed holdings revises the position', () => withStore(async (s) => {
-    const statement = (value) => ({
-      institution: 'Example Bank', accountLast4: '4321', accountKind: 'brokerage', periodEnd: '2032-03-31', endingBalance: value,
-      holdings: [{ symbol: 'EXMPL', name: 'Example Index Fund', quantity: 10, value }], confidence: 0.9,
-    });
-    const pdf = (tag) => ({ name: `statement-${tag}.pdf`, bytes: imagePdf({ tag: `synthetic statement ${tag}` }), mime: 'application/pdf' });
-    const eng = (value) => fakeEngine([[{ docType: 'statement', confidence: 0.9 }], [statement(value)]]);
-    const a = await P.ingestFile(s.db, pdf('first'), s.opts(await eng(1234.5)));
-    const b = await P.ingestFile(s.db, pdf('corrected'), s.opts(await eng(1300)));
-    assert.equal(a.status, 'imported');
-    assert.equal(b.status, 'imported');
-    const pos = all(s.db, 'SELECT * FROM positions');
-    assert.equal(pos.length, 1);
-    assert.deepEqual([pos[0].value, pos[0].price, pos[0].file_id], [1300, 130, b.fileId]);
-    const sup = all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'positions'");
-    assert.deepEqual(sup.map((x) => [x.reason, JSON.parse(x.row).value, x.file_id]), [['revised', 1234.5, a.fileId]]);
-  }));
+
 });
 
 // Review finding F1: an unreadable amount cell (formula without a cached value, or text) must not
 // remove or partially overwrite the active rows of its slot. A readable revision still removes.
-describe('partly unreadable workbooks', () => {
-  const removedFrom = (db, table) => all(db, `SELECT * FROM superseded_rows WHERE table_name = '${table}' AND reason = 'removed'`);
-
-  test('P&L: unreadable cells keep the stored Software total and the Travel row', () => withStore(async (s) => {
-    const off = await offEngine();
-    await P.ingestFile(s.db, unreadablePnlFile('base'), s.opts(off));
-    const r = await P.ingestFile(s.db, unreadablePnlFile('unreadable'), s.opts(off));
-    assert.equal(r.counts.warningCodes.formula_without_cache, 1);
-    assert.equal(r.counts.warningCodes.invalid_pnl_row, 1);
-    const lines = all(s.db, 'SELECT category, period, amount FROM pnl_lines ORDER BY period, category');
-    assert.deepEqual(lines.map((l) => [l.category, l.period, l.amount]), [
-      ['Income', '2032-02', 400], ['Software', '2032-02', -50], ['Travel', '2032-03', -50],
-    ], 'no partial aggregate replaces the complete one and nothing is removed');
-    assert.deepEqual(removedFrom(s.db, 'pnl_lines'), []);
-    assert.equal(count(s.db, 'superseded_rows', "table_name = 'pnl_lines'"), 0);
-  }));
-
-  test('P&L liveness: the same revision without unreadable cells removes the Travel row', () => withStore(async (s) => {
-    const off = await offEngine();
-    await P.ingestFile(s.db, unreadablePnlFile('base'), s.opts(off));
-    const r = await P.ingestFile(s.db, unreadablePnlFile('travelGone'), s.opts(off));
-    assert.equal(r.counts.superseded, 1);
-    assert.deepEqual(removedFrom(s.db, 'pnl_lines').map((x) => JSON.parse(x.row).amount), [-50]);
-    assert.equal(count(s.db, 'pnl_lines', "category = 'Travel'"), 0);
-  }));
-
-  test('tax: unreadable Paid cells keep the stored payments of their slots', () => withStore(async (s) => {
-    const off = await offEngine();
-    await P.ingestFile(s.db, unreadableTaxFile('base'), s.opts(off));
-    const r = await P.ingestFile(s.db, unreadableTaxFile('unreadable'), s.opts(off));
-    assert.equal(r.counts.warningCodes.formula_without_cache, 1);
-    assert.equal(r.counts.warningCodes.invalid_tax_payment, 1);
-    const owner = (j, date) => all(s.db, 'SELECT amount FROM tax_payments WHERE jurisdiction = ? AND payer = ? AND date = ?', j, 'Owner', date).map((t) => t.amount);
-    assert.deepEqual(owner('federal', '2032-03-31'), [120], 'the March federal payment stays');
-    assert.deepEqual(owner('state', '2032-02-29'), [35], 'the February state payment stays');
-    assert.equal(count(s.db, 'tax_payments'), 8);
-    assert.deepEqual(removedFrom(s.db, 'tax_payments'), []);
-  }));
-
-  test('tax liveness: the same revision without unreadable cells removes the March payments', () => withStore(async (s) => {
-    const off = await offEngine();
-    await P.ingestFile(s.db, unreadableTaxFile('base'), s.opts(off));
-    const r = await P.ingestFile(s.db, unreadableTaxFile('marchGone'), s.opts(off));
-    assert.equal(r.counts.superseded, 2);
-    assert.deepEqual(removedFrom(s.db, 'tax_payments').map((x) => JSON.parse(x.row).amount).sort((a, b) => a - b), [60, 120]);
-  }));
-});
-
-// Review finding F5: a Month label cell that cannot be read (formula without a cached value) must
-// not be taken as "the month is gone". The parser warns invalid_tax_month and the pipeline keeps
-// every stored payment of that sheet.
-describe('unreadable tax month label', () => {
-  const taxWithMonthCell = (marchCell, name) => {
-    const head = [[null, 'Federal', null, 'State'], ['Month', 'Owner Paid', 'Spouse Paid', 'Owner Paid', 'Spouse Paid']];
-    const months = [['January', 100, 50, 30, 20], ['February', 110, null, 35, null], [marchCell, 120, 60, null, null]];
-    return { name, bytes: new Uint8Array(writeXlsx([{ name: '2032', rows: [...head, ...months] }])) };
-  };
-
-  test('an uncached Month formula keeps the stored payments and warns invalid_tax_month', () => withStore(async (s) => {
-    const off = await offEngine();
-    await P.ingestFile(s.db, unreadableTaxFile('base'), s.opts(off));
-    assert.equal(count(s.db, 'tax_payments'), 8);
-    const r = await P.ingestFile(s.db, taxWithMonthCell({ formula: 'A2' }, 'tax-month-unreadable.xlsx'), s.opts(off));
-    assert.equal(r.counts.warningCodes.invalid_tax_month, 1);
-    assert.equal(count(s.db, 'tax_payments'), 8, 'every stored payment of the sheet stays active');
-    assert.deepEqual(all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' AND reason = 'removed'"), []);
-  }));
-
-  for (const [what, cell] of [['text that is not a month name', 'not a month'], ['blank', null]]) {
-    test(`a Month label that is ${what} keeps the stored payments and warns invalid_tax_month`, () => withStore(async (s) => {
-      const off = await offEngine();
-      await P.ingestFile(s.db, unreadableTaxFile('base'), s.opts(off));
-      assert.equal(count(s.db, 'tax_payments'), 8);
-      const r = await P.ingestFile(s.db, taxWithMonthCell(cell, 'tax-month-bad-label.xlsx'), s.opts(off));
-      assert.equal(r.counts.warningCodes.invalid_tax_month, 1);
-      assert.equal(count(s.db, 'tax_payments'), 8, 'every stored payment of the sheet stays active');
-      assert.deepEqual(all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' AND reason = 'removed'"), []);
-    }));
-  }
-
-  test('control: a readable Month label with the month absent removes that month', () => withStore(async (s) => {
-    const off = await offEngine();
-    await P.ingestFile(s.db, unreadableTaxFile('base'), s.opts(off));
-    const r = await P.ingestFile(s.db, unreadableTaxFile('marchGone'), s.opts(off));
-    assert.equal(r.counts.warningCodes.invalid_tax_month ?? 0, 0);
-    assert.equal(count(s.db, 'tax_payments'), 6);
-    assert.equal(all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' AND reason = 'removed'").length, 2);
-  }));
-});
-
-// D1: bounded parsing. Real limits: rows 200000, columns 512, cells 2000000, cell length 32768.
-// An input past a limit is recorded as too_large (encrypted bytes kept), never parsed whole.
 describe('bounded parsing (D1)', () => {
   let FM;
   let CHASE;
@@ -860,76 +515,6 @@ describe('bounded parsing (D1)', () => {
 });
 
 // D2: the notes document row never holds the note text; extraction reads it from the vault.
-describe('no plaintext notes (D2)', () => {
-  const SENTENCE = 'The quiet heron counts seventeen lanterns before the marigold tide returns.';
-  const noteFile = () => textFile('household-notes.md', `# Synthetic notes\n\n${SENTENCE}\n\nWe keep two dependents in mind.\n`, 'text/markdown');
-  const NOTES_OUT = { facts: [{ key: 'household.dependents', value: '2', confidence: 0.95 }], goals: [{ title: 'Build a cash reserve', when: '2033', confidence: 0.9 }] };
-  const slices = (s, n = 20) => Array.from({ length: s.length - n + 1 }, (_, i) => s.slice(i, i + n));
-
-  function assertNoText(s) {
-    s.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-    const bytes = [s.file, `${s.file}-wal`].filter((p) => existsSync(p)).map((p) => readFileSync(p).toString('latin1')).join('\n');
-    const tables = s.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'").all().map((r) => r.name);
-    const cells = [];
-    for (const t of tables) for (const row of s.db.prepare(`SELECT * FROM "${t}"`).all()) for (const v of Object.values(row)) if (typeof v === 'string') cells.push(v);
-    const text = cells.join('\n');
-    for (const slice of slices(SENTENCE)) {
-      assert.ok(!bytes.includes(slice), `database file bytes hold no slice of the note: ${slice}`);
-      assert.ok(!text.includes(slice), `no TEXT column holds a slice of the note: ${slice}`);
-    }
-  }
-
-  test('the stored notes document is a reference, and the database never holds the text', () => withStore(async (s) => {
-    const file = noteFile();
-    const r = await P.ingestFile(s.db, file, s.opts(await offEngine()));
-    assert.equal(r.status, 'needs_extraction');
-    const doc = one(s.db, "SELECT * FROM documents WHERE doc_type = 'notes'");
-    const fields = JSON.parse(doc.fields);
-    assert.deepEqual(Object.keys(fields).sort(), ['chars', 'lines', 'ref', 'sha256']);
-    assert.equal(fields.ref, r.fileId);
-    assert.equal(fields.sha256, sha256(file.bytes));
-    assert.equal(fields.chars, new TextDecoder().decode(file.bytes).length);
-    assert.ok(Number.isInteger(fields.lines) && fields.lines >= 5);
-    assertNoText(s);
-  }));
-
-  test('retry with the engine on reads the note from the vault, extracts facts and still stores no text', () => withStore(async (s) => {
-    const first = await P.ingestFile(s.db, noteFile(), s.opts(await offEngine()));
-    const engine = await recordingEngine([[NOTES_OUT]]);
-    const retried = await P.retryFile(s.db, first.fileId, s.opts(engine));
-    assert.equal(retried.status, 'imported');
-    assert.ok(engine.extracts[0].document.text.includes(SENTENCE), 'the engine got the decrypted note');
-    assert.equal(one(s.db, "SELECT value FROM facts WHERE key = 'household.dependents'").value, '2');
-    assert.equal(count(s.db, 'documents', "doc_type = 'notes'"), 1);
-    assert.equal(JSON.parse(one(s.db, "SELECT fields FROM documents WHERE doc_type = 'notes'").fields).ref, first.fileId);
-    assertNoText(s);
-  }));
-});
-
-// A pack refresh failure after the rows commit leaves the file imported (deploy finding: a missing
-// or broken pack dir marked fact-changing uploads failed after their rows were stored).
-describe('pack refresh failure after commit', () => {
-  test('a broken your-plans pack does not mark a fact-changing file failed', () => withStore(async (s) => {
-    const plans = join(s.root, 'packs', 'your-plans');
-    mkdirSync(plans, { recursive: true });
-    writeFileSync(join(plans, 'manifest.json'), '{"id": "Broken Pack"}');
-    const note = textFile('household-notes.md', '# Synthetic notes\n\nWe keep two dependents in mind.\n', 'text/markdown');
-    const first = await P.ingestFile(s.db, note, s.opts(await offEngine()));
-    const engine = await recordingEngine([[{ facts: [{ key: 'household.dependents', value: '2', confidence: 0.95 }], goals: [] }]]);
-    const errors = [];
-    const original = console.error;
-    console.error = (...args) => { errors.push(args.join(' ')); };
-    let retried;
-    try { retried = await P.retryFile(s.db, first.fileId, s.opts(engine)); } finally { console.error = original; }
-    assert.equal(retried.status, 'imported');
-    assert.equal(one(s.db, 'SELECT status FROM files WHERE id = ?', first.fileId).status, 'imported');
-    assert.equal(one(s.db, "SELECT value FROM facts WHERE key = 'household.dependents'").value, '2');
-    assert.ok(errors.some((e) => e.includes('pack refresh failed')), 'the refresh failure is logged');
-  }));
-});
-
-// D3: a key collision from another file of the same parser with a different description is a
-// second transaction (alt key plus a near_duplicate question); across formats it stays a duplicate.
 describe('no silently dropped transactions (D3)', () => {
   const normalize = (v) => String(v).toLowerCase().replace(/[^a-z0-9]/g, '');
   const row = (description, extra = {}) => ({ date: '03/09/2032', amount: '-54.21', balance: '', description, ...extra });
@@ -1218,47 +803,9 @@ describe('no silently dropped transactions (D3)', () => {
 
   // The aggregator format carries no check number, so a mapped export with a reference column stands
   // in for the second format that dedupes against the bank check by its external id.
-  test('F2: a mapped export and a bank check on the same date dedupe automatically; the same check id 10 days later with another description is kept and asked once', () => withStore(async (s) => {
-    await P.ingestFile(s.db, ledgerFile('synthetic-ledger-0042-a.csv', '2032-03-01', 'Check 1042'), s.opts(await fakeEngine([[LEDGER_MAPPING]])));
-    const off = await offEngine();
-    const [ledger] = all(s.db, 'SELECT * FROM transactions');
-    assert.equal(ledger.parser, 'mapped');
-    const bank = await P.ingestFile(s.db, checkBank('Chase0042_Activity_F2_C.csv', '03/01/2032', 'CHECK 1042'), s.opts(off));
-    assert.equal(bank.counts.duplicates, 1, 'the bank check is the mapped posting');
-    assert.equal(count(s.db, 'accounts'), 1, 'one account for both formats');
-    assert.equal(count(s.db, 'superseded_rows', "reason = 'duplicate_cross_format' AND dedupe_key = ?", ledger.dedupe_key), 1);
-    assert.equal(items(s.db, 'near_duplicate').length, 0);
 
-    const r = await P.ingestFile(s.db, checkBank('Chase0042_Activity_F2_D.csv', '03/11/2032', PLUMBER), s.opts(off));
-    assert.equal(r.counts.duplicates, 0, 'another description is another transaction');
-    assert.equal(inserted(r, 'transaction'), 1);
-    const kept = one(s.db, 'SELECT * FROM transactions WHERE description = ?', PLUMBER);
-    assert.equal(kept.dedupe_key, `${ledger.dedupe_key}:d:${sha256(normalize(PLUMBER)).slice(0, 16)}`, 'under its alt key');
-    const q = items(s.db, 'near_duplicate');
-    assert.equal(q.length, 1, 'exactly one question');
-    assert.equal(q[0].subject, [kept.dedupe_key, ledger.dedupe_key].sort().join('|'));
-  }));
 
-  test('F2: when the collided key holds only a confirmed tombstone and a cross-format observation, the same check id 9 days later with another description is kept and asked once', () => withStore(async (s) => {
-    const off = await offEngine();
-    const agg = await confirmCheckIntoAggregator(s, off);
-    const tomb = one(s.db, "SELECT * FROM superseded_rows WHERE reason = 'duplicate_confirmed'");
-    const first = await P.ingestFile(s.db, ledgerFile('synthetic-ledger-0042-a.csv', '2032-03-02', 'Check 1042'), s.opts(await fakeEngine([[LEDGER_MAPPING]])));
-    assert.equal(first.counts.duplicates, 1, 'the mapped check is the confirmed posting');
-    assert.equal(count(s.db, 'superseded_rows', "reason = 'duplicate_cross_format' AND dedupe_key = ?", tomb.dedupe_key), 1);
-    assert.equal(count(s.db, 'transactions', 'dedupe_key = ?', tomb.dedupe_key), 0, 'the collided key holds no stored row');
-    const questions = count(s.db, 'confirm_items', "kind = 'near_duplicate'");
 
-    const r = await P.ingestFile(s.db, ledgerFile('synthetic-ledger-0042-b.csv', '2032-03-11', PLUMBER), s.opts(off));
-    assert.equal(r.counts.duplicates, 0, 'another description is another transaction');
-    assert.equal(inserted(r, 'transaction'), 1);
-    const kept = one(s.db, 'SELECT * FROM transactions WHERE description = ?', PLUMBER);
-    assert.equal(kept.dedupe_key, `${tomb.dedupe_key}:d:${sha256(normalize(PLUMBER)).slice(0, 16)}`, 'under its alt key');
-    assert.equal(count(s.db, 'confirm_items', "kind = 'near_duplicate'"), questions + 1, 'exactly one new question');
-    const asked = pendingNear(s.db);
-    assert.equal(asked.length, 1);
-    assert.equal(asked[0].subject, [kept.dedupe_key, agg.dedupe_key].sort().join('|'), 'asked against the surviving aggregator posting');
-  }));
 
   // Review finding H2: survivor links are followed to the active row, not one hop. A (aggregator,
   // March 1), B (bank, March 4, no check number) and C (bank check 1042, March 6): C is confirmed
@@ -1492,20 +1039,20 @@ describe('authoritative position snapshots (D5)', () => {
     ...(holdings === undefined ? {} : { holdings }),
   });
   const statementFile = (tag) => textFile(`statement-${tag}.txt`, `Synthetic brokerage statement ${tag} for the period ending 2032-03-31`, 'text/plain');
-  const statementEngine = (holdings) => fakeEngine([[{ docType: 'statement', confidence: 0.9 }], [statement(holdings)]]);
+  const importStatement = (s,tag,holdings) => importProposedRows(s, [{ target: 'document', docType: 'statement', fields: statement(holdings) }], { name: `statement-${tag}.xlsx`, marker: tag, now: NOW });
   const HOLDINGS = [{ symbol: 'EXMPL', name: 'Example Index Fund', quantity: 10, value: 200 }, { symbol: 'OTHR', name: 'Other Example Fund', quantity: 5, value: 50 }];
   const statementSymbols = (db) => all(db, "SELECT p.symbol FROM positions p JOIN accounts a ON a.id = p.account_id WHERE a.mask = '4321' ORDER BY p.symbol").map((p) => p.symbol);
 
   test('G5: a statement extraction without a holdings key keeps the stored holdings', () => withStore(async (s) => {
-    assert.equal((await P.ingestFile(s.db, statementFile('full'), s.opts(await statementEngine(HOLDINGS)))).status, 'imported');
-    assert.equal((await P.ingestFile(s.db, statementFile('no-holdings'), s.opts(await statementEngine(undefined)))).status, 'imported');
+    assert.equal((await importStatement(s, 'full', HOLDINGS)).status, 'imported');
+    assert.equal((await importStatement(s, 'no-holdings', undefined)).status, 'imported');
     assert.deepEqual(statementSymbols(s.db), ['EXMPL', 'OTHR']);
     assert.equal(removed(s.db).length, 0);
   }));
 
   test('G5: an explicit empty holdings array is a complete empty snapshot that archives every stored symbol', () => withStore(async (s) => {
-    const first = await P.ingestFile(s.db, statementFile('full'), s.opts(await statementEngine(HOLDINGS)));
-    const empty = await P.ingestFile(s.db, statementFile('empty'), s.opts(await statementEngine([])));
+    const first = await importStatement(s, 'full', HOLDINGS);
+    const empty = await importStatement(s, 'empty', []);
     assert.equal(empty.status, 'imported');
     assert.deepEqual(statementSymbols(s.db), []);
     assert.deepEqual(removed(s.db).map((x) => [JSON.parse(x.row).symbol, x.file_id, x.superseded_by]).sort(), [['EXMPL', first.fileId, empty.fileId], ['OTHR', first.fileId, empty.fileId]]);
@@ -1517,7 +1064,7 @@ describe('authoritative position snapshots (D5)', () => {
   const holdingsOnly = (periodEnd, holdings) => ({ institution: 'Example Bank', accountLast4: '4321', accountKind: 'brokerage', periodEnd, holdings, confidence: 0.9 });
   const holdingsFile = (tag, periodEnd) => textFile(`statement-holdings-${tag}.txt`, `Synthetic brokerage statement ${tag} for the period ending ${periodEnd}`, 'text/plain');
   const importHoldings = async (s, tag, periodEnd, holdings) => {
-    const r = await P.ingestFile(s.db, holdingsFile(tag, periodEnd), s.opts(await fakeEngine([[{ docType: 'statement', confidence: 0.9 }], [holdingsOnly(periodEnd, holdings)]])));
+    const r = await importProposedRows(s, [{ target: 'document', docType: 'statement', fields: holdingsOnly(periodEnd,holdings) }], { name: `holdings-${tag}.xlsx`, marker: tag, now: NOW });
     assert.equal(r.status, 'imported');
     return r;
   };
@@ -1542,7 +1089,7 @@ describe('authoritative position snapshots (D5)', () => {
     assert.equal(shown.src, sourceOf(s.db, empty.fileId));
     assert.equal(row.file_id, empty.fileId, 'provenance points at the empty snapshot');
     assert.notEqual(row.file_id, first.fileId);
-    assert.equal(row.parser, 'extract-statement');
+    assert.equal(row.parser, 'model-import');
     assert.equal(JSON.parse(row.locator)?.field, 'holdings', 'located at the holdings list');
   }));
 

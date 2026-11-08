@@ -278,9 +278,13 @@ export function inferEntities(data, facts) {
     const existing = matchEntity(data, resolveEntities(data, baseFacts), employer.name);
     if (existing?.classified || ledgerKind(baseFacts, employer.name)) continue;
     const prior = value.findIndex(e => sameName(e?.name, employer.name));
+    const soleAccount = businessAccounts.length === 1 ? businessAccounts[0] : null;
+    const assigned = soleAccount ? facts['accounts.businessEntity']?.[soleAccount.id] : null;
+    const assignedBusiness = assigned ? matchEntity(data, resolveEntities(data, baseFacts), assigned) : null;
+    const linkAccount = soleAccount && (!assignedBusiness?.classified || sameName(assignedBusiness.name, employer.name));
     const entity = { name: employer.name, type: facts['income.sCorp'] === true ? 's_corp' : null, owner: [...employer.people][0],
       inferred: true, inferenceKind: 'household_payroll', nameSource: prior >= 0 ? 'owner' : 'employer',
-      ...(businessAccounts.length === 1 ? { accountId: businessAccounts[0].id } : {}), evidence: {
+      ...(linkAccount ? { accountId: soleAccount.id } : {}), evidence: {
         rule: 'Employer marked as a household business; employee from payroll recipient answers',
         documentCount: employer.docs.length, kinds: [...new Set(employer.docs.map(d => d.docType))],
       } };

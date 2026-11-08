@@ -12,6 +12,7 @@ import { tools, getTool } from '../src/tools/index.mjs';
 import { createEngine } from '../src/engine/index.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import * as handlers from '../src/api/handlers.mjs';
+import { describeProposal, describedFields } from '../src/actions/describe.mjs';
 import { parseJson } from '../src/store/db.mjs';
 
 const { threadCreate, ask } = handlers;
@@ -90,8 +91,10 @@ test('AC1 a propose call stores provenance.pendingAction on the reply and writes
   assert.ok(plain(first.message.text).includes('$4,000'));
   const pending = first.message.provenance.pendingAction;
   assert.ok(pending, 'reply carries pendingAction');
-  const { basis, ...rest } = pending;
+  const { basis, description, details, ...rest } = pending;
   assert.deepEqual(rest, { tool: 'update_goal', operation: 'create', args, scopes: ['write:goals'] });
+  assert.equal(description, 'Create the goal "Parent education contribution".', 'a plain-language description is stored');
+  assert.ok(!/4000|4,000|2026/.test(JSON.stringify(details ?? [])), 'the description repeats no model-supplied amount or date');
   assert.equal(typeof basis, 'string');
   assert.match(basis, /^[0-9a-f]+$/);
   const call = first.message.provenance.tools.find(r => r.name === 'update_goal');
@@ -114,13 +117,14 @@ function loadChat() {
 }
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-test('AC1 the chat card renders Confirm and Not now while unresolved, escapes arguments, and no buttons once resolved', async () => {
+test('AC1 the chat card renders Confirm and Not now while unresolved, escapes its description, and no buttons once resolved', async () => {
   const chat = await loadChat();
   assert.equal(typeof chat.pendingActionHtml, 'function', 'chat.js exports pendingActionHtml');
   chat.bind({ esc, T: esc, X: esc, arr: v => (Array.isArray(v) ? v : []), root: null,
     api: { s: { goals: [] }, rec: () => null, txt: s => s, threads: () => [], conversation: () => [] } });
   const pendingAction = { tool: 'update_goal', operation: 'create',
-    args: { title: 'Synthetic <b>bold</b> fund', horizon: 'now', target: 5000 }, scopes: ['write:goals'], basis: 'ab12cd' };
+    args: { title: 'Synthetic <b>bold</b> fund', horizon: 'now', target: 5000 }, scopes: ['write:goals'], basis: 'ab12cd',
+    description: 'Create the goal "Synthetic <b>bold</b> fund".' };
   const m = { id: 'm12', role: 'fathom', text: '<p>I can create this goal.</p>', refs: [], notice: false, provenance: { pendingAction } };
   const html = chat.pendingActionHtml(m);
   assert.match(html, /class="[^"]*\bh-pending-action\b/);
@@ -129,8 +133,9 @@ test('AC1 the chat card renders Confirm and Not now while unresolved, escapes ar
   assert.equal((html.match(/data-proposal-message="m12"/g) || []).length, 2, 'both buttons name the proposal message');
   assert.match(html, />\s*Confirm\s*</);
   assert.match(html, />\s*Not now\s*</);
-  assert.ok(!html.includes('<b>bold</b>'), 'argument text is escaped');
-  assert.ok(html.includes('&lt;b&gt;bold&lt;/b&gt;'), 'argument text is shown escaped');
+  assert.ok(!html.includes('<b>bold</b>'), 'description text is escaped');
+  assert.ok(html.includes('&lt;b&gt;bold&lt;/b&gt;'), 'description text is shown escaped');
+  assert.ok(!/title:|horizon:|target:/.test(html), 'no argument lines');
   for (const [status, label] of [['confirmed', /Confirmed/], ['declined', /Not now/], ['stale', /Out of date/i]]) {
     const done = chat.pendingActionHtml({ ...m, provenance: { pendingAction: { ...pendingAction, resolved: { status, at: now } } } });
     assert.ok(!/<button/.test(done), `${status}: no buttons`);
@@ -416,8 +421,10 @@ test('AC3 a proposal is stale when the goal note it took a value from changes', 
 
 test('AC1 the card shows no model-supplied amount or date', async () => {
   const chat = await loadChat();
-  const pendingAction = { tool: 'update_goal', operation: 'create', args: { title: 'Synthetic fund', horizon: 'now', target: 97361, targetDate: '2028-03-17' },
-    scopes: ['write:goals'], basis: 'ab12cd' };
+  const { describeProposal, describedFields } = await import('../src/actions/describe.mjs');
+  const proposal = { tool: 'update_goal', operation: 'create', args: { title: 'Synthetic fund', horizon: 'now', target: 97361, targetDate: '2028-03-17' } };
+  // The description the server stores with the proposal (no store row is read for a new goal).
+  const pendingAction = { ...proposal, scopes: ['write:goals'], basis: 'ab12cd', ...describedFields(describeProposal(null, proposal)) };
   const html = chat.pendingActionHtml({ id: 'm7', role: 'fathom', text: '<p>x</p>', refs: [], notice: false, provenance: { pendingAction } });
   assert.ok(html.includes('Synthetic fund'));
   assert.ok(!/97361|97,361|2028/.test(html), 'no unsourced figure in the card');
@@ -443,16 +450,18 @@ test('an incomplete recommendation answer proposal preserves the confirmation an
 });
 
 
-test('INF1 the entity proposal card names each business, tax type, person and final-year status', async () => {
+test('INF1 the entity proposal card names each business, tax type, person and final-year status', async t => {
+  const { db } = await setup(t);
   const chat = await loadChat();
   chat.bind({ esc, T: esc, X: esc, arr: v => Array.isArray(v) ? v : [], root: null, api: { s: { goals: [] } } });
-  const html = chat.pendingActionHtml({ id: 'm19', role: 'fathom', provenance: { pendingAction: {
+  const pending = {
     tool: 'answer', operation: 'fact', args: { key: 'business.entities', value: [
       { name: 'Example <Studio>', type: 's_corp', owner: 'owner', status: 'active', accountId: 'synthetic-business' },
       { name: 'Spouse LLC', type: 'llc_single', owner: 'spouse', status: 'active' },
       { name: 'Former partnership', type: 'partnership', owner: 'spouse', status: 'final_year', finalYear: 2026 },
     ] },
-  } } });
+  };
+  const html = chat.pendingActionHtml({ id: 'm19', role: 'fathom', provenance: { pendingAction: { ...pending, ...describedFields(describeProposal(db, pending)) } } });
   assert.match(html, /Example &lt;Studio&gt;/);
   assert.match(html, /S corp/);
   assert.match(html, /single-member LLC.*Schedule C/i);

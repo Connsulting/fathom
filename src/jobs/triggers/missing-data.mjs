@@ -166,7 +166,8 @@ export function items(ctx) {
   if (ctx.warnings.includes('filing_status_assumed')) {
     out.push({ code: 'filing_status_assumed', tax: true, text: 'Your filing status is not set, so we assumed single.', task: 'Tell us your filing status', kind: 'question', link: 'ask' });
   }
-  const reasons = [...(ctx.info.blocked || []), ...(ctx.info.heldReasons || []), ...(ctx.blockedReasons || []).map(b => b.reason)];
+  const reasons = [...(ctx.info.blocked || []), ...(ctx.info.heldReasons || []), ...(ctx.blockedReasons || []).map(b => b.reason),
+    ...(ctx.entities || []).filter(e => e.payrollEmployer && !e.classified).map(e => `entity_unclassified:${e.slug}`)];
   let entityQuestion = false;
   for (const r of reasons) if (!ADVISOR_KEYS.has(r)) {
     if (r.startsWith('entity_unclassified:')) {

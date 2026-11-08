@@ -33,8 +33,13 @@ const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct
 const STATUS = {
   imported: 'Imported',
   duplicate: 'Already imported',
-  needs_mapping: 'Needs a mapping',
-  needs_extraction: 'Needs the engine to read it',
+  waiting_for_engine: 'Waiting for the engine',
+  budget_exhausted: 'Interpretation budget reached',
+  needs_confirmation: 'Ready for review',
+  needs_clarification: 'Needs clarification',
+  needs_source_text: 'Needs readable text',
+  needs_mapping: 'Waiting for interpretation',
+  needs_extraction: 'Waiting for interpretation',
   unsupported: 'Not a supported file',
   too_large: 'Too large to read',
   failed: 'Could not import'
@@ -723,8 +728,11 @@ export function ingestScreens(h) {
     const ctl = fin
       ? `<p class="h-decided-final">${esc(fin)}</p>`
       : btn('Undo', `data-decided-undo="${esc(id)}"${st.undoing[id] ? ' disabled' : ''}`, 'ghost');
-    const ev = evidenceText(d.evidence);
-    const why = t ? `Fathom's categorization.${ev ? ` ${ev}` : ''}` : ev;
+    const ev = evidenceText(d.evidence).trim();
+    const repeatsLabel = ev.replace(/[.!?]+$/, '').trim().toLowerCase() === CAT_LABEL.toLowerCase();
+    const reason = ev.replace(new RegExp(`^${CAT_LABEL}[:.]`, 'i'), '').trim();
+    const detail = reason !== ev ? reason.charAt(0).toUpperCase() + reason.slice(1) : reason;
+    const why = t ? `${CAT_LABEL}.${detail && !repeatsLabel ? ` ${detail}` : ''}` : ev;
     const amount = t ? cash(t.amount) : '';
     const when = t ? dateText(t.date) : '';
     const side = amount || when ? `<div class="h-decided-s">${amount ? `<span class="h-decided-amt">${esc(amount)}</span>` : ''}${when ? `<span>${esc(when)}</span>` : ''}</div>` : '';

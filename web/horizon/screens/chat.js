@@ -16,10 +16,12 @@
    A goal proposal (provenance.goalProposal {title, note, horizon, target, targetDate}) saves a goal
    only when the owner taps Save, through the goals API (api.goalCreate). Its text is escaped; the
    card reads Saved once an owner goal with that title exists.
-   A stored proposal (provenance.pendingAction {tool, operation, args, resolved?}) shows a card
-   with its operation label and its digit-free text arguments (amounts and dates stay in the grounded answer), plus Confirm and Not now while it is unresolved
+   A stored proposal (provenance.pendingAction {tool, operation, args, description, details?,
+   resolved?}) shows a card with the server's plain-language description and at most a few
+   labelled detail lines (never ids, codes or argument names), plus Confirm and Not now while it is unresolved
    and the latest message of its thread (api.proposalDecide); else its state (Confirmed, Not now,
-   Out of date). Nothing is written until the owner confirms.
+   Out of date). Nothing is written until the owner confirms. The confirmed reply's receipt shows
+   the same description (provenance.description).
    Streaming: with the engine on, a question goes out through api.askStream / api.newThreadStream.
    The pending block is a work block (a row button: spinner, "Working…", step count, chevron; its
    body lists steps and notes) above the text streaming in the current round. Progress labels are
@@ -166,30 +168,28 @@ export function goalProposalHtml(m) {
     + '</div>';
 }
 
-const ENTITY_TAX_LABEL = { s_corp: 'S corp', llc_single: 'single-member LLC taxed on Schedule C', sole_prop: 'sole proprietorship', partnership: 'partnership', c_corp: 'C corp', personal: 'personal summary', income_history: 'income history', inactive: 'inactive', not_mine: 'not mine' };
-const PENDING_LABEL = { 'update_goal.create': 'Create goal', 'update_goal.edit': 'Edit goal' };
 const RESOLVED_LABEL = { confirmed: 'Confirmed', declined: 'Not now', stale: 'Out of date' };
-const pendingLabel = (p) => PENDING_LABEL[`${p.tool}.${p.operation}`]
-  || `${String(p.tool || '').replace(/_/g, ' ')}: ${String(p.operation || '').replace(/_/g, ' ')}`.replace(/^./, (c) => c.toUpperCase());
-// Only digit-free text arguments (a title, a horizon) are shown: a model-supplied amount or date
-// has no provenance until the evidence guard accepts it, so figures stay in the grounded answer
-// text above the card and in the receipt after confirming.
-const shownArg = ([, v]) => typeof v === 'string' && v.trim() !== '' && !/\d/.test(v);
+// Stored text (a description the server built from stored names) shown as plain text: demo
+// {n:key} tokens resolve to their names, everything is escaped.
+const plainText = (s) => (H.X ? H.X(s) : H.esc(s));
+// The server describes every proposal (src/actions/describe.mjs) and fills older stored ones
+// when it serves them, so this fallback only covers a message from an unexpected source.
+const FALLBACK_DESCRIPTION = 'The change described above.';
+const descriptionOf = (p) => (typeof p.description === 'string' && p.description.trim() ? p.description : FALLBACK_DESCRIPTION);
+const detailsOf = (p) => H.arr(p.details).filter((d) => isObj(d) && typeof d.label === 'string' && d.label && typeof d.value === 'string' && d.value).slice(0, 4);
 
-// The card for a Fathom message that carries a stored proposal. opts.latest: the message is the
-// latest in its thread (default true); an older unresolved proposal reads Out of date.
+// The card for a Fathom message that carries a stored proposal: one plain-language sentence and
+// at most a few labelled detail lines, never ids, codes or argument names. opts.latest: the
+// message is the latest in its thread (default true); an older unresolved proposal reads Out of date.
 export function pendingActionHtml(m, { latest = true } = {}) {
   if (!H || !m || m.role !== 'fathom' || m.notice || !isObj(m.provenance) || !isObj(m.provenance.pendingAction)) return '';
   const { esc } = H;
   const p = m.provenance.pendingAction;
-  const entities = p.tool === 'answer' && p.operation === 'fact' && p.args?.key === 'business.entities' && Array.isArray(p.args.value) ? p.args.value : null;
-  const args = entities ? [] : isObj(p.args) ? Object.entries(p.args).filter(shownArg) : [];
-  const entityRows = entities ? `<ul class="h-pending-args">${entities.map(e => `<li>${esc(e.name)}: ${esc(ENTITY_TAX_LABEL[e.type] || e.type)}, ${e.owner === 'spouse' ? 'your spouse' : 'you'}${e.status === 'final_year' ? ', final year; final K-1 expected' : ', active'}${e.accountId ? '; linked business account' : ''}</li>`).join('')}</ul>` : '';
+  const details = detailsOf(p);
   const status = isObj(p.resolved) ? p.resolved.status : latest ? null : 'stale';
   const id = esc(m.id);
-  return `<div class="h-proposal h-pending-action"><p><span class="h-proposal-k">Proposed:</span> <b>${esc(entities ? 'Record household businesses' : pendingLabel(p))}</b></p>`
-    + entityRows
-    + (args.length ? `<ul class="h-pending-args">${args.map(([k, v]) => `<li>${esc(k)}: ${esc(v)}</li>`).join('')}</ul>` : '')
+  return `<div class="h-proposal h-pending-action"><p><span class="h-proposal-k">Proposed:</span> <b>${plainText(descriptionOf(p))}</b></p>`
+    + (details.length ? `<ul class="h-pending-args">${details.map((d) => `<li><span class="h-mute">${esc(d.label)}:</span> ${plainText(d.value)}</li>`).join('')}</ul>` : '')
     + (status
       ? `<span class="h-proposal-done">${esc(RESOLVED_LABEL[status] || 'Out of date')}</span>`
       : `<div class="h-pending-btns"><button type="button" class="h-btn pri" data-proposal-decide="confirm" data-proposal-message="${id}">Confirm</button>`
@@ -465,10 +465,19 @@ function receiptLine(a) {
   return `<p><b>${head}</b>: ${esc(receiptValue(text, a.scope))} <a href="${H.href('memories')}" data-go="memories" class="h-mem-all">See all memories</a></p>`;
 }
 
+// The receipt of a confirmed proposal reads like its card: the proposal's description replaces
+// the first receipt's line (a remembered preference keeps its link to the Memories page).
+function confirmedLine(a, description) {
+  const link = a.scope === 'write:preferences' ? ` <a href="${H.href('memories')}" data-go="memories" class="h-mem-all">See all memories</a>` : '';
+  return `<p><b>${plainText(description)}</b>${link}</p>`;
+}
+
 export function workHtml(m) {
   if (!H || !m || m.role !== 'fathom' || !isObj(m.provenance)) return '';
   const { esc } = H;
-  const actions = H.arr(m.provenance.actions).map(a => `<div class="h-action-receipt" data-receipt="${esc(a.id)}" role="status">${receiptLine(a)}`
+  const described = m.provenance.confirmedProposal && typeof m.provenance.description === 'string' && m.provenance.description.trim()
+    ? m.provenance.description : null;
+  const actions = H.arr(m.provenance.actions).map((a, i) => `<div class="h-action-receipt" data-receipt="${esc(a.id)}" role="status">${described && i === 0 ? confirmedLine(a, described) : receiptLine(a)}`
     + (a.planningPending ? '<p class="h-mute">Saved. Planning is pending.</p>' : '')
     + (a.undo?.available === false ? `<span class="h-mute">${esc(a.undo.reason)}</span>` : a.undone ? '<span class="h-mute">Undone</span>' : `<button type="button" class="h-btn" data-undo-action="${esc(a.id)}"${m.provenance.blockControl ? ` data-blk-ctl="${esc(m.provenance.blockControl)}"` : ''}>Undo</button>`) + '</div>').join('');
   if (m.notice || !isObj(m.provenance.work)) return actions;

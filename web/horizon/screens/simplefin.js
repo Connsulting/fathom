@@ -24,9 +24,18 @@ const PROBLEM = {
   payment_required: 'SimpleFIN says the subscription needs payment. Renew it, then reconnect.',
   auth: 'SimpleFIN reports a sign-in problem with a connected institution. Fix it on the SimpleFIN Bridge site, or reconnect.',
   bad_access: 'The stored connection cannot be used. Reconnect with a new setup token.',
-  network: 'The last sync could not reach SimpleFIN. It tries again on the next sync.',
   bad_response: 'The last sync got a reply Fathom could not read. It tries again on the next sync.'
 };
+
+// The warning line for a failed last sync. A network failure names the next scheduled sync, taken
+// from the Engine job list (`jobs` is api.s.engine.jobs).
+export function problemText(code, jobs) {
+  if (code === 'network') {
+    const next = (Array.isArray(jobs) ? jobs : []).find((j) => j && j.id === 'simplefin-sync')?.next;
+    return `The SimpleFIN bridge did not answer in time. Fathom tries again on the next scheduled sync${next ? `, ${next}` : ''}.`;
+  }
+  return PROBLEM[code] || 'The last sync failed. It tries again on the next sync.';
+}
 
 const state = () => H.api.s?.live?.simplefin || { connected: false };
 
@@ -49,7 +58,7 @@ export function block() {
   const { esc, btn, icon, plural, goA } = H;
   const sf = state();
   if (!sf.connected) return `<div class="h-sf" data-sf-box>${form(sf, false)}</div>`;
-  const problem = sf.errorCode ? PROBLEM[sf.errorCode] || 'The last sync failed. It tries again on the next sync.' : '';
+  const problem = sf.errorCode ? problemText(sf.errorCode, H.api.s?.engine?.jobs) : '';
   const msgs = Array.isArray(sf.messages) ? sf.messages : [];
   return `<div class="h-sf on" data-sf-box data-sf-connected>
       <p class="h-sf-st">${icon('check')}<span><b>Connected to SimpleFIN</b>, ${plural(Number(sf.accounts) || 0, 'account')}, last sync ${esc(when(sf.lastSyncAt))}</span></p>

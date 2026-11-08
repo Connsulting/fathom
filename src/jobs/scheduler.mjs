@@ -484,6 +484,7 @@ export function createScheduler({
       clearTimeout(drain);
       try { q.release.run(holder); } catch { /* store already closed */ }
     },
+    idle() { return Promise.allSettled([...active]); },
     jobs() {
       const t = at();
       const zone = tz();

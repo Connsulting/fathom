@@ -212,10 +212,26 @@ email settings, and the first admin invited with `docker exec fathom npm run use
 The repository only ever contains synthetic demo data. Real household data lives only in a
 deployment's data volume (`FATHOM_DATA`) and is never committed.
 
-Fathom has no built-in backup job. Back up the whole data volume, which holds `platform.sqlite` and
+Continue backing up the whole data volume, which holds `platform.sqlite` and
 every household's store and encrypted file vault. Keep the secret files (the Claude credential, the
 platform key, the MCP secret and the email credential) in your secret store, not only on the host: the vault is unreadable
 without the platform key. To restore, put the volume back and start the server with the same platform key and MCP secret.
+
+For a single household, configure `FATHOM_BACKUP_KEY_FILE` and an existing private absolute
+`FATHOM_BACKUP_DESTINATION`. An authenticated admin posts `{}` to `/api/household/backups` and
+inspects `/api/household/backups/<operationId>/status`. The fixed runner freezes that household,
+drains its work, encrypts a consistent SQLite/vault/private-pack/outbox bundle and resumes it.
+Other households remain available. Responses expose only operation status, fixed codes and counts.
+
+With the service stopped, `node scripts/backup-household.mjs --household <id>` uses the same
+runner. Restore with `node scripts/restore-household.mjs --household <id> --confirm <id> --bundle
+<file>`, using the same instance and current platform and backup keys. Rerun that command or start
+the server after an interruption; the journal completes the same generation switch. Current
+membership, passkeys and model accounting survive, target sessions and API keys are revoked,
+and restored outbound work stays paused. Sign in again, inspect status and explicitly resume
+outbound controls; reconnect SimpleFIN to reconfirm its restored secret. Retained bundles and
+rollback roots have a seven-day default expiry (`FATHOM_BACKUP_RETENTION_DAYS`); delete expired
+data only under the operator's retention policy. This does not replace whole-volume recovery.
 
 ## Accounts and access
 

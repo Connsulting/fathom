@@ -304,15 +304,3 @@ export function findHeader(sheet, predicate) {
   }
   return null;
 }
-
-export function ledgerHeader(sheet) {
-  return findHeader(sheet, (columns) => columns.has('payment date') && (columns.has('payment amount') || [...columns.keys()].some((key) => key.endsWith('actual income'))) || columns.has('date') && columns.has('amount') && columns.has('category'));
-}
-
-export function taxHeader(sheet) {
-  const found = findHeader(sheet, (columns) => columns.has('month') && [...columns.keys()].some((key) => /\bpaid$/.test(key)));
-  if (!found || !/^\d{4}$/.test(sheet.name) || found.index < 1) return null;
-  const groups = [...sheet.rows[found.index - 1].cells].filter(([, cell]) => /^(federal|state)$/i.test(String(cell.value).trim())).map(([column, cell]) => ({ column, jurisdiction: String(cell.value).trim().toLowerCase() }));
-  if (!groups.length) return null;
-  return { ...found, groups };
-}

@@ -539,27 +539,27 @@ describe('imports trigger the confirm-guess job through the scheduler', () => {
   }));
 
   test('an upload that imports nothing triggers nothing; a retry that imports triggers confirm-guess and plan', () => withStore(async (s) => {
-    const { headerSignature } = await src('src/ingest/mapping.mjs');
+    const signature = 'synthetic-unapproved-layout';
     const scheduler = fakeScheduler();
     const app = await serve(s, await offEngine(), scheduler);
     try {
       const waiting = await app.request(multipart('novel-export.csv', novelCsv()));
       assert.equal(waiting.status, 200, waiting.text.slice(0, 300));
       const file = waiting.json.files[0];
-      assert.equal(file.status, 'needs_mapping');
+      assert.equal(file.status, 'waiting_for_engine');
       assert.deepEqual(scheduler.calls, [], 'an upload that imports nothing does not trigger');
 
       const stillWaiting = await app.postJson(`/api/files/${file.fileId}/retry`, {});
       assert.equal(stillWaiting.status, 200, stillWaiting.text.slice(0, 300));
-      assert.equal(stillWaiting.json.file.status, 'needs_mapping');
+      assert.equal(stillWaiting.json.file.status, 'waiting_for_engine');
       assert.deepEqual(scheduler.calls, [], 'an unsuccessful retry does not trigger');
 
       s.db.prepare("INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES (?, ?, 'test', ?, 0)")
-        .run(headerSignature(HEADERS), JSON.stringify(MAPPING), NOW);
+        .run(signature, JSON.stringify(MAPPING), NOW);
       const done = await app.postJson(`/api/files/${file.fileId}/retry`, {});
       assert.equal(done.status, 200, done.text.slice(0, 300));
-      assert.equal(done.json.file.status, 'imported');
-      assert.deepEqual(sorted(scheduler.calls), [['confirm-guess', 'ingest'], ['freshness', 'ingest'], ['plan', 'ingest']], 'a successful retry triggers each once');
+      assert.equal(done.json.file.status, 'waiting_for_engine');
+      assert.deepEqual(scheduler.calls, [], 'an unapproved mapping does not import or trigger jobs');
     } finally {
       await app.close();
     }
