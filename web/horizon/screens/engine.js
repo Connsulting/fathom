@@ -8,9 +8,10 @@ let H = null;
 
 export function bind(kit) { H = kit; }
 
-// Unsaved cap input text; the Run plan now state; the pending re-read while a plan runs.
-const S = { cap: null, plan: { phase: 'idle', text: '' }, poll: null };
-const POLL_MS = 5000;
+// Unsaved cap input text; the Run plan now state; the one pending scenario re-read and its delay.
+const S = { cap: null, plan: { phase: 'idle', text: '' }, poll: null, pollMs: null };
+const POLL_RUNNING_MS = 5000;
+const POLL_IDLE_MS = 30000;
 
 const services = () => H.api?.s?.live?.services || null;
 // A plan run on the server (scheduled, or started from another tab).
@@ -74,11 +75,30 @@ function statusSection(svc) {
   return H.section('Status', body);
 }
 
-// While a plan runs, re-read the scenario once after POLL_MS; the redraw schedules the next one.
-function pollWhileRunning() {
-  if (!planRunning() || S.poll) return;
-  S.poll = setTimeout(() => { S.poll = null; H.api.refresh(); }, POLL_MS);
+// One pending one-shot re-read. A pending one that fires no later than `ms` is kept; a shorter
+// delay replaces it. It re-reads only while the Engine screen is shown.
+function arm(ms) {
+  if (S.poll && S.pollMs <= ms) return;
+  if (S.poll) clearTimeout(S.poll);
+  S.pollMs = ms;
+  S.poll = setTimeout(() => {
+    S.poll = null;
+    S.pollMs = null;
+    if (H.routeNow?.().name !== 'engine') return;
+    // A redraw would take focus from the cap field while the owner types; wait for the next one.
+    if (typing()) { schedulePoll(); return; }
+    H.api.refresh();
+  }, ms);
 }
+
+const typing = () => {
+  const el = typeof document === 'undefined' ? null : document.activeElement;
+  return !!el && !!H.root?.contains?.(el) && !!el.matches?.('input, textarea');
+};
+
+// Re-read the scenario after 5 s while a plan runs, else after 30 s, so a plan started on schedule
+// or in another tab disables Run plan now. The redraw calls render, which schedules the next one.
+export function schedulePoll() { arm(planRunning() ? POLL_RUNNING_MS : POLL_IDLE_MS); }
 
 function capForm(b) {
   const { esc } = H;
@@ -116,9 +136,9 @@ function ledgerHtml(en) {
 }
 
 // fresh: the route was just entered. The scenario may predate a plan started on schedule or in
-// another tab, so it is re-read once; the redraw then follows any running plan.
+// another tab, so it is re-read at once; the redraw then follows any running plan.
 export function render(fresh = false) {
-  if (fresh && !S.poll) S.poll = setTimeout(() => { S.poll = null; H.api.refresh(); }, 0);
+  if (fresh) arm(0);
   const { api, arr, T, figHtml, shell, section, pageHead } = H;
   const en = api.s.engine || {};
   const b = en.budget || {};
@@ -135,7 +155,7 @@ export function render(fresh = false) {
     const st = svc?.jobs?.[j.id]?.state;
     return st && STATE_LABEL[st] ? ` <span class="h-svc-tag ${st}">${STATE_LABEL[st]}</span>` : '';
   };
-  pollWhileRunning();
+  schedulePoll();
   const rows = jobsList.map((j) => `<div class="h-jt-r" role="row">
       <div class="h-jt-n" role="cell"><b>${T(j.name)}</b><p>${T(j.does)}</p></div>
       <div class="h-jt-c" role="cell" data-l="Cadence">${T(j.cadence)}</div>
@@ -204,4 +224,5 @@ export function reset() {
   S.plan = { phase: 'idle', text: '' };
   if (S.poll) clearTimeout(S.poll);
   S.poll = null;
+  S.pollMs = null;
 }

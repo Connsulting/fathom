@@ -76,6 +76,7 @@ export const CAUSES = Object.freeze({
   stop_engine_off: 'The engine is turned off, so open questions wait.',
   stop_funding_unavailable: 'The instance has no model funding, so open questions wait. An administrator must fund it.',
   stop_budget: "This month's spend reached the cap, so open questions wait.",
+  stop_run_budget: 'The last run used its spending allowance, so the rest of the open questions wait for the next run.',
   sync_network: 'The SimpleFIN bridge did not answer in time. Fathom tries again on the next sync.',
   sync_bad_response: 'SimpleFIN sent a reply Fathom could not read. Fathom tries again on the next sync.',
   sync_paused: 'The last sync failed and sync is paused, so Fathom will not retry until it is resumed.',
@@ -112,31 +113,42 @@ function classifyFailure(cls, jobId) {
   return { state: 'needs_you', code, cause: failedCause(code), control: C.runJob(jobId) };
 }
 
-// The resolver stop cause on an ok confirm-guess run.
-function classifyStop(code, jobId) {
-  if (code === 'engine_paused') return { state: 'paused', code, cause: CAUSES.stop_engine_paused, control: C.resume('engine') };
-  if (code === 'engine_off') return { state: 'paused', code, cause: CAUSES.stop_engine_off, control: C.engineOn() };
+// The resolver stop cause on an ok confirm-guess run. `ctx` = { flags, engine: the engine service }.
+// A stop caused by a pause that has since been lifted is not current, so it reads as fine (null).
+// The budget stop fires on the monthly cap and on the per-run allowance (resolver.maxCostUsd); only
+// a reached cap points at the cap.
+function classifyStop(code, jobId, ctx) {
+  if (code === 'engine_paused') return ctx.flags.engine ? null : { state: 'paused', code, cause: CAUSES.stop_engine_paused, control: C.resume('engine') };
+  if (code === 'engine_off') return ctx.engine?.code !== 'engine_off' ? null : { state: 'paused', code, cause: CAUSES.stop_engine_off, control: C.engineOn() };
   if (code === 'funding_unavailable') return { state: 'needs_you', code, cause: CAUSES.stop_funding_unavailable, control: C.refresh() };
-  if (code === 'budget') return { state: 'paused', code, cause: CAUSES.stop_budget, control: C.cap() };
+  if (code === 'budget') {
+    if (ctx.engine?.code === 'funding_exhausted') return { state: 'paused', code, cause: CAUSES.stop_budget, control: C.cap() };
+    return { state: 'paused', code, cause: CAUSES.stop_run_budget, control: C.runJob(jobId) };
+  }
   return classifyFailure(code, jobId);
 }
 
-// One finished run row -> a non-healthy classification, or null when the run was fine.
-function classifyRun(r, jobId) {
-  if (r.status === 'error' || r.status === 'interrupted') return classifyFailure(r.status === 'interrupted' ? 'interrupted' : r.error_class, jobId);
+// One finished run row -> a non-healthy classification, or null when the run was fine. A failure
+// or skip caused by a pause that has since been lifted is fine.
+function classifyRun(r, jobId, ctx) {
+  if (r.status === 'error' || r.status === 'interrupted') {
+    if (r.status === 'error' && r.error_class === 'email_paused' && ctx.flags.email) return null;
+    return classifyFailure(r.status === 'interrupted' ? 'interrupted' : r.error_class, jobId);
+  }
   const note = noteOf(r.note);
   if (r.status === 'skipped') {
-    if (note?.paused === true) return { state: 'paused', code: 'paused', cause: CAUSES.sync_skipped_paused, control: C.resume('simplefin') };
+    if (note?.paused === true && !ctx.flags.simplefin) return { state: 'paused', code: 'paused', cause: CAUSES.sync_skipped_paused, control: C.resume('simplefin') };
     return null;
   }
   if (r.status === 'ok' && note?.stoppedBy && typeof note.stoppedBy === 'object') {
     const code = Object.keys(note.stoppedBy).find((k) => note.stoppedBy[k] === true);
-    if (code) return classifyStop(code, jobId);
+    if (code) return classifyStop(code, jobId, ctx);
   }
   return null;
 }
 
-function jobService(db, job, sched, flags) {
+function jobService(db, job, sched, ctx) {
+  const { flags } = ctx;
   const base = { key: `job:${job.id}`, label: job.name, go: JOB_GO[job.id] ?? 'engine', lastSuccessAt: null, nextAttemptAt: null, running: false };
   const rows = db.prepare('SELECT * FROM job_runs WHERE job_id = ? ORDER BY id DESC LIMIT ?').all(job.id, STREAK_ROWS);
   base.running = rows[0]?.status === 'running';
@@ -149,11 +161,11 @@ function jobService(db, job, sched, flags) {
   if (!flags.jobs) return { ...base, state: 'paused', code: 'paused', cause: CAUSES.jobs_paused, since: null, control: C.resume('jobs') };
   const finished = rows.filter((r) => r.status !== 'running');
   const latest = finished[0];
-  const verdict = latest ? classifyRun(latest, job.id) : null;
+  const verdict = latest ? classifyRun(latest, job.id, ctx) : null;
   if (!verdict) return { ...healthy(base), nextAttemptAt: iso(sched.nextAt) };
   let since = latest.started_at;
   for (const r of finished.slice(1)) {
-    if (!classifyRun(r, job.id)) break;
+    if (!classifyRun(r, job.id, ctx)) break;
     since = r.started_at;
   }
   let nextAttemptAt = null;
@@ -212,11 +224,13 @@ function emailService(db, flags, jobs) {
   base.lastSuccessAt = sent ? iso(sent.ts) : null;
   if (!flags.email) return { ...base, state: 'paused', code: 'paused', cause: CAUSES.email_flag_paused, since: null, control: C.resume('email') };
   const rows = db.prepare('SELECT ts, status, error_code FROM email_sends ORDER BY id DESC LIMIT ?').all(STREAK_ROWS);
-  if (rows[0]?.status !== 'failed') return healthy(base);
+  // Email is on here, so a send that failed because email was paused is not current.
+  const failed = (r) => r?.status === 'failed' && r.error_code !== 'paused';
+  if (!failed(rows[0])) return healthy(base);
   const code = `email_${rows[0].error_code || 'other'}`;
   let since = rows[0].ts;
   for (const r of rows.slice(1)) {
-    if (r.status !== 'failed') break;
+    if (!failed(r)) break;
     since = r.ts;
   }
   const v = classifyFailure(code, null);
@@ -236,15 +250,18 @@ function needsAttention(svc, now) {
 export function serviceStatus({ db, outbound = {}, engine = null, scheduler = null, now = new Date() } = {}) {
   const at = new Date(now);
   const flags = Object.fromEntries(['jobs', 'email', 'simplefin', 'engine'].map((k) => [k, outbound?.[k] !== false]));
+  // The engine service first: whether an engine stop on a job is still current depends on it.
+  const engineSvc = engineService(engine, db, flags);
+  const ctx = { flags, engine: engineSvc };
   const jobs = {};
   if (scheduler && typeof scheduler.schedule === 'function') {
     const byId = new Map(scheduler.schedule().map((x) => [x.id, x]));
-    for (const job of JOBS) if (byId.has(job.id)) jobs[job.id] = jobService(db, job, byId.get(job.id), flags);
+    for (const job of JOBS) if (byId.has(job.id)) jobs[job.id] = jobService(db, job, byId.get(job.id), ctx);
   }
   const out = {
     jobs,
     email: emailService(db, flags, jobs),
-    engine: engineService(engine, db, flags),
+    engine: engineSvc,
     simplefin: simplefinService(db, flags, jobs['simplefin-sync']),
   };
   const order = [out.engine, out.simplefin, out.email, ...JOBS.map((j) => jobs[j.id])];

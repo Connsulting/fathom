@@ -42,10 +42,10 @@ const jobErr = (jobId, errorClass, state, control, arg, extra = {}) => ({
   name: `job ${jobId} error ${errorClass}`, runs: [run(jobId, 'error', { errorClass })], pick: (s) => s.jobs[jobId],
   state, control, arg, code: errorClass, api: true, ...extra,
 });
-const stop = (code, state, control, arg) => ({
+const stop = (code, state, control, arg, extra = {}) => ({
   name: `confirm-guess stopped by ${code}`,
   runs: [run('confirm-guess', 'ok', { note: { batches: 1, items: 2, guessed: 0, stopped: true, stoppedBy: { [code]: true } } })],
-  pick: (s) => s.jobs['confirm-guess'], state, control, arg,
+  pick: (s) => s.jobs['confirm-guess'], state, control, arg, ...extra,
 });
 const eng = (name, over, state, control, arg, code, setting) => ({
   name: `engine ${name}`, engine: fakeEngine(over), setting, pick: (s) => s.engine, state, control, arg, code,
@@ -76,7 +76,8 @@ const ROWS = [
   // A code bug needs a person, with Run now as the control.
   jobErr('plan', 'TypeError', 'needs_you', 'run_job', 'plan', { cause: /failed/i }),
   // Skip reasons.
-  { name: 'simplefin-sync skipped while paused', runs: [run('simplefin-sync', 'skipped', { note: { paused: true } })],
+  // A skip while SimpleFIN is paused reads paused while the pause holds (a lifted pause: service-status-recovery).
+  { name: 'simplefin-sync skipped while paused', runs: [run('simplefin-sync', 'skipped', { note: { paused: true } })], outbound: { simplefin: false },
     pick: (s) => s.jobs['simplefin-sync'], state: 'paused', control: 'resume', arg: 'simplefin', api: true },
   { name: 'simplefin-sync skipped with no connection', runs: [run('simplefin-sync', 'skipped', { note: { connected: false } })],
     pick: (s) => s.jobs['simplefin-sync'], state: 'healthy', control: null, api: true },
@@ -94,10 +95,11 @@ const ROWS = [
   eng('instance not funded', { mode: 'live', funded: false }, 'needs_you', 'refresh', undefined, 'funding_unavailable'),
   eng('cap reached', { capUsd: 10, spentUsd: 10 }, 'paused', 'cap', undefined, 'funding_exhausted'),
   // Resolver stop causes on the latest confirm-guess run.
-  stop('engine_paused', 'paused', 'resume', 'engine'),
-  stop('engine_off', 'paused', 'engine_on'),
+  // Each stop reads as current while its cause holds (lifted causes: service-status-recovery).
+  stop('engine_paused', 'paused', 'resume', 'engine', { outbound: { engine: false } }),
+  stop('engine_off', 'paused', 'engine_on', undefined, { engine: fakeEngine({ on: false }), setting: { on: false } }),
   stop('funding_unavailable', 'needs_you', 'refresh'),
-  stop('budget', 'paused', 'cap'),
+  stop('budget', 'paused', 'cap', undefined, { engine: fakeEngine({ capUsd: 10, spentUsd: 10 }) }),
   // SimpleFIN connection row.
   sfRow('error', 'network', 'retrying', 'sync_now'),
   sfRow('reconnect', 'revoked', 'needs_you', 'reconnect'),

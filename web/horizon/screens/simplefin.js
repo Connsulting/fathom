@@ -70,8 +70,10 @@ export function block() {
   const sf = state();
   if (!sf.connected) return `<div class="h-sf" data-sf-box>${form(sf, false)}</div>`;
   const services = H.api.s?.live?.services || null;
-  // The status block, when shown, says what the warning line would, with its control.
-  const svc = services?.simplefin && services.simplefin.state !== 'healthy' ? services.simplefin : null;
+  // The status block, when shown, says what the warning line would, with its control. The
+  // connection comes first; with a healthy connection, a sync job that is not healthy shows.
+  const unwell = (x) => (x && x.state !== 'healthy' ? x : null);
+  const svc = unwell(services?.simplefin) || unwell(services?.jobs?.['simplefin-sync']);
   const problem = !svc && sf.errorCode ? problemText(sf.errorCode, H.api.s?.engine?.jobs, services) : '';
   const msgs = Array.isArray(sf.messages) ? sf.messages : [];
   return `<div class="h-sf on" data-sf-box data-sf-connected>
