@@ -1421,7 +1421,11 @@ serves) and stops it before closing the store.
    calls. `settings.resolver.maxCostUsd` defaults to two dollars per run. Categorization and engine
    calls share that ceiling and the monthly cap; each engine request reserves conservative input
    and maximum output cost before dispatch, and carries its remaining call budget into the engine.
-   Unresolved items stay pending. Demo jobs are skipped. A no-work run records `{pending}`; other
+   Unresolved items stay pending. Fingerprints in `settings.resolver.sent` record attempted items
+   and their supplied evidence, preventing repeated payment for unchanged inputs, including
+   malformed responses and billed failed calls.
+   Changed evidence permits another attempt. Unanswered recommendation items stay on their
+   recommendation instead of duplicating the pending Confirm deck. Demo jobs are skipped. A no-work run records `{pending}`; other
    runs record cost and counts `{batches, items, guessed, stopped}`, where guessed counts answers.
    The CLI prints only `{status, note}` and keeps its existing exit codes.
 

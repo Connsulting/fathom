@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { redact } from '../ingest/redact.mjs';
-import { getSetting, parseJson } from '../store/db.mjs';
+import { getSetting, setSetting, parseJson } from '../store/db.mjs';
 import { getFacts } from '../store/facts.mjs';
 import { autoResolve } from '../ingest/auto.mjs';
 import { deterministicGuess } from '../ingest/bestguess.mjs';
@@ -60,7 +61,7 @@ function queueRecQuestions(db, now, create) {
       context: { key, values: Object.fromEntries(choices.map(c => [String(c.value), c.value])), recId }, now });
   }
 }
-function contextFor(db, packDirs, items) {
+function contextFor(db, packDirs, items, packs = loadPacks(packDirs)) {
   const facts = getFacts(db);
   const rows = db.prepare('SELECT key,value,src,as_of FROM facts ORDER BY key').all().map(r => ({ ref: `facts:${r.key}`, key: r.key, value: parseJson(r.value, null), source: r.src, asOf: r.as_of }));
   rows.push(...db.prepare('SELECT id,name,inst,mask,kind,owner FROM accounts ORDER BY id').all().map(a => ({ ref: `accounts:${a.id}`, ...a })));
@@ -81,7 +82,7 @@ function contextFor(db, packDirs, items) {
   rows.push(...db.prepare("SELECT id,kind,subject,answer FROM confirm_items WHERE status='answered' AND answer!='superseded' ORDER BY id").all()
     .map(r => ({ ref: `confirm_items:${r.id}`, ...r })));
   const overrides = new Map(db.prepare('SELECT id,active FROM packs_state').all().map(r => [r.id, r.active]));
-  for (const { pack, status } of activePacks(loadPacks(packDirs), facts)) {
+  for (const { pack, status } of activePacks(packs, facts)) {
     if (!(overrides.get(pack.id) === 1 || (overrides.get(pack.id) !== 0 && status === 'active'))) continue;
     for (const entry of pack.entries) rows.push({ ref: `packs:${pack.id}:${entry.id}`, title: entry.title ?? entry.id, excerpt: entry.body.slice(0, 6000) });
   }
@@ -149,12 +150,23 @@ export async function resolvePending(db, engine, { now = new Date().toISOString(
   for (let start = 0; start < candidates.length && !stopped; start += size) {
     stopped = admission();
     if (stopped) break;
-    const batch = candidates.slice(start, start + size);
-    const rows = contextFor(db, packDirs, batch);
+    const candidateBatch = candidates.slice(start, start + size);
+    const packs = loadPacks(packDirs);
+    const rows = contextFor(db, packDirs, candidateBatch, packs);
     const refs = new Set(rows.map(r => r.ref));
+    const payloadRows = rows.map(r => ({ ...mask(r), ref: r.ref }));
+    const payloadItem = i => ({ id: i.id, kind: i.kind, question: mask(i.question),
+      options: mask(i.options.filter(o => !o.id.startsWith('always:'))), context: mask(i.context), detail: mask(cardDetail(db, i)) });
+    const fingerprints = new Map(candidateBatch.map(item => [item.id, createHash('sha256')
+      .update(JSON.stringify({ system: SYSTEM, item: payloadItem(item), rows: payloadRows })).digest('hex')]));
+    const saved = getSetting(db, 'resolver.sent', {});
+    const attempts = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+    const batch = candidateBatch.filter(item => attempts[item.id] !== fingerprints.get(item.id));
+    if (!batch.length) continue;
+    const remember = () => setSetting(db, 'resolver.sent', { ...getSetting(db, 'resolver.sent', {}),
+      ...Object.fromEntries(batch.map(item => [item.id, fingerprints.get(item.id)])) });
     const request = { purpose: 'job', system: SYSTEM, schema: RESOLVE_SCHEMA, maxTokens: MAX_TOKENS, tools: [],
-      messages: [{ role: 'user', content: JSON.stringify({ items: batch.map(i => ({ id: i.id, kind: i.kind, question: mask(i.question),
-        options: mask(i.options.filter(o => !o.id.startsWith('always:'))), context: mask(i.context), detail: mask(cardDetail(db, i)) })), rows: rows.map(r => ({ ...mask(r), ref: r.ref })) }) }] };
+      messages: [{ role: 'user', content: JSON.stringify({ items: batch.map(payloadItem), rows: payloadRows }) }] };
     const spent = Math.max(cost(), returnedCost);
     const cap = getSetting(db, 'cap', { usd: 200 })?.usd;
     const monthlyRemaining = Number.isFinite(cap) && cap >= 0 ? cap - ledger.monthSpendUsd(now.slice(0, 7)) : 0;
@@ -162,17 +174,22 @@ export async function resolvePending(db, engine, { now = new Date().toISOString(
     const reserve = estimateUnknownCost({ model: modelFor('job'), ...request }).costUsd;
     if (budgetUsd < reserve) { stopped = 'budget'; break; }
     let response;
+    const beforeCall = cost();
     try { response = await engine.call({ ...request, budgetUsd }); }
-    catch (error) { stopped = error.code ?? error.name ?? 'engine_error'; break; }
+    catch (error) {
+      if (cost() > beforeCall) remember();
+      stopped = error.code ?? error.name ?? 'engine_error'; break;
+    }
+    remember();
     returnedCost += Number(response.costUsd) || 0;
     batches++; items += batch.length;
     let parsed;
     try { parsed = JSON.parse(response.text); } catch { stopped = 'bad_response'; break; }
-    const currentRows = new Map(contextFor(db, packDirs, batch).map(r => [r.ref, JSON.stringify(r)]));
     const sentRows = new Map(rows.map(r => [r.ref, JSON.stringify(r)]));
     const seen = new Set();
     for (const answer of Array.isArray(parsed?.answers) ? parsed.answers : []) {
       const item = batch.find(i => i.id === answer?.item);
+      const currentRows = new Map(contextFor(db, packDirs, candidateBatch, packs).map(r => [r.ref, JSON.stringify(r)]));
       if (!item || seen.has(item.id) || !BASES.has(answer.basis) || !item.options.some(o => o.id === answer.option && !o.id.startsWith('always:'))
         || !Array.isArray(answer.refs) || !answer.refs.length || answer.refs.some(ref => !refs.has(ref) || currentRows.get(ref) !== sentRows.get(ref))) continue;
       if (answer.refs.every(ref => ref.startsWith('packs:'))) continue;

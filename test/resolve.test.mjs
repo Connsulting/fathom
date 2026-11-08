@@ -284,3 +284,43 @@ test('the scheduled resolver answers HSA eligibility and runs the actual planner
     assert.ok(db.prepare('SELECT 1 FROM planner_recs WHERE last_run=?').get(run.id), 'the actual planner persisted recommendations for the resolver run');
   } finally { await scheduler.stop(); }
 }));
+
+test('unchanged unresolved inputs are paid for once, while changed evidence permits another attempt', () => store(async db => {
+  account(db);
+  const engine = model(db, []);
+  await resolvePending(db, engine, options);
+  await resolvePending(db, engine, options);
+  assert.equal(engine.calls.length, 1);
+  db.prepare("UPDATE accounts SET name='Synthetic new evidence' WHERE id='synthetic-a'").run();
+  await resolvePending(db, engine, options);
+  assert.equal(engine.calls.length, 2);
+}));
+
+test('a malformed paid response is remembered and is not bought again on unchanged inputs', () => store(async db => {
+  account(db);
+  let calls = 0;
+  const engine = { isOn: () => true, async call() { calls++; return { text: 'invalid JSON', costUsd: 0.001 }; } };
+  assert.equal((await resolvePending(db, engine, options)).stopped, 'bad_response');
+  await resolvePending(db, engine, options);
+  assert.equal(calls, 1);
+}));
+
+test('references are checked again after an earlier answer in the same batch changes an account', () => store(async db => {
+  const kind = account(db);
+  const owner = ask(db, { kind: 'account_owner', subject: 'synthetic-a', question: 'Whose account?',
+    options: [{ id: 'owner', label: 'You' }, { id: 'spouse', label: 'Spouse' }], now: NOW }).id;
+  const engine = model(db, [prediction(kind), { item: owner, option: 'owner', basis: 'imported_values', refs: ['accounts:synthetic-a'] }]);
+  await resolvePending(db, engine, options);
+  assert.equal(getItem(db, kind).status, 'answered');
+  assert.equal(getItem(db, owner).status, 'pending');
+}));
+
+test('unresolved recommendation questions do not duplicate the Confirm deck', () => store(async db => {
+  rec(db, ['benefits.hsaEligible']);
+  const engine = model(db, []);
+  await resolvePending(db, engine, options);
+  assert.equal(engine.calls.length, 1);
+  assert.equal(db.prepare("SELECT status FROM confirm_items WHERE kind='resolver_fact'").get().status, 'pending');
+  const { ingestState } = await import('../src/ingest/freshness.mjs');
+  assert.equal(ingestState(db, { clock: NOW.slice(0, 10) }).items.some(item => item.kind === 'resolver_fact'), false);
+}));
