@@ -49,6 +49,9 @@ export function deriveRecFacts(data, facts = {}, { entities = [] } = {}) {
     if (!mine.length || unknownRecipient || payroll.blocks.some(b => !b.person || b.person === person)) continue;
     const outside = mine.filter(r => !r.household);
     if (outside.some(r => !r.deferralKnown)) continue;
+    const contributions = facts['retirement.contributions'];
+    if (outside.length && Array.isArray(contributions) && contributions.some(c => c?.person === person
+      && c.plan === 'outside-401k' && !String(c.employer || '').trim())) continue;
     other[person] = { deferral: cents(outside.reduce((s, r) => s + r.deferral, 0)), catchUp: cents(outside.reduce((s, r) => s + r.catchUp, 0)) };
     otherRows.push(...current.filter(d => docRecipient(data, d).person === person).map(ev));
   }
@@ -130,10 +133,12 @@ export function prepareRecFacts(db, data) {
   const deletes = Object.entries(stored).filter(([key, r]) => automatic(r) && !candidates[key]).map(([key]) => key);
   const assumptions = defaults.filter(a => a.path.length ? !values[a.undoKey]?.[a.path[0]]?.undone : values[a.undoKey] !== true);
   return { values, assumptions, writes, deletes, write() {
-    for (const key of deletes) db.prepare("DELETE FROM facts WHERE key = ? AND src LIKE 'derived:%' AND confirmed = 0").run(key);
+    let changed = 0;
+    for (const key of deletes) changed += db.prepare("DELETE FROM facts WHERE key = ? AND src LIKE 'derived:%' AND confirmed = 0").run(key).changes;
     if (writes.length) db.prepare('INSERT OR IGNORE INTO sources (id, label, as_of, kind, note) VALUES (?, ?, ?, ?, ?)')
       .run(`derived:${data.clock}`, 'Derived from stored data and stated assumptions', data.clock, 'derived', '');
-    for (const w of writes) upsertFact(db, { ...w, confirmed: false });
+    for (const w of writes) if (upsertFact(db, { ...w, confirmed: false }).changed) changed++;
+    return changed;
   } };
 }
 
