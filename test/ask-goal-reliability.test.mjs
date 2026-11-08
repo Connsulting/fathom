@@ -284,7 +284,7 @@ test('AC5 and AC3: real Ask gets read/retry rules and saves failed write reasons
       { text: 'The horizon needs a valid identifier.' },
     ] });
   } };
-  const response = await threadCreate({ db, config: {}, answerer: createLiveAnswerer({ engine, root }), body: { text: 'Create my contribution goal.' } });
+  const response = await threadCreate({ db, config: {}, answerer: createLiveAnswerer({ engine, root, services: { engine, config: { dataDir: root } } }), body: { text: 'Create my contribution goal.' } });
   assert.match(seen, /read-only lookups.*before replying/i);
   assert.match(seen, /all.*529.*checking.*transfers/i);
   assert.match(seen, /never ask permission to read/i);
@@ -335,7 +335,7 @@ test('AC7: the confirmed Ask write persists the goal and attributed receipt', as
     ] : [ { toolCalls: [{ name: 'update_goal', args: { operation: 'create', ...args } }] }, { text: 'Your goal is saved.' } ];
     return transport.call({ ...request, fake });
   } };
-  const ctx = { db, config: {}, answerer: createLiveAnswerer({ engine, root }), body: { text: 'Propose the parent contribution goal from its note.' } };
+  const ctx = { db, config: {}, answerer: createLiveAnswerer({ engine, root, services: { engine, config: { dataDir: root } } }), body: { text: 'Propose the parent contribution goal from its note.' } };
   const first = await threadCreate(ctx);
   assert.ok(first.message.provenance.literals.some(l => l.text === '$4,000'));
   const second = await ask({ ...ctx, body: { key: first.thread.key, text: 'yeah' } });

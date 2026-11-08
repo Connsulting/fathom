@@ -72,7 +72,7 @@ export function createMcpHandler({ keys, runtimes, config }) {
 
     keys.touch(record.id);
     const scheduler = household.scheduler;
-    const ctx = { db: household.db, now: new Date(), dataDir: household.root, clock: config.clock, household,
+    const ctx = { db: household.db, now: new Date(), dataDir: household.root, clock: config.clock, household, services: household.services,
       channel: 'mcp', actorId: record.userId || `key:${record.id}`, scopes: record.scopes,
       replan: scheduler ? () => scheduler.runNow('plan') : null, queuePlan: () => scheduler?.soon?.('plan', 'ingest') };
     const server = createToolServer({ scopes: record.scopes, ctx });

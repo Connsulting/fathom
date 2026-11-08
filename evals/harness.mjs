@@ -2,6 +2,8 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInstance } from '../src/platform/db.mjs';
+import { createHouseholdContext } from '../src/platform/runtime.mjs';
+import { createInstanceSecrets } from '../src/platform/secrets.mjs';
 import { seedDemo } from '../demo/seed.mjs';
 import { createEngine, loadCredential, BudgetExceededError, ModelAccountingError } from '../src/engine/index.mjs';
 import { createSpendLedger } from '../src/engine/runtime.mjs';
@@ -136,7 +138,11 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
         throw error;
       } finally { ledger.end(); }
     } };
-    const answerer = createLiveAnswerer({ engine, packs, root: store.root, onRead: call => reads.push(call) });
+    const config = { dataDir: store.dataDir, clock };
+    const household = createHouseholdContext({ householdId: store.householdId, mode: 'demo', db, platform: store.platform,
+      config, secrets: createInstanceSecrets({ config, mode: 'demo' }), engine, packs,
+      answererFactory: options => createLiveAnswerer({ ...options, onRead: call => reads.push(call) }) });
+    const answerer = household.answerer;
     for (const c of cases) {
       ledger.continueBudget();
       if (ledger.state.stopped) {

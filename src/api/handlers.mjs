@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { requireActor, undoAction, ensureActionConversation, receiptsFor, receiptMessages } from '../actions/receipts.mjs';
 import { writeRec } from '../store/recs.mjs';
 import { latestProposal, claimProposal, markProposal, executeProposal, isPlainConfirmation } from '../actions/proposals.mjs';
+import { ownerStatements } from '../actions/evidence.mjs';
 import { ToolError } from '../tools/errors.mjs';
 import { queueAccountPairs } from '../ingest/account-merge.mjs';
 // API handlers. Each takes { household, db, config, engine, packs, answerer, params, body } and
@@ -560,9 +561,12 @@ async function decideProposal(ctx, key, id, decision, ownerText) {
     const run = streaming(turn);
     const { pending } = claim;
     try {
-      const result = await executeProposal(pending, { db, now: stamp(ctx), dataDir: ctx.household?.root, actorId: run.actorId,
+      const toolContext = { db, now: stamp(ctx), dataDir: ctx.household?.root, actorId: run.actorId,
         ownerText, turnId: run.turnId, replan: run.replan, queuePlan: run.queuePlan, conversationKey: key,
-        recId: db.prepare('SELECT rec_id FROM conversations WHERE key = ?').get(key)?.rec_id ?? null, scopes: run.scopes, evidenceMessageId: id });
+        recId: db.prepare('SELECT rec_id FROM conversations WHERE key = ?').get(key)?.rec_id ?? null, scopes: run.scopes, evidenceMessageId: id,
+        channel: 'ask', household: ctx.household, services: ctx.household?.services };
+      toolContext.ownerStatements = () => ownerStatements(toolContext);
+      const result = await executeProposal(pending, toolContext);
       reply = { paragraphs: [CONFIRMED_TEXT], refs: [], provenance: { actionTurn: run.turnId, confirmedProposal: 'm' + id,
         tools: [{ name: pending.tool, args: { operation: pending.operation, ...pending.args }, result: JSON.parse(JSON.stringify(result ?? null)) }] } };
     } catch (e) {
