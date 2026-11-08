@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { registerReceiptKind, requireScope } from '../actions/receipts.mjs';
 import { ToolError } from '../tools/errors.mjs';
 
-const TABLES = ['files', 'sources', 'accounts', 'transactions', 'balances', 'positions', 'pnl_lines', 'tax_payments', 'documents', 'facts', 'figures',
+const TABLES = ['files', 'sources', 'accounts', 'account_holders', 'transactions', 'balances', 'positions', 'pnl_lines', 'tax_payments', 'documents', 'facts', 'figures',
   'held_facts', 'confirm_items', 'superseded_rows', 'transaction_category_imports', 'transaction_category_corrections', 'transaction_category_guesses', 'column_mappings', 'import_proposals'];
 const keys = (db, table) => db.prepare(`PRAGMA table_info(${table})`).all().filter(c => c.pk).sort((a, b) => a.pk - b.pk).map(c => c.name);
 const identity = (row, pk) => JSON.stringify(pk.map(k => row[k]));

@@ -842,7 +842,7 @@ signs no one in.
 
 Tell us. The text is saved by `POST /api/onboarding/notes` (`src/api/onboarding-handlers.mjs`) as a
 file named `Setup notes <date>.md` (type `text/markdown`) through `ingestFile`, exactly the path of
-an uploaded notes file: the bytes are stored encrypted in the vault, the notes parser writes the
+an uploaded notes file: the bytes are stored encrypted in the vault and linked to a
 proposal linked to encrypted source bytes. The engine produces cited fields and shared
 actions; source-grounded validation and explicit current-version approval precede writes.
 

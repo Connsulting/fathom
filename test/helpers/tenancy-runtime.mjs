@@ -402,7 +402,7 @@ async function populateLegacy(dataDir, legacyKey) {
 
   const uploads = [
     { id: null, name: 'synthetic-checking.csv', mime: 'text/csv', bytes: csvBytes(), kind: 'aggregator_csv', parser: 'aggregator', status: 'imported' },
-    { id: null, name: 'synthetic-plan-note.md', mime: 'text/markdown', bytes: noteBytes(), kind: 'notes', parser: 'notes', status: 'needs_extraction' },
+    { id: null, name: 'synthetic-plan-note.md', mime: 'text/markdown', bytes: noteBytes(), kind: 'model_import', parser: 'model-import', status: 'waiting_for_engine' },
   ];
   for (const u of uploads) u.id = fileIdOf(u.bytes);
   const packet = { id: `advpkt-${randomBytes(8).toString('hex')}`, bytes: Buffer.from(PACKET_HTML) };

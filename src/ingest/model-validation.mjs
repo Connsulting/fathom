@@ -98,7 +98,8 @@ export function validateImport(ctx, proposal, source) {
       name: f.name ?? null, price: f.price ?? null, costBasis: f.costBasis ?? null });
     else if (row.target === 'pnl') {
       if (!PERIOD.test(f.period) || !['cash', 'accrual', 'unknown'].includes(f.basis)) errors.push('pnl_context_unresolved');
-      const entity = ctx.db.prepare('SELECT entity FROM entity_aliases WHERE alias = ?').get(normalize(f.entity).replace(/[^a-z0-9]/g, ''))?.entity;
+      const matches = [...new Set(ctx.db.prepare('SELECT alias,entity FROM entity_aliases').all().filter(r => normalize(r.alias).replace(/[^a-z0-9]/g, '') === normalize(f.entity).replace(/[^a-z0-9]/g, '')).map(r => r.entity))];
+      const entity = matches.length === 1 ? matches[0] : null;
       if (!entity) errors.push('entity_unresolved');
       else bindings.push(`entity:${entity}`);
       rows.push({ ...base, kind: 'pnl_line', entity, period: f.period, category: String(f.category), amount });

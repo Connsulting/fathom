@@ -13,6 +13,8 @@ import { refreshPackState } from '../packs/state.mjs';
 import { pickParser } from './registry.mjs';
 import { identifyAccountRows, dedupeKey } from './dedupe.mjs';
 import { cents, institution, LimitError } from './format.mjs';
+import { readWorkbook } from './workbook.mjs';
+import { delimitedCells } from './format.mjs';
 import { sourceFormat } from './model-source.mjs';
 import {
   ask, recordFact, archive, normalizeName, OWNER_OPTIONS, KIND_OPTIONS, NEAR_DUPLICATE_OPTIONS, EMPLOYER_OPTIONS, taxYearOptions,
@@ -181,6 +183,13 @@ async function planFile(db, fileId, file, opts) {
     mirror: parser.mirror ?? 'manual', parsed: parser.parse(file), capabilities: { positions: parser.id === 'brokerage-positions' } };
   const format = sourceFormat(file);
   if (!format) return { status: 'unsupported', warnings: [{ code: 'unsupported_format', locator: {} }] };
+  try {
+    if (format === 'xlsx') readWorkbook(file);
+    if (format === 'csv' || format === 'tsv') delimitedCells(file, format === 'tsv' ? '\t' : ',');
+  } catch (error) {
+    if (error instanceof LimitError) throw error;
+    return { status: 'unsupported', warnings: [{ code: 'unsupported_format', locator: {} }] };
+  }
   const { prepareImport } = await import('./model-review.mjs');
   return { proposalResult: await prepareImport({ ...opts, db }, { file: { ...file, fileId, format }, fake: opts.fake, reinterpret: opts.mode === 'reinterpret' }) };
 }

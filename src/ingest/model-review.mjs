@@ -42,29 +42,33 @@ export async function prepareImport(ctx, { file, layout = null, fake, reinterpre
   const stored = ctx.db.prepare('SELECT sha256,removed_at FROM files WHERE id=?').get(file.fileId);
   if (!stored) throw new ToolError('not_found', 'No such source file.');
   if (stored.removed_at) throw new ToolError('bad_input', 'The source file was removed.');
-  let source;
-  try { source = await indexSource(file); } catch (error) {
-    if (error instanceof LimitError) throw error;
-    return { status: 'unsupported', reasonCode: 'unsupported_format' };
-  }
-  context(ctx);
-  if (source.sha256 !== stored.sha256) stale(['source']);
-  if (source.status !== 'indexed') return { status: 'needs_source_text' };
   const prior = ctx.db.prepare('SELECT * FROM import_proposals WHERE file_id=? ORDER BY version DESC,rowid DESC LIMIT 1').get(file.fileId);
+  const mappings = ctx.db.prepare("SELECT 1 FROM column_mappings WHERE approval_status='approved' LIMIT 1").get();
+  let source;
+  if (prior || mappings || layout || file.format === 'pdf') {
+    try { source = await indexSource(file); } catch (error) {
+      if (error instanceof LimitError) throw error;
+      return { status: 'unsupported', reasonCode: 'unsupported_format' };
+    }
+    context(ctx);
+    if (source.sha256 !== stored.sha256) stale(['source']);
+    if (source.status !== 'indexed') return { status: 'needs_source_text' };
+  }
   if (prior && !reinterpret) {
     if (prior.source_sha256 !== source.sha256) stale(['source']);
     if (['needs_confirmation', 'needs_clarification'].includes(prior.status)) {
       const review = parseJson(prior.review_state, {}), proposal = parseJson(prior.proposal);
-      if (prior.actor_id !== ctx.actorId || !isDeepStrictEqual(review.effect, importEffect(validateImport({ ...ctx, reinterpret }, proposal, source)))) return tx(ctx.db, () => {
+      if (prior.actor_id !== ctx.actorId || !isDeepStrictEqual(review.effect, importEffect(validateImport({ ...ctx, reinterpret: review.reinterpret, capturedAt: review.capturedAt }, proposal, source)))) return tx(ctx.db, () => {
         ctx.db.prepare("UPDATE import_proposals SET status='superseded',updated_at=? WHERE id=? AND version=?").run(stamp(ctx), prior.id, prior.version);
         return stageImport(ctx, { source, proposal: { ...proposal, version: prior.version + 1 }, layout: review.layout,
           delta: review.presentation.delta, preserved: review.presentation.preserved, previousMapping: review.previousMapping,
-          reasonCode: ['layout_mismatch', 'unsupported_currency'].includes(prior.reason_code) ? prior.reason_code : null });
+          reasonCode: ['layout_mismatch', 'unsupported_currency'].includes(prior.reason_code) ? prior.reason_code : null, reinterpret: review.reinterpret });
       });
     }
-    return out(prior);
+    if (prior.status !== 'waiting_for_engine') return out(prior);
   }
-  const reused = reinterpret ? { candidateCount: 0 } : await reuseApprovedMapping(ctx, { source, layout });
+  const correcting = prior?.status === 'waiting_for_engine' && prior.reason_code === 'owner_correction';
+  const reused = reinterpret || correcting || !source ? { candidateCount: 0 } : await reuseApprovedMapping(ctx, { source, layout });
   if (reused.status === 'imported') return reused;
   if (layout || reused.suggestedLayout || reused.candidateCount) {
     const selected = layout ?? reused.suggestedLayout;
@@ -76,9 +80,10 @@ export async function prepareImport(ctx, { file, layout = null, fake, reinterpre
     }
     return stageImport(ctx, { source, proposal, layout: usableLayout, delta: reused.delta, preserved: reused.preserved, previousMapping: reused.previousMapping, reasonCode: reused.reasonCode });
   }
-  const interpreted = await interpretFile({ ctx, file, fake });
+  const interpreted = await interpretFile({ ctx, file, fake, correction: correcting ? prior.approval_evidence : null });
   if (!interpreted.valid || interpreted.status !== 'needs_confirmation' && interpreted.status !== 'needs_clarification') return { status: interpreted.status, reasonCode: interpreted.reasonCode };
   try {
+    if (correcting) Object.assign(interpreted.proposal, { proposalId: prior.id, version: prior.version });
     if (reinterpret && prior) Object.assign(interpreted.proposal, { proposalId: prior.id, version: prior.version + 1 });
     return stageImport(ctx, { source: interpreted.source, proposal: interpreted.proposal, layout: interpreted.layout, reinterpret });
   }
@@ -153,6 +158,9 @@ function commit(ctx, row, proposal, source, file, review, validation, { automati
   const before = { proposalId: row.id, version: row.version, status: row.status, mappingApproved: Boolean(proposal.mappingId && db.prepare("SELECT 1 FROM column_mappings WHERE signature=? AND approval_status='approved'").get(proposal.mappingId)) };
   const result = persistImport(db, source.fileId, file, importPlan(structuredClone(validation.rows), { reinterpret: review.reinterpret }), { now }).result;
   const actionChildren = applySourceActions({ ...ctx, now }, source, validation.actions ?? [], review.capturedAt, review.correction).children;
+  result.counts.actions = actionChildren.filter(Boolean).length;
+  result.counts.notes = validation.notes?.length ?? 0;
+  db.prepare('UPDATE files SET counts=? WHERE id=?').run(JSON.stringify(result.counts), source.fileId);
   const actionFacts = new Set(actionChildren.filter(Boolean).map(child => db.prepare('SELECT entity_id FROM action_receipts WHERE id=? AND kind=?').get(child.id,'fact')?.entity_id).filter(Boolean));
   if (review.reinterpret) db.prepare("UPDATE import_proposals SET status='superseded' WHERE file_id=? AND status='imported'").run(source.fileId);
   if (review.layout && !automatic) {
@@ -219,6 +227,7 @@ export async function reviewImport(ctx, args) {
   const result = tx(ctx.db, () => commit(ctx, row, proposal, source, file, review, validateImport({ ...ctx, reinterpret: review.reinterpret, capturedAt: review.capturedAt }, proposal, source), { evidence: args.evidence }));
   try { refreshPackState(ctx.db, { dataDir: ctx.household.root, now: stamp(ctx) }); } catch {}
   triggerPlan(ctx); triggerGuesses(ctx); triggerFreshness(ctx);
+  ctx.onReceipt?.(result.receipt);
   return result;
 }
 

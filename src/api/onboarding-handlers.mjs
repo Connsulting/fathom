@@ -26,6 +26,7 @@ export async function saveNotes(ctx) {
 
   await householdVault(ctx);
   const opts = ingestOpts(ctx);
+  opts.capturedAt = opts.now;
   let file;
   try {
     file = await ingestFile(ctx.db, { name: `Setup notes ${opts.now.slice(0, 10)}.md`, bytes, mime: 'text/markdown' }, opts);

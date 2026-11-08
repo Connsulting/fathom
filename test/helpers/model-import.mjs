@@ -19,7 +19,7 @@ export async function fixture(options = {}) {
     const vault = await openVault(store.household);
     const path = await storeFile({ vault, id: file.fileId, bytes: file.bytes, purpose: 'upload' });
     store.db.prepare('INSERT INTO files (id,name,sha256,size,mime,uploaded_at,stored_path,status) VALUES (?,?,?,?,?,?,?,?)')
-      .run(file.fileId, file.name, indexed.sha256, file.bytes.length, format === 'csv' ? 'text/csv' : 'text/plain', NOW, path, 'needs_mapping');
+      .run(file.fileId, file.name, indexed.sha256, file.bytes.length, format === 'csv' ? 'text/csv' : 'text/plain', NOW, path, 'waiting_for_engine');
     return indexed;
   }
   return { ...store, ctx, source };

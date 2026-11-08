@@ -53,7 +53,7 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
 const safeCode = err => [err && err.code, err && err.name].find(v => typeof v === 'string' && IDENT.test(v)) || 'unknown';
 
 export { triggerPlan, triggerGuesses, triggerFreshness } from '../ingest/pipeline.mjs';
-export const ingestOpts = ctx => ({ ...ctx, household: ctx.household, actorId: ctx.identity?.id ?? (storeMode(ctx.db) === 'demo' ? 'demo' : null), now: nowIso() });
+export const ingestOpts = ctx => ({ ...ctx, household: ctx.household, actorId: ctx.identity?.id ?? ctx.actorId ?? (storeMode(ctx.db) === 'demo' ? 'demo' : null), now: nowIso() });
 
 export async function uploadFiles(ctx) {
   await householdVault(ctx);
