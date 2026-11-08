@@ -7,7 +7,7 @@ test('MCP action scopes deny before validation and permit only matching writes a
   await withServer({ env: { FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' } }, async s => {
     const read = (await createKey(s.baseUrl, 'Read actions')).key;
     const scopes = [
-      ['write:facts', 'answer', 'fact'], ['write:steps', 'act_on_recommendation', 'step'], ['write:goals', 'update_goal', 'create'],
+      ['write:imports', 'answer', 'expected_transaction'], ['write:facts', 'answer', 'fact'], ['write:steps', 'act_on_recommendation', 'step'], ['write:goals', 'update_goal', 'create'],
       ['write:recs', 'act_on_recommendation', 'start_over'],
       ...['decide', 'revisit', 'pick_point'].map(operation => ['write:decisions', 'act_on_recommendation', operation]),
       ...['send', 'verdict', 'checkin', 'packet'].map(operation => ['write:recs', 'advisor_review', operation]),

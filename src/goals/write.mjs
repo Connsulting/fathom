@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { tx, parseJson as parse, getSetting, setSetting } from '../store/db.mjs';
+import { actionTx as tx, parseJson as parse, getSetting, setSetting } from '../store/db.mjs';
 import { loadFigures, loadGoals } from '../scenario/build.mjs';
 import { buildSuggestions, SUGGEST_SETTING } from '../suggest/build.mjs';
 import { validateGoal, kindOf, KIND_FIELDS, ALL_KIND_FIELDS } from '../shared/goals.mjs';

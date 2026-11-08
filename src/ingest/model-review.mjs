@@ -170,6 +170,10 @@ export async function reviewImport(ctx, args) {
   const row = latest(ctx.db, args.proposalId);
   if (!row) throw new ToolError('not_found', 'No such proposal.');
   const proposal = parseJson(row.proposal), review = parseJson(row.review_state);
+  if (review?.kind === 'actions') {
+    const { reviewUpdate } = await import('./model-updates.mjs');
+    return reviewUpdate(ctx, args, row);
+  }
   scopes(ctx, proposal);
   if (row.version !== args.version || ['imported', 'superseded', 'rejected', 'approved'].includes(row.status)) stale(['proposal']);
   if (!['needs_confirmation', 'needs_clarification'].includes(row.status)) throw new ToolError('bad_input', 'The revised proposal is waiting for interpretation.');

@@ -16,7 +16,7 @@ const expected = {
   retirement: ['target', 'growth', 'after_tax'],
   spending: ['total', 'compare', 'definitions', 'cash_flow', 'recurring'],
   goals: ['list', 'pace', 'suggestions'], recommendations: ['list', 'detail', 'advisor', 'wargame'],
-  knowledge: ['packs', 'search', 'entry'], answer: ['fact', 'rec_questions', 'confirm', 'reopen', 'yearend_mark'],
+  knowledge: ['packs', 'search', 'entry'], answer: ['fact', 'expected_transaction', 'rec_questions', 'confirm', 'reopen', 'yearend_mark'],
   act_on_recommendation: ['status', 'owner', 'step', 'start_over', 'decide', 'revisit', 'pick_point'], update_goal: ['create', 'edit', 'archive', 'delete', 'suggestion'],
   advisor_review: ['send', 'verdict', 'checkin', 'packet'], update_preferences: ['remember', 'curve', 'forget', 'save_definition', 'delete_definition', 'pack'],
   refresh: ['import_file', 'retry_import', 'build_your_plans', 'run_job'], undo: ['undo'],
