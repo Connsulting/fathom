@@ -4,7 +4,8 @@
 // argv must carry `--household <id>` (else codeError household_required). The instance opens
 // through openInstance (its StartupError codes pass through; an empty data directory is
 // household_unavailable), and the household must be active with a storage root (else
-// household_unavailable). household is that household's runtime context, built like the server's
+// household_unavailable). In live engine mode every household's pre-MT-05 spend is carried first
+// (carryAllHouseholds; an unreadable store refuses household_store_unavailable). household is that household's runtime context, built like the server's
 // but with its scheduler not started; argv is the remaining arguments. close() stops the
 // household's scheduler and closes its store and the platform.
 
@@ -12,12 +13,14 @@ import { codeError } from './db.mjs';
 import { openInstance } from './ready.mjs';
 import { createInstanceSecrets } from './secrets.mjs';
 import { buildHouseholdContext } from './runtime.mjs';
+import { carryAllHouseholds } from './model-carry.mjs';
 
 // The household id after --household and the arguments without that pair.
 export function householdArg(argv) {
   const i = argv.indexOf('--household');
   const id = i >= 0 ? argv[i + 1] : undefined;
   if (typeof id !== 'string' || !id || id.startsWith('--')) throw codeError('household_required');
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(id) || argv.indexOf('--household', i + 1) >= 0) throw codeError('household_invalid');
   return { householdId: id, rest: [...argv.slice(0, i), ...argv.slice(i + 2)] };
 }
 
@@ -30,6 +33,9 @@ export async function openCliHousehold(config, argv) {
   try {
     const row = platform.prepare('SELECT status, mode, storage_root, generation FROM households WHERE id = ?').get(householdId);
     if (!row || row.status !== 'active' || row.storage_root == null) throw codeError('household_unavailable');
+    // A live CLI may be the first process to open the instance after the upgrade: every
+    // household's pre-MT-05 spend is carried before this household can be admitted.
+    if (config.engine === 'live') carryAllHouseholds(platform, { dataDir: config.dataDir });
     household = buildHouseholdContext({
       householdId, generation: Number(row.generation), mode: row.mode, relativeRoot: row.storage_root, platform, config,
       secrets: createInstanceSecrets({ config, mode }),

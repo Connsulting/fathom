@@ -34,7 +34,8 @@ function chipFor(p) {
   if (p.status === 'ahead') return gap || 'Ahead';
   if (p.status === 'on pace') return 'On pace';
   if (p.status === 'behind') return gap || 'Behind';
-  return p.reason === 'stale_data' ? 'Data stale' : 'Pace unknown';
+  // Stale or unknown pace has no chip on a Home card; the data line says how current the data is.
+  return null;
 }
 
 const form = (page) => page.locator('form.h-gform');
@@ -143,7 +144,9 @@ test.describe('goal kinds', TAGS, () => {
       await expect(card.locator('[data-goal-priority]')).toHaveText(PRIORITY_LABEL[pri]);
       const { p } = entry(g.id);
       expect(p, `${g.id} has a pace entry`).toBeTruthy();
-      await expect(card.locator('span.h-pchip')).toHaveText(chipFor(p));
+      const want = chipFor(p);
+      if (want) await expect(card.locator('span.h-pchip')).toHaveText(want);
+      else await expect(card.locator('span.h-pchip')).toHaveCount(0);
     }
     const f = entry(floor.id);
     expect(f.p.kind).toBe('floor');

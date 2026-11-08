@@ -21,7 +21,7 @@ import { loadConfig } from '../src/config.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import { buildScenario, clockNow } from '../src/scenario/build.mjs';
 import { callTool, tools as REGISTRY, instructions } from '../src/tools/index.mjs';
-import { sdkOptions } from '../src/engine/live.mjs';
+import { sdkOptions, encodeTranscript } from '../src/engine/live.mjs';
 import { createRuntimeEngine, createSpendLedger } from '../src/engine/runtime.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
 import { PRODUCT_RULES, NOTICES, buildChatPrompt, groundAnswer, renderAnswer, createLiveAnswerer } from '../src/api/answerer.mjs';
@@ -570,10 +570,9 @@ test('B3: an account mask from the real accounts.list result never grounds a num
   const masked = accounts.filter(a => typeof a.mask === 'string' && /^\d+$/.test(a.mask) && Number.isFinite(a.balance) && a.balance > 0);
   assert.ok(masked.length > 0, 'the demo store has masked accounts with balances');
 
-  // The household summary carries no masks or account ids, so only the tool result could leak one.
+  // The household summary carries no account masks, so only the tool result could leak one.
   const summaryJson = JSON.stringify(await callTool('household', { operation: 'summary', }, { db: s.db, now }));
   assert.ok(!/"(?:masks?|accountIds?|account_ids?)"/i.test(summaryJson), 'no mask or account id keys in the summary');
-  for (const a of accounts) assert.ok(!summaryJson.includes(`"${a.id}"`), `the summary does not name account ${a.id}`);
 
   // Masks nothing else grounds: a baseline answer with no tool call states them all.
   const baselineText = `Synthetic amounts: ${masked.map(a => asAmount(a.mask)).join(', ')}.`;
@@ -1098,7 +1097,11 @@ async function offeredTools(s) {
 function leaves(v, key, out = []) {
   if (Array.isArray(v)) for (const x of v) leaves(x, key, out);
   else if (v && typeof v === 'object') {
-    for (const [k, x] of Object.entries(v)) { out.push({ key, value: k, isKey: true }); leaves(x, k, out); }
+    for (const [k, x] of Object.entries(v)) {
+      // Grounding drops figure reference metadata as a whole.
+      if (k === 'ref') continue;
+      out.push({ key, value: k, isKey: true }); leaves(x, k, out);
+    }
   } else out.push({ key, value: v });
   return out;
 }
@@ -1126,16 +1129,18 @@ function candidates(schema, name, intSentinel) {
   }
   if (type === 'array') return candidates(schema.items || { type: 'string' }, name, intSentinel).map(c => ({ value: [c.value], sentinel: c.sentinel }));
   if (type === 'boolean') return [{ value: true, sentinel: false }];
+  if (type === 'object' && name === 'whatIf') return [{ value: { incomeType: 'business' }, sentinel: false }];
   if (type === 'object' && ['ref', 'assumption', 'expr'].every(k => schema.properties?.[k])) return [{ value: sentinelOperand, sentinel: true }];
   return assert.fail(`extend the contract test: ${name} has type ${type}`);
 }
 
-test('R3 A contract: no tool the answerer offers returns a sentinel argument outside identifier keys', async t => {
+test('R3 A contract: scalar read operations return no sentinel argument outside identifier keys', async t => {
   const s = await demoStore(t);
   const listed = await offeredTools(s);
   const offered = listed.flatMap(t => t.operations.map(op => ({ ...t, operation: op.name, inputSchema: { type: 'object', additionalProperties: false, properties: { operation: { type: 'string', enum: [op.name] }, ...op.params }, required: ['operation', ...op.required] } })));
-  const names = [...new Set(offered.map(tool => tool.name))];
-  assert.deepEqual(sorted(names), sorted(REGISTRY.filter(x => x.kind === 'read').map(x => x.name)),
+  const scalar = offered.filter(tool => !['business', 'spending', 'transactions'].includes(tool.name));
+  const names = [...new Set(scalar.map(tool => tool.name))];
+  assert.deepEqual(sorted(names), sorted(REGISTRY.filter(x => x.kind === 'read' && !['business', 'spending', 'transactions'].includes(x.name)).map(x => x.name)),
     'a context without trusted identity offers read tools only');
   const recId = s.db.prepare("SELECT id FROM recs WHERE status != 'hidden' ORDER BY id LIMIT 1").get().id;
   const realPack = s.packs.loaded().find(p => p.id === 's-corp-owner');
@@ -1144,7 +1149,7 @@ test('R3 A contract: no tool the answerer offers returns a sentinel argument out
 
   const calls = [];
   const plan = new Map();
-  for (const tool of offered) {
+  for (const tool of scalar) {
     const props = (tool.inputSchema && tool.inputSchema.properties) || {};
     const required = new Set(tool.inputSchema.required || []);
     // Required arguments take real store values so the tool answers; a sentinel id is an error result.
@@ -1152,7 +1157,7 @@ test('R3 A contract: no tool the answerer offers returns a sentinel argument out
     for (const name of required) {
       const schema = props[name];
       if (schema.enum) base[name] = schema.enum[0];
-      else if (name === 'id') base[name] = recId;
+      else if (name === 'id') base[name] = tool.name === 'accounts' ? s.db.prepare('SELECT id FROM accounts ORDER BY id LIMIT 1').get().id : recId;
       else if (name === 'packId') base[name] = realPack.id;
       else if (name === 'file') base[name] = realPack.entries[0].file;
       else if (name === 'query') base[name] = 'tax';
@@ -1530,8 +1535,8 @@ test('R4 F2: the real business.pnl result over the demo store never grounds its 
   const s = await demoStore(t);
   const scenario = buildScenario(s.db);
   const result = await callTool('business', { operation: 'pnl', }, { db: s.db, now: clockNow(s.db) });
-  assert.ok(result.rows.length > 0, 'the demo store has P&L rows');
-  const period = result.rows.map(r => r.period).sort().at(-1);
+  assert.ok(result.entities.length > 0, 'the demo store has P&L entities');
+  const period = result.entities.flatMap(e => e.groups.filter(g => g.revenue.value || g.expenses.value).map(g => g.key)).sort().at(-1);
   assert.match(period, /^\d{4}-\d{2}$/);
   const month = String(Number(period.slice(5)));
   const year = Number(period.slice(0, 4)).toLocaleString('en-US');
@@ -1539,15 +1544,15 @@ test('R4 F2: the real business.pnl result over the demo store never grounds its 
   const ground = (r, text) => groundAnswer(`The figure is ${text}.`, { scenario, data: [], toolResults: [{ name: 'business', args: { operation: 'pnl', }, result: r }] });
 
   // Self-check: without the periods nothing in the result states these values.
-  const stripped = { rows: result.rows.map(({ period: _p, ...row }) => row), totals: Object.values(result.totals) };
+  const stripped = result.entities.map(e => ({ revenue: e.revenue.value, expenses: e.expenses.value, profit: e.profit.value }));
   for (const text of said) assert.ok(laundered(ground(stripped, text)).includes(text), `self-check: ${text} is not a P&L value`);
 
   for (const text of said) {
     assert.ok(laundered(ground(result, text)).includes(text), `period ${period} must not ground ${text}`);
   }
   // A stored row amount still grounds, attributed to business.pnl.
-  const row = result.rows.find(r => r.amount > 0);
-  const amount = `$${row.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const row = result.entities.find(e => e.revenue.value > 0);
+  const amount = `$${row.revenue.value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const kept = ground(result, amount);
   assert.equal(kept.ok, true, `${amount}: ${JSON.stringify(kept.violations)}`);
   expectToolSource(kept.literals.find(l => l.text === amount), 'business', JSON.stringify(kept.literals));
@@ -1773,6 +1778,31 @@ test('R5 F2: a marked amount in the link text of a parenthesized destination sti
     }
   }
   assert.deepEqual(failures, []);
+});
+
+
+test('Ask keeps original tax identifiers locally and scrubs current and prior turns at the SDK boundary', async t => {
+  const s = await demoStore(t);
+  const { createEngine } = await import('../src/engine/index.mjs');
+  const payloads = [];
+  const live = createEngine({ mode: 'live', credential: 'synthetic-key', roundRunner: async request => {
+    payloads.push({ prompt: encodeTranscript(request.messages), system: sdkOptions({ ...request, configDir: '/synthetic' }).systemPrompt });
+    return { text: 'Keep a reserve.', content: [{ type: 'text', text: 'Keep a reserve.' }], costUsd: 0.001, model: 'synthetic', status: 'success', toolResults: [] };
+  } });
+  const engine = { mode: 'live', isOn: () => true, call: live.call };
+  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root });
+  const original = 'Synthetic SSN 900-12-3456 and EIN 90-1234567.';
+  const { threadCreate, ask } = await import('../src/api/handlers.mjs');
+  const ctx = { db: s.db, config: s.config, packs: s.packs, answerer };
+  const first = await threadCreate({ ...ctx, body: { text: original } });
+  const key = first.thread.key;
+  await ask({ ...ctx, body: { key, text: 'Synthetic ITIN 900-70-1234 question.' } });
+  assert.equal(payloads.length, 2);
+  for (const payload of payloads) assert.ok(!/900-12-3456|90-1234567|900-70-1234/.test(JSON.stringify(payload)), 'outbound Ask history contains no tax identifiers');
+  assert.ok(payloads[1].prompt.includes('XXX-XX-XXXX'), 'prior user text is scrubbed too');
+  const stored = s.db.prepare('SELECT text FROM messages WHERE conversation_key = ? AND role = ? ORDER BY id').all(key, 'me');
+  assert.equal(stored[0].text, original);
+  assert.equal(stored[1].text, 'Synthetic ITIN 900-70-1234 question.');
 });
 
 

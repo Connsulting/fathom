@@ -471,7 +471,7 @@ describe('store modes', () => {
       assert.deepEqual(await dumpStore(file), before);
     });
     const before = await dumpStore(file);
-    const seed = await runCommand('npm', ['run', 'seed:demo'], { env: { FATHOM_DATA: dataDir } });
+    const seed = await runCommand('npm', ['run', 'seed:demo', '--', '--household', servedStore(dataDir).householdId], { env: { FATHOM_DATA: dataDir } });
     assert.notEqual(seed.code, 0);
     assert.deepEqual(await dumpStore(file), before);
   });

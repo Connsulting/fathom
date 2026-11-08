@@ -1,0 +1,319 @@
+{
+  "id": "c1",
+  "op": "chart",
+  "after": 1,
+  "spec": {
+    "kind": "line",
+    "source": {
+      "tool": "spending.trend",
+      "args": {
+        "months": 10
+      },
+      "path": "months"
+    },
+    "x": "month",
+    "series": [
+      {
+        "path": "outflow"
+      },
+      {
+        "path": "inflow"
+      }
+    ]
+  },
+  "calls": [
+    {
+      "tool": "spending.trend",
+      "args": {
+        "months": 10
+      }
+    }
+  ],
+  "snapshot": {
+    "title": "Money in and out by month",
+    "kind": "line",
+    "stacked": false,
+    "x": [
+      {
+        "text": "Jan 2026"
+      },
+      {
+        "text": "Feb 2026"
+      },
+      {
+        "text": "Mar 2026"
+      },
+      {
+        "text": "Apr 2026"
+      },
+      {
+        "text": "May 2026"
+      },
+      {
+        "text": "Jun 2026"
+      },
+      {
+        "text": "Jul 2026"
+      },
+      {
+        "text": "Aug 2026"
+      },
+      {
+        "text": "Sep 2026"
+      },
+      {
+        "text": "Oct 2026"
+      }
+    ],
+    "series": [
+      {
+        "label": "Money out",
+        "unit": "usd",
+        "points": [
+          {
+            "value": 4210,
+            "unit": "usd",
+            "label": "Money out",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 3875.5,
+            "unit": "usd",
+            "label": "Money out",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 4630,
+            "unit": "usd",
+            "label": "Money out",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 5120,
+            "unit": "usd",
+            "label": "Money out",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 4480,
+            "unit": "usd",
+            "label": "Money out",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 3990,
+            "unit": "usd",
+            "label": "Money out",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": null,
+            "unit": "usd",
+            "label": "Money out",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [
+              {
+                "code": "missing_fact",
+                "message": "Two accounts had not synced for this month."
+              }
+            ],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 5340,
+            "unit": "usd",
+            "label": "Money out",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 4150,
+            "unit": "usd",
+            "label": "Money out",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 4425,
+            "unit": "usd",
+            "label": "Money out",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          }
+        ]
+      },
+      {
+        "label": "Money in",
+        "unit": "usd",
+        "points": [
+          {
+            "value": 6200,
+            "unit": "usd",
+            "label": "Money in",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 6200,
+            "unit": "usd",
+            "label": "Money in",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 6450,
+            "unit": "usd",
+            "label": "Money in",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          },
+          null,
+          {
+            "value": 7100,
+            "unit": "usd",
+            "label": "Money in",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 6200,
+            "unit": "usd",
+            "label": "Money in",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 6200,
+            "unit": "usd",
+            "label": "Money in",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 6800,
+            "unit": "usd",
+            "label": "Money in",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 6200,
+            "unit": "usd",
+            "label": "Money in",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 6650,
+            "unit": "usd",
+            "label": "Money in",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.trend"
+            },
+            "source": "Your spending"
+          }
+        ]
+      }
+    ]
+  },
+  "asOf": "2026-10-31",
+  "builtAt": "2026-11-01T12:00:00.000Z"
+}

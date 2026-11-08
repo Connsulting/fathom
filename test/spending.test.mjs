@@ -112,18 +112,15 @@ const catOf = (p, b, name) => {
   return c;
 };
 const leftOf = (p) => Object.fromEntries(p.leftOut.map((l) => [l.key, l]));
-// The contract names both the month list and the per-month total map `months`. Accept either
-// resolution: `months` is the list and the map is another top-level object keyed by exactly those
-// months, or `months` is the map itself.
-const monthList = (p) => (Array.isArray(p.months) ? p.months : Object.keys(p.months));
+// `months` is the ordered list of range months; `monthTotals` maps each of those months to its total figure key.
+const monthList = (p) => {
+  assert.ok(Array.isArray(p.months), 'months is the list of range months');
+  return p.months;
+};
 function monthMap(p) {
-  if (!Array.isArray(p.months)) return p.months;
-  const list = p.months.join();
-  for (const [k, v] of Object.entries(p)) {
-    if (k === 'figures' || k === 'sources' || !v || typeof v !== 'object' || Array.isArray(v)) continue;
-    if (Object.keys(v).join() === list) return v;
-  }
-  assert.fail('no per-month total map keyed by the range months');
+  assert.ok(p.monthTotals && typeof p.monthTotals === 'object' && !Array.isArray(p.monthTotals), 'monthTotals is the per-month total map');
+  assert.deepEqual(Object.keys(p.monthTotals), p.months, 'monthTotals is keyed by exactly the range months');
+  return p.monthTotals;
 }
 const prov = (f, table) => f.provenance.rows.find((r) => r.table === table);
 const near = (a, b) => Math.abs(a - b) < 1e-6;
@@ -302,8 +299,8 @@ test('pl-ac2 bad include or exclude is bad_option; the allowed options and a bad
   assert.equal(code(() => householdSpending({ db, include: ['housing'] })), 'bad_option');
   assert.equal(code(() => householdSpendingRows({ db, include: ['rent'], bucket: 'household', category: 'Groceries' })), 'bad_option');
   assert.equal(code(() => householdSpending({ db, from: '2032-05', to: '2032-04' })), 'bad_range');
-  assert.equal(code(() => householdSpending({ db, from: '2029-10', to: '2032-10' })), 'bad_range', '37 months');
-  assert.equal(code(() => householdSpending({ db, from: '2029-11', to: '2032-10' })), 'ok', '36 months');
+  assert.equal(code(() => householdSpending({ db, from: '2022-10', to: '2032-10' })), 'bad_range', '121 months');
+  assert.equal(code(() => householdSpending({ db, from: '2022-11', to: '2032-10' })), 'ok', '120 months');
   assert.equal(code(() => householdSpending({ db, from: '2032-1', to: '2032-10' })), 'bad_range');
 });
 
@@ -550,7 +547,7 @@ test('pl-ac4 a household with no business account or workbook gets no entities a
   const s = await srv.request({ path: '/api/spending' });
   assert.equal(s.status, 200, s.text.slice(0, 300));
   // The range is still checked with no business data, and a valid one is still accepted.
-  for (const q of ['from=2032-13', 'to=2032-1', 'from=2032-06&to=2032-05', 'from=2029-01&to=2032-01']) {
+  for (const q of ['from=2032-13', 'to=2032-1', 'from=2032-06&to=2032-05', 'from=2022-01&to=2032-01']) {
     const bad = await srv.request({ path: `/api/pnl?${q}` });
     assert.equal(bad.status, 400, `${q}: ${bad.text.slice(0, 200)}`);
   }

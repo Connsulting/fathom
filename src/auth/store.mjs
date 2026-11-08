@@ -143,6 +143,11 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
     const at = now();
     db.prepare('UPDATE household_invitations SET consumed_at = ? WHERE hash = ?').run(at, row.hash);
     const existing = membershipRow(userId, row.household_id);
+    // The first person to join a household founds it and completes its onboarding, which is what
+    // flags a user's tour (src/auth/tour.mjs). Everyone who joins after another member never
+    // onboards, so accepting the invitation flags them instead.
+    const joinsMembers = existing?.status !== 'active'
+      && db.prepare("SELECT 1 AS x FROM household_memberships WHERE household_id = ? AND user_id != ? AND status = 'active' LIMIT 1").get(row.household_id, userId) != null;
     if (!existing) {
       db.prepare(`INSERT INTO household_memberships (user_id, household_id, role, status, version, created_at, updated_at)
         VALUES (?, ?, ?, 'active', 1, ?, ?)`).run(userId, row.household_id, row.role, at, at);
@@ -150,6 +155,7 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
       db.prepare(`UPDATE household_memberships SET role = ?, status = 'active', version = version + 1, updated_at = ?
         WHERE user_id = ? AND household_id = ?`).run(row.role, at, userId, row.household_id);
     }
+    if (joinsMembers) db.prepare('UPDATE users SET tour_pending = 1 WHERE id = ?').run(userId);
     audit('membership.join', { actorId: userId, householdId: row.household_id, targetUserId: userId });
     // A provisioned household becomes active when its first admin joins, and only once its storage
     // exists (a household with no root is never served).
