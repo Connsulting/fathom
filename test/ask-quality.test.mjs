@@ -351,3 +351,10 @@ test('an empty corrective answer still records the triggering kinds', async t =>
   assert.equal(reply.notice, true);
   assert.deepEqual(reply.provenance.discipline.triggeredBy, ['figures.spelled_out']);
 });
+
+
+test('Ask static rules fit the character budget including product rules and answer style', t => {
+  const { system } = buildChatPrompt({ packContextText: '', summary: {}, question: 'Describe the plan.' });
+  t.diagnostic(`ask-static-rules=${system.length}`);
+  assert.ok(system.length <= 8000, `Ask static rules use ${system.length} of 8000 characters`);
+});
