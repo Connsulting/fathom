@@ -65,7 +65,7 @@ import { signInTarget } from '../auth/return-path.js';
 //    take it as an option. context is a list of { kind, id } strings (at most 8) the owner pointed
 //    at; it is sent only when it has at least one entry.
 //  - api.registerFigures(map) keeps Ask block figures ({ 'blk:<messageId>:<blockId>:<n>': { value, unit,
-//    label, kind, asOf, source, gaps } }) for api.fig and the popover, which writes a unit-tagged value by
+//    label, kind, asOf, source, gaps, provenance } }) for api.fig and the popover (assumptions as Assumes rows), which writes a unit-tagged value by
 //    its unit (a ratio as a percent, a date as a date) and a null one as Unavailable with its gap messages.
 //  - api.setFigAction(fn | null): while set, the figure popover shows Add to chat; a click calls
 //    fn(key, label) with the figure key and its plain label, then closes the popover.
@@ -1036,8 +1036,11 @@ function registerFigures(map) {
   for (const [k, e] of Object.entries(map)) {
     if (!e || typeof e !== 'object' || !String(k).startsWith('blk:')) continue;
     const src = 'blk-src:' + k;
+    const provenance = e.provenance && typeof e.provenance === 'object' && !Array.isArray(e.provenance) ? e.provenance : {};
+    // Assumptions the figure was computed under read as the popover's Assumes rows.
+    const notes = arr(provenance.assumptions).map(a => (a && typeof a.stated === 'string' ? a.stated : '')).filter(Boolean);
     extraFig.set(k, { v: e.value ?? null, unit: typeof e.unit === 'string' ? e.unit : 'usd', label: e.label || '', kind: e.kind || 'e', src,
-      gaps: arr(e.gaps), ...(e.stale ? { stale: true } : {}) });
+      gaps: arr(e.gaps), provenance, ...(notes.length ? { notes } : {}), ...(e.stale ? { stale: true } : {}) });
     extraSrc.set(src, { label: e.source || '', asOf: e.asOf || '' });
   }
 }
