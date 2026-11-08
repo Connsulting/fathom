@@ -43,9 +43,8 @@ export function plotSize(w) {
   return { W, H: W <= 480 ? 200 : Math.min(240, Math.round((W * 9) / 16)) };
 }
 
-// The text a figure reads as: its quote, its value by unit, or Unavailable.
-const shown = (f, ctx) => (f.value === null || f.value === undefined ? 'Unavailable'
-  : typeof f.quote === 'string' && f.quote ? f.quote : ctx.formatByUnit(f.value, f.unit));
+// The text a figure reads as (the shell's figureText: never a stored figure token).
+const shown = (f, ctx) => ctx.figureText(f);
 
 const words = (list) => (list.length < 2 ? list.join('') : `${list.slice(0, -1).join(', ')} and ${list.at(-1)}`);
 

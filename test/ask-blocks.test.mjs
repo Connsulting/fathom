@@ -157,14 +157,19 @@ test('compare: each option is a labelled group, every value a figure, unavailabl
   assert.ok([...registered.values()].some((r) => r.value === null && r.gaps.length), 'unavailable figure keeps its gap');
 });
 
-test('an op with no renderer draws the dropped note; stored notes render under the answer', () => {
+test('an op with no renderer draws the dropped note; stored notes render under the answer', async () => {
+  // A stored note with a known reason renders its plain cause (web/core/block-notes.js), else its stored text.
+  const { DROP_REASONS, dropNoteText } = await import('../web/core/block-notes.js');
+  const shown = (n) => (DROP_REASONS.includes(n.reason) ? dropNoteText(n.op, n.reason, n.name) : n.text);
   const { blocks, blockNotes } = fx('notes');
   const html = messageBodyHtml(msg(blocks, { blockNotes }));
   assert.ok(html.includes(esc(dropNote(blocks[0].op))), 'dropped note for the unknown op');
   assert.ok(!html.includes(esc(blocks[0].snapshot.title)), 'no block drawn');
-  for (const n of blockNotes) assert.ok(html.includes(esc(n.text)), n.text);
-  assert.ok(html.lastIndexOf(esc(blockNotes[0].text)) > html.indexOf('<p>Third.</p>'), 'notes follow the text');
-  assert.match(dropNote('table'), /^A table was left out because its data did not check out\.$/);
+  for (const n of blockNotes) assert.ok(html.includes(esc(shown(n))), shown(n));
+  assert.ok(html.lastIndexOf(esc(shown(blockNotes[0]))) > html.indexOf('<p>Third.</p>'), 'notes follow the text');
+  assert.match(dropNote(blocks[0].op), /^A /);
+  assert.doesNotMatch(dropNote(blocks[0].op), /\{/);
+  assert.match(dropNote('table'), /^A table /);
   assert.match(dropNote('compare'), /^A comparison /);
   assert.match(dropNote('chart'), /^A chart /);
   assert.match(dropNote('timeline'), /^A timeline /);
