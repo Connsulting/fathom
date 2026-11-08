@@ -98,7 +98,7 @@ test('platform enforces immutable household and creator bindings', async () => {
 test('one creators keys in two households stay independent when one membership is removed', async () => {
   const f = await mcpHouseholds();
   try {
-    const invitation = f.store.invite(f.B.id, 'member@example.test', { role: 'member' });
+    const invitation = await f.store.invite(f.B.id, 'member@example.test', { role: 'member' });
     assert.equal((await f.member.client.post('/api/auth/invitations/accept', { token: invitation.token })).status, 200);
     const own = await f.create(f.A, f.member.client);
     const issued = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--household', f.B.id, '--owner', 'member@example.test', '--name', 'Synthetic second membership key'], { env: f.env });

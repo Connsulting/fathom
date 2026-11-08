@@ -370,12 +370,12 @@ test('fakeAnswerScript scripts three rounds for "show your work", reading goals 
 
 /* ---------- D. grounding: an ordered list stays a list for the structural count ---------- */
 
-test('a spelled count matching the ordered list that follows grounds; a mismatch flags the count', () => {
+test('a spelled count matching the ordered list that follows grounds; a mismatch flags the count', async () => {
   const opts = { scenario: { fig: {} }, toolResults: [], data: [] };
   for (const gap of ['\n', '\n\n']) {
-    const three = groundAnswer(`There are three things to watch:${gap}1. Pay the estimate.\n2. Keep a reserve.\n3. File on time.`, opts);
+    const three = await groundAnswer(`There are three things to watch:${gap}1. Pay the estimate.\n2. Keep a reserve.\n3. File on time.`, opts);
     assert.equal(three.ok, true, JSON.stringify(three.violations));
-    const two = groundAnswer(`There are three things to watch:${gap}1. Pay the estimate.\n2. Keep a reserve.`, opts);
+    const two = await groundAnswer(`There are three things to watch:${gap}1. Pay the estimate.\n2. Keep a reserve.`, opts);
     assert.equal(two.ok, false);
     assert.ok(two.violations.some(v => /three/i.test(v.text)), JSON.stringify(two.violations));
   }

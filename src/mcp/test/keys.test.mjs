@@ -48,7 +48,7 @@ before(async () => {
     create: (opts = {}) => raw.create({ householdId: hh, ...opts }),
     list: (opts = {}) => raw.list({ householdId: hh, ...opts }),
     revoke: (id, opts = {}) => raw.revoke(id, { householdId: hh, ...opts }),
-    verify: k => raw.verify(k),
+    verify: async k => await raw.verify(k),
     touch: id => raw.touch(id),
   };
 });
@@ -64,14 +64,14 @@ describe('constants and scopes', () => {
       'write:accounts', 'write:categories', 'write:confirm', 'write:imports', 'write:jobs', 'write:decisions', 'write:sources']);
   });
 
-  test('keys accept and retain every new write scope without widening older keys', () => {
+  test('keys accept and retain every new write scope without widening older keys', async () => {
     const old = svc.create({ name: 'Existing', scopes: ['write:recs'] });
     for (const scope of ['write:accounts', 'write:categories', 'write:confirm', 'write:imports', 'write:jobs', 'write:decisions']) {
       const created = svc.create({ name: 'Scoped', scopes: [scope] });
       assert.deepEqual(created.record.scopes, ['read', scope]);
-      assert.deepEqual(svc.verify(created.key).scopes, ['read', scope]);
+      assert.deepEqual((await svc.verify(created.key)).scopes, ['read', scope]);
     }
-    assert.deepEqual(svc.verify(old.key).scopes, ['read', 'write:recs']);
+    assert.deepEqual((await svc.verify(old.key)).scopes, ['read', 'write:recs']);
   });
 
   test('normalizeScopes: empty means read, read always included, ordered and deduplicated', () => {
@@ -233,9 +233,9 @@ describe('key service', () => {
     tick();
   });
 
-  test('verify returns the record for a live key and null otherwise', () => {
+  test('verify returns the record for a live key and null otherwise', async () => {
     const { key, record } = svc.create({ name: 'Verify me', scopes: ['write:recs'] });
-    const got = svc.verify(key);
+    const got = await svc.verify(key);
     assert.ok(got);
     assert.equal(got.id, record.id);
     assert.equal(got.householdId, hh, 'verify names the key household');
@@ -244,25 +244,25 @@ describe('key service', () => {
     const flipped = key.slice(0, -1) + (key.endsWith('A') ? 'B' : 'A');
     for (const bad of [other, flipped, key + 'x', key.slice(0, -1), key.slice(KEY_PREFIX.length), 'other_' + key.slice(7),
       'FATHOM_' + key.slice(7), '', 'fathom_', undefined, null, 42, {}, ` ${key}`]) {
-      assert.equal(svc.verify(bad), null, `refused: ${typeof bad === 'string' ? bad.length + ' chars' : typeof bad}`);
+      assert.equal(await svc.verify(bad), null, `refused: ${typeof bad === 'string' ? bad.length + ' chars' : typeof bad}`);
     }
     tick();
   });
 
-  test('a revoked key no longer verifies; revoke is idempotent and keeps the first timestamp', () => {
+  test('a revoked key no longer verifies; revoke is idempotent and keeps the first timestamp', async () => {
     const { key, record } = svc.create({ name: 'Short lived' });
-    assert.ok(svc.verify(key));
+    assert.ok(await svc.verify(key));
     tick();
     const first = svc.revoke(record.id);
     assert.equal(first.id, record.id);
     assert.equal(first.revokedAt, clock.toISOString());
-    assert.equal(svc.verify(key), null);
+    assert.equal(await svc.verify(key), null);
     const stamp = first.revokedAt;
     tick();
     const again = svc.revoke(record.id);
     assert.equal(again.revokedAt, stamp, 'second revoke keeps the first timestamp');
     assert.equal(svc.list().find(k => k.id === record.id).revokedAt, stamp);
-    assert.equal(svc.verify(key), null);
+    assert.equal(await svc.verify(key), null);
   });
 
   // Contradiction 1: with no users foreign key, verify fails closed on a creator who is no longer an
@@ -271,26 +271,26 @@ describe('key service', () => {
     active.add(users.creator);
     const owned = svc.create({ name: 'Creator key', userId: users.creator });
     const ownerless = svc.create({ name: 'Ownerless key' });
-    assert.equal(svc.verify(owned.key).id, owned.record.id);
-    assert.equal(svc.verify(ownerless.key).id, ownerless.record.id);
+    assert.equal((await svc.verify(owned.key)).id, owned.record.id);
+    assert.equal((await svc.verify(ownerless.key)).id, ownerless.record.id);
     active.delete(users.creator);
-    assert.equal(svc.verify(owned.key), null, 'a removed creator key no longer verifies');
-    assert.equal(svc.verify(ownerless.key).id, ownerless.record.id);
+    assert.equal(await svc.verify(owned.key), null, 'a removed creator key no longer verifies');
+    assert.equal((await svc.verify(ownerless.key)).id, ownerless.record.id);
     assert.ok((await rows()).some(r => r.id === owned.record.id), 'verification alone deletes nothing');
     active.add(users.creator);
-    assert.equal(svc.verify(owned.key).id, owned.record.id, 'an active creator verifies again');
+    assert.equal((await svc.verify(owned.key)).id, owned.record.id, 'an active creator verifies again');
     active.delete(users.creator);
     tick();
   });
 
-  test('ownerless keys stay manageable by an unscoped (admin) caller and refused to a member caller', () => {
+  test('ownerless keys stay manageable by an unscoped (admin) caller and refused to a member caller', async () => {
     const ownerless = svc.create({ name: 'Admin managed key' });
     assert.ok(svc.list().some(k => k.id === ownerless.record.id), 'the unscoped listing carries it');
     assert.ok(!svc.list({ userId: users.member }).some(k => k.id === ownerless.record.id));
     assert.throws(() => svc.revoke(ownerless.record.id, { userId: users.member }), isCode('forbidden'));
     tick();
     assert.equal(svc.revoke(ownerless.record.id).revokedAt, clock.toISOString());
-    assert.equal(svc.verify(ownerless.key), null);
+    assert.equal(await svc.verify(ownerless.key), null);
     tick();
   });
 
@@ -303,13 +303,13 @@ describe('key service', () => {
     assert.throws(() => svc.revoke(''), isCode('not_found'));
   });
 
-  test('a key is bound to its household: another household cannot list, revoke or manage it', () => {
+  test('a key is bound to its household: another household cannot list, revoke or manage it', async () => {
     const { key, record } = svc.create({ name: 'Bound key' });
     const other = 'hh-synthetic-other';
     assert.ok(!raw.list({ householdId: other }).some(k => k.id === record.id));
     assert.throws(() => raw.revoke(record.id, { householdId: other }), isCode('not_found'));
     assert.throws(() => raw.list({}), isCode('not_found'), 'no household, no listing');
-    assert.equal(raw.verify(key).householdId, hh);
+    assert.equal((await raw.verify(key)).householdId, hh);
     tick();
   });
 
@@ -329,10 +329,10 @@ describe('key service', () => {
     const spy = mock.method(crypto, 'timingSafeEqual');
     syncBuiltinESMExports();
     try {
-      assert.equal(svc.verify(firstKey.key).id, firstKey.record.id);
+      assert.equal((await svc.verify(firstKey.key)).id, firstKey.record.id);
       assert.ok(spy.mock.callCount() >= all, `matched earlier key: ${spy.mock.callCount()} compares for ${all} rows`);
       spy.mock.resetCalls();
-      assert.equal(svc.verify('fathom_' + 'Z'.repeat(43)), null);
+      assert.equal(await svc.verify('fathom_' + 'Z'.repeat(43)), null);
       assert.ok(spy.mock.callCount() >= all, `unknown key: ${spy.mock.callCount()} compares for ${all} rows`);
     } finally {
       mock.restoreAll();
@@ -341,13 +341,13 @@ describe('key service', () => {
     tick();
   });
 
-  test('touch sets last_used_at', () => {
+  test('touch sets last_used_at', async () => {
     const { key, record } = svc.create({ name: 'Touched' });
     tick();
     svc.touch(record.id);
     const listed = svc.list().find(k => k.id === record.id);
     assert.equal(listed.lastUsedAt, clock.toISOString());
-    assert.ok(svc.verify(key));
+    assert.ok(await svc.verify(key));
     tick();
   });
 

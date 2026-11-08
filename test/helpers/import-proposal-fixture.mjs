@@ -27,7 +27,7 @@ export async function importProposedRows(store, rows, { name = 'synthetic.xlsx',
     disposition: marker && source.inventory[regionId].refs.includes('r' + leaves.length) ? 'explanatory_text' : 'imported_detail',
     ...(marker && source.inventory[regionId].refs.includes('r' + leaves.length) ? { reason: { refs: ['r' + leaves.length], transform: { op: 'identity' } } } : {}) }));
   await createAuthStore(store.platform).setPlatformSetting('instance_model_cap_usd', 50);
-  const engine = await createRuntimeEngine({ db: store.db, config: { engine: 'fake' }, allowed: () => store.household.outbound.enabled('engine') });
+  const engine = await createRuntimeEngine({ db: store.db, config: { engine: 'fake' }, allowed: async () => await store.household.outbound.enabled('engine') });
   const household = { ...store.household, engine };
   const ctx = { db: store.db, household, scheduler: { trigger() {} }, actorId: 'actor-synthetic', now, ownerText: 'yes', scopes: ['write:imports', 'write:facts', 'write:goals', 'write:steps', 'write:recs'] };
   await ingestFile(store.db, { name, bytes, mime: XLSX_MIME }, { ...ctx, household: { ...household, engine: { isOn: () => false } } });

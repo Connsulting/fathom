@@ -23,7 +23,7 @@ async function setup() {
   const db = s.track(await createRealStore(s.dir()));
   const household = householdOf(db), config = { clock: '2026-11-08' };
   const scheduler = { runNow: async id => ({ id: `run-${id}`, status: 'ok', startedAt: now, finishedAt: now }), trigger() {}, jobs: () => [], runs: () => [] };
-  const engine = createEngine({ mode: 'off' });
+  const engine = await createEngine({ mode: 'off' });
   const services = { household, scheduler, engine, config };
   return { db, now, actorId: 'person-a', household, services, channel: 'mcp' };
 }
@@ -101,8 +101,8 @@ for (const operation of ['import_file','retry_import','build_your_plans','plan',
     : operation === 'build_your_plans' ? { operation, fileIds: [imported.file.id] }
     : { operation: 'run_job', job: operation };
   let inside = false, extracts = 0, queued;
-  const inner = createEngine({ mode: 'fake' });
-  const extraction = req => {
+  const inner = await createEngine({ mode: 'fake' });
+  const extraction = async req => {
     assert.equal(inside, false, 'engine is called only after the tool round');
     extracts++;
     const rows = req.schema?.properties?.title ? fakeExtractRows(req.document.text) : [{ facts: [], goals: [] }];
@@ -130,7 +130,7 @@ for (const operation of ['import_file','retry_import','build_your_plans','plan',
   try {
     await createLiveAnswerer({ engine, root: ctx.household.root, services: ctx.services }).answer({ db: ctx.db,
       key: 'ask:123456abcdef', text: 'Please refresh the data.', actorId: ctx.actorId,
-      replan: () => ctx.services.scheduler.runNow('plan') });
+      replan: async () => await ctx.services.scheduler.runNow('plan') });
     assert.equal(queued?.isError, undefined, JSON.stringify(queued));
     assert.equal(queued.result.status ?? queued.result.run?.status, 'queued');
     assert.equal(queued.result.undo.available, false);
@@ -167,14 +167,14 @@ test('HTTP proposal confirmation executes a pasted-note refresh and persisted re
   const { rpcResult, callToolRpc } = await import('../src/mcp/test/helpers.mjs');
   const instance = await tempInstance();
   let calls = 0;
-  const inner = createEngine({ mode: 'fake' });
+  const inner = await createEngine({ mode: 'fake' });
   const engine = { mode: 'fake', isOn: () => true,
-    extract: req => inner.extract({ ...req, fake: [{ text: '{"rows":[{"facts":[],"goals":[]}]}', costUsd: 0 }] }),
-    call(req) {
+    extract: async req => inner.extract({ ...req, fake: [{ text: '{"rows":[{"facts":[],"goals":[]}]}', costUsd: 0 }] }),
+    async call(req) {
       if (req.purpose === 'chat') calls++;
-      if (req.purpose === 'job') return inner.call({ ...req, fake: [{ text: '{}', costUsd: 0 }] });
+      if (req.purpose === 'job') return await inner.call({ ...req, fake: [{ text: '{}', costUsd: 0 }] });
       if (req.purpose === 'title') return Promise.resolve({ text: '{"title":"Synthetic import"}' });
-      return inner.call({ ...req, fake: [{ toolCalls: [{ name: 'refresh', args: { operation: 'import_file', ...note, propose: true } }], costUsd: 0 },
+      return await inner.call({ ...req, fake: [{ toolCalls: [{ name: 'refresh', args: { operation: 'import_file', ...note, propose: true } }], costUsd: 0 },
         { text: 'Import your pasted note? Confirm below.', costUsd: 0 }] });
     },
   };
@@ -234,8 +234,8 @@ test('refresh receipt rendering omits Undo while ordinary reversible receipts ke
 
 test('MCP rebuild completes inline and all allowed jobs use the household scheduler', async () => {
   const ctx = await setup();
-  const inner = createEngine({ mode: 'fake' });
-  ctx.services.engine = { isOn: () => true, extract: req => inner.extract({ ...req,
+  const inner = await createEngine({ mode: 'fake' });
+  ctx.services.engine = { isOn: () => true, extract: async req => inner.extract({ ...req,
     fake: [{ text: JSON.stringify({ rows: req.schema?.properties?.title ? fakeExtractRows(req.document.text) : [{ facts: [], goals: [] }] }), costUsd: 0 }] }) };
   const rpc = await client(ctx);
   try {

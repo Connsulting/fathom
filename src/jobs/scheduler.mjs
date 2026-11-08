@@ -349,7 +349,7 @@ export function createScheduler({
     running.add(job.id);
     const p = dispatcher.run(captured?.householdId ?? holder, async () => {
       if (stopping) throw new SchedulerError('locked');
-      if (allowed() !== true) throw new SchedulerError('paused');
+      if (await allowed() !== true) throw new SchedulerError('paused');
       if (!await lease(at())) { lockRefused(job.id); throw new SchedulerError('locked'); }
       executing++;
       return executeOnce(job, { ...opts, household: captured }).finally(() => {
@@ -368,7 +368,7 @@ export function createScheduler({
 
   // Claims (jobId, key) and runs the handler. Returns the finished run, or null when already claimed.
   async function executeOnce(job, { key, trigger, t, zone, household: captured }) {
-    if (allowed() !== true) throw new SchedulerError('paused');
+    if (await allowed() !== true) throw new SchedulerError('paused');
     let id;
     try {
       id = (await q.claim.get(job.id, t.toISOString(), key, trigger)).id;
@@ -410,7 +410,7 @@ export function createScheduler({
   async function tickOnce() {
     if (stopping) return;
     const t = at();
-    if (allowed() !== true) return;
+    if (await allowed() !== true) return;
     await ensureJobs(t);
     if (!await lease(t)) {
       for (const job of handled) if (!running.has(job.id)) lockRefused(job.id);
@@ -475,7 +475,7 @@ export function createScheduler({
     if (!job) throw new SchedulerError('unknown_job');
     if (running.has(jobId)) throw new SchedulerError('running');
     const t = at();
-    if (allowed() !== true) throw new SchedulerError('paused');
+    if (await allowed() !== true) throw new SchedulerError('paused');
     if (stopping) throw new SchedulerError('locked');
     if (!await lease(t)) { lockRefused(jobId); throw new SchedulerError('locked'); }
     await ensureJobs(t);
@@ -563,7 +563,7 @@ export function createScheduler({
       const t = at();
       const zone = await tz();
       // A paused household's store is never written, not even job labels.
-      if (allowed() === true) { try { await ensureJobs(t); } catch { /* listing does not depend on the rows */ } }
+      if (await allowed() === true) { try { await ensureJobs(t); } catch { /* listing does not depend on the rows */ } }
       return await mapSeries(handled, async (j) => {
         const nextAt = nextRunAt(j.schedule, t, zone, fixed);
         return { id: j.id, name: j.name, cadence: j.cadence, does: j.does, lastRun: runOut(await q.last.get(j.id)), next: timeLabel(nextAt, zone), nextAt: nextAt.toISOString() };
@@ -593,7 +593,7 @@ export function createScheduler({
 export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}) {
   return {
     async 'simplefin-sync'(ctx) {
-      if (!ctx.household || !ctx.household.outbound.enabled('simplefin')) return { status: 'skipped', note: { paused: true } };
+      if (!ctx.household || !await ctx.household.outbound.enabled('simplefin')) return { status: 'skipped', note: { paused: true } };
       const demo = await getSetting(ctx.db, 'mode', null) === 'demo';
       const out = await syncSimplefin(ctx.db, {
         household: ctx.household, config: ctx.config, hosts: ctx.config?.simplefinHosts, now: ctx.now, clock: ctx.clock, engine: ctx.engine,
@@ -647,8 +647,8 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
     async 'confirm-guess'(ctx) {
       if (await getSetting(ctx.db, 'mode', null) === 'demo') return { status: 'skipped' };
       const packDirs = defaultPackDirs(ctx.household?.root);
-      const allowed = () => ctx.household?.outbound?.enabled('engine') === true;
-      const funded = () => ctx.household?.funded?.() === true;
+      const allowed = async () => await ctx.household?.outbound?.enabled('engine') === true;
+      const funded = async () => await ctx.household?.funded?.() === true;
       const out = await resolvePending(ctx.db, ctx.engine, {
         now: ctx.now, packDirs, allowed, funded,
         async readNotes() {

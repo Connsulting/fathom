@@ -165,8 +165,8 @@ test('session fixtures reuse enrolled users without reinviting them or changing 
   assert.equal(second.session.user.id, first.session.user.id);
   assert.notEqual(second.session.token, first.session.token);
   assert.deepEqual(second.session.user, first.session.user);
-  assert.equal(app.store.session(first.session.token).id, first.session.user.id);
-  assert.equal(app.store.session(second.session.token).id, first.session.user.id);
+  assert.equal((await app.store.session(first.session.token)).id, first.session.user.id);
+  assert.equal((await app.store.session(second.session.token)).id, first.session.user.id);
   assert.deepEqual(await app.store.getUser(first.session.user.id), first.session.user);
   assert.equal((await app.store.membership(first.session.user.id, app.hh)).role, 'admin');
   assert.equal((await app.platform.prepare('SELECT count(*) AS n FROM household_memberships WHERE user_id = ?').get(first.session.user.id)).n, 1);

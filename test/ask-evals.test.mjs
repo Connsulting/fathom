@@ -109,7 +109,7 @@ test('earlier-turn values and context-only tokens fail independently of producti
   try {
     const text = '{f:hsa_left}';
     const scenario = await buildScenario(store.db);
-    assert.equal(groundAnswer(text, { scenario }).ok, true);
+    assert.equal((await groundAnswer(text, { scenario })).ok, true);
     const figures = Object.fromEntries((await store.db.prepare('SELECT key,v FROM figures').all()).map(r => [r.key, r.v]));
     assert.equal(gradeFigures(text, [], { figures }).ok, false);
     const sourced = [{ name: 'household', args: { operation: 'figures',  keys: ['hsa_left'] }, result: [{ key: 'hsa_left', v: figures.hsa_left }] }];

@@ -1,4 +1,4 @@
-export const session = ctx => ctx.auth.session(ctx);
+export const session = async ctx => await ctx.auth.session(ctx);
 export const registerOptions = async ctx => ctx.auth.registerOptions(ctx);
 export const registerVerify = async ctx => ctx.auth.registerVerify(ctx);
 export const signinOptions = async ctx => ctx.auth.signinOptions(ctx);

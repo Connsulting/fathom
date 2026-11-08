@@ -231,7 +231,7 @@ describe('offline migration of a schema 020 real store (AC1, AC3)', () => {
     const email = fx.admin.email;
     assert.deepEqual(admin.verify.json.identity, { id: fx.admin.id, email, login: email, name: email, householdId, role: 'admin',
       operator: false, memberships: [{ householdId, role: 'admin', name: null }], contextVersion: 1 });
-    assert.ok(admin.client.session() && admin.client.session() !== fx.admin.session);
+    assert.ok(await admin.client.session() && await admin.client.session() !== fx.admin.session);
     assert.equal((await admin.client.get('/api/scenario')).status, 200);
     const member = await signIn(base, fx.member.device, fx.member.credentialId);
     assert.equal(member.verify.status, 200, member.verify.text);
@@ -546,7 +546,7 @@ describe('household membership on a real instance (AC1)', () => {
   test('inviting an active member is refused 409; inviting a new address succeeds', T, async () => {
     const dup = await as(admin).post('/api/admin/users/invite', { email: member.email, role: 'member' });
     assert.equal(dup.status, 409, dup.text);
-    await assert.rejects(async () => store.invite(hh, member.email), err => err.status === 409);
+    await assert.rejects(async () => await store.invite(hh, member.email), err => err.status === 409);
     assert.deepEqual(pick(await membership(member.id), ['role', 'status']), { role: 'member', status: 'active' });
     assert.equal(await count(platform, 'SELECT count(*) AS n FROM household_invitations WHERE email = ?', member.email), 1, 'only the original, consumed invitation');
     const fresh = await as(admin).post('/api/admin/users/invite', { email: 'fresh-invite@example.test', role: 'member' });

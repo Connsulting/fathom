@@ -325,16 +325,16 @@ test('markdownBlocks renders paragraphs, lists and bold over escaped text only',
   assert.equal(wrapBlocks(['p1', '<ul><li>x</li></ul>']), '<p>p1</p><ul><li>x</li></ul>');
 });
 
-test('renderAnswer escapes model markup and keeps list numbers out of grounding', () => {
+test('renderAnswer escapes model markup and keeps list numbers out of grounding', async () => {
   const text = 'Do this:\n\n1. Pay <b>now</b>\n2. File **soon**\n\n- <img src=x onerror=alert()>';
-  const g = groundAnswer(text, { scenario: { fig: {} }, toolResults: [], data: [] });
+  const g = await groundAnswer(text, { scenario: { fig: {} }, toolResults: [], data: [] });
   assert.equal(g.ok, true, JSON.stringify(g.violations));
   const blocks = renderAnswer(text, g.violations, g.literals);
   assert.deepEqual(blocks, ['Do this:', '<ol><li>Pay &lt;b&gt;now&lt;/b&gt;</li><li>File <strong>soon</strong></li></ol>',
     '<ul><li>&lt;img src=x onerror=alert()&gt;</li></ul>']);
   assert.deepEqual(listMarkerSpans('1. a\n  2) b\nx 3. c'), [{ index: 0, length: 2 }, { index: 7, length: 2 }]);
   // A number inside a list item is still checked.
-  const bad = groundAnswer('1. Pay $987,654', { scenario: { fig: {} }, toolResults: [], data: [] });
+  const bad = await groundAnswer('1. Pay $987,654', { scenario: { fig: {} }, toolResults: [], data: [] });
   assert.deepEqual(bad.violations.map(v => v.text), ['$987,654']);
   assert.match(renderAnswer('1. Pay $987,654', bad.violations, bad.literals)[0],
     /^<ol><li>Pay <span class="fx-checking fx-unchecked" title="Not checked against your data">\$987,654<\/span>/);

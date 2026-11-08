@@ -253,7 +253,7 @@ test('a missing or foreign Origin is refused before any token or mail', async t 
 test('redeeming the link in the requesting browser adds a passkey and keeps that session', async t => {
   const app = await fixture(t);
   const owner = await enrolled(app, 'owner@example.test');
-  const original = owner.client.session();
+  const original = await owner.client.session();
   const sessionsBefore = await sessionCount(app, owner.user.id);
   const token = await requestLink(app, owner.client, owner.user.email);
   const mark = app.sent.length;
@@ -264,7 +264,7 @@ test('redeeming the link in the requesting browser adds a passkey and keeps that
   assert.ok(options.json.options.excludeCredentials.some(item => item.id === owner.credentialId));
   assert.equal(verify.status, 200, verify.text);
   assert.equal(verify.json.identity.id, owner.user.id);
-  assert.ok(app.store.session(original), 'the original session row survives');
+  assert.ok(await app.store.session(original), 'the original session row survives');
   assert.equal((await identityOf(browser(app, original))).id, owner.user.id, 'the original session cookie still authenticates');
   assert.equal((await identityOf(owner.client)).id, owner.user.id, 'the browser is still signed in');
   assert.ok(await sessionCount(app, owner.user.id) >= sessionsBefore, 'no session of the user is deleted');
@@ -302,7 +302,7 @@ test('a fresh browser consumes the link, adds a second passkey without revoking 
   const owner = await enrolled(app, 'owner@example.test', 'admin');
   const admin = await enrolled(app, 'second-admin@example.test', 'admin');
   const elsewhere = await app.sessionFor(owner.user.email);
-  const requester = owner.client.session();
+  const requester = await owner.client.session();
   const token = await requestLink(app, owner.client, owner.user.email);
   const sessionsBefore = await sessionCount(app, owner.user.id);
   const mark = app.sent.length;
@@ -319,7 +319,7 @@ test('a fresh browser consumes the link, adds a second passkey without revoking 
   assert.equal(ids.length, 2);
   assert.ok(ids.includes(owner.credentialId), 'the first passkey stays');
   assert.ok(ids.includes(tablet.credentials()[0].id));
-  assert.equal(app.store.session(requester)?.id, owner.user.id, 'the requesting session stays');
+  assert.equal((await app.store.session(requester))?.id, owner.user.id, 'the requesting session stays');
   assert.equal((await identityOf(owner.client)).id, owner.user.id);
   assert.equal((await identityOf(elsewhere)).id, owner.user.id, 'other sessions stay');
   assert.equal(await sessionCount(app, owner.user.id), sessionsBefore + 1);
@@ -390,7 +390,7 @@ test('the link is bound to its user and never reaches another account or a pendi
   const app = await fixture(t);
   const owner = await enrolled(app, 'owner@example.test', 'admin');
   const member = await enrolled(app, 'member@example.test');
-  const memberSession = member.client.session();
+  const memberSession = await member.client.session();
   const ownerToken = await requestLink(app, owner.client, owner.user.email);
   const memberToken = await requestLink(app, member.client, member.user.email);
   assert.ok(app.store.token(ownerToken), "another user's link request leaves this link valid");
@@ -409,7 +409,7 @@ test('the link is bound to its user and never reaches another account or a pendi
   assert.equal(verify.json.identity.id, owner.user.id);
   assert.equal((await passkeyIds(app, owner.user.id)).length, 2);
   assert.deepEqual(await passkeyIds(app, member.user.id), [member.credentialId], 'nothing is added to the browser user');
-  assert.equal(app.store.session(memberSession)?.id, member.user.id, "the other user's session is not deleted");
+  assert.equal((await app.store.session(memberSession))?.id, member.user.id, "the other user's session is not deleted");
   assert.equal((await identityOf(member.client)).id, owner.user.id, 'the redeeming browser is signed in as the token user');
   assert.ok(app.store.token(memberToken), "the other user's link is unaffected");
 

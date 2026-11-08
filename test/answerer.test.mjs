@@ -29,6 +29,7 @@ import { ACTION_STATUS } from '../src/shared/rules.mjs';
 import { stripSources, markdownBlocks } from '../src/shared/answer-text.mjs';
 import { ROOT, tempDb } from './helpers/server.mjs';
 import { writeSyntheticPack, ALWAYS } from './helpers/packs.mjs';
+import { findSeries } from '../src/shared/series.mjs';
 
 const ACTIVE_DEMO_PACKS = ['account-tax-treatment', 'advanced-retirement', 'kids-dependents', 's-corp-owner', 'self-employed-partnership', 'spending-and-obligations', 'virginia-resident', 'w2-benefits'];
 const UNCHECKED = '<span class="fx-checking fx-unchecked" title="Not checked against your data">';
@@ -312,7 +313,7 @@ test('groundAnswer accepts valid tokens of every kind, masks them, and collects 
   const scenario = await buildScenario(s.db);
   // {f:port_3m} would read as "3m" if it were not masked.
   const text = 'Reserve sits at {f:true_reserve} against {f:port_3m}, {n:spouse} agrees, the {l:deferral} limit holds and {p:phase_in} applies.';
-  const r = groundAnswer(text, { scenario, toolResults: [], data: [] });
+  const r = await groundAnswer(text, { scenario, toolResults: [], data: [] });
   assert.deepEqual(r.violations, []);
   assert.equal(r.ok, true);
   assert.deepEqual(sorted(r.figureKeys), ['port_3m', 'true_reserve']);
@@ -323,7 +324,7 @@ test('groundAnswer reports each unknown token of any kind once, at its index', a
   const scenario = await buildScenario(s.db);
   const tokens = ['{f:no_such_figure}', '{n:nobody}', '{l:nolaw}', '{p:nopct}'];
   const text = `See ${tokens[0]} with ${tokens[1]} under ${tokens[2]} at ${tokens[3]}.`;
-  const r = groundAnswer(text, { scenario, toolResults: [], data: [] });
+  const r = await groundAnswer(text, { scenario, toolResults: [], data: [] });
   assert.equal(r.ok, false);
   assert.equal(r.violations.length, tokens.length, JSON.stringify(r.violations));
   assert.deepEqual(sorted(r.violations.map(v => v.text)), sorted(tokens));
@@ -337,13 +338,13 @@ test('groundAnswer treats a stored figure written as a literal as a violation un
   const value = scenario.fig.fixed_fee.v;
   const literal = `$${value.toLocaleString('en-US')}`;
   const text = `About ${literal} of delivered work is not invoiced.`;
-  const bare = groundAnswer(text, { scenario, toolResults: [], data: [] });
+  const bare = await groundAnswer(text, { scenario, toolResults: [], data: [] });
   assert.equal(bare.ok, false);
   assert.equal(bare.violations.length, 1);
   assert.equal(bare.violations[0].text, literal);
   assert.equal(bare.violations[0].reason, 'stored figure written as a literal');
 
-  const supported = groundAnswer(text, { scenario, data: [],
+  const supported = await groundAnswer(text, { scenario, data: [],
     toolResults: [{ name: 'household', args: { operation: 'figures',  keys: ['fixed_fee'] }, result: [{ key: 'fixed_fee', v: value }] }] });
   assert.equal(supported.ok, true, JSON.stringify(supported.violations));
 });
@@ -351,17 +352,17 @@ test('groundAnswer treats a stored figure written as a literal as a violation un
 test('groundAnswer grounds literals in tool results and context data, and flags unsupported numbers and number words', async t => {
   const s = await demoStore(t);
   const scenario = await buildScenario(s.db);
-  const fromTool = groundAnswer('You have 37 open items.', { scenario, data: [],
+  const fromTool = await groundAnswer('You have 37 open items.', { scenario, data: [],
     toolResults: [{ name: 'household', args: { operation: 'summary', }, result: { needsYouCount: 37 } }] });
   assert.equal(fromTool.ok, true, JSON.stringify(fromTool.violations));
-  const fromData = groundAnswer('You have 37 open items.', { scenario, toolResults: [], data: [{ openItems: 37 }] });
+  const fromData = await groundAnswer('You have 37 open items.', { scenario, toolResults: [], data: [{ openItems: 37 }] });
   assert.equal(fromData.ok, true, JSON.stringify(fromData.violations));
-  const invented = groundAnswer(`You could save ${INVENTED} next year.`, { scenario, toolResults: [], data: [] });
+  const invented = await groundAnswer(`You could save ${INVENTED} next year.`, { scenario, toolResults: [], data: [] });
   assert.equal(invented.ok, false);
   assert.deepEqual(invented.violations.map(v => v.text), [INVENTED]);
-  const word = groundAnswer('It works across two years.', { scenario, toolResults: [], data: [] });
+  const word = await groundAnswer('It works across two years.', { scenario, toolResults: [], data: [] });
   assert.deepEqual(word.violations.map(v => v.text), ['two']);
-  assert.equal(groundAnswer('It works across two years.', { scenario, toolResults: [], data: [{ years: 2 }] }).ok, true);
+  assert.equal((await groundAnswer('It works across two years.', { scenario, toolResults: [], data: [{ years: 2 }] })).ok, true);
 });
 
 // ---------------------------------------------------------------- B3: no number laundering
@@ -394,7 +395,7 @@ test('B3: a tool result value that echoes a call argument does not ground the nu
     { name: 'transactions', args: { operation: 'search',  text: 'plan 4821' }, result: { rows: [], note: 'No rows matched plan 4821 this year', total: 0 } },
   ];
   for (const echo of echoes) {
-    const r = groundAnswer(LAUNDERED, { scenario, toolResults: [echo], data: [] });
+    const r = await groundAnswer(LAUNDERED, { scenario, toolResults: [echo], data: [] });
     assert.equal(r.ok, false, `ungrounded via ${JSON.stringify(echo)}`);
     assert.ok(laundered(r).includes('4821'), JSON.stringify(r.violations));
     assert.ok(!r.literals.some(l => l.text === '4821'), 'never attributed to the echoing tool');
@@ -410,7 +411,7 @@ test('B3: identifier and citation keys in a tool result do not ground a number',
   for (const key of keys) {
     for (const value of values) {
       const result = { title: 'Synthetic', entry: { [key]: value } };
-      const r = groundAnswer(LAUNDERED, { scenario, toolResults: [{ name: 'recommendations', args: { operation: 'detail', }, result }], data: [] });
+      const r = await groundAnswer(LAUNDERED, { scenario, toolResults: [{ name: 'recommendations', args: { operation: 'detail', }, result }], data: [] });
       assert.equal(r.ok, false, `${key}: ${JSON.stringify(value)} must not ground 4821`);
       assert.ok(laundered(r).includes('4821'));
     }
@@ -421,11 +422,11 @@ test('B3: a real value field still grounds, also next to an unrelated argument a
   const s = await demoStore(t);
   const scenario = await buildScenario(s.db);
   const result = [{ key: 'synthetic', v: 4821, page: 77, source: { id: 'synthetic-source', name: 'plan 9517' } }];
-  const r = groundAnswer(LAUNDERED, { scenario, data: [],
+  const r = await groundAnswer(LAUNDERED, { scenario, data: [],
     toolResults: [{ name: 'household', args: { operation: 'figures',  keys: ['synthetic'] }, result }] });
   assert.equal(r.ok, true, JSON.stringify(r.violations));
   expectToolSource(r.literals.find(l => l.text === '4821'), 'household', JSON.stringify(r.literals));
-  const other = groundAnswer('It is page 77 of plan 9517.', { scenario, data: [],
+  const other = await groundAnswer('It is page 77 of plan 9517.', { scenario, data: [],
     toolResults: [{ name: 'household', args: { operation: 'figures',  keys: ['synthetic'] }, result }] });
   assert.deepEqual(laundered(other), ['77', '9517'], 'the page and the source label are metadata');
 });
@@ -537,7 +538,7 @@ test('B3: a rec id in a rec conversation context never grounds a number; its val
   assert.ok(scenario.recs.some(r => r.id === recId), 'the synthetic rec is visible');
   // Self-check: without its id, the rec context has no 8263 to ground.
   const { id: _id, ...rest } = await callTool('recommendations', { operation: 'detail',  id: recId }, { db: s.db, now: '2026-11-05' });
-  assert.equal(groundAnswer('$8,263', { scenario, data: [rest] }).ok, false, 'only the id carries 8263');
+  assert.equal((await groundAnswer('$8,263', { scenario, data: [rest] })).ok, false, 'only the id carries 8263');
 
   const said = 'This one is worth $8,263, and about $2,750 arrives early.';
   const { engine, requests } = always(s.runtime, said);
@@ -573,8 +574,8 @@ test('B3: an account mask from the real accounts.list result never grounds a num
   const free = new Set(baseline.provenance.grounding.unverified);
   // ...and that no other field of the tool result states.
   const stripped = accounts.map(({ mask: _mask, ...rest }) => rest);
-  const account = masked.find(a => free.has(asAmount(a.mask)) && Number(a.mask) !== a.balance
-    && !groundAnswer(asAmount(a.mask), { scenario, toolResults: [{ name: 'accounts', args: { operation: 'list', }, result: stripped }] }).ok);
+  const account = await findSeries(masked, async a => free.has(asAmount(a.mask)) && Number(a.mask) !== a.balance
+    && !(await groundAnswer(asAmount(a.mask), { scenario, toolResults: [{ name: 'accounts', args: { operation: 'list', }, result: stripped }] })).ok);
   assert.ok(account, 'some masked account has a mask nothing else grounds');
   const mask = asAmount(account.mask);
   const balance = asAmount(account.balance);
@@ -630,12 +631,12 @@ test('B3 r2: an identifier-like string under an unremarkable key never grounds i
   for (const [text, value] of [['8263', 'rec8263'], ['$529', 'plan529'], ['4821', 'acct4821x']]) {
     for (const key of ['ref', 'note', 'fig', 'detail', 'tag']) {
       const result = { title: 'Synthetic', entry: { [key]: value, v: 12 } };
-      const r = groundAnswer(`The amount is ${text}.`, { scenario, data: [], toolResults: [{ name: 'recommendations', args: { operation: 'detail', }, result }] });
+      const r = await groundAnswer(`The amount is ${text}.`, { scenario, data: [], toolResults: [{ name: 'recommendations', args: { operation: 'detail', }, result }] });
       assert.equal(r.ok, false, `${key}: ${value} must not ground ${text}`);
       assert.ok(laundered(r).includes(text));
     }
   }
-  const pos = groundAnswer('The amount is 4821.', { scenario, data: [],
+  const pos = await groundAnswer('The amount is 4821.', { scenario, data: [],
     toolResults: [{ name: 'recommendations', args: { operation: 'detail', }, result: { entry: { note: 'plan529', amount: 4821 } } }] });
   assert.equal(pos.ok, true, JSON.stringify(pos.violations));
 });
@@ -674,13 +675,13 @@ test('B3 r2: an exact amount query keeps the stored row amounts as grounding, at
 test('B3 r2: argument echoes under the same key still do not ground, while other keys with the same value do', async t => {
   const s = await demoStore(t);
   const scenario = await buildScenario(s.db);
-  const echoed = groundAnswer(LAUNDERED, { scenario, data: [],
+  const echoed = await groundAnswer(LAUNDERED, { scenario, data: [],
     toolResults: [{ name: 'transactions', args: { operation: 'search',  minAmount: 4821, maxAmount: 4821 }, result: { minAmount: 4821, maxAmount: 4821, rows: [], total: 0 } }] });
   assert.equal(echoed.ok, false);
-  const contained = groundAnswer(LAUNDERED, { scenario, data: [],
+  const contained = await groundAnswer(LAUNDERED, { scenario, data: [],
     toolResults: [{ name: 'transactions', args: { operation: 'search',  text: 'plan 4821' }, result: { rows: [], note: 'No rows matched plan 4821 this year', total: 0 } }] });
   assert.equal(contained.ok, false);
-  const real = groundAnswer(LAUNDERED, { scenario, data: [],
+  const real = await groundAnswer(LAUNDERED, { scenario, data: [],
     toolResults: [{ name: 'transactions', args: { operation: 'search',  minAmount: 4821, maxAmount: 4821 }, result: { rows: [{ id: 1, amount: 4821 }], total: 1 } }] });
   assert.equal(real.ok, true, JSON.stringify(real.violations));
   expectToolSource(real.literals.find(l => l.text === '4821'), 'transactions', JSON.stringify(real.literals));
@@ -1237,7 +1238,7 @@ test('R3 A (F2): transactions.search total equal to the limit argument grounds, 
     if (!baseline.provenance.grounding.unverified.includes(String(c.n))) continue;
     const page = await callTool('transactions', { operation: 'search',  accountId: c.id, limit: c.n }, { db: s.db, now: '2026-11-05' });
     const { total: _total, ...withoutTotal } = page;
-    if (groundAnswer(said, { scenario, toolResults: [{ name: 'transactions', args: { operation: 'search', }, result: withoutTotal }] }).ok) continue;
+    if ((await groundAnswer(said, { scenario, toolResults: [{ name: 'transactions', args: { operation: 'search', }, result: withoutTotal }] })).ok) continue;
     pick = c;
     break;
   }
@@ -1260,7 +1261,7 @@ test('R3 A (F2): transactions.search total equal to the limit argument grounds, 
   expectToolSource(reply.provenance.literals.find(l => l.text === String(n)), 'transactions', JSON.stringify(reply.provenance.literals));
 
   // A top-level number under a different key than the equal argument is a value, not an echo.
-  const other = groundAnswer(LAUNDERED, { scenario, data: [],
+  const other = await groundAnswer(LAUNDERED, { scenario, data: [],
     toolResults: [{ name: 'transactions', args: { operation: 'search',  minAmount: 4821 }, result: { rows: [], floor: 4821, total: 0 } }] });
   assert.equal(other.ok, true, JSON.stringify(other.violations));
   expectToolSource(other.literals.find(l => l.text === '4821'), 'transactions', JSON.stringify(other.literals));
@@ -1291,7 +1292,7 @@ test('R3 B: bare numbers in prose evidence never ground; marked quantities and J
   const scenario = await buildScenario(s.db);
   for (const where of proseSources(BARE_PROSE)) {
     for (const text of BARE_NUMBERS) {
-      const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+      const r = await groundAnswer(`The figure is ${text}.`, { scenario, ...where });
       assert.ok(laundered(r).includes(text), `${where.label}: "${BARE_PROSE}" must not ground ${text}`);
     }
   }
@@ -1299,10 +1300,10 @@ test('R3 B: bare numbers in prose evidence never ground; marked quantities and J
     // A marked quantity grounds alone and next to bare numbers in the same sentence.
     for (const sentence of [prose, `${prose} ${BARE_PROSE}`]) {
       for (const where of proseSources(sentence)) {
-        const r = groundAnswer(`The figure is ${said}.`, { scenario, ...where });
+        const r = await groundAnswer(`The figure is ${said}.`, { scenario, ...where });
         assert.ok(!laundered(r).includes(span), `${where.label}: "${sentence}" grounds ${span}: ${JSON.stringify(r.violations)}`);
         if (sentence !== prose) {
-          const bare = groundAnswer('The figure is 50.', { scenario, ...where });
+          const bare = await groundAnswer('The figure is 50.', { scenario, ...where });
           assert.ok(laundered(bare).includes('50'), `${where.label}: age 50 stays bare next to ${said}`);
         }
       }
@@ -1315,7 +1316,7 @@ test('R3 B: bare numbers in prose evidence never ground; marked quantities and J
   ];
   for (const where of json) {
     for (const text of ['50', '$560']) {
-      const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+      const r = await groundAnswer(`The figure is ${text}.`, { scenario, ...where });
       assert.equal(r.ok, true, `${text}: ${JSON.stringify(r.violations)}`);
     }
   }
@@ -1423,11 +1424,11 @@ test('R3 D: K-12 and 2026-01 never read as negatives in evidence or in the answe
   ];
   for (const r of evidence) {
     for (const text of ['-12', '−12', '-$12', '-1', '−1', '-$1']) {
-      const g = groundAnswer(`The change is ${text}.`, { scenario, data: [], toolResults: [r] });
+      const g = await groundAnswer(`The change is ${text}.`, { scenario, data: [], toolResults: [r] });
       assert.equal(g.ok, false, `${JSON.stringify(r.result)} must not ground ${text}`);
     }
   }
-  const prose = groundAnswer('Private K-12 tuition can qualify.', { scenario, toolResults: [], data: [] });
+  const prose = await groundAnswer('Private K-12 tuition can qualify.', { scenario, toolResults: [], data: [] });
   assert.ok(!prose.violations.some(v => v.text.startsWith('-')), `K-12 is not read as a negative: ${JSON.stringify(prose.violations)}`);
 });
 
@@ -1484,7 +1485,7 @@ test('R4 F1: digits, k and % inside URLs, link destinations and autolinks never 
   for (const prose of URL_PROSE) {
     for (const where of proseSources(prose)) {
       for (const text of URL_INVENTED) {
-        const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+        const r = await groundAnswer(`The figure is ${text}.`, { scenario, ...where });
         assert.ok(laundered(r).includes(text), `${where.label}: "${prose}" must not ground ${text}`);
       }
     }
@@ -1500,7 +1501,7 @@ test('R4 F1: a single-token URL string under an unremarkable key never grounds i
         { label: 'tool result', data: [], toolResults: [{ name: 'recommendations', args: { operation: 'list', }, result: [{ status: 'doing', link }] }] },
         { label: 'rec context', toolResults: [], data: [{ recommendation: { status: 'doing', link } }] },
       ]) {
-        const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+        const r = await groundAnswer(`The figure is ${text}.`, { scenario, ...where });
         assert.ok(laundered(r).includes(text), `${where.label}: ${link} must not ground ${text}`);
       }
     }
@@ -1517,9 +1518,9 @@ test('R4 F1: a marked quantity in link text outside the URL still grounds', asyn
     'The $500 limit applies, see <https://example.invalid/4821k>.',
   ]) {
     for (const where of proseSources(prose)) {
-      const ok = groundAnswer('The figure is $500.', { scenario, ...where });
+      const ok = await groundAnswer('The figure is $500.', { scenario, ...where });
       assert.equal(ok.ok, true, `${where.label}: "${prose}" grounds $500: ${JSON.stringify(ok.violations)}`);
-      const bad = groundAnswer('The figure is $4,821,000.', { scenario, ...where });
+      const bad = await groundAnswer('The figure is $4,821,000.', { scenario, ...where });
       assert.ok(laundered(bad).includes('$4,821,000'), `${where.label}: "${prose}" must not ground $4,821,000`);
     }
   }
@@ -1539,19 +1540,19 @@ test('R4 F2: the real business.pnl result over the demo store never grounds its 
   const month = String(Number(period.slice(5)));
   const year = Number(period.slice(0, 4)).toLocaleString('en-US');
   const said = [`$${month}`, month, `$${year}`];
-  const ground = (r, text) => groundAnswer(`The figure is ${text}.`, { scenario, data: [], toolResults: [{ name: 'business', args: { operation: 'pnl', }, result: r }] });
+  const ground = async (r, text) => await groundAnswer(`The figure is ${text}.`, { scenario, data: [], toolResults: [{ name: 'business', args: { operation: 'pnl', }, result: r }] });
 
   // Self-check: without the periods nothing in the result states these values.
   const stripped = result.entities.map(e => ({ revenue: e.revenue.value, expenses: e.expenses.value, profit: e.profit.value }));
-  for (const text of said) assert.ok(laundered(ground(stripped, text)).includes(text), `self-check: ${text} is not a P&L value`);
+  for (const text of said) assert.ok(laundered(await ground(stripped, text)).includes(text), `self-check: ${text} is not a P&L value`);
 
   for (const text of said) {
-    assert.ok(laundered(ground(result, text)).includes(text), `period ${period} must not ground ${text}`);
+    assert.ok(laundered(await ground(result, text)).includes(text), `period ${period} must not ground ${text}`);
   }
   // A stored row amount still grounds, attributed to business.pnl.
   const row = result.entities.find(e => e.revenue.value > 0);
   const amount = `$${row.revenue.value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  const kept = ground(result, amount);
+  const kept = await ground(result, amount);
   assert.equal(kept.ok, true, `${amount}: ${JSON.stringify(kept.violations)}`);
   expectToolSource(kept.literals.find(l => l.text === amount), 'business', JSON.stringify(kept.literals));
 });
@@ -1562,10 +1563,10 @@ test('R4 F2: a synthetic period next to an unrelated amount grounds the amount a
   const toolResults = [{ name: 'business', args: { operation: 'pnl', },
     result: { rows: [{ period: '2026-11', category: 'synthetic', amount: 4321.5 }], totals: { '2026-11': 4321.5 } } }];
   for (const text of ['$11', '11', '$2,026']) {
-    const r = groundAnswer(`The figure is ${text}.`, { scenario, data: [], toolResults });
+    const r = await groundAnswer(`The figure is ${text}.`, { scenario, data: [], toolResults });
     assert.ok(laundered(r).includes(text), `period 2026-11 must not ground ${text}`);
   }
-  assert.equal(groundAnswer('The figure is $4,321.50.', { scenario, data: [], toolResults }).ok, true);
+  assert.equal((await groundAnswer('The figure is $4,321.50.', { scenario, data: [], toolResults })).ok, true);
 });
 
 test('R4 F2: date-shaped single-token strings under unremarkable keys ground no number', async t => {
@@ -1581,7 +1582,7 @@ test('R4 F2: date-shaped single-token strings under unremarkable keys ground no 
       ];
       for (const where of wheres) {
         for (const text of DATE_INVENTED) {
-          const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+          const r = await groundAnswer(`The figure is ${text}.`, { scenario, ...where });
           assert.ok(laundered(r).includes(text), `${where.label}: ${key}=${value} must not ground ${text}`);
         }
       }
@@ -1595,13 +1596,13 @@ test('R4 F3: arbitrary short letter codes in the answer are ungrounded numbers, 
   const scenario = await buildScenario(s.db);
   for (const [text, number] of [['Your benefit is X-873 dollars.', '873'], ['Your benefit is AB-500 dollars.', '500'],
     ['You get Q-12 more.', '12'], ['The credit is ZZ-40 this year.', '40']]) {
-    const r = groundAnswer(text, { scenario, toolResults: [], data: [] });
+    const r = await groundAnswer(text, { scenario, toolResults: [], data: [] });
     assert.equal(r.ok, false, `"${text}" must not pass unchecked`);
     assert.ok(laundered(r).includes(number), `"${text}" flags ${number}: ${JSON.stringify(r.violations)}`);
   }
   for (const text of ['Private K-12 tuition can qualify.', 'Her Schedule K-1 arrives later.', 'File a new Form I-9.',
     'Your W-2 shows wages.', 'Update your W-4.', 'A 1099-K reports card payments.', 'Your 1099-NEC arrives in January.']) {
-    const r = groundAnswer(text, { scenario, toolResults: [], data: [] });
+    const r = await groundAnswer(text, { scenario, toolResults: [], data: [] });
     assert.equal(r.ok, true, `"${text}" is vocabulary: ${JSON.stringify(r.violations)}`);
   }
 });
@@ -1633,11 +1634,11 @@ test('R4 F4: scientific notation and decimals in prose evidence ground the whole
   for (const { prose, grounds, not } of cases) {
     for (const where of proseSources(prose)) {
       for (const text of grounds) {
-        const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+        const r = await groundAnswer(`The figure is ${text}.`, { scenario, ...where });
         assert.equal(r.ok, true, `${where.label}: "${prose}" grounds ${text}: ${JSON.stringify(r.violations)}`);
       }
       for (const text of not) {
-        const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+        const r = await groundAnswer(`The figure is ${text}.`, { scenario, ...where });
         assert.ok(laundered(r).includes(text), `${where.label}: "${prose}" must not ground ${text}`);
       }
     }
@@ -1692,15 +1693,15 @@ test('R4 adversarial table: no evidence source launders an invented amount throu
   const scenario = await buildScenario(s.db);
   const failures = [];
   for (const source of EVIDENCE_SOURCES) {
-    const control = groundAnswer(`The figure is ${R4_CONTROL.said}.`, { scenario, ...source.make(R4_CONTROL) });
+    const control = await groundAnswer(`The figure is ${R4_CONTROL.said}.`, { scenario, ...source.make(R4_CONTROL) });
     if (!control.ok) failures.push(`${source.label}: control ${R4_CONTROL.said} does not ground`);
     for (const form of LAUNDERING_FORMS) {
       const carrier = { prose: `${form.prose} ${R4_CONTROL.prose}`, field: { ...form.field, ...R4_CONTROL.field } };
       const where = source.make(carrier);
-      const kept = groundAnswer(`The figure is ${R4_CONTROL.said}.`, { scenario, ...where });
+      const kept = await groundAnswer(`The figure is ${R4_CONTROL.said}.`, { scenario, ...where });
       if (!kept.ok) failures.push(`${source.label} / ${form.form}: control ${R4_CONTROL.said} no longer grounds`);
       for (const text of form.invented) {
-        const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+        const r = await groundAnswer(`The figure is ${text}.`, { scenario, ...where });
         if (!laundered(r).includes(text)) failures.push(`${source.label} / ${form.form}: grounds ${text}`);
       }
     }
@@ -1723,11 +1724,11 @@ test('R5 F1: a scaled quantity in prose evidence grounds its full value, never t
   for (const { prose, grounds, not } of SCALED_PROSE) {
     for (const where of proseSources(prose)) {
       for (const text of grounds) {
-        const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+        const r = await groundAnswer(`The figure is ${text}.`, { scenario, ...where });
         if (!r.ok) failures.push(`${where.label}: "${prose}" should ground ${text}: ${JSON.stringify(laundered(r))}`);
       }
       for (const text of not) {
-        const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+        const r = await groundAnswer(`The figure is ${text}.`, { scenario, ...where });
         if (!laundered(r).includes(text)) failures.push(`${where.label}: "${prose}" must not ground ${text}`);
       }
     }
@@ -1752,7 +1753,7 @@ test('R5 F2: link destinations and bare URLs with parentheses never ground their
   for (const prose of PAREN_PROSE) {
     for (const where of proseSources(prose)) {
       for (const text of ['$4,821', '4821']) {
-        const r = groundAnswer(`The figure is ${text}.`, { scenario, ...where });
+        const r = await groundAnswer(`The figure is ${text}.`, { scenario, ...where });
         if (!laundered(r).includes(text)) failures.push(`${where.label}: "${prose}" must not ground ${text}`);
       }
     }
@@ -1769,9 +1770,9 @@ test('R5 F2: a marked amount in the link text of a parenthesized destination sti
     'See [the $500 limit](https://example.invalid/a(b(c))/d(e)/4821k) for details.',
   ]) {
     for (const where of proseSources(prose)) {
-      const ok = groundAnswer('The figure is $500.', { scenario, ...where });
+      const ok = await groundAnswer('The figure is $500.', { scenario, ...where });
       if (!ok.ok) failures.push(`${where.label}: "${prose}" should ground $500: ${JSON.stringify(laundered(ok))}`);
-      const bad = groundAnswer('The figure is $4,821.', { scenario, ...where });
+      const bad = await groundAnswer('The figure is $4,821.', { scenario, ...where });
       if (!laundered(bad).includes('$4,821')) failures.push(`${where.label}: "${prose}" must not ground $4,821`);
     }
   }

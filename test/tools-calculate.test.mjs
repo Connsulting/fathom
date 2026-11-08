@@ -249,7 +249,7 @@ test('groundAnswer grounds the owner\'s "4 percent" and the calculate result\'s 
   const result = await callTool('calculate', args, ctx);
   assert.equal(result.figure.provenance.assumptions[1].stated, '4%');
   const reply = `At a 4 percent withdrawal rate, the investment needed is ${result.figure.quote}.`;
-  const grounded = groundAnswer(reply, { scenario: { fig: {} }, toolResults: [{ name: 'calculate', args, result }] });
+  const grounded = await groundAnswer(reply, { scenario: { fig: {} }, toolResults: [{ name: 'calculate', args, result }] });
   assert.deepEqual(grounded.violations, []);
   assert.deepEqual(grounded.literals.map(l => l.text), ['4 percent', result.figure.quote]);
   assert.ok(grounded.literals.every(l => l.source === getTool('calculate').source));

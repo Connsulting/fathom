@@ -101,7 +101,7 @@ async function populate(db) {
   const answered = await addAccount('1111', 'cash');
   const asked = await addAccount('2222', null);
   const addItem = async (kind, subject, options) => Number((await db.prepare(`INSERT INTO confirm_items (kind, subject, question, options, context, status, file_id, created_at)
-    VALUES (?, ?, ?, ?, '{}', 'pending', ?, ?)`).run(kind, subject, `Synthetic ${kind} question`, JSON.stringify(options), FILE_ID, AT)).lastInsertRowid);
+    VALUES (?, ?, ?, ?, '{}', 'pending', ?, ?) RETURNING id`).get(kind, subject, `Synthetic ${kind} question`, JSON.stringify(options), FILE_ID, AT)).id);
   const ownerId = await addItem('account_owner', answered, C.OWNER_OPTIONS);
   const pendingId = await addItem('account_kind', asked, C.KIND_OPTIONS);
 
@@ -143,10 +143,10 @@ test('migrate applies the confirm-context migration, creates exactly its four ta
   const tables = await DB.listTables(s.db);
   for (const t of Object.keys(NEW_TABLES)) assert.ok(!tables.includes(t), `precondition: ${t} is new`);
   assert.deepEqual(await applyThrough(s.db, mig.id), [mig.id]);
-  const added = await DB.listTables(s.db).filter((t) => !tables.includes(t)).sort();
+  const added = (await DB.listTables(s.db)).filter((t) => !tables.includes(t)).sort();
   assert.deepEqual(added, Object.keys(NEW_TABLES).sort(), 'exactly the four tables');
   for (const [t, cols] of Object.entries(NEW_TABLES)) assert.deepEqual(await columnsOf(s.db, t), cols, `${t} columns`);
-  for (const t of tables) assert.ok(await DB.listTables(s.db).includes(t), `${t} is kept`);
+  for (const t of tables) assert.ok((await DB.listTables(s.db)).includes(t), `${t} is kept`);
   assert.deepEqual(await snapshot(s.db), before, 'every stored row is unchanged');
   assert.deepEqual((await DB.migrate(s.db)).applied, DB.listMigrations().filter((m) => m.id > mig.id).map((m) => m.id));
   const later = await snapshot(s.db);
@@ -163,26 +163,26 @@ test('migrate applies the confirm-context migration, creates exactly its four ta
   });
   assert.deepEqual(later, before, 'later migrations keep every stored row');
 
-  const owner = C.getItem(s.db, ids.ownerId);
+  const owner = await C.getItem(s.db, ids.ownerId);
   assert.equal(owner.status, 'answered');
   assert.equal(owner.answer, 'owner');
   assert.equal((await one(s.db, 'SELECT owner FROM accounts WHERE id = ?', ids.answered)).owner, 'You');
-  assert.equal(C.getItem(s.db, ids.pendingId).status, 'pending');
-  assert.equal(C.autoInfo(s.db, ids.ownerId), null, 'an answer from before the migration is the owner\'s own');
+  assert.equal((await C.getItem(s.db, ids.pendingId)).status, 'pending');
+  assert.equal(await C.autoInfo(s.db, ids.ownerId), null, 'an answer from before the migration is the owner\'s own');
   assert.deepEqual(await DB.migrate(s.db), { applied: [] }, 'a second migrate applies nothing');
 }));
 
 test('an answer recorded before the migration still reopens, and the pending question is answerable', async () => withOldStore(async (s, ids) => {
   await DB.migrate(s.db);
-  assert.equal(C.finalReason(s.db, C.getItem(s.db, ids.ownerId)), null, 'no import since the answer, so it is not final');
-  const out = C.reopenItem(s.db, ids.ownerId, { now: NOW });
+  assert.equal(await C.finalReason(s.db, await C.getItem(s.db, ids.ownerId)), null, 'no import since the answer, so it is not final');
+  const out = await C.reopenItem(s.db, ids.ownerId, { now: NOW });
   assert.equal(out.item.status, 'pending');
   assert.equal((await one(s.db, 'SELECT owner FROM accounts WHERE id = ?', ids.answered)).owner, null, 'the owner is restored to unset');
   assert.equal(await count(s.db, 'confirm_undo', 'item_id = ?', ids.ownerId), 0);
 
-  C.answerItem(s.db, ids.ownerId, 'spouse', { now: NOW });
+  await C.answerItem(s.db, ids.ownerId, 'spouse', { now: NOW });
   assert.equal((await one(s.db, 'SELECT owner FROM accounts WHERE id = ?', ids.answered)).owner, 'Your spouse');
-  C.answerItem(s.db, ids.pendingId, 'checking', { now: NOW });
+  await C.answerItem(s.db, ids.pendingId, 'checking', { now: NOW });
   assert.equal((await one(s.db, 'SELECT kind FROM accounts WHERE id = ?', ids.asked)).kind, 'checking');
 }));
 
@@ -194,7 +194,7 @@ test('re-importing the answered account after the migration asks nothing new for
   assert.equal(await count(s.db, 'accounts'), 2, 'the row lands in the existing account');
   assert.equal(await count(s.db, 'transactions', 'account_id = ?', ids.answered), 1);
   assert.equal(await count(s.db, 'confirm_items'), questions, 'no new question');
-  const owner = C.getItem(s.db, ids.ownerId);
+  const owner = await C.getItem(s.db, ids.ownerId);
   assert.equal(owner.status, 'answered');
   assert.equal(owner.answer, 'owner');
   assert.equal((await one(s.db, 'SELECT owner FROM accounts WHERE id = ?', ids.answered)).owner, 'You');

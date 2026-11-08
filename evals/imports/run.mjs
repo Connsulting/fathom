@@ -250,9 +250,9 @@ export async function main(argv = process.argv.slice(2)) {
         opened = await openCliHousehold(config, ['--household', process.env.FATHOM_IMPORT_EVAL_HOUSEHOLD]);
         const engine = opened.household.engine;
         await engine.init();
-        options.liveOptions = { ...options, authorized, credentials: engine.credentialStateFor('extract') === 'loaded', funded: opened.household.funded() === true };
+        options.liveOptions = { ...options, authorized, credentials: engine.credentialStateFor('extract') === 'loaded', funded: await opened.household.funded() === true };
         admitLive(options.liveOptions);
-        if (!engine.isOn() || !opened.household.outbound.enabled('engine')) throw new Error('engine_unavailable');
+        if (!engine.isOn() || !await opened.household.outbound.enabled('engine')) throw new Error('engine_unavailable');
         options.liveEngine = engine;
       }
       result = await runEvaluation(options);

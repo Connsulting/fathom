@@ -264,12 +264,12 @@ export async function createAuthService({ platform, config, transport, secrets =
         // session: the browser keeps a live session of the same user, or gets a new one beside any other.
         let session = null;
         if (fresh.purpose === 'add-passkey') {
-          if (store.session(currentSession(req))?.id !== fresh.user.id) session = await store.createSession(fresh.user.id);
+          if ((await store.session(currentSession(req)))?.id !== fresh.user.id) session = await store.createSession(fresh.user.id);
         } else if (fresh.token) {
           await store.revokeSession(currentSession(req));
           session = await store.createSession(fresh.user.id);
         }
-        const sessionUser = store.session(session ? session.token : currentSession(req));
+        const sessionUser = await store.session(session ? session.token : currentSession(req));
         return { identity: sessionUser?.id === fresh.user.id ? await identityFor(sessionUser) : await identityOfUser(fresh.user.id), session };
       });
       if (result.session) setCookie(res, SESSION_COOKIE, result.session, now());

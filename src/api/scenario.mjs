@@ -2,6 +2,7 @@ import { queueAccountPairs } from '../ingest/account-merge.mjs';
 import { buildScenario } from '../scenario/build.mjs';
 import { tourPending } from '../auth/tour.mjs';
 import { serviceStatus } from '../jobs/service-status.mjs';
+import { mapSeries } from '../shared/series.mjs';
 
 const OUTBOUND = ['jobs', 'email', 'simplefin', 'engine'];
 
@@ -10,7 +11,7 @@ const OUTBOUND = ['jobs', 'email', 'simplefin', 'engine'];
 export async function servicesOf(ctx) {
   try {
     const guard = ctx.household?.outbound;
-    const outbound = Object.fromEntries(OUTBOUND.map((k) => [k, typeof guard?.enabled === 'function' ? guard.enabled(k) === true : true]));
+    const outbound = Object.fromEntries(await mapSeries(OUTBOUND, async (k) => [k, typeof guard?.enabled === 'function' ? await guard.enabled(k) === true : true]));
     return await serviceStatus({
       db: ctx.db, outbound, engine: ctx.household?.engine ?? ctx.engine ?? null,
       scheduler: ctx.scheduler ?? ctx.household?.scheduler ?? null, now: new Date(),

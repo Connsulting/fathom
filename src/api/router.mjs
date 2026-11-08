@@ -353,7 +353,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
         // Nothing household-scoped leaves (a stream event or the final body) once the session no
         // longer holds this context: a member removed, a passkey revoked, a sign-out or a switch
         // meanwhile ends the stream or refuses the response, whichever path revoked the session.
-        const contextLost = async () => (!principal || principal.check() ? null
+        const contextLost = async () => (!principal || await principal.check() ? null
           : await identityOf(req, auth) ? staleContext() : new HttpError(401, 'unauthorized'));
         const onEvent = events ? async event => {
           const lost = await contextLost();

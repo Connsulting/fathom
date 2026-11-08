@@ -428,7 +428,7 @@ const KIND_NAMES = { f: 'figure', fk: 'figure', l: 'law', p: 'percent', n: 'name
 // label, and one the context data states is a literal with that datum's label; any other date is a
 // violation with { date: true } (neutralized, never counted toward a regeneration). Literals are in
 // text order.
-export function groundAnswer(text, { scenario, toolResults = [], data = [], dataLabels = [], accountLabels } = {}) {
+export async function groundAnswer(text, { scenario, toolResults = [], data = [], dataLabels = [], accountLabels } = {}) {
   const prose = String(text ?? '');
   const violations = [];
   const figureKeys = new Set();
@@ -451,10 +451,10 @@ export function groundAnswer(text, { scenario, toolResults = [], data = [], data
   for (const m of listMarkerSpans(masked)) {
     unlisted = unlisted.slice(0, m.index) + '•' + ' '.repeat(m.length - 1) + unlisted.slice(m.index + m.length);
   }
-  return groundMasked(unlisted, { scenario, toolResults, data, dataLabels, accountLabels, violations, figureKeys });
+  return await groundMasked(unlisted, { scenario, toolResults, data, dataLabels, accountLabels, violations, figureKeys });
 }
 
-function groundMasked(masked, { scenario, toolResults, data, dataLabels, accountLabels, violations, figureKeys }) {
+async function groundMasked(masked, { scenario, toolResults, data, dataLabels, accountLabels, violations, figureKeys }) {
   const check = (text, options = {}) => checkGrounding(text, { ...options, allowCounts: true });
   const raws = Array.isArray(toolResults) ? toolResults : [];
   const results = raws.map(groundingResult);
@@ -492,7 +492,7 @@ function groundMasked(masked, { scenario, toolResults, data, dataLabels, account
     };
     for (const span of spans) {
       for (let i = 0; i < sources.length; i++) {
-        misses[i] ??= new Set(sources[i].check().violations.map(v => v.index));
+        misses[i] ??= new Set((await sources[i].check()).violations.map(v => v.index));
         if (!misses[i].has(span.index)) { literals.push({ text: span.text, index: span.index, source: sourceOf(i, span) }); break; }
       }
     }
@@ -776,7 +776,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
       } catch { accountLabels = new Map(); }
       return accountLabels;
     };
-    const ground = async (res, toolResults) => groundAnswer(textOf(res),
+    const ground = async (res, toolResults) => await groundAnswer(textOf(res),
       { scenario, toolResults, data, dataLabels, accountLabels: await labelsFor(toolResults) });
     const moreDetail = /\b(?:(?:more|greater) detail|in detail|detailed (?:answer|explanation|breakdown)|(?:explain|walk me through) (?:it |this )?(?:fully|thoroughly|step by step))\b/i.test(question);
     const disciplineOf = (res, toolResults, grounding) => checkAnswerForDelivery(textOf(res),

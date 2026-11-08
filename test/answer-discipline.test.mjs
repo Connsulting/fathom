@@ -183,10 +183,10 @@ const ORDINARY = [
 
 test('ordinary answers pass grounding and the shared discipline check as Ask applies it', async t => {
   const { checkAnswerForDelivery } = await import('../src/api/answerer.mjs');
-  for (const fixture of ORDINARY) await t.test(fixture.id, sub => {
+  for (const fixture of ORDINARY) await t.test(fixture.id, async sub => {
     const { text, calls: toolResults = [], data = [] } = fixture;
     const scenario = { fig: {} };
-    const grounding = groundAnswer(text, { scenario, toolResults, data });
+    const grounding = await groundAnswer(text, { scenario, toolResults, data });
     const check = checkAnswerForDelivery(text, { scenario, toolResults, data, grounding });
     sub.diagnostic(JSON.stringify({ id: fixture.id, grounding: grounding.violations, discipline: check.violations }));
     assert.deepEqual(grounding.violations, []);
@@ -200,7 +200,7 @@ test('a known account suffix is an identifier and never sources a balance', asyn
   const scenario = { fig: {} };
   const toolResults = ORDINARY[0].calls;
   const text = 'The balance is $4,321.';
-  const grounding = groundAnswer(text, { scenario, toolResults });
+  const grounding = await groundAnswer(text, { scenario, toolResults });
   assert.equal(grounding.ok, false);
   assert.deepEqual(checkAnswerForDelivery(text, { scenario, toolResults, grounding }).violations, ['figures.unsourced']);
 });

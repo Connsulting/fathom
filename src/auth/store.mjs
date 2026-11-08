@@ -417,7 +417,7 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
     // changed. Returns { id, name, role } of the selected household.
     async switchHousehold(raw, householdId) {
       return await transaction(async () => {
-        const user = store.session(raw);
+        const user = await store.session(raw);
         if (!user) throw new HttpError(401, 'unauthorized');
         const row = typeof householdId === 'string' ? await db.prepare(`SELECT h.id, h.display_name, m.role FROM household_memberships m
           JOIN households h ON h.id = m.household_id

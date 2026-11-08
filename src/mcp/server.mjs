@@ -24,7 +24,7 @@ export function createToolServer({ scopes, ctx, authorize, runTool }) {
   const server = new Server(serverInfo(), { capabilities: { tools: {} }, instructions: mcpInstructions });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    if (!authorize()) throw new ToolError('forbidden', 'Key authorization is no longer available');
+    if (!await authorize()) throw new ToolError('forbidden', 'Key authorization is no longer available');
     return { tools: offered.map(t => ({
       name: t.name,
       description: t.description,
@@ -34,7 +34,7 @@ export function createToolServer({ scopes, ctx, authorize, runTool }) {
   });
 
   server.setRequestHandler(CallToolRequestSchema, async request => {
-    if (!authorize()) return errorResult('Key authorization is no longer available');
+    if (!await authorize()) return errorResult('Key authorization is no longer available');
     const { name } = request.params;
     const tool = getTool(name);
     if (!tool || !isMcpTool(tool)) return errorResult(`no tool ${name}`);

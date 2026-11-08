@@ -108,7 +108,7 @@ export async function createRuntimeEngine({ db, config = {}, now, allowed = () =
   const reservations = platformLedger && {
     async reserve({ purpose, model, boundUsd }) {
       await syncMirror();
-      return platformLedger.reserve({ purpose, model, boundUsd, adminCapUsd: await capOf(db), legacySpendUsd: await ledger.legacySpendUsd(month()),
+      return await platformLedger.reserve({ purpose, model, boundUsd, adminCapUsd: await capOf(db), legacySpendUsd: await ledger.legacySpendUsd(month()),
         principal: currentPrincipal() });
     },
     settle: (roundId, result) => platformLedger.settle(roundId, result),

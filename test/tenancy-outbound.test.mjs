@@ -245,7 +245,7 @@ describe('the migrated household starts paused and resumes only explicitly', T, 
       assert.equal((await admin.client.postJson('/api/household/outbound', { jobs: false })).status, 403);
       assert.equal((await admin.client.postJson('/api/threads', { text: 'Synthetic suspended question' })).status, 403);
       const guard = (await src('src/platform/outbound.mjs')).outboundGuard(platform, hh);
-      for (const k of OUTBOUND_KINDS) assert.equal(guard.enabled(k), false, `${k} is never enabled while suspended`);
+      for (const k of OUTBOUND_KINDS) assert.equal(await guard.enabled(k), false, `${k} is never enabled while suspended`);
     } finally {
       await platform.prepare("UPDATE households SET status = 'active' WHERE id = ?").run(hh);
     }

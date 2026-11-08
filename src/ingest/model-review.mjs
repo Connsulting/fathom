@@ -23,9 +23,9 @@ import { filterSeries, flatMapSeries, mapSeries } from '../shared/series.mjs';
 const stamp = ctx => new Date(typeof ctx.now === 'function' ? ctx.now() : ctx.now ?? Date.now()).toISOString();
 async function context(ctx) {
   if (!ctx.household || ctx.household.db !== ctx.db || typeof ctx.household.isCurrent !== 'function') throw new TypeError('Captured household context required');
-  if (!ctx.household.isCurrent()) stale(['household']);
+  if (!await ctx.household.isCurrent()) stale(['household']);
   const principal = currentPrincipal();
-  if (principal && principal.check() !== true) throw new ToolError('forbidden', 'The signed-in owner is no longer authorized.');
+  if (principal && await principal.check() !== true) throw new ToolError('forbidden', 'The signed-in owner is no longer authorized.');
   return await requireActor(ctx);
 }
 function scopes(ctx, proposal) {

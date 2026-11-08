@@ -90,11 +90,11 @@ async function interpretBound({ ctx, file, fake, correction = null, retry = fals
   const { db, engine, generation } = household, limits = loweredLimits(overrides);
   const now = () => new Date(typeof ctx.now === 'function' ? ctx.now() : ctx.now ?? Date.now());
   const started = Date.now();
-  const live = () => household.generation === generation && household.isCurrent() === true && household.outbound.enabled('engine') === true && household.funded() === true && engine.isOn() === true && engine.credentialStateFor?.('extract') !== 'failed';
-  if (!live()) return code('waiting_for_engine', 'engine_unavailable');
+  const live = async () => household.generation === generation && await household.isCurrent() === true && await household.outbound.enabled('engine') === true && await household.funded() === true && engine.isOn() === true && engine.credentialStateFor?.('extract') !== 'failed';
+  if (!await live()) return code('waiting_for_engine', 'engine_unavailable');
   const source = await indexSource(file, { accounts: await db.prepare('SELECT * FROM accounts').all(), householdNames: await householdNames(db), entityNames: (await db.prepare('SELECT alias, entity FROM entity_aliases').all()).flatMap(r => [r.alias, r.entity]) });
   if (source.status !== 'indexed') return code('needs_source_text', 'no_safe_source_text');
-  if (!live()) return code('waiting_for_engine', 'context_changed');
+  if (!await live()) return code('waiting_for_engine', 'context_changed');
   const stored = await db.prepare('SELECT sha256 FROM files WHERE id = ?').get(file.fileId);
   if (!stored || stored.sha256 !== source.sha256) return code('needs_clarification', 'source_mismatch');
   const used = await fileSpend(db, file.fileId);
@@ -110,7 +110,7 @@ async function interpretBound({ ctx, file, fake, correction = null, retry = fals
   let reserved = false;
   const requestBudget = { maxCostUsd: allowance, maxInputTokens: limits.inputTokens - used.inputTokens, timeoutMs: limits.timeoutMs, correlationId };
   async function reserve() {
-    if (!live()) throw new EngineOffError();
+    if (!await live()) throw new EngineOffError();
     const remainingTime = limits.timeoutMs - (Date.now() - started);
     if (remainingTime <= 0) throw new BudgetExceededError();
     requestBudget.timeoutMs = remainingTime;
@@ -138,12 +138,12 @@ async function interpretBound({ ctx, file, fake, correction = null, retry = fals
       budget: requestBudget });
     await settle(result.accounting, false);
     const parsed = parseInterpretation(result.text, source);
-    if (!live()) return { ...code('waiting_for_engine', 'context_changed'), ...parsed, source };
+    if (!await live()) return { ...code('waiting_for_engine', 'context_changed'), ...parsed, source };
     if (!parsed.valid) return { ...code('needs_clarification', 'invalid_interpretation'), errors: parsed.errors };
     return { ...code(parsed.proposal.completeness === 'complete' ? 'needs_confirmation' : 'needs_clarification', parsed.proposal.completeness === 'complete' ? 'proposal_validated' : 'unresolved_coverage'), ...parsed, source };
   } catch (error) {
     await settle(error.accounting, true);
-    if (error instanceof EngineOffError || !live()) return code('waiting_for_engine', 'engine_unavailable');
+    if (error instanceof EngineOffError || !await live()) return code('waiting_for_engine', 'engine_unavailable');
     if (error instanceof BudgetExceededError) return code('budget_exhausted', 'engine_or_file_limit');
     // A transient engine failure waits for the resume pass's one automatic retry; that retry's own failure asks the owner.
     if (transientModelError(error) && ctx.autoRetried !== true) return code('waiting_for_engine', 'model_transient');

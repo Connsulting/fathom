@@ -43,7 +43,7 @@ export async function main(argv = process.argv.slice(2), env = process.env) {
       await backfillMergedIdentity(db);
       if (counts.merged) {
         scheduler = createScheduler({db,config,engine:null,handlers:defaultHandlers(),log:{log(){}},
-          allowed:()=>household.outbound.enabled('jobs'),household:()=>household});
+          allowed:async ()=>await household.outbound.enabled('jobs'),household:()=>household});
         const run = await scheduler.trigger('plan','confirm');
         if (!run || run.status !== 'ok') throw new Error();
       }

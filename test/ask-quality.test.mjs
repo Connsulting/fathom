@@ -100,38 +100,38 @@ function expectRowSource(source, s, what) {
 
 // Review r1 F2: only a transaction row's amount is read unsigned. A business loss never grounds
 // the same amount stated as a profit, and no other tool's negative value is mirrored.
-test('a negative value outside transaction amounts does not ground its unsigned form', () => {
+test('a negative value outside transaction amounts does not ground its unsigned form', async () => {
   const toolResults = [{ name: 'business', args: { operation: 'pnl', }, result: {
     rows: [{ period: '2026-09', category: 'Net', amount: -2400 }], totals: { '2026-09': -2400 },
   } }];
-  const r = groundAnswer('Your profit was $2,400 in September.', { scenario: { fig: {} }, toolResults, data: [] });
+  const r = await groundAnswer('Your profit was $2,400 in September.', { scenario: { fig: {} }, toolResults, data: [] });
   assert.deepEqual(r.violations.map(v => v.text), ['$2,400'], JSON.stringify(r.violations));
-  assert.equal(groundAnswer('Your loss was -$2,400.', { scenario: { fig: {} }, toolResults, data: [] }).ok, true);
+  assert.equal((await groundAnswer('Your loss was -$2,400.', { scenario: { fig: {} }, toolResults, data: [] })).ok, true);
 });
 
 // Review r1 F3: a date under any data key (asOf here), not only "date", is sourced to its row.
-test('a prose date matching an asOf date in a same-turn tool result is sourced to that tool', () => {
+test('a prose date matching an asOf date in a same-turn tool result is sourced to that tool', async () => {
   const toolResults = [{ name: 'accounts', args: { operation: 'list', }, result: [
     { id: 'acct-synthetic-checking', name: 'Synthetic checking', kind: 'checking', balance: 1500, asOf: '2026-10-07' },
   ] }];
-  const r = groundAnswer('Your checking balance is as of October 7.', { scenario: { fig: {} }, toolResults, data: [] });
+  const r = await groundAnswer('Your checking balance is as of October 7.', { scenario: { fig: {} }, toolResults, data: [] });
   const hit = r.literals.find(l => l.text === 'October 7');
   assert.ok(hit, JSON.stringify(r.literals));
   assert.equal(hit.source, 'your accounts');
 });
 
 
-test('groundAnswer grounds an unsigned prose amount on an outflow transaction row', () => {
+test('groundAnswer grounds an unsigned prose amount on an outflow transaction row', async () => {
   const toolResults = [{ name: 'transactions', args: { operation: 'search', }, result: {
     rows: [{ id: 7, accountId: CARD, date: '2026-10-03', amount: -2400, description: 'Synthetic Roofing Co', category: 'Home improvement' }],
     truncated: false, total: 1,
   } }];
-  const r = groundAnswer('You paid $2,400.00 for the roof.', { scenario: { fig: {} }, toolResults, data: [] });
+  const r = await groundAnswer('You paid $2,400.00 for the roof.', { scenario: { fig: {} }, toolResults, data: [] });
   assert.deepEqual(r.violations, [], JSON.stringify(r.violations));
   assert.equal(r.ok, true);
   assert.ok(r.literals.some(l => l.text === '$2,400.00'), JSON.stringify(r.literals));
   // The signed form still grounds too.
-  assert.equal(groundAnswer('The change was -$2,400.', { scenario: { fig: {} }, toolResults, data: [] }).ok, true);
+  assert.equal((await groundAnswer('The change was -$2,400.', { scenario: { fig: {} }, toolResults, data: [] })).ok, true);
 });
 
 test('a transaction amount in the answer is sourced to its row: account label, date and description', async t => {
@@ -174,12 +174,12 @@ test('a date in the answer that matches a same-turn row date is a literal with t
 
 // Review r3 F6: yearless evidence ("April 15" in pack prose) sources a yearless prose date only; a
 // prose date that states a year needs evidence with that year.
-test('a stated year needs evidence with that year; yearless evidence sources only a yearless date', () => {
+test('a stated year needs evidence with that year; yearless evidence sources only a yearless date', async () => {
   const data = ['Quarterly estimates are due April 15 and June 15.'];
-  const g = text => groundAnswer(text, { scenario: { fig: {} }, toolResults: [], data, dataLabels: ['knowledge pack entries'] });
-  const bare = g('Your installment is due April 15.');
+  const g = async text => await groundAnswer(text, { scenario: { fig: {} }, toolResults: [], data, dataLabels: ['knowledge pack entries'] });
+  const bare = await g('Your installment is due April 15.');
   assert.equal(bare.literals.find(l => l.text === 'April 15')?.source, 'knowledge pack entries', JSON.stringify(bare.literals));
-  const yeared = g('Your installment is due April 15, 2028.');
+  const yeared = await g('Your installment is due April 15, 2028.');
   assert.deepEqual(yeared.violations.map(v => v.text), ['April 15, 2028'], JSON.stringify(yeared));
   assert.ok(!yeared.literals.some(l => l.text === 'April 15, 2028'));
 });

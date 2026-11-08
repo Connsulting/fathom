@@ -44,7 +44,7 @@ async function main() {
     };
     scheduler = createScheduler({
       db: household.db, config, engine: household.engine, handlers: { plan }, log: quiet,
-      allowed: () => household.outbound.enabled('jobs'), household: () => household,
+      allowed: async () => await household.outbound.enabled('jobs'), household: () => household,
     });
     const run = await scheduler.runNow('plan');
     if (!run || run.status !== 'ok' || !planning) {

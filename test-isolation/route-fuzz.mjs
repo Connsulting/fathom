@@ -63,7 +63,7 @@ function classify(inventory, specs) {
 }
 
 async function wire(f, person, method, spec, headers = {}) {
-  const opts = { method, path: spec.path, headers: { ...headersOf(person), origin: f.baseUrl, ...headers } };
+  const opts = { method, path: spec.path, headers: { ...await headersOf(person), origin: f.baseUrl, ...headers } };
   for (const [name, value] of Object.entries(opts.headers)) if (value === undefined) delete opts.headers[name];
   if (spec.multipart && method === 'POST') {
     const fd = new FormData();
@@ -229,7 +229,7 @@ async function deterministicPolicies(f, inventory, specs) {
   const memberRoutes = inventory.filter(route => !CONTROL.has(keyOf(route)) && !routePolicy(route).admin && !routePolicy(route).backupControl);
   for (const [own, other] of [[f.A, f.B], [f.B, f.A]]) {
     f.dual.identity = ok(await f.dual.client.post('/api/auth/household', { householdId: own.id })).identity;
-    const old = headersOf(f.dual);
+    const old = await headersOf(f.dual);
     const before = await snapshot(other);
     for (const route of memberRoutes) {
       activeCase = { seed: 0, route: keyOf(route), mutation: 'dual-member-foreign-header', assertion: 'dual_context' };
@@ -292,8 +292,8 @@ async function lifecyclePolicies(f, inventory, specs) {
     }
     const revoked = await f.invite(own, own.canary.toLowerCase() + '-revoked@example.test');
     const expired = await f.invite(own, own.canary.toLowerCase() + '-expired@example.test');
-    await f.store.revokeSession(revoked.client.session());
-    await f.platform.prepare('UPDATE auth_sessions SET expires_at=0 WHERE hash=?').run(hash(expired.client.session()));
+    await f.store.revokeSession(await revoked.client.session());
+    await f.platform.prepare('UPDATE auth_sessions SET expires_at=0 WHERE hash=?').run(hash(await expired.client.session()));
     const removed = own.member;
     const memberKey = ok(await removed.client.post('/api/keys', { name: 'Synthetic removed member', scopes: ['read'] }));
     ok(await own.admin.client.post(`/api/admin/users/${removed.identity.id}/remove`, {}));
@@ -359,8 +359,8 @@ async function toolGate(f) {
       assert.equal(r.status, 200, `rpc_${method}`); assert.ok(r.json.result, `rpc_result_${method}`);
     }
     for (const tool of registry) {
-      assert.equal((await mcp(f.baseUrl, null, 'tools/call', { name: tool.name, arguments: samples[tool.name] }, { cookie: headersOf(own.admin).cookie })).status, 401, `session_only_tool ${tool.name}`);
-      const r = await invoke(tool.name, samples[tool.name], { cookie: headersOf(other.admin).cookie, 'x-fathom-household': other.id });
+      assert.equal((await mcp(f.baseUrl, null, 'tools/call', { name: tool.name, arguments: samples[tool.name] }, { cookie: (await headersOf(own.admin)).cookie })).status, 401, `session_only_tool ${tool.name}`);
+      const r = await invoke(tool.name, samples[tool.name], { cookie: (await headersOf(other.admin)).cookie, 'x-fathom-household': other.id });
       assert.equal(r.status, 200, `tool_success ${tool.name}`);
       assert.notEqual(r.json.result?.isError, true, `tool_result ${tool.name}: ${toolText(r)}`);
       if (tool.name === 'retirement') assert.equal(JSON.parse(toolText(r)).figure.value, own.retirementBalance, 'complete_balance');
@@ -371,14 +371,14 @@ async function toolGate(f) {
         checkTime();
         const extra = [{ householdId: other.id }, { household: other.id }, { storedPath: '../' + other.canary },
           { nested: { refs: [{ id: other.canary + '-only', householdId: other.id }] } }, { [`unknown${seed}`]: other.id }][kind];
-        const attacked = await invoke(tool.name, { ...samples[tool.name], ...extra }, { cookie: headersOf(other.admin).cookie });
+        const attacked = await invoke(tool.name, { ...samples[tool.name], ...extra }, { cookie: (await headersOf(other.admin)).cookie });
         assert.equal(attacked.json?.result?.isError, true, `seed=${seed} tool=${tool.name} mutation=${kind} refusal`);
         assert.ok(!toolText(attacked).includes(other.canary), 'tool_error_disclosure');
         await stable(other, before, `seed=${seed} tool=${tool.name} mutation=${kind} effect`);
         count++;
       }
     }
-    assert.equal((await mcp(f.baseUrl, null, 'tools/list', {}, { cookie: headersOf(own.admin).cookie })).status, 401, 'cookie_is_not_bearer');
+    assert.equal((await mcp(f.baseUrl, null, 'tools/list', {}, { cookie: (await headersOf(own.admin)).cookie })).status, 401, 'cookie_is_not_bearer');
     for (const method of ['GET', 'HEAD', 'DELETE', 'PUT', 'PATCH', 'OPTIONS']) {
       for (let seed = 1; seed <= seeds; seed++) for (let kind = 0; kind < 5; kind++) {
         activeCase = { seed, route: `${method} /mcp`, mutation: kind, assertion: 'transport_isolation' };
@@ -425,7 +425,7 @@ async function toolGate(f) {
       body: JSON.stringify([{ jsonrpc: '2.0', id: 1, method: 'tools/list' }, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'household', arguments: { operation: 'summary' } } }]) });
     assert.equal(batch.status, 400, 'rpc_batch_refused');
     for (const path of ['/mcp/', '/%6dcp', '/mcp/nested', '/mcp%2f']) {
-      const r = await request(f.baseUrl, { method: 'POST', path, headers: { ...headersOf(own.admin), 'content-type': 'application/json' }, body: '{}' });
+      const r = await request(f.baseUrl, { method: 'POST', path, headers: { ...await headersOf(own.admin), 'content-type': 'application/json' }, body: '{}' });
       assert.ok([404, 405].includes(r.status), 'exact_mcp_path');
     }
     ok(await own.admin.client.post(`/api/keys/${readKey.record.id}/revoke`, {}));
@@ -438,7 +438,7 @@ async function toolGate(f) {
 
 async function collidingUploads(f) {
   const bytes = Buffer.from(aggregatorCsv([{ date: '2026-10-05', amount: '19.99', description: 'Synthetic colliding upload', account: 'Synthetic shared checking', number: '5550009999' }]));
-  const responses = await Promise.all([f.A, f.B].map(hh => uploadFiles(f.baseUrl, { cookie: headersOf(hh.admin).cookie, householdId: hh.id, contextVersion: hh.admin.identity.contextVersion }, [{ name: 'shared.csv', bytes }])));
+  const responses = await Promise.all(await mapSeries([f.A, f.B], async hh => uploadFiles(f.baseUrl, { cookie: (await headersOf(hh.admin)).cookie, householdId: hh.id, contextVersion: hh.admin.identity.contextVersion }, [{ name: 'shared.csv', bytes }])));
   const ids = responses.map(r => { ok(r); assert.equal(r.json.files[0].status, 'imported', 'independent_upload'); return r.json.files[0].fileId; });
   assert.equal(ids[0], ids[1], 'colliding_file_hash');
   const vaults = await Promise.all([f.A.ctx.vault(), f.B.ctx.vault()]);
@@ -463,7 +463,7 @@ async function replayForeignPayloads(f, inventory, specs) {
     for (const tool of tools.filter(isMcpTool)) {
       activeCase = { seed: 0, route: `tools/call ${tool.name}`, mutation: 'foreign-payload-replay', assertion: 'replay_isolation' };
       const before = await snapshot(other);
-      const r = await mcp(f.baseUrl, own.key.key, 'tools/call', { name: tool.name, arguments: other.toolSamples[tool.name] }, { cookie: headersOf(other.admin).cookie });
+      const r = await mcp(f.baseUrl, own.key.key, 'tools/call', { name: tool.name, arguments: other.toolSamples[tool.name] }, { cookie: (await headersOf(other.admin)).cookie });
       assert.equal(r.status, 200, `foreign_tool_payload ${tool.name}`);
       await stable(other, before, `foreign_tool_payload_effect ${tool.name}`);
     }
@@ -576,7 +576,7 @@ test('adversarial isolation gate crosses real sessions, dispatch, runtimes, pers
     await replayForeignPayloads(f, inventory, specs);
     const logText = logs.join('\n');
     for (const value of [f.A.canary, f.B.canary, f.A.key.key, f.B.key.key, f.keys.platformKeyHex, f.keys.secretHex,
-      f.A.admin.client.session(), f.B.admin.client.session()]) assert.ok(!logText.includes(value), 'sanitized_logs');
+      await f.A.admin.client.session(), await f.B.admin.client.session()]) assert.ok(!logText.includes(value), 'sanitized_logs');
   } catch (error) {
     if (activeCase) {
       if (process.env.FATHOM_FUZZ_REPRO_DIR) {
@@ -637,7 +637,7 @@ if (!probe) test('live-mode model and tool continuations see only the real-sessi
     const from = emulator.requests.length;
     emulator.script([{ wait: held, toolUse: { name: body => body.tools.find(t => /(?:^|__)household$/.test(t.name)).name, input: { operation: 'summary' } } }]);
     const pending = fetch(f.baseUrl + '/api/threads', { method: 'POST', headers: {
-      ...headersOf(f.A.member), origin: f.baseUrl, 'content-type': 'application/json', accept: 'text/event-stream',
+      ...await headersOf(f.A.member), origin: f.baseUrl, 'content-type': 'application/json', accept: 'text/event-stream',
     }, body: JSON.stringify({ text: 'Synthetic revoked streaming request.' }) });
     await emulator.waitForRequests(from + 1);
     ok(await f.A.admin.client.post(`/api/admin/users/${f.A.member.identity.id}/remove`, {}));

@@ -30,6 +30,8 @@ const GENERIC = new Set([
   'transaction', 'savepoint', 'capture', 'flatMap', 'concat', 'trim', 'parse', 'stringify', 'log',
   'error', 'warn', 'info', 'debug', 'abort', 'destroy', 'pipe', 'setHeader', 'writeHead', 'listen',
 ]);
+// Guard and liveness callbacks a context or principal carries.
+export const CHECKS = /^(check|isCurrent|funded|enabled|allowed|held|live|authorize\w*|authenticate\w*|require\w*|admit\w*|reserve\w*|verify\w*|membership|session|identity\w*|servedMember|servedAdmin|isOperator|creatorActive|outboundGuard|guard)$/;
 export const ARRAY_CALLBACKS = new Set(['map', 'filter', 'forEach', 'some', 'every', 'find', 'findIndex', 'flatMap', 'reduce']);
 // Callees that consume a Promise returned by their callback.
 const PROMISE_AWARE = new Set(['test', 'it', 'describe', 'before', 'after', 'beforeEach', 'afterEach', 'then', 'catch', 'finally', 'step', 'all', 'allSettled', 'race', 'any', 'waitFor', 'run', 'withResolvers', 'route', 'expect', 'poll', 'mock']);
@@ -386,7 +388,7 @@ export function analyze(files, { roots = () => false, root = null, driver = () =
       const found = factoriesOf(mod, b, ancestors, depth).map(f => returnedMethods(f).get(name)).filter(Boolean);
       if (found.length) return { targets: found };
     }
-    if (name && !GENERIC.has(name) && methods.has(name)) return { targets: methods.get(name), byName: true };
+    if (name && !GENERIC.has(name) && methods.has(name)) return { targets: methods.get(name), byName: name };
     return { targets: [] };
   }
 
@@ -420,7 +422,11 @@ export function analyze(files, { roots = () => false, root = null, driver = () =
   const reaches = c => {
     if (c.seed) return true;
     if (!c.targets.length) return false;
-    return c.byName ? c.targets.every(t => t.reaches) : c.targets.some(t => t.reaches);
+    // By name, every definition must reach the port, except for guard callbacks: one asynchronous
+    // definition of an authorization, admission or liveness check is enough, since a missed await
+    // on it would fail open (awaiting a synchronous fake of it is harmless).
+    if (c.byName && !CHECKS.test(c.byName)) return c.targets.every(t => t.reaches);
+    return c.targets.some(t => t.reaches);
   };
   const work = calls.filter(c => c.seed);
   const done = new Set();

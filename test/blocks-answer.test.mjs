@@ -77,8 +77,8 @@ test('four blocks per answer, including engine tool rounds', async t => {
   assert.equal(reply.provenance.blockNotes[0].reason, 'too_many');
 });
 
-test('block markers do not count as figures and stream as placeholders', () => {
-  assert.equal(groundAnswer('Recent spending.\n\n{b:b1}', { scenario: { figures: {} } }).ok, true);
+test('block markers do not count as figures and stream as placeholders', async () => {
+  assert.equal((await groundAnswer('Recent spending.\n\n{b:b1}', { scenario: { figures: {} } })).ok, true);
   const html = streamHtml('Recent spending.\n\n{b:b1}');
   assert.match(html, /Chart being prepared/); assert.doesNotMatch(html, /\{b:|Checking this number/);
   assert.ok(getTool('show').operations.every(o => !o.referenceable));

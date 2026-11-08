@@ -297,15 +297,15 @@ test('AC6: Ask excludes small counts and ordinals, and still checks money, perce
   const { db, root } = await setup(t);
   const scenario = await buildScenario(db);
   for (const text of ['There are two goals, one per parent.', 'Option 2 is ready; step 3 follows.', 'Choose the twentieth option.', 'There are twenty accounts.', 'There are 20 goals.']) {
-    assert.equal(groundAnswer(text, { scenario }).ok, true, text);
+    assert.equal((await groundAnswer(text, { scenario })).ok, true, text);
   }
   const words = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen', 'eighteen', 'nineteen', 'twenty'];
   for (const [index, word] of words.entries()) {
-    for (const number of [word, String(index + 1)]) assert.equal(groundAnswer(`There are ${number} goals.`, { scenario }).ok, true);
-    assert.equal(groundAnswer(`The cost is ${word} dollars.`, { scenario }).ok, false);
+    for (const number of [word, String(index + 1)]) assert.equal((await groundAnswer(`There are ${number} goals.`, { scenario })).ok, true);
+    assert.equal((await groundAnswer(`The cost is ${word} dollars.`, { scenario })).ok, false);
   }
   for (const text of ['$2', 'two dollars', 'twenty percent', '2%', '2029-12-31', 'January 2, 2029', 'There are twenty-one accounts.']) {
-    assert.equal(groundAnswer(text, { scenario }).ok, false, text);
+    assert.equal((await groundAnswer(text, { scenario })).ok, false, text);
   }
 });
 

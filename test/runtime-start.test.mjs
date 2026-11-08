@@ -24,14 +24,14 @@ test('building and reading a household context writes no pack state; starting th
 
   const context = await runtimes.get(temp.householdId);
   assert.ok(context, 'the household is served');
-  assert.equal(context.isCurrent(), true);
+  assert.equal(await context.isCurrent(), true);
   await temp.platform.prepare('UPDATE households SET generation = generation + 1 WHERE id = ?').run(temp.householdId);
-  assert.equal(context.isCurrent(), false, 'a captured generation cannot dispatch after replacement');
+  assert.equal(await context.isCurrent(), false, 'a captured generation cannot dispatch after replacement');
   await temp.platform.prepare('UPDATE households SET generation = generation - 1 WHERE id = ?').run(temp.householdId);
   await temp.platform.prepare("UPDATE households SET status = 'suspended' WHERE id = ?").run(temp.householdId);
-  assert.equal(context.isCurrent(), false);
+  assert.equal(await context.isCurrent(), false);
   await temp.platform.prepare("UPDATE households SET status = 'active' WHERE id = ?").run(temp.householdId);
-  assert.equal(context.isCurrent(), true);
+  assert.equal(await context.isCurrent(), true);
   assert.ok((await context.packs.loaded()).length > 0, 'packs load on read');
   assert.equal(await packRows(), 0, 'building and reading the context wrote no pack state');
 

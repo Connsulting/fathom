@@ -22,13 +22,13 @@ function refuse(req, res, status, body, headers) {
 }
 
 // The key record for the request's Authorization header, or null (also when keys are unavailable).
-function authenticate(req, keys) {
+async function authenticate(req, keys) {
   const header = req.headers.authorization;
   if (typeof header !== 'string') return null;
   const m = BEARER.exec(header.trim());
   if (!m) return null;
   try {
-    return keys.verify(m[1]);
+    return await keys.verify(m[1]);
   } catch {
     return null;
   }
@@ -41,7 +41,7 @@ export function createMcpHandler({ keys, runtimes, config }) {
     const host = req.headers.host;
     if (!isAllowedHost(host, config)) return refuse(req, res, 403, { error: 'forbidden host' });
     if (!isAllowedOrigin(req.headers.origin, host)) return refuse(req, res, 403, { error: 'forbidden origin' });
-    let record = authenticate(req, keys);
+    let record = await authenticate(req, keys);
     const household = record ? (await runtimes.get(record.householdId)) : null;
     if (!household) return refuse(req, res, 401, { error: 'unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
     if (req.method !== 'POST') return refuse(req, res, 405, { error: 'method not allowed' }, { Allow: 'POST' });
@@ -65,7 +65,7 @@ export function createMcpHandler({ keys, runtimes, config }) {
     }
 
     try {
-      record = await revalidateRequest({ authenticate: () => authenticate(req, keys), household, runtimes });
+      record = await revalidateRequest({ authenticate: async () => await authenticate(req, keys), household, runtimes });
     } catch {
       refuse(req, res, 401, { error: 'unauthorized' }, { 'WWW-Authenticate': 'Bearer' });
       release();
@@ -73,11 +73,11 @@ export function createMcpHandler({ keys, runtimes, config }) {
     }
 
     keys.touch(record.id);
-    const principal = { check() {
-      const fresh = authenticate(req, keys);
+    const principal = { async check() {
+      const fresh = await authenticate(req, keys);
       return Boolean(fresh) && fresh.id === record.id && fresh.householdId === record.householdId
         && fresh.scopes.length === record.scopes.length && fresh.scopes.every(scope => record.scopes.includes(scope))
-        && household.isCurrent();
+        && await household.isCurrent();
     } };
     const scheduler = household.scheduler;
     const ctx = { db: household.db, now: new Date(), dataDir: household.root, clock: config.clock, household, services: household.services,
@@ -85,7 +85,7 @@ export function createMcpHandler({ keys, runtimes, config }) {
       packDirs: packDirsFor(household.root),
       channel: 'mcp', actorId: record.userId || `key:${record.id}`, scopes: record.scopes,
       replan: scheduler ? () => scheduler.runNow('plan') : null, queuePlan: () => scheduler?.soon?.('plan', 'ingest') };
-    const server = createToolServer({ scopes: record.scopes, ctx, authorize: () => principal.check(), runTool: async fn => {
+    const server = createToolServer({ scopes: record.scopes, ctx, authorize: async () => await principal.check(), runTool: async fn => {
       runtimes.acquire(household);
       try { return await fn(); } finally { runtimes.release(household); }
     } });

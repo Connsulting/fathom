@@ -38,7 +38,7 @@ test('restore replaces only A, retains current authorization and spend, revokes 
     assert.equal(result.status, 'done'); assert.ok(result.membershipDrift > 0);
     const restored = await f.context(f.A.id);
     assert.equal(await marker(restored), 'alpha'); assert.equal(await marker(await f.context(f.B.id)), 'bravo-current');
-    assert.equal(restored.generation, old.generation + 1); assert.equal(old.isCurrent(), false);
+    assert.equal(restored.generation, old.generation + 1); assert.equal(await old.isCurrent(), false);
     assert.deepEqual(await currentRows(f), current);
     assert.deepEqual(await platformRows(f.platform, 'api_keys', f.B.id), bKeys);
     assert.deepEqual(await platformRows(f.platform, 'auth_sessions', f.B.id), bSessions);
@@ -48,7 +48,7 @@ test('restore replaces only A, retains current authorization and spend, revokes 
     assert.equal(await logicalDigest((await f.context(f.B.id)).db), bDigest);
     assert.equal((await f.platform.prepare('SELECT count(*) AS n FROM auth_sessions WHERE household_id = ?').get(f.A.id)).n, 0);
     assert.ok((await platformRows(f.platform, 'api_keys', f.A.id)).every(k => k.revoked_at && k.revoked_code === 'household_restored'));
-    assert.deepEqual(['jobs', 'email', 'simplefin', 'engine'].map(k => restored.outbound.enabled(k)), [false, false, false, false]);
+    assert.deepEqual(await mapSeries(['jobs', 'email', 'simplefin', 'engine'], async k => await restored.outbound.enabled(k)), [false, false, false, false]);
     assert.equal((await restored.db.prepare("SELECT sum(cost_usd) AS n FROM spend_ledger WHERE yyyymm = '2026-11'").get()).n, 11);
     assert.equal((await restored.db.prepare('SELECT status FROM simplefin_connection').get()).status, 'error');
     assert.equal((await restored.db.prepare("SELECT count(*) AS n FROM job_runs WHERE status = 'running'").get()).n, 0);
@@ -70,7 +70,7 @@ for (const phase of ['validated', 'suspended', 'switched', 'finalized']) {
     try {
       const snap = await backup(f);
       await changeMarker(await f.context(f.A.id), 'alpha-current'); await changeMarker(await f.context(f.B.id), 'bravo-current');
-      const bCookie = f.B.admin.client.session();
+      const bCookie = await f.B.admin.client.session();
       await f.server.close();
       const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
         import { loadConfig } from './src/config.mjs';
@@ -86,7 +86,7 @@ for (const phase of ['validated', 'suspended', 'switched', 'finalized']) {
       restarted = await startRuntime({ dataDir: f.dataDir, keys: f.keys, engine: 'off', extra });
       const a = (await restarted.app.runtimes.get(f.A.id));
       assert.equal(await marker(a), 'alpha'); assert.equal(await marker((await restarted.app.runtimes.get(f.B.id))), 'bravo-current');
-      assert.equal(a.generation, 2); assert.equal(a.outbound.enabled('engine'), false);
+      assert.equal(a.generation, 2); assert.equal(await a.outbound.enabled('engine'), false);
       assert.equal((await restarted.app.platform.prepare("SELECT count(*) AS n FROM household_backup_operations WHERE kind = 'restore' AND status = 'done'").get()).n, 1);
       assert.equal((await browser(restarted.baseUrl, { '__Host-fathom-session': bCookie }).get('/api/scenario')).status, 200);
       const login = await signIn(restarted.baseUrl, f.A.admin.device);

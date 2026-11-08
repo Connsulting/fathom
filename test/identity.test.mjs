@@ -507,7 +507,7 @@ test('expired sessions are denied and request entry lazily removes expired auth 
     assert.equal((await request(server.baseUrl, { path: '/api/scenario', headers: { cookie: `__Host-fathom-session=${rows.expiredSession.token}` } })).status, 401);
     assert.equal((await server.request({ path: '/api/scenario' })).status, 200);
     await authCall(server, async (platform, store) => {
-      assert.equal(store.session(rows.expiredSession.token), null);
+      assert.equal(await store.session(rows.expiredSession.token), null);
       assert.ok(store.token(rows.liveToken.token));
       assert.equal((await platform.prepare('SELECT count(*) AS n FROM auth_sessions').get()).n, 1);
       assert.equal((await platform.prepare('SELECT count(*) AS n FROM auth_tokens').get()).n, 1);

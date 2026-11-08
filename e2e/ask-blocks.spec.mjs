@@ -34,7 +34,7 @@ const blk = (scope, block) => scope.locator(`figure.h-blk[data-blk$=":${block.id
 
 async function postThread(request, data) {
   const res = await request.post('/api/threads', { headers: { 'content-type': 'application/json' }, data });
-  expect(res.status(), 'POST /api/threads').toBe(200);
+  expect(await res.status(), 'POST /api/threads').toBe(200);
   return (await res.json()).thread;
 }
 
@@ -314,7 +314,7 @@ test.describe('ask blocks', () => {
 test('real builder table persists and renders in the Ask panel without response rewrites', async ({ request, page }) => {
   await resetDemo(request);
   const response = await request.post('/api/threads', { data: { text: 'Show recent transactions in a table.' } });
-  expect(response.status()).toBe(200);
+  expect(await response.status()).toBe(200);
   const body = await response.json();
   const block = body.message.provenance.blocks[0];
   expect(block.op).toBe('table');
@@ -344,7 +344,7 @@ test('@mobile drill rows keep keyboard focus and a reopened stale block can ask 
   await resetDemo(request);
   const question = 'Show recent transactions in a table.';
   const response = await request.post('/api/threads', { data: { text: question } });
-  expect(response.status()).toBe(200);
+  expect(await response.status()).toBe(200);
   const body = await response.json();
   const db = await openScope({ path: (await servedStore(mainDataDir())).file, journal: null, busyTimeout: 5000 });
   let block;

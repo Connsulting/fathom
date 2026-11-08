@@ -149,7 +149,7 @@ export function createModelLedger(platform, { householdId, generation, now = Dat
         if (!hh || hh.status !== 'active' || Number(hh.generation) !== generation) return { refuse: withCode(new EngineOffError(), 'household_unavailable') };
         let authorized = true;
         if (principal) {
-          try { authorized = principal.check() === true; } catch { authorized = false; }
+          try { authorized = await principal.check() === true; } catch { authorized = false; }
         }
         if (!authorized) return { refuse: withCode(new EngineOffError(), 'authorization_revoked') };
         if (await hasHold(platform, householdId)) return { refuse: withCode(new ModelAccountingError(), 'accounting_hold') };

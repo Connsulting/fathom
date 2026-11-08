@@ -400,7 +400,7 @@ export async function freshInstance(dataDir, mode = 'real') {
 // An enrolled user with an active membership and a live session, made through the platform store
 // (invite, consumeInvitation, markEnrolled, createSession). Returns { id, email, token }.
 export async function enrollMember(store, householdId, email, role = 'member') {
-  const { user, token } = store.invite(householdId, email, { role });
+  const { user, token } = await store.invite(householdId, email, { role });
   await store.consumeInvitation(token, user.id);
   await store.markEnrolled(user.id);
   const session = await store.createSession(user.id);

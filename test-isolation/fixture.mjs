@@ -7,7 +7,7 @@ import { browser, register, signIn } from '../test/helpers/tenancy.mjs';
 import { createAuthenticator } from '../test/helpers/webauthn.mjs';
 import { createAuthStore } from '../src/auth/store.mjs';
 
-export const headersOf = person => ({ cookie: `__Host-fathom-session=${person.client.session()}`,
+export const headersOf = async person => ({ cookie: `__Host-fathom-session=${await person.client.session()}`,
   'x-fathom-household': person.identity.householdId, 'x-fathom-context-version': String(person.identity.contextVersion) });
 
 export function ok(r) {

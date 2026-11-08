@@ -152,12 +152,12 @@ async function devSend(dir, settings, msg, log, authorize) {
   let handle;
   try {
     handle = await open(tmp, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-    authorize?.();
+    await authorize?.();
     await handle.writeFile(body);
     await handle.sync();
     await handle.close();
     handle = null;
-    authorize?.();
+    await authorize?.();
     await rename(tmp, join(dir, `${stem}.json`));
   } catch (err) {
     await handle?.close().catch(() => {});
@@ -271,9 +271,9 @@ export function createTransport(config, {
     const recipients = to == null ? settings.to : [to].flat();
     if (!recipients.length || recipients.some((a) => !ADDRESS.test(a))) throw new EmailError('missing_config');
     const msg = { to: recipients, subject: String(subject ?? ''), text: String(text ?? ''), html: String(html ?? ''), idempotencyKey };
-    authorize?.(msg);
+    await authorize?.(msg);
     let result;
-    if (name === 'dev') result = await devSend(outboxDir, settings, msg, log, () => authorize?.(msg));
+    if (name === 'dev') result = await devSend(outboxDir, settings, msg, log, async () => await authorize?.(msg));
     else if (name === 'agentmail') result = await agentmailSend(fetch, settings, msg);
     else if (name === 'resend') result = await resendSend(fetch, settings, msg);
     else if (name === 'postmark') result = await postmarkSend(fetch, settings, msg);
@@ -297,21 +297,21 @@ export async function configuredRecipients(config, { readFile = readRegular } = 
 
 export function createHouseholdTransport(config, { outboxDir, outbound, recipients, ...options } = {}) {
   if (!outbound || typeof outbound.enabled !== 'function' || !recipients) throw new TypeError('financial mail needs a household recipient policy');
-  const check = recipient => {
-    if (!outbound.enabled('email')) throw new EmailError('paused');
-    recipients.authorize(recipient);
+  const check = async recipient => {
+    if (!await outbound.enabled('email')) throw new EmailError('paused');
+    await recipients.authorize(recipient);
   };
   const name = config.emailTransport ?? 'dev';
   return {
     name,
     async send(message = {}) {
-      if (!outbound.enabled('email')) throw new EmailError('paused');
+      if (!await outbound.enabled('email')) throw new EmailError('paused');
       const selected = await recipients.resolve();
       if (message.to != null) throw new EmailError('recipient_unverified');
       let result;
       for (const recipient of selected) {
         const inner = createTransport({ ...config, emailTo: recipient.email, emailToFile: null }, {
-          ...options, outboxDir, authorize: () => check(recipient),
+          ...options, outboxDir, authorize: async () => await check(recipient),
         });
         result = await inner.send({ ...message, to: [recipient.email],
           idempotencyKey: `fathom:${recipients.householdId}:${recipients.generation}:${randomBytes(16).toString('hex')}`,
@@ -326,7 +326,7 @@ export function createEnrollmentTransport(config, options) {
   const transport = createTransport(config, options);
   return {
     name: transport.name,
-    send(message) {
+    async send(message) {
       if (message?.to == null) throw new EmailError('missing_config');
       return transport.send(message);
     },
