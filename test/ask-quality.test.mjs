@@ -344,3 +344,11 @@ test('a failed corrective round still records the triggering kinds', async t => 
   assert.equal(reply.notice, true);
   assert.deepEqual(reply.provenance.discipline.triggeredBy, ['figures.spelled_out']);
 });
+
+
+test('an empty corrective answer still records the triggering kinds', async t => {
+  const s = await cardStore(t);
+  const { reply } = await ask(s, [[{ text: 'The total is forty dollars.' }], [{ text: '', costUsd: 0 }]]);
+  assert.equal(reply.notice, true);
+  assert.deepEqual(reply.provenance.discipline.triggeredBy, ['figures.spelled_out']);
+});

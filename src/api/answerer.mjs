@@ -814,7 +814,8 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
     if (retried && pendingAction && !proposalStillOffered(text, pendingAction))
       pendingAction = null;
     const paragraphs = renderAnswer(text, grounding.violations, grounding.literals);
-    if (!paragraphs.length) return noticeReply(NOTICES.modelError);
+    if (!paragraphs.length) return actionReply({ ...noticeReply(NOTICES.modelError),
+      provenance: { discipline: { violations: discipline.violations, triggeredBy } } });
     const lower = text.toLowerCase();
     const seenReads = new Set();
     const sources = [...sourceReads, ...toolResults].filter(r => {
