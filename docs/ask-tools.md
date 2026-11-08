@@ -491,7 +491,7 @@ Twenty tools: eleven read, nine write. "Ticket" is the ticket that adds the oper
 | `tax` | read | estimate, room (C5) |
 | `retirement` | read | target, growth, after_tax (C6); access, bridge (C7) |
 | `goals` | read | list, pace (C1); suggestions (C9) |
-| `recommendations` | read | list, detail, advisor (C1) |
+| `recommendations` | read | list, detail, advisor (C1), wargame (B5) |
 | `knowledge` | read | packs, search, entry (C1) |
 | `calculate` | read | add, subtract, multiply, divide, sum, min, max, negate, annualize, monthly, percent_of, round_up, compound (C3) |
 | `update_account` | write | rename, mask, owner, kind, merge (C8) |
@@ -849,6 +849,7 @@ Purpose: the recommendations in the plan. Hidden recommendations never appear. P
 | list | `status?` (a status or a list) | recommendations with live status, window, tasks, owner and goals served, unchanged | live `list_recommendations` |
 | detail | `id` | one recommendation with figures, pack excerpts, owner, goals, unchanged | live `get_recommendation` |
 | advisor | none | the advisor workflow: next check-in, waiting reviews, verdicts, packets, unchanged | live `advisor_status` |
+| wargame | `name` (`salary` or `deferral`) | stored model options with referenceable figure envelopes, planner date, scenario status and decision, and the picked point id; missing stored fields are unavailable, not recomputed; `not_built` carries the planner reason and no points | stored war-game model |
 
 Scope: read.
 
@@ -1393,6 +1394,7 @@ lands the covering operation.
 | `POST /api/threads/:id/trash` | excluded: conversation chrome | | |
 | `POST /api/threads/:id/restore` | excluded: conversation chrome | | |
 | `POST /api/threads/:id/delete` | excluded: conversation chrome | | |
+| `POST /api/threads/:id/proposals/:messageId` | excluded: conversation chrome | | |
 | `GET /api/accounts/:id` | `accounts.detail` | C5 |  |
 | `GET /api/accounts/:id/transactions` | `transactions.search` | C1 | `accountId` set |
 | `GET /api/pnl` | `business.pnl` | C4 | C1's `pnl` reads workbook lines only, as `pnl_by_month` does; the route also derives P&L from categorized transactions, which C4's `businessPnl` build covers |

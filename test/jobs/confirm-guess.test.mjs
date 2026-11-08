@@ -1,10 +1,4 @@
-// The confirm-guess job (plan D7 on the job scheduler): engine best guesses for pending confirm
-// questions run only as the scheduler job 'confirm-guess', daily at 03:00 owner time, manual (runNow,
-// POST /api/jobs/confirm-guess/run) or after an import (trigger). The default handler runs
-// guessPending until nothing is left; its job_runs row is ok with the batch cost sum and a counts
-// note {batches, items, guessed, stopped}, or skipped with {pending} when guessPending skips. A
-// stopped run (engine error) is still ok and records the cost spent so far. Triggers during a run
-// coalesce into one rerun. Every value here is synthetic.
+// The stable confirm-guess scheduler entry now records resolver answers. Fixtures are synthetic.
 
 import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
@@ -37,6 +31,7 @@ const marker = (i) => `Q${pad(i)}Q`;
 function queue(db, n, { start = 1 } = {}) {
   const ids = [];
   for (let i = start; i < start + n; i++) {
+    db.prepare('INSERT INTO accounts (id,name,inst,mask) VALUES (?,?,?,?)').run(`acct-job-synthetic-${pad(i)}`, `Synthetic account ${marker(i)}`, 'Example Bank', String(6000 + i));
     const r = ask(db, {
       kind: 'account_kind', subject: `acct-job-synthetic-${pad(i)}`, question: `What kind of account is Synthetic account ${marker(i)}?`,
       options: KIND_OPTIONS, context: { last4: String(6000 + i) }, now: NOW,
@@ -65,8 +60,8 @@ function liveEngine({ costs = [], failAt = null, hold = false } = {}) {
       if (failAt === n) { const e = new Error('synthetic model failure'); e.name = 'SyntheticEngineError'; throw e; }
       if (hold && n === 1) await gate;
       const { items } = JSON.parse(req.messages[0].content);
-      const guesses = items.map((i) => ({ item: i.id, option: i.options[0].id, basis: 'account_name' }));
-      return { text: JSON.stringify({ guesses }), model: 'stub-live', costUsd: costs[n - 1] ?? 0 };
+      const answers = items.filter(i => i.kind === 'account_kind').map((i) => ({ item: i.id, option: i.options[0].id, basis: 'account_name', refs: [`accounts:${i.context.accountId ?? i.subject ?? `acct-job-synthetic-${pad(Number(i.question.match(/Q(\d+)Q/)[1]))}`}`] }));
+      return { text: JSON.stringify({ answers }), model: 'stub-live', costUsd: costs[n - 1] ?? 0 };
     },
     async extract() { throw new Error('no extraction in this test'); },
   };
@@ -76,7 +71,7 @@ const offRuntime = (db) => createRuntimeEngine({ db, config: { engine: 'off' } }
 const jobHandlers = () => ({ [JOB]: defaultHandlers({ publicUrl: null })[JOB] });
 
 function schedulerFor(db, { engine, handlers = jobHandlers(), now = () => new Date(NOW), config = {} } = {}) {
-  return createScheduler({ db, config: { clock: null, ...config }, engine, handlers, now, tickMs: 3600000, holder: 'guess-holder', log: quiet });
+  return createScheduler({ db, config: { clock: null, ...config }, engine, handlers, now, tickMs: 3600000, holder: 'guess-holder', log: quiet, household: () => ({ outbound: { enabled: () => true }, funded: () => true }) });
 }
 
 const runsOf = (db) => all(db, 'SELECT * FROM job_runs WHERE job_id = ? ORDER BY id', JOB);
@@ -97,8 +92,8 @@ describe('the confirm-guess job definition', () => {
     const job = JOBS.find((j) => j.id === JOB);
     assert.ok(job, 'JOBS has confirm-guess');
     assert.deepEqual({ ...job, schedule: { ...job.schedule } }, {
-      id: JOB, name: 'Confirm best guesses', cadence: 'Daily, 3:00 AM',
-      does: 'Suggest an answer for each pending confirm question.', schedule: { every: 'day', hour: 3 },
+      id: JOB, name: 'Resolve open questions', cadence: 'Daily, 3:00 AM',
+      does: 'Answer supported choices from stored evidence, with Undo.', schedule: { every: 'day', hour: 3 },
     });
     for (const id of ['plan', 'brief-email', 'deadline-alerts', 'freshness']) assert.ok(JOBS.some((j) => j.id === id), `JOBS still has ${id}`);
   });
@@ -118,7 +113,7 @@ describe('the confirm-guess job definition', () => {
     try {
       const job = s.jobs().find((j) => j.id === JOB);
       assert.ok(job, 'jobs() lists confirm-guess');
-      assert.equal(job.name, 'Confirm best guesses');
+      assert.equal(job.name, 'Resolve open questions');
       assert.equal(job.cadence, 'Daily, 3:00 AM');
       assert.equal(typeof job.next, 'string');
       assert.ok(job.next.length > 0, 'a next label');
@@ -149,12 +144,12 @@ describe('the default confirm-guess handler', () => {
       const run = await s.runNow(JOB);
       assert.equal(run.status, 'ok');
       assert.equal(engine.calls.length, 2, '25 items in batches of 20');
-      assert.ok(engine.calls.every((req) => req.purpose === 'confirm'));
-      const rows = all(t.db, 'SELECT item_id, option_id, model, ts FROM confirm_guesses ORDER BY item_id');
+      assert.ok(engine.calls.every((req) => req.purpose === 'job'));
+      const rows = all(t.db, `SELECT a.item_id, ci.answer AS option_id, a.rule, a.created_at AS ts FROM confirm_auto a JOIN confirm_items ci ON ci.id=a.item_id ORDER BY a.item_id`);
       assert.deepEqual(rows.map((r) => r.item_id), ids, 'a guess row for every pending question');
       for (const r of rows) {
         assert.equal(r.option_id, KIND_OPTIONS[0].id);
-        assert.equal(r.model, 'stub-live');
+        assert.equal(r.rule, 'resolver');
         assert.equal(r.ts, NOW, 'guesses carry the run time');
       }
       const [row] = runsOf(t.db);
@@ -166,7 +161,7 @@ describe('the default confirm-guess handler', () => {
       assert.deepEqual(noteOf(row), { batches: 2, items: 25, guessed: 25, stopped: false });
       assert.deepEqual(run.note, { batches: 2, items: 25, guessed: 25, stopped: false });
       for (const id of ids) {
-        assert.equal(t.db.prepare('SELECT status FROM confirm_items WHERE id = ?').get(id).status, 'pending', 'a guess never answers');
+        assert.equal(t.db.prepare('SELECT status FROM confirm_items WHERE id = ?').get(id).status, 'answered', 'a grounded choice answers the question');
       }
     } finally { await s.stop(); }
   }));
@@ -179,7 +174,7 @@ describe('the default confirm-guess handler', () => {
       const run = await s.runNow(JOB);
       assert.equal(run.status, 'ok', 'a stopped run is not an error');
       assert.equal(engine.calls.length, 2, 'no call after the failure');
-      assert.equal(count(t.db, 'confirm_guesses'), 20, 'the first batch is kept');
+      assert.equal(count(t.db, 'confirm_auto'), 20, 'the first batch is kept');
       const [row] = runsOf(t.db);
       assert.equal(row.status, 'ok');
       assert.equal(row.error_class, null);
@@ -198,7 +193,7 @@ describe('the default confirm-guess handler', () => {
       const [row] = runsOf(t.db);
       assert.equal(row.status, 'skipped');
       assert.deepEqual(noteOf(row), { pending: 2 });
-      assert.equal(count(t.db, 'confirm_guesses'), 0);
+      assert.equal(count(t.db, 'confirm_auto'), 0);
       assert.equal(count(t.db, 'spend_ledger'), 0);
     } finally { await s.stop(); }
   }));
@@ -210,7 +205,7 @@ describe('the default confirm-guess handler', () => {
     try {
       const run = await s.runNow(JOB);
       assert.equal(run.status, 'skipped');
-      assert.equal(count(t.db, 'confirm_guesses'), 0);
+      assert.equal(count(t.db, 'confirm_auto'), 0);
     } finally { await s.stop(); }
   }));
 
@@ -232,14 +227,14 @@ describe('the default confirm-guess handler', () => {
       const engine = createRuntimeEngine({ db: t.db, config: { engine: 'fake', demo: true } });
       await engine.init();
       const spend = count(t.db, 'spend_ledger');
-      const guesses = count(t.db, 'confirm_guesses');
+      const guesses = count(t.db, 'confirm_auto');
       const s = schedulerFor(t.db, { engine, handlers: defaultHandlers({ publicUrl: null }), config: { demo: true } });
       try {
         const run = await s.runNow(JOB);
         assert.equal(run.status, 'skipped');
       } finally { await s.stop(); }
       assert.equal(count(t.db, 'spend_ledger'), spend, 'no ledger row');
-      assert.equal(count(t.db, 'confirm_guesses'), guesses, 'no guess');
+      assert.equal(count(t.db, 'confirm_auto'), guesses, 'no guess');
       assert.deepEqual(runsOf(t.db).map((r) => r.status), ['skipped']);
     } finally {
       try { t.db.close(); } catch { /* closed */ }
@@ -258,14 +253,14 @@ function scriptedRuntime(db, scripts) {
     mode: 'live',
     isOn: () => rt.isOn(),
     init: () => rt.init(),
-    call: (req) => rt.call({ ...req, fake: [scripts[n++] ?? { text: JSON.stringify({ guesses: [] }), costUsd: 0 }] }),
+    call: (req) => rt.call({ ...req, fake: [scripts[n++] ?? { text: JSON.stringify({ answers: [] }), costUsd: 0 }] }),
     extract: (req) => rt.extract(req),
   };
 }
-const confirmSpend = (db) => Number(db.prepare("SELECT coalesce(sum(cost_usd), 0) AS s FROM spend_ledger WHERE purpose = 'confirm'").get().s);
+const confirmSpend = (db) => Number(db.prepare("SELECT coalesce(sum(cost_usd), 0) AS s FROM spend_ledger WHERE purpose = 'job'").get().s);
 
 describe('confirm-guess job cost equals the confirm ledger spend, failed calls included', () => {
-  const empty = JSON.stringify({ guesses: [] });
+  const empty = JSON.stringify({ answers: [] });
 
   test('a non-JSON response costing 0.05: cost_usd is 0.05, the run is ok and stopped', () => withStore(async (t) => {
     queue(t.db, 2);
@@ -323,7 +318,7 @@ describe('confirm-guess triggers', () => {
       assert.equal(run.status, 'ok');
       assert.equal(run.trigger, 'ingest');
       assert.match(run.periodKey, /^ingest:/);
-      assert.equal(count(t.db, 'confirm_guesses'), 2);
+      assert.equal(count(t.db, 'confirm_auto'), 2);
     } finally { await s.stop(); }
   }));
 
@@ -346,12 +341,12 @@ describe('confirm-guess triggers', () => {
       await settle(100);
       const rows = runsOf(t.db);
       assert.deepEqual(rows.map((r) => r.trigger), ['manual', 'ingest'], 'the coalesced triggers made one rerun');
-      assert.ok(t.db.prepare('SELECT 1 AS x FROM confirm_guesses WHERE item_id = ?').get(late), 'the question queued meanwhile is guessed');
-      assert.equal(count(t.db, 'confirm_guesses'), 4);
+      assert.ok(t.db.prepare('SELECT 1 AS x FROM confirm_auto WHERE item_id = ?').get(late), 'the question queued meanwhile is guessed');
+      assert.equal(count(t.db, 'confirm_auto'), 4);
       assert.equal(engine.calls.length, 2, 'every question is sent exactly once');
       const sent = engine.calls.map((req) => req.messages[0].content);
       assert.equal(sent.filter((x) => x.includes(marker(4))).length, 1);
-      assert.equal(sent.filter((x) => x.includes(marker(1))).length, 1);
+      assert.ok(sent[0].includes(marker(1))); // Later batches also carry answered history.
     } finally { await s.stop(); }
   }));
 });
@@ -374,7 +369,7 @@ describe('confirm-guess over the jobs API', () => {
       assert.equal(list.status, 200, list.text.slice(0, 300));
       const job = list.json.jobs.find((j) => j.id === JOB);
       assert.ok(job, 'GET /api/jobs lists confirm-guess');
-      assert.equal(job.name, 'Confirm best guesses');
+      assert.equal(job.name, 'Resolve open questions');
       assert.equal(typeof job.next, 'string');
 
       const r = await app.postJson(`/api/jobs/${JOB}/run`, {});
@@ -385,7 +380,7 @@ describe('confirm-guess over the jobs API', () => {
       assert.deepEqual(r.json.run.note, { batches: 1, items: 2, guessed: 2, stopped: false });
       assert.ok(near(r.json.run.costUsd, 0.125));
       assert.equal(r.json.jobs.find((j) => j.id === JOB).lastRun.id, r.json.run.id);
-      assert.deepEqual(all(st.db, 'SELECT item_id FROM confirm_guesses ORDER BY item_id').map((x) => x.item_id), ids);
+      assert.deepEqual(all(st.db, 'SELECT item_id FROM confirm_auto ORDER BY item_id').map((x) => x.item_id), ids);
     } finally {
       await app.close();
       st.close();

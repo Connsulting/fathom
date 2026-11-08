@@ -131,6 +131,14 @@ const answerFixture = (db, id, option) => C.answerItem(db, id, option, { now: SE
 // least one direction (asserted below).
 const categoryHistory = () => aggregatorFile('category-history.csv',Array.from({length:8},(_,i)=>['Groceries','Income'].map(category=>({date:`2032-${String(i+1).padStart(2,'0')}-15`,amount:category==='Income' ? -3000 : 100,description:'Covered '+category,category}))).flat());
 const CASES = {
+  resolver_fact: {
+    setup: async s => C.ask(s.db, { kind: 'resolver_fact', subject: 'benefits.hsaEligible',
+      question: 'Is the synthetic health plan HSA eligible?',
+      options: [{ id: 'true', label: 'Yes' }, { id: 'false', label: 'No' }],
+      context: { key: 'benefits.hsaEligible', values: { true: true, false: false } }, now: SETUP_AT }).id,
+    pairs: [['true', 'false'], ['false', 'true']],
+    reopen: ['true', 'false'],
+  },
   transaction_category: {
     setup: async s => {
       await imported(s,categoryHistory());

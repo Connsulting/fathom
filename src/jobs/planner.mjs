@@ -7,6 +7,7 @@
 //
 // runPlanning(db, engine, {now, packDirs, runId}) -> {runId, status, counts, warnings, costUsd}
 
+import { looksLikeSpending, spendingStatement } from '../pnl/ledgers.mjs';
 import { getSetting, tx, parseJson } from '../store/db.mjs';
 import { withLabelHints } from '../accounts/naming.mjs';
 import { upsertFact } from '../store/facts.mjs';
@@ -24,6 +25,8 @@ import { writeBrief, namesOf, upsertContent } from './planner/brief.mjs';
 import { evaluateCatalog } from './triggers/index.mjs';
 import { reasonText } from './triggers/missing-data.mjs';
 import { wargameFigurePrefixes } from './planner/wargame.mjs';
+import { prepareRecFacts } from '../facts/derive.mjs';
+import { sendToAdvisor } from '../advisor/index.mjs';
 import { liftStaleVetoes } from '../advisor/index.mjs';
 
 export const PLAN_JOB_ID = 'plan';
@@ -64,10 +67,27 @@ async function run(db, engine, { now, packDirs, runId }) {
 async function plan(db, engine, { clock, runId, packDirs }) {
   const packs = loadPacks(packDirs);
   const data = loadPlanningData(db, clock);
+  const recFacts = prepareRecFacts(db, data);
   const stored = storedFacts(db);
+  for (const key of recFacts.deletes) delete stored[key];
+  for (const [key, value] of Object.entries(recFacts.values)) {
+    if (!stored[key] || recFacts.writes.some(w => w.key === key)) stored[key] = { value, src: `derived:${clock}`, confirmed: false };
+    else stored[key] = { ...stored[key], value };
+  }
   const owner = ownerFactsOf(stored);
   const storedValues = Object.fromEntries(Object.entries(stored).map(([k, r]) => [k, r.value]));
   const entities = resolveEntities(data, storedValues);
+
+  const candidates = entities.filter(e => looksLikeSpending(e, storedValues));
+  const ledgerChecks = candidates.length ? [{
+    key: 'pnl.ledgers', value: { ...(storedValues['pnl.ledgers'] || {}), ...Object.fromEntries(candidates.map(e => [e.displayName || e.name, { kind: 'spending' }])) },
+    stored: storedValues['pnl.ledgers'] ?? null, src: 'ledger-confirm',
+    question: `${candidates.map(spendingStatement).join(' ')} Confirm these are spending ledgers.`,
+    rule: 'personal_spending_ledger',
+    rows: candidates.flatMap(e => e.lines.map(l => ({ table: 'pnl_lines', id: l.id, fileId: l.file_id }))),
+  }] : [];
+  const declinedLedgerGuess = ledgerChecks.some(c => db.prepare("SELECT answer FROM confirm_items WHERE kind = 'fact_check' AND subject = ? AND status = 'answered'")
+    .get(`ledger-confirm|${c.key}|${canonicalJson(c.value)}`)?.answer === 'no');
 
   // Facts from the data, then figures over the merged facts, then the facts read off figures.
   const dataFacts = deriveFacts(data, { entities });
@@ -95,8 +115,8 @@ async function plan(db, engine, { clock, runId, packDirs }) {
   };
   const ctx = {
     clock, year: data.taxYear, facts: merged.values, owner, fig,
-    names, model: computed.model, data, packs, packStatus,
-    info: computed.info, freshness: data.freshness, warnings: [...warnings], entities, goals: prefs.goals, curve: prefs.curve,
+    names, model: computed.model, data, packs, packStatus, declinedLedgerGuess,
+    assumptions: recFacts.assumptions, info: computed.info, freshness: data.freshness, warnings: [...warnings], entities, goals: prefs.goals, curve: prefs.curve,
   };
   const results = evaluateCatalog(ctx);
 
@@ -113,6 +133,11 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     const pr = prRows.get(id);
     const stored = pr ? { hash: pr.grounding_hash, src: pr.prose_src, def: parseJson(recRows.get(id).def, {}) } : null;
     const p = await writeProse(r.hit, ctx, { engine, stored });
+    if (r.hit.rec.advisorQuestions?.length) {
+      p.fields = { summary: 'Your advisor will confirm the plan terms and any reasonable salary range. Planning uses the salary of record as an assumption while you wait.',
+        why: ['These professional judgments are included in the advisor packet.'], qa: [] };
+      p.src = 'template';
+    }
     prose[id] = p;
     costUsd += p.costUsd;
     proseCounts[p.kept ? 'kept' : p.src] += 1;
@@ -121,7 +146,7 @@ async function plan(db, engine, { clock, runId, packDirs }) {
 
   const now = new Date().toISOString();
   const out = tx(db, () => {
-    let factsWritten = 0;
+    let factsWritten = recFacts.write();
     for (const w of merged.writes) {
       const res = upsertFact(db, { key: w.key, value: w.value, src: PLANNER_SRC, asOf: clock, confirmed: false, provenance: factProvenance(w) });
       if (res.written && res.changed) factsWritten += 1;
@@ -129,7 +154,7 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     // D9: a payroll document nobody has said is whose gets ingest's own recipient question (an
     // existing or answered question is left as it is).
     for (const q of computed.info.ask || []) withholdingRecipient(db, { ...q, now });
-    askFactChecks(db, merged.checks, { clock, now });
+    askFactChecks(db, [...merged.checks, ...ledgerChecks], { clock, now });
     const delFact = db.prepare('DELETE FROM facts WHERE key = ? AND src = ? AND confirmed = 0');
     for (const key of merged.deletes) {
       delFact.run(key, PLANNER_SRC);
@@ -140,6 +165,28 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     const changes = applyRecs(db, results, {
       clock, now, runId, prose, packOverride: id => overrides[id] ?? null, warn: code => warnings.add(code), prefs,
     });
+    for (const r of results.filter(r => r.state === 'hit')) {
+      const id = r.trigger.id;
+      const row = db.prepare('SELECT status, waiting_on FROM recs WHERE id = ?').get(id);
+      if (!row) continue;
+      if (r.hit.rec.advisorQuestions?.length) {
+        if (!['proposed', 'doing', 'waiting'].includes(row.status)) continue;
+        if (row.status !== 'waiting') {
+          db.prepare("UPDATE recs SET status = 'waiting', waiting_on = 'advisor', updated_at = ? WHERE id = ?").run(now, id);
+          db.prepare("INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, 'advisor_wait', ?, ?, 'waiting', 'planner')")
+            .run(id, now, row.status, row.status);
+        }
+        if (!db.prepare('SELECT id FROM advisor_reviews WHERE rec_id = ? AND closed_at IS NULL').get(id)) sendToAdvisor(db, id, { now });
+      } else if (row.status === 'waiting' && row.waiting_on === 'advisor') {
+        const last = db.prepare('SELECT action, arg, actor FROM rec_events WHERE rec_id = ? AND from_status IS NOT to_status ORDER BY id DESC LIMIT 1').get(id);
+        if (last?.actor !== 'planner' || last.action !== 'advisor_wait') continue;
+        const status = last.arg === 'doing' ? 'doing' : 'proposed';
+        db.prepare('UPDATE recs SET status = ?, waiting_on = NULL, updated_at = ? WHERE id = ?').run(status, now, id);
+        db.prepare("INSERT INTO rec_events (rec_id, ts, action, from_status, to_status, actor) VALUES (?, ?, 'advisor_ready', 'waiting', ?, 'planner')")
+          .run(id, now, status);
+        db.prepare("UPDATE advisor_reviews SET closed_at = ?, closed_reason = 'questions answered' WHERE rec_id = ? AND closed_at IS NULL AND verdict IS NULL").run(now, id);
+      }
+    }
     // What each blocked rec is waiting on (plain reason, the task that clears it, where it is done),
     // read back by the scenario for recs in the waiting status.
     upsertContent(db, 'rec.blockers', Object.fromEntries(results.filter(r => r.state === 'blocked' && r.blocker).map(r => [r.trigger.id, r.blocker])), now);
@@ -180,16 +227,17 @@ function askFactChecks(db, checks, { clock, now }) {
   const reask = db.prepare("UPDATE confirm_items SET status = 'pending', answer = NULL, answered_at = NULL, question = ?, context = ?, file_id = ? WHERE id = ?");
   const bySubject = db.prepare("SELECT id, status, answer, context FROM confirm_items WHERE kind = 'fact_check' AND subject = ?");
   const pending = db.prepare("SELECT id, subject, context FROM confirm_items WHERE kind = 'fact_check' AND status = 'pending'").all()
-    .map(r => ({ ...r, context: parseJson(r.context, {}) || {} })).filter(r => r.context.src === PLANNER_SRC);
+    .map(r => ({ ...r, context: parseJson(r.context, {}) || {} })).filter(r => [PLANNER_SRC, 'ledger-confirm'].includes(r.context.src));
   const keys = new Set(checks.map(c => c.key));
   for (const p of pending) if (!keys.has(p.context.key)) close.run(now, p.id);
   for (const c of checks) {
     const json = canonicalJson(c.value);
-    const subject = `${PLANNER_SRC}|${c.key}|${json}`;
+    const src = c.src || PLANNER_SRC;
+    const subject = `${src}|${c.key}|${json}`;
     for (const p of pending) if (p.context.key === c.key && p.subject !== subject) close.run(now, p.id);
     const { fileId, parser, locator } = factProvenance(c);
-    const question = `Your data says ${c.key} is ${json}, but your notes say ${canonicalJson(c.stored)}. Is the data right?`;
-    const context = { key: c.key, value: c.value, stored: c.stored, src: PLANNER_SRC, asOf: clock, fileId, parser, locator, confidence: 1 };
+    const question = c.question || `Your data says ${c.key} is ${json}, but your notes say ${canonicalJson(c.stored)}. Is the data right?`;
+    const context = { key: c.key, value: c.value, stored: c.stored, src, asOf: clock, fileId, parser, locator, confidence: c.src === 'ledger-confirm' ? null : 1 };
     const prior = bySubject.get(subject);
     if (prior) {
       const was = parseJson(prior.context, {}) || {};

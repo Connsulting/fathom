@@ -1,7 +1,7 @@
 // Decide is dynamic (plan, Decide paragraph): decisions take their status and line from the
 // server, a linked rec finishing decides its decision, and war-game figures carry provenance.
 
-import { test, expect, S, resetDemo, plain, gotoRoute, expectH1, recDialog, openRecFromPage, closeDialogWithX, expectPopoverSource, mainNav } from './helpers.mjs';
+import { test, expect, S, resetDemo, plain, gotoRoute, expectH1, recDialog, openRecFromPage, closeDialogWithX, expectPopoverSource } from './helpers.mjs';
 
 const WARGAME_SOURCE = 'War-game model, from your plan';
 
@@ -23,14 +23,10 @@ async function openDecided(page) {
   await expect(det).toHaveAttribute('open', '');
 }
 
-// Decide (#/wargame) is the What-if view under the Ask tab.
 async function gotoDecide(page) {
-  await gotoRoute(page, 'home');
-  await mainNav(page).getByRole('link', { name: 'Ask', exact: true }).click();
-  await expect(page).toHaveURL(/#\/ask$/);
-  await page.getByRole('navigation', { name: 'Ask views' }).getByRole('link', { name: 'What-if', exact: true }).click();
-  await expect(page).toHaveURL(/#\/wargame$/);
-  await expectH1(page, 'What is open, and what is coming');
+  await gotoRoute(page, 'plan');
+  await expectH1(page, 'Everything on the calendar');
+  await expect(page.getByRole('heading', { name: 'Decisions', exact: true })).toBeVisible();
 }
 
 async function actOnRec(page, recId, action) {
@@ -70,6 +66,32 @@ test('November Decide: the 2026 salary decision is decided, the deferral is open
   await expect(decRow(page, 'open', decision('salary27'))).toHaveCount(0);
   await openDecided(page);
   await expect(decRow(page, 'decided', decision('salary26'))).toBeVisible();
+});
+
+test('Plan keeps the same decision rows as What-if, above recommendation groups', async ({ page }) => {
+  await gotoRoute(page, 'wargame');
+  const rows = await page.locator('article.h-dec').allTextContents();
+  await gotoDecide(page);
+  expect(await page.locator('article.h-dec').allTextContents()).toEqual(rows);
+  const decisions = page.locator('section', { has: page.getByRole('heading', { name: 'Decisions', exact: true }) });
+  await expect(decisions.locator('details[data-det="decided"]')).not.toHaveAttribute('open');
+  expect(await decisions.evaluate((el) => !!(el.compareDocumentPosition(document.querySelector('.h-rows')) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+  await decRow(page, 'open', deferralDecision()).getByRole('link', { name: 'War game', exact: true }).click();
+  await expect(page).toHaveURL(/#\/wargame\/deferral$/);
+});
+
+test('the switcher Decide entry and decision rows land on Plan', async ({ page }) => {
+  await gotoRoute(page, 'home');
+  await page.keyboard.press('Control+k');
+  await page.locator('.h-qs-in').fill('Decide');
+  await page.locator('#h-qs-list [data-qs-key="go:decide"]').click();
+  await expect(page).toHaveURL(/#\/plan$/);
+  await expect(page.getByRole('heading', { name: 'Decisions', exact: true })).toBeVisible();
+  await gotoRoute(page, 'home');
+  await page.keyboard.press('Control+k');
+  await page.locator('.h-qs-in').fill(plain(deferralDecision().title));
+  await page.locator(`[data-qs-key="dec:${deferralDecision().id}"]`).click();
+  await expect(page).toHaveURL(/#\/plan$/);
 });
 
 test('completing the deferral rec decides it: Marked done on your plan.', async ({ page }) => {
