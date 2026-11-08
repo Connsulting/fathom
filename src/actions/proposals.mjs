@@ -14,7 +14,7 @@ import { ToolError } from '../tools/errors.mjs';
 import { getTool, callTool } from '../tools/index.mjs';
 import { operationScopes } from '../tools/tools.mjs';
 import { WRITE_SCOPES } from '../shared/action-scopes.mjs';
-import { requireActor } from './receipts.mjs';
+import { requireActor, receiptScopes } from './receipts.mjs';
 
 // The reply rule lives in evidence.mjs (confirmedProposal uses it); the tool catalog imports
 // evidence.mjs, so it cannot import this module without a cycle through the registry.
@@ -40,7 +40,11 @@ const TABLES = { 'write:goals': ['goals', 'id'], 'write:facts': ['facts', 'key']
 
 export function proposalBasis(db, tool, scopes, args = {}) {
   const parts = [];
-  if (tool === 'undo') parts.push(['action_receipts', db.prepare('SELECT * FROM action_receipts WHERE id = ?').all(args.id)]);
+  if (tool === 'undo') {
+    parts.push(['action_receipts', db.prepare('SELECT * FROM action_receipts ORDER BY id').all()]);
+    parts.push(['expected_transactions', db.prepare('SELECT * FROM expected_transactions ORDER BY id').all()]);
+    parts.push(['recs', db.prepare('SELECT * FROM recs ORDER BY id').all()]);
+  }
   else for (const scope of scopes) {
     const [table, pk] = TABLES[scope];
     if (scope === 'write:preferences') {
@@ -51,6 +55,8 @@ export function proposalBasis(db, tool, scopes, args = {}) {
       continue;
     }
     if (scope === 'write:imports' || scope === 'write:jobs') {
+      parts.push(['expected_transactions', db.prepare('SELECT * FROM expected_transactions ORDER BY id').all()]);
+      parts.push(['accounts', db.prepare('SELECT id,kind FROM accounts ORDER BY id').all()]);
       parts.push(['files', db.prepare('SELECT * FROM files ORDER BY id').all()]);
       parts.push(['settings', db.prepare('SELECT * FROM settings ORDER BY key').all()]);
       parts.push(['job_runs', db.prepare('SELECT * FROM job_runs ORDER BY id').all()]);
@@ -76,7 +82,7 @@ function refusal(pending, scopes) {
   if (!tool || tool.kind !== 'write' || tool.mcpOnly || !op) return 'This change is no longer available.';
   const allowed = allowedScopes(scopes);
   const needed = tool.name === 'undo' ? pending.scopes : operationScopes(op);
-  if (!Array.isArray(needed) || !needed.length || (tool.name === 'undo' && (needed.length !== 1 || !operationScopes(op).includes(needed[0])))) return 'This change is no longer available.';
+  if (!Array.isArray(needed) || !needed.length || (tool.name === 'undo' && needed.some(scope => !operationScopes(op).includes(scope)))) return 'This change is no longer available.';
   const missing = needed.find(s => !allowed.includes(s));
   return missing ? `Permission denied: this change needs ${missing}.` : null;
 }
@@ -88,9 +94,9 @@ async function propose(tool, args, ctx) {
   const op = tool.validateArgs(input);
   let scopes = operationScopes(op);
   if (tool.name === 'undo') {
-    const receipt = ctx.db.prepare('SELECT scope, actor_id FROM action_receipts WHERE id = ?').get(input.id);
+    const receipt = ctx.db.prepare('SELECT * FROM action_receipts WHERE id = ?').get(input.id);
     if (!receipt || receipt.actor_id !== actor) throw new ToolError('forbidden', 'This change is not available to you.');
-    scopes = [receipt.scope];
+    scopes = receiptScopes(receipt);
   }
   const allowed = allowedScopes(ctx.scopes);
   const missing = scopes.find(s => !allowed.includes(s));

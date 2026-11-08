@@ -1,5 +1,5 @@
 // Rec writes shared by the app's rec action path and the MCP tools.
-import { tx, parseJson as parse } from './db.mjs';
+import { actionTx as tx, parseJson as parse } from './db.mjs';
 import { OWNERS } from '../shared/rec-links.mjs';
 import { ToolError } from '../tools/errors.mjs';
 import { isVerifiable } from '../shared/rec-steps.mjs';

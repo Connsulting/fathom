@@ -75,3 +75,21 @@ test('approval refuses changed step definitions and stores a versioned correctio
     assert.equal(x.db.prepare('SELECT count(*) n FROM expected_transactions').get().n, 0);
   } finally { x.close(); }
 });
+
+test('corrections ground new values and date anchors in the exact current owner statement', async () => {
+  const x = await updateFixture('The payroll provider pays next Tuesday, amount $100.');
+  try {
+    const original = { ...x.expected, args: { ...x.expected.args, amount: 100 } };
+    const p = stageUpdate(x.ctx, { source: x.source, actions: [original] });
+    const evidence = 'This was written 2032-03-02. The payroll provider pays next Tuesday, amount $200.';
+    await reviewImport({ ...x.ctx, ownerText: evidence }, { proposalId: p.proposalId, version: 1, decision: 'correct', evidence });
+    const action = { ...x.expected, args: { ...x.expected.args, amount: 200, evidence } };
+    assert.throws(() => stageUpdate(x.ctx, { source: x.source, actions: [action], proposalId: p.proposalId, version: 2, capturedAt: '2032-03-03' }), /anchor|stated/);
+    const revised = stageUpdate(x.ctx, { source: x.source, actions: [action], proposalId: p.proposalId, version: 2, capturedAt: '2032-03-02' });
+    assert.equal(revised.status, 'needs_confirmation');
+    await approve(x, revised);
+    const row = x.db.prepare('SELECT * FROM expected_transactions').get();
+    assert.equal(row.amount, 200); assert.equal(row.due_date, '2032-03-09');
+    assert.equal(JSON.parse(row.evidence).correction.actorId, x.ctx.actorId);
+  } finally { x.close(); }
+});

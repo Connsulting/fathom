@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { updateFixture } from './helpers/model-updates.mjs';
 import { callTool, getTool } from '../src/tools/index.mjs';
-import { setSetting } from '../src/store/db.mjs';
+import { openDb, migrate, listTables, setSetting } from '../src/store/db.mjs';
 import { proposalBasis } from '../src/actions/proposals.mjs';
 
 const args = { operation: 'expected_transaction', subject: 'payroll provider', direction: 'inflow', amount: null,
@@ -61,4 +61,20 @@ test('observed expectations refuse Undo and cannot delete an observed posting', 
     await assert.rejects(callTool('undo', { operation: 'undo', id: out.receipt.id }, ctx), /changed/);
     assert.equal(x.db.prepare('SELECT status FROM expected_transactions').get().status, 'observed');
   } finally { x.close(); }
+});
+
+test('additive expected-payment migration preserves populated financial state and is restart-safe', () => {
+  const db = openDb(':memory:');
+  try {
+    migrate(db, { through: 34 });
+    db.prepare("INSERT INTO accounts (id,name,kind) VALUES ('synthetic','Synthetic account','checking')").run();
+    db.prepare("INSERT INTO transactions (account_id,date,amount,description,dedupe_key) VALUES ('synthetic','2032-03-02',-12.34,'Synthetic posting','synthetic-posting')").run();
+    const tables = listTables(db).filter(t => t !== 'schema_migrations');
+    const snapshot = () => tables.map(t => [t, db.prepare(`SELECT rowid,* FROM ${t}`).all()]);
+    const before = snapshot();
+    assert.deepEqual(migrate(db).applied, [35]);
+    assert.deepEqual(snapshot(), before);
+    assert.deepEqual(migrate(db).applied, []);
+    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+  } finally { db.close(); }
 });

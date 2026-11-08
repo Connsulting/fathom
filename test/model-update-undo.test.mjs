@@ -77,3 +77,13 @@ test('a failed later shared action rolls back earlier actions and receipts', asy
     assert.deepEqual(JSON.parse(x.db.prepare("SELECT tasks_done FROM recs WHERE id='payroll'").get().tasks_done), []);
   } finally { x.close(); }
 });
+
+test('several steps in one recommendation undo in reverse order with one visible affordance', async () => {
+  const x = await updateFixture();
+  try {
+    x.db.prepare("UPDATE recs SET def=? WHERE id='payroll'").run(JSON.stringify({ tasks: [{ t: 'Payroll true-up' }, { t: 'Payroll check' }] }));
+    const result = await apply(x, [x.step, { ...x.step, args: { ...x.step.args, index: 1 } }, x.expected]);
+    await callTool('undo', { operation: 'undo', id: result.receipt.id }, x.ctx);
+    assert.deepEqual(JSON.parse(x.db.prepare("SELECT tasks_done FROM recs WHERE id='payroll'").get().tasks_done), []);
+  } finally { x.close(); }
+});

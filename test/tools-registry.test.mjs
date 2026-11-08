@@ -12,7 +12,7 @@ const expected = {
   accounts: ['list', 'holdings', 'detail', 'net_worth', 'sources'], sources: ['archive_account', 'remove_file', 'merge_accounts'], tax: ['estimate', 'room'], transactions: ['search'], business: ['pnl', 'rows'],
   spending: ['total', 'compare', 'definitions', 'cash_flow', 'recurring'],
   goals: ['list', 'pace'], recommendations: ['list', 'detail', 'advisor', 'wargame'],
-  knowledge: ['packs', 'search', 'entry'], answer: ['fact'],
+  knowledge: ['packs', 'search', 'entry'], answer: ['fact', 'expected_transaction'],
   act_on_recommendation: ['status', 'owner', 'step'], update_goal: ['create', 'edit'],
   update_preferences: ['remember', 'forget', 'save_definition', 'delete_definition', 'pack'], refresh: ['import_file', 'retry_import', 'build_your_plans', 'run_job'], undo: ['undo'],
   calculate: ['add', 'subtract', 'multiply', 'divide', 'sum', 'min', 'max', 'negate', 'annualize', 'monthly', 'percent_of', 'round_up', 'compound'],

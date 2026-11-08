@@ -141,6 +141,10 @@ export function readStoreMode(file) {
   }
 }
 
+export function actionTx(db, fn) {
+  return db.isTransaction ? fn() : tx(db, fn);
+}
+
 // Create a new store file atomically: migrate and initialise a temporary file, then rename it
 // into place, so a crash never leaves a half-built store that a restart would misread.
 export function createStoreFile(file, init) {
