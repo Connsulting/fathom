@@ -34,7 +34,7 @@ export function writeRec(db, id, kind, value, { now, actor = 'ui', onWrite, even
       if (!Number.isInteger(value.index) || value.index < 0 || value.index >= tasks.length || typeof value.checked !== 'boolean') {
         throw new ToolError('bad_input', `task index must be 0 to ${tasks.length - 1} and checked must be true or false`);
       }
-      if (isVerifiable(tasks[value.index])) throw new ToolError('conflict', 'this step completes itself once the product sees it done');
+      if (isVerifiable(tasks[value.index]) && !tasks[value.index].payment) throw new ToolError('conflict', 'this step completes itself once the product sees it done');
       const done = parse(row.tasks_done, []);
       const next = tasks.map((_, k) => !!done[k]);
       next[value.index] = value.checked;

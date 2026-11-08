@@ -43,6 +43,8 @@ function basisOf(ctx) {
 }
 
 export function build(ctx, hit) {
+  const payment = { jurisdiction: 'federal', taxYear: ctx.year, quarter: 4,
+    amount: ctx.fig[hit.basis === 'prior' ? 'sh.fed.priorRemaining' : 'sh.fed.remaining']?.v };
   return {
     title: 'Pay the fourth-quarter federal estimate',
     effort: 'Under an hour',
@@ -54,9 +56,9 @@ export function build(ctx, hit) {
     cross: ctx.facts['household.state'] === 'VA' ? ['The Virginia estimate is due on the same day.'] : [],
     tasks: padTasks([
       'Check the amount against your accountant worksheet',
-      'Pay through IRS Direct Pay or EFTPS',
+      { t: 'Pay through IRS Direct Pay or EFTPS', kind: 'payment', payment },
       'Save the payment confirmation',
-      'Add the payment to your tax payment log',
+      { t: 'Add the payment to your tax payment log', kind: 'payment', payment },
     ]),
   };
 }

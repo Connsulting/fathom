@@ -1,4 +1,3 @@
-import { loadCategoryInputs } from '../../categories/store.mjs';
 import { resolveClock } from '../../scenario/build.mjs';
 import { aggregate, compare, cashFlow, bindFigures, boundResult } from '../../calc/aggregate.mjs';
 import { recurring } from '../../calc/recurring.mjs';
@@ -6,6 +5,8 @@ import { resolveDefinition, spendingDefinitions } from '../../spending/definitio
 import { BUCKETS } from '../../categories/resolve.mjs';
 import { withInferredRecFacts } from '../../store/facts.mjs';
 import { ToolError } from '../errors.mjs';
+import { loadPlanningData } from '../../jobs/planner/data.mjs';
+import { personalSummaryInput } from '../../spending/summaries.mjs';
 
 const choice = (values) => ({ type: 'string', enum: values });
 export const CLASSES = [
@@ -70,7 +71,10 @@ export function readInput(ctx) {
         return [r.key, v];
       }),
   );
-  return { ...loadCategoryInputs(ctx.db), clock, facts: withInferredRecFacts(facts) };
+  const data = loadPlanningData(ctx.db, clock);
+  const input = data.categoryInput;
+  const effectiveFacts = withInferredRecFacts(facts);
+  return { ...input, clock, facts: effectiveFacts, personalSummaries: personalSummaryInput(data, effectiveFacts, input) };
 }
 function op(name, params, summary, route, handler) {
   return {

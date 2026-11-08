@@ -10,7 +10,7 @@
 import { parseJson } from '../../store/db.mjs';
 import { dayLabel } from './data.mjs';
 import { servesGoals, recTopics } from '../../shared/goals.mjs';
-import { withClearedSteps } from '../../shared/rec-steps.mjs';
+import { withClearedSteps, checkCleared } from '../../shared/rec-steps.mjs';
 
 const ACTIVE = ['proposed', 'doing', 'waiting', 'snoozed'];
 const BLOCKABLE = ['proposed', 'doing'];
@@ -97,7 +97,15 @@ export function applyRecs(db, results, ctx) {
       const hit = res.hit;
       const p = prose[id];
       const def = buildDef(hit, p.fields);
-      if (rr && ctx.stepEnv) def.tasks = withClearedSteps(def.tasks, parseJson(rr.def, {}).tasks, ctx.stepEnv);
+      if (rr && ctx.stepEnv) {
+        const oldTasks = parseJson(rr.def, {}).tasks ?? [];
+        def.tasks = def.tasks.map(task => {
+          if (!task.payment) return task;
+          const old = oldTasks.find(t => t.t === task.t && t.payment?.taxYear === task.payment.taxYear && t.payment?.quarter === task.payment.quarter);
+          return old && checkCleared(old, ctx.stepEnv) ? old : task;
+        });
+        def.tasks = withClearedSteps(def.tasks, oldTasks, ctx.stepEnv);
+      }
       const defText = JSON.stringify(def);
       const goalKinds = JSON.stringify(hit.rec.goalKinds);
       const recOwner = hit.rec.owner;

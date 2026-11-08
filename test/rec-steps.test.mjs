@@ -150,3 +150,11 @@ test('the missing-data rec shows an upload button inline and a done step after t
   assert.match(html, /data-step-answer="missing-data"/);
   assert.match(html, /Done automatically/);
 });
+
+test('a payment completed by a connected transaction says where the evidence came from', () => {
+  recSteps.bind(kit);
+  const html = recSteps.html({ id: 'tax-payment', tasks: [{ t: 'Log the payment', kind: 'payment', auto: true,
+    done: true, doneAt: '2026-09-15', evidence: { table: 'transactions', id: 17 } }] });
+  assert.match(html, /Seen in connected transactions Sep 15/);
+  assert.doesNotMatch(html, /I did this|data-act="task"/);
+});

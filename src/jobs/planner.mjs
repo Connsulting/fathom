@@ -33,6 +33,7 @@ import { sendToAdvisor } from '../advisor/index.mjs';
 import { liftStaleVetoes } from '../advisor/index.mjs';
 import { autoResolve } from '../ingest/auto.mjs';
 import { autoDecideCategories } from '../categories/guess.mjs';
+import { observedPayments } from '../ingest/transaction-payments.mjs';
 
 export const PLAN_JOB_ID = 'plan';
 
@@ -168,7 +169,7 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     writeFigures(db, computed.figures, now);
     const changes = applyRecs(db, results, {
       clock, now, runId, prose, packOverride: id => overrides[id] ?? null, warn: code => warnings.add(code), prefs,
-      stepEnv: { facts: merged.values, accounts: accountRows, open: openData },
+      stepEnv: { facts: merged.values, accounts: accountRows, open: openData, payments: observedPayments(db) },
     });
     for (const r of results.filter(r => r.state === 'hit')) {
       const id = r.trigger.id;
