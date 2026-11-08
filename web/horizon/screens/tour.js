@@ -4,7 +4,9 @@
    panel opens the Ask panel while the stop shows; the tour closes it again only if it opened it.
    The pure part (the table, tourCount and
    placeCallout) does no DOM work at import, so node:test imports this module directly.
-   The runtime opens from Settings, the quick switcher, or once on its own on a public demo. While
+   The runtime opens from Settings, the quick switcher, once on its own on a public demo (the browser
+   remembers it), or once on its own for a signed-in user right after they complete onboarding (the
+   server remembers it per user: scenario.live.tourPending until the tour ends). While
    it is open the page, the dialog host and the Ask panel are inert, every key is captured on the
    window before the page sees it, and the tour navigates with replace so it adds no history.
    design.js replaces the page markup on every data change, so the anchor is re-queried on every
@@ -84,6 +86,14 @@ let H = null;
 
 export function bind(kit) { H = kit; }
 
+// Which rule starts the tour on its own: 'demo' on a public demo the browser has not finished it
+// in, 'user' for a signed-in user the server still has it pending for, else null. The browser flag
+// matters only on the public demo and the server flag only off it.
+export function autoStartMode({ publicDemo, tourPending, localDone }) {
+  if (publicDemo === true) return localDone ? null : 'demo';
+  return tourPending === true ? 'user' : null;
+}
+
 const DONE_KEY = 'fathom.tour.done';
 const WAIT_MS = 5000; // how long a stop's anchor may take to render before the stop is skipped
 const PAD = 6;        // spotlight padding around the anchor
@@ -97,6 +107,7 @@ const fresh = () => ({
 });
 let S = fresh();
 let autoTried = false; // once per page load, across remounts
+let userTried = false; // the signed-in start, once per page load; the server clears the flag when it ends
 
 const isPhone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 720px)').matches;
 const viewSize = () => ({ width: document.documentElement.clientWidth, height: document.documentElement.clientHeight });
@@ -536,6 +547,8 @@ function end() {
   const { start: from, opener, openerSig } = S;
   teardown();
   try { window.localStorage.setItem(DONE_KEY, '1'); } catch (e) { /* storage unavailable: the tour may show again */ }
+  // A signed-in user's completion or dismissal is kept per user on the server.
+  if (H.api?.s?.live?.tourPending === true && typeof H.api.tourSeen === 'function') H.api.tourSeen();
   if (from && !sameRoute(H.routeNow(), from)) {
     // A dialog comes back over the page it was opened from, with its history rule.
     if (from.dlg && H.ui) { H.ui.under = from.dlg.under; H.ui.inApp = from.dlg.inApp; }
@@ -547,14 +560,27 @@ function end() {
   if (target && typeof target.focus === 'function') target.focus({ preventScroll: true });
 }
 
-// Once per page load, on a public demo the browser has not finished the tour in.
+// Once per page load: on a public demo the browser has not finished the tour in, or for a signed-in
+// user whose tour is pending on the server.
 export function autoStart() {
   if (autoTried || !H) return;
   autoTried = true;
-  if (H.api?.s?.live?.publicDemo !== true) return;
-  let done = false;
-  try { done = window.localStorage.getItem(DONE_KEY) === '1'; } catch (e) { /* unreadable: not done */ }
-  if (!done) start(null);
+  const live = H.api?.s?.live;
+  let localDone = false;
+  try { localDone = window.localStorage.getItem(DONE_KEY) === '1'; } catch (e) { /* unreadable: not done */ }
+  const mode = autoStartMode({ publicDemo: live?.publicDemo === true, tourPending: live?.tourPending === true, localDone });
+  if (mode === 'user') userTried = true;
+  if (mode) start(null);
+}
+
+// A signed-in user completes onboarding without a reload: the scenario that comes back carries the
+// pending flag, and the next draw off the onboarding route starts the tour once.
+function startPending() {
+  if (userTried || !H || !S.host) return;
+  const live = H.api?.s?.live;
+  if (live?.publicDemo === true || live?.tourPending !== true || H.routeNow().name === 'onboarding') return;
+  userTried = true;
+  queueMicrotask(() => { if (!S.open) start(null); });
 }
 
 /* ---------- screen contract ---------- */
@@ -582,7 +608,7 @@ export function reset() {
 // navigate to (Back, a hash link) ends it; otherwise the layers stay inert and the anchor is
 // marked again on the new markup.
 export function afterDraw(name) {
-  if (!S.open) return;
+  if (!S.open) { startPending(); return; }
   if (!S.nav && S.idx >= 0 && name !== TOUR_STOPS[S.idx].route) {
     // Ending navigates, so it runs after this draw has finished rather than inside it.
     const seq = S.seq;

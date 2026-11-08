@@ -13,17 +13,19 @@ const now = '2026-11-05T12:00:00.000Z';
 
 test('answers validate atomically, preserve confirmed data and replan to a figured action', async () => {
   const db = await s.store({ variant: { facts: { 'accounts.va529': undefined } } });
+  // With no institution on file the plan is asked, not inferred.
+  db.prepare("UPDATE accounts SET inst = '' WHERE kind = '529'").run();
   await planRun(db);
   const account = db.prepare("SELECT id FROM accounts WHERE kind = '529'").get();
   const before = db.prepare("SELECT def FROM recs WHERE id = 'va529'").get();
   assert.ok(JSON.parse(before.def).question);
   let replans = 0;
   const replan = async () => { replans++; return planRun(db); };
-  await assert.rejects(answerFacts(db, [{ key: 'household.ownerAge', value: 43 }, { key: 'accounts.va529', value: { [account.id]: { virginiaPlan: true, ownerAge70Plus: false, carryforward: -1 } } }], { now, replan }), FactAnswerError);
-  assert.notEqual(getFacts(db)['household.ownerAge'], 43);
+  await assert.rejects(answerFacts(db, [{ key: 'household.birthYears', value: { owner: 1983 } }, { key: 'accounts.va529', value: { [account.id]: { virginiaPlan: true, carryforward: -1 } } }], { now, replan }), FactAnswerError);
+  assert.notEqual(getFacts(db)['household.birthYears']?.owner, 1983);
   assert.equal(replans, 0);
   db.prepare("UPDATE recs SET status = 'snoozed' WHERE id = 'va529'").run();
-  await answerFacts(db, [{ key: 'accounts.va529', value: { [account.id]: { virginiaPlan: true, ownerAge70Plus: false, carryforward: 0 } } }], { now, replan, recId: 'va529' });
+  await answerFacts(db, [{ key: 'accounts.va529', value: { [account.id]: { virginiaPlan: true, carryforward: 0 } } }], { now, replan, recId: 'va529' });
   assert.equal(replans, 1);
   const f = db.prepare("SELECT * FROM facts WHERE key = 'accounts.va529'").get();
   assert.equal(f.confirmed, 1);
@@ -41,8 +43,8 @@ test('all typed facts reject malformed values and accept their valid neighbors',
   const db = await s.store();
   const cases = [
     ['business.cashBasis', 'yes', false],
-    ['household.ownerAge', '42', 42],
-    ['household.spouseAge', 40.5, 40],
+    ['household.birthYears', { owner: 1850 }, { owner: 1983 }],
+    ['household.birthYears', { owner: 1983, spouse: 1985.5 }, { owner: 1983, spouse: 1985 }],
     ['benefits.hsaCoverage', 'all', 'family'],
     ['business.salaryRange', { min: 50, max: 10 }, { min: 10, max: 50 }],
     ['household.expectedDate', '2026-02-30', '2026-12-30'],
@@ -79,14 +81,14 @@ test('college accounts recognized by name accept answers and produce deduction r
   const id = db.prepare("SELECT id FROM accounts WHERE kind = '529'").get().id;
   db.prepare("UPDATE accounts SET kind = 'taxable', name = '529 College Savings' WHERE id = ?").run(id);
   await planRun(db);
-  await answerFacts(db, [{ key: 'accounts.va529', value: { [id]: { virginiaPlan: true, ownerAge70Plus: false, carryforward: 0 } } }], { now, replan: () => planRun(db), recId: 'va529' });
+  await answerFacts(db, [{ key: 'accounts.va529', value: { [id]: { virginiaPlan: true, carryforward: 0 } } }], { now, replan: () => planRun(db), recId: 'va529' });
   const scenario = buildScenario(db);
   assert.equal(scenario.recs.find(r => r.id === 'va529').question, undefined);
   assert.ok(scenario.fig['va529.deductionLeft'].v > 0);
 });
 
 test('supplemental catch-up answers preserve the action, checklist and owner completion', async () => {
-  const db = await s.store({ variant: { facts: { 'household.ownerAge': 55 } } });
+  const db = await s.store({ variant: { facts: { 'household.birthYears': { owner: 1971 } } } });
   await planRun(db);
   const rec = buildScenario(db).recs.find(r => r.id === 'year-end-retirement');
   assert.equal(rec.question.primary, false);
