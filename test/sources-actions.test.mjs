@@ -305,7 +305,7 @@ test('route parity, router registration, write scope and MCP label', async () =>
   const expected = {
     'POST /api/accounts/:id/archive': ['sources.archive_account'],
     'POST /api/files/:id/remove': ['sources.remove_file'],
-    'POST /api/accounts/:id/merge': ['sources.merge_accounts'],
+    'POST /api/accounts/:id/merge': ['sources.merge_accounts', 'update_account.merge'],
     'GET /api/sources': ['accounts.sources'],
   };
   for (const [route, ops] of Object.entries(expected)) {
