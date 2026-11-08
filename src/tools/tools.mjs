@@ -9,6 +9,7 @@ export const headers = [
   ['goals', 'read', 'Household goals and their pace.', 'Looking at your goals', 'your goals'],
   ['recommendations', 'read', 'Recommendations in the plan.', 'Looking at your plan', 'your plan'],
   ['knowledge', 'read', 'Sourced tax and planning guidance.', 'Checking your knowledge packs', 'knowledge packs'],
+  ['show', 'read', 'Show results from this answer as a chart, table, comparison or timeline.', 'Drawing a chart', 'your answer'],
   ['calculate', 'read', 'Arithmetic on returned figures.', 'Working out the numbers', 'calculated figures'],
   ['update_account', 'write', 'Update account details.', 'Updating your account', 'account changes'],
   ['categorize', 'write', 'Update transaction categories and merchant rules.', 'Updating categories', 'category changes'],
@@ -21,6 +22,7 @@ export const headers = [
   ['refresh', 'write', 'Refresh household data and plans.', 'Refreshing your data', 'data refresh'],
   ['undo', 'write', 'Undo an earlier change by receipt.', 'Undoing your change', 'undone change'],
 ].map(([name, kind, purpose, progress, source]) => ({ name, kind, purpose, progress, source,
+  ...(name === 'show' ? { askOnly: true } : {}),
   firstOperation: ({ household: 'summary', accounts: 'list', transactions: 'search', spending: 'total', business: 'pnl', tax: 'estimate', retirement: 'target', goals: 'list', recommendations: 'list', knowledge: 'packs' })[name] }));
 
 export const operationScopes = op => op.scopes || [op.scope];

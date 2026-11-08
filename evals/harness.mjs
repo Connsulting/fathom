@@ -10,7 +10,7 @@ import { createSpendLedger } from '../src/engine/runtime.mjs';
 import { modelFor } from '../src/engine/pricing.mjs';
 import { figureViolationKinds as figureCheckNames } from '../src/shared/answer-discipline.mjs';
 import { ANSWER_MAX_WORDS } from '../src/shared/answer-contract.mjs';
-import { plainAnswerText as plain } from '../src/shared/answer-text.mjs';
+import { plainAnswerText as plain, placeBlocks } from '../src/shared/answer-text.mjs';
 import { estimateEvalCost } from './reservation.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
 import { threadCreate, ask } from '../src/api/handlers.mjs';
@@ -19,7 +19,7 @@ import { tokenScope } from '../src/scenario/build.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
 import { tools, CAPABILITIES } from '../src/tools/index.mjs';
 import { expectedFigures, validateCases } from './cases.mjs';
-import { gradeRequiredTools, gradeFigures, gradeLength, gradeExpected, gradeProhibited, evidenceNumbers, gradeThreadTitle } from './graders.mjs';
+import { gradeBlocks, gradeRequiredTools, gradeFigures, gradeLength, gradeExpected, gradeProhibited, evidenceNumbers, gradeThreadTitle } from './graders.mjs';
 
 export async function createEvalStore() {
   const dir = await mkdtemp(join(tmpdir(), 'fathom-ask-eval-'));
@@ -175,9 +175,10 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
         const calls = [...reads, ...attempts.flatMap(a => a.toolResults), ...confirmed];
         const contextNumbers = evidenceNumbers([{ name: 'context', args: {}, result: { figures: Object.values(figures) } }]);
         const gradedAttempts = attempts.map((a, i) => ({ text: a.text, error: a.error ?? null,
-          figures: gradeFigures(a.text, [...reads, ...attempts.slice(0, i + 1).flatMap(r => r.toolResults)], { figures, contextNumbers }),
-          length: gradeLength(a.text, turn.maxWords ?? ANSWER_MAX_WORDS),
+          figures: gradeFigures(placeBlocks(a.text).text, [...reads, ...attempts.slice(0, i + 1).flatMap(r => r.toolResults)], { figures, contextNumbers }),
+          length: gradeLength(placeBlocks(a.text).text, turn.maxWords ?? ANSWER_MAX_WORDS),
           prohibited: gradeProhibited(turn.prohibit, { text: a.text ?? '', writeCalls: 0 }) }));
+        const blocks = gradeBlocks(response.message?.provenance, calls, c.blocks);
         const required = gradeRequiredTools(turn.required, calls);
         const numeric = gradeFigures(delivered, calls, { figures, contextNumbers });
         const length = gradeLength(delivered, turn.maxWords ?? ANSWER_MAX_WORDS);
@@ -188,12 +189,12 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
         const existingToolsOk = required.checks.filter(r => !missing.includes(`${r.name}.${r.operation}`))
           .every(r => r.ok || (scriptForTurn && r.status === 'missing'));
         const safe = numeric.ok && length.ok && refusal && prohibited.ok;
-        const ok = safe && required.ok && expectedGrade.ok && !response.message?.notice;
+        const ok = safe && blocks.ok && required.ok && expectedGrade.ok && !response.message?.notice;
         const turnMissing = scriptForTurn || turn.required.some(r => missing.includes(`${r.name}.${r.operation}`));
         const gapOnly = turnMissing && safe && existingToolsOk && !response.message?.notice;
         const failingChecks = [
           ...required.checks.filter(r => !r.ok).map(r => `required.${r.name}.${r.operation}`),
-          ...figureCheckNames(numeric),
+          ...figureCheckNames(numeric), ...blocks.violations.map(v => v.kind),
           ...(!length.ok ? ['length'] : []),
           ...expectedGrade.checks.flatMap((e, i) => e.ok ? [] : [`expected[${i}]`]),
           ...(!refusal ? ['refusal'] : []), ...(!prohibited.ok ? ['prohibited'] : []),
@@ -201,7 +202,7 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
         ];
         const failedDrafts = gradedAttempts.slice(0, -1).filter(a => !a.figures.ok || !a.length.ok || !a.prohibited.ok || a.error).length;
         result.turns.push({ question: turn.question, rubric: turn.rubric, delivered, tools: calls, required,
-          figures: numeric, expected: expectedGrade, length, refusal, prohibited, failingChecks, failedDrafts, attempts: gradedAttempts,
+          blocks, figures: numeric, expected: expectedGrade, length, refusal, prohibited, failingChecks, failedDrafts, attempts: gradedAttempts,
           blockedBy: gapOnly ? missing.filter(pair => turn.required.some(r => `${r.name}.${r.operation}` === pair)) : [],
           grounding: response.message?.provenance?.grounding ?? null, discipline: response.message?.provenance?.discipline ?? null, historyMessages: Math.max(0, ...requestLengths), ok });
         if (ledger.state.stopped) { result.status = `${ledger.state.stopped}-stopped`; break; }
