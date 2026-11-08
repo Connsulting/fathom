@@ -1,4 +1,4 @@
-import { mcpInstructions as instructions } from '../../tools/index.mjs';
+import { mcpInstructions } from '../../tools/index.mjs';
 // AC1 (raw HTTP): POST /mcp on the real server child. Auth, Host and Origin guards, methods,
 // scope-filtered tools, the permission refusal, last-use tracking and log hygiene.
 
@@ -177,7 +177,7 @@ describe('protocol', () => {
     assert.equal(result.serverInfo.version, BUILD_SHA, 'the server reports the git SHA of the build');
     assert.ok(result.capabilities && result.capabilities.tools);
     assert.equal(typeof result.protocolVersion, 'string');
-    assert.equal(result.instructions, instructions);
+    assert.equal(result.instructions, mcpInstructions);
   });
 
   test('tools/list is filtered by scope with read-only annotations', async () => {

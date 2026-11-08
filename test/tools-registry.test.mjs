@@ -134,3 +134,14 @@ test('C4 declares spending and business API intent coverage for the parity gate'
   assert.ok(chars < 30000); assert.ok(instructions.length < 8000);
   assert.ok(instructions.includes('show')); assert.equal(getTool('show').askOnly, true);
 });
+
+test('show schema accepts only paths and references, with numeric values confined to source args', () => {
+  const inspect = (schema, path = []) => {
+    if (path.at(-1) === 'args') return;
+    assert.ok(!['number', 'integer'].includes(schema.type), path.join('.'));
+    if (schema.type === 'object') assert.equal(schema.additionalProperties, false, path.join('.'));
+    for (const [key, child] of Object.entries(schema.properties ?? {})) inspect(child, [...path, key]);
+    if (schema.items) inspect(schema.items, [...path, 'items']);
+  };
+  inspect(getTool('show').inputSchema);
+});
