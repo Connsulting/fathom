@@ -38,14 +38,14 @@ async function client(ctx, scopes = SCOPES) {
     return JSON.parse(result.content[0].text);
   }, close: async () => { await c.close(); await server.close(); } };
 }
-const api = ctx => ({ db: ctx.db, household: ctx.household, ...ctx.services, config: ctx.services.config, params: {}, body: {} });
+const api = ctx => ({ actorId: ctx.actorId, db: ctx.db, household: ctx.household, ...ctx.services, config: ctx.services.config, params: {}, body: {} });
 
 test('MCP base64 imports share the HTTP pipeline, imports read matches list, retry matches route', async () => {
   const ctx = await setup(), rpc = await client(ctx);
   try {
     const bytes = Buffer.from(note.text);
     const imported = await rpc.call('refresh', { operation: 'import_file', name: note.name, mime: note.mime, contentBase64: bytes.toString('base64') });
-    assert.equal(imported.file.status, 'needs_extraction');
+    assert.equal(imported.file.status, 'waiting_for_engine');
     const row = ctx.db.prepare('SELECT * FROM files WHERE id=?').get(imported.file.id);
     assert.equal(row.name, note.name);
     assert.equal(row.size, bytes.length);
@@ -136,7 +136,7 @@ for (const operation of ['import_file','retry_import','build_your_plans','plan',
     const outcome = JSON.parse(receipt.after_value);
     assert.notEqual(outcome.status, 'queued');
     assert.notEqual(outcome.status, 'failed', JSON.stringify(outcome));
-    if (operation === 'import_file' || operation === 'retry_import') { assert.ok(outcome.file.id); assert.equal(outcome.file.status, 'imported'); assert.ok(extracts > 0); }
+    if (operation === 'import_file' || operation === 'retry_import') { assert.ok(outcome.file.id); assert.equal(outcome.file.status, 'waiting_for_engine'); }
     if (operation === 'build_your_plans') assert.equal(outcome.written, true);
   } finally { tool.handler = original; }
 });
@@ -188,7 +188,7 @@ test('HTTP proposal confirmation executes a pasted-note refresh and persisted re
   assert.equal(confirmed.status, 200, confirmed.text);
   assert.equal(calls, beforeCalls, 'confirmation makes no chat call');
   const receipt = confirmed.json.message.provenance.actions[0];
-  assert.equal(receipt.after.file.status, 'imported');
+  assert.equal(receipt.after.file.status, 'waiting_for_engine');
   assert.equal(receipt.undo.available, false);
   assert.ok(!confirmed.json.message.text.includes('undo it below'));
   const { key } = app.keys.create({ householdId: instance.householdId, name: 'Synthetic importer', scopes: ['read','write:imports'], userId: app.session.user.id });
@@ -198,7 +198,7 @@ test('HTTP proposal confirmation executes a pasted-note refresh and persisted re
     contentBase64: Buffer.from('A different synthetic note.').toString('base64') }));
   assert.equal(result.isError, undefined, result.content[0].text);
   const imported = JSON.parse(result.content[0].text);
-  assert.equal(imported.file.status, 'imported');
+  assert.equal(imported.file.status, 'waiting_for_engine');
   const form = new FormData();
   form.append('files', new Blob(['A different synthetic note.'], { type: note.mime }), 'Other notes.md');
   const upload = await fetch(app.baseUrl + '/api/files', { method: 'POST', headers: app.headers, body: form });
@@ -236,7 +236,7 @@ test('MCP rebuild completes inline and all allowed jobs use the household schedu
   const rpc = await client(ctx);
   try {
     const imported = await rpc.call('refresh', { operation: 'import_file', ...note });
-    assert.equal(imported.file.status, 'imported');
+    assert.equal(imported.file.status, 'waiting_for_engine');
     const built = await rpc.call('refresh', { operation: 'build_your_plans', fileIds: [imported.file.id] });
     assert.equal(built.status, 'built');
     assert.equal(built.written, true);

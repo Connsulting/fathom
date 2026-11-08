@@ -233,7 +233,7 @@ at `$FATHOM_DATA/packs/your-plans/` in the same format.
 parse(file) -> {rows, warnings, period: {from, to}}}` where `file = {name, bytes: Uint8Array, mime}`.
 
 `sourceKind` is one of `bank_csv`, `card_csv`, `aggregator_csv`, `brokerage_positions`,
-`pnl_workbook`, `tax_payments`, `balances`, `paystub`, `tax_doc`, `statement`, `notes`, `other`.
+`pnl_workbook`, `tax_payments`, `balances`, `paystub`, `tax_doc`, `statement`, `notes`, `other`, `model_import`.
 
 Row kinds:
 
@@ -845,21 +845,9 @@ signs no one in.
 
 Tell us. The text is saved by `POST /api/onboarding/notes` (`src/api/onboarding-handlers.mjs`) as a
 file named `Setup notes <date>.md` (type `text/markdown`) through `ingestFile`, exactly the path of
-an uploaded notes file: the bytes are stored encrypted in the vault, the notes parser writes the
-`notes` document row (a reference, never the text), and with the engine on `extractDocument` reads
-the redacted text, writes facts with provenance (`file_id`, parser `extract-notes`, locator) and
-goal documents, and asks a `fact_check` Confirm card for a fact below the confidence floor. With
-the engine off only the parser's deterministic path runs: the note is stored and the file waits
-with status `needs_extraction` (retried from Confirm, Waiting files, once the engine is on);
-nothing is extracted and nothing is invented. The same text saved twice is a `duplicate`. A
-successful import triggers the plan and confirm-guess jobs, like an upload. The response carries
-`understood` from `understoodOf` (`src/onboarding/heard.mjs`):
-`{fileId, status, engineOn, waiting, facts: [{key, label, value, confirmed}], goals: [{title, when}], asked}`,
-the stored rows that file wrote and the open questions it raised; the page shows it after the
-save. A returning owner reaches onboarding again as Setup in Settings (real stores only): the route
-`#/onboarding` is allowed on a real store after first run, lands on step 1 (Goals) with the existing
-goals preselected, shows Back to the app, and finishing returns to the brief. Setup only adds: it
-never deletes goals, notes or files.
+an uploaded notes file: the bytes are stored encrypted in the vault and linked to a
+proposal linked to encrypted source bytes. The engine produces cited fields and shared
+actions; source-grounded validation and explicit current-version approval precede writes.
 
 Confirm ("Here is what we heard"). `live.heard` is `deriveHeard(db, {clock})`: stored facts (filing
 status, state, dependents and ages, expecting a child, income types, benefits, giving), entities
@@ -979,9 +967,9 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/keys` | `{name, scopes?: ('read' or 'write:recs')[]}` | `{key, record, keys}`. The only time the key is shown. Name trimmed, 1 to 80 characters, no control characters; scopes always include `read`; else 400. Any signed-in user may create one; the creator comes from the session, never the body. |
 | `POST /api/keys/:id/revoke` | `{}` | `{record, keys}`. Sets `revokedAt` once (a second revoke keeps it); 404 unknown id. A member may revoke only keys they created (403 otherwise); an admin may revoke any. |
 | `GET /api/mcp` | | `{url, publicUrlSet, tools: [{name, description, scope}], scopes: [{id, label, access}]}`. `url` is the `FATHOM_PUBLIC_URL` origin with `/mcp` appended. |
-| `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`, `unsupported`, `too_large` (past a parse limit, see Ingest) or `failed`. 400 no files or malformed body, 409 a real household without `FATHOM_PLATFORM_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
+| `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `waiting_for_engine`, `waiting_for_engine`, `unsupported`, `too_large` (past a parse limit, see Ingest) or `failed`. 400 no files or malformed body, 409 a real household without `FATHOM_PLATFORM_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
 | `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first; removed files are omitted and a list over 256 KB is shortened with `truncated: true`. |
-| `POST /api/files/:id/retry` | `{}` | `{scenario, file: result}`. Routes a `needs_mapping` or `needs_extraction` file again under the same id; 404 unknown file, 409 a file that is not waiting. |
+| `POST /api/files/:id/retry` | `{}` | `{scenario, file: result}`. Routes a `waiting_for_engine` or `waiting_for_engine` file again under the same id; 404 unknown file, 409 a file that is not waiting. |
 | `POST /api/import-proposals/:proposalId/review` | `{version, decision, evidence}` | Internal staged import review. `approve` validates current owner evidence, source and stored state before committing; `correct` queues a new version. Requires `write:imports` and underlying action scopes. Stale proposals return 409 `proposal_stale` with a deterministic diff. Upload routing is unchanged pending the model-import cutover. |
 | `POST /api/files/:id/remove` | `{}` | `{scenario, receipt}`. Deletes an uploaded file's transactions (with their category rows), balances, positions, P&L lines, tax payments, facts, held facts and documents and its pending questions, drops figures read from it and recomputes each fed account's balance figure, archives an account left with no rows that no live bank connection feeds, and sets `files.removed_at`. The captured change log is stored in `source_changes` under the receipt id; `POST /api/actions/:id/undo` replays it and refuses (409) when a touched row changed since. 404 unknown, 409 already removed, 400 for a file with no stored bytes. Same code as `sources.remove_file`; off on the public demo. |
 | `GET /api/confirm` | | `{items: [pending confirm items]}`. |
@@ -1945,12 +1933,11 @@ and anything ambiguous becomes a short question in the confirm queue.
 
 1. File id is `f-` plus the first 24 hex characters of the content SHA-256. Identical bytes are a
    `duplicate` of the stored file (`duplicateOf`), and nothing is imported again.
-2. The encrypted bytes are stored first, then a `files` row, then the file is routed: a known
-   parser (`pickParser`), else an unknown table (`readTable` then `mapTabular`), else a PDF or
-   UTF-8 text (`extractDocument`), else `unsupported`. Markdown notes keep the notes parser's
-   document as a reference to the encrypted file (`fields: {ref: fileId, sha256, chars, lines}`,
-   never the text) and are then extracted as `notes` from the decrypted bytes (on retry, from the
-   vault).
+2. The encrypted bytes are stored first, then a `files` row. The three standard
+   institution parsers and SimpleFIN retain deterministic ingestion. Every other
+   supported file is indexed and routed through `prepareImport`, source-grounded
+   validation and actor-bound proposal approval. Approved compatible layouts apply
+   locally. Text-layer PDFs use cited spans; raw scans wait as `needs_source_text`.
    Parsing is bounded by `src/ingest/format.mjs` `LIMITS` (200000 rows, 512 columns, 2000000
    cells, 32768 characters per cell; CSV sniffing reads only the header within 64 KiB).
    Workbooks use `XLSX_LIMITS` for cells (250000 worksheet cells, shared strings and rich-text
@@ -2020,31 +2007,27 @@ directory, never a symlink) at `files/<id>.bin`. `src/platform/vault-convert.mjs
 instance offline into a validated bundle at `<root>/work/vault-<operationId>`, published by one
 rename; it only reads the legacy store and files. The server uses it for every stored object.
 
-### Mapping unknown tables
+### Reviewed model imports
 
-`src/ingest/mapping.mjs`: a CSV or workbook sheet with no parser is identified by
-`header_signature` (SHA-256 of its normalized headers). A stored `column_mappings` row is applied
-by code with no model call; otherwise the engine proposes a mapping from the headers and at most 5
-redacted rows, which is validated (`MAPPING_SCHEMA`, every column present, required columns per
-target) before it is stored and applied. With the engine off or an invalid proposal the file is
-`needs_mapping` and can be retried.
+`model-source.mjs` indexes bounded cells and text spans. `model-parse.mjs` obtains
+referenced proposals under durable file budgets. `model-validation.mjs` computes
+values, validates identity and coverage, and previews common persistence and actions.
+`model-review.mjs` requires actor-bound approval of the current version. Approved
+compatible declarative layouts in `model-layout.mjs` can apply locally with no engine
+call. New interpretations wait as `needs_confirmation` or `needs_clarification`;
+unavailable engines wait as `waiting_for_engine`, exhausted limits as
+`budget_exhausted`, and image-only or unreadable PDFs as `needs_source_text`.
 
-### Extraction with redaction
+`extract.mjs` retains document schemas and deterministic document adapters. It has
+no model transport or raw scan dispatch. Historical labels remain readable without
+retaining executable custom parsers. Facts and expected updates reuse shared actions;
+grouped Undo preflights the actor and every represented write scope.
 
-`src/ingest/extract.mjs` classifies a document (`DOC_TYPES`) and extracts it with a per-type JSON
-Schema that never asks for SSNs, EINs, full account numbers, names of people or addresses. Text
-is redacted first (`src/ingest/redact.mjs`): SSN and EIN patterns are masked, money-shaped
-numbers become opaque references that code resolves back, and every other digit run longer than
-4 keeps only its last 4 digits. A PDF's text layer is read first by `src/ingest/pdftext.mjs`
-`pdfText(bytes) -> {status, text, pages}` (pdfjs-dist in a `worker_threads` Worker with bounded
-heaps, a 20 s timeout, a 2 MB text cap and its output discarded; never rejects). `text` (any
-text with a letter) is redacted and sent as text (`pdf_text_layer`); `image_only` (no text on
-any page) is sent as a document (`pdf_document`); `incomplete` (over 50 pages, timeout, cap or
-out of memory) and `failed` (a parse error) wait as `needs_extraction` with note
-`pdf_unreadable`, and nothing is sent (`pdf_withheld`). Extracted values become rows by
-deterministic code; facts below 0.8 confidence wait for a `fact_check`, and employer-dependent
-facts wait in `held_facts` until the employer relation is known. With the engine off the file is
-`needs_extraction`.
+`retryFile` accepts an explicit `mode` of `retry` or `reinterpret`. Reinterpretation
+stages a fresh version from retained bytes, leaving active rows until approval.
+Validated target groups hold period authority over omission removals. Shared batch
+Undo restores revisions and removals only when every affected after-state still
+matches, and retains encrypted files, audit records and model cost.
 
 ### Confirm queue
 

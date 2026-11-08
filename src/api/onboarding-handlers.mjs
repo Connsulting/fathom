@@ -1,9 +1,4 @@
-// Onboarding API: the Tell us note. The text is stored as a notes document through the ingest
-// pipeline (the same path as an uploaded .md file: encrypted in the vault, the notes parser, then
-// fact and goal extraction with the engine gateway), so its facts land with provenance and anything
-// ambiguous becomes a Confirm card. With the engine off only the parser's deterministic path runs:
-// the note is stored and waits (status needs_extraction) until the engine reads it. Errors carry
-// fixed messages; the note text never reaches a response or a log.
+// Notes share upload storage, indexed proposals and explicit approval before financial writes.
 
 import { ingestFile } from '../ingest/pipeline.mjs';
 import { VaultError } from '../ingest/vault.mjs';
@@ -26,6 +21,7 @@ export async function saveNotes(ctx) {
 
   await householdVault(ctx);
   const opts = ingestOpts(ctx);
+  opts.capturedAt = opts.now;
   let file;
   try {
     file = await ingestFile(ctx.db, { name: `Setup notes ${opts.now.slice(0, 10)}.md`, bytes, mime: 'text/markdown' }, opts);

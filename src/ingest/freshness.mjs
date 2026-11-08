@@ -18,6 +18,7 @@ import { merchantDisplayName, plainEvidence } from '../categories/display.mjs';
 const MONTHLY = Object.freeze({ label: 'monthly', staleAfterDays: 45 });
 
 export const CADENCE = Object.freeze({
+  model_import: MONTHLY,
   bank_csv: MONTHLY,
   card_csv: MONTHLY,
   aggregator_csv: MONTHLY,
@@ -100,7 +101,7 @@ export function recordSource(db, { id, label, kind, asOf, now } = {}) {
 }
 
 export function listImportedFiles(db) {
-  const result = { files: db.prepare('SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files WHERE removed_at IS NULL ORDER BY uploaded_at DESC, rowid DESC').all().map(fileOf) };
+  const result = { files: db.prepare('SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files WHERE removed_at IS NULL ORDER BY uploaded_at DESC, rowid DESC').all().map(row => fileWithProposal(db,row)) };
   while (Buffer.byteLength(JSON.stringify(result)) > 256 * 1024 && result.files.length) {
     result.files.splice(Math.floor(result.files.length / 2));
     result.truncated = true;
@@ -109,6 +110,16 @@ export function listImportedFiles(db) {
 }
 
 // A files row as the API returns it.
+function fileWithProposal(db, row) {
+  const file = fileOf(row);
+  const proposal = db.prepare('SELECT id,version,status,reason_code,review_state FROM import_proposals WHERE file_id=? ORDER BY version DESC,rowid DESC LIMIT 1').get(row.id);
+  if (!proposal) return file;
+  const presentation = parseJson(proposal.review_state, {}).presentation ?? {};
+  const batch = db.prepare('SELECT receipt_id FROM import_batches WHERE proposal_id=? AND proposal_version=?').get(proposal.id,proposal.version);
+  return { ...file, proposal: { id: proposal.id, version: proposal.version, status: proposal.status, reasonCode: proposal.reason_code,
+    summary: presentation.summary ?? null, counts: presentation.counts ?? null, receiptId: batch?.receipt_id ?? null } };
+}
+
 export function fileOf(row) {
   return {
     id: row.id,
@@ -316,10 +327,10 @@ export function ingestState(db, { clock } = {}) {
   // Uploaded files always have stored bytes; the demo seed's provenance row does not.
   const files = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files
                             WHERE stored_path IS NOT NULL AND removed_at IS NULL ORDER BY uploaded_at DESC, rowid DESC LIMIT ?`)
-    .all(FILES_LIMIT).map(fileOf);
+    .all(FILES_LIMIT).map(row => fileWithProposal(db,row));
   const waiting = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files
-                              WHERE stored_path IS NOT NULL AND removed_at IS NULL AND status IN ('needs_mapping', 'needs_extraction')
-                              ORDER BY uploaded_at DESC, rowid DESC`).all().map(fileOf);
+                              WHERE stored_path IS NOT NULL AND removed_at IS NULL AND status IN ('needs_mapping', 'needs_extraction', 'waiting_for_engine', 'budget_exhausted', 'needs_confirmation', 'needs_clarification', 'needs_source_text')
+                              ORDER BY uploaded_at DESC, rowid DESC`).all().map(row => fileWithProposal(db,row));
 
   const states = sourceStates(db, at);
   const sources = sourceList(db, at, states);

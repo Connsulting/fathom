@@ -134,7 +134,7 @@ test.describe('demo build', () => {
     const res = await saved;
     expect(res.status()).toBe(200);
     const body = await res.json();
-    expect(body.file.parser).toBe('notes');
+    expect(body.file.parser).toBe('model-import');
     const panel = page.locator('[data-understood]');
     await expect(panel).toBeVisible();
     await expect(panel).toContainText('Saved');
@@ -467,13 +467,13 @@ test.describe('real store past first run', () => {
     await page.getByRole('button', { name: /Save and read/ }).click();
     const res = await saved;
     expect(res.status()).toBe(200);
-    expect((await res.json()).file.status).toBe('needs_extraction');
+    expect((await res.json()).file.status).toBe('waiting_for_engine');
     const panel = page.locator('[data-understood]');
     await expect(panel).toContainText('The engine is off');
     await expect(panel).not.toContainText('Virginia');
     const files = await (await context.request.get(`${BASE}/api/files`)).json();
     const note = files.files.find((f) => /^Setup notes /.test(f.name));
-    expect(note && note.status).toBe('needs_extraction');
+    expect(note && note.status).toBe('waiting_for_engine');
 
     // The connections block sits on the same step; Continue goes on to the heard step.
     await expect(page.locator('[data-sf-box]')).toBeVisible();

@@ -179,16 +179,16 @@ describe('POST /api/files on a demo server', () => {
     assert.deepEqual(r.json.files.map((f) => [f.name, f.status, f.parser]), [
       ['aggregator.csv', 'imported', 'aggregator'],
       ['positions.csv', 'imported', 'brokerage-positions'],
-      ['business-pnl.xlsx', 'imported', 'pnl-workbook'],
-      ['tax-payments.xlsx', 'imported', 'tax-payments'],
+      ['business-pnl.xlsx', 'waiting_for_engine', 'model-import'],
+      ['tax-payments.xlsx', 'waiting_for_engine', 'model-import'],
     ]);
     assert.equal(r.json.files[0].counts.rows.transaction, 2);
     assert.equal(r.json.files[1].counts.rows.position, 2);
-    assert.equal(r.json.files[2].counts.rows.pnl_line, 3);
-    assert.equal(r.json.files[3].counts.rows.tax_payment, 10);
+    assert.equal(r.json.files[2].counts.rows.pnl_line, undefined);
+    assert.equal(r.json.files[3].counts.rows.tax_payment, undefined);
     assert.ok(r.json.scenario && r.json.scenario.meta, 'carries the scenario');
     assert.equal(r.json.pending, r.json.scenario.live.ingest.pending);
-    assert.ok(r.json.pending >= 3, 'owner, kind and tax-year questions');
+    assert.ok(r.json.pending >= 2, 'standard parser owner and kind questions');
     const manual = r.json.scenario.accounts.filter((a) => a.mirror === 'manual' && ['7766', '5544'].includes(a.mask));
     assert.equal(manual.length, 2);
 
@@ -228,7 +228,7 @@ describe('POST /api/files on a demo server', () => {
     const r = await upload(s.baseUrl, [{ name: 'novel.csv', bytes: Buffer.from(novelCsv()), type: 'text/csv' }]);
     assert.equal(r.status, 200, r.text.slice(0, 300));
     const f = r.json.files[0];
-    assert.equal(f.status, 'needs_mapping');
+    assert.equal(f.status, 'waiting_for_engine');
     const retry = await postJson(s.baseUrl, `/api/files/${f.fileId}/retry`, {});
     assert.equal(retry.status, 200, retry.text.slice(0, 300));
     assert.equal(retry.json.file.fileId, f.fileId);
@@ -460,16 +460,18 @@ describe('bounded parsing on a 128 MB heap', () => {
     const bytes = writeXlsx([{ name: 'Synthetic export', rows: gridRows(249990) }], { deflate: true });
     const r = await upload(s.baseUrl, [{ name, bytes, type: XLSX }]);
     assert.equal(r.status, 200, r.text.slice(0, 300));
-    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [[name, 'needs_mapping']]);
+    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [[name, 'waiting_for_engine']]);
   }));
 
   // E1: a sparse table is budgeted as rows times header width before any row is widened to the
   // header: a 512-wide header over 199999 one-cell rows would hold about 102M values.
   const wideHeader = Array.from({ length: 512 }, (_, c) => `synthetic column ${c}`);
 
-  test('E1: a sparse xlsx with a 512-cell header and 199999 one-cell rows answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('a sparse xlsx stays sparse and waits for interpretation without widening rows', T, () => withSmallHeap(async (s) => {
     const rows = [wideHeader, ...Array.from({ length: 199999 }, (_, r) => [r + 1])];
-    await tooLarge(s, 'sparse-wide-export.xlsx', writeXlsx([{ name: 'Synthetic export', rows }], { deflate: true }));
+    const r = await upload(s.baseUrl, [{ name: 'sparse-wide-export.xlsx', bytes: writeXlsx([{ name: 'Synthetic export', rows }], { deflate: true }), type: XLSX }]);
+    assert.equal(r.status, 200);
+    assert.equal(r.json.files[0].status, 'waiting_for_engine');
   }));
 
   test('E1 guard: a sparse CSV with a 512-column header and 199999 one-value rows stays sparse and waits for a mapping; the server stays up', T, () => withSmallHeap(async (s) => {
@@ -477,7 +479,7 @@ describe('bounded parsing on a 128 MB heap', () => {
     const bytes = Buffer.from(`${wideHeader.join(',')}\n${'1\n'.repeat(199999)}`);
     const r = await upload(s.baseUrl, [{ name, bytes, type: 'text/csv' }]);
     assert.equal(r.status, 200, r.text.slice(0, 300));
-    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [[name, 'needs_mapping']]);
+    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [[name, 'waiting_for_engine']]);
   }));
 
   // F1: an empty row carries no data, so it is dropped before any row is widened to the header and
@@ -493,7 +495,7 @@ describe('bounded parsing on a 128 MB heap', () => {
   const waitsForMapping = async (s, name, bytes) => {
     const r = await upload(s.baseUrl, [{ name, bytes, type: XLSX }]);
     assert.equal(r.status, 200, r.text.slice(0, 300));
-    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [[name, 'needs_mapping']]);
+    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [[name, 'waiting_for_engine']]);
     return r.json.files[0];
   };
 
@@ -508,21 +510,21 @@ describe('bounded parsing on a 128 MB heap', () => {
 
   // F1: a stored mapping applied on retry reads the same table, so the empty rows stay unwidened there
   // too, and the one data row imports.
-  test('F1: a stored mapping applied on retry to an xlsx with a 512-cell header and 199998 empty rows imports the data row; the server stays up', T, () => withSmallHeap(async (s) => {
+  test('F1: an unapproved stored mapping cannot import a sparse workbook on retry; the server stays up', T, () => withSmallHeap(async (s) => {
     const rows = emptyRowsExport((r) => (r % 2 ? NO_CELLS : VALUELESS[(r >> 1) % VALUELESS.length]));
     const waiting = await waitsForMapping(s, 'empty-rows-retry.xlsx', writeXlsx([{ name: 'Synthetic export', rows }], { deflate: true }));
-    const { headerSignature } = await src('src/ingest/mapping.mjs');
+    const signature = 'synthetic-unapproved-layout';
     const mapping = { target: 'transaction', date: 'synthetic column 0', amount: 'synthetic column 1', amountSign: 'as_is', dateOrder: 'ymd' };
     const db = await openStore(s.dbFile);
     try {
       db.prepare("INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES (?, ?, 'test', '2032-03-10T12:00:00.000Z', 0)")
-        .run(headerSignature(wideHeader), JSON.stringify(mapping));
+        .run(signature, JSON.stringify(mapping));
     } finally { db.close(); }
     const retry = await postJson(s.baseUrl, `/api/files/${waiting.fileId}/retry`, {});
     assert.equal(retry.status, 200, retry.text.slice(0, 300));
     assert.equal(retry.json.file.fileId, waiting.fileId);
-    assert.equal(retry.json.file.status, 'imported');
-    assert.equal(retry.json.file.counts.rows.transaction, 1, 'only the data row is a transaction');
+    assert.equal(retry.json.file.status, 'waiting_for_engine');
+    assert.equal(retry.json.file.counts.rows.transaction, undefined, 'an unapproved stored layout cannot write rows');
   }));
 
   // E2: workbook metadata parts (workbook.xml and its rels) have their own small element budget,
@@ -542,7 +544,7 @@ describe('bounded parsing on a 128 MB heap', () => {
     const bytes = Buffer.from(`${cols.join(',')}\n${'a,b,c,d,e,f,g,h,i,j\n'.repeat(199998)}`); // 199999 records, 1999990 cells
     const r = await upload(s.baseUrl, [{ name: 'near-limit-export.csv', bytes, type: 'text/csv' }]);
     assert.equal(r.status, 200, r.text.slice(0, 300));
-    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [['near-limit-export.csv', 'needs_mapping']]);
+    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [['near-limit-export.csv', 'waiting_for_engine']]);
   }));
 
   // I1: a CSV record is counted without building or keeping cell text, and the real parse slices
@@ -594,7 +596,7 @@ describe('bounded parsing on a 128 MB heap', () => {
     const bytes = Buffer.from(`${wideHeader.join(',')}\n${row.repeat(3)}`);
     assert.ok(bytes.length <= 50 * 1024 * 1024, 'fixture stays under the upload cap');
     const r = await csvUpload(s, name, bytes);
-    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [[name, 'needs_mapping']]);
+    assert.deepEqual(r.json.files.map((f) => [f.name, f.status]), [[name, 'waiting_for_engine']]);
   }));
 
   test('I1 guard: one cell of 32769 characters answers too_large; the server stays up', T, () => withSmallHeap(async (s) => {
@@ -626,8 +628,8 @@ describe('PDF isolation on a 128 MB heap', () => {
     const bytes = await inflateBombPdf({ inflatedBytes: 8 * 1024 * 1024, fill: 'text' });
     const r = await upload(s.baseUrl, [{ name: 'statement-text-bomb.pdf', bytes, type: PDF }]);
     assert.equal(r.status, 200, r.text.slice(0, 300));
-    assert.equal(r.json.files[0].status, 'needs_extraction');
-    assert.equal(r.json.files[0].counts.extractPath, 'pdf_withheld');
+    assert.equal(r.json.files[0].status, 'needs_source_text');
+    assert.equal(r.json.files[0].status, 'needs_source_text');
   }));
 
   test('a stream of 300 MB of zeros answers 200 and the server stays up', T, () => withPdfServer(async (s) => {

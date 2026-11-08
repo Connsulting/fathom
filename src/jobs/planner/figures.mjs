@@ -273,7 +273,7 @@ export function computeFigures(data, facts, ctx) {
   if (pay.lastPaidDate) out.source('tax-payments', SOURCES['tax-payments'].label, `through ${monthLabel(pay.lastPaidDate.slice(0, 7))}`, SOURCES['tax-payments'].kind);
   const putPaid = (key, label, part, shKeys) => {
     if (holdPayment(part, [key, ...shKeys]) || !part.rows.length) return;
-    out.put(key, part.total, 'a', label, 'tax-payments', rowsLoc('tax_payments', part.ids, { assumptions: ['paid_rows_as_estimates'] }));
+    out.put(key, part.total, 'a', label, 'tax-payments', rowsLoc('tax_payments', part.ids, { assumptions: part.rows.some(row => row.kind === 'paid') ? ['paid_rows_as_estimates'] : [] }));
   };
   putPaid('tax.fed.paid', 'Federal estimated payments logged this year', pay.fed.paid, SH_FED_PAID);
   if (isVa) putPaid('tax.va.paid', 'Virginia estimated payments logged this year', pay.va.paid, SH_VA_PAID);

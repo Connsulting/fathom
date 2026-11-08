@@ -3,6 +3,7 @@
 // directly (no row lost or duplicated), and reopening restores the store as it was before the
 // answer. Unsafe reverts are refused as final with a reason, and every refusal changes nothing.
 
+import { seedHistoricalRows, seedHistoricalDocument, historicalNorthwindRows, historicalTaxRows } from '../helpers/historical-import.mjs';
 import test, { describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, rmSync } from 'node:fs';
@@ -115,7 +116,10 @@ const otherAccountFile = (name = 'other-account.csv') => aggregatorFile(name, [
 ]);
 
 async function imported(s, file, responses) {
-  const r = await P.ingestFile(s.db, file, s.opts(responses ? await fakeEngine(responses) : await offEngine()));
+  const r = responses ? await seedHistoricalDocument(s,file,responses)
+    : file.name.startsWith('northwind-pnl') ? await seedHistoricalRows(s,file,historicalNorthwindRows(), { parser: 'pnl-workbook', sourceKind: 'pnl_workbook', period: { from: '2032-04-01', to: '2032-04-30' } })
+    : file.name === 'tax-payments.xlsx' ? await seedHistoricalRows(s,file,historicalTaxRows(), { parser: 'tax-payments', sourceKind: 'tax_payments', period: { from: '2031-12-31', to: '2032-03-31' } })
+    : await P.ingestFile(s.db, file, s.opts(await offEngine()));
   assert.equal(r.status, 'imported', `${file.name} imports`);
   return r.fileId;
 }
