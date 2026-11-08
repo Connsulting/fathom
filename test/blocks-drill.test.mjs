@@ -5,6 +5,7 @@ import { tempDb, serveAppFixture, request } from './helpers/server.mjs';
 import { callTool } from '../src/tools/index.mjs';
 import { buildSnapshot } from '../src/blocks/snapshot.mjs';
 import { drillQuery } from '../src/blocks/drill.mjs';
+import { tableOf } from '../web/horizon/screens/ask-block-chart.js';
 
 const clock = '2026-11-05';
 const spending = { tool: 'spending', args: { operation: 'total', measure: 'spending', scope: 'household', groupBy: 'category', from: '2026-01', to: '2026-10' }, path: 'groups' };
@@ -24,6 +25,8 @@ test('both drill mappings fetch sums equal to every displayed demo category figu
   assert.ok(spend.groups.length); assert.ok(business.entities.length);
   for (const { ref, result, fields } of cases) {
     const snapshot = buildSnapshot('table', { source: ref, columns: ['key', ...fields] }, [{ name: ref.tool, args: ref.args, result }]);
+    const chart = buildSnapshot('chart', { kind: 'bar', source: ref, x: 'key', series: fields.map(path => ({ path })) }, [{ name: ref.tool, args: ref.args, result }]);
+    assert.deepEqual(tableOf(chart).rows.map(row => row.cells.slice(1).map(cell => cell.drill)), snapshot.rows.map(row => row.cells.slice(1).map(cell => cell.drill)));
     for (const row of snapshot.rows) for (const cell of row.cells.slice(1)) {
       assert.ok(cell.drill, `${ref.tool} category figure has a drill`);
       const res = await request(server.baseUrl, { path: `/api/${cell.drill.route === 'pnl' ? 'pnl' : 'spending'}/rows?${queryString(cell.drill.query)}` });
@@ -43,4 +46,5 @@ test('drillQuery refuses selections the row routes cannot express', () => {
   assert.equal(drillQuery(spending, item, 'total'), null);
   assert.equal(drillQuery({ tool: 'business', args: { operation: 'pnl', groupBy: 'category', entity: 'corp' } }, item, 'profit'), null);
   assert.equal(drillQuery({ ...spending, args: { ...spending.args, include: { categories: ['Other'] } } }, item, 'figure'), null);
+  assert.deepEqual(drillQuery({ ...spending, args: { ...spending.args, include: { categories: [item.key] }, exclude: { categories: ['Other'] } } }, item, 'figure'), drillQuery(spending, item, 'figure'));
 });

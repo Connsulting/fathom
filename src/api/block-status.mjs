@@ -19,6 +19,9 @@ function changed(a, b) {
   if (!a || !b || typeof a !== 'object' || typeof b !== 'object' || Array.isArray(a) !== Array.isArray(b)) return 1;
   return [...new Set([...Object.keys(a), ...Object.keys(b)])].reduce((n, key) => n + changed(a[key], b[key]), 0);
 }
+function hasRowAccount(value) {
+  return value && typeof value === 'object' && (value.t === 'row' && typeof value.row?.account === 'string' || Object.values(value).some(hasRowAccount));
+}
 
 export async function blockStatus(ctx) {
   const thread = getThread(ctx.db, ctx.params.id);
@@ -45,6 +48,7 @@ export async function blockStatus(ctx) {
     let state = 'unavailable', count = 0;
     try {
       const results = await Promise.all(block.calls.map(replay));
+      if (hasRowAccount(block.snapshot)) results.push(await replay({ tool: 'accounts', args: { operation: 'list' } }));
       if (results.every(c => !c.isError) && validateBlock(block.op, block.spec, results).ok) {
         count = changed(displayed(block.snapshot), displayed(buildSnapshot(block.op, block.spec, results)));
         state = count ? 'stale' : 'current';

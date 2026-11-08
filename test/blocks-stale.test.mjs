@@ -71,3 +71,32 @@ test('only the twenty most recent messages with blocks are checked and unknown t
   const blocks = await f.status(); assert.equal(blocks.length, 20);
   const missing = await request(f.server.baseUrl, { path: '/api/threads/000000000000/blocks' }); assert.equal(missing.status, 404);
 });
+
+test('status compares labels, order and figure dates; money is compared to the cent', async t => {
+  const f = await fixture(t);
+  const { id, block } = await f.store('table', { source: { tool: 'spending', args: { operation: 'total', groupBy: 'category', from: '2026-01', to: '2026-10' }, path: 'groups' }, columns: ['key', 'figure'] });
+  const save = snapshot => f.db.prepare('UPDATE messages SET provenance = ? WHERE id = ?').run(JSON.stringify({ blocks: [{ ...block, snapshot }] }), id.slice(1));
+  let snapshot = structuredClone(block.snapshot);
+  snapshot.rows[0].cells[1].fig.value += 0.001; save(snapshot);
+  assert.equal((await f.status())[0].state, 'current');
+  for (const mutate of [s => { s.rows[0].cells[0].text += ' changed'; }, s => { s.rows.reverse(); },
+    s => { s.rows[0].cells[1].fig.asOf = '2026-01-01'; }, s => { s.rows[0].cells[1].fig.value += 0.01; }]) {
+    snapshot = structuredClone(block.snapshot); mutate(snapshot); save(snapshot);
+    assert.equal((await f.status())[0].state, 'stale');
+  }
+});
+
+test('row account labels from an earlier account read stay current and track a rename', async t => {
+  const f = await fixture(t);
+  const spec = { source: { tool: 'transactions', args: { operation: 'search', limit: 3 }, path: 'rows' }, columns: ['description', 'amount'] };
+  const { id, block } = await f.store('table', spec);
+  const results = await Promise.all([{ tool: 'accounts', args: { operation: 'list' } }, ...block.calls].map(async c => ({
+    name: c.tool, args: c.args, result: await callTool(c.tool, c.args, { db: f.db, clock }),
+  })));
+  block.snapshot = buildSnapshot('table', spec, results);
+  f.db.prepare('UPDATE messages SET provenance = ? WHERE id = ?').run(JSON.stringify({ blocks: [block] }), id.slice(1));
+  assert.equal((await f.status())[0].state, 'current');
+  const account = results.find(r => r.name === 'transactions').result.rows[0].accountId;
+  f.db.prepare('UPDATE accounts SET name = ? WHERE id = ?').run('Synthetic renamed account', account);
+  assert.equal((await f.status())[0].state, 'stale');
+});
