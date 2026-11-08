@@ -106,3 +106,16 @@ test('source-operation proposals retain the merged catalog scope and durable Und
  const out=await executeProposal(claim.pending,ctx);assert.ok(row(s).archived_at);assert.equal(out.receipt.scope,'write:sources');
  await undo(ctx,out);assert.equal(row(s).archived_at,null);
 });
+
+for (const [operation,params] of [
+ ['mask',{mask:'1234'}],['owner',{owner:'owner'}],['kind',{kind:'taxable'}],
+]) test(`account ${operation} proposals ignore unrelated rows and guard the target`,async t=>{
+ const s=await realStore();t.after(()=>s.close());account(s);account(s,'unrelated');let pending;
+ await proposalTools(tools).find(t=>t.name==='update_account').handler({operation,id:'manual',...params,propose:true},{...context(s),onProposal:p=>{pending=p;}});
+ const basis=()=>proposalBasis(s.db,pending.tool,pending.scopes,pending.args);
+ s.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('unrelated','2032-03-01',-10,'New posting')").run();
+ s.db.prepare("UPDATE accounts SET display_name='Other reserve' WHERE id='unrelated'").run();
+ assert.equal(basis(),pending.basis);
+ s.db.prepare("UPDATE accounts SET display_name='Target reserve' WHERE id='manual'").run();
+ assert.notEqual(basis(),pending.basis);
+});

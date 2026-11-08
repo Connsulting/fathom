@@ -72,7 +72,7 @@ test('Confirm always answers retain long merchants while the tool enforces its i
  await assert.rejects(callTool('categorize',{operation:'merchant_rule',merchant,category:'Groceries'},s.ctx),{code:'bad_input'});
 });
 
- test('transaction category proposals ignore other transactions but retain the correction row',async t=>{
+test('transaction category proposals ignore other transactions but retain the correction row',async t=>{
  const s=await setup(t),id=s.db.prepare('SELECT id FROM transactions ORDER BY id LIMIT 1').get().id;
  let pending;await proposalTools(tools).find(t=>t.name==='categorize').handler({operation:'transaction',transactionId:id,category:'Groceries',propose:true},{...s.ctx,onProposal:v=>{pending=v;}});
  const basis=()=>proposalBasis(s.db,pending.tool,pending.scopes,pending.args);
@@ -80,4 +80,18 @@ test('Confirm always answers retain long merchants while the tool enforces its i
  assert.equal(basis(),pending.basis);
  await callTool('categorize',{operation:'transaction',transactionId:id,category:'Shopping'},s.ctx);
  assert.notEqual(basis(),pending.basis);
+});
+
+test('merchant proposals guard their rule and the requested category mapping',async t=>{
+ const s=await setup(t),merchant=normalizeMerchant('Warehouse Club #1');let pending;
+ s.db.prepare("INSERT INTO category_source_rules (parser,category,bucket,updated_at) VALUES ('synthetic','Custom category','household',?)").run(NOW);
+ await proposalTools(tools).find(t=>t.name==='categorize').handler({operation:'merchant_rule',merchant,category:'Custom category',propose:true},{...s.ctx,onProposal:p=>{pending=p;}});
+ const basis=()=>proposalBasis(s.db,pending.tool,pending.scopes,pending.args);
+ await callTool('categorize',{operation:'merchant_rule',merchant:'Other shop',category:'Groceries'},s.ctx);
+ assert.equal(basis(),pending.basis);
+ s.db.prepare("UPDATE category_source_rules SET bucket='business' WHERE category='Custom category'").run();
+ assert.notEqual(basis(),pending.basis);
+ const prior=basis();
+ await callTool('categorize',{operation:'merchant_rule',merchant,category:'Groceries'},s.ctx);
+ assert.notEqual(basis(),prior);
 });

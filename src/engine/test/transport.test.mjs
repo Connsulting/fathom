@@ -534,4 +534,5 @@ test('provider scrubbing preserves base64 document and image bytes while scrubbi
  assert.equal(redactProviderText({type:'text',text:data}).text,'XXX-XX-XXXX AAA');
  assert.equal(redactProviderText({source:{type:'base64',data}}).source.data,'XXX-XX-XXXX AAA');
  assert.equal(redactProviderText({type:'document',source:{type:'url',data}}).source.data,'XXX-XX-XXXX AAA');
+ assert.deepEqual(redactProviderText({type:'document',source:{type:'base64',data:{ssn:'900123456'}}}).source.data,{ssn:'XXXXXXXXX'});
 });
