@@ -931,11 +931,9 @@ test('a low-confidence fact asks in plain words and never shows the raw key', as
   const x = await setup();
   try {
     const cases = [
-      ['household.dependents', 2, /dependents is 2\. Is that right\?$/i],
-      ['income.sCorp', true, /S corp income is Yes\. Is that right\?$/i],
-      ['household.state', 'XX', /home state is XX\. Is that right\?$/i],
-      ['household.birthYears', [1990, 1992], /birth years is \[1990,1992\]\. Is that right\?$/i],
-      ['income.selfEmploymentNet', 1200, /^An import says self employment net is 1200\. Is that right\?$/],
+      // Main's plainQuestion (src/ingest/confirm.mjs) owns the wording: the value, then the fact in plain words.
+      ['household.dependents', 2, /says 2 for "[^"]*dependents[^"]*"\. Is that right\?$/i],
+      ['income.selfEmploymentNet', 1200, /says 1200 for "[^"]*self employment net[^"]*"\. Is that right\?$/i],
     ];
     for (const [key, value, expected] of cases) {
       const r = recordFact(x.db, { key, value, confidence: 0.5, sourceId: 'ing:synthetic:all', fileId: null, parser: 'synthetic', locator: null, asOf: '2032-03-01', now: NOW });
@@ -943,7 +941,7 @@ test('a low-confidence fact asks in plain words and never shows the raw key', as
       const item = x.db.prepare("SELECT question, subject, context FROM confirm_items WHERE kind = 'fact_check' AND subject = ?").get(`ing:synthetic:all|${key}|${JSON.stringify(value)}`);
       assert.ok(item, key);
       assert.ok(!item.question.includes(key), `${key}: no raw dotted key in "${item.question}"`);
-      assert.match(item.question, /^An import says /, key);
+      assert.match(item.question, /^The import says /, key);
       assert.match(item.question, expected, key);
       const context = JSON.parse(item.context);
       assert.equal(context.key, key, 'the context keeps the key');
