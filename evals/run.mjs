@@ -28,11 +28,15 @@ export async function main(argv = process.argv.slice(2), { scripts } = {}) {
   }
   const timestamp = new Date().toISOString().replaceAll(':', '-');
   const dir = out ?? fileURLToPath(new URL(`./out/${timestamp}/`, import.meta.url));
-  const scorecard = await runCases({ cases, live, maxUsd: budget ?? 100, outDir: dir, scripts });
+  const scorecard = await runCases({ cases, live, maxUsd: budget ?? 100, outDir: dir, scripts,
+    onRound: round => console.log(JSON.stringify({ type: 'round', ...round })) });
   const counts = {};
   for (const c of scorecard.cases) counts[c.status] = (counts[c.status] ?? 0) + 1;
   console.log(JSON.stringify({ cases: scorecard.completed, selected: scorecard.selected, attempted: scorecard.attempted, results: counts,
     reservedUsd: scorecard.reservedUsd, costUsd: scorecard.costUsd, stopped: scorecard.stopped,
+    failedDrafts: scorecard.failedDrafts,
+    scorecard: scorecard.cases.map(c => ({ id: c.id, status: c.status, failingChecks: c.failingChecks ?? [],
+      missingOperations: c.missingOperations ?? [], failedDrafts: c.failedDrafts ?? 0 })),
     unrun: scorecard.cases.filter(c => c.status === 'unrun').map(({ id, reason }) => ({ id, reason })) }));
   return scorecard.stopped || scorecard.cases.some(c => ['fail', 'xpass'].includes(c.status)) ? 1 : 0;
 }

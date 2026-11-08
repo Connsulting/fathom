@@ -363,6 +363,7 @@ function sigOf(t) {
   const a = (n) => t.getAttribute(n);
   const q = (n) => `[${n}="${CSS.escape(a(n) || '')}"]`;
   if (a('data-askp')) return q('data-askp');
+  if (a('data-blk-ctl')) return q('data-blk-ctl');
   if (a('data-draft')) return q('data-draft');
   if (a('data-ctx-remove')) return q('data-ctx-remove');
   if (a('data-thread')) return `a.h-askx-row${q('data-thread')}`;
