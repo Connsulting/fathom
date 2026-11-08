@@ -14,12 +14,16 @@ const pnlCall = (fn, args) => {
     throw e;
   }
 };
+function requireBusiness(entity) {
+  if (entity.kind === 'spending') throw new ToolError('bad_input', 'A spending ledger is not a business entity.');
+}
 function pnl(args, ctx) {
   const clock = clockOf(ctx),
     window = periodOf(args, clock, null, 'ytd');
-  let entities = pnlEntities({ db: ctx.db, clock });
+  let entities = pnlEntities({ db: ctx.db, clock }).filter(entity => entity.kind !== 'spending');
   if (args.entity) {
     const single = pnlCall(businessPnl, { db: ctx.db, entity: args.entity, from: window.from, to: window.to, clock });
+    requireBusiness(single.entity);
     entities = entities.filter((e) => e.key === single.entity.key);
   }
   const gaps = [];
@@ -175,7 +179,9 @@ export const operations = [
       month,
     },
     handler(args, ctx) {
-      return pnlCall(businessPnlRows, { db: ctx.db, ...args, clock: clockOf(ctx) });
+      const clock = clockOf(ctx);
+      requireBusiness(pnlCall(businessPnl, { db: ctx.db, entity: args.entity, from: args.from, to: args.to, clock }).entity);
+      return pnlCall(businessPnlRows, { db: ctx.db, ...args, clock });
     },
   },
 ];

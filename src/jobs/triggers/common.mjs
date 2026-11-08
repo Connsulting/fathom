@@ -75,6 +75,9 @@ const dollars = label => ({ type: 'number', unit: 'USD', min: 0, label });
 const birthYear = label => ({ type: 'number', unit: 'year', min: MIN_BIRTH_YEAR, max: 2200, integer: true, label });
 
 export const ANSWER_SHAPES = Object.freeze({
+  'pnl.ledgers': { scope: 'household', type: 'map', label: 'Which imported ledgers are spending or businesses?', values: {
+    type: 'object', fields: { kind: { type: 'choice', ownerInterpreted: true, label: 'What does this ledger track?', choices: [{ value: 'spending', label: 'Spending ledger' }, { value: 'business', label: 'Business' }] } },
+  } },
   'retirement.planTermsConfirmed': { scope: 'household', ...yesNo('Has your advisor confirmed your retirement plan terms and eligibility?') },
   'retirement.aggregationConfirmed': { scope: 'household', ...yesNo('Has your advisor confirmed no related business shares your plan limits?') },
   'benefits.hsaEligible': { scope: 'household', ...yesNo('Is your health plan HSA eligible for the whole year?') },
