@@ -13,7 +13,7 @@ before(async () => {
   store = await tempDb(); seedDemo(store.db);
   calls = [];
   for (const [name, args] of [['household', { operation: 'figures' }], ['goals', { operation: 'pace' }],
-    ['transactions', { operation: 'search', limit: 4 }], ['household', { operation: 'deadlines' }]])
+    ['transactions', { operation: 'search', limit: 4 }], ['household', { operation: 'deadlines' }], ['accounts', { operation: 'list' }]])
     calls.push({ name, args, result: await callTool(name, args, { db: store.db, now: new Date('2026-11-05T15:00:00Z') }) });
 });
 after(() => store?.close());
@@ -61,6 +61,7 @@ test('table figures and row amounts retain their source and sort points at a col
     assert.equal(r.cells[1].t, 'row');
     assert.equal(r.cells[1].value, calls[2].result.rows[i].amount);
     assert.equal(r.cells[1].unit, 'usd');
+    assert.equal(r.cells[1].row.account, calls[4].result.find(a => a.id === calls[2].result.rows[i].accountId).name);
     assert.equal(r.cells[1].row.date, calls[2].result.rows[i].date);
     assert.equal(r.cells[1].row.description, calls[2].result.rows[i].description);
   });
@@ -140,6 +141,7 @@ test('row-number charts build figure envelopes with row provenance', () => {
   const s = buildSnapshot('chart', spec, calls); assertSnapshotShape('chart', s);
   s.points.forEach((p, i) => {
     assert.equal(p.y.value, calls[2].result.rows[i].amount);
+    assert.equal(p.y.provenance.sources[0].account, calls[4].result.find(a => a.id === calls[2].result.rows[i].accountId).name);
     assert.equal(p.y.provenance.sources[0].description, calls[2].result.rows[i].description);
   });
 });
@@ -165,8 +167,19 @@ test('separate comparison calls label the single differing assumption from prove
   const spec = { options: refs, fields: ['figure'] };
   assert.equal(validateBlock('compare', spec, results).ok, true);
   const s = buildSnapshot('compare', spec, results); assertSnapshotShape('compare', s);
-  assert.deepEqual(s.options.map(o => o.label), ['Real Return 3%', 'Real Return 4%']);
+  assert.deepEqual(s.options.map(o => o.label), ['Real return 3%', 'Real return 4%']);
   refs[1].source.args = { ...refs[1].source.args, label: 'Another label' };
   results.at(-1).args = refs[1].source.args;
   assert.deepEqual(buildSnapshot('compare', spec, results).options.map(o => o.label), ['calculated figures', 'calculated figures']);
+});
+
+test('row accounts stay null without a successful account-label result', () => {
+  const spec = { source: ref(2, 'rows'), columns: ['amount'] };
+  for (const results of [calls.slice(0, 4), [...calls.slice(0, 4), { ...calls[4], isError: true }]]) {
+    const snapshot = buildSnapshot('table', spec, results);
+    snapshot.rows.forEach(row => assert.equal(row.cells[0].row.account, null));
+  }
+  const results = structuredClone(calls);
+  results[2].result.rows[0].accountId = 'unknown_account';
+  assert.equal(buildSnapshot('table', spec, results).rows[0].cells[0].row.account, null);
 });
