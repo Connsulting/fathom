@@ -153,25 +153,25 @@ export function computeFigures(data, facts, ctx) {
     e.sums = s;
     e.proj = proj;
     const loc = ids => rowsLoc('pnl_lines', ids);
-    out.put(`pnl.${e.slug}.income`, s.income, 'a', `${e.name} income, year to date`, 'pnl', loc(s.ids.income), s.fileId);
-    out.put(`pnl.${e.slug}.expenses`, s.expenses, 'a', `${e.name} expenses, year to date`, 'pnl', loc(s.ids.all), s.fileId);
-    out.put(`pnl.${e.slug}.net`, s.net, 'a', `${e.name} net profit, year to date`, 'pnl', loc(s.ids.all), s.fileId);
-    out.put(`inc.ytd.${e.slug}`, s.income, 'a', `${e.name} income received this year`, 'pnl', loc(s.ids.income), s.fileId);
+    out.put(`pnl.${e.slug}.income`, s.income, 'a', `${e.displayName || e.name} income, year to date`, 'pnl', loc(s.ids.income), s.fileId);
+    out.put(`pnl.${e.slug}.expenses`, s.expenses, 'a', `${e.displayName || e.name} expenses, year to date`, 'pnl', loc(s.ids.all), s.fileId);
+    out.put(`pnl.${e.slug}.net`, s.net, 'a', `${e.displayName || e.name} net profit, year to date`, 'pnl', loc(s.ids.all), s.fileId);
+    out.put(`inc.ytd.${e.slug}`, s.income, 'a', `${e.displayName || e.name} income received this year`, 'pnl', loc(s.ids.income), s.fileId);
     const projLoc = (what, value) => ({ calc: 'straightLineProjection', inputs: { ytd: value, months: m }, steps: [{ label: what, formula: 'year to date * twelve / months of data', value: proj(value) }] });
-    out.put(`pnl.${e.slug}.netProj`, proj(s.net), 'p', `${e.name} net profit, projected for the year`, 'plan-projection', projLoc('Projected net', s.net));
+    out.put(`pnl.${e.slug}.netProj`, proj(s.net), 'p', `${e.displayName || e.name} net profit, projected for the year`, 'plan-projection', projLoc('Projected net', s.net));
     if (e.classified && e.type === 's_corp') {
-      out.put(`pnl.${e.slug}.salary`, s.salary, 'a', `${e.name} officer salary, year to date`, 'pnl', loc(s.ids.salary), s.fileId);
-      out.put(`pnl.${e.slug}.payrollTax`, s.payrollTax, 'a', `${e.name} employer payroll tax, year to date`, 'pnl', loc(s.ids.payrollTax), s.fileId);
+      out.put(`pnl.${e.slug}.salary`, s.salary, 'a', `${e.displayName || e.name} officer salary, year to date`, 'pnl', loc(s.ids.salary), s.fileId);
+      out.put(`pnl.${e.slug}.payrollTax`, s.payrollTax, 'a', `${e.displayName || e.name} employer payroll tax, year to date`, 'pnl', loc(s.ids.payrollTax), s.fileId);
       // A salary the owner decided in Decide is the payroll assumption: it replaces the straight-line
       // P&L projection. The second pass below drops it when a W-2 exists or the salary leaves no
       // distributions; profit before salary still comes from the P&L.
       const decided = decidedSalary(owner, e.slug);
-      const putProjection = () => out.put(`pnl.${e.slug}.salaryProj`, proj(s.salary), 'p', `${e.name} officer salary, projected for the year`, 'plan-projection', projLoc('Projected salary', s.salary));
+      const putProjection = () => out.put(`pnl.${e.slug}.salaryProj`, proj(s.salary), 'p', `${e.displayName || e.name} officer salary, projected for the year`, 'plan-projection', projLoc('Projected salary', s.salary));
       e.salaryAssumed = decided ?? proj(s.salary);
       e.salaryDecided = decided != null;
       e.restoreSalaryProj = () => { e.salaryDecided = false; e.salaryAssumed = proj(s.salary); putProjection(); };
       if (decided != null) {
-        out.put(`pnl.${e.slug}.salaryProj`, decided, 'p', `${e.name} officer salary, as you decided`, 'owner-decision',
+        out.put(`pnl.${e.slug}.salaryProj`, decided, 'p', `${e.displayName || e.name} officer salary, as you decided`, 'owner-decision',
           { calc: 'ownerDecision', inputs: { decision: SALARY_DECIDED_KEY }, steps: [{ label: 'Salary you decided', formula: 'the point you picked in Decide', value: decided }] });
       } else {
         putProjection();
@@ -189,7 +189,7 @@ export function computeFigures(data, facts, ctx) {
   if (corp) {
     const s = corp.sums;
     const P = cents(corp.proj(s.net) + corp.proj(s.salary) + corp.proj(s.payrollTax));
-    out.put('scorp.profitProj', P, 'p', `${corp.entity.name} profit before owner salary, projected`, 'plan-projection',
+    out.put('scorp.profitProj', P, 'p', `${corp.entity.displayName || corp.entity.name} profit before owner salary, projected`, 'plan-projection',
       { calc: 'straightLineProjection', inputs: { net: s.net, salary: s.salary, payrollTax: s.payrollTax, months: corp.entity.months }, steps: [{ label: 'Profit before salary', formula: 'projected net + projected salary + projected employer payroll tax', value: P }] });
     corp.P = P;
   }
@@ -399,7 +399,7 @@ export function computeFigures(data, facts, ctx) {
   const complete = k => fields.every(x => k[x] !== null && k[x] !== '' && k[x] !== undefined && Number.isFinite(Number(k[x])));
   const incompleteK1 = k1Inputs.filter(k => !complete(k));
   out.info.partnershipsMissing = [
-    ...missingPartners.filter(e => inUnit(e.owner)).map(e => e.name),
+    ...missingPartners.filter(e => inUnit(e.owner)).map(e => e.displayName || e.name),
     ...incompleteK1.map(k => k.partnership).filter(Boolean),
   ];
   if (blocked.includes('partnership_incomplete') || incompleteK1.length) out.warn('partnership_incomplete');

@@ -13,6 +13,7 @@ import { parseJson, cents } from '../../store/db.mjs';
 import { accountNaming } from '../../accounts/naming.mjs';
 import { addDays, daysBetween } from '../../scenario/build.mjs';
 import { monthEnd } from '../../ingest/format.mjs';
+import { ledgerDisplayName, ledgerKind } from '../../pnl/ledgers.mjs';
 import { connectedThrough } from '../../ingest/coverage.mjs';
 import { OWNER_OPTIONS, normalizeName } from '../../ingest/confirm.mjs';
 
@@ -100,8 +101,9 @@ export function loadPlanningData(db, clock) {
   const named = ownerFact(db, 'accounts.businessEntity');
   const byAccount = named && typeof named === 'object' && !Array.isArray(named) ? named : {};
   const listed = ownerFact(db, 'business.entities');
+  const ledgerFacts = { 'pnl.ledgers': ownerFact(db, 'pnl.ledgers') };
   const businessNames = [...new Map([...(Array.isArray(listed) ? listed.map(e => e && e.name) : []), ...pnl.map(l => l.entity)]
-    .filter(n => typeof n === 'string' && normalizeName(n)).map(n => [normalizeName(n), n.trim()])).values()];
+    .filter(n => typeof n === 'string' && normalizeName(n) && ledgerKind(ledgerFacts, n, pnl.filter(l => sameName(l.entity, n))) !== 'spending').map(n => [normalizeName(n), n.trim()])).values()];
   const householdNames = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {};
   const holders = new Map(db.prepare('SELECT account_id, holder FROM account_holders').all().map((r) => [r.account_id, r.holder]));
   const naming = accountNaming(db);
@@ -207,9 +209,10 @@ export function resolveEntities(data, facts) {
     e.lines.push(line);
   }
   for (const e of out) {
+    e.displayName = e.lines.length ? ledgerDisplayName(e.lines[0]) : e.name;
     e.months = e.lines.length ? Math.max(...e.lines.map(l => monthOf(l.period))) : 0;
   }
-  return out;
+  return out.filter(e => ledgerKind(facts, e.name, e.lines) !== 'spending');
 }
 
 // P&L sums for one entity (amounts: income positive, expenses negative).
