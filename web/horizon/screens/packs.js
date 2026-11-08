@@ -4,6 +4,7 @@
    everything else. */
 
 import { escapeUserText } from '/shared/tokens.mjs';
+import { packLine, activePacks } from './memories-model.js';
 
 let H = null;
 
@@ -215,7 +216,7 @@ function packPage(p) {
 
   return shell(`<div class="h-rec">
     <a class="h-back" href="${href('packs')}" data-go="packs">${icon('back')}Packs</a>
-    <div class="h-rec-head"><div class="h-kicker">Knowledge pack<span>${st}</span></div><h1>${nameOf(p)}</h1><p class="h-lede">${mt(p, p.why)}</p>
+    <div class="h-rec-head"><div class="h-kicker">Knowledge pack<span>${st}</span></div><h1>${nameOf(p)}</h1><p class="h-lede">${mt(p, packLine(p))}</p>
     ${metaHtml(p)}</div>
     ${on ? `<div class="h-acts big">${btn('Turn off', `data-packtoggle="${esc(p.id)}"`, 'ghost')}</div>` : explored ? '' : `<div class="h-acts big">${btn('What if', `data-whatif="${esc(p.id)}"`, '')}${turnOn}</div>`}
     ${toggled ? `<p class="h-pack-note">${icon('clock')}<span>${TOGGLE_NOTE}</span></p>` : ''}
@@ -237,7 +238,7 @@ function packCard(p) {
   const st = ST[p.status] || esc(p.status);
   return `<article class="h-pack ${esc(p.status)}">
     <div class="h-pack-h"><a href="${href('packs', { id: p.id })}" data-go="packs" data-id="${esc(p.id)}"><b>${nameOf(p)}</b></a><span class="h-pack-st">${on ? '<i></i>' : ''}${st}</span></div>
-    <p>${mt(p, p.why)}</p>
+    <p>${mt(p, packLine(p))}</p>
     ${arr(p.covers).length ? `<p class="h-mute sm">Covers ${arr(p.covers).map((c) => mt(p, c)).join(', ')}</p>` : ''}
     <div class="h-meta"><span>${plural(p.entries || 0, 'entry', 'entries')}</span>${p.curator ? `<span>${mt(p, p.curator)}</span>` : ''}${p.updated ? `<span>Updated ${mt(p, p.updated)}</span>` : ''}${on ? `<span>Powers ${plural(recs.length, 'item')}</span>` : ''}</div>
     <div class="h-acts">${on ? goA('packs', `Open${icon('arrow')}`, { id: p.id }, 'h-more') : btn('What if', `data-whatif="${esc(p.id)}"`, '')}</div>
@@ -315,12 +316,26 @@ function packsList() {
   const act = packs.filter((x) => x.status === 'active');
   const sug = packs.filter((x) => x.status === 'suggested' || x.status === 'exploring');
   const av = packs.filter((x) => x.status === 'available');
-  return shell(`${pageHead('Packs', 'What Fathom knows', 'Curated knowledge that grounds answers and recommendations. Packs turn on when your facts make them apply. Explore the rest with a what-if.')}
+  return shell(`<a class="h-back" href="${H.href('memories')}" data-go="memories">${H.icon('back')}What Fathom knows</a>
+    ${pageHead('What Fathom knows', 'Knowledge packs', 'Curated knowledge that grounds answers and recommendations. Packs turn on when your facts make them apply. Explore the rest with a what-if.')}
     ${act.length ? section(`On <em>${act.length}</em>`, `<div class="h-packs">${act.map(packCard).join('')}</div>`) : ''}
     ${sug.length ? section(`Might apply <em>${sug.length}</em>`, `<div class="h-packs">${sug.map(packCard).join('')}</div>`) : ''}
     ${av.length ? section(`Available <em>${av.length}</em>`, `<div class="h-packs">${av.map(packCard).join('')}</div>`) : ''}
     ${packs.length ? '' : '<p class="h-mute">No packs.</p>'}
     ${yourPlansCard(packs)}`);
+}
+
+// The packs that are on, for What Fathom knows: name, plain status line and what each powers, with
+// a link to every pack and the Your plans builder.
+export function activeHtml() {
+  const { api, arr, esc, icon, goA, href, plural, recById, section } = H;
+  const on = activePacks(api.packs());
+  const rows = on.map((p) => {
+    const n = arr(p.recIds).map((id) => recById(id)).filter(Boolean).length;
+    return `<li class="h-know-p" data-know-pack="${esc(p.id)}"><a href="${href('packs', { id: p.id })}" data-go="packs" data-id="${esc(p.id)}"><b>${nameOf(p)}</b>${icon('arrow')}</a><p>${mt(p, packLine(p))}</p>${n ? `<span class="h-mute sm">Powers ${plural(n, 'item')} on your plan</span>` : ''}</li>`;
+  }).join('');
+  const body = on.length ? `<ul class="h-know-l">${rows}</ul>` : '<p class="h-mute">No pack is on yet. Packs turn on when your facts make them apply.</p>';
+  return section('Knowledge packs', body, goA('packs', `All packs${icon('arrow')}`, {}, 'h-more'), 'h-know-packs');
 }
 
 export function render(id) {

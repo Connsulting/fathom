@@ -114,18 +114,15 @@ test.describe('Money household trend, demo data', () => {
     expect(await readout(page).locator('time').getAttribute('datetime')).not.toBe(first);
   });
 
-  test('@mt-ac3 @mobile Money has no per-account sparkline wall; Accounts has one line per group heading', async ({ page, request }) => {
+  // Accounts merged into the Money overview (SX5): one chart, then one trend line per group heading.
+  test('@mt-ac3 @mobile Money has no per-account sparkline wall and one line per group heading', async ({ page, request }) => {
     await gotoRoute(page, 'money');
     await expect(page.locator('[data-trend]')).toBeVisible();
     await expect(page.locator('.h-spark')).toHaveCount(0);
     await expect(page.locator('.h-sparks')).toHaveCount(0);
-    await expect(page.locator('[data-group-trend]')).toHaveCount(0);
     await expect(page.locator('[data-account]').first()).toBeVisible();
 
     const sc = await (await request.get('/api/scenario')).json();
-    await gotoRoute(page, 'accounts');
-    await expect(page.locator('[data-trend]')).toHaveCount(0);
-    await expect(page.locator('.h-spark')).toHaveCount(0);
     const groups = page.locator('[data-group-trend]');
     await expect(groups).toHaveCount(sc.trend.groups.length);
     for (const g of sc.trend.groups) {
