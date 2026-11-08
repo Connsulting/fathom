@@ -367,7 +367,7 @@ test('homeModel orders cards by pace.goals then the remaining goals, skipping do
     const i = h.pace.goals.findIndex((p) => p.id === c.id);
     assert.equal(c.paceIndex, i, c.id);
     assert.deepEqual(c.pace ?? null, i < 0 ? null : h.pace.goals[i], c.id);
-    assert.deepEqual(c.chip, goalChip(c.pace), c.id);
+    assert.deepEqual(c.chip, cardChip(c.pace), c.id);
     assert.deepEqual(c.bar, paceBar(c.pace), c.id);
   }
   assert.equal(cardOf(m, 'g_extra').paceIndex, -1);
@@ -549,7 +549,7 @@ test('homeHeadline verdict counts the goal actions due before Dec 31 for the fil
   assert.equal(headline(me, pace).title, '1 thing needs you before Dec 31');
   const spouse = homeModel({ goals, pace, recs: recs.filter((r) => r.id !== 'r1'), filter: 'spouse', clock: CLOCK });
   assert.equal(headline(spouse, pace).title, '1 thing needs your spouse before Dec 31');
-  const spouseFree = homeModel({ goals, pace, recs: [recs[0]], filter: 'spouse', clock: CLOCK });
+  const spouseFree = homeModel({ goals, pace, recs: [rec('mine', { serves: ['t'], days: 10, owner: 'you' })], filter: 'spouse', clock: CLOCK });
   assert.equal(headline(spouseFree, pace).title, 'Your spouse is covered through Dec 31');
 });
 

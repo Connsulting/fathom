@@ -223,7 +223,7 @@ test('cards carry kind, owner, priority and line, and a done goal has no card', 
     assert.equal(c.priority, g.priority ?? null, `${c.id} priority`);
     assert.equal(c.paceIndex, h.pace.goals.findIndex(p => p.id === c.id), `${c.id} paceIndex`);
     assert.deepEqual(c.line, c.pace ? H.kindLine(c.pace, c.paceIndex) : null, `${c.id} line`);
-    assert.deepEqual(c.chip, H.goalChip(c.pace), `${c.id} chip`);
+    assert.deepEqual(c.chip, H.cardChip(c.pace), `${c.id} chip`);
   }
   assert.equal(card('g_seed').kind, 'balance', 'a goal without a kind reads balance');
   assert.equal(card('g_bal').line, null, 'balance goals have no kind line');
