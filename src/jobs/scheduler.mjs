@@ -1,3 +1,4 @@
+import { DEFAULT_TIMEZONE, ownerTimezone } from '../shared/timezone.mjs';
 import { createJev } from '../categories/jev.mjs';
 import { selectionFor } from '../models/config.mjs';
 import { createSpendLedger } from '../engine/runtime.mjs';
@@ -57,7 +58,6 @@ import { defaultPackDirs } from '../packs/state.mjs';
 import { syncSimplefin, createFakeSimplefin } from '../ingest/simplefin.mjs';
 import { withoutPrincipal } from '../platform/model-budget.mjs';
 
-export const DEFAULT_TIMEZONE = 'America/New_York';
 const DAY = 86400000;
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -89,15 +89,6 @@ export class JobFailure extends Error {
 
 // ---------------------------------------------------------------- time
 
-export function validTimezone(tz) {
-  if (typeof tz !== 'string' || !tz) return false;
-  try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; } catch { return false; }
-}
-
-export function ownerTimezone(db) {
-  const tz = getSetting(db, 'timezone', null);
-  return validTimezone(tz) ? tz : DEFAULT_TIMEZONE;
-}
 
 const formatters = new Map();
 function partsFormatter(tz) {
