@@ -20,6 +20,7 @@ import * as switcher from './screens/switcher.js';
 import * as simplefin from './screens/simplefin.js';
 import * as recAnswers from './screens/rec-answers.js';
 import * as recBlocker from './screens/rec-blocker.js';
+import * as recSteps from './screens/rec-steps.js';
 import * as accountScreen from './screens/account.js';
 import { composeLabel } from '/shared/account-label.mjs';
 import * as askPanel from './screens/ask-panel.js';
@@ -77,7 +78,7 @@ let bodyLocked = false;
 let connectOn = false;
 
 const freshUi = () => ({
-  curve: {}, prio: {}, modal: null, goalForm: null, goalDel: null,
+  prio: {}, modal: null, goalForm: null, goalDel: null,
   pick: { salary: null, deferral: null }, build: 0,
   buildTimer: 0, draft: {}, recReset: {}, dumped: null, noteBusy: false, understood: null,
   under: null, inApp: false, closing: false, ret: null, y: 0, msgN: {}, det: {}, owner: 'both',
@@ -661,13 +662,14 @@ const suggOf = (id) => arr(api.s.suggestions).find((r) => r && String(r.goalId) 
 // The end-of-horizon note on a date that is not a projection.
 const horizonNote = (label) => (label === 'This year' ? ' (the end of the year you picked)' : ` (the end of the ${esc(label)} you picked)`);
 
-// One goal's suggested target: the line, why, what it comes from, the withdrawal rate when it can
-// be changed, and Accept, Edit, Dismiss. A question asks for an amount; a dismissed one offers Add one.
-// Every amount is a calc:targets figure; the rate is a parameter in percent.
+// A goal's suggestion when Fathom has not set it as the target: a question asks for an amount, a
+// declined one (the owner undid it) offers Add one, and a suggestion not adopted yet shows the line,
+// why and what it comes from. Fathom adopts suggestions itself (src/goals/write.mjs), so there is no
+// Accept, Edit or Dismiss, and the withdrawal rate is told to Ask. Every amount is a calc:targets figure.
 function suggestHtml(s) {
   const id = esc(s.goalId);
   const edit = (label, cls) => btn(label, `data-sugg-act="edit" data-id="${id}"`, cls);
-  if (s.state === 'dismissed') {
+  if (s.state === 'declined') {
     return `<p class="h-gnone">No target yet. <button type="button" class="h-link" data-sugg-act="edit" data-id="${id}">Add one</button></p>`;
   }
   if (s.state !== 'suggested') {
@@ -704,17 +706,15 @@ function suggestHtml(s) {
     src.push(`Spending ${win}`);
   }
   if (f.monthlySavings && s.dateSource === 'projected') src.push(`Saving ${amt(f.monthlySavings)} a month`);
-  let rate = '';
-  if (arr(s.editable).includes('withdrawalRate')) {
-    const r = Number(s.params?.withdrawalRate);
-    const pv = Math.round((Number.isFinite(r) ? r : 0.04) * 10000) / 100;
-    rate = `<label class="h-sugg-rate">Withdrawal rate <input type="number" data-sugg-rate="${id}" min="2" max="6" step="0.25" inputmode="decimal" value="${pv}"><span>%</span></label>`;
-  }
   return `<div class="h-sugg" data-sugg="${id}"><p class="h-sugg-l">${head}${tracks}</p>`
     + `${s.why ? `<p class="h-sugg-why">${T(s.why)}</p>` : ''}`
-    + `${src.length ? `<p class="h-sugg-src">${src.join('. ')}.</p>` : ''}${rate}`
-    + `<div class="h-sugg-acts">${btn('Accept', `data-sugg-act="accept" data-id="${id}"`, 'pri')}${edit('Edit', '')}${btn('Dismiss', `data-sugg-act="dismiss" data-id="${id}"`, 'ghost')}</div></div>`;
+    + `${src.length ? `<p class="h-sugg-src">${src.join('. ')}.</p>` : ''}</div>`;
 }
+
+// A target Fathom set: says so, with Undo (restores what the goal had and declines the suggestion).
+const adoptedHtml = (g) => (g.adopted
+  ? `<p class="h-gset" data-goal-set="${esc(g.id)}">Fathom set this target. <button type="button" class="h-link" data-goal="undo" data-id="${esc(g.id)}">Undo</button></p>`
+  : '');
 
 // Edit from Home or Goals: the goal form on #/goals, prefilled from the suggestion's accept body;
 // a question or a dismissed suggestion opens it with the goal's own values. Nothing is saved.
@@ -734,32 +734,13 @@ function openSuggForm(id) {
   openGoalForm(g.id, draft);
 }
 
-// Accept, Edit, Dismiss and Accept all. Accept posts the record's accept body as the goal update;
-// Accept all posts each pending one in card order and redraws once.
+// Edit goal and Add one on a question or a declined suggestion open the goal's edit view.
 function suggClick(e) {
-  const t = e.target.closest('[data-sugg-act],[data-sugg-all]');
+  const t = e.target.closest('[data-sugg-act]');
   if (!t || !root.contains(t)) return false;
   e.preventDefault();
-  if (t.dataset.suggAll != null) {
-    const list = homeModelNow().pending.filter((s) => s.accept).map((s) => ({ id: s.goalId, fields: s.accept }));
-    if (list.length) api.goalsAccept(list);
-    return true;
-  }
-  const id = t.dataset.id;
-  const act = t.dataset.suggAct;
-  const s = suggOf(id);
-  if (act === 'edit') openSuggForm(id);
-  else if (act === 'accept' && s?.accept) api.goalUpdate(id, s.accept);
-  else if (act === 'dismiss' && s) api.goalSuggestion(id, { action: 'dismiss' });
+  if (t.dataset.suggAct === 'edit') openSuggForm(t.dataset.id);
   return true;
-}
-
-// The withdrawal rate input commits on change, as a fraction, clamped to the calculator's range.
-function suggRate(t) {
-  const v = Number(t.value);
-  if (t.value === '' || !Number.isFinite(v)) { draw(); return; }
-  const pv = Math.max(2, Math.min(6, v));
-  api.goalSuggestion(t.dataset.suggRate, { withdrawalRate: Math.round(pv * 100) / 10000 });
 }
 
 // Desktop: the next goal actions due before Dec 31, up to five, each with date, title and owner.
@@ -790,11 +771,10 @@ function pHome() {
   // The chip links to the pace board; a data excuse is never its label.
   const hc0 = healthChip(pace);
   const hc = hc0.tone === 'ok' || hc0.tone === 'warn' ? hc0 : { tone: 'mute', label: 'Pace board' };
-  const bulk = hd.bulk ? `<div class="h-home-bulk">${btn('Accept all', 'data-sugg-all="1"', 'pri')}${goA('goals', 'Review targets', {}, 'h-home-rev')}</div>` : '';
   const head = `<div class="h-home-head"><div class="h-home-k">${T(api.s.meta.clockLabel)}</div>`
     + `<a class="h-hchip ${hc.tone}" href="${href('pace')}" data-go="pace">${esc(hc.label)}${icon('arrow')}</a>`
     + `<h1 class="h-home-h">${esc(hd.title)}</h1>`
-    + `${dhealthHtml(homeHealth())}${bulk}</div>`;
+    + `${dhealthHtml(homeHealth())}</div>`;
   const cards = `<div class="h-gcards">${m.cards.map(goalCardHome).join('')}</div>`;
   const goalsH = `<div class="h-home-sec"><h2>Goals</h2>${goA('goals', 'All goals')}</div>`;
   const rest = `${goalsH}${cards}${hkHtml(m.housekeeping)}`;
@@ -919,6 +899,7 @@ function recRow(r, ny) {
       <p>${T(r.summary)}</p>
       ${recBlocker.html(r, 'plan')}
       ${recAnswers.html(r, 'plan')}
+      ${live ? recSteps.nextHtml(r) : ''}
       <div class="h-meta"><span>${T(r.triggerText || TRIGGER[r.trigger] || '')}</span>${r.status === 'done' || r.status === 'dismissed' ? '' : `<span>${T(r.window?.label || '')}</span>`}${r.effort ? `<span>${T(r.effort)}</span>` : ''}${values(r) ? `<span>${values(r)}</span>` : ''}${r.advisor ? `<span class="h-adv ${r.advisor.verdict}">${advisorText(r)}</span>` : ''}${servesHtml(r)}</div>
     </div>
     <div class="h-acts">${actionsFor(r, true).join('')}${advisorScreen.rowAction(r)}</div>
@@ -1031,7 +1012,6 @@ function dlgHtml(id) {
   const pend = chatScreen.recPendingHtml(r.id, tkey);
   const busy = chatScreen.askBusy() || !!ui.recReset[r.id];
   const tasks = arr(r.tasks);
-  const doneN = tasks.filter((t) => t.done).length;
   const ny = api.needsYou();
 
   const why = arr(r.why).map((p) => `<p>${T(p)}</p>`).join('');
@@ -1040,9 +1020,7 @@ function dlgHtml(id) {
   const cross = arr(r.cross).length ? `<ul class="h-cross">${arr(r.cross).map((x) => `<li>${T(x)}</li>`).join('')}</ul>` : '';
   const val = arr(r.value).length ? `<ul class="h-vals">${arr(r.value).map((v) => `<li><span class="h-vk">${VALUE[v.cls] || esc(v.cls)}</span><div>${T(v.text)}</div></li>`).join('')}</ul>` : '';
 
-  const pct = tasks.length ? doneN / tasks.length : 0;
-  const check = tasks.length ? `<div class="h-prog"><svg viewBox="0 0 100 4" preserveAspectRatio="none" aria-hidden="true"><rect class="bg" width="100" height="4" rx="2"/><rect class="fg" width="${pct * 100}" height="4" rx="2"/></svg><span>${doneN} of ${tasks.length}</span></div>
-    <ul class="h-tasks">${tasks.map((t, i) => `<li><button type="button" class="h-task${t.done ? ' done' : ''}" data-act="task" data-rec="${esc(r.id)}" data-arg="${i}" aria-pressed="${t.done}"><i>${t.done ? icon('check') : ''}</i><span>${T(t.t)}</span></button>${t.link ? recBlocker.linkHtml(r.id, t.link, 'h-task-go') : ''}${addBtn('step', `${r.id}:${i}`, api.txt(t.t))}</li>`).join('')}</ul>` : '<p class="h-mute">No steps.</p>';
+  const check = recSteps.html(r);
 
   const adv = advisorScreen.recBox(r);
 
@@ -1073,7 +1051,7 @@ function dlgHtml(id) {
         ${cross ? section('Touches', cross) : ''}
       </div>
       <div class="h-dside">
-        ${r.question?.primary ? '' : section('Steps', check)}
+        ${r.question?.primary && !tasks.length ? '' : section('Steps', check)}
         ${section('Advisor', adv)}
         ${wg}
       </div>
@@ -1354,9 +1332,33 @@ function openGoalForm(id, draft) {
 // Trackable figures the store holds, by the shared list.
 const trackFigures = () => KNOWN_FIGURES.filter((k) => api.s.fig && api.s.fig[k.key]);
 
+// The new-goal form: one sentence. Ask's goal operation turns it into a goal (the model picks the
+// kind, timing and whose goal), and Fathom's calculator sets the target.
+function newGoalHtml(f) {
+  return `<form class="h-gform h-gnew" data-goalform="1" aria-label="New goal" novalidate>
+    <h2>New goal</h2>
+    <label class="h-gf"><span class="h-gl">Your goal, in one sentence</span><input type="text" data-gf="title" maxlength="200" value="${esc(f.draft.title)}" placeholder="For example, six months of cash in the bank" autocomplete="off"></label>
+    <p class="h-mute sm">Fathom works out the timing and the target. Change anything later by telling Ask.</p>
+    ${f.err ? `<p class="h-gerr" role="alert">${esc(f.err)}</p>` : ''}
+    <div class="h-ob-nav">${btn('Cancel', 'data-goal="cancel"', 'ghost')}<button type="submit" class="h-btn pri">Add goal</button></div>
+  </form>`;
+}
+
+// Archive and Delete, at the foot of a goal's edit view (Delete asks first).
+const goalLifeHtml = (g) => (ui.goalDel === g.id ? goalDelAsk(g.id)
+  : `${btn('Archive', `data-goal="archive" data-id="${esc(g.id)}"`, 'ghost')}${btn('Delete', `data-goal="delete" data-id="${esc(g.id)}"`, 'ghost')}`);
+
 function goalFormHtml() {
   const f = ui.goalForm;
+  if (!f.id) return newGoalHtml(f);
   const d = f.draft;
+  const g0 = arr(api.s.goals).find((x) => x.id === f.id);
+  // A demo goal's words carry scenario tokens and stay as they are: its edit view is Archive and Delete.
+  if (g0 && g0.origin !== 'owner') {
+    return `<form class="h-gform" data-goalform="1" aria-label="Edit goal" novalidate><h2>Edit goal</h2>
+    <p class="h-mute">${goalTitle(g0)} came with the demo, so its words stay as they are.</p>
+    <div class="h-ob-nav"><span class="h-gform-life">${goalLifeHtml(g0)}</span><span class="h-gform-end">${btn('Cancel', 'data-goal="cancel"', 'ghost')}</span></div></form>`;
+  }
   const accts = arr(api.s.accounts).filter((a) => a.fig);
   const figs = trackFigures();
   const chip = (h) => `<button type="button" class="h-chip${d.horizon === h[0] ? ' on' : ''}" data-goal-h="${h[0]}" aria-pressed="${d.horizon === h[0]}">${h[1]}</button>`;
@@ -1387,7 +1389,7 @@ function goalFormHtml() {
     ${common}
     ${kindFieldsHtml()}
     ${f.err ? `<p class="h-gerr" role="alert">${esc(f.err)}</p>` : ''}
-    <div class="h-ob-nav">${markDone ? `${markDone}<span class="h-gform-end">${navEnd}</span>` : navEnd}</div>
+    <div class="h-ob-nav"><span class="h-gform-life">${markDone}${g ? goalLifeHtml(g) : ''}</span><span class="h-gform-end">${navEnd}</span></div>
   </form>`;
 
   // The rows for the goal's kind. Balance keeps the rows it always had (labels stay unique).
@@ -1490,6 +1492,13 @@ function goalFields(d) {
 function saveGoal() {
   const f = ui.goalForm;
   if (!f || f.saving) return;
+  if (!f.id) {
+    const text = String(f.draft.title || '').trim();
+    if (!text) { f.err = 'Write the goal in one sentence.'; draw(); return; }
+    ui.goalForm = null;
+    chatScreen.askNew(`Add a goal: ${text}`);
+    return;
+  }
   const { fields, err } = goalFields(f.draft);
   if (err) { f.err = err; draw(); return; }
   f.saving = true;
@@ -1529,6 +1538,8 @@ function kindCardHtml(g) {
   return '';
 }
 
+const goalDelAsk = (id) => `<span class="h-gdel">Delete for good?</span>${btn('Delete', `data-goal="delete-yes" data-id="${esc(id)}"`, 'danger')}${btn('Keep', 'data-goal="delete-no"', 'ghost')}`;
+
 function goalCard(g) {
   const owner = g.origin === 'owner';
   const kind = g.kind || 'balance';
@@ -1550,6 +1561,7 @@ function goalCard(g) {
     else if (g.trackWaiting) prog = `<p class="h-gnone">Target ${figHtml(tKey, { k: true })}. Waiting on a balance for what it tracks.</p>`;
     else prog = `<p class="h-gnone">Target ${figHtml(tKey, { k: true })}. <button type="button" class="h-link" data-goal="edit" data-id="${esc(g.id)}">Pick what to track</button> to see progress.</p>`;
   }
+  if (owner && !g.archived) prog += adoptedHtml(g);
   const meta = [];
   if (g.owner && personLabel(g.owner, hhNames())) meta.push(esc(personLabel(g.owner, hhNames())));
   if (g.priority && PRIORITY_LABEL[g.priority]) meta.push(`${PRIORITY_LABEL[g.priority]} priority`);
@@ -1559,11 +1571,12 @@ function goalCard(g) {
   const life = owner && !g.archived
     ? (doneOwner ? btn('Reopen', `data-goal="reopen" data-id="${esc(g.id)}"`, 'ghost') : btn('Mark done', `data-goal="done" data-id="${esc(g.id)}"`, 'ghost'))
     : '';
-  const del = ui.goalDel === g.id
-    ? `<span class="h-gdel">Delete for good?</span>${btn('Delete', `data-goal="delete-yes" data-id="${esc(g.id)}"`, 'danger')}${btn('Keep', 'data-goal="delete-no"', 'ghost')}`
-    : `${owner && !g.archived ? btn('Edit', `data-goal="edit" data-id="${esc(g.id)}"`, 'ghost') : ''}${life}${btn(g.archived ? 'Restore' : 'Archive', `data-goal="${g.archived ? 'restore' : 'archive'}" data-id="${esc(g.id)}"`, 'ghost')}${btn('Delete', `data-goal="delete" data-id="${esc(g.id)}"`, 'ghost')}`;
+  // A live goal's Archive and Delete live in its edit view; an archived one keeps Restore and Delete.
+  const del = !g.archived ? `${btn('Edit', `data-goal="edit" data-id="${esc(g.id)}"`, 'ghost')}${life}`
+    : ui.goalDel === g.id ? goalDelAsk(g.id)
+      : `${owner && g.status === 'done' ? btn('Reopen', `data-goal="reopen" data-id="${esc(g.id)}"`, 'ghost') : btn('Restore', `data-goal="restore" data-id="${esc(g.id)}"`, 'ghost')}${btn('Delete', `data-goal="delete" data-id="${esc(g.id)}"`, 'ghost')}`;
   const note = owner ? g.note : g.prose;
-  return `<article class="h-goal ${esc((g.statusLabel || g.status || '').replace(/\s+/g, '-'))}${g.archived ? ' archived' : ''}" data-goal-id="${esc(g.id)}"><div class="h-goal-h"><b>${goalTitle(g)}</b><span>${g.archived ? 'Archived' : doneOwner ? 'Done' : owner ? '' : T(g.statusLabel || g.status)}</span>${addBtn('goal', g.id, goalText(g))}</div>${note ? `<p>${gText(g, note)}</p>` : ''}${meta.length ? `<div class="h-meta">${meta.map((m) => `<span>${m}</span>`).join('')}</div>` : ''}${prog}<div class="h-gacts">${del}</div></article>`;
+  return `<article class="h-goal ${esc((g.statusLabel || g.status || '').replace(/\s+/g, '-'))}${g.archived ? ' archived' : ''}" data-goal-id="${esc(g.id)}"><div class="h-goal-h"><b>${goalTitle(g)}</b><span>${owner && g.status === 'done' ? 'Done' : g.archived ? 'Archived' : owner ? '' : T(g.statusLabel || g.status)}</span>${addBtn('goal', g.id, goalText(g))}</div>${note ? `<p>${gText(g, note)}</p>` : ''}${meta.length ? `<div class="h-meta">${meta.map((m) => `<span>${m}</span>`).join('')}</div>` : ''}${prog}<div class="h-gacts">${del}</div></article>`;
 }
 
 function pGoals() {
@@ -1578,12 +1591,6 @@ function pGoals() {
   const archived = all.filter((g) => g.archived);
   const axis = `<div class="h-gaxis">${bands.map((b) => `<div><b>${b[1]}</b><span>${b[2]}</span></div>`).join('')}</div>`;
   const cols = `<div class="h-gcols">${bands.map((b) => `<div class="h-gcol"><div class="h-gcol-h"><b>${b[1]}</b><span>${b[2]}</span></div>${goals.filter((g) => (g.horizon || 'now') === b[0]).map(goalCard).join('') || '<p class="h-mute sm">Nothing here.</p>'}</div>`).join('')}</div>`;
-  const curve = arr(api.s.curve).map((c) => {
-    const v = ui.curve[c.id] ?? c.value ?? 0.5;
-    return `<div class="h-curve"><div class="h-curve-ends"><span class="${v < 0.5 ? 'lean' : ''}">${T(c.left)}</span><span class="${v > 0.5 ? 'lean' : ''}">${T(c.right)}</span></div>
-      <input type="range" min="0" max="100" value="${Math.round(v * 100)}" data-curve="${esc(c.id)}" aria-label="${esc(api.txt(c.left) + ' or ' + api.txt(c.right))}">
-      ${c.note ? `<p>${T(c.note)}</p>` : ''}</div>`;
-  }).join('');
   const add = ui.goalForm && !ui.goalForm.id ? '' : `<div class="h-gadd">${btn(`${icon('plus')}Goal`, 'data-goal="new" aria-keyshortcuts="n"', 'pri')}<span class="h-mute sm">Press N</span></div>`;
   const form = ui.goalForm ? goalFormHtml() : '';
   // An open edit form names its goal for the Ask page chip.
@@ -1592,8 +1599,7 @@ function pGoals() {
   const arch = archived.length ? `<details class="h-garch" data-det="goals-archived"${ui.det['goals-archived'] ? ' open' : ''}><summary>${plural(archived.length, 'archived goal')}</summary><div class="h-garch-l">${archived.map(goalCard).join('')}</div></details>` : '';
   return shell(`${pageHead('Goals', 'Where you are headed', 'Goals in your own words, placed on the years they live in.')}
     ${add}${form}
-    ${axis}${cols}${arch}
-    ${curve ? section('Where on the curve', `<p class="h-mute">Every plan trades one thing for another. These set where you sit. Recommendations respect them.</p><div class="h-curves">${curve}</div>`) : ''}`);
+    ${axis}${cols}${arch}`);
 }
 
 function goalClick(t) {
@@ -1601,7 +1607,8 @@ function goalClick(t) {
   const act = d.goal;
   if (act === 'new') { openGoalForm(null); return; }
   if (act === 'edit') { openGoalForm(d.id); return; }
-  if (act === 'cancel') { ui.goalForm = null; draw(); return; }
+  if (act === 'cancel') { ui.goalForm = null; ui.goalDel = null; draw(); return; }
+  if (act === 'undo') { api.goalSuggestion(d.id, { action: 'undo' }); return; }
   if (act === 'archive' || act === 'restore') { if (ui.goalForm?.id === d.id) ui.goalForm = null; api.goalArchive(d.id, act === 'archive'); return; }
   if (act === 'delete') { ui.goalDel = d.id; draw(); return; }
   if (act === 'done' || act === 'reopen') {
@@ -2297,6 +2304,16 @@ function onClick(e) {
   }
   const ow = e.target.closest('[data-owner]');
   if (ow && root.contains(ow)) { e.preventDefault(); ui.owner = ow.dataset.owner; draw(); return; }
+  // An answer step's control: the answer form on the same rec, focused.
+  const sa = e.target.closest('[data-step-answer]');
+  if (sa && root.contains(sa)) {
+    e.preventDefault();
+    const host = sa.closest('.h-dlg, article') || root;
+    const form = host.querySelector(`[data-rec-answers="${CSS.escape(sa.dataset.stepAnswer)}"]`);
+    form?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    form?.querySelector('input:not([type=hidden]),select,button')?.focus({ preventScroll: true });
+    return;
+  }
   const an = e.target.closest('[data-ask-next]');
   if (an && root.contains(an)) { e.preventDefault(); askNext(an.dataset.askNext, an); return; }
   const sel = '[data-go],[data-act],[data-askrec],[data-recstart],[data-wg],[data-onboard],[data-savenote],[data-modal],[data-whatif],[data-packtoggle],[data-decide],[data-revisit],[data-dlg]';
@@ -2446,13 +2463,6 @@ function onInput(e) {
     if (go && was !== (t.value.trim() !== '') && !ui.noteBusy) go.outerHTML = noteGo(t.value.trim() !== '', false);
     return;
   }
-  if (t.dataset.curve) {
-    ui.curve[t.dataset.curve] = Number(t.value) / 100;
-    const box = t.closest('.h-curve');
-    const v = ui.curve[t.dataset.curve];
-    if (box) { const [l, r] = box.querySelectorAll('.h-curve-ends span'); l.classList.toggle('lean', v < 0.5); r.classList.toggle('lean', v > 0.5); }
-    return;
-  }
   if (t.dataset.prio) {
     ui.prio[t.dataset.prio] = Number(t.value) / 100;
     const [l, r] = t.parentElement.querySelectorAll('.h-curve-ends span');
@@ -2468,9 +2478,7 @@ function onChange(e) {
   const t = e.target;
   if (GF_ON_CHANGE.includes(t?.dataset?.gf)) { goalInput(t); return; }
   if (GF_REDRAW.includes(t?.dataset?.gf)) { goalInput(t, { commit: true }); return; }
-  if (t?.dataset?.suggRate) { suggRate(t); return; }
   if (t?.dataset?.recowner) { api.act(t.dataset.recowner, 'owner', t.value); return; }
-  if (t?.dataset?.curve) { api.setCurve(t.dataset.curve, Number(t.value) / 100); return; }
   if (t?.dataset?.prio) { api.setCurve(t.dataset.prio, Number(t.value) / 100); return; }
   ingest?.handleChange(e);
 }
@@ -2558,7 +2566,7 @@ function trapTab(e) {
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
-const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, recBlocker, accountScreen, trendScreen, pnlScreen, tour, memoriesScreen];
+const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, advisorScreen, yearendScreen, simplefin, recAnswers, recBlocker, recSteps, accountScreen, trendScreen, pnlScreen, tour, memoriesScreen];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(), composeLabel,

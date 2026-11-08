@@ -7,7 +7,11 @@ async function start(request) {
   expect((await scenario(request)).live.mode).toBe('demo');
   expect((await request.post('/api/demo/reset',{data:{}})).status()).toBe(200);
   const goal=await request.post('/api/goals',{data:{title:'A cash cushion',note:'Months of spending',horizon:'now'}});
-  expect(goal.status()).toBe(200); return (await goal.json()).goal.id;
+  expect(goal.status()).toBe(200); const id=(await goal.json()).goal.id;
+  // Fathom sets the cushion target itself; undo it so the goal keeps a declined suggestion record,
+  // whose spending figure this spec reads from the calculator.
+  expect((await request.post(`/api/goals/${id}/suggestion`,{data:{action:'undo'}})).status()).toBe(200);
+  return id;
 }
 async function serviceCard(page) {
   await page.goto('/#/confirm');
@@ -36,17 +40,11 @@ test('Check these learns a merchant rule, changes displayed spending, and undoes
   await card.getByRole('button',{name:/Business/}).click();
   const answer=await sent; expect(answer.status()).toBe(200); expect(answer.request().postDataJSON().answer).toBe('always:Business');
   const after=await scenario(request); expect(spending(after,id)).toBeLessThan(baseline);
-  await page.goto('/#/goals');
-  const target=page.locator(`[data-sugg="${id}"]`);
-  await expect(target).toContainText('From');
-  const changedText=await target.textContent();
   await page.goto('/#/confirm');
   const undo=page.waitForResponse(r=>r.request().method()==='POST' && /\/api\/confirm\/\d+\/reopen$/.test(new URL(r.url()).pathname));
   await page.locator('button[data-deck="undo"]').click();
   expect((await undo).status()).toBe(200);
   expect(spending(await scenario(request),id)).toBe(baseline);
-  await page.goto('/#/goals');
-  await expect(page.locator(`[data-sugg="${id}"]`)).not.toHaveText(changedText);
   await serviceCard(page);
   await page.screenshot({path:info.outputPath('check-these.png'),fullPage:true});
 });

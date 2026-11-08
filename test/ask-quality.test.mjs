@@ -1,9 +1,7 @@
 // AQ1 AC2, AC4 and AC5: Ask answer quality. A prose amount grounds against a signed (outflow)
 // transaction row and is sourced to that row (account, date, description); a date matching a row
-// date is sourced to that row; a lone unsourced amount is neutralized in place instead of
-// regenerating the whole answer; only an answer whose figures are mostly unsourced (two or more,
-// and more than half) is regenerated, once, shown as one "Revised to remove N unchecked figures"
-// step; the prompt asks for a short, direct answer and explains where spending lives; the tool
+// date is sourced to that row; any unsourced amount triggers one correction, shown as a
+// "Revised to remove N unchecked figures" step; the prompt asks for a short, direct answer and explains where spending lives; the tool
 // descriptions name card accounts, categories and business P&L.
 //
 // The live path runs a real fake-mode engine (createEngine) over a real store (createRealStore)
@@ -202,14 +200,14 @@ test('unmatched dates never trigger a regeneration; a date in the household data
   assert.equal(dated.provenance.grounding.ok, true, JSON.stringify(dated.provenance.grounding));
 });
 
-/* ---------- (c) one invented amount: neutralized in place, no regeneration ---------- */
+/* ---------- (c) one invented amount: corrected once ---------- */
 
-test('one sourced and one invented amount: one engine call, the sourced amount is fx-src, the invented one is unchecked in place', async t => {
+test('one sourced and one invented amount: one retry, sourced evidence survives, and an uncorrected amount stays unchecked', async t => {
   const s = await cardStore(t);
   const text = `You paid ${ROOF_TEXT} for the roof, and about ${INVENTED} more is still open.`;
   const { reply, calls } = await ask(s, [[{ toolCalls: [QUERY] }, { text }]]);
   assert.ok(!reply.notice, JSON.stringify(reply));
-  assert.equal(calls.length, 1, 'no regeneration');
+  assert.equal(calls.length, 2, 'one correction');
   const html = joined(reply);
   const title = sourceTitle(html, ROOF_TEXT);
   assert.ok(title, html);
@@ -217,16 +215,16 @@ test('one sourced and one invented amount: one engine call, the sourced amount i
   assert.ok(html.includes(`${UNCHECKED_OPEN}${INVENTED}</span>`), html);
   assert.ok(!html.includes('fx-unverified'), html);
   const { grounding, work } = reply.provenance;
-  assert.equal(grounding.retried, false);
+  assert.equal(grounding.retried, true);
   assert.equal(grounding.ok, false);
   assert.deepEqual(grounding.unverified, [INVENTED]);
-  assert.equal(grounding.revised, undefined);
+  assert.equal(grounding.revised, 1);
   assert.equal(work.items.some(x => x.draft), false, JSON.stringify(work.items));
   assert.equal(work.items.some(x => x.k === 'note' && x.text.trim() === text), false, 'the answer is not a work note');
-  assert.equal(work.items.some(x => x.k === 'step' && /^Revised/.test(x.label)), false);
+  assert.equal(work.items.filter(x => x.k === 'step' && /^Revised/.test(x.label)).length, 1);
 });
 
-/* ---------- (d) the regeneration threshold ---------- */
+/* ---------- (d) any unsupported figure ---------- */
 
 test('two of three figures unsourced regenerates once, shown as one revision step, with a plain reset after it', async t => {
   const s = await cardStore(t);
@@ -258,15 +256,15 @@ test('two of three figures unsourced regenerates once, shown as one revision ste
   assert.equal(after, second);
 });
 
-test('one invented amount among two sourced ones, or two among four, does not regenerate', async t => {
+test('even a minority of invented figures triggers correction', async t => {
   const s = await cardStore(t);
   for (const text of [
     `You paid ${ROOF_TEXT} and ${GROCER_TEXT}, and ${INVENTED} is still open.`,
     `You paid ${ROOF_TEXT} and ${GROCER_TEXT}, and ${INVENTED} plus ${INVENTED_2} are still open.`,
   ]) {
-    const { reply, calls } = await ask(s, [[{ toolCalls: [QUERY] }, { text }], [{ text: 'must not run' }]]);
-    assert.equal(calls.length, 1, `no regeneration: ${text}`);
-    assert.equal(reply.provenance.grounding.retried, false, text);
+    const { reply, calls } = await ask(s, [[{ toolCalls: [QUERY] }, { text }], [{ text }]]);
+    assert.equal(calls.length, 2, `one correction: ${text}`);
+    assert.equal(reply.provenance.grounding.retried, true, text);
     const html = joined(reply);
     assert.ok(html.includes(`${UNCHECKED_OPEN}${INVENTED}</span>`), html);
     assert.ok(sourceTitle(html, ROOF_TEXT) && sourceTitle(html, GROCER_TEXT), html);

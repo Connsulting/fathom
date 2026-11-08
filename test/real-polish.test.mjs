@@ -179,7 +179,7 @@ describe('engine models', () => {
     assert.equal(sc.engine.chat.model, '', 'the demo-only chat row stays empty in real mode');
   });
 
-  test('the Engine screen shows each purpose and its model', async () => {
+  test('the Engine screen shows each purpose with a neutral service label', async () => {
     const eng = await import('../web/horizon/screens/engine.js');
     const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
     const sc = buildScenario(await S.store(), { clock: NOW });
@@ -188,7 +188,11 @@ describe('engine models', () => {
       shell: html => html, section: (t, b) => b, pageHead: () => '',
     });
     const html = eng.render();
-    for (const { purpose, model } of sc.engine.models) assert.ok(html.includes(`data-purpose="${purpose}"`) && html.includes(model), purpose);
+    for (const { purpose, model } of sc.engine.models) {
+      assert.ok(html.includes(`data-purpose="${purpose}"`), purpose);
+      assert.ok(!html.includes(model), model);
+    }
+    assert.equal((html.match(/>Configured<\/b>/g) || []).length, sc.engine.models.length);
     assert.match(html, /Chat answers/);
   });
 });

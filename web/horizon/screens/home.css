@@ -130,23 +130,13 @@
 .d-horizon .h-sugg-why { color: var(--tx2); font-size: 13px; line-height: 1.45; }
 .d-horizon .h-sugg-src { color: var(--mu); font-size: 12.5px; line-height: 1.45; }
 .d-horizon .h-sugg-src .fx-fig { font-family: var(--mono); font-size: 12px; color: var(--tx2); }
-.d-horizon .h-sugg-rate { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; width: fit-content; max-width: 100%; color: var(--tx2); font-size: 13px; }
-.d-horizon .h-sugg-rate input {
-  width: 76px; min-height: 32px; padding: 4px 8px; border: 1px solid var(--line2); border-radius: 7px;
-  background: var(--bg); color: var(--tx); font: 13px var(--mono); color-scheme: dark;
-}
-.d-horizon .h-sugg-rate input:focus { outline: none; border-color: var(--ac); }
-.d-horizon .h-sugg-rate span { color: var(--mu); font-family: var(--mono); font-size: 12.5px; }
 .d-horizon .h-sugg-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 .d-horizon .h-gcard .h-gnone { margin-top: 0; }
 .d-horizon .h-goal .h-sugg { margin-top: 10px; padding: 10px 12px; }
 .d-horizon .h-goal .h-sugg-acts .h-btn { height: 28px; padding: 0 10px; font-size: 12.5px; }
+/* A target Fathom set: one quiet line with Undo. */
+.d-horizon .h-goal .h-gset { color: var(--mu); font-size: 12.5px; margin-top: 8px; }
 
-/* header bulk actions */
-.d-horizon .h-home-bulk { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
-.d-horizon .h-home-bulk .h-btn { height: 36px; padding: 0 16px; }
-.d-horizon .h-home-rev { color: var(--ac); font-size: 13.5px; }
-.d-horizon .h-home-rev:hover { color: var(--ac2); }
 
 /* ---------- desktop: due before Dec 31 ---------- */
 .d-horizon .h-due { margin-top: 28px; }
