@@ -1362,7 +1362,7 @@ the Advisor screen for re-download. The packet is not emailed.
 7. Email: `src/email` sends through `FATHOM_EMAIL_TRANSPORT` and the router passes the transport
    as `ctx.transport`; see "Email" below.
 
-## Jobs
+## Proactive jobs
 
 `src/jobs/scheduler.mjs` runs in process. `src/server.mjs` builds it after the engine is
 initialized with `createScheduler({db, config, engine, handlers: defaultHandlers({publicUrl}),
@@ -1404,16 +1404,37 @@ serves) and stops it before closing the store.
    refused with 409 before the scheduler, so nothing changes. `npm run plan` builds a scheduler
    with only the plan handler and runs it now; it exits 3, telling the owner to use Run now in the
    app or `POST /api/jobs/plan/run`, when another process (the running server) holds the lease.
-8. Confirm-guess job: `defaultHandlers` includes `confirm-guess`, the only code path that asks the
-   engine for confirm guesses. Nightly at 03:00, manual (Run now, `POST /api/jobs/confirm-guess/run`,
-   `npm run confirm:guess`) and ingest (`trigger('confirm-guess', 'ingest')` beside the plan trigger
-   after an upload or retry imports a file) runs share it. It calls `guessPending(db, engine, {now:
-   ctx.now})` until nothing is left. When that skips (engine off, not a live engine, nothing
-   pending) the run is `skipped` with note `{pending}`; otherwise it is `ok` with the batch cost
-   sum and note `{batches, items, guessed, stopped}`, also when an engine error stopped it.
-   `npm run confirm:guess` builds a scheduler with only this handler, runs it now and prints one
-   JSON line `{status, note}`; it exits 1 when there is no store and 3 when another process holds
-   the lease.
+8. In-product resolver: the stable `confirm-guess` job id now runs `resolvePending` from
+   `src/resolve/index.mjs`. Its Engine screen name is "Resolve open questions". Nightly at 03:00,
+   Run now (`POST /api/jobs/confirm-guess/run`), `npm run confirm:guess`, and the existing ingest
+   triggers share this handler. Local `autoResolve` and `deterministicGuess` rules run first, even
+   with the engine off. Categorizer proposals for fixed choices apply only at the policy's
+   auto-apply threshold. Remaining fixed choices and yes/no recommendation questions go through
+   one household engine call per batch, under purpose `job`, with stored facts, masked accounts,
+   answered history and active pack excerpts. Model results select option ids and named stored-row
+   or pack-entry refs; missing, changed, unknown and pack-only references are rejected. Number,
+   date and composite numeric answer shapes remain open.
+
+   Answers use `recordAutoAnswer`, including `resolver_fact` Confirm items that use the shared
+   fact-answer writer with channel `resolver`. The normal evidence and Undo ledger applies;
+   Undo restores pending state and declines the item permanently. Recommendation facts re-plan
+   deterministically after a run, without another model call. Evidence uses fixed plain language,
+   without categorization provider names, model names or confidence percentages.
+
+   Household outbound engine pause, engine off and unavailable instance funding stop external
+   calls. `settings.resolver.maxCostUsd` defaults to two dollars per run. Categorization and engine
+   calls share that ceiling and the monthly cap; each engine request reserves conservative input
+   and maximum output cost before dispatch, and carries its remaining call budget into the engine.
+   Unresolved items stay pending. Fingerprints in `settings.resolver.sent` record attempted items
+   and their supplied evidence, preventing repeated payment for unchanged inputs, including
+   malformed responses and billed failed calls.
+   Changed evidence permits another attempt. Unanswered recommendation items stay on their
+   recommendation instead of duplicating the pending Confirm deck. Demo jobs are skipped. A no-work run records `{pending}`; other
+   runs record cost and counts `{batches, items, guessed, stopped}`, where guessed counts answers.
+   The CLI prints only `{status, note}` and keeps its existing exit codes.
+
+   This deliberately replaces plan D6/D7's rule "A guess never answers anything" for the resolver.
+   The old suggestion reader remains for stored suggestions and card evidence.
 9. Triggers during a run: `trigger(jobId, reason)` for a job that is already running remembers the
    request, and when the current run finishes exactly one more run starts with that reason, so
    several triggers during one run coalesce into one rerun. `trigger` never rejects.
@@ -1975,7 +1996,7 @@ item's options, and its basis is one of six fixed codes (`REASON_CODES`); the st
 the fixed sentence for that code (`REASON_TEXT`), never model text, so no model-written figure
 reaches the card; every item sent gets a row (`option_id` NULL otherwise). It runs only on a live
 engine (or with a per-call fake script in tests) that is on; engine errors stop the run as
-`stopped`. Guesses never answer. It runs only as the scheduler job `confirm-guess` (see "Jobs"):
+`stopped`. The resolver supersedes this suggestion-only scheduler path (see "Proactive jobs"). Its stable job id is `confirm-guess`:
 daily at 03:00, after an upload or retry that imports a file, Run now, and `npm run confirm:guess`
 (`src/jobs/guess-cli.mjs`).
 
@@ -2891,7 +2912,7 @@ Category persistence uses `transaction_category_corrections` for personal transa
 
 `src/categories/jev.mjs` uses the pinned TypeSafe model `jev-1.14.0` through the optional `FATHOM_TYPESAFE_KEY_FILE` private key file. A missing file disables this provider. Requests contain redacted transaction descriptions, amount, account kind and date, with the household category vocabulary as choice criteria. Imported categories, source mappings and personal Confirm answers become training labels immediately. Retrieval ranks the nearest six prior dated labels by normalized merchant, description-token overlap, signed amount band and account. Automatic history application requires at least three unanimous examples, all with the exact normalized merchant, account, sign and an adjacent amount band. Disagreement sends those labeled examples to the model instead. No merchant rule is required. Household member names and account masks are removed locally; description digits are masked. Owner questions send local name-match fractions rather than holder names. Deterministic best guesses retain priority.
 
-`src/categories/policy.mjs` is the confidence-policy table. Only the model auto band changes calculator categories from model proposals; agreed history and structural rules can also classify locally. Review proposals remain Uncategorized and appear as Check these cards outside the spending-window and amount filters. Lower-confidence attempts remain Uncategorized and are not sent again; ordinary spending-window checks still apply. Uncalibrated older markers are replaced on the first Jev attempt. The existing `transaction_category_guesses.category` TEXT stores a JSON proposal containing category, confidence and probabilities; its model column remains the exact model id. Uncalibrated older suggestions are not applied. Jev review proposals persist independently of the queue limit, so the deck can contain more than ten of them. The ten-card limit applies only to deterministic category checks and mappings; answered auto items consume no queue slots. Auto application uses Confirm auto answers, plain category options and normal undo/revise. The resolver joins auto provenance, retains personal correction and import priority, and never learns history from automatic answers. Jev auto answers remain undoable after unrelated imports; row-change conflict checks still apply. Duplicate consolidation moves the proposal but drops its automatic correction, so the surviving row can be reviewed without creating owner-derived merchant memory; undo restores the original auto correction.
+`src/categories/policy.mjs` is the confidence-policy table. Only the categorizer auto band applies its proposals directly; remaining fixed choices can be answered by the household resolver when stored references support them. Resolver category answers retain automatic provenance and never teach history. Agreed history and structural rules can also classify locally. Review proposals remain Uncategorized and appear as Check these cards outside the spending-window and amount filters. Lower-confidence attempts remain Uncategorized and are not sent again; ordinary spending-window checks still apply. Uncalibrated older markers are replaced on the first Jev attempt. The existing `transaction_category_guesses.category` TEXT stores a JSON proposal containing category, confidence and probabilities; its model column remains the exact model id. Uncalibrated older suggestions are not applied. Jev review proposals persist independently of the queue limit, so the deck can contain more than ten of them. The ten-card limit applies only to deterministic category checks and mappings; answered auto items consume no queue slots. Auto application uses Confirm auto answers, plain category options and normal undo/revise. The resolver joins auto provenance, retains personal correction and import priority, and never learns history from automatic answers. Jev auto answers remain undoable after unrelated imports; row-change conflict checks still apply. Duplicate consolidation moves the proposal but drops its automatic correction, so the surviving row can be reviewed without creating owner-derived merchant memory; undo restores the original auto correction.
 
 Categorizer calls derive their token cap from the run dollar cap, defaulting to five cents, and reserve serialized UTF-8 bytes once plus per-question framing and shared context. Before each attempt, including retries, they recheck the household engine pause and both run and monthly caps. Actual usage replaces the reservation; a failed request with unknown usage is conservatively charged. Spend is recorded under purpose `categorize` with the pinned model. The scheduler shares one budget between category and closed-option guesses. Demo and disabled-engine jobs never call Jev.
 

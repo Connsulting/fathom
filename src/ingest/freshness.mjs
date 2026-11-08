@@ -148,7 +148,7 @@ function pendingWithGuesses(db) {
                                     FROM confirm_items ci LEFT JOIN files f ON f.id = ci.file_id
                                     LEFT JOIN confirm_guesses g ON g.item_id = ci.id
                                     WHERE ci.status = 'pending'`).all().map((r) => [r.id, r]));
-  const items = pendingItems(db).map((item) => {
+  const items = pendingItems(db).filter(item => item.kind !== 'resolver_fact').map((item) => {
     const r = extra.get(item.id);
     const detail = cardDetail(db, item);
     const g = bestGuess(db, item, detail);
