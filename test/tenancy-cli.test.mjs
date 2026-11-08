@@ -35,6 +35,14 @@ test('operational CLIs require registered household selectors without touching a
       const r = await run(entry, ['--household', fx.A.id], envOf(fx));
       assert.equal(r.code, 0, `${entry}: ${r.stderr}`);
     }
+    const { ask, KIND_OPTIONS } = await import('../src/ingest/confirm.mjs');
+    a.db.prepare('INSERT INTO accounts (id,name,inst,mask) VALUES (?,?,?,?)').run('synthetic-cli-checking', 'Synthetic checking', 'Example Bank', '1234');
+    ask(a.db, { kind: 'account_kind', subject: 'synthetic-cli-checking', question: 'What kind of account is this?', options: KIND_OPTIONS, now: '2026-11-05T12:00:00Z' });
+    const plansBefore = a.db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan'").get().n;
+    const guessed = await run('src/jobs/guess-cli.mjs', ['--household', fx.A.id], envOf(fx));
+    assert.equal(guessed.code, 0, guessed.stderr);
+    assert.equal(a.db.prepare("SELECT count(*) AS n FROM job_runs WHERE job_id = 'plan'").get().n, plansBefore + 1);
+    assert.equal(a.db.prepare("SELECT status FROM job_runs WHERE job_id = 'plan' ORDER BY id DESC LIMIT 1").get().status, 'ok');
     assert.ok(a.db.prepare('SELECT count(*) AS n FROM job_runs').get().n > 0);
     assert.equal(b.db.prepare('SELECT count(*) AS n FROM job_runs').get().n, 0);
     const mail = await run('scripts/email-test.mjs', ['--household', fx.A.id], envOf(fx));
