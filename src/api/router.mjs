@@ -31,6 +31,7 @@ import { HttpError, setSecurityHeaders, sendJson, sendError, guardPost, readJson
 import { guardUpload, readMultipart } from './upload.mjs';
 import { createStatic } from './static.mjs';
 import * as h from './handlers.mjs';
+import { blockAct } from './block-actions.mjs';
 import { recAnswers } from './fact-answers.mjs';
 import * as k from './keys.mjs';
 import { createMcpHandler } from '../mcp/index.mjs';
@@ -98,6 +99,7 @@ const TABLE = [
   { method: 'POST', path: '/api/threads', handler: h.threadCreate, stream: true },
   { method: 'GET', path: '/api/threads/:id', handler: h.threadGet },
   { method: 'GET', path: '/api/threads/:id/blocks', handler: blockStatus },
+  { method: 'POST', path: '/api/threads/:id/messages/:messageId/blocks/:blockId/act', handler: blockAct },
   { method: 'POST', path: '/api/threads/:id/rename', handler: h.threadRename },
   { method: 'POST', path: '/api/threads/:id/archive', handler: h.threadArchive },
   { method: 'POST', path: '/api/threads/:id/trash', handler: h.threadTrash },

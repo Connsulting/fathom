@@ -8,7 +8,7 @@ import { spendingInputs } from '../src/calc/targets.mjs';
 import { loadCategoryInputs } from '../src/categories/store.mjs';
 import { resolveCategories } from '../src/categories/resolve.mjs';
 import { classOf, BUILTIN_DEFINITIONS } from '../src/calc/classes.mjs';
-import { callTool, getTool } from '../src/tools/index.mjs';
+import { callTool, tools, getTool } from '../src/tools/index.mjs';
 import { assertRefsResolve } from './helpers/figures.mjs';
 
 const sum = (xs) => Math.round(xs.reduce((s, x) => s + x, 0) * 100) / 100;

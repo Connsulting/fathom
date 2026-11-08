@@ -423,3 +423,21 @@ test('AC1 the card shows no model-supplied amount or date', async () => {
   assert.ok(!/97361|97,361|2028/.test(html), 'no unsourced figure in the card');
   assert.match(html, /data-proposal-decide="confirm"/);
 });
+
+test('an incomplete recommendation answer proposal preserves the confirmation and refusal note', async t => {
+  const s = await setup(t);
+  const def = { id: 'synthetic-questions', title: 'Synthetic coverage', question: { keys: ['benefits.hsaCoverage', 'business.cashBasis'], primary: true } };
+  s.db.prepare("INSERT INTO recs (id, def, status, updated_at) VALUES (?, ?, 'waiting', ?)").run(def.id, JSON.stringify(def), now);
+  const fake = scriptedEngine([[
+    { toolCalls: [{ name: 'answer', args: { operation: 'rec_questions', recId: def.id, answers: [{ key: 'benefits.hsaCoverage', value: 'family' }], evidence: 'family', propose: true } }] },
+    { text: 'Record family coverage?' },
+  ], [{ text: 'That change was not saved. Please answer each question on this recommendation.' }]]);
+  const ctx = context(s, fake.engine);
+  const first = await threadCreate({ ...ctx, body: { text: 'We have family coverage.' } });
+  assert.equal(first.message.provenance.pendingAction.operation, 'rec_questions');
+  const result = await decide(ctx, first.thread, first.message.id, 'confirm');
+  assert.equal(lastOwnerText(s.db, first.thread.key), 'Confirmed');
+  assert.match(plain(result.message.text), /That change was not saved/);
+  assert.ok(JSON.stringify(fake.calls.at(-1)).includes('answer each question on this recommendation'));
+  assert.equal(receiptCount(s.db), 0);
+});

@@ -108,17 +108,33 @@ export function applyCategoryAnswer(db,item,optionId,{now}={}) {
     return {};
   }
   const always=optionId.startsWith('always:'), category=always ? optionId.slice(7) : optionId;
+  setTransactionCategory(db, c.transactionId, category, { now: at });
+  const t=db.prepare('SELECT description FROM transactions WHERE id=?').get(c.transactionId);
+  const merchant=normalizeMerchant(t.description);
+  if(always && merchant) setMerchantRule(db, merchant, category, { now: at });
+  return {};
+}
+function bucketForCategory(db, category) {
   const mapped=[...new Set(db.prepare('SELECT bucket FROM category_source_rules WHERE category=?').all(category).map(r=>r.bucket))];
   const bucket=sourceBucket('aggregator',category) ?? (mapped.length===1?mapped[0]:null);
   if(!bucket) throw new ConfirmError('bad_option');
-  const t=db.prepare('SELECT * FROM transactions WHERE id=?').get(c.transactionId);
+  return bucket;
+}
+export function setTransactionCategory(db, transactionId, category, { now } = {}) {
+  const t=db.prepare('SELECT id FROM transactions WHERE id=?').get(transactionId);
   if(!t) throw new ConfirmError('stale');
+  const bucket=bucketForCategory(db,category);
   db.prepare(`INSERT INTO transaction_category_corrections VALUES (?,?,?,?) ON CONFLICT(transaction_id)
-    DO UPDATE SET category=excluded.category,bucket=excluded.bucket,updated_at=excluded.updated_at`).run(t.id,category,bucket,at);
-  const merchant=normalizeMerchant(t.description);
-  if(always && merchant) db.prepare(`INSERT INTO category_merchant_rules VALUES (?,?,?,?) ON CONFLICT(merchant)
-    DO UPDATE SET category=excluded.category,bucket=excluded.bucket,updated_at=excluded.updated_at`).run(merchant,category,bucket,at);
-  return {};
+    DO UPDATE SET category=excluded.category,bucket=excluded.bucket,updated_at=excluded.updated_at`).run(t.id,category,bucket,nowOf(now));
+  return { id:t.id, category, bucket };
+}
+export function setMerchantRule(db, merchant, category, { now } = {}) {
+  merchant=normalizeMerchant(merchant);
+  if(!merchant) throw new ConfirmError('bad_option');
+  const bucket=bucketForCategory(db,category);
+  db.prepare(`INSERT INTO category_merchant_rules VALUES (?,?,?,?) ON CONFLICT(merchant)
+    DO UPDATE SET category=excluded.category,bucket=excluded.bucket,updated_at=excluded.updated_at`).run(merchant,category,bucket,nowOf(now));
+  return { merchant, category, bucket };
 }
 export function categoryDetail(db,item) {
   const c=item.context;

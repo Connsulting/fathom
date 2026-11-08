@@ -266,3 +266,20 @@ test('ask threads keep token-bearing HTML as stored', () => withSeeded(db => {
   assert.ok(!conv[0].notice);
   assert.ok(conv[0].id != null && conv[0].ts);
 }));
+
+
+test('war-game starters lead only for open and upcoming games', () => withSeeded(db => {
+  const ids = sc => sc.live.askStarters.map(s => s.id);
+  assert.deepEqual(ids(buildScenario(db)).slice(0, 1), ['wargame-deferral']);
+  db.prepare("UPDATE decisions SET status = 'open', decided_line = NULL WHERE id = 'salary26'").run();
+  assert.deepEqual(ids(buildScenario(db)).slice(0, 2), ['wargame-salary', 'wargame-deferral']);
+  db.prepare("UPDATE decisions SET status = 'upcoming', opens_on = '2027-01-01' WHERE id = 'salary26'").run();
+  assert.equal(ids(buildScenario(db))[0], 'wargame-salary');
+  const raw = JSON.parse(db.prepare("SELECT value FROM content WHERE key = 'wargame'").get().value);
+  raw.salary.unavailable = 'Changed inputs';
+  db.prepare("UPDATE content SET value = ? WHERE key = 'wargame'").run(JSON.stringify(raw));
+  db.prepare("UPDATE decisions SET unavailable_reason = 'Changed inputs' WHERE wargame = 'salary'").run();
+  assert.ok(!ids(buildScenario(db)).includes('wargame-salary'));
+  db.prepare("UPDATE decisions SET status = 'decided' WHERE wargame = 'deferral'").run();
+  assert.ok(!ids(buildScenario(db)).includes('wargame-deferral'));
+}));
