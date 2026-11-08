@@ -52,7 +52,7 @@ const proposeTurn = (input = args, text = PROPOSAL_TEXT, operation = 'create') =
 ];
 
 function context(s, engine, extra = {}) {
-  return { db: s.db, config: {}, answerer: createLiveAnswerer({ engine, root: s.root }), ...extra };
+  return { db: s.db, config: {}, answerer: createLiveAnswerer({ engine, root: s.root, services: { engine, config: { dataDir: s.root } } }), ...extra };
 }
 
 const goalCount = db => db.prepare('SELECT count(*) AS n FROM goals').get().n;

@@ -40,7 +40,7 @@ async function ask(t, scripts, question = 'Describe the household plan.', { setu
   } };
   const scenario = buildScenario(store.db, { packs });
   const text = typeof question === 'function' ? question(scenario) : question;
-  const reply = await createLiveAnswerer({ engine, packs, root: store.root, onRead: r => reads.push(r) }).answer({
+  const reply = await createLiveAnswerer({ engine, packs, root: store.root, services: { engine, packs, config: { dataDir: store.root } }, onRead: r => reads.push(r) }).answer({
     db: store.db, key, text, actorId, ownerText: text,
   });
   assert.ok(!reply.notice, JSON.stringify(reply));

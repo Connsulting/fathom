@@ -77,7 +77,7 @@ function fakeEngine(scripts) {
 
 async function ask(s, scripts, { onEvent } = {}) {
   const { engine, calls } = fakeEngine(scripts);
-  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root }).answer({
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({
     db: s.db, key: THREAD, text: 'Where did my card spending go last month?', ...(onEvent ? { onEvent } : {}),
   });
   return { reply, calls };

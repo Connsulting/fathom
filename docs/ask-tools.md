@@ -434,8 +434,8 @@ MCP is stateless per request, so references are re-evaluable, not session handle
    tools; `destructiveHint` stays false (the one destructive operation, `update_account.merge`,
    needs `confirm: true` and the owner's confirming words).
 5. Ask runs the same registry through `createRegistryServer`. Read tools are offered for every
-   purpose that offers tools today; write tools only for purpose `chat`. `undo` is MCP-only on
-   main (as the five `undo_*_action` tools are) until C2 offers it to Ask too.
+   purpose that offers tools today; write tools, including `undo`, only for purpose `chat`.
+   MCP offers `undo` to a key with any write scope and checks the receipt's scope on each call.
 6. Results carry account masks only, resolve scenario tokens to plain text and never include
    hidden recs (existing rules).
 7. Write results carry the ask-actions receipt `{ id, scope, label, before, after, actorId, ts,
@@ -985,8 +985,8 @@ Progress label "Updating the advisor review". Ticket: C9. Scope: `write:recs`.
 | checkin | `date`, `time?` (`HH:MM`), `lengthMin?` (15..480) | `{ checkin, receipt }` | `advisor_checkin` (table `advisor_checkin`) | planned `set_advisor_checkin` |
 | packet | none | `{ packetId, recIds, receipt }` | not available: a stored packet is a record | planned `create_review_packet` |
 
-The verdict and note must come from the owner's words (`requireEvidence`). `packet` needs the data
-key from `ctx.services` (C2); `createPacket`'s body moves into `buildAndStorePacket`
+The verdict and note must come from the owner's words (`requireEvidence`). `packet` gets its
+household vault from `ctx.services.vault()` (C2); `createPacket`'s body moves into `buildAndStorePacket`
 (`src/advisor/packet.mjs`). Reuses `sendToAdvisor`, `recordVerdict`, `applyStatusAction` with
 `VETO_REASON`, `setCheckin`, `storePacket`, `buildPacketHtml`.
 
@@ -1343,7 +1343,7 @@ route's response shape is the screen's, not the tool's.
 
 ### Route map
 
-All 96 routes on main at this revision: 52 covered, 44 excluded. "Ticket" is the ticket that
+All 100 routes on main at this revision: 52 covered, 48 excluded. "Ticket" is the ticket that
 lands the covering operation.
 
 | Route | Covered by | Ticket | Note |
@@ -1368,6 +1368,7 @@ lands the covering operation.
 | `POST /api/operator/households` | excluded: administration | | |
 | `GET /api/scenario` | `household.summary` | C1 | the UI payload; its parts are also `recommendations.list`, `household.figures`, `household.deadlines` and `goals.list` |
 | `GET /api/pace` | `goals.pace` | C1 |  |
+| `POST /api/tour/seen` | excluded: onboarding wizard | | per-person guided-tour completion |
 | `GET /api/identity` | excluded: identity and sessions | | |
 | `POST /api/recs/:id/action` | `act_on_recommendation.status`, `act_on_recommendation.owner`, `act_on_recommendation.step` | C1 | snooze is status snoozed with wake |
 | `POST /api/actions/:id/undo` | `undo.undo` | C1 |  |
@@ -1394,7 +1395,7 @@ lands the covering operation.
 | `POST /api/threads/:id/trash` | excluded: conversation chrome | | |
 | `POST /api/threads/:id/restore` | excluded: conversation chrome | | |
 | `POST /api/threads/:id/delete` | excluded: conversation chrome | | |
-| `POST /api/threads/:id/proposals/:messageId` | excluded: conversation chrome | | |
+| `POST /api/threads/:id/proposals/:messageId` | excluded: conversation chrome | | explicit confirmation of a stored Ask proposal |
 | `GET /api/accounts/:id` | `accounts.detail` | C5 |  |
 | `GET /api/accounts/:id/transactions` | `transactions.search` | C1 | `accountId` set |
 | `GET /api/pnl` | `business.pnl` | C4 | C1's `pnl` reads workbook lines only, as `pnl_by_month` does; the route also derives P&L from categorized transactions, which C4's `businessPnl` build covers |
@@ -1415,7 +1416,6 @@ lands the covering operation.
 | `POST /api/goals/:id/suggestion` | `update_goal.suggestion` | C9 |  |
 | `POST /api/curve` | `update_preferences.curve` | C9 |  |
 | `POST /api/onboarding` | excluded: onboarding wizard | | |
-| `POST /api/tour/seen` | excluded: guided tour state | | |
 | `POST /api/onboarding/notes` | `refresh.import_file` | C10 | a `text/markdown` note |
 | `POST /api/demo/reset` | excluded: demo reset | | |
 | `GET /api/keys` | excluded: API keys | | |
@@ -1446,6 +1446,8 @@ lands the covering operation.
 | `POST /api/simplefin/disconnect` | excluded: bank credentials | | |
 | `POST /api/yearend/marks` | `answer.yearend_mark` | C8 |  |
 | `GET /api/yearend/packet` | excluded: file download | | |
+| `GET /api/household/outbound` | excluded: administration | | |
+| `POST /api/household/outbound` | excluded: administration | | |
 
 ### Exclusions
 
@@ -1468,7 +1470,7 @@ Eleven reasons, each a whole class of routes:
 8. Conversation chrome (`/api/ask`, threads, the pack what-if): an MCP client keeps its own
    conversations, Ask creating or renaming its own threads is a loop with no owner value, and the
    pack what-if is itself an Ask answer.
-9. Onboarding wizard step: first-run sequencing for the wizard. Facts said in chat go through
+9. Onboarding wizard step and per-person guided-tour completion: first-run sequencing. Facts said in chat go through
    `answer.fact`; setup notes through `refresh.import_file`.
 10. File downloads (the advisor packet and the year-end packet): binary attachments for a
     browser, not data for an agent; the data inside them is readable through
@@ -1711,15 +1713,18 @@ Depends on: C1.
 Files: `src/shared/action-scopes.mjs`, `src/mcp/keys.mjs` (`SCOPE_INFO`), `src/actions/receipts.mjs`
 (`registerReceiptKind(kind, { table, pk } or { restore })` replaces the fixed table; kind
 `setting`), `src/tools/catalog/undo.mjs` (`undo` loses `mcpOnly`; `capabilities:
-['ownerStatements']`), `src/server.mjs` (one `services` object), `src/mcp/index.mjs`
+['ownerStatements']`), `src/platform/runtime.mjs` (one `services` object per household), `src/mcp/index.mjs`
 (`ctx.services`, `ctx.ownerStatements`), `src/api/answerer.mjs` (`createLiveAnswerer` accepts
 `services` and puts it, with `ownerStatements` bound to `src/actions/evidence.mjs`, on the tool
 context), `src/tools/parity.mjs` (new), `src/mcp/test/keys.test.mjs`,
 `test/write-scopes.test.mjs` (new), `test/tool-services.test.mjs` (new),
 `test/tools-parity.test.mjs` (new).
 
-`services` is `{ scheduler, engine, config: { dataDir, dataKeyFile, clock }, dataKey() }`, built
-once in `src/server.mjs` and passed to both `createMcpHandler` and `createLiveAnswerer`.
+`services` is `{ scheduler, engine, config: { dataDir, clock }, vault(), household }`, built
+once per household in `src/platform/runtime.mjs` and shared by MCP and `createLiveAnswerer`.
+`dataDir` is the household root; `vault()` returns that household's vault root and key handle.
+`household` resolves the immutable runtime. Public demo sandboxes use the same factory before
+wrapping the answerer with visitor limits. `createLiveAnswerer` requires `services`.
 
 Done when:
 
