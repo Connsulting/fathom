@@ -42,15 +42,12 @@ export function mineOf(ctx, keys, { actualOnly = false } = {}) {
   return keys.filter(k => k && ctx.fig[k] && (!actualOnly || ctx.fig[k].kind === 'a')).slice(0, 5).map(k => ({ label: dataText(ctx.fig[k].label), fig: k }));
 }
 
-const GENERIC_TASKS = ['Review the figures behind this on the plan', 'Mark it done once it is handled', 'Ask a follow-up question if anything looks off'];
-
 // Tasks are text, or {t, link} when the step is done on another page: link names where ('upload',
-// 'confirm', 'ask' or 'accounts').
+// 'confirm', 'ask' or 'accounts'). Duplicates go and at most six are kept; a short list is never
+// padded with filler, since every step is one the owner reports with "I did this".
 export function padTasks(list) {
   const seen = new Set();
-  const tasks = list.filter(Boolean).map(x => (typeof x === 'string' ? { t: x } : x)).filter(x => (seen.has(x.t) ? false : (seen.add(x.t), true))).slice(0, 6);
-  for (const t of GENERIC_TASKS) if (tasks.length < 3 && !seen.has(t)) { seen.add(t); tasks.push({ t }); }
-  return tasks;
+  return list.filter(Boolean).map(x => (typeof x === 'string' ? { t: x } : x)).filter(x => (seen.has(x.t) ? false : (seen.add(x.t), true))).slice(0, 6);
 }
 
 export const CONFIRM_TASKS = Object.freeze({

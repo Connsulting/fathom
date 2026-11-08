@@ -86,6 +86,13 @@ test('numeric grader distinguishes returned, unsourced and self-computed amounts
   assert.equal(gradeFigures('$150', [result('$150')]).ok, true);
 });
 
+test('digit counts of returned list items have the same exemption as spelled-out counts', () => {
+  const calls = [{ name: 'accounts', args: { operation: 'list' }, result: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] }];
+  for (const text of ['You have 3 accounts.', 'You have three accounts.']) assert.equal(gradeFigures(text, calls).ok, true, text);
+  for (const text of ['You have 4 accounts.', 'You have four accounts.', 'The balance is $3.', 'The rate is 3%.'])
+    assert.equal(gradeFigures(text, calls).ok, false, text);
+});
+
 test('args, result echoes, identifiers, keys, labels and dates cannot source figures', () => {
   for (const call of [
     { name: 'read', args: { minAmount: 150 }, result: {} },
