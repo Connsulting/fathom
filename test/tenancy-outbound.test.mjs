@@ -168,7 +168,7 @@ describe('the migrated household starts paused and resumes only explicitly', T, 
     assert.equal((await admin.client.postJson('/api/jobs/freshness/run', {})).status, 409);
   });
 
-  test('resumed email delivers to an enrolled member only; an unverified recipient never sends', async () => {
+  test('resumed email delivers to the migrated member and ignores later global routing changes', async () => {
     const body = await setFlags({ email: true });
     assert.deepEqual(body.email, RESUMED);
     const before = outboxFiles();
@@ -178,13 +178,12 @@ describe('the migrated household starts paused and resumes only explicitly', T, 
     assert.equal(outboxFiles().length, before.length + 1, 'one message in households/<id>/outbox');
 
     await restart({ extra: { FATHOM_EMAIL_TO: 'outsider@example.test' } });
-    assert.deepEqual((await outbound(admin.client)).email, { enabled: true, effective: false, reason: 'recipient_unverified' });
-    const unverifiedBefore = outboxFiles();
-    const refused = await admin.client.postJson('/api/email/test', {});
-    assert.equal(refused.status, 200);
-    assert.equal(refused.json.send.status, 'failed');
-    assert.equal(refused.json.send.errorCode, 'recipient_unverified');
-    assert.deepEqual(outboxFiles(), unverifiedBefore);
+    assert.deepEqual((await outbound(admin.client)).email, RESUMED, 'global settings no longer reroute initialized subscriptions');
+    const beforeRestartedSend = outboxFiles();
+    const preserved = await admin.client.postJson('/api/email/test', {});
+    assert.equal(preserved.status, 200);
+    assert.equal(preserved.json.send.status, 'sent');
+    assert.equal(outboxFiles().length, beforeRestartedSend.length + 1);
   });
 
   test('live engine with a missing credential: credential_unavailable, and Ask refuses', async () => {
