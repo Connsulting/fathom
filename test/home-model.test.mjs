@@ -11,7 +11,7 @@ import assert from 'node:assert/strict';
 import { rmSync } from 'node:fs';
 import {
   ownerMatches, servedGoalIds, isHousekeepingItem, isOpen, goalChip, healthChip,
-  paceReason, paceBar, REASON_TEXT, reasonText, homeModel, homeHeadline, healthLine, boardCharts
+  paceReason, paceBar, REASON_TEXT, reasonText, homeModel, homeHeadline, healthLine, boardCharts, cardChip, paceMeters
 } from '../web/horizon/screens/home-model.js';
 import { OWNERS } from '../src/shared/rec-links.mjs';
 import { seedDemo } from '../demo/seed.mjs';
@@ -528,19 +528,41 @@ test('homeModel cards carry their suggestion record or null, and pending counts 
 
 /* ---------- headline ---------- */
 
-const headline = (m, pace) => homeHeadline({ cards: m.cards, pace, pending: m.pending });
+const headline = (m, pace) => homeHeadline({ cards: m.cards, pace, pending: m.pending, due: m.due, filter: m.filter });
 
-test('homeHeadline: any goal with a target keeps the pace headline, and bulk needs two pending', () => {
+test('homeHeadline verdict: any goal with a target says covered or how many things need you, and bulk needs two pending', () => {
   const goals = [goal('t'), goal('a'), goal('b')];
   const pace = paceOf([pg('t', 'on pace', { timeGap: 'On pace' }), pg('a', 'no target'), pg('b', 'no target')], { headline: 'Pace headline' });
   const two = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: [sugg('a'), sugg('b')] });
-  assert.deepEqual(headline(two, pace), { title: 'Pace headline', bulk: true });
+  assert.deepEqual(headline(two, pace), { title: 'You are covered through Dec 31', verdict: 'covered', needs: 0, bulk: true });
   const one = homeModel({ goals, pace, recs: [], filter: 'both', clock: CLOCK, suggestions: [sugg('a'), sugg('b', 'question')] });
-  assert.deepEqual(headline(one, pace), { title: 'Pace headline', bulk: false });
-  // A stale or unknown targeted goal still has a target: the pace headline stays.
-  const stalePace = paceOf([pg('t', 'unknown'), pg('a', 'no target')], { headline: 'Stale headline' });
-  const stale = homeModel({ goals: goals.slice(0, 2), pace: stalePace, recs: [], filter: 'both', clock: CLOCK, suggestions: [sugg('a')] });
-  assert.equal(headline(stale, stalePace).title, 'Stale headline');
+  assert.deepEqual(headline(one, pace), { title: 'You are covered through Dec 31', verdict: 'covered', needs: 0, bulk: false });
+});
+
+test('homeHeadline verdict counts the goal actions due before Dec 31 for the filter, never housekeeping or later ones', () => {
+  const goals = [goal('t')];
+  const pace = paceOf([pg('t', 'behind', { timeGap: '2 months behind' })]);
+  const recs = [rec('r1', { serves: ['t'], days: 10 }), rec('r2', { serves: ['t'], days: 20, owner: 'spouse' }), rec('hk', { days: 5 }), rec('late', { serves: ['t'], days: 400 })];
+  const both = homeModel({ goals, pace, recs, filter: 'both', clock: CLOCK });
+  assert.deepEqual(headline(both, pace), { title: '2 things need you before Dec 31', verdict: 'needs', needs: 2, bulk: false });
+  const me = homeModel({ goals, pace, recs, filter: 'me', clock: CLOCK });
+  assert.equal(headline(me, pace).title, '1 thing needs you before Dec 31');
+  const spouse = homeModel({ goals, pace, recs: recs.filter((r) => r.id !== 'r1'), filter: 'spouse', clock: CLOCK });
+  assert.equal(headline(spouse, pace).title, '1 thing needs your spouse before Dec 31');
+  const spouseFree = homeModel({ goals, pace, recs: [recs[0]], filter: 'spouse', clock: CLOCK });
+  assert.equal(headline(spouseFree, pace).title, 'Your spouse is covered through Dec 31');
+});
+
+test('homeHeadline verdict is never a data excuse, even when every targeted goal is stale or unknown', () => {
+  const goals = [goal('t'), goal('u'), goal('a')];
+  const stalePace = paceOf([pg('t', 'unknown'), pg('u', 'unknown', { reason: 'unknown_freshness', stale: false }), pg('a', 'no target')], { headline: 'Pace is unknown: data is stale' });
+  for (const recs of [[], [rec('r1', { serves: ['t'], days: 3 })]]) {
+    const m = homeModel({ goals, pace: stalePace, recs, filter: 'both', clock: CLOCK, suggestions: [sugg('a')] });
+    const t = headline(m, stalePace).title;
+    assert.notEqual(t, stalePace.rollup.headline);
+    assert.doesNotMatch(t, /stale|unknown|data|missing/i, t);
+    assert.match(t, /^(You are covered|1 thing needs you)/, t);
+  }
 });
 
 test('homeHeadline: no targets and pending suggestions say how many goals have a suggested target', () => {
@@ -608,8 +630,10 @@ test('homeModel over the seeded demo store matches the server housekeeping count
     }
     assert.equal(pendingCount(m.pending), 0);
     for (const r of m.due) assert.equal(r.housekeeping, false, `${r.id} in due is not housekeeping`);
-    // Seed goals with targets exist on the demo, so Home keeps the pace headline.
-    assert.equal(headline(m, sc.pace).title, sc.pace.rollup.headline);
+    // Seed goals with targets exist on the demo, so Home gives the verdict over the due list.
+    const v = headline(m, sc.pace);
+    assert.equal(v.needs, m.due.length);
+    assert.equal(v.title, m.due.length ? `${m.due.length} thing${m.due.length === 1 ? ' needs' : 's need'} you before Dec 31` : 'You are covered through Dec 31');
   } finally {
     t.close();
     rmSync(t.dataDir, { recursive: true, force: true });
@@ -654,6 +678,43 @@ test('healthLine names stale goals only when no account is stale, with singular 
   assert.deepEqual(both.parts, ['Data through Aug 7', '2 accounts stale'], 'stale accounts replace the stale goals part');
   assert.equal(both.staleGoals, 3);
   assert.equal(both.stale, true);
+});
+
+test('healthLine owner-only data line: one "Fathom needs" link over the things only the owner can do', () => {
+  const stalePace = paceOf([pg('a', 'unknown', { dataThrough: '2026-08-07' })]);
+  // Stale goal pace alone is not an owner item: the line is the data date, with no link.
+  const quiet = healthLine({ pace: stalePace, ingest: ingestOf(0), accounts: [{ fresh: 'fresh' }], metaDataThrough: null });
+  assert.equal(quiet.line, 'Data through Aug 7');
+  assert.deepEqual(quiet.owner, []);
+  assert.equal(quiet.needs, 0);
+  assert.equal(quiet.needsLabel, null);
+
+  // Questions, then stale accounts, then failed files; the link goes to the first.
+  const all = healthLine({ pace: stalePace, ingest: ingestOf(3, ['failed']), accounts: [{ fresh: 'stale' }, { fresh: 'stale' }], metaDataThrough: null });
+  assert.deepEqual(all.owner, [
+    { key: 'confirm', text: '3 questions to confirm', go: 'confirm' },
+    { key: 'accounts', text: '2 accounts stale', go: 'accounts' },
+    { key: 'files', text: '1 file failed', go: 'add' }
+  ]);
+  assert.equal(all.needs, 3);
+  assert.equal(all.needsLabel, 'Fathom needs 3 things');
+  assert.equal(all.needsGo, 'confirm');
+  assert.equal(all.line, 'Data through Aug 7');
+
+  const one = healthLine({ pace: stalePace, ingest: ingestOf(0, ['failed', 'failed']), accounts: [], metaDataThrough: null });
+  assert.equal(one.needsLabel, 'Fathom needs 1 thing');
+  assert.equal(one.needsGo, 'add');
+  assert.deepEqual(one.owner.map((x) => x.text), ['2 files failed']);
+});
+
+test('cardChip drops the stale and unknown chips a goal card used to carry, keeping progress chips', () => {
+  assert.equal(cardChip(pg('a', 'unknown')), null, 'stale');
+  assert.equal(cardChip(pg('a', 'unknown', { reason: 'unknown_freshness', stale: false })), null, 'unknown');
+  assert.deepEqual(cardChip(pg('a', 'behind', { timeGap: '2 months behind' })), { tone: 'warn', label: '2 months behind' });
+  assert.deepEqual(cardChip(pg('a', 'on pace')), { tone: 'ok', label: 'On pace' });
+  assert.deepEqual(cardChip(pg('a', 'no target')), { tone: 'mute', label: 'No target' });
+  assert.deepEqual(cardChip({ ...pg('f', 'unknown'), kind: 'floor', floor: { state: 'breached' } }), { tone: 'warn', label: 'Below floor' });
+  for (const c of [pg('a', 'unknown'), pg('b', 'ahead'), pg('c', 'behind')]) assert.notEqual(cardChip(c)?.label, 'Data stale');
 });
 
 test('healthLine falls back to the meta label, then to No data yet, and is not stale when current', () => {
@@ -710,4 +771,15 @@ test('boardCharts falls back to one chart per pace goal with a series, in pace o
 test('boardCharts is empty when no series exists', () => {
   assert.deepEqual(boardCharts(paceOf([pg('a', 'no target')], { seriesGoals: { a: { series: null, dataEnd: null, reason: 'no_target' } } })), []);
   assert.deepEqual(boardCharts(paceOf([])), []);
+});
+
+/* ---------- pace board This year ---------- */
+
+test('paceMeters keeps only the This year meters that have figures, in order', () => {
+  const meter = (ratio) => ({ meter: { used: fig(10), limit: fig(20), ratio: fig(ratio) }, reason: null, dataThrough: '2026-10-31' });
+  const none = paceOf([]);
+  assert.deepEqual(paceMeters(none.meters), [], 'no figures, no panel');
+  assert.deepEqual(paceMeters(null), []);
+  assert.deepEqual(paceMeters({ ...none.meters, tax: meter(0.5), income: meter(0.2) }), ['tax', 'income']);
+  assert.deepEqual(paceMeters({ retirement: meter(0.1), tax: { meter: { ratio: { v: null } } }, income: meter(Infinity) }), ['retirement']);
 });
