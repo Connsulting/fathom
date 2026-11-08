@@ -15,7 +15,7 @@ export function bind(kit) { H = kit; }
 
 // G sequences: letter, route, label. design.js reads these for its tab and gear hints.
 export const GO = [
-  ['h', 'home', 'Home'], ['p', 'plan', 'Plan'], ['d', 'wargame', 'Decide'], ['a', 'ask', 'Ask'],
+  ['h', 'home', 'Home'], ['p', 'plan', 'Plan'], ['d', 'plan', 'Decide', 'decide'], ['a', 'ask', 'Ask'],
   ['c', 'confirm', 'Confirm'], ['k', 'packs', 'Packs'], ['f', 'add', 'Files'], ['e', 'engine', 'Engine'],
   ['m', 'email', 'Email'], ['n', 'connect', 'Connect'], ['o', 'money', 'Money'], ['s', 'settings', 'Settings']
 ];
@@ -100,9 +100,9 @@ function openAccount(id, ret) {
 const isDialog = (name) => H.isDlgRoute(name);
 
 function goSource() {
-  const row = (route, label, hint) => ({ key: `go:${route}`, title: label, group: 'Go to', sub: 'Screen', hint, run: () => go(route) });
+  const row = (route, label, hint, key = route) => ({ key: `go:${key}`, title: label, group: 'Go to', sub: 'Screen', hint, run: () => go(route) });
   return [
-    ...GO.map(([k, route, label]) => row(route, label, H.keys.hintText('g ' + k))),
+    ...GO.map(([k, route, label, key]) => row(route, label, H.keys.hintText('g ' + k), key)),
     ...GO_MORE.map(([route, label]) => row(route, label, ''))
   ];
 }
@@ -139,11 +139,7 @@ function decisionSource() {
   return H.arr(H.decisionList()).map((d) => ({
     key: `dec:${d.id}`, title: plain(d.title), group: 'Decisions',
     sub: d.when ? plain(d.when) : DEC_STATUS[d.status] || cap(d.status), hint: '',
-    run: (ret) => {
-      if (d.wargame) go('wargame', { name: d.wargame });
-      else if (d.r) openRec(d.r.id, ret);
-      else go('wargame');
-    }
+    run: () => go('plan')
   }));
 }
 

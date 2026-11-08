@@ -8,10 +8,11 @@
 //   sum: a figure over every matching row (not just the capped items), equal to the cell it opens from.
 //   Each item: amount (raw signed), value (counted: income as is, expenses negated) and fig (at value).
 
+import { ledgerDisplayName, ledgerKind } from './ledgers.mjs';
 import { normalizeName } from '../ingest/confirm.mjs';
 import { businessAccount } from '../categories/resolve.mjs';
 import {
-  PnlError, ITEM_LIMIT, accountLabels, addMonths, byDateDesc, checkDb, checkMonth, checkRange, classified, clockOf, enc,
+  PnlError, ITEM_LIMIT, boundedRows, accountLabels, addMonths, byDateDesc, checkDb, checkMonth, checkRange, classified, clockOf, enc,
   figureRegistry, fileNames, lineRow, monthSums, ownerFact, rowItem, runsLabel, spanLabel, sumOf, txnRow,
 } from './shared.mjs';
 
@@ -54,11 +55,13 @@ function loadBusiness(db, clock) {
   const stated = statedFact && typeof statedFact === 'object' && !Array.isArray(statedFact) ? statedFact : {};
   for (const v of Object.values(stated)) addName(v);
 
-  const only = names.size === 1 ? [...names.keys()][0] : null;
+  const ledgerFacts = { 'pnl.ledgers': ownerFact(db, 'pnl.ledgers') };
+  const businessNames = [...names.keys()].filter(n => ledgerKind(ledgerFacts, names.get(n), lines.filter(l => canon(l.entity).norm === n)) !== 'spending');
+  const only = businessNames.length === 1 ? businessNames[0] : null;
   const owner = new Map();
   for (const a of base.accounts.filter(businessAccount)) {
     const named = typeof stated[a.id] === 'string' && stated[a.id].trim() ? canon(stated[a.id]).norm : null;
-    owner.set(a.id, named ?? only);
+    owner.set(a.id, named && !businessNames.includes(named) ? null : named ?? only);
   }
   const txnsOf = new Map();
   for (const t of base.transactions) {
@@ -89,7 +92,10 @@ function loadBusiness(db, clock) {
   const entities = [];
   for (const [norm, label] of names) {
     const ids = [...owner].filter(([, n]) => n === norm).map(([id]) => id);
-    const e = build(`entity:${norm}`, label, 'entity', ids, lines.filter((l) => canon(l.entity).norm === norm));
+    const entityLines = lines.filter(l => canon(l.entity).norm === norm);
+    const displayName = entityLines.length ? ledgerDisplayName(entityLines[0]) : label;
+    const kind = ledgerKind(ledgerFacts, label, entityLines) === 'spending' ? 'spending' : 'entity';
+    const e = build(`entity:${norm}`, displayName, kind, kind === 'spending' ? [] : ids, entityLines);
     if (e) entities.push(e);
   }
   entities.sort((a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key));
@@ -117,7 +123,7 @@ function findEntity(model, entity) {
   const byKey = model.entities.find((e) => e.key === entity);
   if (byKey) return byKey;
   const n = normalizeName(entity) && model.canon(entity).norm;
-  const hit = n && model.entities.find((e) => e.kind === 'entity' && e.key === `entity:${n}`);
+  const hit = n && model.entities.find((e) => e.kind !== 'account' && e.key === `entity:${n}`);
   if (!hit) throw new PnlError('unknown_entity', 'no P&L for that entity');
   return hit;
 }
@@ -381,5 +387,5 @@ export function businessPnlRows({ db, entity, from, to, section, category, month
   const covered = a.perMonth.some((p) => p.source === 'workbook' && p.txns.length && (!month || p.month === month));
   const note = `Rows behind ${category} ${section === 'income' ? 'income' : 'expenses'}, ${where}.`
     + (covered ? ' Transactions in months that use the imported workbook are not counted and not listed.' : '');
-  return { items, total: rows.length, sum, ...reg.done(), note };
+  return boundedRows({ items, total: rows.length, sum, ...reg.done(), note });
 }

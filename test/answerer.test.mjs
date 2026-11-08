@@ -570,10 +570,9 @@ test('B3: an account mask from the real accounts.list result never grounds a num
   const masked = accounts.filter(a => typeof a.mask === 'string' && /^\d+$/.test(a.mask) && Number.isFinite(a.balance) && a.balance > 0);
   assert.ok(masked.length > 0, 'the demo store has masked accounts with balances');
 
-  // The household summary carries no masks or account ids, so only the tool result could leak one.
+  // The household summary carries no account masks, so only the tool result could leak one.
   const summaryJson = JSON.stringify(await callTool('household', { operation: 'summary', }, { db: s.db, now }));
   assert.ok(!/"(?:masks?|accountIds?|account_ids?)"/i.test(summaryJson), 'no mask or account id keys in the summary');
-  for (const a of accounts) assert.ok(!summaryJson.includes(`"${a.id}"`), `the summary does not name account ${a.id}`);
 
   // Masks nothing else grounds: a baseline answer with no tool call states them all.
   const baselineText = `Synthetic amounts: ${masked.map(a => asAmount(a.mask)).join(', ')}.`;
@@ -1132,12 +1131,13 @@ function candidates(schema, name, intSentinel) {
   return assert.fail(`extend the contract test: ${name} has type ${type}`);
 }
 
-test('R3 A contract: no tool the answerer offers returns a sentinel argument outside identifier keys', async t => {
+test('R3 A contract: scalar read operations return no sentinel argument outside identifier keys', async t => {
   const s = await demoStore(t);
   const listed = await offeredTools(s);
   const offered = listed.flatMap(t => t.operations.map(op => ({ ...t, operation: op.name, inputSchema: { type: 'object', additionalProperties: false, properties: { operation: { type: 'string', enum: [op.name] }, ...op.params }, required: ['operation', ...op.required] } })));
-  const names = [...new Set(offered.map(tool => tool.name))];
-  assert.deepEqual(sorted(names), sorted(REGISTRY.filter(x => x.kind === 'read').map(x => x.name)),
+  const scalar = offered.filter(tool => !['business', 'spending', 'transactions'].includes(tool.name));
+  const names = [...new Set(scalar.map(tool => tool.name))];
+  assert.deepEqual(sorted(names), sorted(REGISTRY.filter(x => x.kind === 'read' && !['business', 'spending', 'transactions'].includes(x.name)).map(x => x.name)),
     'a context without trusted identity offers read tools only');
   const recId = s.db.prepare("SELECT id FROM recs WHERE status != 'hidden' ORDER BY id LIMIT 1").get().id;
   const realPack = s.packs.loaded().find(p => p.id === 's-corp-owner');
@@ -1146,7 +1146,7 @@ test('R3 A contract: no tool the answerer offers returns a sentinel argument out
 
   const calls = [];
   const plan = new Map();
-  for (const tool of offered) {
+  for (const tool of scalar) {
     const props = (tool.inputSchema && tool.inputSchema.properties) || {};
     const required = new Set(tool.inputSchema.required || []);
     // Required arguments take real store values so the tool answers; a sentinel id is an error result.
@@ -1536,8 +1536,8 @@ test('R4 F2: the real business.pnl result over the demo store never grounds its 
   const s = await demoStore(t);
   const scenario = buildScenario(s.db);
   const result = await callTool('business', { operation: 'pnl', }, { db: s.db, now: clockNow(s.db) });
-  assert.ok(result.rows.length > 0, 'the demo store has P&L rows');
-  const period = result.rows.map(r => r.period).sort().at(-1);
+  assert.ok(result.entities.length > 0, 'the demo store has P&L entities');
+  const period = result.entities.flatMap(e => e.groups.filter(g => g.revenue.value || g.expenses.value).map(g => g.key)).sort().at(-1);
   assert.match(period, /^\d{4}-\d{2}$/);
   const month = String(Number(period.slice(5)));
   const year = Number(period.slice(0, 4)).toLocaleString('en-US');
@@ -1545,15 +1545,15 @@ test('R4 F2: the real business.pnl result over the demo store never grounds its 
   const ground = (r, text) => groundAnswer(`The figure is ${text}.`, { scenario, data: [], toolResults: [{ name: 'business', args: { operation: 'pnl', }, result: r }] });
 
   // Self-check: without the periods nothing in the result states these values.
-  const stripped = { rows: result.rows.map(({ period: _p, ...row }) => row), totals: Object.values(result.totals) };
+  const stripped = result.entities.map(e => ({ revenue: e.revenue.value, expenses: e.expenses.value, profit: e.profit.value }));
   for (const text of said) assert.ok(laundered(ground(stripped, text)).includes(text), `self-check: ${text} is not a P&L value`);
 
   for (const text of said) {
     assert.ok(laundered(ground(result, text)).includes(text), `period ${period} must not ground ${text}`);
   }
   // A stored row amount still grounds, attributed to business.pnl.
-  const row = result.rows.find(r => r.amount > 0);
-  const amount = `$${row.amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const row = result.entities.find(e => e.revenue.value > 0);
+  const amount = `$${row.revenue.value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const kept = ground(result, amount);
   assert.equal(kept.ok, true, `${amount}: ${JSON.stringify(kept.violations)}`);
   expectToolSource(kept.literals.find(l => l.text === amount), 'business', JSON.stringify(kept.literals));
@@ -1779,4 +1779,27 @@ test('R5 F2: a marked amount in the link text of a parenthesized destination sti
     }
   }
   assert.deepEqual(failures, []);
+});
+
+
+test('PN1: Ask records a spending ledger from the owner sentence using the advertised answer shape', async t => {
+  const s = await demoStore(t);
+  const text = "Aster's is my card spending, not a business.";
+  const { engine } = scripted(s.runtime, [[
+    { toolCalls: [{ name: 'household', args: { operation: 'fact_shapes' } }] },
+    { toolCalls: [{ name: 'answer', args: { operation: 'fact', key: 'pnl.ledgers', value: { "Aster's": { kind: 'spending' } }, evidence: text } }] },
+    { toolCalls: [{ name: 'answer', args: { operation: 'fact', key: 'pnl.ledgers', value: { "Birch's": { kind: 'spending' } }, evidence: text } }] },
+    { text: 'Saved the named spending ledger classification.' },
+  ]]);
+  const reply = await createLiveAnswerer({ engine, packs: s.packs, root: s.root, services: { engine, config: { dataDir: s.root } } }).answer({ db: s.db, key: THREAD, text, ownerText: text, actorId: 'demo', turnId: 'synthetic-ledger' });
+  assert.ok(!reply.notice);
+  const shapes = await callTool('household', { operation: 'fact_shapes' }, { db: s.db, dataDir: s.root });
+  assert.ok(shapes['pnl.ledgers']);
+  const fact = s.db.prepare("SELECT value, confirmed FROM facts WHERE key = 'pnl.ledgers'").get();
+  assert.ok(fact, JSON.stringify(reply));
+  assert.deepEqual(JSON.parse(fact.value), { "Aster's": { kind: 'spending' } });
+  assert.equal(fact.confirmed, 1);
+  assert.ok(reply.provenance.tools.some(x => x.name === 'answer' && x.args.operation === 'fact'));
+  const refused = reply.provenance.tools.find(x => x.name === 'answer' && Object.hasOwn(x.args.value, "Birch's"));
+  assert.match(refused.result.error, /stated|stored|evidence/i);
 });

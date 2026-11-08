@@ -22,6 +22,15 @@ function defFor(base, kind) {
   return def;
 }
 
+// The checks createGoal (id null) or updateGoal (id set) run before writing, without writing.
+export function checkGoal(db, fields, id = null) {
+  if (id === null) return valid(db, fields, false);
+  const row = db.prepare('SELECT * FROM goals WHERE id = ?').get(id);
+  if (!row) throw new ToolError('not_found', 'no such goal');
+  if (row.origin !== 'owner') throw new ToolError('conflict', 'this goal came with the demo and cannot be edited; archive it or add your own');
+  return valid(db, fields, true, parse(row.def, {}));
+}
+
 export function createGoal(db, fields, { now, onWrite } = {}) {
   return tx(db, () => {
     const value = valid(db, fields, false);

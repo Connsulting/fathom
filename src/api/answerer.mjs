@@ -73,8 +73,13 @@ import { listPreferences } from '../actions/preferences.mjs';
 // (<ul>/<ol>); every other block is paragraph inner HTML.
 //
 // Ask threads can write through scoped registry tools; receipts and Undo are durable product data.
+// With a signed-in owner every offered write tool also takes propose: true (src/actions/proposals.mjs):
+// the operation is recorded, not run, and the reply carries it as provenance.pendingAction (never
+// on a notice reply). answer's `scopes` limits what may be proposed; `staleNote` is a note from
+// Fathom given to the model with the question and shown as the reply's first paragraph.
 
-import { callTool, tools as REGISTRY, getTool, instructions } from '../tools/index.mjs';
+import { callTool, tools as REGISTRY, getTool, instructions, ToolError } from '../tools/index.mjs';
+import { proposalTools } from '../actions/proposals.mjs';
 import { buildScenario, clockNow } from '../scenario/build.mjs';
 import { findDates } from '../engine/grounding.mjs';
 import { checkGrounding, numberPattern, EngineOffError, BudgetExceededError, ModelCallError, ModelAccountingError, RoundLimitError } from '../engine/index.mjs';
@@ -87,6 +92,7 @@ import { fakeAnswerScript } from './fake-answers.mjs';
 import { stripSources, listMarkerSpans, markdownBlocks } from '../shared/answer-text.mjs';
 import { resolveRefs } from './context-refs.mjs';
 import { DEMO_LIMIT_MESSAGE } from '../public-demo/control.mjs';
+import { ANSWER_MAX_WORDS } from '../shared/answer-contract.mjs';
 
 export const PRODUCT_RULES = [
   'You are Fathom, a year-round financial co-pilot for one household of independent professionals.',
@@ -107,7 +113,7 @@ export const PRODUCT_RULES = [
 export const ANSWER_STYLE = [
   'Answer style:',
   'Lead with the direct answer in one or two sentences.',
-  'Keep the whole reply under about 150 words unless the owner asks for more detail.',
+  `Keep the whole reply under ${ANSWER_MAX_WORDS} words unless the owner asks for more detail.`,
   'Use at most one short list.',
   'Skip generic caveats the owner did not ask about.',
   'End with one offer of the next useful step.',
@@ -119,6 +125,9 @@ export const NOTICES = Object.freeze({
   overCap: "This month's engine budget of {f:engine.budget.monthly} is used up, so answers are paused. Raise the cap on the Engine screen or wait for next month.",
   modelError: 'The model could not answer just now, so nothing was made up. Try again in a moment.',
 });
+
+// Added to the chat rules when write tools are offered (an Ask thread with a signed-in owner).
+export const PROPOSE_RULE = 'When you suggest a change the owner has not asked for, call the write tool with propose: true in the same turn instead of asking them to reply yes. Nothing is saved until they confirm.';
 
 const UNCHECKED_OPEN = '<span class="fx-checking fx-unchecked" title="Not checked against your data">';
 // Regenerate only when at least REGEN_MIN figures and more than REGEN_SHARE of all figures are unchecked.
@@ -646,12 +655,17 @@ export function whatIfOwnerText(def) {
   return typeof def.manifest === 'string' ? escapeUserText(prompt) : prompt;
 }
 
-export function createLiveAnswerer({ engine, packs, root, services } = {}) {
+export function createLiveAnswerer({ engine, packs, root, services, onRead } = {}) {
   if (!engine || typeof engine.call !== 'function') throw new TypeError('createLiveAnswerer needs an engine');
   if (typeof root !== 'string' || !root) throw new TypeError('createLiveAnswerer needs the household root');
   if (!services || typeof services !== 'object') throw new TypeError('createLiveAnswerer needs household services');
   // The tool context of every call this answerer makes: its household's db and root.
   const toolCtx = (db, now) => ({ db, now, dataDir: root, services, household: services.household });
+  const read = async (name, args, ctx) => {
+    const result = await callTool(name, args, ctx);
+    onRead?.({ name, args, result });
+    return result;
+  };
 
   // One grounded model answer: call, ground, regenerate once with a corrective turn when most
   // figures are unchecked (needsRevision), render.
@@ -662,15 +676,23 @@ export function createLiveAnswerer({ engine, packs, root, services } = {}) {
     const work = workList();
     stream.progress(PROGRESS_START);
     work.step(PROGRESS_START);
-    const summary = await callTool('household', { operation: 'summary' }, toolCtx(db, now));
+    const summary = await read('household', { operation: 'summary' }, toolCtx(db, now));
     const active = activeManifestPacks(db, packs);
     const packIds = active.map(a => a.pack.id).sort();
     const packContextText = packContext(active.map(({ pack }) => ({ pack, status: 'active' })));
     const prompt = buildChatPrompt({ packContextText, summary, context, history, question, today: scenario.meta && scenario.meta.clock });
     prompt.systemDynamic += '\n<household_preferences>\n' + JSON.stringify(listPreferences(db)) + '\n</household_preferences>';
-    const offered = REGISTRY.filter(t => !t.mcpOnly && (t.kind === 'read' || actionContext?.actorId));
+    const writes = !!actionContext?.actorId;
+    const offered = writes ? proposalTools(REGISTRY.filter(t => !t.mcpOnly)) : REGISTRY.filter(t => !t.mcpOnly && t.kind === 'read');
+    if (writes) prompt.system += '\n\n' + PROPOSE_RULE;
+    // The one operation this turn may propose (provenance.pendingAction), recorded by a propose call.
+    let pendingAction = null;
+    const onProposal = proposal => {
+      if (pendingAction) throw new ToolError('conflict', 'Only one change can be proposed per answer.');
+      pendingAction = structuredClone(proposal);
+    };
     const fake = engine.mode === 'fake' ? fakeAnswerScript({ scenario, summary, propose: actions, ...fakeArgs }) : undefined;
-    const toolContext = { ...actionContext, ...toolCtx(db, now), channel: 'ask' };
+    const toolContext = { ...actionContext, ...toolCtx(db, now), channel: 'ask', ...(writes ? { onProposal } : {}) };
     toolContext.ownerStatements = () => ownerStatements(toolContext);
     const request = { purpose: 'chat', system: prompt.system, systemDynamic: prompt.systemDynamic, messages: prompt.messages,
       tools: offered, toolContext, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}),
@@ -689,7 +711,7 @@ export function createLiveAnswerer({ engine, packs, root, services } = {}) {
     const labelsFor = async toolResults => {
       if (accountLabels || !toolResults.some(r => r && !r.isError && r.name === 'transactions')) return accountLabels;
       try {
-        accountLabels = new Map((await callTool('accounts', { operation: 'list' }, toolCtx(db, now))).map(a => [a.id, a.name]));
+        accountLabels = new Map((await read('accounts', { operation: 'list' }, toolCtx(db, now))).map(a => [a.id, a.name]));
       } catch { accountLabels = new Map(); }
       return accountLabels;
     };
@@ -765,13 +787,14 @@ export function createLiveAnswerer({ engine, packs, root, services } = {}) {
           ...(revised ? { revised } : {}) },
         costUsd: Number(costUsd.toFixed(6)),
         ...(references.length ? { references: references.map(({ kind, id }) => ({ kind, id })) } : {}),
+        ...(pendingAction ? { pendingAction } : {}),
         work: { ms: Math.max(0, Math.round(performance.now() - t0)), items: work.items },
       },
     };
   }
 
   return {
-    async answer({ db, key, questionId, text, clock, refs, onEvent, actorId, ownerText, turnId, replan, queuePlan } = {}) {
+    async answer({ db, key, questionId, text, clock, refs, onEvent, actorId, ownerText, turnId, replan, queuePlan, scopes, staleNote } = {}) {
       if (typeof key !== 'string' || !key) throw new TypeError('answer needs a conversation key');
       const scenario = buildScenario(db, { clock, packs });
       const now = clockNow(db, clock);
@@ -791,17 +814,23 @@ export function createLiveAnswerer({ engine, packs, root, services } = {}) {
       const rec = recForKey(scenario, key);
       let context = null;
       if (rec) {
-        context = { recommendation: await callTool('recommendations', { operation: 'detail', id: rec.id }, toolCtx(db, now)) };
+        context = { recommendation: await read('recommendations', { operation: 'detail', id: rec.id }, toolCtx(db, now)) };
         baseRefs = [...baseRefs, rec.id];
       } else if (key.startsWith('pack:')) {
         context = packConversationContext(db, packs, key.slice(5)).context;
       }
       const references = resolveRefs(db, scenario, refs);
       if (references.length) context = { ...(context || {}), references };
-      return run({ db, scenario, now, question, context, history: scenario.live.conversations[key] || [], baseRefs, references,
+      // A note from Fathom (a refused or out-of-date proposal) goes to the model with the question
+      // and leads the reply; the stored owner message stays the owner's own words.
+      const note = typeof staleNote === 'string' && staleNote.trim() ? staleNote.trim() : null;
+      const asked = note ? `${question}\n\n[Note from Fathom: ${note} Re-check the current data and propose the change again if it still fits.]` : question;
+      const reply = await run({ db, scenario, now, question: asked, context, history: scenario.live.conversations[key] || [], baseRefs, references,
         actions: isThreadKey(key), onEvent,
-        actionContext: isThreadKey(key) && actorId ? { actorId, ownerText, turnId, replan, queuePlan, conversationKey: key, recId: rec?.id } : null,
+        actionContext: isThreadKey(key) && actorId ? { actorId, ownerText, turnId, replan, queuePlan, conversationKey: key, recId: rec?.id,
+          ...(Array.isArray(scopes) ? { scopes } : {}) } : null,
         fakeArgs: { key, questionId: hasQ ? questionId : undefined, text: hasQ ? undefined : question } });
+      return note ? { ...reply, paragraphs: [escapeUserText(note), ...reply.paragraphs] } : reply;
     },
 
     async whatIf({ db, packId, clock, onEvent } = {}) {
