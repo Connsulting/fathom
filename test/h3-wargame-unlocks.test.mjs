@@ -162,3 +162,15 @@ test('AC2: a deferral option over its contribution limit is dropped alone and th
   assert.throws(() => wargamePick(api(db, { name: 'deferral' }, { index: 'd100' })), e => e.status >= 400 && e.status < 500);
   assert.ok(wargamePick(api(db, { name: 'deferral' }, { index: 'd50' })).scenario, 'a remaining option can still be picked');
 });
+
+// The main tax run treats a refundable child tax credit it cannot model as a precision gap; a war
+// game did not, and offered an upload that could not unlock it.
+test('AC1: a child tax credit limited to income tax is an assumption, not a dead-end hold', async () => {
+  const db = await S.store({ variant: { entities: [SOLE_PROP] } });
+  await planRun(db, { now: NOW });
+  const wg = contentValue(db, 'wargame');
+  assert.equal(wg.notBuilt?.deferral, undefined, `deferral is built: ${JSON.stringify(wg.notBuilt)}`);
+  assert.ok(wg.deferral.options.length >= 2);
+  const scenario = getScenario(api(db));
+  assert.ok(scenario.fig[`wg.deferral.${wg.deferral.options[0].id}.tax2026`].notes.some(n => /child tax credit/i.test(n)), 'the comparison says what it leaves out');
+});
