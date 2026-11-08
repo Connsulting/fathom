@@ -360,7 +360,6 @@ export function mainRoutes() {
     ['wargame/salary', plain(S.wargame.salary.title)],
     ['wargame/deferral', plain(S.wargame.deferral.title)],
     ['goals', 'Where you are headed'],
-    ['money', 'Money'],
     ['advisor', plain(S.advisor.name)],
     ['yearend', 'The packet for your accountant'],
     ['connect', 'Bring your own AI'],

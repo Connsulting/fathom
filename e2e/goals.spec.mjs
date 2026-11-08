@@ -147,6 +147,7 @@ test.describe('goals', TAGS, () => {
     await expectH1(page, 'Dump everything in');
     await expect(page.locator('input[data-prio]')).toHaveCount(0);
     await page.unroute('**/api/**');
+    await page.reload();
     await gotoGoals(page);
     await expect(page.locator('input[data-curve]')).toHaveCount(0);
   });

@@ -354,9 +354,9 @@ test.describe('ask everywhere', () => {
     await expect(pageChip(page)).toHaveCount(0);
     await expect(panelInput(page)).toBeFocused();
 
-    await gotoRoute(page, 'money');
+    await gotoRoute(page, 'pnl');
     await expect(panel(page)).toBeVisible();
-    await expect(pageChip(page).locator('.h-ctx-l')).toHaveText('On: Money > Overview');
+    await expect(pageChip(page).locator('.h-ctx-l')).toContainText('On: Money > P&L');
   });
 
   test('@ae-ac2 the page chip names the account in the account dialog and the rec in a rec dialog', async ({ page }) => {
