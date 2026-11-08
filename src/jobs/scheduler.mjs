@@ -251,6 +251,7 @@ export function createScheduler({
   let timer = null;
   let first = null;
   let renewer = null;
+  let executing = 0;
   let stopping = false;
   // Debounced triggers: jobId -> timer.
   const soonTimers = new Map();
@@ -316,10 +317,12 @@ export function createScheduler({
       if (stopping) throw new SchedulerError('locked');
       if (allowed() !== true) throw new SchedulerError('paused');
       if (!lease(at())) throw new SchedulerError('locked');
-      return executeOnce(job, { ...opts, household: captured });
+      executing++;
+      return executeOnce(job, { ...opts, household: captured }).finally(() => {
+        if (--executing === 0) stopRenewing();
+      });
     }).finally(() => {
       running.delete(job.id);
-      if (!running.size) stopRenewing();
       const again = pending.get(job.id);
       pending.delete(job.id);
       if (again && !stopping) trigger(job.id, again).catch(() => {});
