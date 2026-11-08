@@ -58,6 +58,7 @@ test('rec_questions checks question keys and evidence, matches route values and 
  const s=await setup(t),def={id:'synthetic',title:'Coverage',question:{keys:['benefits.hsaCoverage'],primary:true}};
  s.db.prepare("INSERT INTO recs (id,def,status,updated_at) VALUES ('synthetic',?,'waiting',?)").run(JSON.stringify(def),NOW);
  const args={operation:'rec_questions',recId:'synthetic',answers:[{key:'benefits.hsaCoverage',value:'family'}],evidence:'family'};
+ await assert.rejects(callTool('answer',{...args,answers:[{key:'synthetic.unsupported',value:'family'}]},s.ctx),{name:'ToolError',code:'bad_input'});
  await assert.rejects(callTool('answer',{...args,answers:[{key:'business.cashBasis',value:true}]},s.ctx));
  await assert.rejects(callTool('answer',{...args,evidence:'individual'},s.ctx),{code:'bad_input'});
  const r=await callTool('answer',args,s.ctx);assert.equal(r.receipts.length,1);assert.equal(JSON.parse(s.db.prepare("SELECT value FROM facts WHERE key='benefits.hsaCoverage'").get().value),'family');
