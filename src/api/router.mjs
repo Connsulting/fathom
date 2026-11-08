@@ -52,6 +52,7 @@ import { identityOf, revalidateRequest, sendUnauthorized } from './identity.mjs'
 import * as authHandlers from '../auth/handlers.mjs';
 import { demoRouteBehavior, DEMO_OFF_MESSAGE } from '../public-demo/control.mjs';
 import { runWithPrincipal } from '../platform/model-budget.mjs';
+import { blockStatus } from './block-status.mjs';
 
 const TABLE = [
   { method: 'GET', path: '/healthz', handler: h.healthz, public: true },
@@ -96,6 +97,7 @@ const TABLE = [
   { method: 'GET', path: '/api/threads', handler: h.threadList },
   { method: 'POST', path: '/api/threads', handler: h.threadCreate, stream: true },
   { method: 'GET', path: '/api/threads/:id', handler: h.threadGet },
+  { method: 'GET', path: '/api/threads/:id/blocks', handler: blockStatus },
   { method: 'POST', path: '/api/threads/:id/rename', handler: h.threadRename },
   { method: 'POST', path: '/api/threads/:id/archive', handler: h.threadArchive },
   { method: 'POST', path: '/api/threads/:id/trash', handler: h.threadTrash },

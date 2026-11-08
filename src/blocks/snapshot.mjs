@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { at, isFigure, resolve, rowNumber } from './paths.mjs';
 import { columnLabel, sourceLabel, fieldLabel, figureLabel, itemLabel, dateText } from './labels.mjs';
+import { drillQuery } from './drill.mjs';
 
 function provenanceOf(provenance) {
   const out = {};
@@ -32,12 +33,20 @@ function cell(item, ref, field, accountLabels) {
 }
 function pointFigure(item, ref, field, accountLabels) {
   const value = at(item, field);
-  if (isFigure(value)) return figure(value, ref, field);
+  if (isFigure(value)) {
+    const fig = figure(value, ref, field), drill = drillQuery(ref, item, field);
+    return drill ? { ...fig, drill } : fig;
+  }
   const row = cell(item, ref, field, accountLabels);
   return { value: row.value, unit: 'usd', label: columnLabel([item], ref, field), kind: 'a', asOf: row.row.date,
     gaps: [], provenance: { sources: [row.row] }, source: sourceLabel(ref) };
 }
 const xKey = value => JSON.stringify(isFigure(value) ? value.value : value);
+function drillSource(ref, results) {
+  if (ref.tool !== 'business' || !/^entities\.\d+\.groups$/.test(ref.path)) return ref;
+  const entity = resolve({ ...ref, path: ref.path.replace(/\.groups$/, '.entity.key') }, results);
+  return { ...ref, args: { ...ref.args, entity } };
+}
 function chart(spec, results, accountLabels) {
   const items = resolve(spec.source, results);
   if (spec.kind === 'scatter') {
@@ -56,16 +65,20 @@ function chart(spec, results, accountLabels) {
       const ref = s.source || spec.source, rows = resolve(ref, results);
       const byX = new Map(rows.map(item => [xKey(at(item, spec.x)), item]));
       return { label: columnLabel(rows, ref, s.path), unit: pointFigure(rows[0], ref, s.path, accountLabels).unit,
-        points: items.map(item => { const matched = byX.get(xKey(at(item, spec.x))); return matched ? pointFigure(matched, ref, s.path, accountLabels) : null; }) };
+        points: items.map(item => { const matched = byX.get(xKey(at(item, spec.x))); return matched ? pointFigure(matched, drillSource(ref, results), s.path, accountLabels) : null; }) };
     }) };
 }
 function table(spec, results, accountLabels) {
   const items = resolve(spec.source, results);
+  const drillRef = drillSource(spec.source, results);
   return { title: spec.title ?? sourceLabel(spec.source), columns: spec.columns.map(field => {
     const sample = cell(items[0], spec.source, field, accountLabels);
     return { label: columnLabel(items, spec.source, field), type: sample.t,
       ...(sample.t === 'fig' ? { unit: sample.fig.unit } : sample.t === 'row' ? { unit: sample.unit } : {}) };
-  }), rows: items.map(item => ({ cells: spec.columns.map(field => cell(item, spec.source, field, accountLabels)) })),
+  }), rows: items.map(item => ({ cells: spec.columns.map(field => {
+    const value = cell(item, spec.source, field, accountLabels), drill = drillQuery(drillRef, item, field);
+    return drill ? { ...value, drill } : value;
+  }) })),
   ...(spec.sort ? { sort: { column: spec.columns.indexOf(spec.sort.column), dir: spec.sort.dir } } : {}) };
 }
 function assumptionLabels(refs, items, fields) {

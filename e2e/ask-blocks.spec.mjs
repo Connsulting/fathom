@@ -7,6 +7,11 @@
 
 import { readFileSync } from 'node:fs';
 import { test, expect, resetDemo, gotoRoute, recDialog } from './helpers.mjs';
+import { DatabaseSync } from 'node:sqlite';
+import { mainDataDir } from './data-dir.mjs';
+import { servedStore } from '../test/helpers/server.mjs';
+import { callTool } from '../src/tools/index.mjs';
+import { buildSnapshot } from '../src/blocks/snapshot.mjs';
 
 const fx = (name) => JSON.parse(readFileSync(new URL(`../test/fixtures/blocks/${name}.json`, import.meta.url), 'utf8'));
 const TABLE = fx('table');
@@ -330,4 +335,62 @@ test('real builder table persists and renders in the Ask panel without response 
   await expect(page.locator('.fx-pop')).toContainText(block.snapshot.rows[0].cells.at(-1).row.description);
   await page.reload();
   await expect(blk(panel(page), block)).toBeVisible();
+});
+
+test('@mobile drill rows keep keyboard focus and a reopened stale block can ask its question again', async ({ request, page }) => {
+  await resetDemo(request);
+  const question = 'Show recent transactions in a table.';
+  const response = await request.post('/api/threads', { data: { text: question } });
+  expect(response.status()).toBe(200);
+  const body = await response.json();
+  const db = new DatabaseSync(servedStore(mainDataDir()).file);
+  let block;
+  try {
+    const args = { operation: 'total', groupBy: 'category', from: '2026-01', to: '2026-10' };
+    const result = await callTool('spending', args, { db, clock: '2026-11-05' });
+    const spec = { source: { tool: 'spending', args, path: 'groups' }, columns: ['key', 'figure'] };
+    block = { id: 'b1', op: 'table', spec, calls: [{ tool: 'spending', args }],
+      snapshot: buildSnapshot('table', spec, [{ name: 'spending', args, result }]), asOf: result.total.asOf, builtAt: '2026-11-05T00:00:00Z', after: 1 };
+    db.prepare('UPDATE messages SET provenance = ? WHERE id = ?').run(JSON.stringify({ ...body.message.provenance, blocks: [block] }), body.message.id.slice(1));
+  } finally { db.close(); }
+  let statusReads = 0;
+  page.on('request', req => { if (req.url().endsWith(`/api/threads/${body.thread.id}/blocks`)) statusReads++; });
+  await gotoRoute(page, `ask/${body.thread.id}`);
+  const table = blk(page.locator('.h-root'), block);
+  const button = table.getByRole('button', { name: 'Show rows', exact: true }).first();
+  await expect(button).toBeVisible();
+  await button.focus(); await page.keyboard.press('Enter');
+  const heading = table.getByRole('heading', { name: 'Rows behind this figure' });
+  await expect(heading).toBeFocused();
+  const region = table.getByRole('region', { name: 'Rows behind this figure' });
+  await expect(region).toContainText('Rows sum');
+  await expect(region.locator('li')).not.toHaveCount(0);
+  await expect(heading).toBeFocused();
+  await region.locator('li .fx-fig').first().click();
+  await expect(page.locator('.fx-pop')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await heading.focus(); await page.keyboard.press('Escape');
+  await expect(heading).toHaveCount(0); await expect(button).toBeFocused();
+  expect(statusReads).toBe(1);
+  await noSidewaysScroll(page);
+
+  const changed = new DatabaseSync(servedStore(mainDataDir()).file);
+  try {
+    const source = block.snapshot.rows[0].cells[1].fig.provenance.sources[0].ids[0];
+    const row = changed.prepare('SELECT * FROM transactions WHERE id = ?').get(source);
+    changed.prepare('INSERT INTO transactions (account_id, date, amount, description) VALUES (?, ?, ?, ?)').run(row.account_id, '2026-10-15', row.amount, row.description);
+  } finally { changed.close(); }
+  await page.reload();
+  await expect(table).toContainText('Stale');
+  await expect(table).toContainText('Your data changed after this answer.');
+  const storedFigure = table.locator('tbody tr').first().locator('.fx-fig').first();
+  const originalValue = await page.evaluate(k => window.Fathom.api.fig(k).v, await storedFigure.getAttribute('data-fig'));
+  expect(originalValue).toBe(block.snapshot.rows[0].cells[1].fig.value);
+  await storedFigure.click();
+  await expect(page.locator('.fx-pop')).toContainText('Changed since this answer');
+  await page.keyboard.press('Escape');
+  const asked = page.waitForRequest(req => req.url().endsWith('/api/ask') && req.method() === 'POST');
+  await table.getByRole('button', { name: 'Ask again', exact: true }).click();
+  expect((await asked).postDataJSON()).toMatchObject({ key: body.thread.key, text: question });
+  await expect.poll(async () => (await (await request.get(`/api/threads/${body.thread.id}`)).json()).messages.filter(m => m.role === 'me').length).toBe(2);
 });
