@@ -9,8 +9,8 @@ export const recipe = () => ({ schemaVersion: 1, currency: 'USD', tables: [{ she
     amount: { columns: [3], transform: { op: 'currency_decode', currency: 'USD' } }, description: { columns: [4], transform: { op: 'trim' } } }, attributes: {},
   roles: [{ column: 1, equals: 'Total', disposition: 'control_total', amountColumn: 3 }] }] });
 
-export async function fixture() {
-  const store = await realStore();
+export async function fixture(options = {}) {
+  const store = await realStore(options);
   store.db.prepare("INSERT INTO accounts (id,name,inst,kind,owner,identity) VALUES ('account-synthetic','Synthetic account','Example bank','cash','you','synthetic-account')").run();
   const ctx = { db: store.db, household: store.household, actorId: 'actor-synthetic', scopes: ['write:imports'], now: NOW, ownerText: 'yes' };
   async function source(text = 'Account,Date,Amount USD,Description\naccount-synthetic,2032-03-02,-12.25,Synthetic purchase\naccount-synthetic,2032-03-03,2.25,Synthetic refund\nTotal,,-10.00,Control total\n', format = 'csv') {

@@ -6,7 +6,7 @@ import { requireActor, saveReceipt } from '../actions/receipts.mjs';
 import { requireImportReviewEvidence } from '../actions/evidence.mjs';
 import { indexSource } from './model-source.mjs';
 import { openVault, readStoredFile } from './vault.mjs';
-import { validateImport, importBasis, importPlan } from './model-validation.mjs';
+import { validateImport, importEffect, importPlan } from './model-validation.mjs';
 import { applyLayout, layoutContext, layoutDigest, layoutDelta } from './model-layout.mjs';
 import { persistImport } from './pipeline.mjs';
 import { currentPrincipal } from '../platform/model-budget.mjs';
@@ -29,7 +29,7 @@ function stale(diff = []) {
   const error = new ToolError('proposal_stale', 'The proposal changed. Review its current summary.');
   error.diff = diff; throw error;
 }
-const out = row => ({ proposalId: row.id, version: row.version, status: row.status, ...parseJson(row.review_state, {})?.presentation });
+const out = row => ({ proposalId: row.id, version: row.version, status: row.status, reasonCode: row.reason_code, ...parseJson(row.review_state, {})?.presentation });
 const latest = (db, id) => db.prepare('SELECT * FROM import_proposals WHERE id = ? ORDER BY version DESC LIMIT 1').get(id);
 
 export async function prepareImport(ctx, { file, layout = null, fake }) {
@@ -40,53 +40,75 @@ export async function prepareImport(ctx, { file, layout = null, fake }) {
   const prior = ctx.db.prepare('SELECT * FROM import_proposals WHERE file_id=? ORDER BY version DESC,rowid DESC LIMIT 1').get(file.fileId);
   if (prior) {
     if (prior.source_sha256 !== source.sha256) stale(['source']);
+    if (['needs_confirmation', 'needs_clarification'].includes(prior.status)) {
+      const review = parseJson(prior.review_state, {}), proposal = parseJson(prior.proposal);
+      if (prior.actor_id !== ctx.actorId || !isDeepStrictEqual(review.effect, importEffect(validateImport(ctx, proposal, source)))) return tx(ctx.db, () => {
+        ctx.db.prepare("UPDATE import_proposals SET status='superseded',updated_at=? WHERE id=? AND version=?").run(stamp(ctx), prior.id, prior.version);
+        return stageImport(ctx, { source, proposal: { ...proposal, version: prior.version + 1 }, layout: review.layout,
+          delta: review.presentation.delta, preserved: review.presentation.preserved, previousMapping: review.previousMapping });
+      });
+    }
     return out(prior);
   }
-  if (layout) {
-    const reused = await reuseApprovedMapping(ctx, { source, layout });
-    if (reused.status === 'imported') return reused;
-    return { ...stageImport(ctx, { source, proposal: applyLayout(source, layout), layout }), delta: reused.delta, preserved: reused.preserved };
+  const reused = await reuseApprovedMapping(ctx, { source, layout });
+  if (reused.status === 'imported') return reused;
+  if (layout || reused.suggestedLayout || reused.candidateCount) {
+    const selected = layout ?? reused.suggestedLayout;
+    let proposal, usableLayout = selected;
+    try { proposal = applyLayout(source, selected); } catch {
+      usableLayout = null;
+      proposal = { version: 1, fileId: source.fileId, sha256: source.sha256, proposalId: randomUUID(), interpreterVersion: '1', mappingId: null, mappingVersion: null,
+        rows: [], coverage: source.regions.map(regionId => ({ regionId, refs: source.inventory[regionId].refs, disposition: 'unresolved' })), completeness: 'incomplete' };
+    }
+    return stageImport(ctx, { source, proposal, layout: usableLayout, delta: reused.delta, preserved: reused.preserved, previousMapping: reused.previousMapping, reasonCode: reused.reasonCode });
   }
   const interpreted = await interpretFile({ ctx, file, fake });
   if (!interpreted.valid || interpreted.status !== 'needs_confirmation' && interpreted.status !== 'needs_clarification') return { status: interpreted.status, reasonCode: interpreted.reasonCode };
-  return stageImport(ctx, { source: interpreted.source, proposal: interpreted.proposal });
+  try { return stageImport(ctx, { source: interpreted.source, proposal: interpreted.proposal, layout: interpreted.layout }); }
+  catch (error) {
+    if (!(error instanceof ToolError) || error.code !== 'bad_input') throw error;
+    return stageImport(ctx, { source: interpreted.source, proposal: interpreted.proposal, reasonCode: 'layout_mismatch' });
+  }
 }
 
-export function stageImport(ctx, { source, proposal, layout = null }) {
+export function stageImport(ctx, { source, proposal, layout = null, delta = [], preserved = {}, previousMapping = null, reasonCode = null }) {
   const actor = context(ctx);
   scopes(ctx);
   const file = ctx.db.prepare('SELECT * FROM files WHERE id = ?').get(source.fileId);
   if (!file || file.sha256 !== source.sha256) stale(['source']);
   const existing = latest(ctx.db, proposal.proposalId);
   const correction = existing?.status === 'waiting_for_engine' && existing.reason_code === 'owner_correction';
-  if (existing && !correction) {
+  const refreshed = existing?.status === 'superseded' && proposal.version === existing.version + 1;
+  if (existing && !correction && !refreshed) {
     if (existing.source_sha256 !== source.sha256 || !isDeepStrictEqual(parseJson(existing.proposal), proposal)) stale(['proposal']);
     return out(existing);
   }
   if (correction && (existing.actor_id !== actor || existing.version !== proposal.version || existing.source_sha256 !== source.sha256)) stale(['correction']);
   proposal = structuredClone(proposal);
-  const validation = validateImport(ctx, proposal, source);
+  let validation = validateImport(ctx, proposal, source);
   let structural = null;
   if (layout) {
     const mapped = applyLayout(source, layout);
-    if (!['rows', 'coverage', 'controls', 'completeness'].every(k => isDeepStrictEqual(mapped[k], proposal[k]))) throw new ToolError('bad_input', 'The layout does not describe this proposal.');
+    if (!['rows', 'coverage', 'controls', 'completeness'].every(k => isDeepStrictEqual(mapped[k], k === 'controls' ? proposal[k] ?? [] : proposal[k]))) throw new ToolError('bad_input', 'The layout does not describe this proposal.');
     structural = { ...layoutContext(source, layout), bindings: validation.bindings };
     proposal.mappingId = layoutDigest(structural);
     const old = ctx.db.prepare('SELECT mapping_version FROM column_mappings WHERE signature = ?').get(proposal.mappingId);
-    proposal.mappingVersion = old?.mapping_version ?? 1;
+    proposal.mappingVersion = old?.mapping_version ?? (previousMapping ? previousMapping.version + 1 : 1);
   } else { proposal.mappingId = null; proposal.mappingVersion = null; }
-  const review = { basis: importBasis(ctx.db), sourceFormat: source.format, layout, structural, ...(correction ? { correction: parseJson(existing.review_state).correction } : {}),
-    presentation: { summary: validation.summary, counts: validation.counts, errors: validation.errors } };
-  const now = stamp(ctx), status = validation.valid ? 'needs_confirmation' : 'needs_clarification';
+  validation = validateImport(ctx, proposal, source);
+  const review = { effect: importEffect(validation), sourceFormat: source.format, layout, structural, previousMapping,
+    ...(correction ? { correction: parseJson(existing.review_state).correction } : {}),
+    presentation: { summary: validation.summary, counts: validation.counts, errors: validation.errors, delta, preserved } };
+  const now = stamp(ctx), status = validation.valid && !reasonCode ? 'needs_confirmation' : 'needs_clarification';
   if (correction) {
     ctx.db.prepare(`UPDATE import_proposals SET status=?,proposal=?,mapping_id=?,mapping_version=?,reason_code=?,updated_at=?,review_state=? WHERE id=? AND version=?`)
-      .run(status, JSON.stringify(proposal), proposal.mappingId, proposal.mappingVersion, validation.valid ? null : validation.errors[0], now, JSON.stringify(review), proposal.proposalId, proposal.version);
+      .run(status, JSON.stringify(proposal), proposal.mappingId, proposal.mappingVersion, reasonCode ?? (validation.valid ? null : validation.errors[0]), now, JSON.stringify(review), proposal.proposalId, proposal.version);
     return out(latest(ctx.db, proposal.proposalId));
   }
   ctx.db.prepare(`INSERT INTO import_proposals (id,version,file_id,source_sha256,status,proposal,interpreter_version,mapping_id,mapping_version,
     reason_code,actor_id,created_at,updated_at,review_state) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
     .run(proposal.proposalId, proposal.version, source.fileId, source.sha256, status, JSON.stringify(proposal), proposal.interpreterVersion,
-      proposal.mappingId, proposal.mappingVersion, validation.valid ? null : validation.errors[0], actor, now, now, JSON.stringify(review));
+      proposal.mappingId, proposal.mappingVersion, reasonCode ?? (validation.valid ? null : validation.errors[0]), actor, now, now, JSON.stringify(review));
   return out(latest(ctx.db, proposal.proposalId));
 }
 
@@ -105,23 +127,32 @@ function commit(ctx, row, proposal, source, file, review, validation, { automati
   const actor = context(ctx), db = ctx.db, now = stamp(ctx);
   const current = latest(db, row.id);
   if (current?.version !== row.version || current.status !== row.status) stale(['proposal']);
-  const basis = importBasis(db), diff = Object.keys(basis).filter(key => basis[key] !== review.basis[key]);
+  const effect = importEffect(validation), diff = layoutDelta(review.effect, effect);
   if (diff.length) stale(diff);
   if (!validation.valid || row.status !== 'needs_confirmation') throw new ToolError('bad_input', 'Resolve the proposal validation issues first.');
   const before = { proposalId: row.id, version: row.version, status: row.status };
   const result = persistImport(db, source.fileId, file, importPlan(structuredClone(validation.rows)), { now }).result;
-  if (review.layout && !automatic) db.prepare(`INSERT INTO column_mappings (signature,mapping,src,created_at,uses,schema_version,mapping_version,
+  if (review.layout && !automatic) {
+    if (review.previousMapping) {
+      const parent = db.prepare('SELECT structural_context FROM column_mappings WHERE signature=?').get(review.previousMapping.id);
+      const previous = parseJson(parent?.structural_context);
+      if (previous && isDeepStrictEqual(previous.headers, review.structural.headers) && isDeepStrictEqual(previous.bindings, review.structural.bindings)) {
+        db.prepare("UPDATE column_mappings SET approval_status='invalidated' WHERE signature=? AND mapping_version=?").run(review.previousMapping.id, review.previousMapping.version);
+      }
+    }
+    db.prepare(`INSERT INTO column_mappings (signature,mapping,src,created_at,uses,schema_version,mapping_version,
     approval_status,approved_by,approved_at,structural_context,header_signature) VALUES (?,?, 'owner',?,0,1,?,'approved',?,?,?,?)
     ON CONFLICT(signature) DO UPDATE SET mapping=excluded.mapping,mapping_version=excluded.mapping_version,approval_status='approved',
     approved_by=excluded.approved_by,approved_at=excluded.approved_at,structural_context=excluded.structural_context,header_signature=excluded.header_signature`)
-    .run(proposal.mappingId, JSON.stringify(review.layout), now, proposal.mappingVersion, actor, now, JSON.stringify(review.structural), layoutDigest(review.structural.headers));
+      .run(proposal.mappingId, JSON.stringify(review.layout), now, proposal.mappingVersion, actor, now, JSON.stringify(review.structural), layoutDigest(review.structural.headers));
+  }
   if (automatic) db.prepare('UPDATE column_mappings SET uses=uses+1 WHERE signature=?').run(proposal.mappingId);
   db.prepare("UPDATE import_proposals SET status='imported',actor_id=?,approval_evidence=?,approved_at=?,updated_at=? WHERE id=? AND version=?")
     .run(actor, evidence, now, now, row.id, row.version);
   const receipt = saveReceipt({ ...ctx, now }, { scope: 'write:imports', kind: 'model_import', id: row.id, label: 'Reviewed import', before,
     after: { ...before, status: 'imported', counts: result.counts } });
   db.prepare(`INSERT INTO import_batches (id,proposal_id,proposal_version,file_id,status,before_state,after_state,receipt_id,created_at)
-    VALUES (?,?,?,?,'committed',?,?,?,?)`).run(randomUUID(), row.id, row.version, row.file_id, JSON.stringify(review.basis), JSON.stringify(importBasis(db)), receipt?.id ?? null, now);
+    VALUES (?,?,?,?,'committed',?,?,?,?)`).run(randomUUID(), row.id, row.version, row.file_id, JSON.stringify(review.effect), JSON.stringify(effect), receipt?.id ?? null, now);
   return { proposalId: row.id, version: row.version, status: 'imported', counts: result.counts, receipt, confirmationRequired: false };
 }
 
@@ -152,16 +183,59 @@ export async function reviewImport(ctx, args) {
   return tx(ctx.db, () => commit(ctx, row, proposal, source, file, review, validateImport(ctx, proposal, source), { evidence: args.evidence }));
 }
 
-export async function reuseApprovedMapping(ctx, { source, layout }) {
+function mappingCandidates(ctx, source) {
+  const pool = ctx.db.prepare("SELECT * FROM column_mappings WHERE approval_status='approved' AND schema_version=1 AND structural_context IS NOT NULL AND header_signature IS NOT NULL ORDER BY rowid DESC").all();
+  const exact = new Map();
+  const query = ctx.db.prepare("SELECT * FROM column_mappings WHERE header_signature=? AND approval_status='approved' AND schema_version=1");
+  for (const mapping of pool) {
+    const headers = layoutContext(source, parseJson(mapping.mapping)).headers;
+    for (const found of query.all(layoutDigest(headers))) exact.set(found.signature, found);
+  }
+  if (exact.size) return [...exact.values()];
+  const scored = pool.map(mapping => {
+    const before = parseJson(mapping.structural_context), after = layoutContext(source, parseJson(mapping.mapping));
+    const labels = before.headers.flatMap(h => h.columns.map(c => c.label));
+    const current = after.headers.flatMap(h => h.columns.map(c => c.label));
+    const overlap = labels.filter(label => current.includes(label)).length;
+    return { mapping, score: overlap >= Math.max(2, Math.ceil(labels.length / 2)) ? overlap / Math.max(labels.length, current.length) : 0 };
+  });
+  const best = Math.max(0, ...scored.map(c => c.score));
+  return scored.filter(c => c.score > 0 && c.score === best).map(c => c.mapping);
+}
+
+export async function reuseApprovedMapping(ctx, { source, layout = null }) {
   context(ctx); scopes(ctx);
-  const candidates = ctx.db.prepare("SELECT * FROM column_mappings WHERE approval_status='approved' AND structural_context IS NOT NULL ORDER BY rowid DESC").all();
+  let candidates = mappingCandidates(ctx, source);
+  const bound = candidates.filter(mapping => {
+    try {
+      const validation = validateImport(ctx, applyLayout(source, layout ?? parseJson(mapping.mapping)), source);
+      return isDeepStrictEqual(parseJson(mapping.structural_context).bindings, validation.bindings);
+    } catch { return false; }
+  });
+  if (bound.length) candidates = bound;
+  if (!layout) {
+    const applicable = candidates.filter(mapping => {
+      try {
+        const candidate = parseJson(mapping.mapping), validation = validateImport(ctx, applyLayout(source, candidate), source);
+        return validation.valid && isDeepStrictEqual(parseJson(mapping.structural_context), { ...layoutContext(source, candidate), bindings: validation.bindings });
+      } catch { return false; }
+    });
+    if (applicable.length === 1) layout = parseJson(applicable[0].mapping);
+    else if (candidates.length === 1) layout = parseJson(candidates[0].mapping);
+    else return { status: 'needs_clarification', candidateCount: candidates.length, confirmationRequired: true,
+      delta: [{ field: 'layout', reason: 'no_unique_approved_layout' }], preserved: { candidates: candidates.map(m => ({ id: m.signature, version: m.mapping_version, ...parseJson(m.structural_context) })) } };
+  }
   let proposal, validation;
   try { proposal = applyLayout(source, layout); validation = validateImport(ctx, proposal, source); } catch { validation = { valid: false, bindings: [] }; }
   const structural = { ...layoutContext(source, layout), bindings: validation.bindings };
   const matches = candidates.filter(c => isDeepStrictEqual(parseJson(c.structural_context), structural));
   if (matches.length !== 1 || !validation.valid) return { status: 'needs_clarification', confirmationRequired: true,
+    reasonCode: layout.currency !== 'USD' ? 'unsupported_currency' : null,
+    candidateCount: candidates.length, suggestedLayout: layout,
     delta: candidates.length === 1 ? layoutDelta(parseJson(candidates[0].structural_context), structural) : [{ field: 'layout', reason: 'no_unique_approved_layout' }],
-    preserved: candidates.length === 1 ? parseJson(candidates[0].mapping) : {}, errors: validation.errors ?? ['invalid_layout'] };
+    preserved: candidates.length === 1 ? { layout: parseJson(candidates[0].mapping), bindings: parseJson(candidates[0].structural_context).bindings } : {},
+    previousMapping: candidates.length === 1 ? { id: candidates[0].signature, version: candidates[0].mapping_version } : null,
+    errors: validation.errors ?? ['invalid_layout'] };
   const match = matches[0];
   proposal.mappingId = match.signature; proposal.mappingVersion = match.mapping_version;
   const staged = stageImport(ctx, { source, proposal, layout });

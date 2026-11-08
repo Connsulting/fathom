@@ -76,3 +76,23 @@ test('same account/day equal postings retain multiplicity and foreign account al
     assert.ok(validateImport(x.ctx, applyLayout(t, recipe()), t).errors.includes('account_unresolved'));
   } finally { x.close(); }
 });
+
+test('each cited subtotal reconciles only the group selected by its source columns', async () => {
+  const x = await fixture();
+  try {
+    const source = await x.source('Account,Date,Amount USD,Description\naccount-synthetic,2032-03-01,-3,Synthetic purchase\naccount-synthetic,2032-03-01,-3,Subtotal\naccount-synthetic,2032-04-01,-7,Synthetic purchase\naccount-synthetic,2032-04-01,-7,Subtotal\n');
+    const layout = recipe(); layout.tables[0].roles = [{ column: 4, equals: 'Subtotal', disposition: 'control_total', amountColumn: 3, groupColumns: [1, 2] }];
+    const p = applyLayout(source, layout), v = validateImport(x.ctx, p, source);
+    assert.equal(v.valid, true, JSON.stringify(v.errors)); assert.equal(p.controls.length, 2);
+    assert.deepEqual(p.controls.map(c => c.rows), [[0], [1]]);
+  } finally { x.close(); }
+});
+
+test('model-selected rounding cannot hide contradictory control totals', async () => {
+  const x = await fixture();
+  try {
+    const source = await x.source('Account,Date,Amount USD,Description\naccount-synthetic,2032-03-01,-3.25,Synthetic purchase\nTotal,,-3,Control total\n');
+    const proposal = applyLayout(source, recipe()); proposal.controls[0].precision = 'dollar';
+    assert.ok(validateImport(x.ctx, proposal, source).errors.includes('rounding_precision_unproven'));
+  } finally { x.close(); }
+});
