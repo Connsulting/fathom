@@ -14,14 +14,14 @@ function compact(value) {
   if (JSON.stringify(value) === fieldJson) return { $ref: '#/$defs/field' };
   return Array.isArray(value) ? value.map(compact) : Object.fromEntries(Object.entries(value).map(([k, v]) => [k, compact(v)]));
 }
-export const INTERPRETATION_SCHEMA = { type: 'object', properties: compact(Object.fromEntries(['rows', 'coverage', 'completeness'].map(k => [k, PROPOSAL_SCHEMA.properties[k]]))),
+export const INTERPRETATION_SCHEMA = { type: 'object', properties: compact(Object.fromEntries(['rows', 'coverage', 'completeness', 'controls'].map(k => [k, PROPOSAL_SCHEMA.properties[k]]))),
   required: ['rows', 'coverage', 'completeness'], additionalProperties: false, $defs: { field: FIELD_SCHEMA } };
 const numericFields = new Set(['amount', 'quantity', 'price', 'costBasis']);
 
 export function parseInterpretation(output, source) {
   try {
     if (typeof output === 'string') output = JSON.parse(output);
-    if (!output || Object.keys(output).some(k => !['rows', 'coverage', 'completeness'].includes(k))) throw new TypeError();
+    if (!output || Object.keys(output).some(k => !['rows', 'coverage', 'completeness', 'controls'].includes(k))) throw new TypeError();
     const proposal = { version: 1, fileId: source.fileId, sha256: source.sha256, proposalId: randomUUID(), interpreterVersion: '1', mappingId: null, mappingVersion: null, ...output };
     const checked = validateProposal(proposal, source);
     if (!checked.valid) return checked;

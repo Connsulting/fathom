@@ -33,7 +33,7 @@ test('authenticated HTTP review guards, exact owner statement, versions, foreign
     assert.equal((await post(staged.proposalId, args, { cookie: '' })).status, 401);
     assert.equal((await post(staged.proposalId, args, { origin: 'https://other.example.test' })).status, 403);
     assert.equal((await post('foreign-proposal', args)).status, 404);
-    for (const body of [{ ...args, actorId: 'another' }, { ...args, householdId: 'another' }, { ...args, version: 0 }, { ...args, evidence: '' }, { ...args, evidence: 'x'.repeat(4001) }]) {
+    for (const body of [{ ...args, actorId: 'another' }, { ...args, householdId: 'another' }, { ...args, proposalId: staged.proposalId }, { ...args, version: 0 }, { ...args, evidence: '' }, { ...args, evidence: 'x'.repeat(4001) }]) {
       assert.equal((await post(staged.proposalId, body)).status, 400);
     }
     const out = await post(staged.proposalId, args);

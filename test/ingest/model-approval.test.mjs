@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture, recipe } from '../helpers/model-import.mjs';
 import { applyLayout } from '../../src/ingest/model-layout.mjs';
-import { stageImport, reviewImport } from '../../src/ingest/model-review.mjs';
+import { stageImport, reviewImport, prepareImport } from '../../src/ingest/model-review.mjs';
+import { field } from '../helpers/model-import.mjs';
+import { runWithPrincipal } from '../../src/platform/model-budget.mjs';
 
 test('staging writes no ledger or mapping; explicit actor-bound approval commits once with a receipt', async () => {
   const x = await fixture();
@@ -22,6 +24,30 @@ test('staging writes no ledger or mapping; explicit actor-bound approval commits
     assert.equal(x.db.prepare('SELECT count(*) n FROM transactions').get().n, 2);
     assert.equal(x.db.prepare('SELECT approval_status FROM column_mappings').get().approval_status, 'approved');
     await assert.rejects(reviewImport(x.ctx, { proposalId: staged.proposalId, version: 1, decision: 'approve', evidence: 'yes' }), e => e.code === 'proposal_stale');
+  } finally { x.close(); }
+});
+
+test('underlying fact scopes are checked before any mixed proposal effect', async () => {
+  const x = await fixture();
+  try {
+    const source = await x.source(), proposal = applyLayout(source, recipe());
+    proposal.rows.push({ target: 'fact', key: 'household.state', scope: 'household', datePrecision: 'day',
+      fields: { value: field('r7'), asOf: field('r5'), subject: field('r4') } });
+    const staged = stageImport(x.ctx, { source, proposal });
+    await assert.rejects(reviewImport(x.ctx, { proposalId: staged.proposalId, version: 1, decision: 'approve', evidence: 'yes' }), e => e.code === 'forbidden');
+    assert.equal(x.db.prepare('SELECT count(*) n FROM transactions').get().n, 0);
+    assert.equal(x.db.prepare('SELECT count(*) n FROM action_receipts').get().n, 0);
+  } finally { x.close(); }
+});
+
+test('identical source preparation reuses its staged interpretation without another engine call', async () => {
+  const x = await fixture();
+  try {
+    const source = await x.source();
+    const staged = stageImport(x.ctx, { source, proposal: applyLayout(source, recipe()), layout: recipe() });
+    const out = await prepareImport(x.ctx, { file: { fileId: source.fileId, format: source.format, bytes: source.bytes } });
+    assert.equal(out.proposalId, staged.proposalId); assert.equal(out.version, staged.version);
+    assert.equal(out.status, 'needs_confirmation');
   } finally { x.close(); }
 });
 
@@ -65,5 +91,31 @@ test('mismatched owner evidence and missing import scope refuse without effects'
     await assert.rejects(reviewImport({ ...x.ctx, ownerText: 'wait' }, args), e => e.code === 'bad_input');
     await assert.rejects(reviewImport({ ...x.ctx, scopes: [] }, args), e => e.code === 'forbidden');
     assert.equal(x.db.prepare('SELECT count(*) n FROM action_receipts').get().n, 0);
+  } finally { x.close(); }
+});
+
+test('authorization revoked during source read refuses the late commit', async () => {
+  const x = await fixture();
+  try {
+    const source = await x.source(), staged = stageImport(x.ctx, { source, proposal: applyLayout(source, recipe()) });
+    let authorized = true;
+    const household = { ...x.household, async vault() { const vault = await x.household.vault(); authorized = false; return vault; } };
+    await assert.rejects(runWithPrincipal({ check: () => authorized }, () => reviewImport({ ...x.ctx, household },
+      { proposalId: staged.proposalId, version: 1, decision: 'approve', evidence: 'yes' })), e => e.code === 'forbidden');
+    assert.equal(x.db.prepare('SELECT count(*) n FROM transactions').get().n, 0);
+  } finally { x.close(); }
+});
+
+test('a corrected interpretation needs a fresh acceptance of its own version', async () => {
+  const x = await fixture();
+  try {
+    const source = await x.source(), staged = stageImport(x.ctx, { source, proposal: applyLayout(source, recipe()) });
+    await reviewImport({ ...x.ctx, ownerText: 'Use the original sign.' }, { proposalId: staged.proposalId, version: 1, decision: 'correct', evidence: 'Use the original sign.' });
+    const revised = { ...applyLayout(source, recipe()), proposalId: staged.proposalId, version: 2 };
+    const ready = stageImport(x.ctx, { source, proposal: revised, layout: recipe() });
+    assert.equal(ready.status, 'needs_confirmation');
+    assert.equal(x.db.prepare('SELECT count(*) n FROM transactions').get().n, 0);
+    const out = await reviewImport({ ...x.ctx, ownerText: 'looks right' }, { proposalId: staged.proposalId, version: 2, decision: 'approve', evidence: 'looks right' });
+    assert.equal(out.status, 'imported'); assert.equal(out.version, 2);
   } finally { x.close(); }
 });

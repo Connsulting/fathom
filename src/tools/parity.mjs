@@ -50,6 +50,7 @@ export const PARITY_EXCLUDED = Object.freeze({
 });
 
 export const PARITY_PENDING = Object.freeze({
+  "POST /api/import-proposals/:proposalId/review": {"ticket": "IMP-7", "operations": ["refresh.review_import"]},
   "POST /api/preferences/:id/delete": {"ticket": "C10", "operations": ["update_preferences.forget"]},
   "POST /api/recs/:id/answers": {"ticket": "C8", "operations": ["answer.rec_questions"]},
   "POST /api/recs/:id/start-over": {"ticket": "C9", "operations": ["act_on_recommendation.start_over"]},

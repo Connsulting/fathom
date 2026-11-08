@@ -58,3 +58,21 @@ test('household-local proposal versions, batches and mapping approval cannot cro
     assert.throws(() => a.prepare('UPDATE import_proposals SET version = 0').run());
   } finally { a.close(); b.close(); }
 });
+
+test('review metadata upgrade preserves populated proposal, mapping and financial rows', () => {
+  const db = legacy();
+  try {
+    migrate(db, { through: 31 });
+    db.prepare(`INSERT INTO import_proposals (id,version,file_id,source_sha256,status,proposal,interpreter_version,created_at,updated_at)
+      VALUES ('proposal-synthetic',1,'f-synthetic',?,'needs_confirmation','{}','1',?,?)`).run('a'.repeat(64), now, now);
+    const oldProposal = db.prepare('SELECT * FROM import_proposals').get();
+    const oldMapping = db.prepare('SELECT * FROM column_mappings').get();
+    const before = snapshot(db);
+    assert.deepEqual(migrate(db).applied, [33]);
+    const proposal = db.prepare('SELECT * FROM import_proposals').get(), mapping = db.prepare('SELECT * FROM column_mappings').get();
+    for (const [key, value] of Object.entries(oldProposal)) assert.deepEqual(proposal[key], value);
+    for (const [key, value] of Object.entries(oldMapping)) assert.deepEqual(mapping[key], value);
+    assert.equal(proposal.review_state, null); assert.equal(mapping.header_signature, null);
+    assert.deepEqual(snapshot(db), before);
+  } finally { db.close(); }
+});

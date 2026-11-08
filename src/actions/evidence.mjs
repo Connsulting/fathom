@@ -79,6 +79,16 @@ export function isExplicitYes(text) {
   return t.length <= 160 && YES.test(t) && !HEDGE.test(t);
 }
 
+export function requireImportReviewEvidence(ctx, evidence, { approve = false } = {}) {
+  if (typeof evidence !== 'string' || evidence.length < 1 || evidence.length > 4000 || !evidence.trim() || ctx.ownerText !== evidence) {
+    throw new ToolError('bad_input', 'Use the exact current owner statement as evidence.');
+  }
+  requireEvidence({ ...ctx, conversationKey: null }, evidence, { evidence });
+  if (approve && !/^(?:yes|yeah|yep|yup|ok|okay|sure|looks right|looks good|go ahead|do it|import(?: it| this| the file)?|approve(?: it| this)?)[.!\s]*$/i.test(evidence.trim())) {
+    throw new ToolError('bad_input', 'Explicitly accept this proposal or submit a correction.');
+  }
+}
+
 function confirmedProposal(ctx, value, shape) {
   if (!ctx.conversationKey || !ctx.actorId) return false;
   const rows = ctx.db.prepare(`SELECT role, text, provenance FROM messages WHERE conversation_key = ? AND id <= ? ORDER BY id DESC LIMIT 2`)
