@@ -102,3 +102,15 @@ test('chart, compare and timeline operations build from their minimum arguments'
   assert.deepEqual(reply.provenance.blocks.map(b => b.op), ['chart', 'compare', 'timeline']);
   assert.ok(reply.provenance.blocks.every(b => b.after === 1));
 });
+
+test('show cannot be referenced by another block or a calculation', async t => {
+  const { resolveRef } = await import('../src/tools/refs.mjs');
+  const ref = { tool: 'show', args: table, path: '' };
+  await assert.rejects(resolveRef(ref, {}), /not referenceable/);
+  const { reply } = await answer(t, [[
+    { toolCalls: [read, { name: 'show', args: table }, { name: 'show', args: { ...table, source: ref } }] },
+    { text: 'Recent spending follows.' },
+  ]]);
+  assert.equal(reply.provenance.blocks.length, 1);
+  assert.equal(reply.provenance.blockNotes[0].reason, 'not_a_read');
+});
