@@ -244,7 +244,7 @@ test('PRODUCT_RULES states the advisory boundaries, the figure token rule and th
   assert.equal(typeof PRODUCT_RULES, 'string');
   assert.match(PRODUCT_RULES, /advisory/i);
   assert.ok(PRODUCT_RULES.includes('{f:'), 'figure tokens are explained');
-  assert.ok(instructions.includes('household.figures'));
+  assert.ok(PRODUCT_RULES.includes('household.figures'));
   assert.ok(instructions.includes('Advisor review stays inside Fathom. Marking for review or preparing a packet sends nothing outside the product. Never claim to have emailed anyone.'));
   assert.ok(instructions.includes('A card payment from checking moves money to the card; it is not new spending.'));
   // B2: chat never writes; the rule names the proposal tool instead of the write tool.
