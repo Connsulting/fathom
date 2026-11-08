@@ -85,7 +85,7 @@ const amountBand = amount => Math.floor(Math.log10(Math.max(1,Math.abs(amount)))
 
 export function createHistoryIndex({transactions,corrections=[],sourceRules=[]}) {
   const corrected=new Map(corrections.filter(c=>!c.auto).map(c=>[c.transaction_id,c]));
-  const mapped=new Map(sourceRules.map(c=>[JSON.stringify([c.parser,c.category]),c.bucket]));
+  const mapped=new Map(sourceRules.filter(c=>!c.auto).map(c=>[JSON.stringify([c.parser,c.category]),c.bucket]));
   const words=new Map();
   for(const t of transactions) {
     const c=corrected.get(t.id), imported=importedCategory(t);
@@ -139,7 +139,7 @@ export function resolveCategories({ transactions, accounts, corrections = [], me
     const rule = merchants.get(merchant), mapped = sources.get(JSON.stringify([imported.parser,imported.category]));
     if (own) set(t,own.category,own.bucket,'correction',{transactionId:t.id});
     else if (rule && merchant) set(t,rule.category,rule.bucket,'correction',{merchant});
-    else if (mapped) set(t,imported.category,mapped.bucket,'correction',imported);
+    else if (mapped) set(t,imported.category,mapped.bucket,mapped.auto ? 'guess' : 'correction',mapped.auto ?? imported);
     else if (sourceBucket(imported.parser,imported.category)) set(t,imported.category,sourceBucket(imported.parser,imported.category),'import',imported);
   }
   const priority = new Set(transferSourceIds ?? rows.filter(t=>spendingAccount(byId.get(t.account_id))).map(t=>t.id));

@@ -30,6 +30,43 @@ export function taxYearFor(clock) {
 const BANK = ['checking', 'cash'];
 const IRA = (a) => (a.kind === 'roth' || a.kind === 'retirement') && /\bira\b/i.test(`${a.name || ''}`) && !/401|403|457/.test(a.name || '');
 
+// Ordinary bank interest is reported at $10: https://www.irs.gov/instructions/i1099int.
+// HSA distributions: packs/account-tax-treatment/hsa-and-529-withdrawals.md (Pub. 969).
+// No dollar threshold is applied to HSA withdrawals or processor deposits: any activity vetoes inference.
+const INFERENCE_THRESHOLDS = Object.freeze({ interestCents: 1000, activity: 0 });
+
+function inferredSkips(db, { year, facts, accounts }) {
+  const rows = db.prepare('SELECT id, account_id, date, amount, description, category, file_id, locator FROM transactions WHERE date BETWEEN ? AND ? ORDER BY date, id')
+    .all(`${year}-01-01`, `${year}-12-31`);
+  const evidence = (rs) => rs.slice(-1).map((r) => ({ table: 'transactions', id: r.id, date: r.date, account: r.account_id, label: r.description || r.category || 'Ledger transaction', fileId: r.file_id, locator: r.locator }));
+  const out = new Map();
+  const infer = (key, reason, rs) => out.set(key, { inferred: true, reason, evidenceCount: rs.length, evidence: evidence(rs) });
+  for (const a of accounts) {
+    if (!BANK.includes(a.kind) && !(a.kind === 'business' && !/payroll/i.test(a.name || ''))) continue;
+    const history = rows.filter((r) => r.account_id === a.id);
+    if (!history.length) continue;
+    const interest = history.filter((r) => r.amount > 0 && /\binterest\b/i.test(`${r.category || ''} ${r.description || ''}`));
+    const total = interest.reduce((n, r) => n + Math.round(r.amount * 100), 0);
+    if (total < INFERENCE_THRESHOLDS.interestCents) {
+      infer(`1099-int:${a.id}`, `Interest in stored ${year} history is below the bank reporting threshold.`, interest.length ? interest : history);
+    }
+  }
+  const hsas = new Set(accounts.filter((a) => a.kind === 'hsa').map((a) => a.id));
+  const hsaRows = rows.filter((r) => hsas.has(r.account_id));
+  if (hsaRows.length && !hsaRows.some((r) => r.amount < INFERENCE_THRESHOLDS.activity)) {
+    infer('hsa:1099-sa', `No HSA distributions in stored ${year} HSA history.`, hsaRows);
+  }
+  const processor = /\b(stripe|square|paypal|venmo|adyen|braintree|shopify|clover|toast|payment[ -]processor|card[ -](?:payment|settlement))\b/i;
+  if (rows.length && !rows.some((r) => r.amount > INFERENCE_THRESHOLDS.activity && processor.test(`${r.category || ''} ${r.description || ''}`))) {
+    infer('1099-k', `No payment-processor deposits in stored ${year} history.`, rows);
+  }
+  if (facts['income.partnership'] === false) {
+    const row = db.prepare("SELECT key, updated_at, file_id, locator FROM facts WHERE key = 'income.partnership'").get();
+    out.set('k1:partnership', { inferred: true, reason: 'No partnership entity in stored household facts.', evidence: [{ table: 'facts', id: row.key, date: row.updated_at, label: 'Partnership income: No', fileId: row.file_id, locator: row.locator }] });
+  }
+  return out;
+}
+
 function activeAccounts(db, year) {
   const from = `${year}-01-01`, to = `${year}-12-31`;
   const has = (table, col) => new Set(db.prepare(`SELECT DISTINCT account_id AS id FROM ${table} WHERE ${col} BETWEEN ? AND ?`).all(from, to).map((r) => r.id));
@@ -103,7 +140,7 @@ export function expectedItems({ facts, accounts, year, active, deposits, employe
   if (facts['retirement.ira'] === true && !items.some((i) => i.form === '5498')) {
     add({ key: '5498:ira', form: '5498', t: '5498 for IRA contributions', src: 'Each IRA custodian', arrives: 'may31', why: 'You hold IRAs' });
   }
-  if (facts['income.partnership'] === true) {
+  if (typeof facts['income.partnership'] === 'boolean') {
     add({ key: 'k1:partnership', form: 'k1', t: 'K-1 from each partnership', src: 'The partnership’s preparer', arrives: 'mar15', why: 'You have partnership income' });
   }
   if (facts['income.selfEmployed'] === true) {
@@ -150,15 +187,11 @@ export function loadMarks(db, year) {
   return new Map(db.prepare('SELECT item_key, reason, marked_at FROM yearend_marks WHERE tax_year = ?').all(year).map((r) => [r.item_key, r]));
 }
 
-// Mark an expected item not needed this year (reason required), or clear the mark (reason null).
+// An empty stored reason is the owner's durable "needed after all" override.
 export function setMark(db, { year, key, reason, now = new Date().toISOString() }) {
-  if (reason == null) {
-    db.prepare('DELETE FROM yearend_marks WHERE tax_year = ? AND item_key = ?').run(year, key);
-    return { cleared: true };
-  }
   db.prepare(`INSERT INTO yearend_marks (tax_year, item_key, reason, marked_at) VALUES (?, ?, ?, ?)
-              ON CONFLICT(tax_year, item_key) DO UPDATE SET reason = excluded.reason, marked_at = excluded.marked_at`).run(year, key, reason, now);
-  return { marked: true };
+              ON CONFLICT(tax_year, item_key) DO UPDATE SET reason = excluded.reason, marked_at = excluded.marked_at`).run(year, key, reason ?? '', now);
+  return reason == null ? { cleared: true } : { marked: true };
 }
 
 const fileOut = (d) => ({ id: d.file_id, name: d.file_name || 'Unnamed file', date: String(d.uploaded_at || '').slice(0, 10), docId: d.id, form: d.doc_type, issuer: issuerOf(d.fields) });
@@ -195,6 +228,7 @@ export function yearendChecklist(db, { year, clock, plain = (s) => s }) {
   const items = expectedItems({ facts, accounts, year, active, deposits, employerNames: employers(all), mortgagePaid, pnlEntities: pnl.map((p) => p.entity) });
   const { matched, unmatched } = matchDocuments(items, docs);
   const marks = loadMarks(db, year);
+  const inferred = inferredSkips(db, { year, facts, accounts });
   const fileName = (id) => db.prepare('SELECT name, uploaded_at FROM files WHERE id = ?').get(id);
   const out = items.map((i) => {
     const arrives = ARRIVES[i.arrives];
@@ -210,11 +244,12 @@ export function yearendChecklist(db, { year, clock, plain = (s) => s }) {
       }
     }
     const mark = marks.get(i.key);
+    const skip = mark ? (mark.reason ? { reason: mark.reason, at: mark.marked_at } : null) : inferred.get(i.key);
     if (files.length) status = 'have';
-    else if (mark) status = 'skipped';
+    else if (skip) status = 'skipped';
     else status = clock > arrives.due(year) ? 'missing' : 'expected';
     const item = { key: i.key, form: i.form, t: i.t, status, src: i.src, note, due: arrives.due(year), why: i.why, files };
-    if (mark) item.skip = { reason: mark.reason, at: mark.marked_at };
+    if (skip) item.skip = skip;
     return item;
   });
   return { year, items: out, unmatched: unmatched.map((d) => ({ ...fileOut(d), t: `${formLabel(d.doc_type)}${issuerOf(d.fields) ? ` from ${issuerOf(d.fields)}` : ''}` })) };
