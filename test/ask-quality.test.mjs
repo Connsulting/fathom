@@ -299,8 +299,7 @@ test('the static system prompt carries PRODUCT_RULES, then the answer style and 
 
 /* ---------- (f) tool descriptions ---------- */
 
-// The registry as of this change: descriptions changed; SRC1 adds the sources tool.
-const TOOL_NAMES = ['advisor_review', 'accounts', 'act_on_recommendation', 'answer', 'business', 'calculate', 'goals', 'household', 'knowledge', 'recommendations', 'sources', 'spending', 'tax', 'transactions', 'undo', 'update_goal', 'update_preferences'];
+const TOOL_NAMES = ['advisor_review', 'accounts', 'act_on_recommendation', 'answer', 'business', 'calculate', 'goals', 'household', 'knowledge', 'recommendations', 'refresh', 'sources', 'spending', 'tax', 'transactions', 'undo', 'update_goal', 'update_preferences'];
 
 test('transactions.search names credit cards and categories, business.pnl names business, and spending has its own tool', () => {
   const byName = new Map(REGISTRY.map(x => [x.name, x]));
