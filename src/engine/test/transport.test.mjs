@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { consumeSdkMessages, normalizeSdkRound, assistantText, messagesRound, wireSchema, WIRE_UNSUPPORTED_KEYWORDS } from '../live.mjs';
+import { consumeSdkMessages, normalizeSdkRound, assistantText, messagesRound, sdkOptions, encodeTranscript, wireSchema, WIRE_UNSUPPORTED_KEYWORDS } from '../live.mjs';
 import { DEFAULT_MODEL, usageCostUsd } from '../pricing.mjs';
 import { createEngine, createMemoryLedger, ModelAccountingError, ModelCallError } from '../index.mjs';
 import * as engineModule from '../index.mjs';
@@ -338,5 +338,185 @@ test('a rejected live extract records zero cost and does not disable the engine'
     assert.equal(ledger.entries[0].costUsd, 0);
     assert.deepEqual(await engine.extract({ document, schema, maxTokens: 64 }), [{ c: 0.5 }], 'the engine still works after the rejection');
     await assert.rejects(engine.extract({ document, schema, maxTokens: 64 }), ModelCallError, 'the full schema still bounds the value locally');
+  } finally { stub.restore(); }
+});
+
+
+const TAX_TEXT = 'SSN 900-12-3456; ITIN 900 70 1234; EIN 90-1234567; SSN: 900123456; ITIN: 900701234; EIN: 901234567';
+const assertNoTaxIds = value => {
+  const text = JSON.stringify(value);
+  for (const id of ['900-12-3456', '900 70 1234', '90-1234567', '900123456', '900701234', '901234567']) {
+    assert.ok(!text.includes(id), `outbound tax identifier: ${id}`);
+  }
+};
+
+test('SDK outbound transcript and system text scrub tax identifiers without mutating callers', () => {
+  const messages = [
+    { role: 'user', content: TAX_TEXT },
+    { role: 'assistant', content: [{ type: 'text', text: TAX_TEXT }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'synthetic-evidence', content: JSON.stringify({ filename: `tax_${TAX_TEXT}.pdf`, amount: 123456789, date: '2032-03-05' }) }] },
+  ];
+  const original = structuredClone(messages);
+  const wire = encodeTranscript(messages);
+  assertNoTaxIds(wire);
+  assert.deepEqual(messages, original);
+  assert.ok(wire.includes('123456789'));
+  assert.ok(wire.includes('2032-03-05'));
+  assert.ok(wire.includes('synthetic-evidence'));
+  const options = sdkOptions({ credential: { value: 'synthetic-key' }, configDir: '/synthetic', system: TAX_TEXT, systemDynamic: TAX_TEXT, maxTokens: 64, model: DEFAULT_MODEL });
+  assertNoTaxIds(options.systemPrompt);
+});
+
+test('Messages outbound body scrubs nested metadata, history and schema descriptions', async () => {
+  const stub = stubFetch([{ status: 200, body: OK_MESSAGE('{}') }]);
+  const messages = [{ role: 'user', content: [{ type: 'text', text: TAX_TEXT }, { type: 'document', title: `tax_${TAX_TEXT}.pdf`, source: { type: 'text', media_type: 'text/plain', data: TAX_TEXT } }] }];
+  const original = structuredClone(messages);
+  const schema = { type: 'object', description: TAX_TEXT, properties: { amount: { type: 'number', minimum: 0 }, date: { type: 'string' } }, additionalProperties: false };
+  try {
+    await messagesRound({ credential: { value: 'synthetic-key' }, system: TAX_TEXT, systemDynamic: TAX_TEXT, messages, schema, model: DEFAULT_MODEL, maxTokens: 64 });
+    assertNoTaxIds(stub.bodies[0]);
+    assert.deepEqual(messages, original);
+    assert.equal(schema.description, TAX_TEXT);
+    assert.deepEqual(stub.bodies[0].output_config.format.schema.properties, { amount: { type: 'number' }, date: { type: 'string' } });
+  } finally { stub.restore(); }
+});
+
+test('MCP replies scrub success and error text while local evidence keeps original data', async () => {
+  const { createRegistryServer } = await import('../tools.mjs');
+  const result = { filename: `tax_${TAX_TEXT}.pdf`, amount: 123456789, date: '2032-03-05', evidence: { id: 'synthetic-evidence', excerpt: TAX_TEXT } };
+  const registry = createRegistryServer([{ name: 'synthetic', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: TAX_TEXT,
+    inputSchema: { type: 'object', properties: { operation: { type: 'string' } }, required: ['operation'], additionalProperties: false },
+    handler: async args => {
+      if (args.operation === 'fail') { const error = new Error(TAX_TEXT); error.name = 'ToolError'; throw error; }
+      return result;
+    } }], { purpose: 'chat' });
+  const reply = await registry.invoke('synthetic', { operation: 'read' });
+  assertNoTaxIds(reply);
+  assert.deepEqual(registry.results[0].result, result);
+  const wireResult = JSON.parse(reply.content[0].text);
+  assert.equal(wireResult.amount, result.amount);
+  assert.equal(wireResult.date, result.date);
+  assert.equal(wireResult.evidence.id, result.evidence.id);
+  const failed = await registry.invoke('synthetic', { operation: 'fail' });
+  assert.equal(failed.isError, true);
+  assertNoTaxIds(failed);
+  const invalid = await registry.invoke('synthetic', { operation: TAX_TEXT, [TAX_TEXT]: 'invalid' });
+  assertNoTaxIds(invalid);
+});
+
+
+test('tax identifier sanitization preserves financial values and documents identifier-shaped false positives', async () => {
+  const { redactTaxIdentifiers, redactProviderText } = await import('../../ingest/redact.mjs');
+  const safe = { amount: 123456789, text: '$123456789 and $123,456.78 on 2032-03-05', evidence: 'synthetic-evidence-20320305', schema: { type: 'number', minimum: 123456789 } };
+  assert.deepEqual(redactProviderText(safe), safe);
+  assert.deepEqual(redactProviderText({ ssn: '900123456', nested: { ITIN: '900701234', EIN: '901234567' } }), { ssn: 'XXXXXXXXX', nested: { ITIN: 'XXXXXXXXX', EIN: 'XXXXXXXXX' } });
+  const forms = ['900-12-3456', '900 12 3456', '900_12_3456', '900\u201112\u20113456', '90-1234567', '90 1234567', '90_1234567', 'SSN 900123456', 'ITIN: 900701234', 'EIN=901234567', 'tax identification number: 900123456'];
+  for (const form of forms) {
+    const masked = redactTaxIdentifiers(`synthetic_${form}.pdf`);
+    assert.ok(!masked.includes(form), `supported form ${form}`);
+    assert.equal(redactTaxIdentifiers(masked), masked, 'idempotent');
+  }
+  assert.equal(redactTaxIdentifiers('Amount code 900-12-3456'), 'Amount code XXX-XX-XXXX', 'identifier-shaped non-identifiers are the accepted false positive');
+});
+
+test('MCP advertised tool metadata is sanitized without changing local schemas', async () => {
+  const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+  const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+  const { createRegistryServer } = await import('../tools.mjs');
+  const inputSchema = { type: 'object', description: TAX_TEXT, properties: { amount: { type: 'number', minimum: 0 } }, additionalProperties: false };
+  const registry = createRegistryServer([{ name: 'synthetic', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: TAX_TEXT, inputSchema, handler: async () => ({ ok: true }) }], { purpose: 'chat' });
+  const client = new Client({ name: 'synthetic', version: '1.0.0' });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  try {
+    await registry.instance.connect(serverTransport);
+    await client.connect(clientTransport);
+    const advertised = await client.listTools();
+    assertNoTaxIds(advertised);
+    assert.deepEqual(advertised.tools[0].inputSchema.properties, inputSchema.properties);
+    assert.equal(inputSchema.description, TAX_TEXT);
+  } finally { await client.close(); await registry.instance.close(); }
+});
+
+
+test('public demo scrubs the serialized provider request including raw tool result replay', async () => {
+  const { publicDemoRound } = await import('../../public-demo/engine.mjs');
+  const stub = stubFetch([{ status: 200, body: OK_MESSAGE('Synthetic response.') }]);
+  const id = '0f8e2c1a-4b7d-4e2a-9f12-3456789abcde';
+  const result = { filename: `synthetic_${TAX_TEXT}.pdf`, receipt: { id }, amount: 123456789, date: '2032-03-05' };
+  const messages = [
+    { role: 'user', content: TAX_TEXT },
+    { role: 'assistant', content: [{ type: 'tool_use', id, name: 'synthetic', input: { note: TAX_TEXT } }] },
+    { role: 'tool', content: [{ result }] },
+  ];
+  const tools = [{ name: 'synthetic', description: TAX_TEXT, inputSchema: { type: 'object', description: TAX_TEXT, properties: { amount: { type: 'number' } }, additionalProperties: false } }];
+  const original = structuredClone({ messages, tools });
+  try {
+    await publicDemoRound({ credential: { value: 'synthetic-key' }, system: TAX_TEXT, systemDynamic: TAX_TEXT, messages, tools, maxTokens: 64, model: DEFAULT_MODEL, registry: { results: [] } });
+    assertNoTaxIds(stub.bodies[0]);
+    assert.deepEqual({ messages, tools }, original);
+    const replay = stub.bodies[0].messages[2].content[0];
+    assert.equal(replay.tool_use_id, id);
+    const sent = JSON.parse(replay.content);
+    assert.equal(sent.receipt.id, id);
+    assert.equal(sent.amount, result.amount);
+    assert.equal(sent.date, result.date);
+    assert.deepEqual(stub.bodies[0].tools[0].input_schema.properties, tools[0].inputSchema.properties);
+  } finally { stub.restore(); }
+});
+
+test('tax identifier boundaries preserve UUID receipt and preference IDs and still scrub underscore filenames', async () => {
+  const { redactTaxIdentifiers, redactProviderText } = await import('../../ingest/redact.mjs');
+  const id = '0f8e2c1a-4b7d-4e2a-9f12-3456789abcde';
+  const evidence = { receipt: { id }, preference: { id }, refs: [id, id.toUpperCase()] };
+  assert.deepEqual(redactProviderText(evidence), evidence);
+  assert.equal(encodeTranscript([{ role: 'tool', content: evidence }]), JSON.stringify([{ role: 'tool', content: evidence }]));
+  for (const text of ['a900-12-3456', '900-12-3456f', 'a90-1234567', '90-1234567F']) assert.equal(redactTaxIdentifiers(text), text);
+  assert.equal(redactTaxIdentifiers('synthetic_900-12-3456_90-1234567.pdf'), 'synthetic_XXX-XX-XXXX_XX-XXXXXXX.pdf');
+});
+
+
+test('Messages tool transport scrubs every round including original tool evidence replay', async () => {
+  const id = '0f8e2c1a-4b7d-4e2a-9f12-3456789abcde';
+  const result = { filename: `synthetic_${TAX_TEXT}.pdf`, amount: 123456789, date: '2032-03-05', receipt: { id } };
+  const tools = [{ name: 'synthetic', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: TAX_TEXT,
+    inputSchema: { type: 'object', description: TAX_TEXT, properties: {}, additionalProperties: false }, handler: async () => result }];
+  const messages = [{ role: 'user', content: TAX_TEXT }];
+  const original = structuredClone(messages);
+  const first = { ...OK_MESSAGE(''), content: [{ type: 'tool_use', id, name: 'synthetic', input: {} }], stop_reason: 'tool_use' };
+  const stub = stubFetch([{ status: 200, body: first }, { status: 200, body: OK_MESSAGE('Synthetic response.') }]);
+  try {
+    const engine = createEngine({ mode: 'live', credential: 'synthetic-key', testTransport: { baseURL: 'http://127.0.0.1:9' } });
+    const reply = await engine.call({ purpose: 'chat', system: TAX_TEXT, systemDynamic: TAX_TEXT, messages, tools, maxTokens: 64 });
+    assert.equal(stub.bodies.length, 2);
+    stub.bodies.forEach(assertNoTaxIds);
+    assert.deepEqual(messages, original);
+    assert.equal(tools[0].description, TAX_TEXT);
+    assert.deepEqual(reply.toolResults[0].result, result);
+    const replay = stub.bodies[1].messages.at(-1).content[0];
+    assert.equal(replay.tool_use_id, id);
+    const sent = JSON.parse(replay.content);
+    assert.equal(sent.receipt.id, id);
+    assert.equal(sent.amount, result.amount);
+    assert.equal(sent.date, result.date);
+    assert.ok(sent.filename.includes('XXX-XX-XXXX'));
+  } finally { stub.restore(); }
+});
+
+test('PDF extraction scrubs outbound system and schema text and preserves the binary document', async () => {
+  const data = Buffer.from('%PDF-synthetic');
+  const schema = { type: 'object', description: TAX_TEXT, properties: { amount: { type: 'number', description: TAX_TEXT } }, required: ['amount'], additionalProperties: false };
+  const original = structuredClone(schema);
+  const stub = stubFetch([{ status: 200, body: OK_MESSAGE('{"rows":[{"amount":42}]}') }]);
+  try {
+    const engine = createEngine({ mode: 'live', credential: 'synthetic-key', testTransport: { baseURL: 'http://127.0.0.1:9' } });
+    const rows = await engine.extract({ document: { type: 'pdf', data, pages: 1 }, system: TAX_TEXT, schema, maxTokens: 64 });
+    assert.deepEqual(rows, [{ amount: 42 }]);
+    assert.equal(stub.bodies.length, 1);
+    assertNoTaxIds(stub.bodies[0]);
+    assert.deepEqual(schema, original);
+    const source = stub.bodies[0].messages[0].content[0].source;
+    assert.equal(source.media_type, 'application/pdf');
+    assert.equal(source.data, data.toString('base64'));
+    assert.equal(data.toString(), '%PDF-synthetic');
   } finally { stub.restore(); }
 });

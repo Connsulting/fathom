@@ -16,12 +16,14 @@ import { setSetting, getSetting } from '../src/store/db.mjs';
 import { JOBS } from '../src/jobs/scheduler.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
-const seed = dataDir => runCommand('npm', ['run', 'seed:demo'], { env: { FATHOM_DATA: dataDir } });
+const seed = dataDir => runCommand('npm', ['run', 'seed:demo', '--', '--household', servedStore(dataDir)?.householdId ?? 'synthetic-legacy'], { env: { FATHOM_DATA: dataDir } });
 const novemberStatus = r => (r.statusByDemo && r.statusByDemo.november) || r.status;
 const cents = n => Math.round(n * 100) / 100 === n;
 
 async function seededDir() {
-  const dataDir = await tempDir();
+  const instance = await tempInstance({ mode: 'demo' });
+  const { dataDir } = instance;
+  instance.close();
   const r = await seed(dataDir);
   assert.equal(r.code, 0, `seed:demo failed:\n${r.stdout}\n${r.stderr}`);
   return dataDir;
@@ -71,7 +73,7 @@ test('demo/ does not import from or reference mock-v2', () => {
   for (const f of files) assert.ok(!readFileSync(f, 'utf8').includes('mock-v2'), `${f} mentions mock-v2`);
 });
 
-test('seed:demo creates a demo store at the November state', T, async () => {
+test('seed:demo populates its selected demo store at the November state', T, async () => {
   const dataDir = await seededDir();
   const served = servedStore(dataDir);
   assert.ok(served, 'the seed created an instance with a rooted household');
