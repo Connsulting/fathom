@@ -88,7 +88,12 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
         const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, []);
         const names = new Set(value.map(e => normalizeName(e.name)));
         value = [...(Array.isArray(prior) ? prior : []).filter(e => !names.has(normalizeName(e?.name))
-          && !(e?.inferred && (links.includes(e.accountId) || e.accountIds?.some(id => links.includes(id))))), ...value];
+          && !(e?.inferred && (links.includes(e.accountId) || e.accountIds?.some(id => links.includes(id)))))
+          .map(e => {
+            if (!links.includes(e?.accountId)) return e;
+            const { accountId, ...unlinked } = e;
+            return unlinked;
+          }), ...value];
       }
       if (shape.type === 'map') {
         const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
