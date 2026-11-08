@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fixture, recipe } from '../helpers/model-import.mjs';
 import { applyLayout, layoutContext } from '../../src/ingest/model-layout.mjs';
-import { stageImport, reviewImport, reuseApprovedMapping } from '../../src/ingest/model-review.mjs';
+import { stageImport, reviewImport, reuseApprovedMapping, prepareImport } from '../../src/ingest/model-review.mjs';
 import { indexSource } from '../../src/ingest/model-source.mjs';
 import { writeXlsx } from '../helpers/xlsx.mjs';
 
@@ -63,4 +63,39 @@ test('same headers and bytes in a second household cannot reuse another househol
     assert.equal(b.db.prepare('SELECT count(*) n FROM transactions').get().n, 0);
     await assert.rejects(reviewImport(b.ctx, { proposalId: staged.proposalId, version: 1, decision: 'approve', evidence: 'yes' }), e => e.code === 'not_found');
   } finally { a.close(); b.close(); }
+});
+
+test('prepareImport discovers its approved layout from headers with no caller recipe or engine call', async () => {
+  const x = await fixture();
+  try {
+    const source = await x.source(), staged = stageImport(x.ctx, { source, proposal: applyLayout(source, recipe()), layout: recipe() });
+    await reviewImport(x.ctx, { proposalId: staged.proposalId, version: 1, decision: 'approve', evidence: 'yes' });
+    const s = await x.source('Account,Date,Amount USD,Description\naccount-synthetic,2032-03-19,-9,Synthetic automatic repeat\n');
+    const out = await prepareImport(x.ctx, { file: { fileId: s.fileId, format: s.format, bytes: s.bytes } });
+    assert.equal(out.status, 'imported'); assert.equal(out.confirmationRequired, false);
+    assert.equal(x.db.prepare('SELECT sum(amount) n FROM transactions').get().n, -19);
+    assert.equal(x.db.prepare('SELECT count(*) n FROM import_model_spend').get().n, 0);
+  } finally { x.close(); }
+});
+
+test('multiple approved layouts retain only the relevant changed-header delta across reads', async () => {
+  const x = await fixture();
+  try {
+    for (const [labels, date] of [['Account,Date,Amount USD,Description', '2032-03-02'], ['Reference,Posted,Value USD,Memo', '2032-03-12']]) {
+      const source = await x.source(`${labels}\naccount-synthetic,${date},-3,Synthetic seed\n`);
+      const staged = stageImport(x.ctx, { source, proposal: applyLayout(source, recipe()), layout: recipe() });
+      await reviewImport(x.ctx, { proposalId: staged.proposalId, version: 1, decision: 'approve', evidence: 'yes' });
+    }
+    const source = await x.source('Account,Date,Amount USD,Description,Credit\naccount-synthetic,2032-03-22,-4,Synthetic changed layout,0\n');
+    const file = { fileId: source.fileId, format: source.format, bytes: source.bytes };
+    const held = await prepareImport(x.ctx, { file });
+    assert.equal(held.status, 'needs_clarification');
+    assert.ok(held.delta.some(d => d.field.includes('headers')));
+    assert.deepEqual(held.preserved.layout, recipe());
+    assert.ok(held.preserved.bindings.includes('account-synthetic'));
+    const again = await prepareImport(x.ctx, { file });
+    assert.deepEqual(again.delta, held.delta); assert.deepEqual(again.preserved, held.preserved);
+    assert.equal(x.db.prepare('SELECT count(*) n FROM import_model_spend').get().n, 0);
+    assert.equal(x.db.prepare('SELECT count(*) n FROM transactions').get().n, 2);
+  } finally { x.close(); }
 });
