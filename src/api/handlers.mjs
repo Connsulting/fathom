@@ -64,6 +64,7 @@ const nowIso = () => new Date().toISOString();
 export { scenarioOf } from './scenario.mjs';
 import { scenarioOf } from './scenario.mjs';
 
+
 // The current "today" for message timestamps: the scenario clock's date at the current time.
 const stamp = ctx => clockNow(ctx.db, ctx.config && ctx.config.clock);
 

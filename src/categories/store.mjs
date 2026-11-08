@@ -11,7 +11,7 @@ export const CATEGORY_THRESHOLD = 100;
 export const CATEGORY_LIMIT = 10;
 const labels = { household:'Household spending',business:'Business',income:'Income',transfer:'Transfer',tax:'Tax',saving:'Saving or investing',excluded:'Excluded' };
 const nowOf = now => now ?? new Date().toISOString();
-export const isJevProposal = g => g?.model===JEV_MODEL && typeof g.category==='string'
+export const isJevProposal = g => (g?.model===JEV_MODEL || g?.modelPort===true) && typeof g.category==='string'
   && Number.isFinite(g.confidence) && g.confidence>=0 && g.confidence<=1;
 export function loadCategoryInputs(db) {
   const named = parseJson(db.prepare("SELECT value FROM facts WHERE key='accounts.businessEntity' AND (src IS NULL OR src!='planner')").get()?.value,{});
@@ -32,7 +32,7 @@ export function loadCategoryInputs(db) {
       LEFT JOIN confirm_auto a ON a.item_id=i.id`).all().map(r=>({...r,auto:parseJson(r.auto_evidence,null)})),
     guesses:db.prepare('SELECT * FROM transaction_category_guesses').all().map(r=>{
       const p=parseJson(r.category,null);
-      return {...r,category:p?.category??null,confidence:p?.confidence,probabilities:p?.probabilities};
+      return {...r,category:p?.category??null,confidence:p?.confidence,probabilities:p?.probabilities,modelPort:p?.modelPort};
     }) };
 }
 function checks(db,{clock = getSetting(db,'clock',new Date().toISOString().slice(0,10)),threshold = CATEGORY_THRESHOLD,policy,accountIds}={}) {

@@ -3012,3 +3012,72 @@ The chronological 1,000-row replay classified 207 rows from history at 97.58% ex
 `householdSpending({db, from, to, include, exclude, clock})` returns `{from, to, months, include, exclude, total, monthlyAverage, monthTotals, buckets, leftOut, gaps, notes, figures, sources}`: household-bucket outflows on spending accounts (never business accounts), housing toggled by `exclude: ['housing']` and tax payments by `include: ['tax']`. `householdSpendingRows({db, from, to, include, exclude, bucket, category, month, clock})` lists the rows behind one cell.
 
 Every number is a figure key into `figures`: `{v, src, kind: 'a', label, notes, detail, sums?, provenance: {source, accounts, months, rows, files}}`, with `src` one of `pnl:workbook`, `pnl:transactions`, `pnl:mixed` or `spend:transactions` in `sources` (`{label, asOf}`, the newest counted row). The routes are `GET /api/pnl`, `GET /api/pnl/rows`, `GET /api/spending` and `GET /api/spending/rows` (`src/api/pnl-handlers.mjs`).
+
+## Model completion port
+
+`src/models/port.mjs` is the model boundary. A completion takes messages, optional tools,
+`schema` or typed `choices`, `maxTokens`, and the engine's request budget:
+`{ maxCostUsd, maxInputTokens?, timeoutMs?, correlationId? }`. The engine runs
+`beforeDispatch` after platform admission. Results include content, tool results or choices,
+input and output token counts, actual USD cost, and accounting metadata. Errors use the fixed
+codes exported as `MODEL_ERROR_CODES`; provider response bodies never become product errors.
+Admission preserves existing refusal objects, and `modelErrorCode` provides a normalized code
+without changing those objects. The engine applies the shared `redactProviderText` scrub immediately before every
+`port.complete`, including JSON-schema prompts, typed choices, tool arguments and tool-result
+replay. Existing transport scrubs remain in place. Zero input-token reports hold accounting;
+a zero reported charge cannot override positive configured token rates.
+
+The engine admits every household response before calling an adapter. It checks the outbound
+engine pause, instance funding and the request budget, then reserves in the platform ledger
+using the household allocation and monthly cap. SDK rounds reserve twice the per-response
+bound because one SDK round can generate a response after running tools. Other adapters
+reserve one response bound. Every tool continuation gets a new reservation. Known usage
+settles the reservation and mirrors into the household spend ledger; missing usage or an
+uncertain transport outcome holds the reservation until reconciliation. A refused
+`beforeDispatch` settles at zero. Adapters do not retry internally.
+
+The current Claude SDK and Messages API paths remain the defaults for Ask, jobs, titles,
+Confirm and imports. The categorizer defaults to the existing typed-choice service. The
+OpenAI-compatible adapter uses Chat Completions and can target an aggregator such as
+OpenRouter. The Ollama adapter uses its native `/api/chat` endpoint. Both support tool calls,
+JSON schemas and typed choices. They accept text documents; binary document blocks are
+refused before dispatch. Grounding and tool authorization remain engine responsibilities.
+
+Configuration is per purpose, loaded by `src/models/config.mjs`. `ask` includes chat and jobs;
+`import` includes extraction and structured Confirm calls. Defaults require no new settings.
+For each of `ASK`, `TITLE`, `CATEGORIZE` and `IMPORT`, the environment accepts:
+
+| Variable suffix after `FATHOM_MODEL_<PURPOSE>_` | Meaning |
+| --- | --- |
+| `ADAPTER` | `claude`, `jev` (categorize only), `openai` or `ollama` |
+| `MODEL` | Provider model identifier; required for `openai` and `ollama` |
+| `BASE_URL` | Caller-supplied API base URL; required for `openai` and `ollama` |
+| `KEY_FILE` | Private token file, read once at initialization; optional for unauthenticated endpoints |
+| `INPUT_USD_PER_MILLION` | Input rate used for reservations and usage accounting |
+| `OUTPUT_USD_PER_MILLION` | Output rate used for reservations and usage accounting |
+
+For example, `FATHOM_MODEL_ASK_ADAPTER=ollama` selects a local Ask service when its model and
+base URL are also supplied. OpenAI-compatible endpoints require explicit input and output
+rates. Ollama defaults to zero provider cost but still passes funding, pause, reservation and
+usage accounting checks. Claude and the default categorizer retain their existing pricing
+and credential-file settings. No endpoint, credential or model selection is taken from a
+household prompt. Model identifiers remain in accounting and provenance records; product
+screens use neutral service labels. Alternative categorization models retain their identity
+and produce review suggestions, without inheriting the default model's calibrated auto-apply
+threshold.
+
+Scheduled categorization uses the household runtime's completion function. The offline
+category evaluation reads its source rows through a read-only connection and opens separate
+accounting connections so paid evaluation also reserves and records every response.
+Low-level engine and categorizer constructors support injected transports for isolated tests;
+production callers use `createRuntimeEngine`, which requires a platform reservation ledger
+in live mode.
+
+`scripts/model-port-smoke.mjs` creates a disposable synthetic household and sends one fixed
+request for each purpose through the live runtime, including real platform reservations and
+household ledger writes. Set `FATHOM_SMOKE_ADAPTER`, `FATHOM_SMOKE_MODEL` and
+`FATHOM_SMOKE_BASE_URL`, plus optional `FATHOM_SMOKE_KEY_FILE` and explicit
+`FATHOM_SMOKE_INPUT_USD_PER_MILLION` / `FATHOM_SMOKE_OUTPUT_USD_PER_MILLION` rates.
+Per-purpose variables also work when testing mixed selections. Output is limited to pass or
+fail per purpose and token counts; any failure exits nonzero. The disposable store is removed
+on exit. Use a local endpoint for development smoke runs.
