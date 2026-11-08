@@ -326,15 +326,15 @@ describe('historical document rows', () => {
     assert.equal(q.length, 1);
     assert.match(q[0].subject, /^[0-9a-f]{12}$/);
     assert.deepEqual(JSON.parse(q[0].options), [{ id: 'outside', label: 'An outside employer' }, { id: 'household', label: 'Our own business' }]);
-    for (const k of EMPLOYER_FACTS) assert.ok(!(k in F.getFacts(s.db)), `${k} not written before the answer`);
+    for (const k of EMPLOYER_FACTS) assert.ok(!(k in (await F.getFacts(s.db))), `${k} not written before the answer`);
     const tax = await all(s.db, 'SELECT * FROM tax_payments ORDER BY amount');
     assert.deepEqual(tax.map((t) => [t.jurisdiction, t.amount, t.kind, t.date, t.date_precision, t.tax_year]), [
       ['CO', 250, 'withholding', '2032-03-15', 'day', 2032],
       ['federal', 700, 'withholding', '2032-03-15', 'day', 2032],
     ]);
 
-    C.answer(s.db, q[0].id, 'outside', { now: NOW });
-    const after = F.getFacts(s.db);
+    await C.answer(s.db, q[0].id, 'outside', { now: NOW });
+    const after = (await F.getFacts(s.db));
     assert.equal(after['income.w2'], true);
     assert.equal(after['benefits.employer401k'], true);
     assert.equal(after['benefits.hsa'], true);
@@ -343,14 +343,14 @@ describe('historical document rows', () => {
     const next = await seedHistoricalDocument(s, paystubFile({ payDate: '2032-03-31' }), paystubResponses({ ...extracted, payDate: '2032-03-31', periodStart: '2032-03-16', periodEnd: '2032-03-31' }));
     assert.equal(next.status, 'imported');
     assert.equal((await items(s.db, 'employer_relation')).length, 1, 'the same employer asks nothing new');
-    assert.equal(C.pendingItems(s.db).filter((i) => i.kind === 'employer_relation').length, 0);
-    assert.equal(F.getFacts(s.db)['income.w2'], true);
+    assert.equal((await C.pendingItems(s.db)).filter((i) => i.kind === 'employer_relation').length, 0);
+    assert.equal((await F.getFacts(s.db))['income.w2'], true);
   }));
 
   test('R6: answering household writes income.sCorp, not income.w2', async () => withStore(async (s) => {
     await seedHistoricalDocument(s, paystubFile(), paystubResponses(PAYSTUB));
-    C.answer(s.db, (await items(s.db, 'employer_relation'))[0].id, 'household', { now: NOW });
-    const f = F.getFacts(s.db);
+    await C.answer(s.db, (await items(s.db, 'employer_relation'))[0].id, 'household', { now: NOW });
+    const f = (await F.getFacts(s.db));
     assert.equal(f['income.sCorp'], true);
     assert.ok(!('income.w2' in f));
   }));
@@ -362,7 +362,7 @@ describe('historical document rows', () => {
     const r = await seedHistoricalDocument(s, paystubFile({ employer: 'Northwind Design' }), paystubResponses({ ...PAYSTUB, employerName: 'Northwind Design' }));
     assert.equal(r.status, 'imported');
     assert.equal((await items(s.db, 'employer_relation')).length, 0);
-    const f = F.getFacts(s.db);
+    const f = (await F.getFacts(s.db));
     assert.equal(f['income.sCorp'], true);
     assert.ok(!('income.w2' in f));
     assert.equal((await one(s.db, "SELECT confirmed FROM facts WHERE key = 'income.sCorp'")).confirmed, 0);
@@ -408,9 +408,9 @@ describe('held employer facts', () => {
     assert.ok(held.length >= 2);
     assert.ok(held.every((h) => h.hold === `employer:${key}`));
     assert.deepEqual([...new Set(held.map((h) => h.file_id))].sort(), [first.fileId, second.fileId].sort(), 'each document holds its own rows');
-    for (const k of EMPLOYER_FACTS) assert.ok(!(k in F.getFacts(s.db)), `${k} held, not written`);
+    for (const k of EMPLOYER_FACTS) assert.ok(!(k in (await F.getFacts(s.db))), `${k} held, not written`);
 
-    C.answer(s.db, q[0].id, 'outside', { now: NOW });
+    await C.answer(s.db, q[0].id, 'outside', { now: NOW });
     const fact = async (k) => await one(s.db, 'SELECT * FROM facts WHERE key = ?', k);
     assert.equal(JSON.parse((await fact('income.w2')).value), true);
     assert.ok([first.fileId, second.fileId].includes((await fact('income.w2')).file_id));
@@ -430,9 +430,9 @@ describe('annual withholding supersedes paystub detail', () => {
   const stub = (payDate, start) => [paystubFile({ payDate }), { ...PAYSTUB, payDate, periodStart: start, periodEnd: payDate }];
   const stubs = [stub('2032-03-15', '2032-03-01'), stub('2032-03-31', '2032-03-16')];
   const answerRecipient = async (db, option) => {
-    const q = C.pendingItems(db).find((i) => i.kind === 'employer_recipient');
+    const q = (await C.pendingItems(db)).find((i) => i.kind === 'employer_recipient');
     assert.ok(q, 'employer_recipient is asked');
-    C.answer(db, q.id, option, { now: NOW });
+    await C.answer(db, q.id, option, { now: NOW });
   };
 
   async function assertSummarized(db) {
@@ -528,9 +528,9 @@ describe('withholding recipients (D4, G4)', () => {
   });
   const key = () => X.nameKey('Example Employer LLC');
   const payers = () => ({ w2: `w2:${key()}:2032:9000000`, a: `paystub:${key()}:2032-03-15:500000`, b: `paystub:${key()}:2032-03-15:250000` });
-  const pendingOf = (db, kind) => C.pendingItems(db).filter((i) => i.kind === kind);
-  const recipientQuestions = (db) => C.pendingItems(db).filter((i) => i.kind === 'employer_recipient' || i.kind === 'document_recipient');
-  const answerEmployer = async (db, option) => C.answer(db, pendingOf(db, 'employer_recipient')[0].id, option, { now: NOW });
+  const pendingOf = async (db, kind) => (await C.pendingItems(db)).filter((i) => i.kind === kind);
+  const recipientQuestions = async (db) => (await C.pendingItems(db)).filter((i) => i.kind === 'employer_recipient' || i.kind === 'document_recipient');
+  const answerEmployer = async (db, option) => await C.answer(db, (await pendingOf(db, 'employer_recipient'))[0].id, option, { now: NOW });
   const active = async (db) => await all(db, 'SELECT * FROM tax_payments ORDER BY payer, amount');
   const rekeyed = (t) => D.dedupeKey({ kind: 'tax_payment', jurisdiction: t.jurisdiction, sheetYear: t.tax_year, date: t.date, payer: t.payer });
   // Two members' paystubs with identical payroll figures; the bytes differ only in a trailing line.
@@ -556,7 +556,7 @@ describe('withholding recipients (D4, G4)', () => {
     for (const t of rows) assert.match(t.source_slot, new RegExp(`^wh:${key()}:2032:(federal|co):unknown$`, 'i'));
     assert.deepEqual(rows.map((t) => t.payer).sort(), [`${p.a}:doc:${ids.a}`, `${p.a}:doc:${ids.a}`, `${p.b}:doc:${ids.b}`, `${p.b}:doc:${ids.b}`, `${p.w2}:doc:${ids.w2}`, `${p.w2}:doc:${ids.w2}`].sort());
     assert.equal(await count(s.db, 'superseded_rows', "reason = 'summarized'"), 0);
-    const q = pendingOf(s.db, 'employer_recipient');
+    const q = (await pendingOf(s.db, 'employer_recipient'));
     assert.equal(q.length, 1, 'one question for the employer');
     assert.equal(q[0].subject, key());
     assert.deepEqual(q[0].options, [{ id: 'owner', label: 'You' }, { id: 'spouse', label: 'Your spouse' }, { id: 'both', label: 'Both of you' }]);
@@ -565,13 +565,13 @@ describe('withholding recipients (D4, G4)', () => {
   test('two members at one employer: after both and each document recipient, B stays active and A is summarized', async () => withStore(async (s) => {
     const ids = await importAll(s);
     await answerEmployer(s.db, 'both');
-    const docs = pendingOf(s.db, 'document_recipient');
+    const docs = (await pendingOf(s.db, 'document_recipient'));
     const p = payers();
     const subject = { w2: `${p.w2}:doc:${ids.w2}`, a: `${p.a}:doc:${ids.a}`, b: `${p.b}:doc:${ids.b}` };
     assert.deepEqual(docs.map((d) => d.subject).sort(), Object.values(subject).sort(), 'one question per document, its subject the per-document payer');
     for (const d of docs) assert.deepEqual(d.options.map((o) => o.id), ['owner', 'spouse']);
     const answer = { [subject.w2]: 'owner', [subject.a]: 'owner', [subject.b]: 'spouse' };
-    for (const d of docs) C.answer(s.db, d.id, answer[d.subject], { now: NOW });
+    for (const d of docs) await C.answer(s.db, d.id, answer[d.subject], { now: NOW });
 
     const rows = await all(s.db, 'SELECT * FROM tax_payments ORDER BY amount');
     assert.deepEqual(rows.map((t) => [t.payer, t.amount, t.source_slot.split(':').at(-1), t.recipient]), [
@@ -595,10 +595,10 @@ describe('withholding recipients (D4, G4)', () => {
         assert.equal(new Set(rows.map((t) => t.dedupe_key)).size, 4);
 
         await answerEmployer(s.db, 'both');
-        const docs = pendingOf(s.db, 'document_recipient');
+        const docs = (await pendingOf(s.db, 'document_recipient'));
         assert.deepEqual(docs.map((d) => d.subject).sort(), [`${base}:doc:${ids.a}`, `${base}:doc:${ids.b}`].sort(), 'one question per document');
         const recipient = { a: 'owner', b: 'spouse' };
-        for (const m of answerOrder) C.answer(s.db, docs.find((d) => d.subject === `${base}:doc:${ids[m]}`).id, recipient[m], { now: NOW });
+        for (const m of answerOrder) await C.answer(s.db, docs.find((d) => d.subject === `${base}:doc:${ids[m]}`).id, recipient[m], { now: NOW });
 
         rows = await active(s.db);
         assert.deepEqual(rows.map((t) => [t.payer, t.recipient, t.source_slot.split(':').at(-1), t.amount]), [
@@ -608,7 +608,7 @@ describe('withholding recipients (D4, G4)', () => {
         assert.ok(rows.every((t) => !t.payer.includes(':doc:')), 'the file id leaves the payer once resolved');
         for (const t of rows) assert.equal(t.dedupe_key, rekeyed(t));
         assert.equal(await count(s.db, 'superseded_rows'), 0);
-        assert.equal(recipientQuestions(s.db).length, 0);
+        assert.equal((await recipientQuestions(s.db)).length, 0);
       }));
     }
   }
@@ -618,9 +618,9 @@ describe('withholding recipients (D4, G4)', () => {
       const ids = { a: await importStub(s, 'a'), b: await importStub(s, 'b') };
       const base = payers().a;
       await answerEmployer(s.db, 'both');
-      const docs = pendingOf(s.db, 'document_recipient');
+      const docs = (await pendingOf(s.db, 'document_recipient'));
       assert.deepEqual(docs.map((d) => d.subject).sort(), [`${base}:doc:${ids.a}`, `${base}:doc:${ids.b}`].sort(), 'one question per document');
-      for (const m of answerOrder) C.answer(s.db, docs.find((d) => d.subject === `${base}:doc:${ids[m]}`).id, 'owner', { now: NOW });
+      for (const m of answerOrder) await C.answer(s.db, docs.find((d) => d.subject === `${base}:doc:${ids[m]}`).id, 'owner', { now: NOW });
       const rows = await active(s.db);
       assert.deepEqual(rows.map((t) => [t.payer, t.amount, t.file_id]), [[`${base}:owner`, 250, ids.a], [`${base}:owner`, 700, ids.a]], 'one row per jurisdiction, from the older file');
       const dup = await all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' AND reason = 'duplicate' ORDER BY id");
@@ -640,7 +640,7 @@ describe('withholding recipients (D4, G4)', () => {
         [`paystub:${key()}:2032-03-31:500000:${option}`, option, option], [`paystub:${key()}:2032-03-31:500000:${option}`, option, option],
       ]);
       for (const t of later) assert.equal(t.dedupe_key, rekeyed(t));
-      assert.equal(recipientQuestions(s.db).length, 0, 'nothing new is asked');
+      assert.equal((await recipientQuestions(s.db)).length, 0, 'nothing new is asked');
     }));
   }
 
@@ -648,19 +648,19 @@ describe('withholding recipients (D4, G4)', () => {
     const a = await importStub(s, 'a');
     const base = payers().a;
     await answerEmployer(s.db, 'both');
-    const [docA] = pendingOf(s.db, 'document_recipient');
+    const [docA] = (await pendingOf(s.db, 'document_recipient'));
     assert.equal(docA.subject, `${base}:doc:${a}`);
-    C.answer(s.db, docA.id, 'owner', { now: NOW });
+    await C.answer(s.db, docA.id, 'owner', { now: NOW });
 
     const b = await importStub(s, 'b');
-    const docs = pendingOf(s.db, 'document_recipient');
+    const docs = (await pendingOf(s.db, 'document_recipient'));
     assert.deepEqual(docs.map((d) => d.subject), [`${base}:doc:${b}`], 'only the new document is asked about');
-    assert.equal(pendingOf(s.db, 'employer_recipient').length, 0, 'the employer answer is remembered');
+    assert.equal((await pendingOf(s.db, 'employer_recipient')).length, 0, 'the employer answer is remembered');
     assert.deepEqual((await active(s.db)).map((t) => t.payer), [`${base}:doc:${b}`, `${base}:doc:${b}`, `${base}:owner`, `${base}:owner`]);
 
-    C.answer(s.db, docs[0].id, 'spouse', { now: NOW });
+    await C.answer(s.db, docs[0].id, 'spouse', { now: NOW });
     assert.deepEqual((await active(s.db)).map((t) => [t.payer, t.file_id]), [[`${base}:owner`, a], [`${base}:owner`, a], [`${base}:spouse`, b], [`${base}:spouse`, b]]);
-    assert.equal(recipientQuestions(s.db).length, 0);
+    assert.equal((await recipientQuestions(s.db)).length, 0);
   }));
 
   // Review finding H1: every withholding-bearing document, not only employer ones, belongs to a
@@ -693,7 +693,7 @@ describe('withholding recipients (D4, G4)', () => {
     assert.deepEqual(rows.map((t) => [t.payer, t.recipient, t.amount]).sort(), [[`${base}:doc:${ids.a}`, 'unknown', 240], [`${base}:doc:${ids.b}`, 'unknown', 240]].sort());
     assert.equal(new Set(rows.map((t) => t.dedupe_key)).size, 2);
     for (const t of rows) assert.match(t.source_slot, new RegExp(`^wh:${X.nameKey(PAYER_NAME)}:2032:federal:unknown$`));
-    const docs = pendingOf(s.db, 'document_recipient');
+    const docs = (await pendingOf(s.db, 'document_recipient'));
     assert.deepEqual(docs.map((d) => d.subject).sort(), [`${base}:doc:${ids.a}`, `${base}:doc:${ids.b}`].sort(), 'one document_recipient question per document');
     for (const d of docs) {
       assert.deepEqual(d.options.map((o) => o.id), ['owner', 'spouse']);
@@ -724,7 +724,7 @@ describe('withholding recipients (D4, G4)', () => {
       ]);
       for (const t of rows) assert.equal(t.dedupe_key, rekeyed(t), 'rekeyed under the resolved payer');
       assert.equal(await count(s.db, 'superseded_rows', "table_name = 'tax_payments'"), 0);
-      assert.equal(recipientQuestions(s.db).length, 0);
+      assert.equal((await recipientQuestions(s.db)).length, 0);
     }));
 
     for (const answerOrder of [['a', 'b'], ['b', 'a']]) {
@@ -736,8 +736,8 @@ describe('withholding recipients (D4, G4)', () => {
         assert.equal(rows[0].dedupe_key, rekeyed(rows[0]));
         const dup = await all(s.db, "SELECT * FROM superseded_rows WHERE table_name = 'tax_payments' ORDER BY id");
         assert.deepEqual(dup.map((x) => [x.reason, x.file_id, JSON.parse(x.row).payer, JSON.parse(x.row).amount]), [['duplicate', ids.b, `${base}:owner`, 240]]);
-        assert.equal(recipientQuestions(s.db).length, 0);
-        assert.equal(pendingOf(s.db, 'withholding_conflict').length, 0, 'equal amounts are a duplicate, never a conflict');
+        assert.equal((await recipientQuestions(s.db)).length, 0);
+        assert.equal((await pendingOf(s.db, 'withholding_conflict')).length, 0, 'equal amounts are a duplicate, never a conflict');
       }));
     }
   }
@@ -764,7 +764,7 @@ describe('withholding recipients (D4, G4)', () => {
     return r.fileId;
   };
   const answerConflict = async (s, option) => {
-    const q = pendingOf(s.db, 'withholding_conflict');
+    const q = (await pendingOf(s.db, 'withholding_conflict'));
     assert.equal(q.length, 1, 'one withholding_conflict question');
     return C.answer(s.db, q[0].id, option, { now: NOW });
   };
@@ -779,7 +779,7 @@ describe('withholding recipients (D4, G4)', () => {
         const docs = { first: int1099Of('original', 200), second: int1099Of('corrected', 240) };
         const ids = { first: await importDoc(s, docs.first), second: await importDoc(s, docs.second) };
         const base = base1099('1099-int');
-        const asked = pendingOf(s.db, 'document_recipient');
+        const asked = (await pendingOf(s.db, 'document_recipient'));
         const member = { a: ids.first, b: ids.second };
         for (const m of answerOrder) await answerDoc(s, asked, `${base}:doc:${member[m]}`, 'owner');
         return { ids, base, docs, amounts: { first: 200, second: 240 }, again: '' };
@@ -817,10 +817,10 @@ describe('withholding recipients (D4, G4)', () => {
       assert.equal((await archivedWith(s.db, 'duplicate')).length, 0, 'no row is archived as duplicate');
       assert.equal((await archivedWith(s.db, 'revised')).length, 0, 'no row is revised in place');
       assert.equal((await archivedWith(s.db, 'withholding_conflict')).length, 0, 'nothing is archived before the answer');
-      const q = pendingOf(s.db, 'withholding_conflict');
+      const q = (await pendingOf(s.db, 'withholding_conflict'));
       assert.equal(q.length, 1, 'exactly one withholding_conflict question');
       assert.deepEqual(q[0].options.map((o) => o.id), ['first', 'second', 'both']);
-      assert.equal(recipientQuestions(s.db).length, 0);
+      assert.equal((await recipientQuestions(s.db)).length, 0);
     }));
 
     const KEEP = { first: ['first'], second: ['second'], both: ['first', 'second'] };
@@ -838,9 +838,9 @@ describe('withholding recipients (D4, G4)', () => {
         const archived = await archivedWith(s.db, 'withholding_conflict');
         assert.deepEqual(archived.map((x) => [x.file_id, JSON.parse(x.row).amount]), rejected ? [[ids[rejected], amounts[rejected]]] : [], 'the rejected row is archived, never dropped');
         assert.equal((await archivedWith(s.db, 'duplicate')).length, 0);
-        assert.equal(pendingOf(s.db, 'withholding_conflict').length, 0);
+        assert.equal((await pendingOf(s.db, 'withholding_conflict')).length, 0);
 
-        const pending = C.pendingItems(s.db).map((i) => i.id);
+        const pending = (await C.pendingItems(s.db)).map((i) => i.id);
         const rows = await active(s.db);
         const superseded = await count(s.db, 'superseded_rows');
         // W-2: re-downloaded copies (same extraction, new bytes) route through import under the
@@ -850,7 +850,7 @@ describe('withholding recipients (D4, G4)', () => {
           const r = await seedHistoricalDocument(s, await d.file(again), (await d.engine()).responses);
           assert.equal(r.status, again ? 'imported' : 'duplicate');
         }
-        assert.deepEqual(C.pendingItems(s.db).map((i) => i.id), pending, 'nothing new is asked');
+        assert.deepEqual((await C.pendingItems(s.db)).map((i) => i.id), pending, 'nothing new is asked');
         assert.deepEqual(await active(s.db), rows, 'active rows are unchanged');
         assert.equal(await count(s.db, 'superseded_rows'), superseded, 'nothing more is archived');
       }));
@@ -865,7 +865,7 @@ describe('withholding recipients (D4, G4)', () => {
     assert.deepEqual(state.map((t) => [t.amount, t.file_id]), [[3500, first]], 'one state row, from the earlier file');
     assert.deepEqual((await archivedWith(s.db, 'duplicate')).map((x) => [x.file_id, JSON.parse(x.row).jurisdiction, JSON.parse(x.row).amount]), [[second, state[0].jurisdiction, 3500]]);
     assert.deepEqual((await federal(s.db)).map((t) => [t.amount, t.file_id]), [[12000, first], [13000, second]]);
-    const q = pendingOf(s.db, 'withholding_conflict');
+    const q = (await pendingOf(s.db, 'withholding_conflict'));
     assert.equal(q.length, 1, 'one question, for federal only');
   }));
 
@@ -874,7 +874,7 @@ describe('withholding recipients (D4, G4)', () => {
   // answering a conflict whose rows no longer match what it asked about is refused as stale and
   // changes nothing.
   const snapshot = async (db) => ({ rows: await all(db, 'SELECT * FROM tax_payments ORDER BY id'), superseded: await all(db, 'SELECT * FROM superseded_rows ORDER BY id') });
-  const refusedStale = (db, id, option) => assert.throws(async () => C.answer(db, id, option, { now: NOW }),
+  const refusedStale = async (db, id, option) => await assert.rejects(async () => await C.answer(db, id, option, { now: NOW }),
     (e) => e?.name === 'ConfirmError' && ['stale', 'not_found'].includes(e.code), `answering ${option} is refused as stale`);
   const stubVersion = (version, federalWithholding) => ({
     file: () => textFile(`paystub-version-${version}-2032-03-15.txt`, `${paystubText()}\nSynthetic version ${version}`, 'text/plain'),
@@ -890,14 +890,14 @@ describe('withholding recipients (D4, G4)', () => {
     await answerEmployer(s.db, 'owner');
     assert.deepEqual((await active(s.db)).map((t) => [t.payer, t.amount, t.file_id]), [[`${payers().w2}:owner`, 12000, w2]], 'the W-2 summarizes both paystub versions');
     assert.equal((await archivedWith(s.db, 'summarized')).length, 2);
-    assert.equal(pendingOf(s.db, 'withholding_conflict').length, 0, 'the conflict closes once its rows are summarized');
+    assert.equal((await pendingOf(s.db, 'withholding_conflict')).length, 0, 'the conflict closes once its rows are summarized');
     const conflicts = await items(s.db, 'withholding_conflict');
 
     // Two members' 1099-INTs with withholding; their rows may take the ids the paystub rows freed.
     const ids1099 = [await import1099(s, '1099-int', 'a'), await import1099(s, '1099-int', 'b')];
     const before = await snapshot(s.db);
     assert.deepEqual(before.rows.filter((t) => t.payer.startsWith('1099-int:')).map((t) => [t.file_id, t.amount]), ids1099.map((id) => [id, 240]));
-    for (const c of conflicts) for (const option of ['first', 'second', 'both']) refusedStale(s.db, c.id, option);
+    for (const c of conflicts) for (const option of ['first', 'second', 'both']) await refusedStale(s.db, c.id, option);
     assert.deepEqual(await snapshot(s.db), before, 'no tax row or archive changes');
   }));
 
@@ -914,13 +914,13 @@ describe('withholding recipients (D4, G4)', () => {
     test(`L1 guard: a pending withholding_conflict whose later row changed (${how}) is refused as stale and changes nothing`, async () => withStore(async (s) => {
       const ids = { first: await importDoc(s, int1099Of('original', 200)), second: await importDoc(s, int1099Of('corrected', 240)) };
       const base = base1099('1099-int');
-      const asked = pendingOf(s.db, 'document_recipient');
+      const asked = (await pendingOf(s.db, 'document_recipient'));
       for (const id of [ids.first, ids.second]) await answerDoc(s, asked, `${base}:doc:${id}`, 'owner');
-      const [q] = pendingOf(s.db, 'withholding_conflict');
+      const [q] = (await pendingOf(s.db, 'withholding_conflict'));
       assert.ok(q, 'a withholding_conflict is pending');
-      mutate(s.db, await one(s.db, "SELECT * FROM tax_payments WHERE file_id = ? AND jurisdiction = 'federal'", ids.second));
+      await mutate(s.db, await one(s.db, "SELECT * FROM tax_payments WHERE file_id = ? AND jurisdiction = 'federal'", ids.second));
       const before = await snapshot(s.db);
-      for (const option of ['first', 'second']) refusedStale(s.db, q.id, option);
+      for (const option of ['first', 'second']) await refusedStale(s.db, q.id, option);
       assert.deepEqual(await snapshot(s.db), before, 'no tax row or archive changes');
     }));
   }
@@ -937,7 +937,7 @@ describe('withholding recipients (D4, G4)', () => {
       async run(s) {
         const ids = { first: await importDoc(s, int1099Of('original', 200)), second: await importDoc(s, int1099Of('corrected', 0)) };
         const base = base1099('1099-int');
-        for (const d of pendingOf(s.db, 'document_recipient')) C.answer(s.db, d.id, 'owner', { now: NOW });
+        for (const d of (await pendingOf(s.db, 'document_recipient'))) await C.answer(s.db, d.id, 'owner', { now: NOW });
         return { ids, base };
       },
     },
@@ -964,7 +964,7 @@ describe('withholding recipients (D4, G4)', () => {
     for (const option of ['first', 'second']) {
       test(`L2: ${c.name} corrected to explicit zero federal withholding queues one withholding_conflict; answering ${option} leaves ${option === 'first' ? c.amount : 0}`, async () => withStore(async (s) => {
         const { ids, base } = await c.run(s);
-        assert.equal(pendingOf(s.db, 'withholding_conflict').length, 1, 'one withholding_conflict question');
+        assert.equal((await pendingOf(s.db, 'withholding_conflict')).length, 1, 'one withholding_conflict question');
         await answerConflict(s, option);
         const rows = await federalOf(s.db, base);
         const archived = (await archivedWith(s.db, 'withholding_conflict')).map((x) => [x.file_id, JSON.parse(x.row).amount]);
@@ -977,7 +977,7 @@ describe('withholding recipients (D4, G4)', () => {
           assert.deepEqual(rows.filter((t) => t.amount !== 0).map((t) => [t.amount, t.file_id]), [[c.amount, ids.first]]);
           assert.ok(!archived.some(([fileId]) => fileId === ids.first), 'the earlier row is kept');
         }
-        assert.equal(pendingOf(s.db, 'withholding_conflict').length, 0);
+        assert.equal((await pendingOf(s.db, 'withholding_conflict')).length, 0);
       }));
     }
   }
@@ -994,7 +994,7 @@ describe('withholding recipients (D4, G4)', () => {
       const first = await importDoc(s, firstDoc());
       if (employer) await answerEmployer(s.db, 'owner');
       const second = await importDoc(s, absentDoc());
-      for (const d of pendingOf(s.db, 'document_recipient')) C.answer(s.db, d.id, 'owner', { now: NOW });
+      for (const d of (await pendingOf(s.db, 'document_recipient'))) await C.answer(s.db, d.id, 'owner', { now: NOW });
       assert.deepEqual((await federalOf(s.db, baseOf())).map((t) => [t.amount, t.file_id]), [[name === 'W-2' ? 12000 : 200, first]], 'the earlier withholding stays');
       assert.equal(await count(s.db, 'tax_payments', "file_id = ? AND jurisdiction = 'federal'", second), 0, 'the absent field stores no federal row');
       assert.equal((await items(s.db, 'withholding_conflict')).length, 0, 'no withholding_conflict is queued');
@@ -1017,7 +1017,7 @@ describe('withholding recipients (D4, G4)', () => {
   const payerSlot = (recipient = 'owner') => slotOf(X.nameKey(PAYER_NAME), recipient);
   const employerSlot = (recipient = 'owner') => slotOf(key(), recipient);
   const answerDocs = async (s, recipientOf) => {
-    for (const d of pendingOf(s.db, 'document_recipient')) C.answer(s.db, d.id, recipientOf(d), { now: NOW });
+    for (const d of (await pendingOf(s.db, 'document_recipient'))) await C.answer(s.db, d.id, recipientOf(d), { now: NOW });
   };
   const M1_KEEP = { first: ['first'], second: ['second'], both: ['first', 'second'] };
   const W2_CORRECTED = { ...W2_FIRST, wages: 88000, socialSecurityWages: 88000, medicareWages: 88000, stateWages: 88000, federalWithheld: 11500 };
@@ -1032,9 +1032,9 @@ describe('withholding recipients (D4, G4)', () => {
           first: await importDoc(s, formOf('1099-int', 'm1-original', { interest: 1200, federalWithheld: 200 })),
           second: await importDoc(s, formOf('1099-int', 'm1-corrected', { interest: 1000, federalWithheld: 0 })),
         };
-        const asked = pendingOf(s.db, 'document_recipient');
+        const asked = (await pendingOf(s.db, 'document_recipient'));
         assert.equal(asked.length, 2, 'one document_recipient question per 1099-INT');
-        for (const m of answerOrder) C.answer(s.db, asked.find((d) => d.context.payer.endsWith(`:doc:${ids[m]}`)).id, 'owner', { now: NOW });
+        for (const m of answerOrder) await C.answer(s.db, asked.find((d) => d.context.payer.endsWith(`:doc:${ids[m]}`)).id, 'owner', { now: NOW });
         return ids;
       },
     })),
@@ -1065,7 +1065,7 @@ describe('withholding recipients (D4, G4)', () => {
       const left = M1_KEEP[option].reduce((sum, k) => sum + c.amounts[k], 0);
       test(`M1: ${c.name}: one withholding_conflict; answering ${option} leaves ${left} federal withholding for the payer`, async () => withStore(async (s) => {
         const ids = await c.run(s);
-        assert.equal(recipientQuestions(s.db).length, 0, 'both documents are resolved to the owner');
+        assert.equal((await recipientQuestions(s.db)).length, 0, 'both documents are resolved to the owner');
         assert.deepEqual((await inSlot(s.db, c.slot())).map((t) => [t.amount, t.file_id]), [[c.amounts.first, ids.first], [c.amounts.second, ids.second]], 'both rows stay active until the answer');
         assert.equal((await items(s.db, 'withholding_conflict')).length, 1, 'exactly one withholding_conflict is queued');
         assert.equal((await archivedWith(s.db, 'duplicate')).length, 0);
@@ -1078,7 +1078,7 @@ describe('withholding recipients (D4, G4)', () => {
         const rejected = option === 'first' ? 'second' : option === 'second' ? 'first' : null;
         assert.deepEqual((await archivedWith(s.db, 'withholding_conflict')).map((x) => [x.file_id, JSON.parse(x.row).amount]),
           rejected ? [[ids[rejected], c.amounts[rejected]]] : [], 'the rejected row is archived as withholding_conflict');
-        assert.equal(pendingOf(s.db, 'withholding_conflict').length, 0);
+        assert.equal((await pendingOf(s.db, 'withholding_conflict')).length, 0);
         assert.equal((await items(s.db, 'withholding_conflict')).length, 1, 'no further question');
       }));
     }
@@ -1103,7 +1103,7 @@ describe('withholding recipients (D4, G4)', () => {
     // of the kept row and raises no withholding_conflict.
     for (const d of [docs.first, docs.second]) assert.equal((await seedHistoricalDocument(s, await d.file('-again'), (await d.engine()).responses)).status, 'imported');
     await answerDocs(s, () => 'owner');
-    assert.equal(recipientQuestions(s.db).length, 0);
+    assert.equal((await recipientQuestions(s.db)).length, 0);
     assert.equal((await items(s.db, 'withholding_conflict')).length, conflicts, 'no withholding_conflict is asked again');
     assert.deepEqual(await active(s.db), rows, 'active rows are unchanged');
     assert.deepEqual((await archivedWith(s.db, 'duplicate')).map((x) => JSON.parse(x.row).amount).sort((a, b) => a - b), [45, 200], 'the copies are archived as duplicates');
@@ -1172,8 +1172,8 @@ describe('withholding recipients (D4, G4)', () => {
         '1099-int': await importDoc(s, formOf('1099-int', 'm1-int', { interest: 1200, federalWithheld: 200 })),
         '1099-div': await importDoc(s, formOf('1099-div', 'm1-div', { federalWithheld: 240 })),
       };
-      const asked = pendingOf(s.db, 'document_recipient');
-      for (const t of answerOrder) C.answer(s.db, asked.find((d) => d.context.payer.endsWith(`:doc:${ids[t]}`)).id, 'owner', { now: NOW });
+      const asked = (await pendingOf(s.db, 'document_recipient'));
+      for (const t of answerOrder) await C.answer(s.db, asked.find((d) => d.context.payer.endsWith(`:doc:${ids[t]}`)).id, 'owner', { now: NOW });
       assert.deepEqual((await inSlot(s.db, payerSlot())).map((t) => [t.payer.split(':')[0], t.amount, t.file_id]), [['1099-int', 200, ids['1099-int']], ['1099-div', 240, ids['1099-div']]], 'both share the slot and stay active');
       assert.equal((await items(s.db, 'withholding_conflict')).length, 0);
     }));
@@ -1227,19 +1227,19 @@ describe('withholding recipients (D4, G4)', () => {
       const left = sc.keep.reduce((sum, k) => sum + c.amounts[k], 0);
       test(`N1: ${c.name}: ${sc.label} keeps ${sc.keep.join(' and ')} (${left}) and asks nothing new`, async () => withStore(async (s) => {
         const ids = { first: await importDoc(s, c.docs.first), second: await importDoc(s, c.docs.second) };
-        c.resolve(s);
+        await c.resolve(s);
         await answerConflict(s, sc.option);
         const expected = sc.keep.map((k) => [c.amounts[k], ids[k]]);
         assert.deepEqual((await inSlot(s.db, c.slot())).map((t) => [t.amount, t.file_id]), expected, 'the answer is applied');
         const conflicts = (await items(s.db, 'withholding_conflict')).length;
-        const pending = C.pendingItems(s.db).map((i) => i.id);
+        const pending = (await C.pendingItems(s.db)).map((i) => i.id);
         const keptArchives = await mapSeries(sc.keep, async (k) => (await archivedOf(s.db, ids[k])).length);
 
         const d = c.docs[sc.copy];
         const r = await seedHistoricalDocument(s, await d.file('-again'), (await d.engine()).responses);
         assert.equal(r.status, 'imported', 'new bytes are a new file');
         await answerDocs(s, () => 'owner');
-        assert.equal(recipientQuestions(s.db).length, 0, 'the copy is resolved to the owner');
+        assert.equal((await recipientQuestions(s.db)).length, 0, 'the copy is resolved to the owner');
 
         const rows = await inSlot(s.db, c.slot());
         assert.deepEqual(rows.map((t) => [t.amount, t.file_id]), expected, `${sc.keep.join(' and ')} stay active and the copy collapses`);
@@ -1247,9 +1247,9 @@ describe('withholding recipients (D4, G4)', () => {
         assert.ok(!(await active(s.db)).some((t) => t.file_id === r.fileId), 'the copy is never active');
         for (const x of await archivedOf(s.db, r.fileId)) assert.ok(['withholding_conflict', 'duplicate'].includes(x.reason), `the copy is archived as withholding_conflict or duplicate, not ${x.reason}`);
         assert.deepEqual(await mapSeries(sc.keep, async (k) => (await archivedOf(s.db, ids[k])).length), keptArchives, 'no kept row is archived');
-        assert.equal(pendingOf(s.db, 'withholding_conflict').length, 0, 'no withholding_conflict is pending');
+        assert.equal((await pendingOf(s.db, 'withholding_conflict')).length, 0, 'no withholding_conflict is pending');
         assert.equal((await items(s.db, 'withholding_conflict')).length, conflicts, 'no new withholding_conflict is queued');
-        assert.deepEqual(C.pendingItems(s.db).map((i) => i.id), pending, 'nothing new is pending');
+        assert.deepEqual((await C.pendingItems(s.db)).map((i) => i.id), pending, 'nothing new is pending');
       }));
     }
   }
