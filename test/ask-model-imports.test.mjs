@@ -7,9 +7,16 @@ for (const operation of ['import_file', 'note', 'retry_import', 'review_import']
   const response = await interpretation(text, { pasted });
   let args = { operation: 'import_file', name: pasted ? 'synthetic.md' : 'synthetic.csv', mime: pasted ? 'text/markdown' : 'text/csv', text };
   if (operation === 'retry_import' || operation === 'review_import') {
-    x.responses.push(response); const initial = await x.upload();
-    args = operation === 'retry_import' ? { operation, fileId: initial.fileId }
-      : { operation, proposalId: initial.proposalId, version: initial.version, decision: 'correct', evidence: 'Change the sign.' };
+    if (operation === 'retry_import') {
+      const { setSetting } = await import('../src/store/db.mjs');
+      setSetting(x.db, 'engine', { on: false });
+      const initial = await x.mcp('import_file', { name: 'synthetic.csv', mime: 'text/csv', text: csv });
+      args = { operation, fileId: initial.file.fileId };
+      setSetting(x.db, 'engine', { on: true });
+    } else {
+      x.responses.push(response); const initial = await x.upload();
+      args = { operation, proposalId: initial.proposalId, version: initial.version, decision: 'correct', evidence: 'Change the sign.' };
+    }
   }
   x.responses.push(response);
   const before = x.extracts;

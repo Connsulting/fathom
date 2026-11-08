@@ -97,6 +97,6 @@ test('an unanchored note asks for its date and accepts a plain answer', async ({
   await r.locator('[data-proposal-correct]').click();
   const done = await reviewed;
   expect(done.status()).toBe(200);
-  expect((await done.json()).status).toBe('queued');
+  expect((await done.json()).status).toBe('waiting_for_engine');
   await expect(r.locator('[data-proposal-status]')).toHaveText('Waiting for the engine');
 });

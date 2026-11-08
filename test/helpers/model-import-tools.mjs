@@ -45,11 +45,13 @@ export async function modelApp(t) {
   const { key } = app.keys.create({ householdId: app.household.householdId, userId: app.session.user.id, name: 'Synthetic import key', scopes: SCOPES });
   return { ...x, app, engine, responses, get extracts() { return extracts; },
     set chat(value) { chat = value; }, set onExtract(value) { onExtract = value; }, set onChat(value) { onChat = value; },
-    async mcp(operation, args = {}) {
-      const result = rpcResult(await callToolRpc(app.baseUrl, key, 'refresh', { operation, ...args }));
+    async tool(name, args, scopes) {
+      const scoped = scopes ? app.keys.create({ householdId: app.household.householdId, userId: app.session.user.id, name: 'Synthetic scoped key', scopes }).key : key;
+      const result = rpcResult(await callToolRpc(app.baseUrl, scoped, name, args));
       if (result.isError) return { error: result.content[0].text };
       return JSON.parse(result.content[0].text);
     },
+    mcp(operation, args = {}) { return this.tool('refresh', { operation, ...args }); },
     async upload(text = csv) {
       const form = new FormData(); form.append('files', new Blob([text], { type: 'text/csv' }), 'synthetic.csv');
       const response = await fetch(app.baseUrl + '/api/files', { method: 'POST', headers: app.headers, body: form });

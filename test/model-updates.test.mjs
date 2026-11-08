@@ -71,7 +71,7 @@ test('approval refuses changed step definitions and stores a versioned correctio
     x.db.prepare("UPDATE recs SET def=? WHERE id='payroll'").run(JSON.stringify({ tasks: [{ t: 'Different step' }] }));
     await assert.rejects(approve(x, p), e => e.code === 'proposal_stale');
     const correction = await reviewImport({ ...x.ctx, ownerText: 'Use the other step' }, { proposalId: p.proposalId, version: 1, decision: 'correct', evidence: 'Use the other step' });
-    assert.equal(correction.version, 2); assert.equal(correction.status, 'queued');
+    assert.equal(correction.version, 2); assert.equal(correction.status, 'waiting_for_engine');
     await assert.rejects(approve(x, p), e => e.code === 'proposal_stale');
     assert.equal(x.db.prepare('SELECT count(*) n FROM expected_transactions').get().n, 0);
   } finally { x.close(); }

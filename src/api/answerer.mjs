@@ -830,7 +830,9 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
       .map(r => droppedBlock(r.args?.operation, r.isError ? 'bad_input' : r.result.reason));
     if (retried && pendingAction && !proposalStillOffered(text, pendingAction))
       pendingAction = null;
+    const queuedImport = toolResults.find(r => !r.isError && r.name === 'refresh' && r.result?.status === 'queued' && r.result.message);
     const paragraphs = renderAnswer(text, grounding.violations, grounding.literals);
+    if (queuedImport && !text.includes(queuedImport.result.message)) paragraphs.unshift(escapeUserText(queuedImport.result.message));
     if (!paragraphs.length && !placement.blocks.length && !blockNotes.length) return actionReply({ ...noticeReply(NOTICES.modelError),
       provenance: { discipline: { violations: discipline.violations, triggeredBy } } });
     const lower = text.toLowerCase();

@@ -1081,7 +1081,7 @@ plans pack, run a job now. Progress label "Bringing in your data". Ticket: C10.
 |---|---|---|---|---|---|
 | import_file | `name` (1..200), `mime`, exactly one of `contentBase64` or `text` | write:imports | MCP `{ file: { id, name, status, counts }, pending, receipt }`; Ask `{ status: 'queued', name, receipt }` | not available: imported rows are undone per Confirm answer; the file stays on record | planned `import_file` |
 | retry_import | `fileId` | write:imports | MCP `{ file, receipt }`; Ask `{ status: 'queued', name, receipt }` | not available (as `import_file`) | planned `retry_import` |
-| review_import | `proposalId`, `version` (positive integer), `decision` (`approve` or `correct`), `evidence` (exact owner statement, 1..4000 characters) | write:imports plus every underlying action scope | `{ proposalId, version, status, counts, receipt }` on approval; correction returns a queued new version | model batch restoration arrives with the atomic import cutover | IMP-7, pending registration; delegates to the shared import review service |
+| review_import | `proposalId`, `version` (positive integer), `decision` (`approve` or `correct`), `evidence` (exact owner statement, 1..4000 characters) | write:imports plus every underlying action scope | `{ proposalId, version, status, counts, receipt }` on approval; correction queues in Ask and interprets inline over HTTP/MCP | approved model batches use shared Undo | IMP-7; shared import review service |
 | build_your_plans | `fileIds?` | write:imports | MCP `{ status: 'built', written, entries, sources, warnings, dropped, receipt }`; Ask `{ status: 'queued', receipt }` | not available: the pack is rebuilt from the files | planned `build_your_plans` |
 | run_job | `job` (`plan`, `simplefin-sync`, `freshness`, `confirm-guess`) | write:jobs | `{ run: { id, status, startedAt, finishedAt } or { id, status: 'queued' }, receipt }` | not available: a job run reads and replans; its effects are undone where they land | planned `run_job` (its `id` becomes `job`) |
 
@@ -1436,7 +1436,7 @@ lands the covering operation.
 | `POST /api/files` | `refresh.import_file` | C10 |  |
 | `GET /api/files` | `household.imports` | C10 |  |
 | `POST /api/files/:id/retry` | `refresh.retry_import` | C10 |  |
-| `POST /api/import-proposals/:proposalId/review` | `refresh.review_import` | IMP-7 | planned shared import review; `write:imports` plus underlying action scopes |
+| `POST /api/import-proposals/:proposalId/review` | `refresh.review_import` | IMP-7 | shared import review; `write:imports` plus underlying action scopes |
 | `POST /api/files/:id/remove` | `sources.remove_file` | SRC1 | rows archived in a change log; Undo by receipt |
 | `GET /api/sources` | `accounts.sources` | SRC1 | real names, range, history or stale |
 | `GET /api/confirm` | `household.confirm_items` | C8 | status pending |
@@ -1503,7 +1503,7 @@ The scopes on main are `read`, `write:recs`, `write:facts`, `write:steps`, `writ
 | `write:accounts` | `update_account` (all five) | Rename accounts, set their last four, owner and kind, and merge duplicates with confirmation. |
 | `write:categories` | `categorize` (both) | Correct transaction categories and set merchant rules. |
 | `write:confirm` | `answer.confirm`, `answer.reopen`, `answer.yearend_mark` | Answer and reopen Confirm questions and mark expected tax documents. |
-| `write:imports` | `answer.expected_transaction`, `refresh.import_file`, `refresh.retry_import`, `refresh.build_your_plans` | Import files, record expected payments and retry or build from imported documents. |
+| `write:imports` | `answer.expected_transaction`, `refresh.import_file`, `refresh.retry_import`, `refresh.review_import`, `refresh.build_your_plans` | Import files, record expected payments and retry or build from imported documents. |
 | `write:jobs` | `refresh.run_job` | Run planning, sync, freshness and guess jobs now. |
 | `write:decisions` | `act_on_recommendation.decide`, `revisit`, `pick_point` | Pick and decide war-game options and reopen decisions. |
 

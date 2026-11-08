@@ -82,7 +82,7 @@ test('refresh validates size, encoding, job allowlist, queue capability and demo
 test('read-only MCP denies each new write before validation', async () => {
   const rpc = await client(await setup(), ['read']);
   try {
-    for (const [name,operation] of [ ...['forget','save_definition','delete_definition','pack'].map(op => ['update_preferences',op]), ...['import_file','retry_import','build_your_plans','run_job'].map(op => ['refresh',op]) ]) {
+    for (const [name,operation] of [ ...['forget','save_definition','delete_definition','pack'].map(op => ['update_preferences',op]), ...['import_file','retry_import','review_import','build_your_plans','run_job'].map(op => ['refresh',op]) ]) {
       const result = await rpc.call(name, { operation });
       assert.equal(result.isError, true);
       assert.match(result.content[0].text, new RegExp(`Permission denied: ${name}\\.${operation} needs`));
