@@ -4,13 +4,16 @@ import { seedDemo } from '../demo/seed.mjs';
 import { tempDb } from './helpers/server.mjs';
 import { assertRefsResolve, envelopeEntries } from './helpers/figures.mjs';
 import { callTool, getTool } from '../src/tools/index.mjs';
-import { buildScenario } from '../src/scenario/build.mjs';
+import { plainDeep } from '../src/tools/catalog/figures.mjs';
+import { buildScenario, tokenScope } from '../src/scenario/build.mjs';
 import { setSetting } from '../src/store/db.mjs';
-import { loadPlanningData, resolveEntities, pnlSums } from '../src/jobs/planner/data.mjs';
+import { loadPlanningData, resolveEntities } from '../src/jobs/planner/data.mjs';
 import { createOut } from '../src/jobs/planner/figures.mjs';
 import { buildWargames, notBuiltReason } from '../src/jobs/planner/wargame.mjs';
 import { householdTax } from '../src/jobs/planner/household.mjs';
 import { payrollTax, TAX_2026 } from '../src/calc/index.mjs';
+
+import { SCORP } from './helpers/real-store.mjs';
 
 const CLOCK = '2026-11-05';
 const call = (ctx, name) => callTool('recommendations', { operation: 'wargame', name }, ctx);
@@ -23,7 +26,11 @@ async function store(t, { planned = true } = {}) {
   if (!planned) return ctx;
   const data = loadPlanningData(s.db, CLOCK);
   const entity = resolveEntities(data, {})[0];
-  entity.sums = pnlSums(entity);
+  entity.sums = { income: SCORP.income * entity.months,
+    net: (SCORP.income - Object.values(SCORP.expenses).reduce((a, b) => a + b, 0)) * entity.months,
+    salary: SCORP.expenses['Officer salary'] * entity.months,
+    payrollTax: SCORP.expenses['Payroll taxes'] * entity.months };
+  entity.classified = true;
   entity.proj = value => value * 12 / entity.months;
   const gross = entity.proj(entity.sums.salary);
   const P = entity.proj(entity.sums.net + entity.sums.salary + entity.sums.payrollTax);
@@ -69,7 +76,7 @@ for (const name of ['salary', 'deferral']) test(`${name} returns the planner's s
   assert.equal(result.status, scenario.wargame[name].status);
   const decision = scenario.decisions.find(d => d.wargame === name);
   assert.deepEqual(result.decision, decision ? { id: decision.id, status: decision.status,
-    ...(decision.line ? { decidedLine: decision.line } : {}) } : null);
+    ...(decision.line ? { decidedLine: plainDeep(tokenScope(ctx.db), decision.line) } : {}) } : null);
   assert.equal(result.picked, list.at(-1).id);
   assert.equal(result.asOf, CLOCK);
   const items = name === 'salary' ? result.salary.points : result.deferral.options;
@@ -160,4 +167,26 @@ test('wargame requires an allowed name and refuses extra arguments', async t => 
     await assert.rejects(callTool('recommendations', args, ctx), { code: 'bad_input' });
   }
   assert.ok((await call(ctx, 'salary')).salary.points.length > 0);
+});
+
+test('deferral tax years stay in order when a stored field is missing', async t => {
+  const ctx = await store(t);
+  const option = buildScenario(ctx.db, { clock: CLOCK }).wargame.deferral.options[0];
+  ctx.db.prepare('DELETE FROM figures WHERE key = ?').run(`wg.deferral.${option.id}.tax2026`);
+  const result = await call(ctx, 'deferral');
+  assert.equal(result.deferral.options[0].figures.taxThisYear.value, null);
+  assert.equal(result.deferral.options[0].figures.taxNextYear.value,
+    ctx.db.prepare('SELECT v FROM figures WHERE key = ?').get(`wg.deferral.${option.id}.tax2027`).v);
+  await assertRefsResolve(result, ctx);
+});
+
+test('stored unavailable figures keep the planner gap and date', async t => {
+  const ctx = await store(t);
+  const id = buildScenario(ctx.db, { clock: CLOCK }).wargame.salary.points[0].id;
+  ctx.db.prepare('UPDATE figures SET unavailable_reason = ? WHERE key = ?')
+    .run('Inputs changed since planning', `wg.salary.${id}.tax`);
+  const f = (await call(ctx, 'salary')).salary.points[0].figures.tax;
+  assert.equal(f.value, null);
+  assert.equal(f.asOf, CLOCK);
+  assert.match(f.gaps[0].message, /Inputs changed since planning/);
 });
