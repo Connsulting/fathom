@@ -139,6 +139,7 @@ async function adversarialRoutes(f, inventory, specs) {
           activeCase = { seed, route: keyOf(route), mutation: kind, assertion: 'route_isolation' };
           checkTime();
           const before = snapshot(other), wireSpec = { ...spec };
+          const outbound = [f.externalCount(), manifest(join(own.ctx.root, 'outbox')), manifest(join(f.dataDir, 'outbox'))];
           const headers = {};
           let method = route.method, expected;
           if (scoped) {
@@ -164,6 +165,7 @@ async function adversarialRoutes(f, inventory, specs) {
           assert.equal(r.status, expected, `seed=${seed} ${keyOf(route)} mutation=${kind} refusal`);
           assert.ok(!r.text.includes(other.canary), `seed=${seed} ${keyOf(route)} mutation=${kind} disclosure`);
           stable(other, before, `seed=${seed} ${keyOf(route)} mutation=${kind} foreign_effect`);
+          assert.deepEqual([f.externalCount(), manifest(join(own.ctx.root, 'outbox')), manifest(join(f.dataDir, 'outbox'))], outbound, 'unauthorized_outbound_effect');
           count++;
         }
       }
@@ -445,6 +447,7 @@ test('adversarial isolation gate crosses real sessions, dispatch, runtimes, pers
   const failures = [];
   try {
     f = await isolationFixture({ extra: { FATHOM_SIMPLEFIN_ALLOWED_HOSTS: 'bridge.example.test' } });
+    f.externalCount = () => external.length;
     for (const hh of [f.A, f.B]) await seedHousehold(f, hh);
     const specs = new Map();
     for (const hh of [f.A, f.B]) specs.set(hh.id, await financialCases(f, hh));
@@ -479,6 +482,16 @@ test('adversarial isolation gate crosses real sessions, dispatch, runtimes, pers
         if (route.path === '/api/household/backups') await f.app.backups.idle();
         assert.equal(r.status, spec.status ?? 200, `authorized ${keyOf(route)} ${r.status} ${r.json?.error ?? ''}`);
         assert.ok(!r.text.includes(other.canary), `response ${keyOf(route)}`);
+        if (route.path === '/api/email/test' || route.path === '/api/email/brief') {
+          assert.equal(r.json.send.status, 'sent', 'authorized_email_delivery');
+          const dir = join(own.ctx.root, 'outbox');
+          const messages = readdirSync(dir).filter(p => p.endsWith('.json')).map(p => JSON.parse(readFileSync(join(dir, p), 'utf8')));
+          assert.ok(messages.length >= 1, 'local_financial_mail_sink');
+          for (const message of messages) {
+            assert.equal(message.to, own.admin.identity.email, 'financial_mail_recipient');
+            assert.ok(!JSON.stringify(message).includes(other.canary), 'financial_mail_context');
+          }
+        }
         if (r.status === 200) {
           assert.equal(r.headers['x-fathom-household'], own.id, `response_context ${keyOf(route)}`);
           assert.equal(r.headers['x-fathom-context-version'], String(own.admin.identity.contextVersion), 'response_version');
