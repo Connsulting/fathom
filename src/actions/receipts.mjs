@@ -160,14 +160,15 @@ export function restoreReceiptGroup(ctx, { after, receipt, checkOnly = false }) 
 registerReceiptKind('receipt_group', { restore: restoreReceiptGroup });
 
 export async function undoAction(ctx, id, scope) {
-  let receipt, scopes;
+  let receipt, scopes, decisionChanged = false;
   tx(ctx.db, () => {
     const row = ctx.db.prepare('SELECT * FROM action_receipts WHERE id=?').get(id);
     scopes = row ? receiptScopes(row) : [scope];
+    decisionChanged = row?.kind === 'decision_decide' || row?.kind === 'decision_revisit';
     receipt = restoreReceipt(ctx, id, scope);
 
   });
-  if (scopes.includes('write:facts')) await replanAction(ctx, receipt);
+  if (scopes.includes('write:facts') || decisionChanged) await replanAction(ctx, receipt);
   else if (scope === 'write:sources') ctx.queuePlan?.();
   if (scope === 'write:preferences') {
     const { adoptSuggestions } = await import('../goals/write.mjs');

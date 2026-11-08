@@ -174,7 +174,7 @@ describe('registry entries', () => {
     }
     assert.deepEqual(getTool('knowledge').operations.find(o => o.name === 'entry').required.slice().sort(), ['file', 'packId']);
     assert.deepEqual(getTool('knowledge').operations.find(o => o.name === 'search').required, ['query']);
-    assert.deepEqual(tools.filter(x => x.operations.some(o => o.scope === 'write:recs' || o.scopes?.includes('write:recs'))).map(x => x.name), ['act_on_recommendation', 'undo']);
+    assert.deepEqual(tools.filter(x => x.operations.some(o => o.scope === 'write:recs' || o.scopes?.includes('write:recs'))).map(x => x.name), ['act_on_recommendation', 'advisor_review', 'undo']);
   });
 });
 
