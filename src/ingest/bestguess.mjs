@@ -164,8 +164,9 @@ function engineGuess(db, item, detail) {
   const row = db.prepare('SELECT option_id, reason, model FROM confirm_guesses WHERE item_id = ?').get(item.id);
   const option = row?.option_id != null ? optionOf(item, row.option_id) : null;
   if (!option) return null;
-  if(row.model===JEV_MODEL) {
-    const confidence=parseJson(row.reason,null)?.confidence;
+  const proposal=parseJson(row.reason,null);
+  if(row.model===JEV_MODEL || proposal?.modelPort===true) {
+    const confidence=proposal?.confidence;
     if(!Number.isFinite(confidence)) return null;
     return {option:option.id,label:option.label,source:'engine',confidence,evidence:jevEvidence(confidence)};
   }

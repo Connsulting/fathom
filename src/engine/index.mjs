@@ -1,10 +1,13 @@
 import { open } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import { redactProviderText } from '../ingest/redact.mjs';
 import { checkGrounding } from './grounding.mjs';
 import { compileSchema } from './schema.mjs';
 import { createRegistryServer } from './tools.mjs';
-import { sdkRound, messagesRound, messagesToolRound } from './live.mjs';
-import { modelFor, estimateUnknownCost, PDF_PAGE_INPUT_TOKENS } from './pricing.mjs';
+import { sdkRound } from './live.mjs';
+import { selectionFor } from '../models/config.mjs';
+import { createModelPort, modelErrorCode } from '../models/port.mjs';
+import { PDF_PAGE_INPUT_TOKENS } from './pricing.mjs';
 import { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError, fundingUnavailable, withCode } from './errors.mjs';
 export { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError, fundingUnavailable } from './errors.mjs';
 export { checkGrounding, numberPattern } from './grounding.mjs';
@@ -21,7 +24,7 @@ async function serial(ledger, callback) {
 
 // Purposes answered in one structured messages round with no tools and no tool loop. 'title'
 // (Ask thread names) runs on TITLE_MODEL, every other purpose on DEFAULT_MODEL.
-const SINGLE_ROUND = ['extract', 'confirm', 'title'];
+const SINGLE_ROUND = ['extract', 'confirm', 'title', 'categorize'];
 const PURPOSES = ['chat', 'job', ...SINGLE_ROUND];
 
 // The separator placed before a round's text when it follows earlier rounds' text. The model's
@@ -225,7 +228,7 @@ function checkTestTransport(testTransport) {
 export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger = createMemoryLedger(), capUsd = 200,
   credential, responses = [], now = () => new Date(), toolContext = {}, streamDelayMs = 0,
   modelOverride, maxRounds = 8, admitRound = null, roundRunner = sdkRound, allowed = () => true, funded = () => true,
-  reservations = null, testTransport = null } = {}) {
+  reservations = null, testTransport = null, modelConfig = {}, modelTransport, modelCredentials = {} } = {}) {
   if (!['live', 'fake', 'off'].includes(mode)) throw new TypeError('Invalid engine mode');
   const transport = checkTestTransport(testTransport);
   if (reservations != null && !['reserve', 'settle', 'hold'].every(k => typeof reservations[k] === 'function')) {
@@ -237,8 +240,8 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
   if (typeof ledger.monthSpendUsd !== 'function' || typeof ledger.record !== 'function') throw new TypeError('Invalid ledger adapter');
   const scripted = [...responses];
   let poisoned = false;
-  const call = async ({ purpose, system = '', systemDynamic = '', messages, tools = [], maxTokens = 1024, schema, grounding = {}, fake,
-    toolContext: callContext, onEvent, budget, beforeDispatch, extraInputTokens = 0 } = {}) => {
+  const complete = async ({ purpose, system = '', systemDynamic = '', messages, tools = [], maxTokens = 1024, schema, grounding = {}, fake,
+    toolContext: callContext, onEvent, budget, beforeDispatch, extraInputTokens = 0, choices } = {}) => {
     if (mode === 'off') throw new EngineOffError();
     const answer = createAnswerAssembler();
     // The text streamed in the current round since its last interim event.
@@ -273,10 +276,16 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       roundStream = '';
     };
     if (!PURPOSES.includes(purpose)) throw new TypeError('Invalid call purpose');
-    const model = modelOverride ?? modelFor(purpose);
+    const selection = selectionFor(modelConfig, purpose);
+    if (modelOverride) selection.model = modelOverride;
+    const port = createModelPort({ selection, purpose, transport: modelTransport, credential: modelCredentials[purpose], roundRunner, testTransport: transport });
+    const model = port.model;
     if (typeof system !== 'string' || typeof systemDynamic !== 'string' || !Array.isArray(messages) || messages.length === 0 || !Number.isInteger(maxTokens) || maxTokens <= 0 || maxTokens > 128000) {
       throw new TypeError('Invalid model request');
     }
+    if (schema && choices || choices && tools.length) throw new TypeError('Choices cannot include a schema or tools');
+    if (choices && (!Array.isArray(choices) || choices.length===0 || choices.some(q => !Array.isArray(q.options) || q.options.length<2
+      || q.options.length>255 || new Set(q.options).size!==q.options.length || q.options.some(o => typeof o!=='string' || !o)))) throw new TypeError('Invalid choices');
     if (fake !== undefined && !Array.isArray(fake)) throw new TypeError('Invalid fake script list');
     if (!Number.isInteger(extraInputTokens) || extraInputTokens < 0) throw new TypeError('Invalid model request');
     const queue = fake === undefined ? scripted : structuredClone(fake);
@@ -299,8 +308,8 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
         // The call's own budget (budget.maxCostUsd across its rounds, budget.maxInputTokens per round)
         // refuses a round whose worst case no longer fits, in every mode; with reservations the
         // platform ledger below is the live authority and admits before beforeDispatch runs.
-        const estimateNow = () => estimateUnknownCost({ model, maxTokens,
-          system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools, schema, extraInputTokens });
+        const estimateNow = () => port.estimate({ maxTokens,
+          system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools, schema, choices, extraInputTokens });
         const callRemaining = (budget?.maxCostUsd ?? Infinity) - cost;
         let maxBudgetUsd;
         if (!reserving) {
@@ -314,18 +323,17 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
           maxBudgetUsd = allowance;
         }
         if (admitRound) await admitRound({ purpose, system, systemDynamic, messages: transcript, tools, maxTokens });
-        const auth = mode === 'live' ? explicitCredential(credential) : undefined;
+        const auth = mode === 'live' && port.credentialRequired ? explicitCredential(modelCredentials[purpose] ?? credential) : modelCredentials[purpose];
         const context = callContext ?? toolContext;
         const registry = createRegistryServer(tools, { purpose, ctx: { ...context, now: context.now ?? ts,
           ...(purpose === 'chat' && typeof context.replan === 'function' ? { queueAfterTools: task => afterTools.push(task) } : {}) } });
         const unknownCost = estimateNow;
-        const runner = SINGLE_ROUND.includes(purpose) ? messagesRound : transport ? messagesToolRound : roundRunner;
         let admission = null;
         try {
           if (reserving) {
             const estimate = unknownCost();
             const perResponseUsd = estimate.costUsd;
-            const boundUsd = runner === messagesRound || runner === messagesToolRound ? perResponseUsd : SDK_RESPONSE_BOUND * perResponseUsd;
+            const boundUsd = port.responseBound * perResponseUsd;
             if (budget && (boundUsd > callRemaining || estimate.inputTokens > (budget.maxInputTokens ?? Infinity))) {
               const error = new BudgetExceededError(); error.toolResults = allResults; throw error;
             }
@@ -374,8 +382,9 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               content: Array.isArray(script.content) ? script.content : [{ type: 'text', text }], details: { maxBudgetUsd } };
           } else {
             try {
-              round = await runner({ credential: auth, system, systemDynamic, messages: transcript, tools, maxTokens, maxBudgetUsd, model,
-                registry, schema, ...(transport ? { baseURL: transport.baseURL } : {}), ...(budget ? { timeoutMs: budget.timeoutMs } : {}),
+              const outbound = redactProviderText({ system, systemDynamic, messages: transcript, tools, schema, choices });
+              round = await port.complete({ credential: auth, ...outbound, maxTokens, maxBudgetUsd, model, budget,
+                registry, ...(transport ? { baseURL: transport.baseURL } : {}), ...(budget ? { timeoutMs: budget.timeoutMs } : {}),
                 ...(emit ? { onEvent: emit } : {}) });
             } catch {
               round = { text: '', content: [], status: 'transport_error', is_error: true,
@@ -428,7 +437,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       }
       const toolBoundary = round.status === 'error_max_turns' && round.toolResults.length > 0;
       if (round.api_error_status != null || (round.is_error && !toolBoundary && round.status !== 'error_max_budget_usd')) {
-        throw Object.assign(new ModelCallError('Model did not complete a valid response'), { accounting });
+        throw Object.assign(new ModelCallError('Model did not complete a valid response'), { accounting, code: round.errorCode ?? 'unavailable', ...(round.retryAfterMs ? {retryAfterMs:round.retryAfterMs} : {}) });
       }
       if (round.status === 'error_max_budget_usd') {
         const error = new BudgetExceededError(); error.toolResults = allResults; throw error;
@@ -443,13 +452,14 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
             toolRounds: fallback ? toolRounds.map(r => ({ ...r, text: '', parts: r.parts.filter(p => !('text' in p)) })) : toolRounds }
           : {};
         return { text, content: round.content, costUsd: Number(cost.toFixed(12)), model: round.model,
-          toolResults: allResults, rounds, accounting, ...chatParts, grounding: checkGrounding(text, { ...grounding, toolResults: allResults }) };
+          toolResults: allResults, rounds, accounting, ...(round.choices ? { choices: round.choices } : {}), ...chatParts, grounding: checkGrounding(text, { ...grounding, toolResults: allResults }) };
       }
       transcript.push({ role: 'assistant', content: round.content }, { role: 'tool', content: round.toolResults });
     }
     const error = new RoundLimitError(); error.toolResults = allResults; throw error;
   };
-  return { call, async extract({ document, schema, system = 'Extract documented rows without guessing.', maxTokens = 4096, fake } = {}) {
+  const call = req => complete(req).catch(error => { if (!(error instanceof EngineOffError)) error.code ??= modelErrorCode(error); throw error; });
+  return { call, complete: call, async extract({ document, schema, system = 'Extract documented rows without guessing.', maxTokens = 4096, fake } = {}) {
     if (mode === 'off') throw new EngineOffError();
     const responseSchema = { type: 'object', properties: { rows: { type: 'array', items: schema } }, required: ['rows'], additionalProperties: false };
     const validate = compileSchema(responseSchema);
