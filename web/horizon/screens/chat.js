@@ -453,9 +453,8 @@ function receiptValue(value, scope) {
 // shows its label; any other receipt shows its label and the value before and after.
 function receiptLine(a) {
   const { esc } = H;
-  // A source change (archive, restore, remove a file, merge) says it all in its label.
   if (a.scope === 'write:sources') return `<p><b>${esc(a.label)}</b></p>`;
-  if (a.scope !== 'write:preferences') return `<p><b>${esc(a.label)}</b>: ${esc(receiptValue(a.before, a.scope))} → ${esc(receiptValue(a.after, a.scope))}</p>`;
+  if (a.scope !== 'write:preferences' || typeof (a.after ?? a.before) !== 'string') return `<p><b>${esc(a.label)}</b>: ${esc(receiptValue(a.before, a.scope))} → ${esc(receiptValue(a.after, a.scope))}</p>`;
   const had = a.before != null && a.before !== '';
   const head = a.after == null ? 'Memory deleted' : had ? 'Memory updated' : 'Memory saved';
   const text = a.after == null ? a.before : a.after;
@@ -467,7 +466,7 @@ export function workHtml(m) {
   const { esc } = H;
   const actions = H.arr(m.provenance.actions).map(a => `<div class="h-action-receipt" data-receipt="${esc(a.id)}" role="status">${receiptLine(a)}`
     + (a.planningPending ? '<p class="h-mute">Saved. Planning is pending.</p>' : '')
-    + (a.undone ? '<span class="h-mute">Undone</span>' : `<button type="button" class="h-btn" data-undo-action="${esc(a.id)}">Undo</button>`) + '</div>').join('');
+    + (a.undo?.available === false ? `<span class="h-mute">${esc(a.undo.reason)}</span>` : a.undone ? '<span class="h-mute">Undone</span>' : `<button type="button" class="h-btn" data-undo-action="${esc(a.id)}">Undo</button>`) + '</div>').join('');
   if (m.notice || !isObj(m.provenance.work)) return actions;
   const w = m.provenance.work;
   const ms = Number(w.ms);
