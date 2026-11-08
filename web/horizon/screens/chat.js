@@ -56,7 +56,7 @@ let H = null;
 
 export function bind(kit) {
   H = kit;
-  useKit({ esc, money, registerFigures: (map) => { if (kit.api && kit.api.registerFigures) kit.api.registerFigures(map); } });
+  useKit({ esc, money, getApi: () => kit.api, askAgain: (text, key) => sendAsk({ text, key }), registerFigures: (map) => { if (kit.api && kit.api.registerFigures) kit.api.registerFigures(map); } });
 }
 
 // A message's body: its stored html, with an answer's blocks placed after paragraph `after` and

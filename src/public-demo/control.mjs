@@ -14,6 +14,7 @@ const ALLOWED = new Set([
   'POST /api/wargame/:name/pick', 'POST /api/decisions/:id/decide', 'POST /api/decisions/:id/revisit',
   'POST /api/packs/:id/toggle', 'POST /api/packs/:id/whatif', 'GET /api/packs/:id/entries/:entryId',
   'POST /api/ask', 'GET /api/threads', 'POST /api/threads', 'GET /api/threads/:id',
+  'GET /api/threads/:id/blocks',
   'POST /api/threads/:id/rename', 'POST /api/threads/:id/archive', 'POST /api/threads/:id/trash',
   'POST /api/threads/:id/restore', 'POST /api/threads/:id/delete',
   'GET /api/accounts/:id', 'GET /api/accounts/:id/transactions', 'POST /api/accounts/:id/name',
