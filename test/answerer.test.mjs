@@ -21,7 +21,7 @@ import { loadConfig } from '../src/config.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import { buildScenario, clockNow } from '../src/scenario/build.mjs';
 import { callTool, tools as REGISTRY, instructions } from '../src/tools/index.mjs';
-import { sdkOptions } from '../src/engine/live.mjs';
+import { sdkOptions, encodeTranscript } from '../src/engine/live.mjs';
 import { createRuntimeEngine, createSpendLedger } from '../src/engine/runtime.mjs';
 import { createLivePacks } from '../src/packs/live.mjs';
 import { PRODUCT_RULES, NOTICES, buildChatPrompt, groundAnswer, renderAnswer, createLiveAnswerer } from '../src/api/answerer.mjs';
@@ -1773,4 +1773,26 @@ test('R5 F2: a marked amount in the link text of a parenthesized destination sti
     }
   }
   assert.deepEqual(failures, []);
+});
+
+
+test('Ask keeps original tax identifiers locally and scrubs current and prior turns at the SDK boundary', async t => {
+  const s = await demoStore(t);
+  const { createEngine } = await import('../src/engine/index.mjs');
+  const payloads = [];
+  const live = createEngine({ mode: 'live', credential: 'synthetic-key', roundRunner: async request => {
+    payloads.push({ prompt: encodeTranscript(request.messages), system: sdkOptions({ ...request, configDir: '/synthetic' }).systemPrompt });
+    return { text: 'Keep a reserve.', content: [{ type: 'text', text: 'Keep a reserve.' }], costUsd: 0.001, model: 'synthetic', status: 'success', toolResults: [] };
+  } });
+  const engine = { mode: 'live', isOn: () => true, call: live.call };
+  const answerer = createLiveAnswerer({ engine, packs: s.packs, root: s.root });
+  const original = 'Synthetic SSN 900-12-3456 and EIN 90-1234567.';
+  await answerer.answer({ db: s.db, key: THREAD, text: original });
+  await answerer.answer({ db: s.db, key: THREAD, text: 'Synthetic ITIN 900-70-1234 question.' });
+  assert.equal(payloads.length, 2);
+  for (const payload of payloads) assert.doesNotMatch(JSON.stringify(payload), /900-12-3456|90-1234567|900-70-1234/);
+  assert.ok(payloads[1].prompt.includes('XXX-XX-XXXX'), 'prior user text is scrubbed too');
+  const stored = s.db.prepare('SELECT content FROM messages WHERE conversation_key = ? AND role = ? ORDER BY id').all(THREAD, 'user');
+  assert.equal(stored[0].content, original);
+  assert.equal(stored[1].content, 'Synthetic ITIN 900-70-1234 question.');
 });
