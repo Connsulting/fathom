@@ -16,7 +16,7 @@ test('nonstandard upload stages, approval preserves repeated occurrences, repeat
     const repeat = await upload(x, transactions());
     assert.equal(repeat.status, 'duplicate');
     assert.equal((await x.db.prepare('SELECT count(*) n FROM import_model_spend').get()).n, 1);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 test('unknown files with the engine off wait without writes and raw scans are withheld', async () => {
   const x = await setup();
@@ -27,7 +27,7 @@ test('unknown files with the engine off wait without writes and raw scans are wi
     const pdf = await ingestFile(x.db, { name: 'scan.pdf', bytes: Buffer.from('%PDF-1.7\n%%EOF'), mime: 'application/pdf' }, x.opts);
     assert.equal(pdf.status, 'needs_source_text');
     assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 0);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('typed note facts use shared actions, require their scope, and expose grouped Undo', async () => {
@@ -57,7 +57,7 @@ test('typed note facts use shared actions, require their scope, and expose group
     const again = await retryFile(x.db,fileId,{ ...x.opts, scopes: x.ctx.scopes });
     assert.equal(again.status,'needs_confirmation');
     assert.equal((await x.db.prepare('SELECT count(*) n FROM facts').get()).n,0);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('resolved accounts scope external ids independently even with equal display names', async () => {
@@ -74,7 +74,7 @@ test('resolved accounts scope external ids independently even with equal display
     await approve(x,staged);
     assert.deepEqual((await x.db.prepare('SELECT account_id,count(*) n FROM transactions GROUP BY account_id ORDER BY account_id').all()).map(r => [r.account_id,r.n]), [['account-second',1],['account-synthetic',2]]);
     assert.deepEqual((await x.db.prepare('SELECT occurrence FROM transactions WHERE account_id=?').all('account-second')).map(r => r.occurrence), [1]);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('model rows and standard exports retain the same semantic posting identity', async () => {
@@ -89,7 +89,7 @@ test('model rows and standard exports retain the same semantic posting identity'
     const r = await approve(x,staged);
     assert.equal(r.counts.duplicates, 1);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 1);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('source groups retain financial freshness when an unrelated note is approved', async () => {
@@ -103,7 +103,7 @@ test('source groups retain financial freshness when an unrelated note is approve
     assert.deepEqual(await x.db.prepare('SELECT * FROM sources WHERE id=?').get(source.id),source);
     assert.equal((await sourceStates(x.db,'2032-03-10')).sources.get(source.id).state,'fresh');
     assert.equal((await x.db.prepare("SELECT count(*) n FROM sources WHERE substr(id,1,4)='ing:'").get()).n,2);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 
@@ -122,7 +122,7 @@ test('typed withholding recipients reach the planner in the filing unit and join
     assert.equal(joint.fed.withheld.blocked,null);
     const single = classifyPayments(data,{persons:['owner'],f:'single',isVa:true});
     assert.equal(single.fed.withheld.blocked,'withholding_recipient_unknown');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('a tax source cannot overwrite an estimate with withholding under the same frozen payment identity', async () => {
@@ -137,7 +137,7 @@ test('a tax source cannot overwrite an estimate with withholding under the same 
     const next = await importProposedRows(x,[payment('withholding')]);
     assert.equal(next.status,'needs_clarification');
     assert.equal((await x.db.prepare('SELECT kind FROM tax_payments').get()).kind,'estimate');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 
@@ -159,5 +159,5 @@ test('corrected typed withholding uses the existing recipient conflict safeguard
     await answer(x.db,item.id,'second',{now:x.ctx.now});
     assert.equal((await classify()).fed.withheld.blocked,null);
     assert.equal((await classify()).fed.withheld.total,125);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });

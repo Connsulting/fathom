@@ -255,10 +255,10 @@ test('a store migrated to exactly 005 upgrades to 006-chat through the platform 
   const file = join(dataDir, DB_FILE);
   const old = await openDb(file);
   try {
-    old.exec('CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
+    await old.applySchema('CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
     const record = old.prepare("INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, '2026-10-01T00:00:00Z')");
     for (const name of MAIN_MIGRATIONS) {
-      old.exec(readFileSync(join(MIGRATIONS_DIR, name), 'utf8'));
+      await old.applySchema(readFileSync(join(MIGRATIONS_DIR, name), 'utf8'));
       await record.run(Number(name.slice(0, 3)), name.slice(4, -4));
     }
     await setSetting(old, 'mode', 'real');
@@ -325,17 +325,15 @@ test('openDb waits out a short exclusive lock held by another process', async ()
   const { spawn } = await import('node:child_process');
   const dir = await tempDir();
   const file = join(dir, DB_FILE);
-  (await openDb(file)).close();
-  const holder = spawn(process.execPath, ['-e', `
-    const { DatabaseSync } = require('node:sqlite');
-    const db = await openScope({ path: ${JSON.stringify(file)}, journal: null, busyTimeout: 0 });
-    db.exec('PRAGMA locking_mode = EXCLUSIVE');
-    db.exec('BEGIN EXCLUSIVE');
-    db.applySchema('CREATE TABLE IF NOT EXISTS held (x)');
+  await (await openDb(file)).close();
+  const storageUrl = new URL('../src/storage/index.mjs', import.meta.url).href;
+  const holder = spawn(process.execPath, ['--input-type=module', '-e', `
+    import { openScope } from ${JSON.stringify(storageUrl)};
+    const db = await openScope({ path: ${JSON.stringify(file)}, journal: null, busyTimeout: 0, exclusive: true });
+    await db.applySchema('CREATE TABLE IF NOT EXISTS held (x)');
     process.stdout.write('locked\\n');
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 700);
-    db.exec('COMMIT');
-    db.close();
+    await new Promise(resolve => setTimeout(resolve, 700));
+    await db.close();
   `], { stdio: ['ignore', 'pipe', 'inherit'] });
   await new Promise((resolve, reject) => {
     holder.stdout.on('data', d => { if (String(d).includes('locked')) resolve(); });

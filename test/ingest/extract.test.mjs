@@ -545,7 +545,7 @@ describe('withholding recipients (D4, G4)', () => {
   test('the new kinds exist and tax_payments has a recipient column', async () => withStore(async (s) => {
     assert.ok(C.KINDS.includes('employer_recipient'));
     assert.ok(C.KINDS.includes('document_recipient'));
-    assert.ok((await all(s.db, 'PRAGMA table_info(tax_payments)')).some((c) => c.name === 'recipient'));
+    assert.ok((await s.db.columns('tax_payments')).some((c) => c.name === 'recipient'));
   }));
 
   test('unknown recipient: a W-2 plus paystubs leave everything active under per-document payers and queue the employer question', async () => withStore(async (s) => {

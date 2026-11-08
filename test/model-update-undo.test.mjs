@@ -28,7 +28,7 @@ test('group approval and Undo preflight all scopes and actors without partial wr
     assert.deepEqual(JSON.parse((await x.db.prepare("SELECT tasks_done FROM recs WHERE id='payroll'").get()).tasks_done), []);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM files').get()).n, 1);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM action_receipts WHERE undone_at IS NOT NULL').get()).n, 3);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('stale child Undo and a later direct child Undo refuse the whole group', async () => {
@@ -45,7 +45,7 @@ test('stale child Undo and a later direct child Undo refuse the whole group', as
       await assert.rejects(callTool('undo', { operation: 'undo', id: result.receipt.id }, x.ctx), /changed|undone/);
       assert.equal((await x.db.prepare('SELECT undone_at FROM action_receipts WHERE id=?').get(result.receipt.id)).undone_at, null);
       if (stale === 'step') assert.equal((await x.db.prepare('SELECT count(*) n FROM expected_transactions').get()).n, 1);
-    } finally { x.close(); }
+    } finally { await x.close(); }
   }
 });
 
@@ -68,7 +68,7 @@ test('facts and goals use shared actions, defer planning, and require their chil
     await callTool('undo', { operation: 'undo', id: result.receipt.id }, x.ctx);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM goals').get()).n, 0);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM facts').get()).n, 0);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('a failed later shared action rolls back earlier actions and receipts', async () => {
@@ -77,7 +77,7 @@ test('a failed later shared action rolls back earlier actions and receipts', asy
     await assert.rejects(async () => await stageUpdate(x.ctx, { source: x.source, actions: [x.step, { ...x.expected, args: { ...x.expected.args, amount: 1234 } }], capturedAt: '2032-03-02T14:00:00Z' }));
     assert.equal((await x.db.prepare('SELECT count(*) n FROM action_receipts').get()).n, 0);
     assert.deepEqual(JSON.parse((await x.db.prepare("SELECT tasks_done FROM recs WHERE id='payroll'").get()).tasks_done), []);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('several steps in one recommendation undo in reverse order with one visible affordance', async () => {
@@ -87,7 +87,7 @@ test('several steps in one recommendation undo in reverse order with one visible
     const result = await apply(x, [x.step, { ...x.step, args: { ...x.step.args, index: 1 } }, x.expected]);
     await callTool('undo', { operation: 'undo', id: result.receipt.id }, x.ctx);
     assert.deepEqual(JSON.parse((await x.db.prepare("SELECT tasks_done FROM recs WHERE id='payroll'").get()).tasks_done), []);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('routine recommendation prose changes preserve step Undo while task changes still refuse', async () => {
@@ -98,7 +98,7 @@ test('routine recommendation prose changes preserve step Undo while task changes
     await callTool('undo', { operation: 'undo', id: result.receipt.id }, x.ctx);
     assert.equal(JSON.parse((await x.db.prepare("SELECT def FROM recs WHERE id='payroll'").get()).def).title, 'Updated plan prose');
     assert.deepEqual(JSON.parse((await x.db.prepare("SELECT tasks_done FROM recs WHERE id='payroll'").get()).tasks_done), []);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('pending grouped Undo depends on its children and target rows rather than unrelated activity', async () => {
@@ -112,5 +112,5 @@ test('pending grouped Undo depends on its children and target rows rather than u
     assert.equal(await proposalBasis(x.db, 'undo', result.receipt.scopes, input), before);
     await x.db.prepare("UPDATE recs SET tasks_done='[false]' WHERE id='payroll'").run();
     assert.notEqual(await proposalBasis(x.db, 'undo', result.receipt.scopes, input), before);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });

@@ -22,7 +22,7 @@ test('one shared expected action records provenance and Undo without affecting a
     for (const table of ['transactions', 'balances', 'pnl_lines', 'tax_payments']) assert.equal((await x.db.prepare(`SELECT count(*) n FROM ${table}`).get()).n, 0);
     await callTool('undo', { operation: 'undo', id: out.receipt.id }, ctx);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM expected_transactions').get()).n, 0);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('relative dates use household local midnight, strict next weekday and DST', async () => {
@@ -37,7 +37,7 @@ test('relative dates use household local midnight, strict next weekday and DST',
     await setSetting(x.db, 'timezone', 'invalid');
     const out = await callTool('answer', args, { ...x.ctx, now: '2032-03-02T14:00:00Z', ownerText: args.evidence });
     assert.equal(out.expectedTransaction.dateEvidence.timezone, 'America/New_York');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('expected action refuses fabricated figures, arbitrary dates, foreign accounts and statuses', async () => {
@@ -50,7 +50,7 @@ test('expected action refuses fabricated figures, arbitrary dates, foreign accou
     await assert.rejects(callTool('answer', args, { ...ctx, scopes: ['read'] }), /Permission/);
     await assert.rejects(callTool('answer', args, { ...ctx, ownerText: 'Unrelated words' }), /evidence|stated/);
     await callTool('answer', args, ctx);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('observed expectations refuse Undo and cannot delete an observed posting', async () => {
@@ -61,7 +61,7 @@ test('observed expectations refuse Undo and cannot delete an observed posting', 
     await x.db.prepare("UPDATE expected_transactions SET status='observed' WHERE id=?").run(out.expectedTransaction.id);
     await assert.rejects(callTool('undo', { operation: 'undo', id: out.receipt.id }, ctx), /changed/);
     assert.equal((await x.db.prepare('SELECT status FROM expected_transactions').get()).status, 'observed');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('additive expected-payment migration preserves populated financial state and is restart-safe', async () => {
@@ -88,5 +88,5 @@ test('the shared answer schema preserves each operation while expected-payment e
     await assert.rejects(callTool('answer', { ...args, evidence }, ctx), /4000/);
     await callTool('answer', { ...args, evidence: evidence.slice(0, 4000) }, { ...ctx, ownerText: evidence.slice(0, 4000) });
     assert.equal((await x.db.prepare('SELECT count(*) n FROM expected_transactions').get()).n, 1);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });

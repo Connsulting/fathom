@@ -96,7 +96,7 @@ test('a taken FATHOM_PORT makes the process exit nonzero with a clear message', 
     assert.notEqual(code, 0);
     assert.match(out, new RegExp(String(port)), 'message names the port');
   } finally {
-    blocker.close();
+    await blocker.close();
   }
 });
 

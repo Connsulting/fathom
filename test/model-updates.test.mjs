@@ -23,7 +23,7 @@ test('payroll note stages existing step and unknown payment, then explicitly app
     assert.equal(row.status, 'expected'); assert.equal(row.file_id, x.source.fileId);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 0);
     assert.ok(result.receipt);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('unknown facts and missing recommendation steps remain cited notes', async () => {
@@ -36,7 +36,7 @@ test('unknown facts and missing recommendation steps remain cited notes', async 
     assert.equal(p.actions.length, 0);
     await approve(x, p);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM facts').get()).n, 0);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('historical unanchored notes ask for the anchor and guessed amounts or dates fail', async () => {
@@ -49,7 +49,7 @@ test('historical unanchored notes ask for the anchor and guessed amounts or date
       await assert.rejects(async () => await stageUpdate(x.ctx, { source: x.source, capturedAt: '2032-03-02T14:00:00Z', actions: [{ ...x.expected, args: { ...x.expected.args, ...args } }] }), /stated|date|evidence/);
     }
     assert.equal((await x.db.prepare('SELECT count(*) n FROM action_receipts').get()).n, 0);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('source spans bind the exact file, bytes and actor instead of conversation history', async () => {
@@ -61,7 +61,7 @@ test('source spans bind the exact file, bytes and actor instead of conversation 
     const p = await stageUpdate(x.ctx, { source: x.source, capturedAt: '2032-03-02T14:00:00Z', actions: [x.expected] });
     await assert.rejects(await approve(x, p, { actorId: 'foreign-actor' }), /owner|available/);
     await approve(x, p);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('approval refuses changed step definitions and stores a versioned correction without writes', async () => {
@@ -74,7 +74,7 @@ test('approval refuses changed step definitions and stores a versioned correctio
     assert.equal(correction.version, 2); assert.equal(correction.status, 'waiting_for_engine');
     await assert.rejects(await approve(x, p), e => e.code === 'proposal_stale');
     assert.equal((await x.db.prepare('SELECT count(*) n FROM expected_transactions').get()).n, 0);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('corrections ground new values and date anchors in the exact current owner statement', async () => {
@@ -92,7 +92,7 @@ test('corrections ground new values and date anchors in the exact current owner 
     const row = await x.db.prepare('SELECT * FROM expected_transactions').get();
     assert.equal(row.amount, 200); assert.equal(row.due_date, '2032-03-09');
     assert.equal(JSON.parse(row.evidence).correction.actorId, x.ctx.actorId);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('unrelated household activity leaves a waiting note approvable, but source and timezone changes do not', async () => {
@@ -105,7 +105,7 @@ test('unrelated household activity leaves a waiting note approvable, but source 
     await planRun(x.db, { now: '2032-03-03' });
     await approve(x, p);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM expected_transactions').get()).n, 1);
-  } finally { x.close(); }
+  } finally { await x.close(); }
   for (const changed of ['source', 'timezone']) {
     const y = await updateFixture();
     try {
@@ -114,6 +114,6 @@ test('unrelated household activity leaves a waiting note approvable, but source 
       else await y.db.prepare("INSERT INTO settings (key,value,updated_at) VALUES ('timezone','\"UTC\"',?)").run(y.ctx.now);
       await assert.rejects(await approve(y, p), e => e.code === 'proposal_stale');
       assert.equal((await y.db.prepare('SELECT count(*) n FROM expected_transactions').get()).n, 0);
-    } finally { y.close(); }
+    } finally { await y.close(); }
   }
 });

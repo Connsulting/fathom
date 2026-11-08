@@ -177,7 +177,7 @@ test('AC2 corrections survive duplicate consolidation and its undo without casca
   assert.equal(resolveCategories(await loadCategoryInputs(db)).get(a).layer,'uncategorized');
   assert.deepEqual((await db.foreignKeyCheck()),[]);
   // Same dependency move is the account-merge call site; run it in a rollbackable transaction.
-  db.exec('BEGIN'); await moveCategoryRows(db,b,a); await db.prepare('DELETE FROM transactions WHERE id=?').run(b); db.exec('COMMIT');
+  await db.transaction(async db => { await moveCategoryRows(db,b,a); await db.prepare('DELETE FROM transactions WHERE id=?').run(b); });
   assert.equal(resolveCategories(await loadCategoryInputs(db)).get(a).bucket,'business');
 });
 

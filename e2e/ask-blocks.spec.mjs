@@ -346,7 +346,7 @@ test('@mobile drill rows keep keyboard focus and a reopened stale block can ask 
   const response = await request.post('/api/threads', { data: { text: question } });
   expect(response.status()).toBe(200);
   const body = await response.json();
-  const db = new DatabaseSync((await servedStore(mainDataDir())).file);
+  const db = await openScope({ path: (await servedStore(mainDataDir())).file, journal: null, busyTimeout: 5000 });
   let block;
   try {
     const args = { operation: 'total', groupBy: 'category', from: '2026-01', to: '2026-10' };
@@ -377,12 +377,12 @@ test('@mobile drill rows keep keyboard focus and a reopened stale block can ask 
   expect(statusReads).toBe(1);
   await noSidewaysScroll(page);
 
-  const changed = new DatabaseSync((await servedStore(mainDataDir())).file);
+  const changed = await openScope({ path: (await servedStore(mainDataDir())).file, journal: null, busyTimeout: 5000 });
   try {
     const source = block.snapshot.rows[0].cells[1].fig.provenance.sources[0].ids[0];
     const row = await changed.prepare('SELECT * FROM transactions WHERE id = ?').get(source);
     await changed.prepare('INSERT INTO transactions (account_id, date, amount, description) VALUES (?, ?, ?, ?)').run(row.account_id, '2026-10-15', row.amount, row.description);
-  } finally { changed.close(); }
+  } finally { await changed.close(); }
   await page.reload();
   await expect(table).toContainText('Stale');
   await expect(table).toContainText('Your data changed after this answer.');

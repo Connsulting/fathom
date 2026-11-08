@@ -17,7 +17,7 @@ test('validation derives totals and duplicate counts through the actual persiste
     assert.equal(v.counts.rows.transaction, 2);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 0);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM sources').get()).n, 0);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('P&L grouping sums signed detail with every operand and its transform retained', async () => {
@@ -35,7 +35,7 @@ test('P&L grouping sums signed detail with every operand and its transform retai
     assert.equal(resolveField(s, v.rows[0].locator.fields.amount), -14.5);
     assert.equal(v.rows[0].locator.derivedFrom.length, 10);
     assert.deepEqual(p, original);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('mismatch, missing regions, omitted amount refs, unknown identity and invalid dates fail closed', async () => {
@@ -50,7 +50,7 @@ test('mismatch, missing regions, omitted amount refs, unknown identity and inval
     const p = applyLayout(s, recipe());
     s.values.r6 = 'changed';
     assert.equal((await validateImport(x.ctx, p, s)).valid, false);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('a fully inventoried no-total layout says no sheet total to check', async () => {
@@ -61,7 +61,7 @@ test('a fully inventoried no-total layout says no sheet total to check', async (
     assert.equal(v.valid, true);
     assert.equal(v.summary.totalStatus, 'no_sheet_total');
     assert.equal(v.summary.totalMessage, 'No sheet total to check');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('same account/day equal postings retain multiplicity and foreign account aliases remain unresolved', async () => {
@@ -74,7 +74,7 @@ test('same account/day equal postings retain multiplicity and foreign account al
     await x.db.prepare("INSERT INTO accounts (id,name) VALUES ('account-other','Synthetic account')").run();
     const t = await x.source('Account,Date,Amount USD,Description\nSynthetic account,2032-03-02,-12.25,Synthetic purchase\n');
     assert.ok((await validateImport(x.ctx, applyLayout(t, recipe()), t)).errors.includes('account_unresolved'));
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('each cited subtotal reconciles only the group selected by its source columns', async () => {
@@ -85,7 +85,7 @@ test('each cited subtotal reconciles only the group selected by its source colum
     const p = applyLayout(source, layout), v = await validateImport(x.ctx, p, source);
     assert.equal(v.valid, true, JSON.stringify(v.errors)); assert.equal(p.controls.length, 2);
     assert.deepEqual(p.controls.map(c => c.rows), [[0], [1]]);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('model-selected rounding cannot hide contradictory control totals', async () => {
@@ -94,5 +94,5 @@ test('model-selected rounding cannot hide contradictory control totals', async (
     const source = await x.source('Account,Date,Amount USD,Description\naccount-synthetic,2032-03-01,-3.25,Synthetic purchase\nTotal,,-3,Control total\n');
     const proposal = applyLayout(source, recipe()); proposal.controls[0].precision = 'dollar';
     assert.ok((await validateImport(x.ctx, proposal, source)).errors.includes('rounding_precision_unproven'));
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });

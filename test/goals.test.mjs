@@ -28,7 +28,7 @@ const NOW = '2032-03-10T12:00:00.000Z';
 // store whose directory stands in as the household root.
 async function store(t, { demo = false } = {}) {
   const s = demo ? await tempInstance({ mode: 'demo', init: seedDemo }) : await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   const config = { clock: '2032-03-10', dataDir: s.dataDir };
   const household = demo ? await s.household(config) : null;
   const root = household ? household.root : s.dataDir;

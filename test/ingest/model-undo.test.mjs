@@ -17,7 +17,7 @@ test('shared Undo restores the previous same-file interpretation and retains sou
     assert.equal((await x.db.prepare('SELECT count(*) n FROM files').get()).n, 1);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM import_model_spend').get()).n, 2);
     assert.equal((await x.db.prepare('SELECT status FROM import_batches ORDER BY rowid DESC LIMIT 1').get()).status, 'undone');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('Undo refuses another actor, missing scope and changed after-state without partial effects', async () => {
@@ -33,7 +33,7 @@ test('Undo refuses another actor, missing scope and changed after-state without 
       await assert.rejects(undoAction(ctx, approved.receipt.id, 'write:imports'), e => e.code === (refusal === 'stale' ? 'conflict' : 'forbidden'));
       assert.deepEqual(await x.db.prepare('SELECT * FROM transactions ORDER BY id').all(), before);
       assert.equal((await x.db.prepare('SELECT status FROM import_batches').get()).status, 'committed');
-    } finally { x.close(); }
+    } finally { await x.close(); }
   }
 });
 test('Undo first approval makes the layout require approval again', async () => {
@@ -44,7 +44,7 @@ test('Undo first approval makes the layout require approval again', async () => 
     assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 0);
     const next = await upload(x, transactions('-15.00'));
     assert.equal(next.status, 'needs_confirmation');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 
@@ -72,7 +72,7 @@ test('Undo survives the real category guessing job but refuses a later owner cor
         assert.equal((await x.db.prepare('SELECT count(*) n FROM transaction_category_guesses').get()).n,0);
         assert.equal((await x.db.prepare("SELECT count(*) n FROM confirm_items WHERE kind='transaction_category'").get()).n,0);
       }
-    } finally { x.close(); }
+    } finally { await x.close(); }
   }
 });
 
@@ -92,5 +92,5 @@ test('grouped reinterpret Undo retains the active file status and permits anothe
     const proposal = JSON.parse((await x.db.prepare('SELECT proposal FROM import_proposals ORDER BY rowid DESC LIMIT 1').get()).proposal);
     const staged = await retryFile(x.db,second.fileId,{...x.opts,scopes:x.ctx.scopes,mode:'reinterpret',fake:[{text:JSON.stringify({rows:proposal.rows,coverage:proposal.coverage,completeness:proposal.completeness})}]});
     assert.equal(staged.status,'needs_confirmation');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });

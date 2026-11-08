@@ -48,7 +48,7 @@ export async function openCliHousehold(config, argv) {
   return {
     household, platform, mode, argv: rest,
     async close() {
-      closing ??= (await household.close()).finally(async () => {
+      closing ??= household.close().finally(async () => {
         try { await platform.close(); } catch { /* already closed */ }
       });
       return closing;

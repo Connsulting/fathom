@@ -271,7 +271,7 @@ export async function sideHousehold({ dataDir, env, householdId, engineOptions =
     return {
       household, engine: household.engine, platform,
       async close() {
-        closing ??= (await household.close()).finally(async () => { try { await platform.close(); } catch { /* already closed */ } });
+        closing ??= household.close().finally(async () => { try { await platform.close(); } catch { /* already closed */ } });
         return closing;
       },
     };

@@ -352,7 +352,7 @@ describe('key service', () => {
   });
 
   test('list is ordered by creation and never exposes a hash or a key', async () => {
-    const list = svc.list();
+    const list = await svc.list();
     assert.ok(list.length > 10);
     for (const k of list) {
       assert.deepEqual(Object.keys(k).sort(), LIST_FIELDS);

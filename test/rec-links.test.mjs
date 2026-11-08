@@ -173,7 +173,7 @@ describe('demo store (AC1, AC4)', () => {
     s = await tempDb();
     await seedDemo(s.db);
   });
-  after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
 
   test('every rec in demo/scenario.mjs names its goal kinds and owner as pinned', () => {
     assert.deepEqual(demo.recs.map(r => r.id).sort(), Object.keys(DEMO_MAP).sort());

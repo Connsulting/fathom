@@ -258,6 +258,7 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
   const drains = new Map();
   const streams = new Map();
   const stale = new Set(); // contexts replaced by a newer generation, closed once released
+  const building = new Map(); // householdId and generation -> context being built
   let started = false;
   let closed = false;
 
@@ -288,20 +289,32 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
     const generation = Number(row.generation);
     const entry = entries.get(householdId);
     if (entry && entry.generation === generation) return entry.context;
-    if (entry) {
-      entries.delete(householdId);
-      retire(entry.context);
+    // One build per household generation at a time: concurrent requests share it.
+    const key = `${householdId}\0${generation}`;
+    if (!building.has(key)) {
+      building.set(key, (async () => {
+        const current = entries.get(householdId);
+        if (current) {
+          entries.delete(householdId);
+          retire(current.context);
+        }
+        let context;
+        try {
+          context = await build({ householdId, generation, mode: row.mode, relativeRoot: row.storage_root, platform, config, secrets, transportOptions, dispatcher, engineOptions });
+        } catch (err) {
+          console.error('fathom: household runtime unavailable', codeOf(err));
+          return null;
+        }
+        if (closed) {
+          await context.close().catch(() => {});
+          return null;
+        }
+        entries.set(householdId, { context, generation });
+        if (started) startHousehold(context);
+        return context;
+      })().finally(() => building.delete(key)));
     }
-    let context;
-    try {
-      context = build({ householdId, generation, mode: row.mode, relativeRoot: row.storage_root, platform, config, secrets, transportOptions, dispatcher, engineOptions });
-    } catch (err) {
-      console.error('fathom: household runtime unavailable', codeOf(err));
-      return null;
-    }
-    entries.set(householdId, { context, generation });
-    if (started) startHousehold(context);
-    return context;
+    return building.get(key);
   }
 
   return {

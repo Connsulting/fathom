@@ -206,7 +206,7 @@ export function streamPacket(res, packet) {
   return new Promise(async (resolve) => {
     let done = false;
     let s = null;
-    const finish = async () => { if (done) return; done = true; s?.destroy(); (await packet.cleanup()).finally(resolve); };
+    const finish = async () => { if (done) return; done = true; s?.destroy(); packet.cleanup().finally(resolve); };
     // The client may have gone while the packet was being built: remove it without streaming.
     if (res.destroyed || res.writableEnded || res.socket?.destroyed) { await finish(); return; }
     res.writeHead(200, {

@@ -79,7 +79,7 @@ async function installPacer(page) {
             if (done) {
               if (buf) ctl.enqueue(enc.encode(buf));
               buf = '';
-              ctl.close();
+              await ctl.close();
               return;
             }
             const { value, done: end } = await reader.read();

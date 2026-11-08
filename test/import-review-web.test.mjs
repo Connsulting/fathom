@@ -234,7 +234,7 @@ test('waiting rows carry the review fields, with each column bound to its layout
     assert.ok(summary.startsWith('2 transactions'), summary);
     assert.ok(summary.includes('-$10 in total.'), summary);
     assert.ok(summary.endsWith('Totals match the sheet.'), summary);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('a stale proposal redraws with its current summary and a plain status line', async () => {
@@ -261,7 +261,7 @@ test('note actions state each change from the stored proposal and the expected p
     assert.deepEqual(file.proposal.actions, [{ text: 'Payroll true-up marked done' }, { kind: 'expected', subject: 'payroll provider', direction: 'inflow',
       dueDate: '2032-03-09', datePrecision: 'day', amount: null, phrase: 'next Tuesday', timezone: 'America/New_York' }]);
     assert.equal(proposalSummary(file), 'From your note: Payroll true-up marked done; expected incoming payment from payroll provider on Mar 9, 2032 (from "next Tuesday", America/New_York), amount unknown.');
-  } finally { x.close(); }
+  } finally { await x.close(); }
   const y = await updateFixture();
   try {
     await stageUpdate(y.ctx, { source: y.source, actions: [{ ...y.step, args: { ...y.step.args, checked: false } }, y.expected] });
@@ -269,7 +269,7 @@ test('note actions state each change from the stored proposal and the expected p
     assert.equal(file.proposal.status, 'needs_clarification');
     assert.equal(file.proposal.actions[0].text, 'Payroll true-up reopened');
     assert.equal(file.proposal.actions[1].phrase, null, 'an unresolved relative date is not shown as resolved');
-  } finally { y.close(); }
+  } finally { await y.close(); }
 });
 
 test('a waiting file carries its stored reason as reasonCode', async () => {
@@ -285,5 +285,5 @@ test('a waiting file carries its stored reason as reasonCode', async () => {
     const file = (await ingestState(x.db)).waiting.find((f) => f.id === r.fileId);
     assert.equal(file.reasonCode, 'file_limit');
     assert.equal(proposalControl(proposalStatus(file), { engineOn: true, reasonCode: proposalReason(file) }), 'upload');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });

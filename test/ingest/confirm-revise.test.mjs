@@ -70,7 +70,7 @@ async function pairedStore() {
 async function withTwoStores(fn) {
   const x = await pairedStore();
   const y = await pairedStore();
-  try { return await fn(x, y); } finally { x.close(); y.close(); }
+  try { return await fn(x, y); } finally { await x.close(); await y.close(); }
 }
 
 const STATUS = { final: 409, not_answered: 409, stale: 409, bad_option: 400, not_found: 404 };

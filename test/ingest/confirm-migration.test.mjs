@@ -48,28 +48,7 @@ const accountOf = (mask) => {
 };
 
 async function applyThrough(db, target) {
-  const done = new Set((await db.prepare('SELECT id FROM schema_migrations').all()).map((row) => row.id));
-  const record = db.prepare('INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)');
-  const applied = [];
-  for (const migration of DB.listMigrations().filter((m) => m.id <= target && !done.has(m.id))) {
-    const sql = readFileSync(migration.file, 'utf8');
-    const rebuild = /^-- REBUILDS_TABLE\b/m.test(sql);
-    if (rebuild) db.exec('PRAGMA foreign_keys = OFF');
-    db.exec('BEGIN');
-    try {
-      await db.applySchema(sql);
-      assert.deepEqual((await db.foreignKeyCheck()), []);
-      await record.run(migration.id, migration.name, AT);
-      db.exec('COMMIT');
-      applied.push(migration.id);
-    } catch (err) {
-      db.exec('ROLLBACK');
-      throw err;
-    } finally {
-      if (rebuild) db.exec('PRAGMA foreign_keys = ON');
-    }
-  }
-  return applied;
+  return (await DB.migrate(db, { through: target })).applied;
 }
 
 async function storeAt014() {
@@ -80,10 +59,10 @@ async function storeAt014() {
   await made.db.close();
   const file = join(made.root, 'fathom.sqlite');
   for (const f of [file, `${file}-wal`, `${file}-shm`]) rmSync(f, { force: true });
-  const db = DB.openDb(file);
+  const db = await DB.openDb(file);
   await db.applySchema('CREATE TABLE IF NOT EXISTS schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
   await applyThrough(db, 14);
-  DB.setSetting(db, 'mode', 'real');
+  await DB.setSetting(db, 'mode', 'real');
   const config = {
     dataDir, platformKeyFile: keys.platformKeyFile, mcpSecretFile: keys.mcpSecretFile,
     engine: 'off', clock: null, demo: false, port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev',
@@ -144,7 +123,7 @@ async function populate(db) {
 async function withOldStore(fn) {
   const s = await storeAt014();
   try {
-    assert.equal(DB.schemaVersion(s.db), 14, 'precondition: the store is at 014');
+    assert.equal(await DB.schemaVersion(s.db), 14, 'precondition: the store is at 014');
     const ids = await populate(s.db);
     return await fn(s, ids);
   } finally { await s.close(); }
@@ -161,13 +140,13 @@ test('migrate applies the confirm-context migration, creates exactly its four ta
   assert.ok(mig.id > 14);
   await applyThrough(s.db, mig.id - 1);
   assert.deepEqual(await snapshot(s.db), before, 'preceding migrations keep every stored row');
-  const tables = DB.listTables(s.db);
+  const tables = await DB.listTables(s.db);
   for (const t of Object.keys(NEW_TABLES)) assert.ok(!tables.includes(t), `precondition: ${t} is new`);
   assert.deepEqual(await applyThrough(s.db, mig.id), [mig.id]);
-  const added = DB.listTables(s.db).filter((t) => !tables.includes(t)).sort();
+  const added = await DB.listTables(s.db).filter((t) => !tables.includes(t)).sort();
   assert.deepEqual(added, Object.keys(NEW_TABLES).sort(), 'exactly the four tables');
   for (const [t, cols] of Object.entries(NEW_TABLES)) assert.deepEqual(await columnsOf(s.db, t), cols, `${t} columns`);
-  for (const t of tables) assert.ok(DB.listTables(s.db).includes(t), `${t} is kept`);
+  for (const t of tables) assert.ok(await DB.listTables(s.db).includes(t), `${t} is kept`);
   assert.deepEqual(await snapshot(s.db), before, 'every stored row is unchanged');
   assert.deepEqual((await DB.migrate(s.db)).applied, DB.listMigrations().filter((m) => m.id > mig.id).map((m) => m.id));
   const later = await snapshot(s.db);

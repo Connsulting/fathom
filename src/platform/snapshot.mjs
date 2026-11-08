@@ -193,7 +193,7 @@ export async function createSourceSnapshot({
     manifest = packed.manifest;
     archive = encrypt(k, packed.plain);
   } finally {
-    own?.close();
+    await own?.close();
   }
   const partial = partialName(out, operationId);
   rmSync(partial, { force: true });

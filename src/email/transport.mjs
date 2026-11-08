@@ -254,7 +254,7 @@ async function smtpSend(createSmtpTransport, settings, msg) {
     if (err instanceof EmailError) throw err;
     throw new EmailError(smtpCode(err));
   } finally {
-    try { smtp?.close?.(); } catch { /* already closed */ }
+    try { await smtp?.close?.(); } catch { /* already closed */ }
   }
 }
 

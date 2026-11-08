@@ -568,7 +568,7 @@ test('bootstrap CLI requires explicit admin, reissues only before enrollment, an
     assert.equal(await store.findUser('another@example.test'), null);
     assert.equal((await store.membership(user.id, hh)).role, 'admin');
     assert.deepEqual(await financialDump(temp.db), initial);
-  } finally { temp.close(); rmSync(temp.dataDir, { recursive: true, force: true }); }
+  } finally { await temp.close(); rmSync(temp.dataDir, { recursive: true, force: true }); }
 });
 
 test('bootstrap CLI refuses demo, absent database, an unmigrated real store and invalid public origin without seeding financial data', T, async () => {
@@ -605,7 +605,7 @@ test('bootstrap CLI refuses demo, absent database, an unmigrated real store and 
     assert.equal(await store.findUser('admin@example.test'), null);
     assert.deepEqual(await financialDump(real.db), realInitial);
   } finally {
-    for (const temp of [demoInstance, real, legacy]) { temp.close(); rmSync(temp.dataDir, { recursive: true, force: true }); }
+    for (const temp of [demoInstance, real, legacy]) { await temp.close(); rmSync(temp.dataDir, { recursive: true, force: true }); }
     rmSync(missing, { recursive: true, force: true });
   }
 });
@@ -626,7 +626,7 @@ test('email failure revokes the bootstrap link and writes only a fixed sanitized
     assert.ok(await createAuthStore(temp.platform).invitation(linkFrom(good.stdout).token));
     assert.equal(await liveInvitations(temp.platform), 1);
     assert.equal((await temp.db.prepare('SELECT count(*) AS n FROM email_sends').get()).n, 0);
-  } finally { temp.close(); rmSync(temp.dataDir, { recursive: true, force: true }); }
+  } finally { await temp.close(); rmSync(temp.dataDir, { recursive: true, force: true }); }
 });
 
 test('adding a credential excludes every current credential and malformed verification preserves both accounts', T, async () => {
@@ -731,7 +731,7 @@ test('recovery does not await mail latency, sanitizes send failures and revokes 
     clearTimeout(timer);
     rejectMail(new Error('synthetic transport closed'));
     await app.close();
-    temp.close();
+    await temp.close();
     rmSync(temp.dataDir, { recursive: true, force: true });
   }
 });
@@ -750,5 +750,5 @@ test('bootstrap CLI refuses after any member has enrolled and preserves that acc
     assert.equal(await store.findUser('new-admin@example.test'), null);
     assert.equal((await store.session(member.token)).id, member.user.id);
     assert.deepEqual(await financialDump(temp.db), initial);
-  } finally { temp.close(); rmSync(temp.dataDir, { recursive: true, force: true }); }
+  } finally { await temp.close(); rmSync(temp.dataDir, { recursive: true, force: true }); }
 });

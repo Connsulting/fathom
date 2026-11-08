@@ -92,7 +92,7 @@ describe('planner default owners (AC2)', () => {
 describe('owner action through recAction (AC2)', () => {
   let s;
   before(async () => { s = await demoStore(); });
-  after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
 
   test('AC4: setting an owner stores it with the override flag, records a ui event and returns the scenario', async () => {
     const before = (await s.db.prepare("SELECT status FROM recs WHERE id = 'va529'").get()).status;
@@ -204,7 +204,7 @@ describe('MCP owner tool and linked recs (AC2, AC4)', () => {
     s = await demoStore();
     ctx = { db: s.db, now: new Date('2026-11-05T15:00:00Z') };
   });
-  after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
 
   test('act_on_recommendation.owner is a write:recs tool taking id and owner', () => {
     const t = getTool('act_on_recommendation');

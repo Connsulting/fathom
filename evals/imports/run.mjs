@@ -127,7 +127,7 @@ async function environment(engineFactory) {
   const inner = await createRuntimeEngine({ db: x.db, config: { engine: 'fake', fakeStreamMs: 0 } });
   const engine = engineFactory(inner);
   const app = await serveAppFixture({ ...x, engine, authenticated: true });
-  return { ...x, app, engine, async close() { await app.household.scheduler.stop(); await app.close(); x.close(); } };
+  return { ...x, app, engine, async close() { await app.household.scheduler.stop(); await app.close(); await x.close(); } };
 }
 async function upload(x, c) {
   const form = new FormData(); form.append('files', new Blob([c.bytes]), `synthetic.${c.format === 'text' ? 'txt' : c.format}`);

@@ -56,7 +56,7 @@ test('household-local proposal versions, batches and mapping approval cannot cro
     await assert.rejects(async () => await a.prepare("UPDATE import_batches SET proposal_version = 99").run());
     await assert.rejects(async () => await a.prepare("UPDATE import_proposals SET status = 'fabricated'").run());
     await assert.rejects(async () => await a.prepare('UPDATE import_proposals SET version = 0').run());
-  } finally { a.close(); b.close(); }
+  } finally { await a.close(); await b.close(); }
 });
 
 test('migration 034 preserves populated proposal, mapping and financial rows', async () => {

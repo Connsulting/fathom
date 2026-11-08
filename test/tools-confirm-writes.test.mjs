@@ -10,6 +10,7 @@ import { recAnswers } from '../src/api/fact-answers.mjs';
 import { markItem } from '../src/api/yearend-handlers.mjs';
 import { yearendChecklist } from '../src/yearend/expected.mjs';
 import { setSetting } from '../src/store/db.mjs';
+import { rehearse } from '../src/storage/index.mjs';
 import { proposalTools, proposalBasis } from '../src/actions/proposals.mjs';
 
 async function setup(t){const s=await realStore();t.after(async ()=>await s.close());await setSetting(s.db,'clock','2032-03-10');
@@ -211,13 +212,13 @@ test('reopen and revise proposals retain dependent answers and their Undo rows',
  const dependent=(await ask(s.db,{kind:'transaction_category',subject:String(transaction),question:'Synthetic category',options:[{id:'Groceries',label:'Groceries'}],context:{transactionId:transaction},now:NOW})).id;
  await recordAutoAnswer(s.db,dependent,'Groceries',{rule:'synthetic',evidence:{text:'Synthetic evidence',basis:[root],ancestors:[root]},now:NOW});
  for(const args of [{ids:[root]},{items:[{id:root,answer:'joint'}],revise:true}]){
-  const basis=async ()=>await proposalBasis(s.db,'answer',['write:confirm'],args),before=await basis();
+  const basis=async (db=s.db)=>await proposalBasis(db,'answer',['write:confirm'],args),before=await basis();
   await s.db.prepare("INSERT INTO transactions(account_id,date,amount,description) VALUES ('manual','2032-03-02',-7,'Unrelated posting')").run();
   assert.equal(await basis(),before);
-  s.db.exec('SAVEPOINT dependent_change');
-  await s.db.prepare("UPDATE transaction_category_corrections SET category='Medical' WHERE transaction_id=?").run(transaction);
-  assert.notEqual(await basis(),before);
-  s.db.exec('ROLLBACK TO dependent_change');s.db.exec('RELEASE dependent_change');
+  await rehearse(s.db,async h=>{
+   await h.prepare("UPDATE transaction_category_corrections SET category='Medical' WHERE transaction_id=?").run(transaction);
+   assert.notEqual(await basis(h),before);
+  });
  }
 });
 

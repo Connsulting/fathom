@@ -36,10 +36,8 @@ async function storeAtMain() {
   )`);
   const record = db.prepare('INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)');
   for (const m of listMigrations().filter(m => m.id <= 6)) {
-    db.exec('BEGIN');
     await db.applySchema(readFileSync(m.file, 'utf8'));
     await record.run(m.id, m.name, AT);
-    db.exec('COMMIT');
   }
   return db;
 }

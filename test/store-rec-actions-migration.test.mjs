@@ -16,10 +16,8 @@ async function storeBefore() {
   const db = await openScope({ path: ':memory:', journal: null, busyTimeout: 0 });
   await db.applySchema(`CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)`);
   for (const m of listMigrations().filter(x => x.id < TARGET.id)) {
-    db.exec('BEGIN');
     await db.applySchema(readFileSync(m.file, 'utf8'));
     await db.prepare('INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)').run(m.id, m.name, 'x');
-    db.exec('COMMIT');
   }
   const rec = db.prepare(`INSERT INTO recs (id, def, status, wake, tasks_done, updated_at, sort, pack_id)
                           VALUES (?, '{}', ?, ?, '[true,false]', '2026-11-01T00:00:00Z', ?, 'p')`);

@@ -258,10 +258,10 @@ test('MCP rebuild completes inline and all allowed jobs use the household schedu
 
 test('large import lists keep newest rows within the tool result bound and preserve API parity', async () => {
   const ctx = await setup();
-  const insert = ctx.db.prepare('INSERT INTO files(id,name,uploaded_at,status) VALUES (?,?,?,?)');
-  ctx.db.exec('BEGIN');
-  for (let i = 0; i < 1500; i++) await insert.run(`file-${i}`, 'Synthetic file ' + 'x'.repeat(180), now, 'imported');
-  ctx.db.exec('COMMIT');
+  await ctx.db.transaction(async tx => {
+    const ins = tx.prepare('INSERT INTO files(id,name,uploaded_at,status) VALUES (?,?,?,?)');
+    for (let i = 0; i < 1500; i++) await ins.run(`file-${i}`, 'Synthetic file ' + 'x'.repeat(180), now, 'imported');
+  });
   await ctx.db.prepare('UPDATE files SET removed_at = ? WHERE id = ?').run(now, 'file-1499');
   const result = await callTool('household', { operation: 'imports' }, ctx);
   assert.equal(result.truncated, true);

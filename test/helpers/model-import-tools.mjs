@@ -41,7 +41,7 @@ export async function modelApp(t) {
     return await inner.call({ ...request, fake: [{ text: request.purpose === 'title' ? '{"title":"Synthetic import"}' : '{}', costUsd: 0 }] });
   } };
   const app = await serveAppFixture({ ...x, engine, authenticated: true });
-  t.after(async () => { await app.household.scheduler.stop(); await app.close(); x.close(); });
+  t.after(async () => { await app.household.scheduler.stop(); await app.close(); await x.close(); });
   const { key } = app.keys.create({ householdId: app.household.householdId, userId: app.session.user.id, name: 'Synthetic import key', scopes: SCOPES });
   return { ...x, app, engine, responses, get extracts() { return extracts; },
     set chat(value) { chat = value; }, set onExtract(value) { onExtract = value; }, set onChat(value) { onChat = value; },

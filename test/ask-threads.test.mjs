@@ -65,13 +65,11 @@ async function storeAt007(file, init) {
     await db.applySchema('CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
     const record = db.prepare("INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, '2026-10-01T00:00:00.000Z')");
     for (const m of listMigrations().filter(x => x.id <= 7)) {
-      db.exec('BEGIN');
       await db.applySchema(readFileSync(m.file, 'utf8'));
       await record.run(m.id, m.name);
-      db.exec('COMMIT');
     }
     assert.ok(!(await db.columns('conversations')).some(c => c.name === 'title'), 'the fixture is pre-threads');
-    init(db);
+    await init(db);
   } finally {
     await db.checkpoint();
     await db.close();

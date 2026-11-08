@@ -63,6 +63,6 @@ test('authenticated HTTP review guards, exact owner statement, versions, foreign
     assert.equal((await x.db.prepare('SELECT count(*) n FROM expected_transactions').get()).n, 0);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM files WHERE id=?').get(note.fileId)).n, 1);
   } finally {
-    await new Promise(resolve => server.close(resolve)); runtimes.close(); x.close();
+    await new Promise(resolve => server.close(resolve)); runtimes.close(); await x.close();
   }
 });

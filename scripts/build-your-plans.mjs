@@ -53,7 +53,7 @@ async function main() {
     if (e instanceof BudgetExceededError) fail("this month's engine budget is used up; raise the cap first.");
     fail(`the build failed (${e && e.name ? e.name : 'error'}).`);
   } finally {
-    cli.close();
+    await cli.close();
   }
 }
 

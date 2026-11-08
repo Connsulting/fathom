@@ -105,7 +105,7 @@ const codeOf = err => [err && err.code, err && err.name].find(v => typeof v === 
 // Survivors of merges made before the carry-over existed get their institution and last 4 from
 // their SimpleFIN snapshot, in every served household. A failure never stops startup.
 async function backfillMerged(runtimes) {
-  for (const id of runtimes.list()) {
+  for (const id of await runtimes.list()) {
     try {
       const household = runtimes.get(id);
       if (household) await backfillMergedIdentity(household.db);
@@ -147,7 +147,7 @@ async function startPublicDemo(config, platform) {
   try {
     await listen(server, config);
   } catch (err) {
-    demo.close();
+    await demo.close();
     await platform.close();
     throw err;
   }
@@ -156,7 +156,7 @@ async function startPublicDemo(config, platform) {
     server, platform, runtimes: null, url: urlOf(server, config),
     close() {
       closing ??= new Promise(done => {
-        server.close(async () => { demo.close(); await platform.close(); done(); });
+        server.close(async () => { await demo.close(); await platform.close(); done(); });
         server.closeAllConnections();
       });
       return closing;

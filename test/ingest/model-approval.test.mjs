@@ -24,7 +24,7 @@ test('staging writes no ledger or mapping; explicit actor-bound approval commits
     assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 2);
     assert.equal((await x.db.prepare('SELECT approval_status FROM column_mappings').get()).approval_status, 'approved');
     await assert.rejects(reviewImport(x.ctx, { proposalId: staged.proposalId, version: 1, decision: 'approve', evidence: 'yes' }), e => e.code === 'proposal_stale');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('underlying fact scopes are checked before any mixed proposal effect', async () => {
@@ -37,7 +37,7 @@ test('underlying fact scopes are checked before any mixed proposal effect', asyn
     await assert.rejects(reviewImport(x.ctx, { proposalId: staged.proposalId, version: 1, decision: 'approve', evidence: 'yes' }), e => e.code === 'forbidden');
     assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 0);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM action_receipts').get()).n, 0);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('identical source preparation reuses its staged interpretation without another engine call', async () => {
@@ -48,7 +48,7 @@ test('identical source preparation reuses its staged interpretation without anot
     const out = await prepareImport(x.ctx, { file: { fileId: source.fileId, format: source.format, bytes: source.bytes } });
     assert.equal(out.proposalId, staged.proposalId); assert.equal(out.version, staged.version);
     assert.equal(out.status, 'needs_confirmation');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('stale stored state or changed source refuses atomically without mapping, receipt or batch approval', async () => {
@@ -63,7 +63,7 @@ test('stale stored state or changed source refuses atomically without mapping, r
       if (changed === 'generation') ctx = { ...ctx, household: { ...ctx.household, isCurrent: () => false } };
       await assert.rejects(reviewImport(ctx, { proposalId: staged.proposalId, version: 1, decision: 'approve', evidence: 'yes' }), e => e.code === 'proposal_stale');
       for (const table of ['transactions', 'column_mappings', 'action_receipts', 'import_batches']) assert.equal((await x.db.prepare(`SELECT count(*) n FROM ${table}`).get()).n, 0);
-    } finally { x.close(); }
+    } finally { await x.close(); }
   }
 });
 
@@ -79,7 +79,7 @@ test('corrections retain exact owner evidence, queue a fresh version and invalid
     await assert.rejects(reviewImport(x.ctx, { proposalId: staged.proposalId, version: 1, decision: 'approve', evidence: 'yes' }), e => e.code === 'proposal_stale');
     await assert.rejects(reviewImport(x.ctx, { proposalId: staged.proposalId, version: 2, decision: 'approve', evidence: 'yes' }), e => e.code === 'bad_input');
     assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 0);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('mismatched owner evidence and missing import scope refuse without effects', async () => {
@@ -91,7 +91,7 @@ test('mismatched owner evidence and missing import scope refuse without effects'
     await assert.rejects(reviewImport({ ...x.ctx, ownerText: 'wait' }, args), e => e.code === 'bad_input');
     await assert.rejects(reviewImport({ ...x.ctx, scopes: [] }, args), e => e.code === 'forbidden');
     assert.equal((await x.db.prepare('SELECT count(*) n FROM action_receipts').get()).n, 0);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('authorization revoked during source read refuses the late commit', async () => {
@@ -103,7 +103,7 @@ test('authorization revoked during source read refuses the late commit', async (
     await assert.rejects(runWithPrincipal({ check: () => authorized }, async () => reviewImport({ ...x.ctx, household },
       { proposalId: staged.proposalId, version: 1, decision: 'approve', evidence: 'yes' })), e => e.code === 'forbidden');
     assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 0);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('a corrected interpretation needs a fresh acceptance of its own version', async () => {
@@ -117,7 +117,7 @@ test('a corrected interpretation needs a fresh acceptance of its own version', a
     assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 0);
     const out = await reviewImport({ ...x.ctx, ownerText: 'looks right' }, { proposalId: staged.proposalId, version: 2, decision: 'approve', evidence: 'looks right' });
     assert.equal(out.status, 'imported'); assert.equal(out.version, 2);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('unrelated uploads and an independent approval do not stale another file', async () => {
@@ -130,7 +130,7 @@ test('unrelated uploads and an independent approval do not stale another file', 
     await x.source('Account,Date,Amount USD,Description\naccount-synthetic,2032-03-07,-8,Unrelated upload\n');
     for (const p of [first, second]) assert.equal((await reviewImport(x.ctx, { proposalId: p.proposalId, version: 1, decision: 'approve', evidence: 'yes' })).status, 'imported');
     assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 2);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('changed duplicate preview refuses with a meaningful diff and restages a fresh approvable version', async () => {
@@ -149,7 +149,7 @@ test('changed duplicate preview refuses with a meaningful diff and restages a fr
     await assert.rejects(reviewImport(x.ctx, { proposalId: second.proposalId, version: 1, decision: 'approve', evidence: 'yes' }), e => e.code === 'proposal_stale');
     assert.equal((await reviewImport(x.ctx, { proposalId: second.proposalId, version: 2, decision: 'approve', evidence: 'yes' })).status, 'imported');
     assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 1);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('a source removed or account archived after staging cannot be restored by an old approval', async () => {
@@ -163,6 +163,6 @@ test('a source removed or account archived after staging cannot be restored by a
       assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 0);
       assert.equal((await x.db.prepare('SELECT count(*) n FROM action_receipts').get()).n, 0);
       if (table === 'files') await assert.rejects(prepareImport(x.ctx, { file: { fileId: source.fileId, format: source.format, bytes: source.bytes } }), e => e.code === 'bad_input');
-    } finally { x.close(); }
+    } finally { await x.close(); }
   }
 });

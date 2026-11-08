@@ -487,7 +487,7 @@ for (const row of ROWS) {
           assert.equal(rowOf(harness(after).screens.addFiles('add'), id), null, `${where}: gone from Files`);
         } else assert.ok(still, `${where}: the documented next state is still listed`);
       }
-    } finally { x.close(); }
+    } finally { await x.close(); }
   });
 
   test(`${row.name}: an identical re-upload`, async () => {
@@ -517,7 +517,7 @@ for (const row of ROWS) {
         assert.ok((await ingestState(x.db)).waiting.some((f) => f.id === id), row.name);
         assert.ok(!text(await uploadResultHtml(again)).includes('Already imported'), `${row.name}: not shown as already imported`);
       }
-    } finally { x.close(); }
+    } finally { await x.close(); }
   });
 }
 
@@ -553,7 +553,7 @@ test('a busy or locked store is a transient failure: retried once, then left for
 
     // The owner's Retry still imports it.
     assert.equal((await P.retryFile(x.db, r.fileId, x.opts)).status, 'imported');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('resumeImports skips a file this household is already routing, then resumes it', async () => {
@@ -566,7 +566,7 @@ test('resumeImports skips a file this household is already routing, then resumes
       assert.equal((await fileRowOf(x.db, id)).status, 'pending');
     } finally { x.household.inFlight.delete(id); }
     assert.deepEqual((await P.resumeImports(x.db, bg(x))).resumed, [{ fileId: id, status: 'imported' }]);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('a manual Retry of a failed file is accepted; an imported file is still refused', async () => {
@@ -575,7 +575,7 @@ test('a manual Retry of a failed file is accepted; an imported file is still ref
     const failed = await P.ingestFile(x.db, csvOf('manual'), { ...x.opts, parser: throwing(plainError()) });
     assert.equal((await P.retryFile(x.db, failed.fileId, x.opts)).status, 'imported');
     await assert.rejects(P.retryFile(x.db, failed.fileId, x.opts), (e) => e.status === 409 && e.code === 'not_waiting');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('the Imports service counts every unresolved file once and needs the owner over retrying', async () => {
@@ -594,7 +594,7 @@ test('the Imports service counts every unresolved file once and needs the owner 
     // A removed file is not counted.
     await removeFile({ db: x.db, now: NOW, actorId: 'actor-synthetic' }, pendingId);
     assert.equal((await serviceStatus({ db: x.db, now: new Date(NOW) })).imports.files, 3);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('Replace uploads the new file and removes the replaced one only when the new file was read', async () => {
@@ -714,7 +714,7 @@ test('a transient model failure waits for the engine, shows that Fathom tries ag
     // Nothing is left for a further pass.
     assert.deepEqual((await P.resumeImports(x.db, bg(x))).resumed, []);
     assert.equal(eng.calls.length, 2);
-  } finally { eng.restore(); x.close(); }
+  } finally { eng.restore(); await x.close(); }
 });
 
 test('a transient model failure that fails again on its automatic retry asks the owner and is not retried again', async () => {
@@ -738,7 +738,7 @@ test('a transient model failure that fails again on its automatic retry asks the
     assert.deepEqual(second.resumed, []);
     assert.equal(eng.calls.length, 2);
     assert.deepEqual([(await fileRowOf(x.db, r.fileId)).status, (await fileRowOf(x.db, r.fileId)).note], ['needs_clarification', 'model_failed']);
-  } finally { eng.restore(); x.close(); }
+  } finally { eng.restore(); await x.close(); }
 });
 
 // The pinned budget rule (test/ingest/model-budget.test.mjs, unknown failed call): a failure with no
@@ -757,7 +757,7 @@ test('a transient model failure with unknown usage gets its automatic retry only
     assert.equal(eng.calls.length, 1, 'a retry that does not fit never dispatches');
     assert.deepEqual((await P.resumeImports(x.db, bg(x))).resumed, []);
     assert.equal((await serviceStatus({ db: x.db, now: new Date(NOW) })).imports.state, 'needs_you');
-  } finally { eng.restore(); x.close(); }
+  } finally { eng.restore(); await x.close(); }
 });
 
 test('a non-transient model failure asks the owner on the first attempt and is never retried automatically', async () => {
@@ -774,7 +774,7 @@ test('a non-transient model failure asks the owner on the first attempt and is n
     assert.equal((await serviceStatus({ db: x.db, now: new Date(NOW) })).imports.state, 'needs_you');
     assert.deepEqual((await P.resumeImports(x.db, { ...bg(x), fake: await fakeFor(csv) })).resumed, []);
     assert.equal(eng.calls.length, 1);
-  } finally { eng.restore(); x.close(); }
+  } finally { eng.restore(); await x.close(); }
 });
 
 // Review round 2: the model port reports a 429 as rate_limit and a 5xx or lost connection as
@@ -789,7 +789,7 @@ test('a rate limit or an unavailable provider is a transient model failure', asy
       assert.deepEqual([r.status, r.reasonCode], ['waiting_for_engine', 'model_transient'], providerCode);
       const first = await P.resumeImports(x.db, { ...bg(x), fake: await fakeFor(csv) });
       assert.deepEqual(first.resumed, [{ fileId: r.fileId, status: 'needs_confirmation' }], providerCode);
-    } finally { eng.restore(); x.close(); }
+    } finally { eng.restore(); await x.close(); }
   }
 });
 
@@ -808,7 +808,7 @@ test('an identical upload during an in-flight retry answers the unresolved statu
     assert.equal((await fileRowOf(x.db, failed.fileId)).status, 'failed', 'not routed a second time');
     x.opts.household.inFlight.delete(failed.fileId);
     assert.equal((await P.ingestFile(x.db, file, x.opts)).status, 'imported', 'liveness: once free it is routed again');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 // Review round 2: the Add files control of a file that needs readable text (or a smaller file)
@@ -852,7 +852,7 @@ test('the background pass leaves a failed note change proposal to the owner', as
     assert.deepEqual((await P.resumeImports(x.db, bg(x))).resumed, []);
     assert.deepEqual([(await fileRowOf(x.db, failed.fileId)).status, (await fileRowOf(x.db, failed.fileId)).note], ['failed', 'store_locked']);
     assert.equal((await serviceStatus({ db: x.db, now: new Date(NOW) })).imports.state, 'needs_you');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('persistImport records warning rows per code, at most five, and warningText names them in plain words', async () => {
@@ -894,7 +894,7 @@ test('persistImport records warning rows per code, at most five, and warningText
     assert.equal(emptyCounts.warningCodes.empty_file, 1);
     assert.equal(emptyCounts.warningRows?.empty_file, undefined);
     assert.equal(emptyCounts.warningMore?.empty_file, undefined);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 // warningText may return an array of sentences or one string of sentences; both read as lines.
@@ -942,7 +942,7 @@ test('a waiting row with warnings shows the plain lines under its cause', async 
     const row = rowOf(harness(await ingestState(x.db)).screens.addFiles('add'), r.fileId);
     assert.match(row, /data-warning/);
     assert.ok(text(row).includes('Row 3 had no readable date or amount and was skipped.') || text(row).includes('Row 3 had no readable date or amount and were skipped.'), text(row));
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('a low-confidence fact asks in plain words and never shows the raw key', async () => {
@@ -967,7 +967,7 @@ test('a low-confidence fact asks in plain words and never shows the raw key', as
     }
     const dependents = (await x.db.prepare("SELECT question FROM confirm_items WHERE kind = 'fact_check' AND subject LIKE '%household.dependents%'").get()).question;
     assert.match(dependents, /dependents/);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('healthLine leaves failed files to the Imports service line', () => {

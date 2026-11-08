@@ -148,7 +148,7 @@ export async function createPublicDemoHandler(config, { platform: basePlatform }
     },
     async close() {
       clearInterval(timer);
-      for (const runtime of runtimes.values()) runtime.close();
+      for (const runtime of runtimes.values()) await runtime.close();
       runtimes.clear();
       await control.close();
     },

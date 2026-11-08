@@ -20,7 +20,7 @@ test('approved repeats apply every current row with no engine call or layout pro
     assert.equal((await x.db.prepare('SELECT sum(amount) n FROM transactions').get()).n, -17);
     const mapping = (await x.db.prepare('SELECT mapping FROM column_mappings').get()).mapping;
     assert.ok(!mapping.includes('12.25')); assert.ok(!mapping.includes('2032-03-02'));
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('column, sign, unit, and same-header context changes hold and return only their delta', async () => {
@@ -40,7 +40,7 @@ test('column, sign, unit, and same-header context changes hold and return only t
       assert.ok(out.delta.length); assert.ok(out.preserved);
       assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 2);
     }
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('new populated sheets and reordered columns are structural changes, row amounts are not', async () => {
@@ -64,7 +64,7 @@ test('same headers and bytes in a second household cannot reuse another househol
     assert.equal((await b.db.prepare('SELECT count(*) n FROM column_mappings').get()).n, 0);
     assert.equal((await b.db.prepare('SELECT count(*) n FROM transactions').get()).n, 0);
     await assert.rejects(reviewImport(b.ctx, { proposalId: staged.proposalId, version: 1, decision: 'approve', evidence: 'yes' }), e => e.code === 'not_found');
-  } finally { a.close(); b.close(); }
+  } finally { await a.close(); await b.close(); }
 });
 
 test('prepareImport discovers its approved layout from headers with no caller recipe or engine call', async () => {
@@ -77,7 +77,7 @@ test('prepareImport discovers its approved layout from headers with no caller re
     assert.equal(out.status, 'imported'); assert.equal(out.confirmationRequired, false);
     assert.equal((await x.db.prepare('SELECT sum(amount) n FROM transactions').get()).n, -19);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM import_model_spend').get()).n, 0);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('multiple approved layouts retain only the relevant changed-header delta across reads', async () => {
@@ -99,7 +99,7 @@ test('multiple approved layouts retain only the relevant changed-header delta ac
     assert.deepEqual(again.delta, held.delta); assert.deepEqual(again.preserved, held.preserved);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM import_model_spend').get()).n, 0);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 2);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('identical headers stay uniquely bound to the right account context', async () => {
@@ -118,7 +118,7 @@ test('identical headers stay uniquely bound to the right account context', async
     assert.equal(result.status, 'needs_clarification');
     assert.deepEqual(result.preserved.bindings, ['account-synthetic']);
     assert.ok(result.delta.some(d => d.field.includes('headers')));
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('an approved sign correction creates a newer mapping version for automatic use', async () => {
@@ -137,7 +137,7 @@ test('an approved sign correction creates a newer mapping version for automatic 
     const repeat = await x.source('Account,Date,Amount USD,Description\naccount-synthetic,2032-03-13,-9,Synthetic newer repeat\n');
     assert.equal((await prepareImport(x.ctx, { file: { fileId: repeat.fileId, format: repeat.format, bytes: repeat.bytes } })).status, 'imported');
     assert.equal((await x.db.prepare("SELECT amount FROM transactions WHERE date='2032-03-13'").get()).amount, 9);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('non-USD layouts wait with a reason code rather than throwing or dispatching', async () => {
@@ -147,7 +147,7 @@ test('non-USD layouts wait with a reason code rather than throwing or dispatchin
     const out = await prepareImport(x.ctx, { file: { fileId: source.fileId, format: source.format, bytes: source.bytes }, layout });
     assert.equal(out.status, 'needs_clarification'); assert.equal(out.reasonCode, 'unsupported_currency');
     assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 0);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('first preparation stages the engine layout, then header discovery repeats with engine paused', async () => {
@@ -164,7 +164,7 @@ test('first preparation stages the engine layout, then header discovery repeats 
     const repeat = await x.source('Account,Date,Amount USD,Description\naccount-synthetic,2032-03-28,-9,New automatic source\n');
     assert.equal((await prepareImport(x.ctx, { file: { fileId: repeat.fileId, format: repeat.format, bytes: repeat.bytes } })).status, 'imported');
     assert.equal((await x.db.prepare('SELECT count(*) n FROM import_model_spend').get()).n, 1);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('a model layout disagreeing with its cited rows stays held without active writes', async () => {
@@ -179,5 +179,5 @@ test('a model layout disagreeing with its cited rows stays held without active w
     assert.equal(first.status, 'needs_clarification'); assert.equal(first.reasonCode, 'layout_mismatch');
     await assert.rejects(reviewImport(x.ctx, { proposalId: first.proposalId, version: 1, decision: 'approve', evidence: 'yes' }), e => e.code === 'bad_input');
     assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 0);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });

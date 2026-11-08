@@ -6,6 +6,7 @@ import { callTool, tools } from '../src/tools/index.mjs';
 import { createToolServer } from '../src/mcp/server.mjs';
 import { proposalTools, proposalBasis } from '../src/actions/proposals.mjs';
 import * as api from '../src/api/accounts.mjs';
+import { rehearse } from '../src/storage/index.mjs';
 
 const context = s => ({ db: s.db, household: s.household, config: s.config, now: NOW, actorId: 'test-owner', channel: 'mcp', ownerText: 'yes, merge these accounts', replan: async () => ({ status: 'ok' }) });
 const account = async (s,id='manual') => await s.db.prepare("INSERT INTO accounts (id,name,inst,kind,owner,mirror) VALUES (?, 'Savings', 'Example Bank', 'cash', 'Your spouse', 'manual')").run(id);
@@ -124,15 +125,15 @@ for (const [operation,params] of [
 test('merge proposals ignore unrelated transactions and retain both accounts and moved rows',async t=>{
  const s=await realStore();t.after(async ()=>await s.close());const ids=await seedDuplicate(s,{sure:true});await account(s,'unrelated');
  const args={id:ids.keep,withId:ids.own,confirm:true,evidence:'yes, merge these accounts'};
- const basis=async ()=>await proposalBasis(s.db,'update_account',['write:accounts'],args), before=await basis();
+ const basis=async (db=s.db)=>await proposalBasis(db,'update_account',['write:accounts'],args), before=await basis();
  await s.db.prepare("INSERT INTO transactions(account_id,date,amount,description) VALUES ('unrelated','2032-03-01',-10,'Unrelated posting')").run();
  await s.db.prepare("INSERT INTO transactions(account_id,date,amount,description) VALUES (?,'2032-03-01',-999,'Unrelated survivor posting')").run(ids.keep);
  assert.equal(await basis(),before);
  for(const id of [ids.keep,ids.own]){
-  s.db.exec('SAVEPOINT target_change');
-  await s.db.prepare("UPDATE accounts SET display_name='Changed' WHERE id=?").run(id);
-  assert.notEqual(await basis(),before);
-  s.db.exec('ROLLBACK TO target_change');s.db.exec('RELEASE target_change');
+  await rehearse(s.db,async h=>{
+   await h.prepare("UPDATE accounts SET display_name='Changed' WHERE id=?").run(id);
+   assert.notEqual(await basis(h),before);
+  });
  }
  await s.db.prepare('UPDATE transactions SET amount=amount-1 WHERE account_id=?').run(ids.own);
  assert.notEqual(await basis(),before);

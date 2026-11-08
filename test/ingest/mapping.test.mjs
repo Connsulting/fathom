@@ -21,5 +21,5 @@ test('a saved approved layout revalidates and imports locally without another co
     const r = await prepareImport(x.ctx, { file: { fileId: next.fileId, format: 'csv', bytes: next.bytes } });
     assert.equal(r.status, 'imported'); assert.equal(r.confirmationRequired, false);
     assert.equal((await x.db.prepare('SELECT count(*) n FROM import_model_spend').get()).n, 0);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });

@@ -84,10 +84,10 @@ export function writeBackupKey(dir, { mode = 0o600, bytes = 32, name = 'backup.k
 
 // Plain connection with no pragmas: reads change nothing, and closing the last connection removes
 // a WAL database's -wal and -shm files the way a stopped server leaves them.
-export async function withDb(file, fn) {
+export async function withDb(file, fn, options = {}) {
   if (!existsSync(file)) throw new Error(`no database at ${file}`);
-  const db = await openScope({ path: file, journal: null, busyTimeout: 5000 });
-  try { return fn(db); } finally { await db.close(); }
+  const db = await openScope({ path: file, journal: null, busyTimeout: 5000, ...options });
+  try { return await fn(db); } finally { await db.close(); }
 }
 
 export async function rows(db, table, order = 'rowid') {
@@ -278,8 +278,7 @@ export function migrateWithFault(dataDir, keyFile, phase, mode) {
 const HOLDER_CHILD = `
 import { openScope } from '../../src/storage/index.mjs';
 const db = await openScope({ path: process.env.HOLD_FILE, journal: null, busyTimeout: 5000 });
-db.exec('PRAGMA journal_mode = WAL');
-db.prepare('SELECT count(*) AS n FROM settings').get();
+await db.prepare('SELECT count(*) AS n FROM settings').get();
 console.log('holding');
 setInterval(() => {}, 1000);
 `;

@@ -23,10 +23,8 @@ async function storeBefore() {
   const db = await openScope({ path: ':memory:', journal: null, busyTimeout: 0 });
   await db.applySchema('CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
   for (const m of listMigrations().filter(x => x.id < TARGET_ID)) {
-    db.exec('BEGIN');
     await db.applySchema(readFileSync(m.file, 'utf8'));
     await db.prepare('INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)').run(m.id, m.name, 'x');
-    db.exec('COMMIT');
   }
   return db;
 }

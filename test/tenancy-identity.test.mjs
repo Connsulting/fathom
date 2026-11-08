@@ -375,10 +375,9 @@ describe('preflight refusals change nothing (migration safety)', () => {
   test('orphan auth rows refuse orphan_auth_rows; removing the orphan lets the migration run', T, async t => {
     const fx = await legacyFixture(t);
     await withDb(fx.file, async db => {
-      db.exec('PRAGMA foreign_keys = OFF');
       await db.prepare('INSERT INTO passkeys (id, user_id, public_key, counter, transports, name, created_at) VALUES (?, ?, ?, 0, ?, ?, ?)')
         .run('pk-orphan-synthetic', 'usr-missing-synthetic', Buffer.from('synthetic'), '["internal"]', 'Orphan', Date.now());
-    });
+    }, { foreignKeys: false });
     const before = stable(fx.dataDir);
     const r = await migrateCli(fx.dataDir, fx.keyFile);
     assert.equal(r.code, 1, r.stderr);
@@ -394,8 +393,6 @@ describe('preflight refusals change nothing (migration safety)', () => {
     const fx = await legacyFixture(t);
     await withDb(fx.file, async db => {
       // 018 pins households to id 1; rebuild the table without that CHECK to hold a second one.
-      db.exec('PRAGMA foreign_keys = OFF');
-      db.exec('BEGIN');
       await db.applySchema('CREATE TABLE households_rebuilt (id INTEGER PRIMARY KEY)');
       await db.applySchema('INSERT INTO households_rebuilt (id) SELECT id FROM households');
       await db.applySchema('DROP TABLE households');
@@ -403,9 +400,8 @@ describe('preflight refusals change nothing (migration safety)', () => {
       await db.applySchema('INSERT INTO households (id) VALUES (2)');
       await db.prepare('INSERT INTO users (id, household_id, email, role, user_handle, created_at, enrolled_at) VALUES (?, 2, ?, ?, ?, ?, ?)')
         .run('usr-second-household', 'second-household@example.test', 'admin', randomBytes(32).toString('base64url'), Date.now(), Date.now());
-      db.exec('COMMIT');
       assert.deepEqual((await db.foreignKeyCheck()), []);
-    });
+    }, { foreignKeys: false });
     const before = stable(fx.dataDir);
     const r = await migrateCli(fx.dataDir, fx.keyFile);
     assert.equal(r.code, 1, r.stderr);

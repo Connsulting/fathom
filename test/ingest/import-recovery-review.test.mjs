@@ -148,7 +148,7 @@ test('a proposal the scheduler resume pass staged is restaged under the reviewin
     engine.restore();
     await scheduler.stop();
     await app.close();
-    x.close();
+    await x.close();
   }
 });
 
@@ -163,7 +163,7 @@ test('liveness: a proposal the reviewing owner staged is approved directly', T, 
     assert.equal((await proposalsOf(x.db, own.fileId))[0].actor_id, x.ctx.actorId);
     assert.equal((await approve(x, own)).status, 'imported');
     assert.equal(await txCount(x.db, own.fileId), 2);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('liveness: a proposal another real owner staged is still refused as forbidden and left as it was', T, async () => {
@@ -176,7 +176,7 @@ test('liveness: a proposal another real owner staged is still refused as forbidd
     assert.deepEqual((await proposalsOf(x.db, other.fileId)).map((p) => [p.version, p.status, p.actor_id]), [[1, 'needs_confirmation', 'actor-other-synthetic']]);
     assert.equal((await fileRow(x.db, other.fileId)).status, 'needs_confirmation');
     assert.equal(await txCount(x.db, other.fileId), 0);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('reviewImport answers proposal_stale for a background proposal; a retry restages it under the owner with no model call; approval imports', T, async () => {
@@ -199,5 +199,5 @@ test('reviewImport answers proposal_stale for a background proposal; a retry res
     assert.equal((await proposalsOf(x.db, id)).at(-1).actor_id, x.ctx.actorId);
     assert.equal((await approve(x, restaged)).status, 'imported');
     assert.equal(await txCount(x.db, id), 2);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });

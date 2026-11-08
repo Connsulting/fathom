@@ -630,7 +630,7 @@ describe('static symlinks', () => {
   }, T);
   after(async () => {
     if (srv) await srv.close();
-    if (td) td.close();
+    if (td) await td.close();
   });
 
   test('a symlink to a file outside the root is a 404 and leaks nothing', async () => {

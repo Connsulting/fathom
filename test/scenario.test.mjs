@@ -23,7 +23,7 @@ async function seeded() {
 
 async function withSeeded(fn) {
   const t = await seeded();
-  try { return await fn(t.db); } finally { t.close(); }
+  try { return await fn(t.db); } finally { await t.close(); }
 }
 
 const decision = (sc, id) => sc.decisions.find(d => d.id === id);

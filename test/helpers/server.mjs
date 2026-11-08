@@ -437,7 +437,7 @@ export async function serveAppFixture({
       close: () => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }).then(() => owned?.close()),
     };
   } catch (err) {
-    owned?.close();
+    await owned?.close();
     throw err;
   }
 }

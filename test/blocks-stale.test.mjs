@@ -116,7 +116,7 @@ test('block status reads stay inside the visitor conversation sandbox', async t 
   const created = await postJson(server.url, '/api/threads', {}, { origin });
   assert.equal(created.status, 200);
   const cookie = created.headers['set-cookie'][0].split(';')[0];
-  const db = new DatabaseSync((await servedStore(join(dataDir, 'sandboxes', cookie.split('=')[1]))).file);
+  const db = await openScope({ path: (await servedStore(join(dataDir, 'sandboxes', cookie.split('=')[1]))).file, journal: null, busyTimeout: 5000 });
   try {
     const args = { operation: 'deadlines' };
     const result = await callTool('household', args, { db });
