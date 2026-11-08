@@ -1,11 +1,8 @@
-// Opt-in live email check (`npm run email:test`): with FATHOM_LIVE_EMAIL=1, sends one test email
-// through the configured FATHOM_EMAIL_* transport (the instance transport; the dev transport writes
-// to <dataDir>/outbox) and prints only the status and a fixed code. Without it, exits 2 and sends
-// nothing. Touches no store; prints no body, address, key or stack.
+// Opt-in test delivery for one explicitly selected household. The household transport checks
+// its outbound flag and verified recipients and writes dev mail only to its private outbox.
 
-import { join } from 'node:path';
 import { loadConfig, ConfigError } from '../src/config.mjs';
-import { createTransport, EmailError } from '../src/email/transport.mjs';
+import { openCliHousehold } from '../src/platform/cli.mjs';
 import { simpleDarkEmail } from '../src/email/palette.mjs';
 
 const TEXT = [
@@ -28,16 +25,20 @@ async function main() {
     console.error(`email test: failed config ${err.message}`);
     return 1;
   }
-  // Silence the transport's own log line so the output is exactly one status line.
-  const log = { info: () => {}, log: () => {}, warn: () => {}, error: () => {} };
+  let cli;
   try {
-    const transport = createTransport(config, { outboxDir: join(config.dataDir, 'outbox'), log });
+    cli = await openCliHousehold(config, process.argv.slice(2));
+    if (cli.argv.length) throw Object.assign(new Error(), { code: 'invalid_arguments' });
+    const transport = cli.household.transport;
     const r = await transport.send({ subject: 'Fathom test email', text: TEXT, html: HTML });
     console.log(`email test: sent via ${transport.name} to ${r.recipients} recipient(s)`);
     return 0;
   } catch (err) {
-    console.error(`email test: failed ${err instanceof EmailError ? err.code : 'other'}`);
+    const code = typeof err?.code === 'string' && /^[a-z_]+$/.test(err.code) ? err.code : 'other';
+    console.error(`email test: failed ${code}`);
     return 1;
+  } finally {
+    await cli?.close();
   }
 }
 

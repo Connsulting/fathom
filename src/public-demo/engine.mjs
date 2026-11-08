@@ -1,28 +1,21 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { createEngine, loadCredential, BudgetExceededError, ModelCallError } from '../engine/index.mjs';
 import { createSpendLedger } from '../engine/runtime.mjs';
+import { wireMessages, ANTHROPIC_BASE_URL } from '../engine/live.mjs';
 import { PRICING, usageCostUsd } from '../engine/pricing.mjs';
+import { redactProviderText } from '../ingest/redact.mjs';
 import { DEMO_LIMIT_MESSAGE } from './control.mjs';
 
 export class DemoLimitError extends BudgetExceededError {
   constructor() { super(); this.demoLimit = true; }
 }
 
-function wireMessages(messages) {
-  return messages.map((message, i) => {
-    if (message.role !== 'tool') return message;
-    const uses = messages[i - 1].content.filter(block => block.type === 'tool_use');
-    return { role: 'user', content: uses.map((use, index) => ({ type: 'tool_result', tool_use_id: use.id,
-      content: JSON.stringify(message.content[index]?.result ?? null), is_error: message.content[index]?.isError === true })) };
-  });
-}
-
 export async function publicDemoRound({ credential, system, systemDynamic, messages, tools, maxTokens, model, registry, onEvent }) {
   const client = new Anthropic({ apiKey: credential.value, authToken: null,
-    baseURL: 'https://api.anthropic.com', maxRetries: 0, timeout: 30000 });
-  const response = await client.messages.create({ model, max_tokens: maxTokens,
+    baseURL: ANTHROPIC_BASE_URL, maxRetries: 0, timeout: 30000 });
+  const response = await client.messages.create(redactProviderText({ model, max_tokens: maxTokens,
     system: `${system}\n${systemDynamic}`, messages: wireMessages(messages),
-    ...(tools.length ? { tools: tools.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema })) } : {}) });
+    ...(tools.length ? { tools: tools.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.inputSchema })) } : {}) }));
   for (const block of response.content) {
     if (block.type === 'tool_use') {
       onEvent?.({ type: 'tool', name: block.name });

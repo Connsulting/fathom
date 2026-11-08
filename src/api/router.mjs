@@ -1,7 +1,7 @@
 // Routing: the JSON API under /api plus /healthz, the MCP endpoint at exactly /mcp, and static
 // files for everything else.
 // `routes` is the route table (docs/architecture.md lists every entry; test/docs.test.mjs checks).
-// `upload: true` routes take multipart bodies (read by the handler through ctx.readUpload);
+// `upload: true` routes take multipart bodies, parsed before dispatch into ctx.uploads;
 // `download: true` routes answer { filename, type, bytes } as an attachment instead of JSON;
 // `ingest: true` routes never log error details, which could carry file contents; `quiet: true`
 // routes (email, jobs and the packet) likewise log an error code only. `stream: true` routes (the two
@@ -19,6 +19,10 @@
 // demo household. The handler ctx then carries that one context and its db, engine, packs,
 // answerer, scheduler and transport; the context is held (acquire) until the response is done.
 // Public, auth, session and operator routes get no household; they use ctx.platform.
+// Model admission: a gated financial handler runs under a principal (runWithPrincipal) whose
+// check() re-resolves the request's identity and holds only while it still names the same user and
+// household with an active membership, so a revoked session or membership stops the next model
+// round of a request already in flight. Demo (ungated) requests carry no principal.
 
 import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
@@ -43,9 +47,10 @@ import * as pl from './pnl-handlers.mjs';
 import * as oh from './onboarding-handlers.mjs';
 import * as ah from './advisor-handlers.mjs';
 import * as obh from './outbound-handlers.mjs';
-import { identityOf, sendUnauthorized } from './identity.mjs';
+import { identityOf, revalidateRequest, sendUnauthorized } from './identity.mjs';
 import * as authHandlers from '../auth/handlers.mjs';
 import { demoRouteBehavior, DEMO_OFF_MESSAGE } from '../public-demo/control.mjs';
+import { runWithPrincipal } from '../platform/model-budget.mjs';
 
 const TABLE = [
   { method: 'GET', path: '/healthz', handler: h.healthz, public: true },
@@ -276,32 +281,35 @@ export function createHandler({ platform, config, runtimes, auth, keys, mcp = nu
           held = runtimes.acquire(household);
         }
         let body = {};
-        let readUpload = null;
+        let uploads = null;
         if (r.upload) {
           guardUpload(req, { origin: gated ? new URL(config.publicUrl).origin : null });
-          readUpload = () => readMultipart(req);
+          uploads = await readMultipart(req);
         } else if (r.method === 'POST') {
           guardPost(req, { origin: gated || config.publicDemo ? new URL(config.publicUrl).origin : null });
           body = await readJsonBody(req);
         }
         if (gated && !r.public) {
-          identity = identityOf(req, auth);
-          if (!identity) throw new HttpError(401, 'unauthorized');
-          checkAccess(r, identity);
-          if (household && identity.householdId !== household.householdId) throw membershipRequired();
+          identity = revalidateRequest({ authenticate: () => identityOf(req, auth), checkAccess: fresh => checkAccess(r, fresh), household, runtimes });
         }
         // A write to a seeded demo household drops its synthetic marker.
         const seeded = household && !gated && !config.publicDemo && r.method === 'POST' && path !== '/api/demo/reset' ? household.db : null;
         const changesBefore = seeded ? seeded.prepare('SELECT total_changes() AS n').get().n : 0;
         const events = r.stream && wantsEventStream(req) ? createEventStream(req, res) : null;
+        const caller = identity;
+        const principal = gated && household ? { check() {
+          const now = identityOf(req, auth);
+          return Boolean(now) && now.id === caller.id && now.householdId === caller.householdId && auth.servedMember(now);
+        } } : null;
+        const run = fn => (principal ? runWithPrincipal(principal, fn) : fn());
         let out;
         try {
-          out = await r.handler({
+          out = await run(() => r.handler({
             household, db: household?.db, engine: household?.engine, packs: household?.packs, answerer: household?.answerer,
             scheduler: household?.scheduler, transport: household?.transport, platform, config, identity, auth,
             get keys() { if (config.publicDemo) throw demoOff(); return keys; },
-            params, query: queryOf(url, q), body, readUpload, req, res, ...(events ? { onEvent: events.send } : {}),
-          });
+            params, query: queryOf(url, q), body, uploads, req, res, ...(events ? { onEvent: events.send } : {}),
+          }));
         } catch (err) {
           // Once the event stream has started, an error is its last event.
           if (!events || !events.started) throw err;

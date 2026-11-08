@@ -1,0 +1,193 @@
+{
+  "id": "c2",
+  "op": "chart",
+  "after": 1,
+  "spec": {
+    "kind": "bar",
+    "stacked": true,
+    "source": {
+      "tool": "spending.total",
+      "args": {
+        "groupBy": "category",
+        "split": "kind"
+      },
+      "path": "groups"
+    },
+    "x": "label",
+    "series": [
+      {
+        "path": "fixed"
+      },
+      {
+        "path": "flexible"
+      }
+    ]
+  },
+  "calls": [
+    {
+      "tool": "spending.total",
+      "args": {
+        "groupBy": "category",
+        "split": "kind"
+      }
+    }
+  ],
+  "snapshot": {
+    "title": "Fixed and flexible spending by category",
+    "kind": "bar",
+    "stacked": true,
+    "x": [
+      {
+        "text": "Housing"
+      },
+      {
+        "text": "Groceries"
+      },
+      {
+        "text": "Travel"
+      },
+      {
+        "text": "Childcare"
+      },
+      {
+        "text": "Health"
+      }
+    ],
+    "series": [
+      {
+        "label": "Fixed",
+        "unit": "usd",
+        "points": [
+          {
+            "value": 2400,
+            "unit": "usd",
+            "label": "Fixed",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.total"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 610.25,
+            "unit": "usd",
+            "label": "Fixed",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.total"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 0,
+            "unit": "usd",
+            "label": "Fixed",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.total"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 1350,
+            "unit": "usd",
+            "label": "Fixed",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.total"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 220,
+            "unit": "usd",
+            "label": "Fixed",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.total"
+            },
+            "source": "Your spending"
+          }
+        ]
+      },
+      {
+        "label": "Flexible",
+        "unit": "usd",
+        "points": [
+          {
+            "value": 180,
+            "unit": "usd",
+            "label": "Flexible",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.total"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 240,
+            "unit": "usd",
+            "label": "Flexible",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.total"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 960,
+            "unit": "usd",
+            "label": "Flexible",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.total"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 0,
+            "unit": "usd",
+            "label": "Flexible",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.total"
+            },
+            "source": "Your spending"
+          },
+          {
+            "value": 145.5,
+            "unit": "usd",
+            "label": "Flexible",
+            "kind": "m",
+            "asOf": "2026-10-31",
+            "gaps": [],
+            "provenance": {
+              "calc": "spending.total"
+            },
+            "source": "Your spending"
+          }
+        ]
+      }
+    ]
+  },
+  "asOf": "2026-10-31",
+  "builtAt": "2026-11-01T12:00:00.000Z"
+}

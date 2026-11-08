@@ -186,6 +186,50 @@ test('AC4: a stored amount must match exactly rather than round to a proposed ta
   assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: 97361.49 })).isError);
 });
 
+test('SEC2: stored notes and sourced proposals keep identifier context for numeric evidence', async t => {
+  const { db, ctx, registry } = await setup(t);
+  db.prepare('DELETE FROM facts').run();
+  db.prepare('DELETE FROM goals').run();
+  db.prepare('DELETE FROM figures').run();
+  storedGoal(db, 'Account ending in 4821, due 2028-09-17.');
+  const receipts = () => db.prepare('SELECT count(*) AS n FROM action_receipts').get().n;
+  for (const target of [4821, 2028, 9, 17]) {
+    const out = await registry().invoke('update_goal', { operation: 'create', title: 'Savings', target });
+    assert.equal(out.isError, true, String(target));
+    assert.equal(receipts(), 0);
+  }
+  for (const rendered of [false, true]) {
+    const text = 'Create a savings goal for account ending in 4821?';
+    const literals = [{ text: '4821', index: text.indexOf('4821'), source: 'account summary' }];
+    message(db, rendered ? renderAnswer(text, [], literals).join('') : text, { literals });
+    ctx.ownerText = 'yes';
+    const rejected = await registry().invoke('update_goal', { operation: 'create', title: 'Savings', target: 4821 });
+    assert.equal(rejected.isError, true);
+    assert.equal(receipts(), 0);
+  }
+  const accepted = await registry().invoke('update_goal', { operation: 'create', title: 'Savings', target: 8000 });
+  assert.ok(!accepted.isError, accepted.content[0].text);
+  assert.equal(receipts(), 1);
+});
+
+test('SEC2: owner-stated range bounds persist through the Ask registry', async t => {
+  const { db, ctx, registry } = await setup(t);
+  db.prepare('DELETE FROM facts').run();
+  db.prepare('DELETE FROM figures').run();
+  db.prepare('DELETE FROM goals').run();
+  for (const range of ['$4,000-$8,000', '$4,000 - $8,000', '4000-8000', '4000 - 8000']) {
+    ctx.ownerText = `Save ${range} by 2028-12-31.`;
+    const out = await registry().invoke('update_goal', { operation: 'create', kind: 'range', title: 'Savings',
+      targetLow: 4000, targetHigh: 8000, targetDate: '2028-12-31' });
+    assert.ok(!out.isError, `${range}: ${out.content[0].text}`);
+    const saved = JSON.parse(out.content[0].text);
+    assert.equal(saved.goal.targetLow, 4000);
+    assert.equal(saved.goal.targetHigh, 8000);
+    assert.ok(saved.receipt.id);
+  }
+  assert.equal(db.prepare('SELECT count(*) AS n FROM action_receipts').get().n, 4);
+});
+
 test('AC4: the merged goal model keeps evidence for ranges, floors and contribution details', async t => {
   const { db, registry } = await setup(t);
   const account = db.prepare('SELECT id FROM accounts LIMIT 1').get().id;
