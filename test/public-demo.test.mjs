@@ -215,7 +215,7 @@ test('public startup refuses a demo after an import attempt', async t => {
   const privateConfig = { ...loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '1' }), port: 0 };
   const s = await startServer(privateConfig);
   try {
-    const household = s.runtimes.demo();
+    const household = await s.runtimes.demo();
     await ingestFile(household.db, { name: 'sample.csv', bytes: Buffer.from('Date,Description,Amount\n2026-11-01,Sample,10\n') }, { config: privateConfig, household });
     assert.equal(await getSetting(household.db, 'synthetic_demo', null), null);
   } finally { await s.close(); }
@@ -227,7 +227,7 @@ test('a refused private-demo request preserves the marker and a successful write
   t.after(() => s.close());
   const post = (path, body) => fetch(s.url + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   assert.equal((await post('/api/jobs/plan/run', {})).status, 409);
-  const { db } = s.runtimes.demo();
+  const { db } = await s.runtimes.demo();
   assert.equal(await getSetting(db, 'synthetic_demo'), 'synthetic-v1');
   assert.equal((await post('/api/goals', { title: 'Private demo goal', horizon: 'now' })).status, 200);
   assert.equal(await getSetting(db, 'synthetic_demo', null), null);

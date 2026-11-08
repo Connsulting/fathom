@@ -261,10 +261,10 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
     if (r.admin && !await auth.servedAdmin(identity)) throw adminRequired();
     if (financial(r) && !await auth.servedMember(identity)) throw membershipRequired();
   };
-  function resolveHousehold(identity) {
-    if (gated) return runtimes.forIdentity(identity);
+  async function resolveHousehold(identity) {
+    if (gated) return await runtimes.forIdentity(identity);
     try {
-      return runtimes.demo();
+      return await runtimes.demo();
     } catch {
       throw new HttpError(503, 'household unavailable');
     }
@@ -316,7 +316,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
         // The household is fixed before the body is read and kept for the whole request.
         let household = null;
         if (financial(r)) {
-          household = resolveHousehold(identity);
+          household = await resolveHousehold(identity);
           if (!household) throw membershipRequired();
           cancelStream = r.stream ? () => res.destroy() : null;
           held = runtimes.acquire(household, cancelStream);
