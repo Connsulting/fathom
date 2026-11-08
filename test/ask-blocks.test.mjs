@@ -464,3 +464,20 @@ test('niceTicks keeps design.js scale marks', () => {
   assert.deepEqual(niceTicks(-120, 480, 4), [-200, 0, 200, 400, 600]);
   assert.deepEqual(niceTicks(0.095, 0.207, 4), [0.05, 0.1, 0.15, 0.2, 0.25]);
 });
+
+// UI3 AC2: a transaction row's figure is labeled with the readable name, and its popover keeps the
+// bank's raw text as a detail line; a row whose name is its description adds nothing.
+test('a transaction row figure keeps the raw bank text beside its readable name', () => {
+  const raw = 'ORIG CO NAME:EXAMPLE PAYROLL CO ENTRY DESCR:NET SEC:CCD';
+  const row = (description, name) => ({ t: 'row', value: -10, unit: 'usd', row: { account: 'Checking', date: '2032-03-01', description, name } });
+  const block = { id: 'bt', op: 'table', after: 1, spec: {}, calls: [], snapshot: { title: 'Rows', columns: [{ label: 'Amount', type: 'row' }],
+    rows: [{ cells: [row(raw, 'Example Payroll payroll (net)')] }, { cells: [row('Grocery market', 'Grocery market')] }] } };
+  registered = new Map();
+  messageBodyHtml(msg([block]));
+  const figs = [...registered.values()];
+  const named = figs.find((f) => f.label === 'Example Payroll payroll (net)');
+  assert.ok(named, 'the readable name labels the figure');
+  assert.deepEqual(named.detail, [{ k: 'Bank text', v: raw }], 'the raw bank text stays in the popover');
+  const plain = figs.find((f) => f.label === 'Grocery market');
+  assert.equal(plain.detail, undefined, 'no detail line when the name is the description');
+});

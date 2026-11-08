@@ -127,8 +127,9 @@ function wireName(text) {
   // Incoming wording wins: an incoming memo can still say WIRE TRANSFER VIA its bank.
   const inc = /\bfedwire\s+credit\b|\bincoming\s+wire\b|\bwire\s+(?:transfer\s+)?(?:from|in)\b|\bwire\s+credit\b/i.test(text);
   const out = !inc && /\boutgoing\s+wire\b|\bwire\s+(?:transfer\s+)?(?:to|out|via)\b|\bwire\s+debit\b/i.test(text);
-  const to = wireParty(f.get('A/C') || f.get('BNF') || '');
-  const from = wireParty(f.get('B/O') || f.get('ORG') || '');
+  // Each field is read on its own: an A/C that is only an account number leaves BNF to name the party.
+  const to = wireParty(f.get('A/C') || '') || wireParty(f.get('BNF') || '');
+  const from = wireParty(f.get('B/O') || '') || wireParty(f.get('ORG') || '');
   if (!inc && to) return `Wire to ${to}`;
   if (!out && from) return `Wire from ${from}`;
   // A wire fee is a fee, named by the general rule.
