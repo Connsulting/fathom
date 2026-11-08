@@ -56,7 +56,7 @@ function chart(spec, results, accountLabels) {
       xLabel: columnLabel(items, spec.source, spec.x), yLabel: columnLabel(ys, ref, series.path),
       xUnit: pointFigure(items[0], spec.source, spec.x, accountLabels).unit, yUnit: pointFigure(ys[0], ref, series.path, accountLabels).unit,
       points: items.map((item, i) => ({ ...(typeof item.id === 'string' ? { id: item.id } : {}), label: itemLabel(item, spec.source),
-        x: pointFigure(item, spec.source, spec.x, accountLabels), y: pointFigure(ys[i], ref, series.path, accountLabels),
+        x: pointFigure(item, drillSource(spec.source, results), spec.x, accountLabels), y: pointFigure(ys[i], drillSource(ref, results), series.path, accountLabels),
         frontier: item.frontier === true, current: item.current === true })) };
   }
   return { title: spec.title ?? sourceLabel(spec.source), kind: spec.kind, stacked: spec.stacked ?? false,
