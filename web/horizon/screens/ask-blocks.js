@@ -85,8 +85,11 @@ function figureList(snapshot) {
       if (!isObj(c)) continue;
       if ((c.t === 'fig' || c.t === 'none') && isObj(c.fig)) add(c, c.fig);
       else if (c.t === 'row' && isObj(c.row)) {
-        out.push([c, { value: c.value ?? null, unit: c.unit || 'usd', label: c.row.description || '', kind: 'a',
-          asOf: c.row.date || '', source: c.row.account || '', gaps: [], provenance: { row: c.row } }]);
+        // The readable name labels the figure; the bank's raw text stays one line below it.
+        const raw = typeof c.row.description === 'string' && c.row.name && c.row.name !== c.row.description ? c.row.description : '';
+        out.push([c, { value: c.value ?? null, unit: c.unit || 'usd', label: c.row.name || c.row.description || '', kind: 'a',
+          asOf: c.row.date || '', source: c.row.account || '', gaps: [], provenance: { row: c.row },
+          ...(raw ? { detail: [{ k: 'Bank text', v: raw }] } : {}) }]);
       }
     }
   }

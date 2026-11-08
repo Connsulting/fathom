@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { at, isFigure, resolve, rowNumber } from './paths.mjs';
 import { columnLabel, sourceLabel, fieldLabel, figureLabel, itemLabel, dateText } from './labels.mjs';
 import { drillQuery } from './drill.mjs';
+import { transactionDisplayName } from '../categories/display.mjs';
 
 // An input figure keeps its own fields but not its nested provenance, so a block of derived
 // figures (a projection's years) stays within the block size cap.
@@ -29,12 +30,17 @@ function figure(fig, ref, field) {
   for (const key of ['window', 'quote', 'direction']) if (fig[key] !== undefined) out[key] = structuredClone(fig[key]);
   return out;
 }
+// A bank description keeps its raw text (checks compare it) and gains the readable name beside it.
+const named = (text) => (typeof text === 'string' ? { name: transactionDisplayName(text) } : {});
 function cell(item, ref, field, accountLabels) {
   const value = at(item, field);
   if (isFigure(value)) return { t: 'fig', fig: figure(value, ref, field) };
   if (rowNumber(ref, field)) return { t: 'row', value, unit: 'usd', row: {
-    account: item.account?.label ?? accountLabels.get(item.accountId) ?? null, date: item.date ?? null, description: item.description ?? null } };
-  return { t: 'text', text: typeof value === 'number' ? String(value) : value };
+    account: item.account?.label ?? accountLabels.get(item.accountId) ?? null, date: item.date ?? null, description: item.description ?? null, ...named(item.description) } };
+  const description = field === 'description' || String(field).endsWith('.description');
+  // A transaction's merchant is its normalized description; its name and raw text come from the description.
+  const merchant = field === 'merchant' && typeof item?.description === 'string';
+  return { t: 'text', text: typeof value === 'number' ? String(value) : value, ...(description ? named(value) : merchant ? { ...named(item.description), raw: item.description } : {}) };
 }
 function pointFigure(item, ref, field, accountLabels) {
   const value = at(item, field);

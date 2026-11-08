@@ -70,8 +70,8 @@ describe('account cards', () => {
       amount: 5551.96, date: '2026-10-14', fileId: chase, fileName: CHASE_FILE, basis: 'balance', sources: [{ fileId: chase, fileName: CHASE_FILE }],
     });
     assert.equal(v.recent.length, 3);
-    assert.deepEqual(v.recent[0], { date: '2026-10-14', amount: -8.75, description: 'SQ *CORNER CF', fileName: CHASE_FILE });
-    assert.deepEqual(v.recent[1], { date: '2026-10-12', amount: -8.75, description: 'Corner Cafe', fileName: AGG_FILE });
+    assert.deepEqual(v.recent[0], { date: '2026-10-14', amount: -8.75, description: 'SQ *CORNER CF', name: 'Corner Cf', fileName: CHASE_FILE });
+    assert.deepEqual(v.recent[1], { date: '2026-10-12', amount: -8.75, description: 'Corner Cafe', name: 'Corner Cafe', fileName: AGG_FILE });
     for (let i = 1; i < v.recent.length; i++) assert.ok(v.recent[i - 1].date >= v.recent[i].date, 'newest first');
     assert.ok(v.recent.every((r) => [AGG_FILE, CHASE_FILE].includes(r.fileName)));
   }));
@@ -273,7 +273,7 @@ describe('compare cards', () => {
 
     const stored = JSON.parse(one(s.db, 'SELECT snapshot FROM simplefin_snapshots WHERE sf_key = ?', sfKey).snapshot);
     assert.deepEqual(d.snapshot, {
-      recent: stored.recent.slice(0, 3).map((r) => ({ date: r.date, amount: Number(r.amount), description: r.description })),
+      recent: stored.recent.slice(0, 3).map((r) => ({ date: r.date, amount: Number(r.amount), description: r.description, name: r.description })),
       balanceDate: stored.balanceDate,
     });
     assert.equal(d.snapshot.recent.length, 1, 'the fake bridge checking has one posting');

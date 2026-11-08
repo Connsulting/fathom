@@ -123,7 +123,7 @@ test('the owner group card lists every pending owner question with account detai
   await expect(acct.locator('[data-field="files"]')).toContainText(AGG);
   await expect(acct.locator('[data-field="files"]')).toContainText(BANK);
   await expect(acct.locator('[data-field="rows"]')).toContainText(new RegExp(`\\b${view.rows.transactions}\\b`));
-  await expect(det.locator('.h-cf-recent li').first()).toContainText(view.recent[0].description);
+  await expect(det.locator('.h-cf-recent li').first()).toContainText(view.recent[0].name || view.recent[0].description);
 
   // An Individual TOD row: its same-named table lists the other Individual TOD accounts and marks
   // the cells that differ.
