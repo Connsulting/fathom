@@ -4,6 +4,7 @@ import { tx, parseJson } from '../store/db.mjs';
 import { ToolError } from '../tools/errors.mjs';
 import { requireActor, saveReceipt, groupReceipts } from '../actions/receipts.mjs';
 import { requireImportReviewEvidence } from '../actions/evidence.mjs';
+import { LimitError } from './format.mjs';
 import { indexSource } from './model-source.mjs';
 import { openVault, readStoredFile } from './vault.mjs';
 import { validateImport, importEffect, importPlan } from './model-validation.mjs';
@@ -11,6 +12,7 @@ import { applyLayout, layoutContext, layoutDigest, layoutDelta } from './model-l
 import { persistImport } from './pipeline.mjs';
 import { currentPrincipal } from '../platform/model-budget.mjs';
 import { interpretFile } from './model-parse.mjs';
+import { applySourceActions } from './model-updates.mjs';
 import { importSnapshot, importChanges } from './model-undo.mjs';
 import { refreshPackState } from '../packs/state.mjs';
 import { triggerPlan, triggerGuesses, triggerFreshness } from './pipeline.mjs';
@@ -40,7 +42,11 @@ export async function prepareImport(ctx, { file, layout = null, fake, reinterpre
   const stored = ctx.db.prepare('SELECT sha256,removed_at FROM files WHERE id=?').get(file.fileId);
   if (!stored) throw new ToolError('not_found', 'No such source file.');
   if (stored.removed_at) throw new ToolError('bad_input', 'The source file was removed.');
-  const source = await indexSource(file);
+  let source;
+  try { source = await indexSource(file); } catch (error) {
+    if (error instanceof LimitError) throw error;
+    return { status: 'unsupported', reasonCode: 'unsupported_format' };
+  }
   context(ctx);
   if (source.sha256 !== stored.sha256) stale(['source']);
   if (source.status !== 'indexed') return { status: 'needs_source_text' };
@@ -108,7 +114,7 @@ export function stageImport(ctx, { source, proposal, layout = null, delta = [], 
     proposal.mappingVersion = old?.mapping_version ?? (previousMapping ? previousMapping.version + 1 : 1);
   } else { proposal.mappingId = null; proposal.mappingVersion = null; }
   validation = validateImport({ ...ctx, reinterpret }, proposal, source);
-  const review = { reinterpret, effect: importEffect(validation), sourceFormat: source.format, layout, structural, previousMapping,
+  const review = { capturedAt: ctx.capturedAt ?? null, reinterpret, effect: importEffect(validation), sourceFormat: source.format, layout, structural, previousMapping,
     ...(correction ? { correction: parseJson(existing.review_state).correction } : {}),
     presentation: { summary: validation.summary, counts: validation.counts, errors: validation.errors, delta, preserved } };
   const now = stamp(ctx), status = validation.valid && !reasonCode ? 'needs_confirmation' : 'needs_clarification';
@@ -146,6 +152,8 @@ function commit(ctx, row, proposal, source, file, review, validation, { automati
   scopes(ctx, proposal);
   const before = { proposalId: row.id, version: row.version, status: row.status, mappingApproved: Boolean(proposal.mappingId && db.prepare("SELECT 1 FROM column_mappings WHERE signature=? AND approval_status='approved'").get(proposal.mappingId)) };
   const result = persistImport(db, source.fileId, file, importPlan(structuredClone(validation.rows), { reinterpret: review.reinterpret }), { now }).result;
+  const actionChildren = applySourceActions({ ...ctx, now }, source, validation.actions ?? [], review.capturedAt, review.correction).children;
+  const actionFacts = new Set(actionChildren.filter(Boolean).map(child => db.prepare('SELECT entity_id FROM action_receipts WHERE id=? AND kind=?').get(child.id,'fact')?.entity_id).filter(Boolean));
   if (review.reinterpret) db.prepare("UPDATE import_proposals SET status='superseded' WHERE file_id=? AND status='imported'").run(source.fileId);
   if (review.layout && !automatic) {
     if (review.previousMapping) {
@@ -165,16 +173,16 @@ function commit(ctx, row, proposal, source, file, review, validation, { automati
   db.prepare("UPDATE import_proposals SET status='imported',actor_id=?,approval_evidence=?,approved_at=?,updated_at=? WHERE id=? AND version=?")
     .run(actor, evidence, now, now, row.id, row.version);
   const afterSnapshot = importSnapshot(db);
-  const factReceipts = snapshot.facts.flatMap(old => {
+  const factReceipts = snapshot.facts.filter(old => !actionFacts.has(old.key)).flatMap(old => {
     const current = afterSnapshot.facts.find(r => r.key === old.key);
     const child = saveReceipt({ ...ctx, now }, { scope: 'write:facts', kind: 'fact', id: old.key, label: 'Imported fact', before: old, after: current ?? null });
     return child ? [child] : [];
   });
-  for (const current of afterSnapshot.facts.filter(r => !snapshot.facts.some(old => old.key === r.key))) factReceipts.push(saveReceipt({ ...ctx, now }, { scope: 'write:facts', kind: 'fact', id: current.key, label: 'Imported fact', before: null, after: current }));
+  for (const current of afterSnapshot.facts.filter(r => !actionFacts.has(r.key) && !snapshot.facts.some(old => old.key === r.key))) factReceipts.push(saveReceipt({ ...ctx, now }, { scope: 'write:facts', kind: 'fact', id: current.key, label: 'Imported fact', before: null, after: current }));
   const batchReceipt = saveReceipt({ ...ctx, now }, { scope: 'write:imports', kind: 'model_import', id: row.id, label: 'Reviewed import', before,
     after: { status: 'imported', counts: result.counts, scopes: ['write:imports'], changes: importChanges(db, snapshot, afterSnapshot).filter(c => c.table !== 'facts'),
       mapping: proposal.mappingId ? { id: proposal.mappingId, version: proposal.mappingVersion } : null } });
-  const receipt = factReceipts.length ? groupReceipts({ ...ctx, now }, [batchReceipt, ...factReceipts], { id: row.id, label: 'Reviewed import' }) : batchReceipt;
+  const receipt = factReceipts.length || actionChildren.some(Boolean) ? groupReceipts({ ...ctx, now }, [batchReceipt, ...factReceipts, ...actionChildren], { id: row.id, label: 'Reviewed import' }) : batchReceipt;
   db.prepare(`INSERT INTO import_batches (id,proposal_id,proposal_version,file_id,status,before_state,after_state,receipt_id,created_at)
     VALUES (?,?,?,?,'committed',?,?,?,?)`).run(randomUUID(), row.id, row.version, row.file_id, JSON.stringify({ effect: review.effect, changes: importChanges(db, snapshot, afterSnapshot) }), JSON.stringify(effect), receipt?.id ?? null, now);
   return { proposalId: row.id, version: row.version, status: 'imported', counts: result.counts, receipt, confirmationRequired: false };
@@ -208,7 +216,7 @@ export async function reviewImport(ctx, args) {
     return { proposalId: row.id, version, status: 'queued', reasonCode: 'owner_correction' };
   });
   const { source, file } = await readSource(ctx, row);
-  const result = tx(ctx.db, () => commit(ctx, row, proposal, source, file, review, validateImport({ ...ctx, reinterpret: review.reinterpret }, proposal, source), { evidence: args.evidence }));
+  const result = tx(ctx.db, () => commit(ctx, row, proposal, source, file, review, validateImport({ ...ctx, reinterpret: review.reinterpret, capturedAt: review.capturedAt }, proposal, source), { evidence: args.evidence }));
   try { refreshPackState(ctx.db, { dataDir: ctx.household.root, now: stamp(ctx) }); } catch {}
   triggerPlan(ctx); triggerGuesses(ctx); triggerFreshness(ctx);
   return result;

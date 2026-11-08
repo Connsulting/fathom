@@ -12,7 +12,7 @@ import { tx, parseJson } from '../store/db.mjs';
 import { refreshPackState } from '../packs/state.mjs';
 import { pickParser } from './registry.mjs';
 import { identifyAccountRows, dedupeKey } from './dedupe.mjs';
-import { header as headerText, cents, institution, isoDate, LimitError } from './format.mjs';
+import { cents, institution, LimitError } from './format.mjs';
 import { sourceFormat } from './model-source.mjs';
 import {
   ask, recordFact, archive, normalizeName, OWNER_OPTIONS, KIND_OPTIONS, NEAR_DUPLICATE_OPTIONS, EMPLOYER_OPTIONS, taxYearOptions,

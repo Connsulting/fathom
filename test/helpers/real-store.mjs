@@ -32,6 +32,7 @@ import { ingestFile } from '../../src/ingest/pipeline.mjs';
 import { answer, pendingItems } from '../../src/ingest/confirm.mjs';
 import { nameKey } from '../../src/ingest/extract.mjs';
 import { createEngine } from '../../src/engine/index.mjs';
+import { seedHistoricalDocument } from './historical-import.mjs';
 import { importProposedRows } from './import-proposal-fixture.mjs';
 import { writeXlsx, XLSX_MIME } from './xlsx.mjs';
 import { secretsFor, servedStore } from './server.mjs';
@@ -268,7 +269,7 @@ export async function addNotes(db, extraction) {
     name: `household-notes-${c.seq}.md`, mime: 'text/markdown',
     bytes: new TextEncoder().encode(`# Household notes\n\nSynthetic owner note number ${c.seq} for a test household.\n`),
   };
-  const out = await ingestFile(db, file, { engine: engineOf('fake', [[{ goals: [], ...extraction }]]), config: c.config, household: c.household, now: stampOf(db) });
+  const out = await seedHistoricalDocument({ db, ...c }, file, [[{ goals: [], ...extraction }]]);
   if (out.status !== 'imported') throw new Error(`synthetic notes were not imported (${out.status})`);
   return out;
 }

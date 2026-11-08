@@ -2,11 +2,13 @@ import { createHash } from 'node:crypto';
 import { validateProposal } from './model-contract.mjs';
 import { parseInterpretation } from './model-parse.mjs';
 import { resolveField } from './model-source.mjs';
+import { prepareSourceActions, applySourceActions } from './model-updates.mjs';
+import { relativeDateEvidence } from '../actions/evidence.mjs';
 import { persistImport } from './pipeline.mjs';
 import { toRows, validateExtraction, periodOf } from './extract.mjs';
 import { isoDate, number, cents } from './format.mjs';
 
-export const importEffect = validation => Object.fromEntries(['valid', 'errors', 'rows', 'counts', 'bindings', 'identities', 'questions', 'summary'].map(key => [key, validation[key] ?? null]));
+export const importEffect = validation => Object.fromEntries(['valid', 'errors', 'rows', 'counts', 'bindings', 'identities', 'questions', 'summary', 'actions', 'notes'].map(key => [key, validation[key] ?? null]));
 const collect = (value, out = []) => {
   if (value?.refs && value.transform) out.push(...value.refs);
   else if (value && typeof value === 'object') Object.values(value).forEach(v => collect(v, out));
@@ -37,7 +39,7 @@ export function importPlan(rows, { reinterpret = false } = {}) {
 
 export function validateImport(ctx, proposal, source) {
   const checked = validateProposal(proposal, source);
-  const errors = [...checked.errors], rows = [], bindings = [], identities = [];
+  const errors = [...checked.errors], rows = [], bindings = [], identities = [], actions = [], notes = [];
   const fail = reason => ({ valid: false, errors: [...new Set([...errors, reason])], rows, bindings, identities, counts: null, summary: null });
   if (!checked.valid) return fail('invalid_proposal');
   if (source.status !== 'indexed') return fail('needs_source_text');
@@ -117,6 +119,19 @@ export function validateImport(ctx, proposal, source) {
     } else if (row.target === 'account_metadata') {
       if (!accountFor(ctx.db, f.accountId)) errors.push('account_unresolved');
       else rows.push({ ...base, kind: 'account_metadata', accountId: f.accountId, account: { inst: f.institution, mask: f.mask, kind: f.kind, holder: f.holder, name: f.alias } });
+    } else if (['fact', 'expected_transaction'].includes(row.target) && source.format === 'text' && source.bytes.length <= 4000) {
+      const span = { fileId: source.fileId, sha256: source.sha256, byteStart: 0, byteEnd: source.bytes.length };
+      const evidence = new TextDecoder('utf-8', { fatal: true }).decode(source.bytes);
+      let args = row.target === 'fact' ? { key: row.key, value: f.value, evidence } : { subject: f.subject, dueDate: f.dueDate,
+        amount: f.amount ?? null, accountId: f.accountId ?? null, direction: row.direction, datePrecision: row.datePrecision, evidence };
+      try {
+        if (row.target === 'expected_transaction' && /^next /i.test(f.dueDate)) {
+          const derived = relativeDateEvidence({ ...ctx, sourceEvidence: { source, span, actorId: ctx.actorId, capturedAt: ctx.capturedAt ?? null } }, f.dueDate);
+          args = { ...args, dueDate: derived.date, relativeDate: f.dueDate };
+        }
+        const prepared = prepareSourceActions(ctx, source, [{ tool: 'answer', operation: row.target === 'fact' ? 'fact' : 'expected_transaction', args, span }]);
+        actions.push(...prepared.accepted); notes.push(...prepared.notes);
+      } catch (error) { errors.push(error.code ?? 'invalid_action'); }
     } else errors.push('action_adapter_required');
   }
   const controls = proposal.controls ?? [], controlled = new Set(controls.flatMap(c => c.field.refs));
@@ -157,11 +172,12 @@ export function validateImport(ctx, proposal, source) {
   ctx.db.exec('SAVEPOINT import_preview');
   try {
     counts = persistImport(ctx.db, source.fileId, { name: 'Reviewed import', bytes: source.bytes }, importPlan(structuredClone(persisted), { reinterpret: ctx.reinterpret }), { now: new Date(typeof ctx.now === 'function' ? ctx.now() : ctx.now ?? Date.now()).toISOString() }).result.counts;
+    if (actions.length) applySourceActions({ ...ctx, scopes: undefined }, source, actions, ctx.capturedAt ?? null, null);
     questions = ctx.db.prepare('SELECT kind,subject,question,options,context,status FROM confirm_items WHERE file_id=? ORDER BY kind,subject').all(source.fileId).map(row => ({ ...row }));
   } catch { errors.push('persistence_refused'); }
   finally { ctx.db.exec('ROLLBACK TO import_preview'); ctx.db.exec('RELEASE import_preview'); }
   if (errors.length) return fail('validation_failed');
-  return { valid: true, errors: [], rows: persisted, bindings: [...new Set(bindings)].sort(), identities, questions, counts,
+  return { valid: true, errors: [], actions, notes, rows: persisted, bindings: [...new Set(bindings)].sort(), identities, questions, counts,
     summary: { rows: proposal.rows.length, amount: parsed.resolved.reduce((n, row) => n + toCents(row.fields.amount ?? 0), 0) / 100,
       totalStatus: controls.length ? 'totals_match' : 'no_sheet_total', totalMessage: controls.length ? 'Totals match the sheet' : 'No sheet total to check' } };
 }

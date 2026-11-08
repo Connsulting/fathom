@@ -29,3 +29,29 @@ test('unknown files with the engine off wait without writes and raw scans are wi
     assert.equal(x.db.prepare('SELECT count(*) n FROM transactions').get().n, 0);
   } finally { x.close(); }
 });
+
+test('typed note facts use shared actions, require their scope, and expose grouped Undo', async () => {
+  const { createHash } = await import('node:crypto');
+  const { indexSource } = await import('../../src/ingest/model-source.mjs');
+  const { undoAction } = await import('../../src/actions/receipts.mjs');
+  const x = await setup();
+  try {
+    const bytes = Buffer.from('single\n2032-03-01\nowner\n'), fileId = 'f-' + createHash('sha256').update(bytes).digest('hex').slice(0,24);
+    const source = await indexSource({ fileId, bytes, format: 'text' });
+    const find = value => Object.keys(source.values).find(id => String(source.values[id]).trim() === value);
+    const ref = value => ({ refs: [find(value)], transform: { op: 'trim' } });
+    const output = { rows: [{ target: 'fact', key: 'household.filingStatus', scope: 'household', datePrecision: 'day', fields: {
+      value: ref('single'), asOf: ref('2032-03-01'), subject: ref('owner'),
+    } }], completeness: 'complete', coverage: source.regions.map(regionId => ({ regionId, refs: source.inventory[regionId].refs, disposition: 'imported_detail' })) };
+    const staged = await ingestFile(x.db, { name: 'state.txt', bytes }, { ...x.opts, fake: [{ text: JSON.stringify(output), costUsd: 0.001, tokens: { input_tokens: 20, output_tokens: 40 } }] });
+    assert.equal(staged.status, 'needs_confirmation', JSON.stringify(staged));
+    await assert.rejects(approve(x,staged), e => e.code === 'forbidden');
+    x.ctx.scopes.push('write:facts');
+    const approved = await approve(x,staged);
+    assert.deepEqual(approved.receipt.scopes, ['write:facts','write:imports']);
+    assert.equal(JSON.parse(x.db.prepare("SELECT value FROM facts WHERE key='household.filingStatus'").get().value), 'single');
+    await assert.rejects(undoAction({ ...x.ctx, scopes: ['write:imports'] }, approved.receipt.id, 'write:imports'), e => e.code === 'forbidden');
+    await undoAction(x.ctx, approved.receipt.id, 'write:imports');
+    assert.equal(x.db.prepare('SELECT count(*) n FROM facts').get().n, 0);
+  } finally { x.close(); }
+});

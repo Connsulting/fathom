@@ -151,7 +151,7 @@ export function deriveHeard(db, { clock } = {}) {
 // What one saved notes file added. `file` is the ingest result for it ({fileId, status, counts}).
 // The facts are the stored rows that file wrote; goals are the goal documents it wrote; `asked`
 // counts the open Confirm questions it raised. With the engine off nothing is read from the note
-// (the file waits with status needs_extraction), and understood says so rather than listing nothing.
+// (the file waits with status waiting_for_engine), and understood says so rather than listing nothing.
 export function understoodOf(db, file, { engineOn = true } = {}) {
   const fileId = file && file.fileId;
   const facts = [];

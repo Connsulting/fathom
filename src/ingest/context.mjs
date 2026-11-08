@@ -18,7 +18,6 @@ import { accountNaming } from '../accounts/naming.mjs';
 import { cents } from './format.mjs';
 import { normalizeName } from './confirm.mjs';
 import { parsers } from './registry.mjs';
-import { id as MAPPED_ID, label as MAPPED_LABEL } from './mapping.mjs';
 import { labelOf } from './extract.mjs';
 
 export const ACCOUNT_FIELDS = Object.freeze(['institution', 'mask', 'holder', 'owner', 'kind', 'balance', 'from', 'to', 'files']);
@@ -39,7 +38,7 @@ export function parserLabel(parser) {
   if (known) return known.label;
   const historical = { 'pnl-workbook': 'Business P&L', 'tax-payments': 'Tax payments', 'balances': 'Balances', 'account-map': 'Account metadata', 'notes': 'Notes', 'model-import': 'Reviewed import' };
   if (historical[parser]) return historical[parser];
-  if (parser === MAPPED_ID) return MAPPED_LABEL;
+  if (parser === 'mapped') return 'Mapped export';
   if (parser.startsWith('extract-')) return labelOf(parser.slice('extract-'.length));
   return 'Historical import';
 }

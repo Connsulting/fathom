@@ -112,7 +112,7 @@ test('a waiting file shows on Accounts with Retry, without any pending question'
   const res = await uploaded;
   expect(res.status()).toBe(200);
   const body = await res.json();
-  expect(body.files.map((f) => f.status)).toEqual(['needs_mapping']);
+  expect(body.files.map((f) => f.status)).toEqual(['waiting_for_engine']);
   expect(body.pending).toBe(before.length);
   const file = body.files[0];
   expect(await pendingIds(request)).toEqual(before);

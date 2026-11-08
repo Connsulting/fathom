@@ -180,7 +180,7 @@ export async function realStore({ engine = 'off' } = {}) {
 export async function fakeEngine(responses = [], { capUsd = 200 } = {}) {
   const { createEngine } = await src('src/engine/index.mjs');
   const inner = createEngine({ mode: 'fake', capUsd, responses: responses.map((rows) => ({ text: JSON.stringify({ rows }) })) });
-  return { mode: 'fake', isOn: () => true, call: (req) => inner.call(req), extract: (req) => inner.extract(req) };
+  return { responses, mode: 'fake', isOn: () => true, call: (req) => inner.call(req), extract: (req) => inner.extract(req) };
 }
 
 // A fake engine that records every request it receives (extract and call), independent of the
@@ -190,6 +190,7 @@ export async function recordingEngine(responses = [], opts) {
   const extracts = [];
   const calls = [];
   return {
+    responses,
     mode: 'fake',
     isOn: () => true,
     extracts,
