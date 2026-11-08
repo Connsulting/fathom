@@ -499,3 +499,15 @@ test('drill rows show the readable name and keep the raw bank text as its title'
   assert.ok(html.includes(' Grocery market '), 'a name equal to its description is shown once, plainly');
   assert.ok(!html.includes('title="Grocery market"'));
 });
+
+// UI3 AC2: a compare block's description cell shows the readable name with the raw text on hover.
+test('compare cells show a description\'s readable name and keep the raw bank text as its title', async () => {
+  const { render } = await import('../web/horizon/screens/ask-block-compare.js');
+  const raw = 'ORIG CO NAME:GUSTO CO ENTRY DESCR:NET SEC:CCD';
+  const snapshot = { title: 'Two rows', fields: [{ label: 'Description' }], options: [
+    { label: 'First', cells: [{ t: 'text', text: raw, name: 'Gusto payroll (net)' }] },
+    { label: 'Second', cells: [{ t: 'text', text: 'Grocery market', name: 'Grocery market' }] }] };
+  const html = render(snapshot, { esc, key: 'm:c', ctl: (x) => x, fig: () => '' });
+  assert.ok(html.includes(`<span title="${esc(raw)}">Gusto payroll (net)</span>`), 'the name shows with the raw text as its title');
+  assert.ok(html.includes('<dd>Grocery market</dd>'), 'a name equal to its text is shown plainly');
+});
