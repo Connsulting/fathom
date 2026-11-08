@@ -77,6 +77,7 @@ test('a planner check goes stale only when the notes fact changes, and the next 
   const again = getItem(db, check.id);
   assert.equal(again.status, 'pending');
   assert.equal(again.context.stored, NOTES_VALUE + 1, 'asked again against the current notes value');
+  assert.ok(!again.question.includes(KEY), 'the comparison retains the notes value without exposing its fact key');
   assert.match(again.question, new RegExp(`notes say ${NOTES_VALUE + 1}\\.`));
   assert.equal(answerItem(db, check.id, 'no').item.answer, 'no');
 });

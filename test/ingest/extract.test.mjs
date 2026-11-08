@@ -135,7 +135,8 @@ describe('schemas', () => {
     if (schema.type === 'object') {
       if (schema.additionalProperties !== false) problems.push(`${path}: additionalProperties is not false`);
       for (const [key, sub] of Object.entries(schema.properties || {})) {
-        if (BANNED(key)) problems.push(`${path}.${key}: banned property`);
+        const payrollRecipient = key === 'employeeName' && ['w2', 'paystub'].includes(path);
+        if (BANNED(key) && !payrollRecipient) problems.push(`${path}.${key}: banned property`);
         walk(sub, `${path}.${key}`, problems);
       }
     }
@@ -159,6 +160,10 @@ describe('schemas', () => {
     assert.deepEqual(problems, []);
     assert.ok(X.SCHEMAS.paystub.properties.employerName, 'paystub extracts employerName');
     assert.ok(X.SCHEMAS.w2.properties.employerName, 'w2 extracts employerName');
+    for (const type of ['w2', 'paystub']) assert.ok(X.SCHEMAS[type].properties.employeeName, 'payroll recipient names support household matching');
+    for (const [type, schema] of Object.entries(X.SCHEMAS).filter(([type]) => !['w2', 'paystub'].includes(type))) {
+      assert.equal(schema.properties?.employeeName, undefined, `${type} does not request a payroll recipient`);
+    }
     assert.deepEqual([...X.CLASSIFY_SCHEMA.required].sort(), ['confidence', 'docType']);
     assert.deepEqual([...X.CLASSIFY_SCHEMA.properties.docType.enum], [...X.DOC_TYPES]);
   });

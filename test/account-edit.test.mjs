@@ -328,7 +328,7 @@ test('AC2: undo restores an answered owner, including one that was final', () =>
 }));
 
 test('AC2: undo of an edit that answered a pending question puts it back to pending', () => withStore(async (s, { A, C }) => {
-  const id = plainAccount(s, 'acct-undo-p', { owner: null, kind: null });
+  const id = plainAccount(s, 'acct-undo-p', { owner: null, kind: null, name: 'Synthetic flexible account' });
   const ownerItem = askOwner(C, s.db, id).id;
   const kindItem = askKind(C, s.db, id).id;
   const o = await A.accountOwner(ctx(s, id, { owner: 'joint' }));

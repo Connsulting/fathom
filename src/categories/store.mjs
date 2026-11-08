@@ -111,7 +111,18 @@ export function applyCategoryAnswer(db,item,optionId,{now}={}) {
   setTransactionCategory(db, c.transactionId, category, { now: at });
   const t=db.prepare('SELECT description FROM transactions WHERE id=?').get(c.transactionId);
   const merchant=normalizeMerchant(t.description);
-  if(always && merchant) setMerchantRule(db, merchant, category, { now: at });
+  if(always && merchant) {
+    setMerchantRule(db, merchant, category, { now: at });
+    const siblings = db.prepare(`SELECT i.id,t.id AS transaction_id,t.description FROM confirm_items i
+      JOIN transactions t ON i.subject=cast(t.id AS TEXT)
+      WHERE i.kind='transaction_category' AND i.status='pending' AND i.id!=?
+        AND NOT EXISTS (SELECT 1 FROM transaction_category_corrections c WHERE c.transaction_id=t.id)`)
+      .all(item.id).filter(t => normalizeMerchant(t.description) === merchant);
+    for (const sibling of siblings) {
+      setTransactionCategory(db, sibling.transaction_id, category, { now: at });
+      db.prepare("UPDATE confirm_items SET status='answered',answer=?,answered_at=? WHERE id=?").run(category,at,sibling.id);
+    }
+  }
   return {};
 }
 function bucketForCategory(db, category) {
