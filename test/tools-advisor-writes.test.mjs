@@ -58,10 +58,34 @@ test('verdict requires the owner words for verdict, note and date and refuses re
   const base = { reviewId: sent.reviewId, verdict: 'vetoed', date: '2026-11-04', evidence: ctx.ownerText };
   await assert.rejects(call(ctx, 'verdict', { ...base, note: 'Invented explanation' }), { code: 'bad_input' });
   await assert.rejects(call(ctx, 'verdict', { ...base, verdict: 'confirmed' }), { code: 'bad_input' });
-  await assert.rejects(call(ctx, 'verdict', { ...base, date: '2026-11-03' }), { code: 'bad_input' });
+  await assert.rejects(call(ctx, 'verdict', { ...base, date: '2026-02-30' }), { code: 'bad_input' });
   assert.equal(ctx.db.prepare('SELECT verdict FROM advisor_reviews WHERE id = ?').get(sent.reviewId).verdict, null);
   await call(ctx, 'verdict', base);
   await assert.rejects(call(ctx, 'verdict', base), { code: 'conflict' });
+});
+
+test('advisor verdict choices accept owner-facing approval and rejection words, with the date supplied separately', async () => {
+  const ctx = await store();
+  for (const [evidence, verdict] of [
+    ['My advisor approved it', 'confirmed'], ['The advisor signed off', 'confirmed'], ['My advisor agreed', 'confirmed'],
+    ['The advisor said no', 'vetoed'], ['My advisor rejected it', 'vetoed'], ['The advisor declined', 'vetoed'],
+    ['My advisor confirmed and approved it', 'confirmed'],
+  ]) {
+    const { reviewId } = await call(ctx, 'send', { recId });
+    const ask = { ...ctx, channel: 'ask', ownerText: evidence };
+    const result = await call(ask, 'verdict', { reviewId, verdict, date: CLOCK, evidence });
+    assert.equal(result.review.verdict, verdict);
+    assert.equal(result.review.date, CLOCK);
+  }
+  const { reviewId } = await call(ctx, 'send', { recId });
+  const evidence = 'My advisor approved it';
+  await assert.rejects(call({ ...ctx, channel: 'ask', ownerText: 'We have not asked the advisor' }, 'verdict',
+    { reviewId, verdict: 'confirmed', date: CLOCK, evidence }), { code: 'bad_input' });
+  await assert.rejects(call({ ...ctx, channel: 'ask', ownerText: evidence }, 'verdict',
+    { reviewId, verdict: 'vetoed', date: CLOCK, evidence }), { code: 'bad_input' });
+  const mixed = 'The advisor approved one option and rejected another';
+  await assert.rejects(call({ ...ctx, channel: 'ask', ownerText: mixed }, 'verdict',
+    { reviewId, verdict: 'confirmed', date: CLOCK, evidence: mixed }), { code: 'bad_input' });
 });
 
 test('checkin matches its route and Undo restores the full prior row or absence', async t => {
@@ -114,6 +138,10 @@ test('advisor proposals do not write and become stale when reviews or checkin ch
   await tool.handler({ operation: 'send', recId, propose: true }, { ...ctx, onProposal: p => proposals.push(p) });
   assert.equal(ctx.db.prepare('SELECT count(*) n FROM advisor_reviews').get().n, 0);
   const p = proposals[0];
+  const { setSetting } = await import('../src/store/db.mjs');
+  setSetting(ctx.db, 'ask.titleRejects', { unparsable: 1 });
+  setSetting(ctx.db, 'ask.titleRetried.ask:0123456789ab', true);
+  assert.equal(proposalBasis(ctx.db, p.tool, p.scopes, p.args), p.basis);
   await call(ctx, 'send', { recId });
   assert.notEqual(proposalBasis(ctx.db, p.tool, p.scopes, p.args), p.basis);
   const before = proposalBasis(ctx.db, 'advisor_review', ['write:recs'], { date: '2026-12-10' });

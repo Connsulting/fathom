@@ -27,6 +27,10 @@ function receipt(ctx, kind, entityId, before, after, label, from = before, to = 
 }
 const unavailable = reason => ({ available: false, reason });
 const reviews = (db, recId) => db.prepare('SELECT * FROM advisor_reviews WHERE rec_id = ? ORDER BY id').all(recId);
+const verdictShape = { type: 'choice', choices: [
+  ...['approved', 'signed off', 'agreed'].map(label => ({ value: 'confirmed', label })),
+  ...['rejected', 'said no', 'declined'].map(label => ({ value: 'vetoed', label })),
+] };
 
 export const operations = [
   { tool: 'advisor_review', name: 'send', scope: 'write:recs', summary: 'Mark a recommendation for advisor review inside Fathom.',
@@ -48,7 +52,8 @@ export const operations = [
     handler(args, ctx) {
       const actor = requireActor(ctx);
       const evidenceCtx = ctx.channel === 'mcp' ? { ...ctx, ownerText: args.evidence } : ctx;
-      for (const field of ['verdict', 'date', ...(args.note ? ['note'] : [])]) requireEvidence(evidenceCtx, args[field], { evidence: args.evidence, argument: field });
+      requireEvidence(evidenceCtx, args.verdict, { evidence: args.evidence, argument: 'verdict', shape: verdictShape });
+      if (args.note) requireEvidence(evidenceCtx, args.note, { evidence: args.evidence, argument: 'note' });
       return guard(() => tx(ctx.db, () => {
         const before = ctx.db.prepare('SELECT * FROM advisor_reviews WHERE id = ?').get(args.reviewId) ?? null;
         recordVerdict(ctx.db, args.reviewId, { ...args, now: stamp(ctx) },

@@ -7,6 +7,7 @@ import { proposalTools, proposalBasis } from '../src/actions/proposals.mjs';
 import { createGoal } from '../src/goals/write.mjs';
 import { getSetting, setSetting } from '../src/store/db.mjs';
 import { CURVE_AXES } from '../src/shared/goals.mjs';
+import { createEngine } from '../src/engine/index.mjs';
 
 const S = scratch('fathom-goal-writes-');
 after(() => S.cleanup());
@@ -124,10 +125,43 @@ test('goal proposal basis covers settings and suggestions inputs, and proposals 
   const tool = proposalTools([getTool('update_goal')])[0];
   await tool.handler({ operation: 'suggestion', id: row.id, action: 'dismiss', propose: true }, { ...ctx, onProposal: p => { pending = p; } });
   assert.equal(getSetting(ctx.db, 'goals.suggestions', null), null);
+  setSetting(ctx.db, 'ask.titleRejects', { unparsable: 1 });
+  setSetting(ctx.db, 'ask.titleRetried.ask:0123456789ab', true);
+  assert.equal(proposalBasis(ctx.db, pending.tool, pending.scopes, pending.args), pending.basis);
   setSetting(ctx.db, 'goals.suggestions', { [row.id]: { dismissed: 'later' } });
   assert.notEqual(proposalBasis(ctx.db, pending.tool, pending.scopes, pending.args), pending.basis);
   const basis = () => proposalBasis(ctx.db, 'update_preferences', ['write:preferences'], { positions: { [CURVE_AXES[0].id]: 0.7 } });
   const before = basis();
+  setSetting(ctx.db, 'ask.titleRejects', { unparsable: 2 });
+  assert.equal(basis(), before);
   setSetting(ctx.db, 'curve.positions', { [CURVE_AXES[0].id]: 0.2 });
   assert.notEqual(basis(), before);
+});
+
+test('a thread-title settings write between an archive proposal and HTTP confirmation does not make it stale', async t => {
+  const ctx = await store();
+  const row = add(ctx, { title: 'Kitchen remodel' });
+  const transport = createEngine({ mode: 'fake' });
+  let chatCalls = 0;
+  const engine = { mode: 'fake', isOn: () => true, call(request) {
+    if (request.purpose !== 'chat') return Promise.resolve({ text: 'not a title response', toolResults: [] });
+    chatCalls++;
+    return transport.call({ ...request, fake: [
+      { toolCalls: [{ name: 'update_goal', args: { operation: 'archive', id: row.id, propose: true } }] },
+      { text: 'I can archive the kitchen remodel goal. Confirm below.' },
+    ] });
+  } };
+  const srv = await serveAppFixture({ db: ctx.db, config: ctx.household.config, authenticated: true, engine });
+  t.after(() => srv.close());
+  const first = await srv.postJson('/api/threads', { text: 'Archive the kitchen remodel goal.' });
+  assert.equal(first.status, 200, first.text);
+  assert.ok(first.json.message.provenance.pendingAction);
+  assert.ok(getSetting(ctx.db, 'ask.titleRejects', null));
+  setSetting(ctx.db, `ask.titleRetried.${first.json.thread.key}`, true);
+  assert.equal(ctx.db.prepare('SELECT archived_at FROM goals WHERE id = ?').get(row.id).archived_at, null);
+  const calls = chatCalls;
+  const confirmed = await srv.postJson(`/api/threads/${first.json.thread.id}/proposals/${first.json.message.id}`, { decision: 'confirm' });
+  assert.equal(confirmed.status, 200, confirmed.text);
+  assert.equal(chatCalls, calls);
+  assert.ok(ctx.db.prepare('SELECT archived_at FROM goals WHERE id = ?').get(row.id).archived_at);
 });
