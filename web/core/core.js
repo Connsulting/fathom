@@ -1491,6 +1491,30 @@ function retryFile(id) {
   return send('/api/files/' + encodeURIComponent(id) + '/retry', {}, d => d.file || null);
 }
 
+// Approve ('approve', evidence 'Looks right') or correct in the owner's own words ('correct') one
+// version of a staged import proposal for file `fileId`. Resolves the review result ({status:
+// 'imported', counts, receipt} or {status: 'queued'}) with the scenario applied, or null on failure
+// (error line shown). A stale proposal (409 proposal_stale) is restaged by retrying the file; that
+// scenario is applied without an error line and the call resolves { stale: true }.
+function reviewImport(id, version, decision, evidence, fileId) {
+  if (id == null || id === '' || !Number.isSafeInteger(version) || version <= 0 || (decision !== 'approve' && decision !== 'correct')
+    || typeof evidence !== 'string' || !evidence.trim() || evidence.length > 4000) return done();
+  const fail = (err) => {
+    lastError = (err && err.message) ? err.message : 'The server could not complete that.';
+    showError('Could not save that review. ' + lastError);
+    return null;
+  };
+  const applied = (data, out) => { applyScenario(data.scenario); hideError(); lastError = ''; notify(); return out; };
+  const run = () => postJson('/api/import-proposals/' + encodeURIComponent(id) + '/review', { version, decision, evidence }).then(
+    data => applied(data, data),
+    err => (err && err.status === 409 && err.code === 'proposal_stale' && fileId != null && fileId !== ''
+      ? postJson('/api/files/' + encodeURIComponent(fileId) + '/retry', {}).then(data => applied(data, { stale: true }), fail)
+      : fail(err)));
+  const p = queue.then(run);
+  queue = p;
+  return p;
+}
+
 // Advisor workflow (item 24). Each resolves with a truthy value on success, null on failure.
 function sendToAdvisor(recId) {
   if (recId == null || recId === '') return done();
@@ -1602,6 +1626,7 @@ const api = {
   answerMany,
   reopenMany,
   retryFile,
+  reviewImport,
   archiveAccount,
   removeFile,
   yearendMark,

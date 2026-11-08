@@ -351,7 +351,7 @@ describe('waiting files', () => {
     assert.ok(Array.isArray(st.waiting), 'waiting array present');
     const w = st.waiting.find((f) => f.id === odd.fileId);
     assert.ok(w, 'the waiting file is listed');
-    assert.deepEqual(Object.keys(w).sort(), ['counts', 'id', 'name', 'parser', 'sourceKind', 'status', 'uploadedAt']);
+    assert.deepEqual(Object.keys(w).sort(), ['counts', 'id', 'name', 'parser', 'reasonCode', 'sourceKind', 'status', 'uploadedAt']);
     assert.equal(w.name, 'odd.csv');
     assert.equal(w.status, 'waiting_for_engine');
     assert.ok(st.waiting.every((f) => f.status === 'waiting_for_engine'));
