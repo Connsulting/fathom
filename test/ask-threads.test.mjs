@@ -418,7 +418,7 @@ test('AC5 the answer request carries this thread history and nothing from anothe
   msg.run(b.key, 'me', 'Synthetic other thread question', '2026-11-05T09:05:01.000Z');
   msg.run(b.key, 'fathom', '<p>Synthetic other thread answer</p>', '2026-11-05T09:05:02.000Z');
 
-  const reply = await createLiveAnswerer({ engine, packs, root: s.dataDir }).answer({ db: s.db, key: a.key, text: 'Synthetic follow up' });
+  const reply = await createLiveAnswerer({ engine, packs, root: s.dataDir, services: { engine, config: { dataDir: s.dataDir } } }).answer({ db: s.db, key: a.key, text: 'Synthetic follow up' });
   assert.ok(!reply.notice, JSON.stringify(reply.paragraphs));
   assert.ok(requests.length >= 1);
   const req = requests[0];

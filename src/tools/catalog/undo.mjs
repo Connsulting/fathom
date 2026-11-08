@@ -1,6 +1,7 @@
 import { undoAction } from '../../actions/receipts.mjs';
 import { WRITE_SCOPES } from '../../shared/action-scopes.mjs';
 import { ToolError } from '../errors.mjs';
+export const capabilities = ['ownerStatements'];
 export const operations = [{
   tool: 'undo', name: 'undo', scopes: WRITE_SCOPES,
   summary: 'Undo your earlier change by receipt id; refuses another actor or an item edited since.',
