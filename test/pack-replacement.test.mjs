@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { uploadFailure, replacementFeedback } from '../web/horizon/screens/pack-replacement.js';
+import { uploadFailure, replacementFeedback, replacementRemovalIds } from '../web/horizon/screens/pack-replacement.js';
 
 test('replacement upload failures name the actual cause and allow a valid neighboring result', () => {
   for (const status of ['failed', 'unsupported', 'too_large']) {
@@ -22,6 +22,21 @@ test('feedback survives reload, keeps the saved copy and retry state, and is iso
   reloaded.set('old', { ...reloaded.get('old'), code: 'remove_failed', retried: true });
   assert.equal(replacementFeedback(storage, 'owner:household').get('old').retried, true);
   assert.equal(replacementFeedback(storage, 'owner:other-household').get('old'), undefined);
-  reloaded.retain([]);
+  reloaded.clear('old');
   assert.equal(replacementFeedback(storage, 'owner:household').get('old'), undefined);
+});
+
+test('an empty scope keeps feedback in memory without reading or writing browser storage', () => {
+  let accesses = 0;
+  const storage = { getItem() { accesses++; return '{}'; }, setItem() { accesses++; } };
+  const state = replacementFeedback(storage, null);
+  state.set('old', { code: 'failed' });
+  assert.equal(state.get('old').code, 'failed');
+  assert.equal(accesses, 0);
+});
+
+test('a later replacement removes the earlier saved copy and retries only unfinished removals', () => {
+  assert.deepEqual(replacementRemovalIds('old', 'first'), ['old']);
+  assert.deepEqual(replacementRemovalIds('old', 'second', { savedId: 'first', removeIds: ['old'] }), ['first', 'old']);
+  assert.deepEqual(replacementRemovalIds('old', 'second', { savedId: 'second', removeIds: ['old'] }), ['old']);
 });
