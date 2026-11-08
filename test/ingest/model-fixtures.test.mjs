@@ -5,9 +5,9 @@ import { generateCases, manifestOf } from '../../evals/imports/generate.mjs';
 import { validateSourceRef } from '../../src/ingest/model-contract.mjs';
 import { readWorkbook } from '../../src/ingest/workbook.mjs';
 
-test('24 base oracles reproduce their committed checksums and bytes from seed 20320417', () => {
+test('96 lifecycle oracles reproduce their committed checksums and bytes from seed 20320417', () => {
   const cases = generateCases(); const repeat = generateCases();
-  assert.equal(cases.length, 24); assert.equal(new Set(cases.map(c => c.family)).size, 12);
+  assert.equal(cases.length, 96); assert.equal(new Set(cases.map(c => c.family)).size, 12);
   assert.deepEqual(manifestOf(cases), JSON.parse(readFileSync(new URL('../../evals/imports/manifest.json', import.meta.url))));
   for (let i = 0; i < cases.length; i++) {
     assert.deepEqual(cases[i].bytes, repeat[i].bytes);
@@ -20,7 +20,7 @@ test('24 base oracles reproduce their committed checksums and bytes from seed 20
     })) };
     for (const ref of Object.values(source.refs)) assert.equal(validateSourceRef(ref, source).valid, true);
     for (const row of cases[i].oracle.expected) {
-      for (const field of Object.values(row.fields ?? {})) for (const id of field.refs) assert.ok(source.refs[id], id);
+      for (const field of Object.values(row.fields ?? {})) for (const id of field?.refs ?? []) assert.ok(source.refs[id], id);
     }
     if (cases[i].format === 'xlsx') assert.ok(readWorkbook({ bytes: cases[i].bytes }).sheets.length > 0);
   }
@@ -32,6 +32,7 @@ test('oracles preserve blank versus zero, formulas, hidden regions, both epochs 
   const refs = cases.flatMap(c => c.oracle.source.refs);
   assert.ok(refs.some(r => r.value === 0)); assert.ok(refs.some(r => r.valueType === 'empty'));
   assert.ok(refs.some(r => r.formula && r.cached)); assert.ok(refs.some(r => r.formula && !r.cached));
+  assert.ok(cases.some(c => c.oracle.expected.some(row => row.fields?.amount?.transform.op === 'sign')));
   assert.ok(refs.some(r => r.hidden)); assert.ok(refs.some(r => r.mergedAnchor));
   assert.deepEqual([...new Set(cases.filter(c => c.format === 'xlsx').map(c => c.oracle.source.epoch))].sort(), ['1900', '1904']);
   for (const c of cases.filter(c => c.format === 'text')) {
@@ -50,6 +51,6 @@ test('account-scoped ids and equal repeated postings survive in source-derived o
     assert.equal(rows[1].amount, rows[2].amount);
     assert.deepEqual(rows.slice(1).map(r => r.occurrence), [1, 2]);
   }
-  const formulas = generateCases().filter(c => c.family === 'formula_cache');
+  const formulas = generateCases().filter(c => c.family === 'formula_cache' && c.variant === 'base');
   assert.deepEqual(formulas.map(c => c.oracle.reconciliation), ['match', 'conflict']);
 });

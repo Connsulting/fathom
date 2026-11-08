@@ -138,6 +138,8 @@ const SOURCE_LABELS = {
   'pnl:transactions': 'Categorized business transactions',
   'pnl:mixed': 'P&L workbook and categorized transactions',
   'spend:transactions': 'Categorized household transactions',
+  'spend:workbook': 'Personal spreadsheet summaries',
+  'spend:mixed': 'Household transactions and personal spreadsheet summaries',
 };
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
@@ -157,7 +159,7 @@ export function figureRegistry({ kind, labels, files }) {
     const lines = rows.filter((r) => r.table === 'pnl_lines');
     const txns = rows.filter((r) => r.table === 'transactions');
     const source = lines.length && txns.length ? 'workbook and transactions' : lines.length ? 'workbook' : 'transactions';
-    const src = kind === 'spend' ? 'spend:transactions'
+    const src = kind === 'spend' ? lines.length ? txns.length ? 'spend:mixed' : 'spend:workbook' : 'spend:transactions'
       : source === 'workbook' ? 'pnl:workbook' : source === 'transactions' ? 'pnl:transactions' : 'pnl:mixed';
     const accountIds = [...new Set(txns.map((r) => r.accountId))]
       .sort((a, b) => (labels.get(a)?.order ?? 0) - (labels.get(b)?.order ?? 0));

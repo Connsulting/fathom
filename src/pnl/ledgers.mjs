@@ -29,9 +29,12 @@ export function ownerEntityIdentity(entity) {
   return identity;
 }
 
-const personName = text => normalizeName(String(text || '').replace(/['’]s$/i, ''));
+const personName = text => normalizeName(String(text || '').replace(/\s+(?:personal\s+)?(?:summary|summary sheet|monthly summary|budget|income and expenses|income & expenses)$/i, '').replace(/['’]s$/i, ''));
+const nameWords = text => (String(text || '').normalize('NFKC').toLowerCase().replace(/['’]s\b/g, '').match(/[\p{L}\p{N}]+/gu) || []).join(' ');
+export const payrollIncomeCategory = category => /^(?:income|wages|salary|paychecks?|employment income|wages and salary)$/i.test(String(category).trim());
+export const personalIncomeCategory = category => payrollIncomeCategory(category) || /^(?:client income|self.employment income|interest income|dividend income|other income)$/i.test(String(category).trim());
 export function summaryPerson(entity, facts) {
-  const labels = [entity.name, entity.displayName].filter(Boolean);
+  const labels = [entity.name, entity.displayName, ...(entity.lines || []).map(ledgerDisplayName)].filter(Boolean);
   const names = new Set(labels.map(personName));
   const manual = (Array.isArray(facts['business.entities']) ? facts['business.entities'] : []).find(e => e && !e.inferred
     && ['personal', 'income_history'].includes(e.type) && names.has(personName(e.name)) && ['owner', 'spouse'].includes(e.owner));
@@ -40,7 +43,8 @@ export function summaryPerson(entity, facts) {
   if (assigned) return { person: assigned[1], source: 'owner_answer' };
   const household = facts['household.names'] || {};
   const matches = ['owner', 'spouse'].filter(person => [household[person], ...(person === 'owner' ? [household.me] : [])]
-    .filter(n => typeof n === 'string' && n.trim()).some(n => names.has(personName(n)) || names.has(personName(n.split(/\s+/)[0]))));
+    .filter(n => typeof n === 'string' && n.trim()).some(n => [n, n.trim().split(/\s+/)[0]].some(candidate => names.has(personName(candidate))
+      || labels.some(label => ` ${nameWords(label)} `.includes(` ${nameWords(candidate)} `)))));
   return matches.length === 1 ? { person: matches[0], source: 'household_names' } : null;
 }
 
@@ -60,9 +64,10 @@ export function looksLikeSpending(entity, facts) {
   if (lines.some(l => (personal ? /revenue|sales|client fees|consulting fees|officer|payroll/i : /^income$|revenue|sales|client fees|consulting fees/i).test(l.category))) return false;
   const totals = new Map();
   for (const line of lines) totals.set(line.category, (totals.get(line.category) || 0) + line.amount);
-  if ([...totals].some(([category, amount]) => amount > 0 && !(personal && /^income$/i.test(category)) && !PERSONAL_CATEGORIES.has(String(category).trim().toLowerCase()))) return false;
+  if ([...totals].some(([category, amount]) => amount > 0 && !(personal && personalIncomeCategory(category)) && !PERSONAL_CATEGORIES.has(String(category).trim().toLowerCase()))) return false;
   const categories = [...new Set(lines.map(l => String(l.category).trim().toLowerCase()))];
-  return categories.filter(c => PERSONAL_CATEGORIES.has(c)).length > categories.length / 2;
+  const spending = categories.filter(c => PERSONAL_CATEGORIES.has(c)).length;
+  return spending > categories.length / 2 || (personal && spending > 0 && categories.every(c => PERSONAL_CATEGORIES.has(c) || personalIncomeCategory(c)));
 }
 
 export const spendingStatement = entity => `${entity.displayName || entity.name} looks like personal spending: mostly household categories.`;

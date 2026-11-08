@@ -1,6 +1,6 @@
 import { fromStored } from '../../calc/figure.mjs';
 import { buildScenario, tokenScope } from '../../scenario/build.mjs';
-import { notBuiltReason } from '../../jobs/planner/wargame.mjs';
+import { notBuiltReason } from '../../jobs/planner/unlocks.mjs';
 import { clockOf, plainDeep } from './figures.mjs';
 
 const SALARY = { salary: 'salary', payroll: 'payroll', distributions: 'dist', tax: 'tax', room: 'x', taxChange: 'y' };
@@ -58,6 +58,9 @@ export const operations = [{
     out[name] = name === 'salary'
       ? { xLabel: plainDeep(scope, game.xLabel), yLabel: plainDeep(scope, game.yLabel), points: mapped }
       : { monthlyInvoices: figure('wg.deferral.base.income', 'deferral.monthlyInvoices'), options: mapped };
+    // H3: points or options left out for a contribution limit, each with its reason.
+    if (Array.isArray(game.excluded) && game.excluded.length) out[name].excluded = game.excluded.map(e => ({ id: e.id, label: plainDeep(scope, e.label), reason: e.invalid }));
+    if (typeof game.unavailable === 'string' && game.unavailableFix) out.unavailableFix = game.unavailableFix;
     const dated = mapped.flatMap(item => Object.values(item.figures)).find(f => f.asOf);
     out.asOf = dated?.asOf || (name === 'deferral' ? out.deferral.monthlyInvoices.asOf : null);
     return out;

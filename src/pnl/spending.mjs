@@ -8,9 +8,12 @@
 //   Each item: amount (raw signed), value (counted: the outflow positive, a refund negative) and fig (at value).
 
 import { spendingAccount } from '../categories/resolve.mjs';
+import { loadPlanningData } from '../jobs/planner/data.mjs';
+import { getFacts } from '../store/facts.mjs';
+import { personalSummaryInput, selectPersonalSummaries, SUMMARY_RULE } from '../spending/summaries.mjs';
 import {
   PnlError, ITEM_LIMIT, accountLabels, addMonths, byDateDesc, checkDb, checkMonth, checkRange, classified, clockOf, enc,
-  figureRegistry, fileNames, monthSums, rowItem, runsLabel, spanLabel, sumOf, txnRow,
+  figureRegistry, fileNames, monthSums, rowItem, runsLabel, spanLabel, sumOf, txnRow, lineRow,
 } from './shared.mjs';
 
 const INCLUDE = ['tax'];
@@ -27,7 +30,7 @@ const LEFT_OUT = [
   ['saving', 'Saving or investing'],
   ['excluded', 'Excluded'],
 ];
-const SPEND_NOTE = ['Spending is household outflows; a refund lowers its category.'];
+const SPEND_NOTE = ['Spending is household outflows; a refund lowers its category.', SUMMARY_RULE];
 
 function options(list, allowed, name) {
   if (list == null) return [];
@@ -48,12 +51,14 @@ function analyze({ db, from, to, include, exclude, clock }) {
   const labels = accountLabels(db);
   const accounts = base.accounts.filter(spendingAccount);
   const spendingIds = new Set(accounts.map((a) => a.id));
+  const data = loadPlanningData(db, c);
+  const summaries = personalSummaryInput(data, getFacts(db), data.categoryInput);
   const rows = base.transactions.filter((t) => spendingIds.has(t.account_id));
 
   // Default range: the trailing twelve months ending at the latest month with a spending-account
   // row, or the month before when that month is the clock's own (still in progress).
   const clockMonth = c.slice(0, 7);
-  const latest = rows.length ? rows.at(-1).date.slice(0, 7) : addMonths(clockMonth, -1);
+  const latest = [...rows.map(t => t.date.slice(0, 7)), ...summaries.lines.map(l => l.period)].sort().at(-1) ?? addMonths(clockMonth, -1);
   const end = to ?? (latest === clockMonth ? addMonths(clockMonth, -1) : latest);
   const start = from ?? addMonths(end, -11);
   const months = checkRange(start, end);
@@ -80,9 +85,18 @@ function analyze({ db, from, to, include, exclude, clock }) {
       else leave('tax', row);
     } else if (r.bucket !== 'income') leave(r.bucket, row);
   }
+  const supplemental = selectPersonalSummaries(summaries, { window: { from: start, to: end }, payroll: false }).rows.filter(l => !l.income);
+  for (const line of supplemental) {
+    const row = { ...lineRow({ ...line, id: line.sourceId }), value: -line.amount, category: line.category, layer: 'summary', person: line.person, housing: HOUSING.test(line.category) };
+    if (line.bucket === 'household') {
+      if (row.housing && exc.includes('housing')) leave('housing', row);
+      else put('household', row.category, row);
+    } else if (line.bucket === 'tax' && inc.includes('tax')) put('tax', row.category, row);
+    else leave(line.bucket, row);
+  }
   const lastMonth = new Map();
   for (const t of rows) lastMonth.set(t.account_id, t.date.slice(0, 7));
-  const activeMonths = new Set(inRange.map((t) => t.date.slice(0, 7)));
+  const activeMonths = new Set([...inRange.map((t) => t.date.slice(0, 7)), ...supplemental.map(l => l.period)]);
   return { from: start, to: end, months, include: inc, exclude: exc, counted, left, accounts, lastMonth, activeMonths, labels, files: fileNames(db) };
 }
 
@@ -99,8 +113,8 @@ export function householdSpending(opts = {}) {
 
   // Months with any household account transaction: the divisor for every monthly average.
   const active = a.months.filter((m) => a.activeMonths.has(m)).length;
-  const AVG_NOTE = ['The average divides the total by the months that have any household account transaction.'];
-  const AVG_DETAIL = [{ k: 'Uses', v: `${active} ${active === 1 ? 'month' : 'months'} with household account transactions` }];
+  const AVG_NOTE = ['The average divides the total by the months that have household account transactions or summary lines.'];
+  const AVG_DETAIL = [{ k: 'Uses', v: `${active} ${active === 1 ? 'month' : 'months'} with household spending records` }];
   const buckets = [];
   const totalByMonth = new Map();
   for (const bucket of BUCKETS) {
@@ -203,8 +217,8 @@ export function householdSpendingRows({ bucket, category, month, ...opts } = {})
   const reg = figureRegistry({ kind: 'spend', labels: a.labels, files: a.files });
   const byMonth = a.counted[bucket].get(category);
   const rows = (byMonth ? (month ? byMonth.get(month) ?? [] : all(byMonth)) : []).sort(byDateDesc);
-  const items = rows.slice(0, ITEM_LIMIT).map((row) => rowItem(reg, `spend.row.${row.id}`, row, {
-    account: a.labels.get(row.accountId)?.label ?? row.accountId, category, label: `Transaction on ${row.date}`,
+  const items = rows.slice(0, ITEM_LIMIT).map((row) => rowItem(reg, `spend.row.${row.table}.${row.id}`, row, {
+    account: row.table === 'pnl_lines' ? 'Summary sheet' : a.labels.get(row.accountId)?.label ?? row.accountId, category, label: `${row.table === 'pnl_lines' ? 'Summary line' : 'Transaction'} on ${row.date}`,
   }));
   const where = month ? spanLabel(month, month) : spanLabel(a.from, a.to);
   const sum = reg.add(`${keyBase(a)}.rows.${bucket}.${enc(category)}.${month ?? 'total'}`, { v: sumOf(rows), label: `${category}, ${where}`, rows, counted: true, notes: SPEND_NOTE });

@@ -27,6 +27,7 @@ export const ASSUMPTION_TEXT = Object.freeze({
   prior_tax_total_line: "Last year's target uses the total tax on your uploaded return as filed, which may include taxes the safe-harbor rule leaves out, so it may be a little high.",
   paid_rows_as_estimates: 'Every payment in your tax payment log is counted as an estimated payment.',
   w2_plan_compensation: 'The plan uses W-2 compensation: box one wages plus the elective deferrals box one leaves out.',
+  ctc_refundable_unsupported: 'The refundable part of the child tax credit is left out; the credit is limited to income tax.',
   addl_medicare_withholding_not_read: 'Additional Medicare tax withheld by an employer is not read from your W-2s yet, so withholding may be a little low.',
 });
 

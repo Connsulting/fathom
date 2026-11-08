@@ -9,7 +9,8 @@ import { buildScenario, tokenScope } from '../src/scenario/build.mjs';
 import { setSetting } from '../src/store/db.mjs';
 import { loadPlanningData, resolveEntities } from '../src/jobs/planner/data.mjs';
 import { createOut } from '../src/jobs/planner/figures.mjs';
-import { buildWargames, notBuiltReason } from '../src/jobs/planner/wargame.mjs';
+import { buildWargames } from '../src/jobs/planner/wargame.mjs';
+import { notBuiltReason } from '../src/jobs/planner/unlocks.mjs';
 import { householdTax } from '../src/jobs/planner/household.mjs';
 import { payrollTax, TAX_2026 } from '../src/calc/index.mjs';
 

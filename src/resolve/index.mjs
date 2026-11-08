@@ -29,7 +29,7 @@ const mask = value => typeof value === 'string' ? redact(value) : Array.isArray(
   : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, mask(v)])) : value;
 const declined = (db, id) => !!db.prepare('SELECT 1 FROM confirm_auto_declined WHERE item_id=?').get(id);
 function eligible(item) {
-  if (item.kind === 'tax_year') return false;
+  if (['tax_year', 'transaction_payment'].includes(item.kind)) return false;
   if (['fact_check', 'resolver_fact'].includes(item.kind)) {
     try { return closedShape(answerShape(item.context.key)); } catch { return false; }
   }

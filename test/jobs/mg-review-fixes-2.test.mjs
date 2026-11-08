@@ -300,7 +300,8 @@ const PATHS = [
   },
 ];
 
-const listOf = (g, game) => (game === 'salary' ? (g && g.points) || [] : (g && g.options) || []);
+// H3: an over-limit point or option is listed under excluded with its reason, beside the rest.
+const listOf = (g, game) => [...(game === 'salary' ? (g && g.points) || [] : (g && g.options) || []), ...((g && g.excluded) || [])];
 const itemReason = x => ['unavailable', 'blocked', 'invalid'].map(k => x && x[k]).find(nonEmpty) || null;
 const pick = (db, clock, game, item) => wargamePick(api(db, clock, { name: game }, { index: item }));
 

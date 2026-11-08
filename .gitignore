@@ -31,4 +31,6 @@ playwright-report/
 !/evals/imports/
 /evals/imports/*
 !/evals/imports/generate.mjs
+!/evals/imports/run.mjs
+!/evals/imports/live-cap.mjs
 !/evals/imports/manifest.json

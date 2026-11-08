@@ -9,6 +9,9 @@ import { resolveSpendingWindow, SPENDING_KINDS, isBusinessAccount, TARGET_PARAME
 import { classOf, CATEGORY_CLASSES } from './classes.mjs';
 import { envelope, round } from './figure.mjs';
 import { ToolError } from '../tools/errors.mjs';
+import { selectPersonalSummaries, summarySources, SUMMARY_RULE } from '../spending/summaries.mjs';
+import { ownerOf } from '../jobs/planner/data.mjs';
+import { payrollIncomeCategory } from '../pnl/ledgers.mjs';
 
 export const monthIndex = (m) => Number(m.slice(0, 4)) * 12 + Number(m.slice(5, 7)) - 1;
 export const monthAt = (i) => `${Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}`;
@@ -201,23 +204,35 @@ export function coverageGaps(input, window, scope = 'household') {
 export function aggregate(input, args = {}, definition = null) {
   const selected = selectSpendingRows(input),
     { rows, categories, resolved, onSpending } = selected;
-  const window = periodOf(args, input.clock, resolved.window);
+  const summaryMonths = input.personalSummaries?.lines.map(l => l.period).filter(m => m < input.clock.slice(0, 7)).sort() || [];
+  const summaryFrom = summaryMonths.length ? monthAt(Math.max(monthIndex(summaryMonths[0]), monthIndex(summaryMonths.at(-1)) - 11)) : null;
+  const summaryWindow = summaryFrom ? { from: summaryFrom, to: summaryMonths.at(-1), months: monthIndex(summaryMonths.at(-1)) - monthIndex(summaryFrom) + 1 } : null;
+  const window = periodOf(args, input.clock, resolved.window || summaryWindow);
   const scope = args.scope ?? 'household',
     measure = args.measure ?? 'spending';
   const enriched = rows.map((t) => {
     const c = categories.get(t.id);
-    return { ...t, ...c, class: classOf(c.category, c.bucket), merchant: normalizeMerchant(t.description) };
+    return { ...t, ...c, person: ownerOf(input.accounts.find(a => a.id === t.account_id)?.owner) || 'unassigned', class: classOf(c.category, c.bucket), merchant: normalizeMerchant(t.description) };
   });
   const byId = new Map(input.accounts.map((a) => [a.id, a]));
   const defaultWindow = (args.window ?? (args.from || args.to ? 'custom' : 'spending_window')) === 'spending_window';
   const allowed = new Set(onSpending.map((t) => t.id));
   const inWindow = (t) => window && t.date.slice(0, 7) >= window.from && t.date.slice(0, 7) <= window.to;
-  const windowRows = enriched.filter(
+  const summaryDerivedWindow = !resolved.window && !!summaryWindow;
+  const bankRows = enriched.filter(
     (t) =>
       inWindow(t) &&
       scopeHas(byId.get(t.account_id), scope) &&
-      (!defaultWindow || !spendingAccount(byId.get(t.account_id)) || allowed.has(t.id)),
+      (!defaultWindow || summaryDerivedWindow || !spendingAccount(byId.get(t.account_id)) || allowed.has(t.id)),
   );
+  const bankIds = new Set(bankRows.map(t => t.id));
+  const summaryInput = input.personalSummaries ? { ...input.personalSummaries, connected: input.personalSummaries.connected.filter(t => bankIds.has(t.id)) } : null;
+  const summaries = selectPersonalSummaries(summaryInput, { window, payroll: measure === 'income' });
+  const windowRows = bankRows.filter(t => !(measure === 'income' && t.bucket === 'income' && payrollIncomeCategory(t.category)
+    && summaries.payrollRows.some(w => w.person === t.person && t.date.slice(0, 7) >= w.from && t.date.slice(0, 7) <= w.to)));
+  if (scope !== 'business') windowRows.push(...[...summaries.rows, ...(measure === 'income' ? summaries.payrollRows : [])]
+    .filter(t => t.date <= input.clock || t.sourceTable === 'documents')
+    .map(t => ({ ...t, class: classOf(t.category, t.bucket), merchant: normalizeMerchant(t.description) })));
   const transfers = new Set([
     ...matchTransfers(
       rows.filter((t) => t.amount < 0),
@@ -254,7 +269,7 @@ export function aggregate(input, args = {}, definition = null) {
   const value = (t) => (['spending', 'outflow'].includes(measure) ? -t.amount : t.amount);
   const raw = sumRows(counted, value),
     scale = args.annualize && window ? 12 / window.months : 1;
-  const gaps = [];
+  const gaps = measure === 'income' && scope !== 'business' ? [...summaries.gaps] : [];
   for (const [layer, code] of [
     ['uncategorized', 'uncategorized_rows'],
     ['guess', 'guessed_rows'],
@@ -311,7 +326,9 @@ export function aggregate(input, args = {}, definition = null) {
   const f = (v, label, rs, extra = {}) =>
     figureFor(v, label, rs, {
       ...opts,
-      accounts: [...new Set(rs.map((t) => t.account_id))].map((id) => ({ id, label: byId.get(id).name })),
+      accounts: [...new Set(rs.map((t) => t.account_id).filter(Boolean))].map((id) => ({ id, label: byId.get(id).name })),
+      sources: summarySources(rs),
+      ...(rs.some(t => t.sourceTable === 'pnl_lines') ? { formula: `sum of selected amounts; ${SUMMARY_RULE}` } : {}),
       packRefs: [
         ...new Map(
           rs
@@ -343,7 +360,7 @@ export function aggregate(input, args = {}, definition = null) {
   const allGroups = [...map]
     .map(([key, rs]) => ({
       key,
-      label: groupBy === 'account' ? byId.get(key).name : groupBy === 'class' && key === 'debt_service' ? 'All debt payments' : key,
+      label: groupBy === 'account' ? byId.get(key)?.name || 'Summary sheets and payroll' : groupBy === 'class' && key === 'debt_service' ? 'All debt payments' : key,
       figure: f(sumRows(rs, value) * scale, 'Selected group', rs, { unit: total.unit }),
     }))
     .sort((a, b) => Math.abs(b.figure.value) - Math.abs(a.figure.value) || String(a.key).localeCompare(String(b.key)));
@@ -377,6 +394,11 @@ export function aggregate(input, args = {}, definition = null) {
   );
   return {
     total,
+    byPerson: [...Map.groupBy(counted, t => t.person)].map(([person, rs]) => ({ person,
+      total: f(sumRows(rs, value) * scale, `${person} ${measure}`, rs, { unit: total.unit }),
+    })),
+    ...(scope !== 'business' && summaries.evidence.length ? { summaryEvidence: [...Map.groupBy(summaries.evidence, r => r.reason)]
+      .map(([reason, rs]) => ({ reason, sources: summarySources(rs), rule: SUMMARY_RULE })) } : {}),
     perMonth,
     months: window?.months ?? 0,
     window,
@@ -487,17 +509,20 @@ export function cashFlow(input, args) {
     htb = matchTransfers(householdOut, businessIn);
   const categories = resolveCategories({ ...input, transactions: rows });
   const inWindow = (t) => window && t.date.slice(0, 7) >= window.from && t.date.slice(0, 7) <= window.to;
-  const windowRows = rows.filter(inWindow);
+  const summaries = selectPersonalSummaries(input.personalSummaries, { window, payroll: false });
+  const windowRows = [...rows.filter(inWindow), ...summaries.rows.filter(t => t.date <= input.clock)];
   const make = (rs, w) => {
     const gaps = coverageGaps(input, w, args.scope ?? 'all');
-    const f = (v, label, r) => figureFor(v, label, r, { window: w, gaps });
+    const f = (v, label, r) => figureFor(v, label, r, { window: w, gaps, sources: summarySources(r),
+      ...(r.some(t => t.sourceTable === 'pnl_lines') ? { formula: `sum of selected amounts; ${SUMMARY_RULE}` } : {}),
+    });
     const side = (scope) => {
       const r = rs.filter(
         (t) =>
-          scopeHas(byId.get(t.account_id), scope) &&
+          (t.sourceTable === 'pnl_lines' ? scope === 'household' : scopeHas(byId.get(t.account_id), scope)) &&
           ((args.scope ?? 'all') === 'all' || args.scope === scope) &&
           !transferIds.has(t.id) &&
-          categories.get(t.id).bucket !== 'transfer',
+          (t.bucket || categories.get(t.id).bucket) !== 'transfer',
       );
       const incoming = r.filter((t) => t.amount > 0),
         outgoing = r.filter((t) => t.amount < 0);

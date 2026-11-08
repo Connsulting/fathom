@@ -1,4 +1,5 @@
 import { gapControl } from '../../core/gap-control.js';
+import { advisorWaitsHtml } from './unlocks.js';
 // What a waiting recommendation is waiting on, in plain words, with the action that clears it and a
 // link to where it is done, and the estimate gaps on inputs the rec reads, one line each. The
 // planner stores the blocker on the rec while it waits; it is gone the moment the rec is no longer
@@ -18,12 +19,16 @@ export function linkHtml(recId, link, cls = 'h-btn') {
 }
 
 export function html(r, surface) {
+  // H3: waiting on the advisor names each answer and the control that records it, first, beside any
+  // optional estimate improvements.
+  const advisor = r.status === 'waiting' && r.waitingOn === 'advisor' && r.advisorWaits?.length
+    ? advisorWaitsHtml(r.advisorWaits, H).replace('class="h-blocker ', `class="h-blocker h-blocker-${H.esc(surface)} `) : '';
   const { esc } = H;
   const box = body => `<div class="h-blocker h-blocker-${esc(surface)}" role="note">${body}</div>`;
-  // A hold shows only while the rec waits on it.
-  const b = r.status === 'waiting' ? r.blocker : null;
+  // A data hold shows only while the rec waits on it and not on the advisor.
+  const b = r.status === 'waiting' && !advisor ? r.blocker : null;
   const waiting = b ? box(`<b>Waiting on</b><p>${esc(b.text)}</p><p class="h-blocker-do">${esc(b.task)}</p>${b.fix ? gapControl(b.fix, esc) : linkHtml(r.id, b.link)}`) : '';
   // Each gap on an input this rec reads is one line naming its fix; the full list lives on Missing data.
   const gaps = r.gaps?.length ? box(`<b>Optional estimate improvements</b>${r.gaps.map(g => `<p class="h-gap-ref" data-gap-ref="${esc(g.code)}">${esc(g.message)} ${gapControl(g.action, esc)}</p>`).join('')}`) : '';
-  return waiting + gaps;
+  return advisor + waiting + gaps;
 }

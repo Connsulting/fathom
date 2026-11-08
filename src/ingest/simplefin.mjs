@@ -24,6 +24,7 @@ import { ask, normalizeName, ACCOUNT_MATCH_OPTIONS } from './confirm.mjs';
 import { autoResolve } from './auto.mjs';
 import { cents } from './format.mjs';
 import { DEFAULT_HOSTS, parseAllowedHosts } from './simplefin-hosts.mjs';
+import { reconcileTransactionPayments } from './transaction-payments.mjs';
 
 export { DEFAULT_HOSTS, parseAllowedHosts };
 
@@ -449,6 +450,7 @@ export async function syncSimplefin(db, { household, config = {}, hosts, fetch: 
     console.error('fathom: auto-resolve failed', e?.code ?? e?.name ?? 'error');
   }
   queueAccountPairs(db, { now: stamp });
+  reconcileTransactionPayments(db, { now: stamp });
   return { status: authError ? 'reconnect' : 'ok', code: authError ? 'auth' : undefined, changed, counts };
 }
 

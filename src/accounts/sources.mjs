@@ -23,6 +23,7 @@ import { mergePlan } from '../ingest/account-merge.mjs';
 import { refreshFigures } from '../ingest/pipeline.mjs';
 import { accountNaming } from './naming.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
+import { reconcileTransactionPayments } from '../ingest/transaction-payments.mjs';
 
 export const SOURCES_SCOPE = 'write:sources';
 export const CHANGED_SINCE = 'This item changed since that action. Ask for a new change instead.';
@@ -98,6 +99,7 @@ export function removeFile(ctx, id) {
       const unset = db.prepare('UPDATE accounts SET fig_key = NULL WHERE id = ? AND fig_key IS NOT NULL AND fig_key NOT IN (SELECT key FROM figures)');
       for (const account of fed) unset.run(account);
       db.prepare('UPDATE files SET removed_at = ? WHERE id = ?').run(stamp, id);
+      reconcileTransactionPayments(db, { now: stamp });
     });
     const receipt = saveReceipt(ctx, { scope: SOURCES_SCOPE, kind: 'file', id, label: `Remove ${file.name}`, before: { removed_at: null }, after: { removed_at: stamp } });
     db.prepare('INSERT INTO source_changes (receipt_id, changes) VALUES (?, ?)').run(receipt.id, JSON.stringify(changes));
@@ -137,6 +139,7 @@ registerReceiptKind('file', {
     const log = ctx.db.prepare('SELECT changes FROM source_changes WHERE receipt_id = ?').get(receipt.id);
     if (!log) throw new ToolError('conflict', CHANGED_SINCE);
     conflictOnChange(() => revertChanges(ctx.db, JSON.parse(log.changes)));
+    reconcileTransactionPayments(ctx.db, { now: stampOf(ctx) });
   },
 });
 registerReceiptKind('merge', {

@@ -48,6 +48,7 @@ function goLink(r, link, confirmId) {
 }
 
 function note(t) {
+  if (t.auto && t.done && t.evidence?.table === 'transactions') return `Seen in connected transactions${t.doneAt ? ` ${when(t.doneAt)}` : ''}`;
   if (t.auto) return t.done ? 'Done automatically' : PENDING[t.kind] || PENDING.review;
   if (!t.done) return '';
   const day = t.doneAt ? when(t.doneAt) : '';

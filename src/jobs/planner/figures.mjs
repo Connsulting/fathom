@@ -12,7 +12,7 @@ import { isCollegeAccount } from '../../shared/account-kinds.mjs';
 import { ageAtYearEnd, accountOwnerAge } from '../../shared/ages.mjs';
 import { activeInference } from '../../shared/va529-plan.mjs';
 import { estimatedPaymentSafeHarbor, solo401kRoom, sepRoom, hsaLimit, payrollTax, TAX_2026 } from '../../calc/index.mjs';
-import { cents } from '../../store/db.mjs';
+import { cents, parseJson } from '../../store/db.mjs';
 import { accountLabel, sourceLabel } from '../../shared/account-label.mjs';
 import {
   pnlSums, ytd, dateLabel, monthLabel, cleanLabel, sum, addDays,
@@ -27,6 +27,7 @@ import { classifyPayments } from './payments.mjs';
 import { notesFor } from './assumptions.mjs';
 import { trailingCharitable } from './facts.mjs';
 import { buildWargames } from './wargame.mjs';
+import { personalSummaryInput, selectPersonalSummaries, summarySources, SUMMARY_RULE } from '../../spending/summaries.mjs';
 
 const CASH_KINDS = ['checking', 'savings', 'cash', 'business'];
 const PERSONAL_CASH = ['checking', 'savings', 'cash'];
@@ -121,6 +122,15 @@ export function computeFigures(data, facts, ctx) {
   const owner = ctx.owner || {};
   const out = createOut(clock);
   const TY = data.taxYear;
+  const summaries = personalSummaryInput(data, facts, data.categoryInput);
+  const personal = selectPersonalSummaries(summaries, { window: { from: `${data.year}-01`, to: clock.slice(0, 7) }, bankIncome: false, householdSalary: true });
+  for (const person of ['owner', 'spouse']) {
+    const rows = personal.rows.filter(r => r.person === person && r.income);
+    if (!rows.length) continue;
+    out.source('personal-summary', 'Personal spreadsheet summaries', dateLabel(clock), 'ledger');
+    out.put(`inc.ytd.summary-${person}`, sum(rows.map(r => r.amount)), 'a', `${person === 'owner' ? 'Your' : "Your spouse's"} income from the summary sheet`, 'personal-summary',
+      { ...rowsLoc('pnl_lines', rows.map(r => r.sourceId)), sources: summarySources(rows), notes: ['From the summary sheet; recorded payroll and household business salary cover wages for the same person and months.'] }, rows[0].fileId);
+  }
 
   // Accounts and cash.
   const accounts = data.accounts;
@@ -142,7 +152,7 @@ export function computeFigures(data, facts, ctx) {
     if (biz.length) out.put('cash.business', bizTotal, 'a', 'Business cash', 'calc:cash', rowsLoc('balances', biz.flatMap(a => a.latest.ids)));
     out.put('cash.personal', cents(total - bizTotal), 'a', 'Personal cash', 'calc:cash', rowsLoc('balances', withBal(PERSONAL_CASH).flatMap(a => a.latest.ids)));
   }
-  monthlyOutflow(data, out);
+  monthlyOutflow(data, out, summaries);
 
   // Profit and loss per entity.
   const year = data.year;
@@ -275,6 +285,14 @@ export function computeFigures(data, facts, ctx) {
     const code = part.blocked;
     const gap = taxGap(code, { employer: keys[0].startsWith('tax.fed.') ? 'federal payments' : 'Virginia payments' });
     gap.figureKeys = keys;
+    if (code === 'estimated_payer_unknown') {
+      const accounts = new Set(part.rows.filter(r => r.parser === 'transaction-payment').map(r => parseJson(r.locator, {}).transaction?.accountId));
+      const question = data.confirm.find(i => i.kind === 'account_owner' && i.status === 'pending' && accounts.has(i.subject));
+      if (question) {
+        gap.message = 'Excluded connected-account estimates until we know whose account paid them.';
+        gap.action = { screen: 'confirm', id: question.id, label: 'Name the account owner' };
+      }
+    }
     if (code === 'withholding_recipient_unknown' && keys[0] === 'tax.va.withheld') gap.action = {
       screen: 'ask', key: 'tax.withholding.virginia', label: 'Enter the withholding total', prompt: 'Record my total Virginia withholding for this tax year. Ask me for the amount.',
     };
@@ -700,10 +718,10 @@ export function computeFigures(data, facts, ctx) {
   } else {
     // R3-7: with no household tax neither game can be built from current inputs. With no S corp
     // on file the salary game's missing input is the S corp itself, whatever else blocks tax.
-    const code = out.info.blocked[0] || vaBlocked || 'inputs_changed';
+    const code = out.info.blocked[0] || vaBlocked || 'calc_failed';
     const unclassified = pnlEntities.find(e => !e.classified);
     out.info.wargameInvalid.salary = unclassified ? `entity_unclassified:${unclassified.slug}` : corps.length ? code
-      : facts['income.sCorp'] === true && data.pnl.length ? 'scorp_identity_missing' : 'inputs_changed';
+      : facts['income.sCorp'] === true && data.pnl.length ? 'scorp_identity_missing' : 'scorp_missing';
     out.info.wargameInvalid.deferral = code;
   }
 
@@ -796,13 +814,13 @@ export function priorFicaWages(data, owner, person, corpName) {
   return amount(fact && typeof fact === 'object' ? fact[person] : undefined);
 }
 
-// inc.ytd.total (F8): every income-received figure, P&L entities plus outside wages.
+// inc.ytd.total: business receipts, outside wages and uncovered personal summary income.
 function incomeTotal(out) {
   const keys = Object.keys(out.figures).filter(k => k.startsWith('inc.ytd.') && k !== 'inc.ytd.total').sort();
   if (!keys.length) return;
   const total = sum(keys.map(k => out.figures[k].v));
   out.put('inc.ytd.total', total, keys.some(k => out.figures[k].kind !== 'a') ? 'e' : 'a', 'Income received this year', 'calc:income',
-    { ...rowsLoc('figures', keys), calc: 'sum', inputs: Object.fromEntries(keys.map(k => [k, out.figures[k].v])), steps: [{ label: 'Income received', formula: 'sum of income received per business plus outside wages', value: total }] });
+    { ...rowsLoc('figures', keys), calc: 'sum', inputs: Object.fromEntries(keys.map(k => [k, out.figures[k].v])), steps: [{ label: 'Income received', formula: 'sum of business receipts, outside wages and uncovered summary income', value: total }] });
 }
 
 function finish(out) {
@@ -839,7 +857,7 @@ function finish(out) {
 const dayNumber = iso => Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))) / 86400000;
 const toCents = v => Math.round(Number(v) * 100);
 
-function monthlyOutflow(data, out) {
+function monthlyOutflow(data, out, summaries) {
   const spend = data.accounts.filter(SPEND_ACCOUNT);
   const ids = new Set(spend.map(a => a.id));
   const household = new Set(data.accounts.map(a => a.id));
@@ -862,11 +880,14 @@ function monthlyOutflow(data, out) {
       && toCents(u.amount) === want && Math.abs(dayNumber(u.date) - dayNumber(t.date)) <= 5);
     if (m) { usedIds.add(m); matched += 1; } else rows.push(t);
   }
-  const total = -sum(rows.map(t => t.amount));
+  const supplemental = selectPersonalSummaries(summaries, { window: { from: months[0], to: months.at(-1) }, payroll: false }).rows.filter(r => !r.income && !['transfer', 'excluded'].includes(r.bucket) && r.amount < 0);
+  const total = -sum([...rows, ...supplemental].map(t => t.amount));
   if (!(total > 0)) return;
   const avg = cents(total / 3);
   out.put('cash.monthlyOut', avg, 'e', 'Average monthly spending from personal accounts', 'calc:cash', {
     calc: 'monthlyOutflow', ...rowsLoc('transactions', rows.map(t => t.id)),
+    sources: summarySources([...rows, ...supplemental]),
+    ...(supplemental.length ? { notes: [SUMMARY_RULE] } : {}),
     inputs: { months, matchedTransfers: matched, accounts: spend.map(a => a.id) },
     steps: [
       { label: 'Matched transfers excluded', formula: 'outflows matched to an equal inflow on another household account within five days', value: matched },
