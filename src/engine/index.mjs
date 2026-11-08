@@ -193,8 +193,9 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
   const scripted = [...responses];
   let poisoned = false;
   const call = async ({ purpose, system = '', systemDynamic = '', messages, tools = [], maxTokens = 1024, schema, grounding = {}, fake,
-    toolContext: callContext, onEvent } = {}) => {
+    toolContext: callContext, onEvent, budgetUsd } = {}) => {
     if (mode === 'off') throw new EngineOffError();
+    if (budgetUsd !== undefined && (!Number.isFinite(budgetUsd) || budgetUsd < 0)) throw new TypeError('Invalid call budget');
     const answer = createAnswerAssembler();
     // The text streamed in the current round since its last interim event.
     let roundStream = '';
@@ -250,6 +251,10 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
         const ts = new Date(now()).toISOString();
         const spend = await ledger.monthSpendUsd(monthKey(ts));
         if (!Number.isFinite(spend) || spend < 0) throw new ModelAccountingError();
+        const remainingBudget = Math.min(capUsd - spend, budgetUsd === undefined ? Infinity : budgetUsd - cost);
+        if (budgetUsd !== undefined && estimateUnknownCost({ model, maxTokens, system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools }).costUsd > remainingBudget) {
+          throw new BudgetExceededError();
+        }
         if (spend >= capUsd) { const error = new BudgetExceededError(); error.toolResults = allResults; throw error; }
         if (admitRound) await admitRound({ purpose, system, systemDynamic, messages: transcript, tools, maxTokens });
         const auth = mode === 'live' ? explicitCredential(credential) : undefined;
@@ -284,11 +289,11 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               status: script.status ?? (script.toolCalls?.length ? 'error_max_turns' : 'success'),
               is_error: script.is_error === true, api_error_status: script.api_error_status ?? null,
               accountingUnknown: script.accountingUnknown ?? false, toolResults: registry.results,
-              content: Array.isArray(script.content) ? script.content : [{ type: 'text', text }], details: { maxBudgetUsd: capUsd - spend } };
+              content: Array.isArray(script.content) ? script.content : [{ type: 'text', text }], details: { maxBudgetUsd: remainingBudget } };
           } else {
             try {
               round = await (SINGLE_ROUND.includes(purpose) ? messagesRound : roundRunner)({ credential: auth, system, systemDynamic,
-                messages: transcript, tools, maxTokens, maxBudgetUsd: capUsd - spend, model, registry, schema, ...(emit ? { onEvent: emit } : {}) });
+                messages: transcript, tools, maxTokens, maxBudgetUsd: remainingBudget, model, registry, schema, ...(emit ? { onEvent: emit } : {}) });
             } catch {
               round = { text: '', content: [], status: 'transport_error', is_error: true,
                 accountingUnknown: true, model, tokens: {}, toolResults: registry.results, details: {} };

@@ -36,19 +36,32 @@ test('the checklist lists expected, received and unmatched documents with source
 
 test('marking a document not needed keeps the reason across reload and can be undone @mobile', async ({ page }) => {
   await gotoRoute(page, 'yearend');
-  await item(page, '1099-k').getByRole('button', { name: 'Not needed' }).click();
-  const form = page.locator('form[data-ye-form="1099-k"]');
+  await item(page, '1099-nec').getByRole('button', { name: 'Not needed', exact: true }).click();
+  const form = page.locator('form[data-ye-form="1099-nec"]');
   await form.getByRole('button', { name: 'Save' }).click();
   await expect(form, 'an empty reason is not saved').toBeVisible();
-  await form.locator('input[name="reason"]').fill('No card processor this year');
+  await form.locator('input[name="reason"]').fill('No reportable client payments this year');
   await form.getByRole('button', { name: 'Save' }).click();
-  const skipped = group(page, 'skipped').locator('[data-ye-item="1099-k"]');
-  await expect(skipped).toContainText('Not needed: No card processor this year');
+  const skipped = group(page, 'skipped').locator('[data-ye-item="1099-nec"]');
+  await expect(skipped).toContainText('Not needed: No reportable client payments this year');
   await page.reload();
-  await expect(group(page, 'skipped').locator('[data-ye-item="1099-k"]')).toContainText('No card processor this year');
-  await group(page, 'skipped').locator('[data-ye-item="1099-k"]').getByRole('button', { name: 'Needed after all' }).click();
+  await expect(group(page, 'skipped').locator('[data-ye-item="1099-nec"]')).toContainText('No reportable client payments this year');
+  await group(page, 'skipped').locator('[data-ye-item="1099-nec"]').getByRole('button', { name: 'Needed after all' }).click();
+  await expect(group(page, 'expected').locator('[data-ye-item="1099-nec"]')).toBeVisible();
+});
+
+test('inferred documents show the reason and evidence, and Undo survives reload @mobile', async ({ page }) => {
+  await gotoRoute(page, 'yearend');
+  const inferred = item(page, '1099-k');
+  await expect(inferred).toContainText('Inferred not needed: No payment-processor deposits in stored 2026 history.');
+  await inferred.locator('[data-ye-evidence] summary').click();
+  await expect(inferred.locator('[data-ye-evidence]')).toContainText('transactions row');
+  await expect(inferred.locator('[data-ye-evidence]')).toContainText('ledger:row');
+  await inferred.getByRole('button', { name: 'Needed after all' }).click();
   await expect(group(page, 'expected').locator('[data-ye-item="1099-k"]')).toBeVisible();
-  await expect(group(page, 'skipped')).toHaveCount(0);
+  await page.reload();
+  await expect(group(page, 'expected').locator('[data-ye-item="1099-k"]')).toBeVisible();
+  await expect(item(page, '1099-k').locator('[data-ye-evidence]')).toHaveCount(0);
 });
 
 test('assembling the packet downloads a zip of the index and every received document @mobile', async ({ page }, info) => {
