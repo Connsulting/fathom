@@ -5,7 +5,7 @@ import { categoryGuess } from '../categories/store.mjs';
 // quotes stored values. Rule guesses come from stored rows (account kind from the account name,
 // same for a near duplicate on the same date with the same amount, joint for a holder naming both
 // household members); otherwise the stored engine guess, whose fixed reason code is rendered from
-// the card's own detail. The fixed reason sentence is never the evidence. A guess never answers.
+// the card's own detail. The fixed reason sentence is never the evidence. The resolver can apply a grounded choice.
 // bestGuess(db, item, detail) -> {option, label, evidence, source: 'rule' | 'engine'} | null
 
 import { parseJson } from '../store/db.mjs';
