@@ -1,5 +1,5 @@
-// Rich Ask answers, B3 (docs/plans/rich-ask-answers.md sections 2 and 5): stored table and compare
-// blocks drawn in an answer on the Ask page, in the docked panel (down to its 320px minimum, a
+// Rich Ask answers, B3 and B4 (docs/plans/rich-ask-answers.md sections 2 and 5): stored table,
+// compare, chart and timeline blocks drawn in an answer on the Ask page, in the docked panel (down to its 320px minimum, a
 // 288px content box), in the phone sheet and in the rec dialog, in light and dark color schemes.
 // The demo server's fake engine answers a real question; page.route rewrites the scenario so that
 // answer carries the synthetic fixture blocks from test/fixtures/blocks. Expected labels, values
@@ -12,6 +12,10 @@ const fx = (name) => JSON.parse(readFileSync(new URL(`../test/fixtures/blocks/${
 const TABLE = fx('table');
 const COMPARE = fx('compare');
 const NOTES = fx('notes');
+const LINE = fx('chart-line');
+const SCATTER = fx('chart-scatter');
+const TIMELINE = fx('timeline');
+const DRAWN = [LINE, SCATTER, TIMELINE];
 const REC_ID = 'dcfsa';
 const STORE_KEY = 'fathom.askPanel';
 
@@ -38,7 +42,7 @@ async function withBlocks(page, threads) {
       const list = convs[th.key] || [];
       const last = [...list].reverse().find((m) => m.role === 'fathom');
       if (!last) continue;
-      last.provenance = { ...(last.provenance || {}), blocks: [TABLE, COMPARE, ...NOTES.blocks], blockNotes: NOTES.blockNotes };
+      last.provenance = { ...(last.provenance || {}), blocks: [TABLE, COMPARE, ...DRAWN, ...NOTES.blocks], blockNotes: NOTES.blockNotes };
     }
     await route.fulfill({ response: res, json: body });
   });
@@ -60,8 +64,11 @@ async function expectBlocks(scope, page) {
   await expect(t.locator('th[scope="col"]')).toHaveText(TABLE.snapshot.columns.map((x) => x.label));
   await expect(c.locator('section[role="group"] h4')).toHaveText(COMPARE.snapshot.options.map((o) => o.label));
   for (const n of NOTES.blockNotes) await expect(scope.getByText(n.text, { exact: true }).first()).toBeVisible();
+  for (const b of DRAWN) await expect(blk(scope, b).locator('figcaption')).toHaveText(b.snapshot.title);
+  await expect(blk(scope, LINE).locator('svg[role="img"]')).toHaveAttribute('aria-label', /^Line chart of /);
+  await expect(blk(scope, TIMELINE).locator('ol > li')).toHaveCount(TIMELINE.snapshot.events.length);
   const vw = page.viewportSize().width;
-  for (const b of [t, c]) {
+  for (const b of [t, c, ...DRAWN.map((x) => blk(scope, x))]) {
     const box = await b.boundingBox();
     expect(box.x, 'block starts on screen').toBeGreaterThanOrEqual(0);
     expect(box.x + box.width, 'block ends on screen').toBeLessThanOrEqual(vw + 0.5);
@@ -114,7 +121,7 @@ test.describe('ask blocks', () => {
     const pb = await panel(page).boundingBox();
     expect(Math.round(pb.width)).toBe(320);
     await expectBlocks(panel(page), page);
-    for (const b of [blk(panel(page), TABLE), blk(panel(page), COMPARE)]) {
+    for (const b of [TABLE, COMPARE, ...DRAWN].map((x) => blk(panel(page), x))) {
       const box = await b.boundingBox();
       expect(box.width, 'block fits the 288px content box').toBeLessThanOrEqual(288.5);
       expect(box.x).toBeGreaterThanOrEqual(pb.x);
@@ -214,6 +221,66 @@ test.describe('ask blocks', () => {
     await expect(pop).toBeVisible();
     for (const a of target.provenance.assumptions) {
       await expect(pop.locator('.fx-pop-row', { hasText: 'Assumes' }).locator('.fx-pop-v')).toContainText(a.stated);
+    }
+  });
+
+  test('@mobile charts: arrow keys move the active point and the live region, Enter opens the popover, Escape returns focus', async ({ page }) => {
+    if (page.viewportSize().width > 400) await page.setViewportSize({ width: 1280, height: 900 });
+    const s = LINE.snapshot;
+    for (const colorScheme of ['light', 'dark']) {
+      await page.emulateMedia({ colorScheme });
+      await gotoRoute(page, `ask/${thread.id}`);
+      const ch = blk(page.locator('.h-root'), LINE);
+      await expect(ch).toBeVisible();
+      const plot = ch.locator('.h-blk-plot');
+      const read = ch.locator('.h-blk-read');
+      await expect(read).toHaveAttribute('aria-live', 'polite');
+      await plot.focus();
+      await page.keyboard.press('Home');
+      await expect(read).toContainText(s.series[0].label);
+      await expect(read).toContainText(s.x[0].text);
+      await page.keyboard.press('ArrowRight');
+      await expect(read).toContainText(s.x[1].text);
+      await page.keyboard.press('ArrowDown');
+      await expect(read).toContainText(s.series[1].label);
+      await expect(read).toContainText(s.x[1].text);
+      await expect(plot).toBeFocused();
+
+      const target = s.series[1].points[1];
+      await page.keyboard.press('Enter');
+      const pop = page.locator('.fx-pop');
+      await expect(pop).toBeVisible();
+      await expect(pop.locator('.fx-pop-label')).toHaveText(target.label);
+      await expect(pop.locator('.fx-pop-row', { hasText: 'Source' }).locator('.fx-pop-v')).toHaveText(target.source);
+      await expect(pop.locator('.fx-pop-row', { hasText: 'As of' }).locator('.fx-pop-v')).toHaveText(target.asOf);
+      await page.keyboard.press('Escape');
+      await expect(pop).toHaveCount(0);
+      await expect(plot).toBeFocused();
+
+      // The scatter moves along its points in x order.
+      const sc = blk(page.locator('.h-root'), SCATTER);
+      await sc.locator('.h-blk-plot').focus();
+      await page.keyboard.press('End');
+      const last = [...SCATTER.snapshot.points].sort((a, b) => a.x.value - b.x.value).at(-1);
+      await expect(sc.locator('.h-blk-read')).toContainText(last.label);
+
+      // The Table toggle swaps in the same values as a table, and back.
+      const tog = ch.locator('button.h-blk-tog');
+      await expect(tog).toHaveText('Table');
+      await expect(tog).toHaveAttribute('aria-pressed', 'false');
+      const ctl = await tog.getAttribute('data-blk-ctl');
+      await tog.focus();
+      await page.keyboard.press('Enter');
+      const on = page.locator(`[data-blk-ctl="${ctl}"]`);
+      await expect(on).toHaveAttribute('aria-pressed', 'true');
+      await expect(on).toBeFocused();
+      await expect(ch.locator('table th[scope="col"]').nth(1)).toHaveText(s.series[0].label);
+      await expect(ch.locator('tbody tr')).toHaveCount(s.x.length);
+      await expect(ch.locator('svg')).toHaveCount(0);
+      await page.keyboard.press('Enter');
+      await expect(on).toHaveAttribute('aria-pressed', 'false');
+      await expect(ch.locator('svg[role="img"]')).toBeVisible();
+      await noSidewaysScroll(page);
     }
   });
 
