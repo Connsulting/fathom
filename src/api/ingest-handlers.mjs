@@ -33,7 +33,7 @@ const FINAL_MESSAGE = {
   used_since: 'A later import used this answer, so it is final.',
 };
 
-const answerContext = ctx => ({ ...ctx, household: ctx.household ?? ctx.services?.household, scheduler: ctx.scheduler ?? ctx.household?.scheduler ?? ctx.services?.household?.scheduler });
+const schedulerOf = ctx => ctx.scheduler ?? ctx.household?.scheduler ?? ctx.services?.household?.scheduler;
 
 const nowIso = () => new Date().toISOString();
 const storeMode = db => (getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real');
@@ -54,11 +54,11 @@ const safeCode = err => [err && err.code, err && err.name].find(v => typeof v ==
 
 // Fire and forget: a trigger failure logs a code and never fails the request.
 function triggerJob(ctx, jobId) {
-  ctx = answerContext(ctx);
-  if (!ctx.scheduler) return;
+  const scheduler = schedulerOf(ctx);
+  if (!scheduler) return;
   const failed = err => console.error(`fathom: ${jobId} trigger failed`, safeCode(err));
   try {
-    const p = ctx.scheduler.trigger(jobId, 'ingest');
+    const p = scheduler.trigger(jobId, 'ingest');
     if (p && typeof p.then === 'function') p.then(null, failed);
   } catch (err) {
     failed(err);
@@ -154,7 +154,7 @@ function confirmAction(ctx, fn) {
   }
   resolveAfterAnswer(ctx);
   if (out.factsChanged) {
-    try { refreshPackState(ctx.db, { dataDir: ctx.household.root }); } catch (err) { console.error('fathom: pack refresh failed', err && err.name); }
+    try { refreshPackState(ctx.db, { dataDir: ctx.household?.root ?? ctx.services?.household?.root }); } catch (err) { console.error('fathom: pack refresh failed', err && err.name); }
   }
   const withFinal = item => {
     const now = getItem(ctx.db, item.id) || item;
@@ -178,11 +178,11 @@ function resolveAfterAnswer(ctx) {
 // the scheduler's debounce: one run 30 s after the last answer of a burst, or right away once the
 // pending queue is empty. The run's job_runs trigger is 'confirm'. Never fails the request.
 export function schedulePlan(ctx) {
-  ctx = answerContext(ctx);
-  if (!ctx.scheduler || typeof ctx.scheduler.soon !== 'function' || storeMode(ctx.db) === 'demo') return;
+  const scheduler = schedulerOf(ctx);
+  if (!scheduler || typeof scheduler.soon !== 'function' || storeMode(ctx.db) === 'demo') return;
   try {
     const left = ctx.db.prepare("SELECT count(*) AS n FROM confirm_items WHERE status = 'pending'").get().n;
-    ctx.scheduler.soon('plan', 'confirm', { immediate: left === 0 });
+    scheduler.soon('plan', 'confirm', { immediate: left === 0 });
   } catch (err) {
     console.error('fathom: plan trigger failed', safeCode(err));
   }
@@ -191,7 +191,6 @@ export function schedulePlan(ctx) {
 // A confirm action with its follow-ups: auto-resolution, the plan schedule and, for an account
 // question, a freshness run. Shared by the account dialog's owner, kind and merge edits.
 export function afterAnswer(ctx, fn) {
-  ctx = answerContext(ctx);
   try {
     const out = confirmAction(ctx, fn);
     schedulePlan(ctx);

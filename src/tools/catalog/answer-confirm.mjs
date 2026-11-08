@@ -17,7 +17,11 @@ const nowOf=ctx=>new Date(ctx.now ?? Date.now()).toISOString();
 const itemState=(db,ids)=>ids.map(id=>{const row=db.prepare('SELECT * FROM confirm_items WHERE id=?').get(id);return row?{...row}:null;});
 const changed=()=>{throw new ToolError('changed_since','This item changed since that action.');};
 const ident=s=>'"'+s.replaceAll('"','""')+'"';
-function domain(fn){try{return fn();}catch(err){if(err.name==='ConfirmError'||err instanceof HttpError)throw new ToolError(err.reason||err.code||(err.status===404?'not_found':'bad_input'),err.reason||err.message);throw err;}}
+function domainError(err) {
+  if (err.name === 'ConfirmError' || err instanceof HttpError) return new ToolError(err.reason || err.code || (err.status === 404 ? 'not_found' : err.status === 409 ? 'conflict' : 'bad_input'), err.reason || err.message);
+  return err;
+}
+function domain(fn) { try { return fn(); } catch (err) { throw domainError(err); } }
 function changedRows(db,ids) {
   const changes=ids.flatMap(id=>parseJson(db.prepare('SELECT changes FROM confirm_undo WHERE item_id=?').get(id)?.changes,[])||[]);
   return [...new Map(changes.map(c=>[`${c.table}:${c.rowid}`,{table:c.table,rowid:c.rowid,fields:c.op==='update'&&c.table==='accounts'?Object.keys(JSON.parse(c.after)).filter(k=>JSON.parse(c.before)[k]!==JSON.parse(c.after)[k]):null}])).values()];
@@ -71,7 +75,7 @@ async function recQuestions(args,ctx){
   await saveRecAnswers(ctx,{recId:args.recId,answers:args.answers},{now:nowOf(ctx),channel:ctx.channel==='mcp'?'mcp':'ask',actorId,replan:async()=>{},onWrite(before,after){
     const receipt=saveReceipt(ctx,{scope:'write:facts',kind:'fact',id:after.key,label:'Recommendation answer',before:select(before),after:select(after),from:parseJson(before?.value,null),to:parseJson(after.value,null)});
     if(receipt)receipts.push(receipt);
-  }});
+  }}).catch(err => { throw domainError(err); });
   let planningPending=false;
   for(const receipt of receipts)ctx.onReceipt?.(receipt);
   if(receipts.length){planningPending=await replanAction(ctx,receipts[0]);for(const receipt of receipts.slice(1)){

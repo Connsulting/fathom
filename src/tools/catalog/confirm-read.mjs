@@ -7,7 +7,7 @@ import { bounded } from './balances.mjs';
 import { ToolError } from '../errors.mjs';
 
 export function confirmItems(args, ctx) {
-  const status=args.status ?? 'pending';
+  const status=args.status ?? (args.ids ? 'all' : 'pending');
   let items;
   if (args.ids) {
     items=args.ids.map(id=>getConfirm({...ctx,params:{id:String(id)}}).item)
