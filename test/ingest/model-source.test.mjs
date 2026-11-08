@@ -83,3 +83,12 @@ test('deterministic sums, signs, USD and date transforms reject invalid source v
   s.values[ids[0]] = 99;
   assert.throws(() => resolveField(s, field([ids[0]])), /changed/);
 });
+
+test('private names and credential identifiers crossing leaf boundaries remain masked', async () => {
+  const prefix = 'a'.repeat(494);
+  const s = await indexSource(file(`${prefix} Syntheticperson token=${'secret'.repeat(120)}`, 'text'), { householdNames: { me: 'Syntheticperson' } });
+  const wire = JSON.stringify(s.envelope);
+  assert.ok(!wire.includes('Synthe'));
+  assert.ok(!wire.includes('person'));
+  assert.ok(!wire.includes('secret'));
+});

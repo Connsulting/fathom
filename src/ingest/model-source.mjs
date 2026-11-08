@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readWorkbook } from './workbook.mjs';
-import { delimitedCells, text, number, cents, isoDate, LimitError } from './format.mjs';
+import { delimitedCells, number, cents, isoDate, LimitError } from './format.mjs';
 import { pdfText } from './pdftext.mjs';
 import { scrubDescription } from '../categories/jev.mjs';
 
@@ -19,25 +19,26 @@ export async function indexSource(file, privacy = {}) {
   const envelope = { sheets: [], regions: [], values: [] };
   source.envelope = envelope;
   let tokenIndex = 0, refIndex = 0;
-  const privateWords = [...Object.values(privacy.householdNames ?? {}).filter(v => typeof v === 'string').flatMap(v => v.split(/\s+/)),
-    ...(privacy.entityNames ?? []), ...(privacy.accounts ?? []).flatMap(a => [a.name, a.institution, a.mask, a.id])].filter(v => typeof v === 'string' && v.trim());
+  const privateWords = [file.name, ...Object.values(privacy.householdNames ?? {}).filter(v => typeof v === 'string').flatMap(v => v.split(/\s+/)),
+    ...(privacy.entityNames ?? []), ...(privacy.accounts ?? []).flatMap(a => [a.name, a.inst, a.mask, a.id])].filter(v => typeof v === 'string' && v.trim()).map(v => v.normalize('NFKC'));
   function masked(value) {
     let s = String(value).normalize('NFKC');
     for (const word of privateWords) s = s.replace(new RegExp(escape(word), 'gi'), '[redacted]');
     return s.replace(identifiers, '[redacted]');
   }
   function add(value, meta) {
+    if (refIndex >= 250000) throw new LimitError('Too many source references');
     const id = `r${refIndex++}`;
     source.refs[id] = { fileId: file.fileId, sha256, rawHash: digest(JSON.stringify(value)), valueType: typeof value === 'number' ? 'number' : typeof value === 'boolean' ? 'boolean' : value === '' ? 'empty' : 'text', precision: 'exact', ...meta };
     source.values[id] = value;
     return id;
   }
-  function view(id) {
+  function view(id, redacted = null) {
     const r = source.refs[id], raw = source.values[id];
     let value;
     if (r.valueType === 'number' || r.valueType === 'date' || r.valueType === 'boolean') value = opaque(tokenIndex++);
     else {
-      const clean = masked(raw);
+      const clean = redacted ?? masked(raw);
       value = clean.replace(quantity, () => opaque(tokenIndex++));
       value = value.match(/[\s\S]{1,500}/g)?.map(part => scrubDescription(part, privacy)).join('') ?? '';
     }
@@ -68,7 +69,14 @@ export async function indexSource(file, privacy = {}) {
             ...(merge ? { mergedAnchor: merge.split(':')[0] } : {}) });
           ids.push(id); view(id);
         }
-        if (ids.length) region(ids, ids.every(id => source.refs[id].valueType === 'empty') ? 'empty' : sheet.hidden ? 'hidden' : 'unresolved');
+        const groups = new Map();
+        for (const id of ids) {
+          const r = source.refs[id];
+          const disposition = ['empty', 'error'].includes(r.valueType) ? r.valueType : r.formula && !r.cached ? 'uncached_formula' : r.hidden ? 'hidden' : 'unresolved';
+          if (!groups.has(disposition)) groups.set(disposition, []);
+          groups.get(disposition).push(id);
+        }
+        for (const [disposition, group] of groups) region(group, disposition);
       }
     });
   } else if (['csv', 'tsv'].includes(file.format)) {
@@ -76,7 +84,7 @@ export async function indexSource(file, privacy = {}) {
     const headers = rows[0]?.values.map((_, i) => `h${i}`) ?? [];
     for (const row of rows) {
       const ids = row.values.map((value, i) => add(value, { row: row.row, column: i + 1, headerRef: headers[i] ?? `h${i}` }));
-      ids.forEach(view); region(ids);
+      ids.forEach(id => view(id)); region(ids);
     }
   } else if (['text', 'pdf'].includes(file.format)) {
     let input;
@@ -84,10 +92,13 @@ export async function indexSource(file, privacy = {}) {
       const pdf = await pdfText(bytes);
       if (pdf.status !== 'text') return { ...source, status: 'needs_source_text' };
       input = pdf.text; source.bytes = Buffer.from(input);
-    } else input = text({ bytes });
+    } else input = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
     let offset = 0, page = 1, line = 1;
     for (const part of input.match(/[^\n\f]*[\n\f]?/g) ?? []) {
       if (!part) continue;
+      const blockedSpans = [...part.matchAll(identifiers)].map(m => [m.index, m.index + m[0].length]);
+      for (const word of privateWords) for (const m of part.matchAll(new RegExp(escape(word), 'gi'))) blockedSpans.push([m.index, m.index + m[0].length]);
+      let charOffset = 0;
       for (const chunk of part.match(/[\s\S]{1,500}/gu) ?? []) {
         const byteStart = offset, byteEnd = offset + Buffer.byteLength(chunk);
         const id = add(chunk, { line, ...(file.format === 'pdf' ? { page } : {}), byteStart, byteEnd });
@@ -95,11 +106,14 @@ export async function indexSource(file, privacy = {}) {
         // Quantity references retain original byte positions. Identifier spans never gain tokens.
         for (const m of chunk.matchAll(quantity)) {
           const before = chunk.slice(0, m.index), end = m.index + m[0].length;
-          const blocked = [...chunk.matchAll(identifiers)].some(i => m.index < i.index + i[0].length && end > i.index);
+          const blocked = blockedSpans.some(([a, b]) => charOffset + m.index < b && charOffset + end > a);
           if (!blocked) ids.push(add(m[0], { line, ...(file.format === 'pdf' ? { page } : {}),
             byteStart: byteStart + Buffer.byteLength(before), byteEnd: byteStart + Buffer.byteLength(before + m[0]) }));
         }
-        ids.forEach(view); region(ids); offset = byteEnd;
+        let safe = '';
+        for (let i = 0; i < chunk.length; i++) safe += blockedSpans.some(([a, b]) => charOffset + i >= a && charOffset + i < b) ? 'X' : chunk[i];
+        view(id, masked(safe));
+        ids.slice(1).forEach(valueId => view(valueId)); region(ids); offset = byteEnd; charOffset += chunk.length;
       }
       if (part.endsWith('\f')) { page++; line = 1; } else if (part.endsWith('\n')) line++;
     }
