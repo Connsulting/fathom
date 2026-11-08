@@ -194,7 +194,7 @@ export async function prepareRecFacts(db, data) {
     key: 'business.entities', path: [entity.name], value: entity.type, undoKey: 'business.entityInference',
     evidence: `${entity.name}: inferred ${entity.type === 'personal' ? 'personal spending and income summary' : entity.type === 'income_history' ? 'past client income history' : entity.type === 'inactive' ? 'inactive past business' : entity.type === null ? 'household business with tax type pending' : 'S corp'} from stored ${entity.inferenceKind === 'household_payroll' ? 'household employer and payroll evidence' : 'ledger activity'}.${entity.type === 'personal' ? entity.owner ? ` Attributed to ${entity.owner === 'spouse' ? 'your spouse' : 'you'}.` : ' Tell Fathom who this summary belongs to.' : ''}${(entity.evidence?.otherIncome || []).map(a => ` ${a.stated}.`).join('')} Not right? Tell Fathom which one is the S corp or correct this summary's person.`,
   });
-  return { values, assumptions, writes, deletes, mortgage, async write() {
+  return { values, assumptions, writes, deletes, mortgage, async write(db) {
     let changed = 0;
     if (entityInference.changed) {
       const src = `inferred:entities:${data.clock}`;

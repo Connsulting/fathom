@@ -57,7 +57,7 @@ export async function revertChanges(db, changes) {
   for (const c of [...changes].reverse()) {
     if (!known.has(c.table) || c.movedFrom !== undefined) throw changedSince();
     const { cols, current } = await shapeOf(c.table);
-    const now = current.get(c.rowid)?.img;
+    const now = (await current.get(c.rowid))?.img;
     if (c.op === 'delete') {
       if (now !== undefined || !sameColumns(cols, c.before)) throw changedSince();
       await db.prepare(`INSERT INTO main.${ident(c.table)} (rowid, ${cols.map(ident).join(', ')}) VALUES (?, ${values(cols)})`)

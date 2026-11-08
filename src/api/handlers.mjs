@@ -1,3 +1,4 @@
+import { currentHandle } from '../storage/index.mjs';
 import { decide, revisit, pickWargame } from '../decisions/write.mjs';
 import { setPackActive, packIsActive } from '../packs/state.mjs';
 import { writePreference } from '../actions/preferences.mjs';
@@ -70,7 +71,7 @@ import { txWith } from '../store/db.mjs';
 
 
 // The current "today" for message timestamps: the scenario clock's date at the current time.
-const stamp = async ctx => await clockNow(ctx.db, ctx.config && ctx.config.clock);
+const stamp = async ctx => await clockNow(currentHandle(ctx.db), ctx.config && ctx.config.clock);
 
 async function visibleRec(db, id) {
   const row = await db.prepare('SELECT * FROM recs WHERE id = ?').get(id);
@@ -217,7 +218,8 @@ export async function packWhatIf(ctx) {
   const key = 'pack:' + first.id;
   const reply = first.what_if_done ? null
     : await need(ctx, 'answerer').whatIf({ db, packId: first.id, clock: ctx.config && ctx.config.clock });
-  await tx(db, async (db) => {
+  await txWith(ctx, async (ctx) => {
+    const { db } = ctx;
     const row = await packRow(db, first.id);
     let asked = !!row.what_if_asked;
     let done = !!row.what_if_done;

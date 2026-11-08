@@ -304,7 +304,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
         if (poisoned) throw reserving ? withCode(new ModelAccountingError(), 'accounting_unrecorded') : new ModelAccountingError();
         if (await allowed() !== true) { const error = new EngineOffError(); error.toolResults = allResults; throw error; }
         if (mode === 'live' && await funded() !== true) { const error = fundingUnavailable(); error.toolResults = allResults; throw error; }
-        const ts = new Date(now()).toISOString();
+        const ts = new Date(await now()).toISOString();
         // The call's own budget (budget.maxCostUsd across its rounds, budget.maxInputTokens per round)
         // refuses a round whose worst case no longer fits, in every mode; with reservations the
         // platform ledger below is the live authority and admits before beforeDispatch runs.

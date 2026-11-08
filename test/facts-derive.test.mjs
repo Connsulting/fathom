@@ -101,7 +101,7 @@ test('defaults carry assumptions and Undo survives rederivation', async () => {
     assert.equal(result.values['household.filingStatus'], 'mfj');
     assert.equal(result.values['business.cashBasis'], true);
     assert.ok(result.assumptions.every(a => /assum/i.test(a.evidence)));
-    await result.write();
+    await result.write(db);
     assert.equal((await getFacts(db))['household.filingStatus'], 'mfj');
     await answerFacts(db, [{ key: 'household.filingStatusDefault', value: true }], { now: `${date}T12:00:00Z`, replan: async () => {} });
     result = await prepareRecFacts(db, base());
@@ -127,14 +127,14 @@ test('Virginia carryforward defaults preserve confirmed plan answers and Undo is
     const data = base();
     data.accounts.push({ id: 'college', kind: '529', inst: 'Invest529' });
     let prepared = await prepareRecFacts(db, data);
-    await prepared.write();
+    await prepared.write(db);
     assert.equal(prepared.values['accounts.va529'].college.carryforward, 0);
     assert.equal((await getFacts(db))['accounts.va529'].college.carryforward, undefined);
     fact({ carry: { value: (await getFacts(db))['accounts.va529Carryforward'], ...await db.prepare("SELECT src FROM facts WHERE key = 'accounts.va529Carryforward'").get(), provenance: { locator: JSON.parse((await db.prepare("SELECT locator FROM facts WHERE key = 'accounts.va529Carryforward'").get()).locator) } } }, 'carry', { college: 0 });
     assert.equal(questionFor(['accounts.va529'], { accounts: data.accounts, facts: await getFacts(db) }).answered, true);
     await answerFacts(db, [{ key: 'accounts.va529CarryforwardDefault', value: { college: { undone: true } } }], { now: `${date}T12:00:00Z`, replan: async () => {} });
     prepared = await prepareRecFacts(db, data);
-    await prepared.write();
+    await prepared.write(db);
     assert.equal(prepared.values['accounts.va529'].college.carryforward, undefined);
     assert.equal(questionFor(['accounts.va529'], { accounts: data.accounts, facts: await getFacts(db) }).answered, false);
   } finally { await db.close(); }
@@ -148,16 +148,16 @@ test('a derived fact is refreshed and removed with its evidence, while an owner 
     const data = base();
     data.accounts.push({ id: 'checking', kind: 'checking' });
     data.transactions.push({ id: 1, date, account_id: 'checking', amount: -200, category: 'Charitable Donations' });
-    (await prepareRecFacts(db, data)).write();
+    await (await prepareRecFacts(db, data)).write(db);
     assert.equal((await getFacts(db))['tax.vaItemizedEstimate'], 200);
     data.transactions[0].amount = -300;
-    (await prepareRecFacts(db, data)).write();
+    await (await prepareRecFacts(db, data)).write(db);
     assert.equal((await getFacts(db))['tax.vaItemizedEstimate'], 300);
     data.transactions = [];
-    (await prepareRecFacts(db, data)).write();
+    await (await prepareRecFacts(db, data)).write(db);
     assert.equal((await getFacts(db))['tax.vaItemizedEstimate'], undefined);
     await upsertFact(db, { key: 'tax.vaItemizedEstimate', value: 700, src: 'you', confirmed: true });
-    (await prepareRecFacts(db, data)).write();
+    await (await prepareRecFacts(db, data)).write(db);
     assert.equal((await getFacts(db))['tax.vaItemizedEstimate'], 700);
   } finally { await db.close(); }
 });

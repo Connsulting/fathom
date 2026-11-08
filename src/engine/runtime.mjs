@@ -190,7 +190,7 @@ export async function createRuntimeEngine({ db, config = {}, now, allowed = () =
         const s = await platformLedger.status(month());
         return { ...base, capUsd: Math.min(await capOf(db), s.allocationUsd), spentUsd: s.committedUsd };
       }
-      const at = new Date(now ? now() : Date.now());
+      const at = new Date(now ? await now() : Date.now());
       return { ...base, capUsd: await capOf(db), spentUsd: await ledger.monthSpendUsd(at.toISOString().slice(0, 7)) };
     },
     complete: async (req) => guarded((e) => e.call(req), req.purpose),

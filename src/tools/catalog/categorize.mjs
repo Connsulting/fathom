@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { tx } from '../../store/db.mjs';
+import { txWith } from '../../store/db.mjs';
 import { setTransactionCategory, setMerchantRule, loadCategoryInputs } from '../../categories/store.mjs';
 import { resolveCategories, normalizeMerchant } from '../../categories/resolve.mjs';
 import { classOf } from '../../calc/classes.mjs';
@@ -27,7 +27,7 @@ async function categorize(operation,args,ctx) {
   const pk=operation==='transaction'?'transaction_id':'merchant';
   const id=operation==='transaction'?args.transactionId:normalizeMerchant(args.merchant);
   let receipt,result;
-  try { await tx(db,async (db)=>{
+  try { await txWith(ctx,async (ctx)=>{ const { db }=ctx;
     const before=await db.prepare(`SELECT * FROM ${table} WHERE ${pk}=?`).get(id)||null;
     if(operation==='transaction') {
       const transaction=await setTransactionCategory(db,id,args.category,{now:at});

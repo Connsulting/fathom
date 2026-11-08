@@ -22,8 +22,8 @@ class Queue {
 
 const connections = new WeakMap();
 
-// The handle statements on scope should use in the current async context: the open transaction or
-// savepoint handle when this context is inside one on the scope's connection, else the scope.
+// The handle statements on scope (or on a transaction handle) should use in the current async
+// context: the innermost open transaction or savepoint handle on that connection, else the handle itself.
 export function currentHandle(scope) {
   const connection = connections.get(scope);
   if (!connection) throw storageError();
@@ -91,6 +91,7 @@ export function createScope(connection) {
         });
       },
     });
+    connections.set(handle, connection);
     const context = new Map(contexts.getStore());
     context.set(connection, handle);
     try { return await contexts.run(context, () => callback(handle)); }
