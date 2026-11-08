@@ -4,7 +4,7 @@ import { checkGrounding } from './grounding.mjs';
 import { compileSchema } from './schema.mjs';
 import { createRegistryServer } from './tools.mjs';
 import { sdkRound, messagesRound, messagesToolRound } from './live.mjs';
-import { modelFor, estimateUnknownCost } from './pricing.mjs';
+import { modelFor, estimateUnknownCost, PDF_PAGE_INPUT_TOKENS } from './pricing.mjs';
 import { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError, fundingUnavailable, withCode } from './errors.mjs';
 export { EngineOffError, BudgetExceededError, RoundLimitError, ModelCallError, ModelAccountingError, fundingUnavailable } from './errors.mjs';
 export { checkGrounding, numberPattern } from './grounding.mjs';
@@ -205,6 +205,13 @@ const pause = ms => (ms > 0 ? new Promise(resolve => setTimeout(resolve, ms)) : 
 // subprocess); without it requests go to https://api.anthropic.com.
 export const SDK_RESPONSE_BOUND = 2;
 
+// extract({ document: { type: 'pdf', data, pages } }): an image-only PDF is billed per page (each
+// page as an image plus its text), so its round's bound (reservation and unknown-cost estimate)
+// adds pages * PDF_PAGE_INPUT_TOKENS (src/engine/pricing.mjs) input tokens to the byte estimate.
+// pages is the document's page count, an integer from 1 to MAX_PDF_PAGES; without it extract
+// throws TypeError and nothing is reserved or dispatched.
+export const MAX_PDF_PAGES = 100;
+
 const LOOPBACK = /^http:\/\/(127\.0\.0\.1|localhost|\[::1\]):([1-9]\d{0,4})$/;
 
 function checkTestTransport(testTransport) {
@@ -231,7 +238,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
   const scripted = [...responses];
   let poisoned = false;
   const call = async ({ purpose, system = '', systemDynamic = '', messages, tools = [], maxTokens = 1024, schema, grounding = {}, fake,
-    toolContext: callContext, onEvent } = {}) => {
+    toolContext: callContext, onEvent, extraInputTokens = 0 } = {}) => {
     if (mode === 'off') throw new EngineOffError();
     const answer = createAnswerAssembler();
     // The text streamed in the current round since its last interim event.
@@ -271,6 +278,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       throw new TypeError('Invalid model request');
     }
     if (fake !== undefined && !Array.isArray(fake)) throw new TypeError('Invalid fake script list');
+    if (!Number.isInteger(extraInputTokens) || extraInputTokens < 0) throw new TypeError('Invalid model request');
     const queue = fake === undefined ? scripted : structuredClone(fake);
     const transcript = structuredClone(messages);
     const allResults = [];
@@ -299,7 +307,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
         const registry = createRegistryServer(tools, { purpose, ctx: { ...context, now: context.now ?? ts,
           ...(purpose === 'chat' && typeof context.replan === 'function' ? { queueAfterTools: task => afterTools.push(task) } : {}) } });
         const unknownCost = () => estimateUnknownCost({ model, maxTokens,
-          system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools });
+          system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools, extraInputTokens });
         const runner = SINGLE_ROUND.includes(purpose) ? messagesRound : transport ? messagesToolRound : roundRunner;
         let admission = null;
         try {
@@ -416,12 +424,18 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     const responseSchema = { type: 'object', properties: { rows: { type: 'array', items: schema } }, required: ['rows'], additionalProperties: false };
     const validate = compileSchema(responseSchema);
     let block;
+    let extraInputTokens = 0;
     if (document?.type === 'text' && typeof document.text === 'string') {
       block = { type: 'document', source: { type: 'text', media_type: 'text/plain', data: document.text } };
     } else if (document?.type === 'pdf' && (Buffer.isBuffer(document.data) || document.data instanceof Uint8Array)) {
+      // A PDF is billed per page, so no admission without its established page count.
+      if (!Number.isInteger(document.pages) || document.pages < 1 || document.pages > MAX_PDF_PAGES) {
+        throw new TypeError(`A PDF document needs its page count (an integer from 1 to ${MAX_PDF_PAGES})`);
+      }
       block = { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: Buffer.from(document.data).toString('base64') } };
+      extraInputTokens = document.pages * PDF_PAGE_INPUT_TOKENS;
     } else throw new TypeError('A text or PDF document is required');
-    const response = await call({ purpose: 'extract', system, maxTokens, schema: responseSchema, fake,
+    const response = await call({ purpose: 'extract', system, maxTokens, schema: responseSchema, fake, extraInputTokens,
       messages: [{ role: 'user', content: [block, { type: 'text', text: 'Return the rows matching the supplied schema.' }] }] });
     let parsed;
     try { parsed = JSON.parse(response.text); } catch { throw new ModelCallError('Model returned invalid JSON'); }

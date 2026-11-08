@@ -27,6 +27,7 @@ import { createInstance } from './platform/db.mjs';
 import { openInstance, StartupError } from './platform/ready.mjs';
 import { createInstanceSecrets } from './platform/secrets.mjs';
 import { createRuntimeRegistry } from './platform/runtime.mjs';
+import { carryAllHouseholds } from './platform/model-carry.mjs';
 import { createHandler } from './api/router.mjs';
 import { createAuthService } from './auth/service.mjs';
 import { createKeyService } from './mcp/keys.mjs';
@@ -176,6 +177,8 @@ export async function startServer(config = loadConfig(), { engineOptions = {} } 
   try {
     const transport = createTransport(config, { outboxDir: join(config.dataDir, 'outbox') });
     const auth = createAuthService({ platform, config, transport, secrets });
+    // Live mode: every household's pre-MT-05 spend is carried before any household is admitted.
+    if (config.engine === 'live') carryAllHouseholds(platform, { dataDir: config.dataDir, now: (engineOptions.fundingNow ?? Date.now)() });
     runtimes = createRuntimeRegistry({ platform, config, secrets, engineOptions });
     backfillMerged(runtimes);
     const keys = createKeyService({ platform, secret: () => secrets.mcpSecret(), creatorActive: auth.creatorActive });

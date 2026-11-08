@@ -110,7 +110,7 @@ test('typed extraction accepts valid rows and records cost even when validation 
     { text: '{"rows":[{"amount":75}]}', costUsd: 0.01 }, { text: '{"rows":[{"amount":"invented"}]}', costUsd: 0.02 },
   ] });
   assert.deepEqual(await engine.extract({ document: { type: 'text', text: 'Synthetic amount 75' }, schema }), [{ amount: 75 }]);
-  await assert.rejects(engine.extract({ document: { type: 'pdf', data: Buffer.from('%PDF-synthetic') }, schema }), /schema/);
+  await assert.rejects(engine.extract({ document: { type: 'pdf', data: Buffer.from('%PDF-synthetic'), pages: 1 }, schema }), /schema/);
   assert.equal(ledger.entries.length, 2);
   assert.equal(ledger.entries[1].purpose, 'extract');
   await assert.rejects(createEngine({ mode: 'off' }).extract({ document: { type: 'text', text: 'demo' }, schema }), EngineOffError);
