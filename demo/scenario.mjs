@@ -3017,11 +3017,11 @@ export default {
       },
       {
         "id": "confirm-guess",
-        "name": "Confirm best guesses",
+        "name": "Resolve open questions",
         "cadence": "Daily, 3:00 AM",
         "last": "Today 3:00 AM",
         "next": "Tomorrow 3:00 AM",
-        "does": "Suggest an answer for each pending confirm question.",
+        "does": "Answer supported choices from stored evidence, with Undo.",
         "cost": 0.03
       },
       {
