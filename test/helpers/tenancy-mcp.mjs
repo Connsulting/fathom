@@ -54,6 +54,11 @@ export async function mcpHouseholds() {
       hh.db.prepare('INSERT INTO recs (id, def, status, updated_at) VALUES (?, ?, ?, ?)')
         .run(`${hh.canary}-only`, JSON.stringify({ title: hh.canary }), 'proposed', '2026-11-05');
       hh.db.prepare('INSERT INTO accounts (id, name, kind) VALUES (?, ?, ?)').run('colliding-account', hh.canary, 'checking');
+      hh.retirementBalance = hh === A ? 12345 : 67890;
+      hh.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)')
+        .run('colliding-account', '2026-11-05', hh.retirementBalance);
+      hh.retirement = { operation: 'growth', solve: 'balance', years: 0,
+        balance: { ref: { tool: 'accounts', args: { operation: 'detail', id: 'colliding-account' }, path: 'balance' } } };
       writeSyntheticPack(hh.ctx.root, { id: 'your-plans', appliesWhen: ALWAYS, entries: [
         { file: 'shared.md', title: hh.canary, body: `# ${hh.canary}\n\n${hh.canary} private guidance.\n` },
         { file: `${hh.canary}.md`, title: hh.canary, body: `# ${hh.canary}\n\n${hh.canary} private guidance.\n` },
