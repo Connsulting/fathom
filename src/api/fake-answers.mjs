@@ -88,6 +88,18 @@ function commandOf(scenario, key, text) {
 }
 
 export function fakeAnswerScript({ scenario, key, questionId, text, whatIfPack, summary, propose = false } = {}) {
+  const game = questionId === 'wargame-salary' || text === 'Compare the salary options for my S corp side by side.' ? 'salary'
+    : questionId === 'wargame-deferral' || text === 'Should I move some December invoices into January? Compare the options.' ? 'deferral' : null;
+  if (game) {
+    const args = { operation: 'wargame', name: game };
+    const source = { tool: 'recommendations', args, path: game === 'salary' ? 'salary.points' : 'deferral.options' };
+    const fields = game === 'salary' ? ['figures.salary', 'figures.tax', 'figures.room', 'figures.distributions']
+      : ['figures.amount', 'figures.taxThisYear', 'figures.taxNextYear', 'figures.net', 'figures.decemberCash', 'figures.payrollNeed'];
+    return [{ toolCalls: [{ name: 'recommendations', args }] },
+      ...(game === 'salary' ? [{ toolCalls: [{ name: 'show', args: { operation: 'chart', kind: 'scatter', source, x: 'figures.room', series: [{ path: 'figures.taxChange' }] } }] }] : []),
+      { toolCalls: [{ name: 'show', args: { operation: 'compare', source, fields } }] },
+      { text: game === 'salary' ? 'The stored salary tradeoffs follow.\n\n{b:b1}\n\nCompare the options below.\n\n{b:b2}' : 'The stored invoice-deferral options follow.\n\n{b:b1}' }];
+  }
   if (typeof text === 'string' && /show (?:our |my )?monthly spending.*chart/i.test(text)) {
     const args = { operation: 'total', groupBy: 'month', window: 'ytd' };
     return [{ toolCalls: [{ name: 'spending', args }] },

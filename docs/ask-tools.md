@@ -1385,6 +1385,7 @@ lands the covering operation.
 | `POST /api/recs/:id/answers` | `answer.rec_questions` | C8 |  |
 | `POST /api/recs/:id/start-over` | `act_on_recommendation.start_over` | C9 |  |
 | `POST /api/wargame/:name/pick` | `act_on_recommendation.pick_point` | C9 |  |
+| `POST /api/threads/:id/messages/:messageId/blocks/:blockId/act` | `act_on_recommendation.pick_point`, `act_on_recommendation.decide` | Stored comparison option ids only; receipt and Undo. |
 | `POST /api/decisions/:id/decide` | `act_on_recommendation.decide` | C9 |  |
 | `POST /api/decisions/:id/revisit` | `act_on_recommendation.revisit` | C9 |  |
 | `POST /api/packs/:id/toggle` | `update_preferences.pack` | C10 |  |

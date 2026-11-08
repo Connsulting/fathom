@@ -16,7 +16,7 @@ export const operations = [{
     const scenario = buildScenario(ctx.db, { clock: clockOf(ctx) });
     const scope = tokenScope(ctx.db);
     const game = scenario.wargame[name];
-    const decision = scenario.decisions.find(d => d.wargame === name);
+    const decision = scenario.decisions.find(d => d.wargame === name && d.status === game?.status) || scenario.decisions.find(d => d.wargame === name);
     const rows = ctx.db.prepare(`SELECT f.*, s.as_of AS src_as_of FROM figures f
       LEFT JOIN sources s ON s.id = f.src WHERE f.key LIKE ?`).all(`wg.${name}.%`);
     const stored = new Map(rows.map(row => [row.key, row]));
