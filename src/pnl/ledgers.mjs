@@ -1,5 +1,6 @@
 import { normalizeName } from '../ingest/confirm.mjs';
 import { parseJson } from '../store/db.mjs';
+import { sourceBucket } from '../categories/resolve.mjs';
 
 export function ledgerDisplayName(line) {
   const locator = typeof line.locator === 'string' ? parseJson(line.locator, {}) : line.locator;
@@ -33,6 +34,14 @@ const personName = text => normalizeName(String(text || '').replace(/\s+(?:perso
 const nameWords = text => (String(text || '').normalize('NFKC').toLowerCase().replace(/['’]s\b/g, '').match(/[\p{L}\p{N}]+/gu) || []).join(' ');
 export const payrollIncomeCategory = category => /^(?:income|wages|salary|paychecks?|employment income|wages and salary)$/i.test(String(category).trim());
 export const personalIncomeCategory = category => payrollIncomeCategory(category) || /^(?:client income|self.employment income|interest income|dividend income|other income)$/i.test(String(category).trim());
+export const summaryTransfer = line => line.bucket === 'transfer' || sourceBucket(line.parser, line.category) === 'transfer'
+  || sourceBucket('aggregator', line.category) === 'transfer' || /transfer|venmo|zelle|paypal/i.test(line.category);
+export function summaryIncomeAssumption(entry, category) {
+  const assumed = entry?.inferred && entry.type === 'personal' && entry.evidence?.otherIncome?.find(a => normalizeName(a.category) === normalizeName(category));
+  return assumed ? { stated: assumed.stated, key: 'business.entities', path: [entry.name], undoKey: 'business.entityInference' } : null;
+}
+export const summaryAssumptions = rows => [...new Map(rows.filter(r => r.incomeAssumption)
+  .map(r => [JSON.stringify(r.incomeAssumption), r.incomeAssumption])).values()];
 export function summaryPerson(entity, facts) {
   const labels = [entity.name, entity.displayName, ...(entity.lines || []).map(ledgerDisplayName)].filter(Boolean);
   const names = new Set(labels.map(personName));

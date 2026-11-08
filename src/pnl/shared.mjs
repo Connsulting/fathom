@@ -10,6 +10,7 @@ import { resolveClock, tokenScope } from '../scenario/build.mjs';
 import { loadCategoryInputs } from '../categories/store.mjs';
 import { resolveCategories } from '../categories/resolve.mjs';
 import { transactionDisplayName } from '../categories/display.mjs';
+import { summaryAssumptions } from './ledgers.mjs';
 
 export const MAX_MONTHS = 120;
 export const ROW_IDS = 50;
@@ -156,6 +157,7 @@ export function figureRegistry({ kind, labels, files }) {
     newest.set(src, n);
   };
   const add = (key, { v, label, rows, notes = [], sums = null, counted = false, detail = [] }) => {
+    const assumptions = summaryAssumptions(rows);
     const lines = rows.filter((r) => r.table === 'pnl_lines');
     const txns = rows.filter((r) => r.table === 'transactions');
     const source = lines.length && txns.length ? 'workbook and transactions' : lines.length ? 'workbook' : 'transactions';
@@ -181,9 +183,10 @@ export function figureRegistry({ kind, labels, files }) {
     for (const r of rows) bump(src, counted ? 'counted' : 'any', r.date);
     if (!newest.has(src)) newest.set(src, { counted: '', any: '' });
     figures[key] = {
-      v: money(v), src, kind: 'a', label, notes: notes.slice(0, 5), detail: [...rowsDetail, ...detail],
+      v: money(v), src, kind: 'a', label, notes: [...assumptions.map(a => a.stated), ...notes].slice(0, 5), detail: [...rowsDetail, ...detail],
       ...(sums ? { sums } : {}),
-      provenance: { source, accounts, months, rows: rowRefs, files: fileRefs, asOf: rows.map(r => r.date).sort().at(-1) ?? null },
+      provenance: { source, accounts, months, rows: rowRefs, files: fileRefs, asOf: rows.map(r => r.date).sort().at(-1) ?? null,
+        ...(assumptions.length ? { assumptions } : {}) },
     };
     return key;
   };

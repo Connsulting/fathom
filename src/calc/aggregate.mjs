@@ -11,7 +11,7 @@ import { envelope, round } from './figure.mjs';
 import { ToolError } from '../tools/errors.mjs';
 import { selectPersonalSummaries, summarySources, SUMMARY_RULE } from '../spending/summaries.mjs';
 import { ownerOf } from '../jobs/planner/data.mjs';
-import { payrollIncomeCategory } from '../pnl/ledgers.mjs';
+import { payrollIncomeCategory, summaryAssumptions } from '../pnl/ledgers.mjs';
 
 export const monthIndex = (m) => Number(m.slice(0, 4)) * 12 + Number(m.slice(5, 7)) - 1;
 export const monthAt = (i) => `${Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, '0')}`;
@@ -113,6 +113,8 @@ export function figureFor(
     accounts = [],
   } = {},
 ) {
+  const assumptions = [...new Map([...summaryAssumptions(rows), ...inputs.flatMap(f => f.provenance?.assumptions || [])]
+    .map(a => [JSON.stringify(a), a])).values()];
   return envelope(value, {
     unit,
     label,
@@ -128,6 +130,7 @@ export function figureFor(
       accounts,
       sources: sources ?? [{ table: 'transactions', ids: rows.slice(0, 50).map((t) => t.id), count: rows.length }],
       packRefs,
+      ...(assumptions.length ? { assumptions } : {}),
     },
   });
 }

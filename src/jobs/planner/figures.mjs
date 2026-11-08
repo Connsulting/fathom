@@ -27,6 +27,7 @@ import { notesFor } from './assumptions.mjs';
 import { trailingCharitable } from './facts.mjs';
 import { buildWargames } from './wargame.mjs';
 import { personalSummaryInput, selectPersonalSummaries, summarySources, SUMMARY_RULE } from '../../spending/summaries.mjs';
+import { summaryAssumptions } from '../../pnl/ledgers.mjs';
 
 const CASH_KINDS = ['checking', 'savings', 'cash', 'business'];
 const PERSONAL_CASH = ['checking', 'savings', 'cash'];
@@ -128,7 +129,8 @@ export function computeFigures(data, facts, ctx) {
     if (!rows.length) continue;
     out.source('personal-summary', 'Personal spreadsheet summaries', dateLabel(clock), 'ledger');
     out.put(`inc.ytd.summary-${person}`, sum(rows.map(r => r.amount)), 'a', `${person === 'owner' ? 'Your' : "Your spouse's"} income from the summary sheet`, 'personal-summary',
-      { ...rowsLoc('pnl_lines', rows.map(r => r.sourceId)), sources: summarySources(rows), notes: ['From the summary sheet; recorded payroll and household business salary cover wages for the same person and months.'] }, rows[0].fileId);
+      { ...rowsLoc('pnl_lines', rows.map(r => r.sourceId)), sources: summarySources(rows), summaryAssumptions: summaryAssumptions(rows),
+        notes: [...summaryAssumptions(rows).map(a => a.stated), 'From the summary sheet; recorded payroll and household business salary cover wages for the same person and months.'] }, rows[0].fileId);
   }
 
   // Accounts and cash.
@@ -818,8 +820,10 @@ function incomeTotal(out) {
   const keys = Object.keys(out.figures).filter(k => k.startsWith('inc.ytd.') && k !== 'inc.ytd.total').sort();
   if (!keys.length) return;
   const total = sum(keys.map(k => out.figures[k].v));
+  const assumptions = keys.flatMap(k => out.figures[k].locator.summaryAssumptions || []);
   out.put('inc.ytd.total', total, keys.some(k => out.figures[k].kind !== 'a') ? 'e' : 'a', 'Income received this year', 'calc:income',
-    { ...rowsLoc('figures', keys), calc: 'sum', inputs: Object.fromEntries(keys.map(k => [k, out.figures[k].v])), steps: [{ label: 'Income received', formula: 'sum of business receipts, outside wages and uncovered summary income', value: total }] });
+    { ...rowsLoc('figures', keys), calc: 'sum', inputs: Object.fromEntries(keys.map(k => [k, out.figures[k].v])), summaryAssumptions: assumptions,
+      notes: assumptions.map(a => a.stated), steps: [{ label: 'Income received', formula: 'sum of business receipts, outside wages and uncovered summary income', value: total }] });
 }
 
 function finish(out) {
