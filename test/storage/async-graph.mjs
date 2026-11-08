@@ -289,6 +289,27 @@ export function analyze(files, { roots = () => false, root = null, driver = () =
     return out;
   }
 
+  // The functions a factory returns (`return row => ...`, `=> x => ...`, `return named`).
+  const returnedFns = new Map();
+  function returnedFunctions(info) {
+    if (returnedFns.has(info)) return returnedFns.get(info);
+    const out = [];
+    returnedFns.set(info, out);
+    const take = n => {
+      n = unwrap(n);
+      if (isFunction(n)) out.push(fnOf.get(n));
+      else if (n?.type === 'Identifier') {
+        const b = lookup(info.mod, n.name, [info.mod.ast, info.node, info.node.body]);
+        if (b?.kind === 'fn' && b.info) out.push(b.info);
+      }
+    };
+    if (info.node.body.type !== 'BlockStatement') take(info.node.body);
+    else fullAncestor(info.node.body, (n, _s, anc) => {
+      if (n.type === 'ReturnStatement' && !anc.some(a => isFunction(a))) take(n.argument);
+    });
+    return out;
+  }
+
   // The factory functions whose returned object a binding holds (through destructuring and
   // properties of other factories' results).
   function factoriesOf(mod, b, ancestors, depth) {
@@ -314,6 +335,11 @@ export function analyze(files, { roots = () => false, root = null, driver = () =
     if (callee.type === 'Identifier') {
       const b = bindingOf(mod, callee.name, ancestors);
       if (b?.kind === 'fn' && b.info) return { targets: [b.info] };
+      // A function a factory returned: `const connected = connectedAccountFor(db); connected(row)`.
+      if (b?.kind === 'value' && !b.prop) {
+        const made = factoriesOf(mod, b, ancestors, depth).flatMap(f => returnedFunctions(f));
+        if (made.length) return { targets: made };
+      }
       // Destructured from a factory call: `const { invite } = await fixture()`.
       const init = b?.kind === 'value' && b.prop ? unwrap(b.init) : null;
       if (init?.type === 'CallExpression' && depth < 3) {

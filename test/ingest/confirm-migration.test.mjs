@@ -55,7 +55,7 @@ async function storeAt014() {
   const dataDir = await tempDir('fathom-confirm-migration-');
   const keys = secretsFor(dataDir);
   // A fresh real instance whose household store is replaced by one built only through 014.
-  const made = PL.createInstance(dataDir, { mode: 'real', platformKey: keys.platformKey });
+  const made = await PL.createInstance(dataDir, { mode: 'real', platformKey: keys.platformKey });
   await made.db.close();
   const file = join(made.root, 'fathom.sqlite');
   for (const f of [file, `${file}-wal`, `${file}-shm`]) rmSync(f, { force: true });

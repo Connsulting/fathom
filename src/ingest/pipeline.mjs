@@ -353,7 +353,7 @@ export async function persistImport(db, fileId, file, plan, opts) {
   // Accounts: identity, id, and the file's source id.
   const accountRows = parsed.rows.filter((r) => r.account);
   const connected = connectedAccountFor(db);
-  for (const row of accountRows) row.accountId ??= connected(row) ?? accountIdOf(accountIdentity(row));
+  for (const row of accountRows) row.accountId ??= await connected(row) ?? accountIdOf(accountIdentity(row));
   const accountIds = [...new Set(accountRows.map((r) => r.accountId))];
   const single = accountIds.length === 1 ? accountIds[0] : null;
   const sourceId = `ing:${plan.parser}:${plan.sourceGroup ? plan.sourceGroup + ':' : ''}${single ?? 'all'}`;

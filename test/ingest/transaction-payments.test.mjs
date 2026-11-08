@@ -39,7 +39,7 @@ async function fixture(fn, rows = postings()) {
     body.accounts[0].transactions = rows;
     body.accounts[1].transactions = [posting('transfer-in', '2026-09-18', 475, 'Transfer from checking')];
     const opts = { household: s.household, config: s.config, now: NOW, clock: CLOCK,
-      fetch: (url, init) => new URL(url).pathname.endsWith('/accounts')
+      fetch: async (url, init) => new URL(url).pathname.endsWith('/accounts')
         ? Promise.resolve(new Response(JSON.stringify(body), { status: 200 })) : base(url, init) };
     await connectSimplefin(s.db, fakeToken(), opts);
     await fn(s, opts, body);

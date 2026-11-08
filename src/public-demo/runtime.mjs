@@ -95,7 +95,7 @@ export async function createPublicDemoHandler(config, { platform: basePlatform }
       const handler = createHandler({ platform, config: sandboxConfig, runtimes: registry,
         auth: { demo: true, sweep() {}, session: () => ({ demo: true, publicDemo: true, identity: null }) } });
       const runtime = { active: 0,
-        handler: (req, res) => requestAddress.run(clientAddress(req), () => handler(req, res)),
+        handler: (req, res) => requestAddress.run(clientAddress(req), async () => handler(req, res)),
         close() { registry.close().catch(() => {}).finally(async () => await platform.close()); },
       };
       runtimes.set(id, runtime);
