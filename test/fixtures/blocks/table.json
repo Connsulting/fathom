@@ -1,0 +1,579 @@
+{
+  "id": "b1",
+  "op": "table",
+  "after": 1,
+  "spec": {
+    "source": {
+      "tool": "spending.total",
+      "args": {
+        "groupBy": "category"
+      },
+      "path": "groups"
+    },
+    "columns": [
+      "label",
+      "figure",
+      "share",
+      "count"
+    ]
+  },
+  "calls": [
+    {
+      "tool": "spending.total",
+      "args": {
+        "groupBy": "category"
+      }
+    }
+  ],
+  "snapshot": {
+    "title": "Spending by category",
+    "columns": [
+      {
+        "label": "Category",
+        "type": "text"
+      },
+      {
+        "label": "Spent",
+        "unit": "usd",
+        "type": "fig"
+      },
+      {
+        "label": "Share of spending",
+        "unit": "ratio",
+        "type": "fig"
+      },
+      {
+        "label": "Charges",
+        "unit": "count",
+        "type": "fig"
+      }
+    ],
+    "rows": [
+      {
+        "cells": [
+          {
+            "t": "text",
+            "text": "Groceries"
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 612.4,
+              "unit": "usd",
+              "label": "Groceries spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 0.21,
+              "unit": "ratio",
+              "label": "Groceries share of spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 18,
+              "unit": "count",
+              "label": "Groceries charges",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          }
+        ]
+      },
+      {
+        "cells": [
+          {
+            "t": "text",
+            "text": "Dining out"
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 288,
+              "unit": "usd",
+              "label": "Dining out spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 0.098,
+              "unit": "ratio",
+              "label": "Dining out share of spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 11,
+              "unit": "count",
+              "label": "Dining out charges",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          }
+        ]
+      },
+      {
+        "cells": [
+          {
+            "t": "text",
+            "text": "Utilities"
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 341.17,
+              "unit": "usd",
+              "label": "Utilities spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 0.117,
+              "unit": "ratio",
+              "label": "Utilities share of spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 4,
+              "unit": "count",
+              "label": "Utilities charges",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          }
+        ]
+      },
+      {
+        "cells": [
+          {
+            "t": "text",
+            "text": "Transit"
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 96.5,
+              "unit": "usd",
+              "label": "Transit spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 0.033,
+              "unit": "ratio",
+              "label": "Transit share of spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 9,
+              "unit": "count",
+              "label": "Transit charges",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          }
+        ]
+      },
+      {
+        "cells": [
+          {
+            "t": "text",
+            "text": "Childcare"
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 905,
+              "unit": "usd",
+              "label": "Childcare spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 0.31,
+              "unit": "ratio",
+              "label": "Childcare share of spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 2,
+              "unit": "count",
+              "label": "Childcare charges",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          }
+        ]
+      },
+      {
+        "cells": [
+          {
+            "t": "text",
+            "text": "Insurance"
+          },
+          {
+            "t": "none",
+            "fig": {
+              "value": null,
+              "unit": "usd",
+              "label": "Insurance spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [
+                {
+                  "code": "missing_fact",
+                  "message": "No charges are stored for this category yet."
+                }
+              ],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "none"
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 0,
+              "unit": "count",
+              "label": "Insurance charges",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          }
+        ]
+      },
+      {
+        "cells": [
+          {
+            "t": "text",
+            "text": "Phone"
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 120,
+              "unit": "usd",
+              "label": "Phone spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 0.041,
+              "unit": "ratio",
+              "label": "Phone share of spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 2,
+              "unit": "count",
+              "label": "Phone charges",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          }
+        ]
+      },
+      {
+        "cells": [
+          {
+            "t": "text",
+            "text": "Gifts"
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 77.25,
+              "unit": "usd",
+              "label": "Gifts spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 0.026,
+              "unit": "ratio",
+              "label": "Gifts share of spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 3,
+              "unit": "count",
+              "label": "Gifts charges",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          }
+        ]
+      },
+      {
+        "cells": [
+          {
+            "t": "text",
+            "text": "Health"
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 230,
+              "unit": "usd",
+              "label": "Health spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 0.079,
+              "unit": "ratio",
+              "label": "Health share of spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 5,
+              "unit": "count",
+              "label": "Health charges",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          }
+        ]
+      },
+      {
+        "cells": [
+          {
+            "t": "text",
+            "text": "Home repair"
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 318.9,
+              "unit": "usd",
+              "label": "Home repair spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 0.109,
+              "unit": "ratio",
+              "label": "Home repair share of spending",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          },
+          {
+            "t": "fig",
+            "fig": {
+              "value": 1,
+              "unit": "count",
+              "label": "Home repair charges",
+              "kind": "m",
+              "asOf": "2026-10-31",
+              "gaps": [],
+              "provenance": {
+                "calc": "spending.total"
+              },
+              "source": "Your spending"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "asOf": "2026-10-31",
+  "builtAt": "2026-11-01T12:00:00.000Z"
+}
