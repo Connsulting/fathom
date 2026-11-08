@@ -182,12 +182,17 @@ function seriesSvg(s, ctx, W, H, at) {
     if (v !== 0) g += `<line class="h-blk-grid" x1="${L}" x2="${W - R}" y1="${sy(v)}" y2="${sy(v)}"/>`;
     g += `<text class="h-blk-tk" x="${L - 7}" y="${r1(sy(v) + 3.5)}" text-anchor="end">${esc(tickText[k])}</text>`;
   });
-  // x labels: as many as fit without overlapping; a line's ends anchor inward.
-  const lw = Math.max(...xs.map((x) => String(x.text || '').length), 1) * 6.2 + 10;
+  // x labels: as many as fit without overlapping. A line shows its first and last label, anchored
+  // inward, and drops a middle label that would run into either.
+  const lw = Math.max(...xs.map((x) => String(x.text || '').length), 1) * 6.6 + 12;
   const every = Math.max(1, Math.ceil((n * lw) / pw));
+  const ends = !bars && n > 1;
   xs.forEach((x, i) => {
-    if (i % every !== 0) return;
-    const anchor = bars || n === 1 ? 'middle' : i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle';
+    const last = i === n - 1;
+    if (i % every !== 0 && !(ends && last)) return;
+    if (ends && i > 0 && !last && (sx(i) - sx(0) < 1.5 * lw || sx(n - 1) - sx(i) < 1.5 * lw)) return;
+    if (ends && last && i !== 0 && sx(i) - sx(0) < 2 * lw) return;
+    const anchor = !ends ? 'middle' : i === 0 ? 'start' : last ? 'end' : 'middle';
     g += `<text class="h-blk-tk" x="${sx(i)}" y="${H - 7}" text-anchor="${anchor}">${esc(x.text)}</text>`;
   });
   if (y0 <= 0 && y1 >= 0) g += `<line class="h-blk-zero" x1="${L}" x2="${W - R}" y1="${sy(0)}" y2="${sy(0)}"/>`;
