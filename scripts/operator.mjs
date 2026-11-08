@@ -4,10 +4,7 @@
 // each change. Touches only platform.sqlite. Prints fixed codes only, never the email: success
 // exits 0, a refusal prints `operator: <code>` on stderr and exits 1.
 
-import { existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { PLATFORM_FILE, LOCK_FILE, openPlatform } from '../src/platform/db.mjs';
-import { LOCK_FILE as TENANCY_LOCK_FILE } from '../src/platform/migrate-tenancy.mjs';
+import { openOperatorPlatform } from '../src/platform/ready.mjs';
 import { createAuthStore } from '../src/auth/store.mjs';
 
 const blank = v => v == null || v === '';
@@ -23,12 +20,7 @@ function codeOf(e) {
 
 function main([command, email, ...extra]) {
   if (!['grant', 'revoke'].includes(command) || blank(email) || extra.length) throw fail('usage');
-  const dataDir = resolve(blank(process.env.FATHOM_DATA) ? 'data' : process.env.FATHOM_DATA);
-  if (existsSync(join(dataDir, LOCK_FILE))) throw fail('platform_migration_in_progress');
-  if (existsSync(join(dataDir, TENANCY_LOCK_FILE))) throw fail('tenancy_migration_in_progress');
-  const file = join(dataDir, PLATFORM_FILE);
-  if (!existsSync(file)) throw fail('platform_migration_required');
-  const platform = openPlatform(file);
+  const platform = openOperatorPlatform();
   try {
     const store = createAuthStore(platform);
     const user = store.findUser(email);

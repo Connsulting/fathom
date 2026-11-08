@@ -314,6 +314,7 @@ describe('extractDocument', () => {
     assert.equal(out.period.to, '2032-03-31');
     assert.equal(engine.extracts[0].document.type, 'pdf');
     assert.ok(Buffer.from(engine.extracts[0].document.data).equals(Buffer.from(PDF_BYTES)));
+    assert.equal(engine.extracts[0].document.pages, 1, 'the established page count goes with the PDF');
   });
 
   test('source kind and period per document type', async () => {
@@ -1429,6 +1430,7 @@ describe('PDF text layer (D6)', () => {
     assert.equal(r.counts.extractPath, 'pdf_document');
     assert.equal(engine.extracts[0].document.type, 'pdf');
     assert.ok(Buffer.from(engine.extracts[0].document.data).equals(Buffer.from(bytes)));
+    assert.equal(engine.extracts[0].document.pages, 1, 'the established page count goes with the PDF');
     const t = await P.ingestFile(s.db, paystubFile(), s.opts(await fakeEngine(paystubResponses(PAYSTUB))));
     assert.equal(t.counts.extractPath, 'text');
   }));

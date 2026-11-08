@@ -112,6 +112,13 @@ export function goalChip(p) {
   return { tone: 'mute', label: 'Pace unknown' };
 }
 
+// The chip a Home goal card carries: progress only. Stale or unknown pace has no chip there; the one
+// data line at the top says how current the data is.
+export function cardChip(p) {
+  const c = goalChip(p);
+  return c.label === 'Data stale' || c.label === 'Pace unknown' ? null : c;
+}
+
 const included = (pace) => arr(pace?.goals).filter((g) => g && g.status !== 'no target');
 
 export function healthChip(pace) {
@@ -255,7 +262,7 @@ export function homeModel({ goals, pace, recs, filter, suggestions, clock } = {}
     const actions = queue.filter((r) => servedGoalIds(r).includes(String(g.id)));
     const suggestion = records.find((r) => String(r.goalId) === String(g.id)) || null;
     return {
-      id: g.id, goal: g, pace: p, paceIndex, chip: goalChip(p), bar: paceBar(p), next: actions[0] || null, actions, suggestion,
+      id: g.id, goal: g, pace: p, paceIndex, chip: cardChip(p), bar: paceBar(p), next: actions[0] || null, actions, suggestion,
       kind: g.kind || 'balance', owner: g.owner ?? null, priority: g.priority ?? null, line: p ? kindLine(p, paceIndex) : null
     };
   });
@@ -271,14 +278,21 @@ export function homeModel({ goals, pace, recs, filter, suggestions, clock } = {}
   };
 }
 
-// The Home headline. A goal with a target keeps the pace headline; with none, it counts the goals
-// that have a suggested target, else the goals that still need one. bulk: Accept all is offered.
-export function homeHeadline({ cards, pace, pending } = {}) {
+// The Home headline. A goal with a target gives the verdict: covered, or how many goal actions due
+// before Dec 31 need the filtered owner. It never explains the data; the data line does that. With
+// no target, it counts the goals that have a suggested target, else the goals that still need one.
+// bulk: Accept all is offered.
+const WHOM = { both: 'you', me: 'you', spouse: 'your spouse' };
+export function homeHeadline({ cards, pending, due, filter } = {}) {
   const list = arr(cards);
   const n = Array.isArray(pending) ? pending.length : Math.max(0, Number(pending) || 0);
   const bulk = n >= 2;
   if (list.some((c) => c?.pace && c.pace.status !== 'no target')) {
-    return { title: pace?.rollup?.headline || 'Pace for your goals', bulk };
+    const needs = Array.isArray(due) ? due.length : Math.max(0, Number(due) || 0);
+    const whom = WHOM[filter] || WHOM.both;
+    if (needs > 0) return { title: `${plural(needs, 'thing')} ${needs === 1 ? 'needs' : 'need'} ${whom} before Dec 31`, verdict: 'needs', needs, bulk };
+    const who = whom === 'you' ? 'You are' : 'Your spouse is';
+    return { title: `${who} covered through Dec 31`, verdict: 'covered', needs: 0, bulk };
   }
   if (n > 0) return { title: `Suggested targets for ${plural(n, 'goal')}`, bulk };
   const need = list.filter((c) => !c?.pace || c.pace.status === 'no target').length;
@@ -313,7 +327,21 @@ export function healthLine({ pace, ingest, accounts, metaDataThrough } = {}) {
   else if (staleGoals > 0) rows.push({ text: `pace data stale for ${plural(staleGoals, 'goal')}`, tone: 'bad' });
   if (pending > 0) rows.push({ text: `${plural(pending, 'question')} to confirm`, tone: 'ask' });
   if (failed > 0) rows.push({ text: `${plural(failed, 'file')} failed`, tone: 'bad' });
-  return { dataThrough, dataLabel, staleAccounts, staleGoals, pending, failed, stale: staleAccounts + staleGoals > 0, parts: rows.map((r) => r.text), rows };
+  // Owner-only items: what Fathom cannot do itself. Stale pace alone is not one; the data date covers it.
+  const owner = [];
+  if (pending > 0) owner.push({ key: 'confirm', text: `${plural(pending, 'question')} to confirm`, go: 'confirm' });
+  if (staleAccounts > 0) owner.push({ key: 'accounts', text: `${plural(staleAccounts, 'account')} stale`, go: 'accounts' });
+  if (failed > 0) owner.push({ key: 'files', text: `${plural(failed, 'file')} failed`, go: 'add' });
+  return {
+    dataThrough, dataLabel, staleAccounts, staleGoals, pending, failed, stale: staleAccounts + staleGoals > 0, parts: rows.map((r) => r.text), rows,
+    line: dataLabel, owner, needs: owner.length, needsLabel: owner.length ? `Fathom needs ${plural(owner.length, 'thing')}` : null, needsGo: owner[0]?.go ?? null
+  };
+}
+
+// The pace board's This year meters that have a figure to show, in board order. None means no panel.
+export const METER_KEYS = Object.freeze(['retirement', 'tax', 'income']);
+export function paceMeters(meters) {
+  return METER_KEYS.filter((k) => finite(meters?.[k]?.meter?.ratio?.v));
 }
 
 export function boardCharts(pace) {

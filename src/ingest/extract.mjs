@@ -359,7 +359,7 @@ export async function extractDocument(engine, file, { docType: forced, household
       ({ document, refs } = redactedText(layer.text));
       extractPath = 'pdf_text_layer';
     } else if (layer.status === 'image_only') {
-      document = { type: 'pdf', data: file.bytes };
+      document = { type: 'pdf', data: file.bytes, pages: layer.pages };
       extractPath = 'pdf_document';
     } else return waiting('pdf_unreadable', 'pdf_withheld');
   } else {

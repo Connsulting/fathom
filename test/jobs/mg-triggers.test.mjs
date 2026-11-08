@@ -696,7 +696,11 @@ test('MG12: a built salary game becomes unavailable when outside deferrals becom
   pickRefused(db, 'salary');
 });
 
-const vaAnswersMissing = db => addFact(db, 'accounts.va529', { [accountIdByMask(db, MASKS.college)]: { virginiaPlan: true } });
+const vaAnswersMissing = db => {
+  const id = accountIdByMask(db, MASKS.college);
+  addFact(db, 'accounts.va529', { [id]: { virginiaPlan: true } });
+  addFact(db, 'accounts.va529CarryforwardDefault', { [id]: { undone: true } });
+};
 const vaAnswersComplete = db => addFact(db, 'accounts.va529', { [accountIdByMask(db, MASKS.college)]: { virginiaPlan: true, carryforward: 0 } });
 const JAN = '2027-01-10';
 

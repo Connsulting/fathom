@@ -189,7 +189,8 @@ export function gradeExpected(text, values, { figures = {} } = {}) {
     if (Number.isFinite(figures[key])) tokens.push({ value: figures[key], money: true });
     return ' ';
   });
-  const actual = [...numericFigures(expanded), ...tokens];
+  const directed = expanded.replace(/\bnet cash outflow is\s+(\$\s*\d[\d,]*(?:\.\d+)?)/gi, (_, amount) => '-' + amount);
+  const actual = [...numericFigures(directed), ...tokens];
   const checks = values.map(value => ({ value, ok: actual.some(n => close(n.value, value, n.money)) }));
   return { ok: checks.every(c => c.ok), checks };
 }

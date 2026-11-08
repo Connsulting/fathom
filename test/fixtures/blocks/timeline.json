@@ -1,0 +1,100 @@
+{
+  "id": "t1",
+  "op": "timeline",
+  "after": 3,
+  "spec": {
+    "source": {
+      "tool": "household.deadlines",
+      "args": {},
+      "path": "items"
+    },
+    "date": "date",
+    "value": "amount"
+  },
+  "calls": [
+    {
+      "tool": "household.deadlines",
+      "args": {}
+    }
+  ],
+  "snapshot": {
+    "title": "Coming deadlines",
+    "events": [
+      {
+        "date": "2026-11-15",
+        "label": "Estimated tax payment",
+        "value": {
+          "value": 3200,
+          "unit": "usd",
+          "label": "Estimated tax payment",
+          "kind": "p",
+          "asOf": "2026-10-31",
+          "gaps": [],
+          "provenance": {
+            "calc": "household.deadlines"
+          },
+          "source": "Your deadlines"
+        }
+      },
+      {
+        "date": "2026-12-31",
+        "label": "Dependent care account deadline",
+        "value": {
+          "value": 1840.75,
+          "unit": "usd",
+          "label": "Dependent care balance",
+          "kind": "p",
+          "asOf": "2026-10-31",
+          "gaps": [],
+          "provenance": {
+            "calc": "household.deadlines"
+          },
+          "source": "Your deadlines"
+        }
+      },
+      {
+        "date": "2027-01-15",
+        "label": "Fourth quarter estimate",
+        "value": {
+          "value": null,
+          "unit": "usd",
+          "label": "Fourth quarter estimate",
+          "kind": "p",
+          "asOf": "2026-10-31",
+          "gaps": [
+            {
+              "code": "missing_fact",
+              "message": "The year end income is not known yet."
+            }
+          ],
+          "provenance": {
+            "calc": "household.deadlines"
+          },
+          "source": "Your deadlines"
+        }
+      },
+      {
+        "date": "2027-04-15",
+        "label": "Tax filing deadline"
+      },
+      {
+        "date": "2045-06-01",
+        "label": "Retirement account access age",
+        "value": {
+          "value": 59.5,
+          "unit": "age",
+          "label": "Access age",
+          "kind": "p",
+          "asOf": "2026-10-31",
+          "gaps": [],
+          "provenance": {
+            "calc": "retirement.access"
+          },
+          "source": "Your retirement"
+        }
+      }
+    ]
+  },
+  "asOf": "2026-10-31",
+  "builtAt": "2026-11-01T12:00:00.000Z"
+}

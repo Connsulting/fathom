@@ -473,3 +473,50 @@ test('tax identifier boundaries preserve UUID receipt and preference IDs and sti
   for (const text of ['a900-12-3456', '900-12-3456f', 'a90-1234567', '90-1234567F']) assert.equal(redactTaxIdentifiers(text), text);
   assert.equal(redactTaxIdentifiers('synthetic_900-12-3456_90-1234567.pdf'), 'synthetic_XXX-XX-XXXX_XX-XXXXXXX.pdf');
 });
+
+
+test('Messages tool transport scrubs every round including original tool evidence replay', async () => {
+  const id = '0f8e2c1a-4b7d-4e2a-9f12-3456789abcde';
+  const result = { filename: `synthetic_${TAX_TEXT}.pdf`, amount: 123456789, date: '2032-03-05', receipt: { id } };
+  const tools = [{ name: 'synthetic', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: TAX_TEXT,
+    inputSchema: { type: 'object', description: TAX_TEXT, properties: {}, additionalProperties: false }, handler: async () => result }];
+  const messages = [{ role: 'user', content: TAX_TEXT }];
+  const original = structuredClone(messages);
+  const first = { ...OK_MESSAGE(''), content: [{ type: 'tool_use', id, name: 'synthetic', input: {} }], stop_reason: 'tool_use' };
+  const stub = stubFetch([{ status: 200, body: first }, { status: 200, body: OK_MESSAGE('Synthetic response.') }]);
+  try {
+    const engine = createEngine({ mode: 'live', credential: 'synthetic-key', testTransport: { baseURL: 'http://127.0.0.1:9' } });
+    const reply = await engine.call({ purpose: 'chat', system: TAX_TEXT, systemDynamic: TAX_TEXT, messages, tools, maxTokens: 64 });
+    assert.equal(stub.bodies.length, 2);
+    stub.bodies.forEach(assertNoTaxIds);
+    assert.deepEqual(messages, original);
+    assert.equal(tools[0].description, TAX_TEXT);
+    assert.deepEqual(reply.toolResults[0].result, result);
+    const replay = stub.bodies[1].messages.at(-1).content[0];
+    assert.equal(replay.tool_use_id, id);
+    const sent = JSON.parse(replay.content);
+    assert.equal(sent.receipt.id, id);
+    assert.equal(sent.amount, result.amount);
+    assert.equal(sent.date, result.date);
+    assert.ok(sent.filename.includes('XXX-XX-XXXX'));
+  } finally { stub.restore(); }
+});
+
+test('PDF extraction scrubs outbound system and schema text and preserves the binary document', async () => {
+  const data = Buffer.from('%PDF-synthetic');
+  const schema = { type: 'object', description: TAX_TEXT, properties: { amount: { type: 'number', description: TAX_TEXT } }, required: ['amount'], additionalProperties: false };
+  const original = structuredClone(schema);
+  const stub = stubFetch([{ status: 200, body: OK_MESSAGE('{"rows":[{"amount":42}]}') }]);
+  try {
+    const engine = createEngine({ mode: 'live', credential: 'synthetic-key', testTransport: { baseURL: 'http://127.0.0.1:9' } });
+    const rows = await engine.extract({ document: { type: 'pdf', data, pages: 1 }, system: TAX_TEXT, schema, maxTokens: 64 });
+    assert.deepEqual(rows, [{ amount: 42 }]);
+    assert.equal(stub.bodies.length, 1);
+    assertNoTaxIds(stub.bodies[0]);
+    assert.deepEqual(schema, original);
+    const source = stub.bodies[0].messages[0].content[0].source;
+    assert.equal(source.media_type, 'application/pdf');
+    assert.equal(source.data, data.toString('base64'));
+    assert.equal(data.toString(), '%PDF-synthetic');
+  } finally { stub.restore(); }
+});
