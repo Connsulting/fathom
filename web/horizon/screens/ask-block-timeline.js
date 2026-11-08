@@ -35,22 +35,26 @@ export function tableOf(s) {
   };
 }
 
+// "As of <build date>" for a timeline with no figures, in both views.
+function asOfHtml(snapshot, ctx) {
+  const day = /^\d{4}-\d{2}-\d{2}/.exec(ctx.builtAt || '');
+  return day && !events(snapshot).some((e) => isObj(e.value))
+    ? `<p class="h-blk-asof">As of ${ctx.esc(ctx.formatByUnit(day[0], 'date'))}</p>` : '';
+}
+
 export function render(snapshot, ctx) {
   const { esc, state } = ctx;
   if (state.table) {
     const t = tableOf(snapshot);
     t.rows.forEach((r) => { r.cells[0].text = ctx.formatByUnit(r.cells[0].sort, 'date'); });
-    return toggleHtml(ctx) + tableHtml(t, ctx);
+    return toggleHtml(ctx) + tableHtml(t, ctx) + asOfHtml(snapshot, ctx);
   }
   const items = events(snapshot).map((e) => {
     const d = dateOf(e);
     const v = isObj(e.value) ? `<span class="h-blk-ev-v">${ctx.fig(e.value)}</span>` : '';
     return `<li class="h-blk-ev"><time datetime="${esc(d)}">${esc(ctx.formatByUnit(d, 'date'))}</time><span class="h-blk-ev-l">${esc(e.label)}</span>${v}</li>`;
   }).join('');
-  const day = /^\d{4}-\d{2}-\d{2}/.exec(ctx.builtAt || '');
-  const asOf = day && !events(snapshot).some((e) => isObj(e.value))
-    ? `<p class="h-blk-asof">As of ${esc(ctx.formatByUnit(day[0], 'date'))}</p>` : '';
-  return toggleHtml(ctx) + `<ol class="h-blk-tl" aria-label="${esc(summary(snapshot, ctx))}">${items}</ol>${asOf}`;
+  return toggleHtml(ctx) + `<ol class="h-blk-tl" aria-label="${esc(summary(snapshot, ctx))}">${items}</ol>${asOfHtml(snapshot, ctx)}`;
 }
 
 export function bind(root, snapshot, ctx) {
