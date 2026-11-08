@@ -1179,7 +1179,7 @@ test('R3 A contract: scalar read operations return no sentinel argument outside 
       throw e;
     }));
     const numbers = new Set(leaves(JSON.parse(seen)).map(l => l.value).filter(v => typeof v === 'number'));
-    const intProp = Object.values(props).find(p => p.type === 'integer');
+    const intProp = Object.values(props).map(p => p.type === 'array' ? p.items : p).find(p => p?.type === 'integer');
     let intSentinel;
     if (intProp) {
       for (let n = intProp.maximum ?? 1000; n >= (intProp.minimum ?? 1) && intSentinel === undefined; n--) {

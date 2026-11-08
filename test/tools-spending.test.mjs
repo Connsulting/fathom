@@ -7,7 +7,8 @@ import { spendingInputs } from '../src/calc/targets.mjs';
 import { loadCategoryInputs } from '../src/categories/store.mjs';
 import { resolveCategories } from '../src/categories/resolve.mjs';
 import { classOf, BUILTIN_DEFINITIONS } from '../src/calc/classes.mjs';
-import { callTool } from '../src/tools/index.mjs';
+import { proposalTools } from '../src/actions/proposals.mjs';
+import { callTool, tools } from '../src/tools/index.mjs';
 import { assertRefsResolve } from './helpers/figures.mjs';
 
 const sum = (xs) => Math.round(xs.reduce((s, x) => s + x, 0) * 100) / 100;
@@ -193,8 +194,10 @@ test('C4 eval scripts call valid operations', async (t) => {
     for (const turn of c.turns) {
       const frames = await script({ turn, db: store.db, clock: '2026-11-05' });
       assert.ok(frames[0].toolCalls.length, c.id);
-      for (const call of frames[0].toolCalls)
-        await callTool(call.name, call.args, { db: store.db, dataDir: store.root, clock: '2026-11-05' });
+      for (const call of frames[0].toolCalls) {
+        const tool = proposalTools(tools).find(t => t.name === call.name);
+        await tool.handler(call.args, { db: store.db, dataDir: store.root, clock: '2026-11-05', actorId: 'demo', onProposal() {} });
+      }
     }
   }
 });
