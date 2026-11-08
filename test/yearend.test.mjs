@@ -365,71 +365,71 @@ async function inferenceStore() {
 
 test('inferred 1099-INT: below threshold with evidence, threshold and other years do not qualify', async () => {
   const { db, tx, item } = await inferenceStore();
-  tx('bank', 9.99, 'Interest paid', 'interest');
-  tx('bank', 50, 'Interest paid', 'interest', '2025-12-31');
-  let i = item('1099-int:bank');
+  await tx('bank', 9.99, 'Interest paid', 'interest');
+  await tx('bank', 50, 'Interest paid', 'interest', '2025-12-31');
+  let i = await item('1099-int:bank');
   assert.equal(i.status, 'skipped');
   assert.equal(i.skip.inferred, true);
   assert.match(i.skip.reason, /Interest.*below the bank reporting threshold/);
   assert.ok(!i.skip.reason.includes('$'), 'inferred prose has no bare dollar amounts');
   assert.ok(i.skip.evidence.some(e => e.table === 'transactions' && e.locator === 'synthetic ledger row'));
-  tx('bank', 0.01, 'Interest paid', 'interest');
-  assert.equal(item('1099-int:bank').status, 'missing');
+  await tx('bank', 0.01, 'Interest paid', 'interest');
+  assert.equal((await item('1099-int:bank')).status, 'missing');
   await db.close();
 });
 
 test('inferred 1099-SA: no HSA distributions with evidence; an HSA withdrawal prevents inference', async () => {
   const { db, tx, item } = await inferenceStore();
-  tx('hsa', 100, 'Contribution');
-  assert.equal(item('hsa:1099-sa').skip.inferred, true);
-  assert.match(item('hsa:1099-sa').skip.reason, /No HSA distributions/);
-  assert.ok(item('hsa:1099-sa').skip.evidence.length);
-  tx('hsa', -20, 'Medical reimbursement');
-  assert.equal(item('hsa:1099-sa').status, 'missing');
+  await tx('hsa', 100, 'Contribution');
+  assert.equal((await item('hsa:1099-sa')).skip.inferred, true);
+  assert.match((await item('hsa:1099-sa')).skip.reason, /No HSA distributions/);
+  assert.ok((await item('hsa:1099-sa')).skip.evidence.length);
+  await tx('hsa', -20, 'Medical reimbursement');
+  assert.equal((await item('hsa:1099-sa')).status, 'missing');
   await db.close();
 });
 
 test('inferred 1099-K: no processor deposits with evidence; a processor deposit prevents inference', async () => {
   const { db, tx, item } = await inferenceStore();
-  assert.equal(item('1099-k').skip.inferred, true);
-  assert.match(item('1099-k').skip.reason, /No payment-processor deposits/);
-  assert.ok(item('1099-k').skip.evidence.some(e => e.table === 'transactions'));
-  tx('bank', 50, 'Stripe payout', 'income');
-  assert.equal(item('1099-k').status, 'missing');
+  assert.equal((await item('1099-k')).skip.inferred, true);
+  assert.match((await item('1099-k')).skip.reason, /No payment-processor deposits/);
+  assert.ok((await item('1099-k')).skip.evidence.some(e => e.table === 'transactions'));
+  await tx('bank', 50, 'Stripe payout', 'income');
+  assert.equal((await item('1099-k')).status, 'missing');
   await db.close();
 });
 
 test('inferred K-1: stored no-partnership fact with evidence; partnership or unknown stays uninferred', async () => {
   const { db, item } = await inferenceStore();
-  assert.equal(item('k1:partnership').skip.inferred, true);
-  assert.match(item('k1:partnership').skip.reason, /No partnership entity/);
-  assert.ok(item('k1:partnership').skip.evidence.some(e => e.table === 'facts' && e.id === 'income.partnership'));
+  assert.equal((await item('k1:partnership')).skip.inferred, true);
+  assert.match((await item('k1:partnership')).skip.reason, /No partnership entity/);
+  assert.ok((await item('k1:partnership')).skip.evidence.some(e => e.table === 'facts' && e.id === 'income.partnership'));
   await upsertFact(db, { key: 'income.partnership', value: true, confirmed: true });
-  assert.equal(item('k1:partnership').status, 'expected');
+  assert.equal((await item('k1:partnership')).status, 'expected');
   await db.prepare("DELETE FROM facts WHERE key = 'income.partnership'").run();
-  assert.equal(item('k1:partnership'), undefined);
+  assert.equal(await item('k1:partnership'), undefined);
   await db.close();
 });
 
 test('inference: Undo and manual not-needed decisions persist across history changes; received still wins', async () => {
   const { db, tx, item } = await inferenceStore();
-  assert.equal(item('1099-k').status, 'skipped');
+  assert.equal((await item('1099-k')).status, 'skipped');
   await setMark(db, { year: 2026, key: '1099-k', reason: null });
-  assert.equal(item('1099-k').status, 'missing');
-  tx('bank', 100, 'Client payment');
-  assert.equal(item('1099-k').status, 'missing');
+  assert.equal((await item('1099-k')).status, 'missing');
+  await tx('bank', 100, 'Client payment');
+  assert.equal((await item('1099-k')).status, 'missing');
   await setMark(db, { year: 2026, key: '1099-k', reason: 'Owner decision' });
-  tx('bank', 100, 'Stripe payout');
-  assert.deepEqual(item('1099-k').skip.reason, 'Owner decision');
+  await tx('bank', 100, 'Stripe payout');
+  assert.deepEqual((await item('1099-k')).skip.reason, 'Owner decision');
   await addDoc(db, { id: 'processor-form', name: 'processor.pdf', type: '1099-k' });
-  assert.equal(item('1099-k').status, 'have');
+  assert.equal((await item('1099-k')).status, 'have');
   await db.close();
 });
 
 test('inference: no ledger history is unknown, not zero', async () => {
   const { db, item } = await inferenceStore();
   await db.prepare('DELETE FROM transactions').run();
-  assert.equal(item('1099-k').status, 'missing');
-  assert.equal(item('hsa:1099-sa').status, 'missing');
+  assert.equal((await item('1099-k')).status, 'missing');
+  assert.equal((await item('hsa:1099-sa')).status, 'missing');
   await db.close();
 });

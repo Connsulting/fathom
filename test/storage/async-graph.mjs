@@ -174,6 +174,15 @@ export function analyze(files, { roots = () => false, root = null } = {}) {
               continue;
             }
             if (dyn && d.id.type === 'Identifier') { declare(d.id.name, { kind: 'import', from: dyn, name: '*' }); continue; }
+            if (d.id.type === 'ObjectPattern' && d.init) {
+              for (const q of d.id.properties) {
+                if (q.type !== 'Property') continue;
+                const target = q.value.type === 'AssignmentPattern' ? q.value.left : q.value;
+                if (target.type === 'Identifier') declare(target.name, { kind: 'value', init: d.init, prop: propName(q.key) });
+                else for (const n of patternNames(target)) declare(n, { kind: 'value', init: null });
+              }
+              continue;
+            }
             for (const n of patternNames(d.id)) {
               if (d.id.type === 'Identifier' && isFunction(d.init)) declare(n, { kind: 'fn', info: fnOf.get(d.init) });
               else declare(n, { kind: 'value', init: d.id.type === 'Identifier' ? d.init : null, decl: d });
@@ -280,6 +289,13 @@ export function analyze(files, { roots = () => false, root = null } = {}) {
     if (callee.type === 'Identifier') {
       const b = bindingOf(mod, callee.name, ancestors);
       if (b?.kind === 'fn' && b.info) return { targets: [b.info] };
+      // Destructured from a factory call: `const { invite } = await fixture()`.
+      const init = b?.kind === 'value' && b.prop ? unwrap(b.init) : null;
+      if (init?.type === 'CallExpression' && depth < 3) {
+        const made = classify({ mod, node: init, ancestors }, depth + 1).targets;
+        const found = made.map(f => returnedMethods(f).get(b.prop)).filter(Boolean);
+        if (found.length) return { targets: found };
+      }
       return { targets: [] };
     }
     if (callee.type !== 'MemberExpression') return { targets: [] };

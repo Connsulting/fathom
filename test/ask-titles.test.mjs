@@ -202,11 +202,11 @@ test('AC3 nameThread does nothing before the first owner message has a reply', a
   const { db, thread, add } = await namingStore(t);
   const { engine, calls } = stubEngine({ title: 'Quarterly estimate planning' });
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null, 'no messages');
-  add(thread.key, 'me', FIRST_Q);
+  await add(thread.key, 'me', FIRST_Q);
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null, 'the first question has no reply yet');
   assert.equal(calls.length, 0);
   assert.deepEqual(await rowOf(db, thread.key), { title: null, title_source: null });
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
   const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
   assert.ok(out != null, 'one completed turn names the thread');
   assert.equal(calls.length, 1);
@@ -217,24 +217,24 @@ test('AC3 nameThread names a thread after its first completed turn', async t => 
   // Model title after one owner message and one reply.
   {
     const { db, thread, add } = await namingStore(t);
-    add(thread.key, 'me', FIRST_Q);
-    add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+    await add(thread.key, 'me', FIRST_Q);
+    await add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
     const { engine, calls } = stubEngine({ title: 'Quarterly estimate planning' });
     const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
     assert.deepEqual(out, { title: 'Quarterly estimate planning', titleSource: 'auto', from: 'model' });
     assert.equal(calls.length, 1);
     assert.equal(calls[0].purpose, 'title');
     assert.deepEqual(await rowOf(db, thread.key), { title: 'Quarterly estimate planning', title_source: 'auto' });
-    add(thread.key, 'me', 'Synthetic estimate question two');
-    add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+    await add(thread.key, 'me', 'Synthetic estimate question two');
+    await add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
     assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null, 'never renamed after the first naming');
     assert.equal(calls.length, 1);
   }
   // Fallback after one turn whose reply is a notice (the engine is off).
   {
     const { db, thread, add } = await namingStore(t);
-    add(thread.key, 'me', FIRST_Q);
-    add(thread.key, 'fathom', '<p>Synthetic engine off notice</p>', 1);
+    await add(thread.key, 'me', FIRST_Q);
+    await add(thread.key, 'fathom', '<p>Synthetic engine off notice</p>', 1);
     const { engine, calls } = stubEngine({ title: 'Quarterly estimate planning' }, { on: false });
     const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
     assert.deepEqual(out, { title: FIRST_Q, titleSource: 'auto', from: 'fallback' });
@@ -244,8 +244,8 @@ test('AC3 nameThread names a thread after its first completed turn', async t => 
   // Fallback after one turn when the model title is invalid.
   {
     const { db, thread, add } = await namingStore(t);
-    add(thread.key, 'me', FIRST_Q);
-    add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+    await add(thread.key, 'me', FIRST_Q);
+    await add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
     const { engine, calls } = stubEngine({ title: 'Spend 4000 on the estimates' });
     const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
     assert.deepEqual(out, { title: FIRST_Q, titleSource: 'auto', from: 'fallback' });
@@ -276,10 +276,10 @@ test('AC3 nameThread sends one title call with only this thread and stores the m
 
 test('AC3 nameThread skips notices in the title prompt', async t => {
   const { db, thread, add } = await namingStore(t);
-  add(thread.key, 'me', FIRST_Q);
-  add(thread.key, 'fathom', '<p>Synthetic notice text for the prompt test</p>', 1);
-  add(thread.key, 'me', 'Synthetic estimate question two');
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+  await add(thread.key, 'me', FIRST_Q);
+  await add(thread.key, 'fathom', '<p>Synthetic notice text for the prompt test</p>', 1);
+  await add(thread.key, 'me', 'Synthetic estimate question two');
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
   const { engine, calls } = stubEngine({ title: 'Quarterly estimate planning' });
   await nameThread({ db, engine, key: thread.key, clock: CLOCK });
   assert.equal(calls.length, 1);
@@ -338,10 +338,10 @@ test('AC3 a thread already named by hand is never sent for a title', async t => 
 
 test('AC3 a thread whose first message has no usable title text is never sent for a title again', async t => {
   const { db, thread, add } = await namingStore(t);
-  add(thread.key, 'me', '{f:yearend_cash}');
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
-  add(thread.key, 'me', 'Synthetic estimate question two');
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+  await add(thread.key, 'me', '{f:yearend_cash}');
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+  await add(thread.key, 'me', 'Synthetic estimate question two');
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
   const { engine, calls } = stubEngine({ title: '<b>Quarterly</b> estimates' });
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
   assert.equal(calls.length, 2);
@@ -368,8 +368,8 @@ test('AC3 a model title with words the owner never typed is accepted when the co
   assert.equal(validateTitle('Retirement portfolio target from spending', { fromModel: true, conversationWords }),
     'Retirement portfolio target from spending');
   const { db, thread, add } = await namingStore(t);
-  add(thread.key, 'me', said);
-  add(thread.key, 'fathom', '<p>Synthetic spending answer</p>');
+  await add(thread.key, 'me', said);
+  await add(thread.key, 'fathom', '<p>Synthetic spending answer</p>');
   const { engine, calls } = stubEngine({ title: 'Retirement portfolio target from spending' });
   const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
   assert.deepEqual(out, { title: 'Retirement portfolio target from spending', titleSource: 'auto', from: 'model' });
@@ -379,8 +379,8 @@ test('AC3 a model title with words the owner never typed is accepted when the co
 
 test('AC3 conversation words come from reply text as well as owner text', async t => {
   const { db, thread, add } = await namingStore(t);
-  add(thread.key, 'me', 'Synthetic opening question');
-  add(thread.key, 'fathom', '<p>Synthetic mortgage payoff answer</p>');
+  await add(thread.key, 'me', 'Synthetic opening question');
+  await add(thread.key, 'fathom', '<p>Synthetic mortgage payoff answer</p>');
   const { engine } = stubEngine({ title: 'Mortgage payoff' });
   const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
   assert.deepEqual(out, { title: 'Mortgage payoff', titleSource: 'auto', from: 'model' });
@@ -405,10 +405,10 @@ test('AC3 fraction and multiplier words never pass in a model title, even in the
   assert.equal(validateTitle('Quarterly estimates', { fromModel: true, conversationWords: live }), 'Quarterly estimates');
   const { db, thread, add } = await namingStore(t);
   const first = 'How much income should I save this quarter?';
-  add(thread.key, 'me', first);
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
-  add(thread.key, 'me', 'What about taxes?');
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+  await add(thread.key, 'me', first);
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+  await add(thread.key, 'me', 'What about taxes?');
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
   const { engine, calls } = stubEngine({ title: 'Save a quarter of income' });
   await nameThread({ db, engine, key: thread.key, clock: CLOCK });
   assert.equal(calls.length, 2);
@@ -503,8 +503,8 @@ test('AC8: model titles keep conversation identifiers and refuse invented number
 
 test('AC9: rejected title retries once with a plain reason before falling back', async t => {
   const { db, thread, add } = await namingStore(t);
-  add(thread.key, 'me', 'Have I made 529 contributions in 2026?');
-  add(thread.key, 'fathom', '<p>The 529 contributions are stored.</p>');
+  await add(thread.key, 'me', 'Have I made 529 contributions in 2026?');
+  await add(thread.key, 'fathom', '<p>The 529 contributions are stored.</p>');
   const { engine, calls } = seqEngine([{ title: '$4,000 plan' }, { title: '529 contributions' }]);
   assert.deepEqual(await nameThread({ db, engine, key: thread.key }), { title: '529 contributions', titleSource: 'auto', from: 'model' });
   assert.equal(calls.length, 2);
@@ -520,8 +520,8 @@ test('AC9: rejected title retries once with a plain reason before falling back',
 test('AC10: opening an old fallback thread after many turns repairs its title only once', async t => {
   const { db, thread, add } = await namingStore(t);
   for (let i = 0; i < 4; i++) {
-    add(thread.key, 'me', 'Have I made 529 contributions in 2026?');
-    add(thread.key, 'fathom', '<p>The 529 contributions are stored.</p>');
+    await add(thread.key, 'me', 'Have I made 529 contributions in 2026?');
+    await add(thread.key, 'fathom', '<p>The 529 contributions are stored.</p>');
   }
   await db.prepare("UPDATE conversations SET title = ?, title_source = 'auto' WHERE key = ?").run('Have I made 529 contributions in 2026?', thread.key);
   const { engine, calls } = seqEngine([{ title: '529 contributions' }]);
@@ -624,37 +624,37 @@ test('AC3 ask.titleRejects counts repeats per reason and an accepted title or a 
 
 test('AC10 a fallback-titled thread is repaired on its next answered turn and an accepted title replaces it', async t => {
   const { db, thread, add } = await namingStore(t);
-  add(thread.key, 'me', FIRST_Q);
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+  await add(thread.key, 'me', FIRST_Q);
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
   const { engine, calls } = seqEngine([{ title: 'Spend 4000 on the estimates' }, { title: 'Spend 4000 on the estimates' }, { title: 'Quarterly estimate planning' }]);
   assert.deepEqual(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), { title: FIRST_Q, titleSource: 'auto', from: 'fallback' });
   assert.equal(titleCalls(calls), 2);
-  add(thread.key, 'me', 'Synthetic estimate question two');
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+  await add(thread.key, 'me', 'Synthetic estimate question two');
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
   const out = await nameThread({ db, engine, key: thread.key, clock: CLOCK });
   assert.deepEqual(out, { title: 'Quarterly estimate planning', titleSource: 'auto', from: 'model' });
   assert.equal(titleCalls(calls), 3, 'exactly one retry call');
   assert.deepEqual(await rowOf(db, thread.key), { title: 'Quarterly estimate planning', title_source: 'auto' });
-  add(thread.key, 'me', 'Synthetic estimate question three');
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer three</p>');
+  await add(thread.key, 'me', 'Synthetic estimate question three');
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer three</p>');
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
   assert.equal(titleCalls(calls), 3, 'no further title call after the third turn');
 });
 
 test('AC3 a rejected retry keeps the fallback, records the reason and is not tried again', async t => {
   const { db, thread, add } = await namingStore(t);
-  add(thread.key, 'me', FIRST_Q);
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+  await add(thread.key, 'me', FIRST_Q);
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
   const { engine, calls } = seqEngine([{ title: 'Spend 4000 on the estimates' }, { title: 'Spend 4000 on the estimates' }, { title: 'Half the estimates' }, { title: 'Half the estimates' }, { title: 'Quarterly estimate planning' }]);
   await nameThread({ db, engine, key: thread.key, clock: CLOCK });
-  add(thread.key, 'me', 'Synthetic estimate question two');
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+  await add(thread.key, 'me', 'Synthetic estimate question two');
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
   assert.equal(titleCalls(calls), 4);
   assert.deepEqual(await rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
   assert.deepEqual(await rejects(db), { number: 2, money_word: 2 });
-  add(thread.key, 'me', 'Synthetic estimate question three');
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer three</p>');
+  await add(thread.key, 'me', 'Synthetic estimate question three');
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer three</p>');
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
   assert.equal(titleCalls(calls), 4, 'the retry happens once');
   assert.deepEqual(await rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
@@ -662,12 +662,12 @@ test('AC3 a rejected retry keeps the fallback, records the reason and is not tri
 
 test('AC3 a thread whose first title came from the model gets no retry at turn 2', async t => {
   const { db, thread, add } = await namingStore(t);
-  add(thread.key, 'me', FIRST_Q);
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+  await add(thread.key, 'me', FIRST_Q);
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
   const { engine, calls } = seqEngine([{ title: 'Quarterly estimate planning' }, { title: 'Estimate planning question' }]);
   assert.equal((await nameThread({ db, engine, key: thread.key, clock: CLOCK })).from, 'model');
-  add(thread.key, 'me', 'Synthetic estimate question two');
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+  await add(thread.key, 'me', 'Synthetic estimate question two');
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
   assert.equal(titleCalls(calls), 1);
   assert.deepEqual(await rowOf(db, thread.key), { title: 'Quarterly estimate planning', title_source: 'auto' });
@@ -675,13 +675,13 @@ test('AC3 a thread whose first title came from the model gets no retry at turn 2
 
 test('AC3 a manual rename before turn 2 prevents the retry', async t => {
   const { db, thread, add } = await namingStore(t);
-  add(thread.key, 'me', FIRST_Q);
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+  await add(thread.key, 'me', FIRST_Q);
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
   const { engine, calls } = seqEngine([{ title: 'Spend 4000 on the estimates' }, { title: 'Spend 4000 on the estimates' }, { title: 'Quarterly estimate planning' }]);
   await nameThread({ db, engine, key: thread.key, clock: CLOCK });
   await db.prepare("UPDATE conversations SET title = 'Synthetic manual name', title_source = 'manual' WHERE key = ?").run(thread.key);
-  add(thread.key, 'me', 'Synthetic estimate question two');
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+  await add(thread.key, 'me', 'Synthetic estimate question two');
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
   assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
   assert.equal(titleCalls(calls), 2);
   assert.deepEqual(await rowOf(db, thread.key), { title: 'Synthetic manual name', title_source: 'manual' });
@@ -689,12 +689,12 @@ test('AC3 a manual rename before turn 2 prevents the retry', async t => {
 
 test('AC3 a manual rename made while the retry call runs survives', async t => {
   const { db, thread, add } = await namingStore(t);
-  add(thread.key, 'me', FIRST_Q);
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+  await add(thread.key, 'me', FIRST_Q);
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
   const seq = seqEngine([{ title: 'Spend 4000 on the estimates' }, { title: 'Spend 4000 on the estimates' }, { title: 'Quarterly estimate planning' }]);
   await nameThread({ db, engine: seq.engine, key: thread.key, clock: CLOCK });
-  add(thread.key, 'me', 'Synthetic estimate question two');
-  add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+  await add(thread.key, 'me', 'Synthetic estimate question two');
+  await add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
   const racing = { ...seq.engine, call: async req => {
     const res = await seq.engine.call(req);
     await db.prepare("UPDATE conversations SET title = 'Synthetic manual name', title_source = 'manual' WHERE key = ?").run(thread.key);
@@ -707,25 +707,25 @@ test('AC3 a manual rename made while the retry call runs survives', async t => {
 test('AC3 no retry call when the engine is off at turn 2 or the first title was null', async t => {
   {
     const { db, thread, add } = await namingStore(t);
-    add(thread.key, 'me', FIRST_Q);
-    add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+    await add(thread.key, 'me', FIRST_Q);
+    await add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
     const { engine, calls, state } = seqEngine([{ title: 'Spend 4000 on the estimates' }, { title: 'Spend 4000 on the estimates' }, { title: 'Quarterly estimate planning' }]);
     await nameThread({ db, engine, key: thread.key, clock: CLOCK });
     state.on = false;
-    add(thread.key, 'me', 'Synthetic estimate question two');
-    add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+    await add(thread.key, 'me', 'Synthetic estimate question two');
+    await add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
     assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
     assert.equal(titleCalls(calls), 2);
     assert.deepEqual(await rowOf(db, thread.key), { title: FIRST_Q, title_source: 'auto' });
   }
   {
     const { db, thread, add } = await namingStore(t);
-    add(thread.key, 'me', '{f:yearend_cash}');
-    add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
+    await add(thread.key, 'me', '{f:yearend_cash}');
+    await add(thread.key, 'fathom', '<p>Synthetic estimate answer one</p>');
     const { engine, calls } = seqEngine([{ title: '<b>Quarterly</b> estimates' }, { title: '<b>Quarterly</b> estimates' }, { title: 'Quarterly estimate planning' }]);
     await nameThread({ db, engine, key: thread.key, clock: CLOCK });
-    add(thread.key, 'me', 'Synthetic estimate question two');
-    add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
+    await add(thread.key, 'me', 'Synthetic estimate question two');
+    await add(thread.key, 'fathom', '<p>Synthetic estimate answer two</p>');
     assert.equal(await nameThread({ db, engine, key: thread.key, clock: CLOCK }), null);
     assert.equal(titleCalls(calls), 2, 'a NULL title is never retried');
     assert.deepEqual(await rowOf(db, thread.key), { title: null, title_source: 'auto' });

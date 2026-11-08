@@ -42,7 +42,7 @@ async function proposal(db, { sourced = true, target = 4000, thread = key } = {}
 test('AC1: replay both failed goal call shapes through the Ask registry, then correct horizon', async t => {
   const { db, registry } = await setup(t);
   await storedGoal(db); await proposal(db);
-  const r = registry();
+  const r = await registry();
   for (const extra of [{ note, track: null }, {}]) {
     const rejected = await r.invoke('update_goal', { operation: 'create', ...args, horizon: 'This year', ...extra });
     assert.equal(rejected.isError, true);
@@ -66,7 +66,7 @@ test('AC2: create and edit schemas offer canonical horizons with every display l
 test('AC3: schema and handler errors retain argument reasons without sibling household values', async t => {
   const { ctx, registry } = await setup(t);
   ctx.ownerText = 'Use $4,000 by 2026-02-30';
-  const r = registry();
+  const r = await registry();
   for (const [input, reason] of [
     [{ ...args, target: 'wrong' }, /target.*(?:number|null)/],
     [{ ...args, extra: 'private sibling' }, /extra.*(?:unknown|additional|allowed|not a known)/i],
@@ -89,13 +89,13 @@ test('AC4: stored goal definitions and notes, facts and available figures suppor
   const { db, registry } = await setup(t);
   await storedGoal(db);
   for (const input of [args, { ...args, target: 8000 }]) {
-    assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...input })).isError);
+    assert.ok(!(await (await registry()).invoke('update_goal', { operation: 'create', ...input })).isError);
   }
   await db.prepare("INSERT INTO facts (key, value, confirmed, updated_at) VALUES ('goal.syntheticTarget', '7319', 1, ?)").run(now);
   await db.prepare("INSERT INTO facts (key, value, confirmed, updated_at) VALUES ('goal.syntheticDate', ?, 1, ?)").run(JSON.stringify('2028-09-17'), now);
-  assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: 7319, targetDate: '2028-09-17' })).isError);
+  assert.ok(!(await (await registry()).invoke('update_goal', { operation: 'create', ...args, target: 7319, targetDate: '2028-09-17' })).isError);
   const value = (await db.prepare('SELECT v FROM figures WHERE unavailable_reason IS NULL AND v > 0 LIMIT 1').get()).v;
-  assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: value })).isError);
+  assert.ok(!(await (await registry()).invoke('update_goal', { operation: 'create', ...args, target: value })).isError);
 });
 
 test('AC4: sourced immediate stored proposals accept short explicit confirmations', async t => {
@@ -105,7 +105,7 @@ test('AC4: sourced immediate stored proposals accept short explicit confirmation
     await proposal(db, { target: ++target });
     ctx.ownerText = reply;
     assert.equal((await db.prepare("SELECT count(*) AS n FROM goals WHERE json_extract(def, '$.target') = ?").get(target)).n, 0);
-    const out = await registry().invoke('update_goal', { operation: 'create', ...args, target });
+    const out = await (await registry()).invoke('update_goal', { operation: 'create', ...args, target });
     assert.ok(!out.isError, `${reply}: ${out.content[0].text}`);
   }
 });
@@ -114,19 +114,19 @@ test('AC4: invented, unsourced, negative, delayed and current-turn proposals con
   const { db, ctx, registry } = await setup(t);
   const input = { ...args, target: 97361 };
   await proposal(db, { sourced: false, target: input.target });
-  assert.equal((await registry().invoke('update_goal', { operation: 'create', ...input })).isError, true);
+  assert.equal((await (await registry()).invoke('update_goal', { operation: 'create', ...input })).isError, true);
   await proposal(db, { target: input.target });
   for (const reply of ['no', 'wait', 'not yet', 'yeah but wait', 'yes, do not create it', 'okay maybe later', 'surely not', 'yesterday']) {
     ctx.ownerText = reply;
-    assert.equal((await registry().invoke('update_goal', { operation: 'create', ...input })).isError, true, reply);
+    assert.equal((await (await registry()).invoke('update_goal', { operation: 'create', ...input })).isError, true, reply);
   }
   ctx.ownerText = 'yeah';
   await message(db, 'Something unrelated.', null);
-  assert.equal((await registry().invoke('update_goal', { operation: 'create', ...input })).isError, true);
-  const before = registry();
+  assert.equal((await (await registry()).invoke('update_goal', { operation: 'create', ...input })).isError, true);
+  const before = await registry();
   await proposal(db, { target: input.target });
   assert.equal((await before.invoke('update_goal', { operation: 'create', ...input })).isError, true, 'only pre-existing assistant rows count');
-  assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...input })).isError, 'next request can confirm saved proposal');
+  assert.ok(!(await (await registry()).invoke('update_goal', { operation: 'create', ...input })).isError, 'next request can confirm saved proposal');
 });
 
 test('AC4: a stored confirmation belongs to its actor and thread', async t => {
@@ -134,33 +134,33 @@ test('AC4: a stored confirmation belongs to its actor and thread', async t => {
   await proposal(db, { target: 97361 });
   await message(db, 'yeah', { ownerInput: { actorId: 'someone-else' } }, 'me');
   ctx.ownerText = null;
-  assert.equal((await registry().invoke('update_goal', { operation: 'create', ...args, target: 97361 })).isError, true);
+  assert.equal((await (await registry()).invoke('update_goal', { operation: 'create', ...args, target: 97361 })).isError, true);
   await db.prepare("DELETE FROM messages WHERE role = 'me' AND conversation_key = ?").run(key);
   await message(db, 'yeah', { ownerInput: { actorId: 'demo' } }, 'me');
-  assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: 97361 })).isError);
+  assert.ok(!(await (await registry()).invoke('update_goal', { operation: 'create', ...args, target: 97361 })).isError);
   await db.prepare('INSERT INTO conversations (key, created_at) VALUES (?, ?)').run('ask:abcdef012345', now);
   await message(db, 'An unrelated proposal.', null, 'fathom', 'ask:abcdef012345');
   await proposal(db, { target: 97372 });
   await message(db, 'yeah', { ownerInput: { actorId: 'demo' } }, 'me', 'ask:abcdef012345');
   ctx.conversationKey = 'ask:abcdef012345'; ctx.ownerText = null;
-  const wrongThread = await registry().invoke('update_goal', { operation: 'create', ...args, title: 'Other thread', target: 97372 });
+  const wrongThread = await (await registry()).invoke('update_goal', { operation: 'create', ...args, title: 'Other thread', target: 97372 });
   assert.equal(wrongThread.isError, true);
   assert.match(wrongThread.content[0].text, /^target:/);
   ctx.conversationKey = key; ctx.ownerText = 'yeah';
-  assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: 97372 })).isError);
+  assert.ok(!(await (await registry()).invoke('update_goal', { operation: 'create', ...args, target: 97372 })).isError);
 });
 
 test('AC4: goal evidence never loosens household fact attribution', async t => {
   const { db, ctx, registry } = await setup(t);
   await db.prepare("INSERT INTO facts (key, value, confirmed, updated_at) VALUES ('household.dependents', '2', 1, ?) ON CONFLICT(key) DO UPDATE SET value = '2'").run(now);
   await db.prepare("DELETE FROM facts WHERE key = 'household.birthYears'").run();
-  const out = await registry().invoke('answer', { operation: 'fact', key: 'household.birthYears', value: { owner: 1974 }, evidence: 'yeah' });
+  const out = await (await registry()).invoke('answer', { operation: 'fact', key: 'household.birthYears', value: { owner: 1974 }, evidence: 'yeah' });
   assert.equal(out.isError, true);
   assert.equal(await db.prepare("SELECT value FROM facts WHERE key = 'household.birthYears'").get(), undefined);
   await proposal(db, { target: 1969 });
-  assert.equal((await registry().invoke('answer', { operation: 'fact', key: 'household.birthYears', value: { owner: 1969 }, evidence: 'yeah' })).isError, true);
+  assert.equal((await (await registry()).invoke('answer', { operation: 'fact', key: 'household.birthYears', value: { owner: 1969 }, evidence: 'yeah' })).isError, true);
   ctx.ownerText = 'I was born in 1974';
-  const good = await registry().invoke('answer', { operation: 'fact', key: 'household.birthYears', value: { owner: 1974 }, evidence: ctx.ownerText });
+  const good = await (await registry()).invoke('answer', { operation: 'fact', key: 'household.birthYears', value: { owner: 1974 }, evidence: ctx.ownerText });
   assert.ok(!good.isError, JSON.stringify(good.content));
 });
 
@@ -171,19 +171,19 @@ test('AC4: date components from a goal note are not target amounts', async t => 
   await db.prepare('DELETE FROM figures WHERE v IN (12, 31, 2026)').run();
   await storedGoal(db, 'Due 2026-12-31.');
   for (const target of [12, 31, 2026]) {
-    const out = await registry().invoke('update_goal', { operation: 'create', ...args, target });
+    const out = await (await registry()).invoke('update_goal', { operation: 'create', ...args, target });
     assert.equal(out.isError, true, String(target));
     assert.match(out.content[0].text, /^target:/);
   }
-  assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: 8000 })).isError);
+  assert.ok(!(await (await registry()).invoke('update_goal', { operation: 'create', ...args, target: 8000 })).isError);
 });
 
 test('AC4: a stored amount must match exactly rather than round to a proposed target', async t => {
   const { db, registry } = await setup(t);
   await storedGoal(db, 'Planned $97,361.49 by 2026-12-31.');
-  const rounded = await registry().invoke('update_goal', { operation: 'create', ...args, target: 97361 });
+  const rounded = await (await registry()).invoke('update_goal', { operation: 'create', ...args, target: 97361 });
   assert.equal(rounded.isError, true);
-  assert.ok(!(await registry().invoke('update_goal', { operation: 'create', ...args, target: 97361.49 })).isError);
+  assert.ok(!(await (await registry()).invoke('update_goal', { operation: 'create', ...args, target: 97361.49 })).isError);
 });
 
 test('SEC2: stored notes and sourced proposals keep identifier context for numeric evidence', async t => {
@@ -194,7 +194,7 @@ test('SEC2: stored notes and sourced proposals keep identifier context for numer
   await storedGoal(db, 'Account ending in 4821, due 2028-09-17.');
   const receipts = async () => (await db.prepare('SELECT count(*) AS n FROM action_receipts').get()).n;
   for (const target of [4821, 2028, 9, 17]) {
-    const out = await registry().invoke('update_goal', { operation: 'create', title: 'Savings', target });
+    const out = await (await registry()).invoke('update_goal', { operation: 'create', title: 'Savings', target });
     assert.equal(out.isError, true, String(target));
     assert.equal(await receipts(), 0);
   }
@@ -203,11 +203,11 @@ test('SEC2: stored notes and sourced proposals keep identifier context for numer
     const literals = [{ text: '4821', index: text.indexOf('4821'), source: 'account summary' }];
     await message(db, rendered ? renderAnswer(text, [], literals).join('') : text, { literals });
     ctx.ownerText = 'yes';
-    const rejected = await registry().invoke('update_goal', { operation: 'create', title: 'Savings', target: 4821 });
+    const rejected = await (await registry()).invoke('update_goal', { operation: 'create', title: 'Savings', target: 4821 });
     assert.equal(rejected.isError, true);
     assert.equal(await receipts(), 0);
   }
-  const accepted = await registry().invoke('update_goal', { operation: 'create', title: 'Savings', target: 8000 });
+  const accepted = await (await registry()).invoke('update_goal', { operation: 'create', title: 'Savings', target: 8000 });
   assert.ok(!accepted.isError, accepted.content[0].text);
   assert.equal(await receipts(), 1);
 });
@@ -219,7 +219,7 @@ test('SEC2: owner-stated range bounds persist through the Ask registry', async t
   await db.prepare('DELETE FROM goals').run();
   for (const range of ['$4,000-$8,000', '$4,000 - $8,000', '4000-8000', '4000 - 8000']) {
     ctx.ownerText = `Save ${range} by 2028-12-31.`;
-    const out = await registry().invoke('update_goal', { operation: 'create', kind: 'range', title: 'Savings',
+    const out = await (await registry()).invoke('update_goal', { operation: 'create', kind: 'range', title: 'Savings',
       targetLow: 4000, targetHigh: 8000, targetDate: '2028-12-31' });
     assert.ok(!out.isError, `${range}: ${out.content[0].text}`);
     const saved = JSON.parse(out.content[0].text);
@@ -246,12 +246,12 @@ test('AC4: the merged goal model keeps evidence for ranges, floors and contribut
       .run(id, JSON.stringify({ ...def, id, horizon: 'now', note: '' }), now);
   }
   for (const def of defs) {
-    const out = await registry().invoke('update_goal', { operation: 'create', ...def, horizon: 'now' });
+    const out = await (await registry()).invoke('update_goal', { operation: 'create', ...def, horizon: 'now' });
     assert.ok(!out.isError, out.content[0].text);
   }
   const invented = structuredClone(defs[2]);
   invented.entered.people[0].amount = 1379.12;
-  const rejected = await registry().invoke('update_goal', { operation: 'create', ...invented });
+  const rejected = await (await registry()).invoke('update_goal', { operation: 'create', ...invented });
   assert.equal(rejected.isError, true);
   assert.match(rejected.content[0].text, /^entered\.people\.0\.amount:/);
 });

@@ -66,19 +66,19 @@ test('the served household is a single opaque platform row and creating it popul
 
 test('invitations canonicalize the entire ASCII address, preserve plus tags and reissue pending roles', async t => {
   const { store, hh, invite } = await fixture(t);
-  const first = invite('  Owner+One@EXAMPLE.TEST  ', 'admin');
+  const first = await invite('  Owner+One@EXAMPLE.TEST  ', 'admin');
   assert.equal(first.user.email, 'owner+one@example.test');
   assert.equal(first.user.enrolledAt, null);
   assert.deepEqual(await store.invitation(first.token),
     { householdId: hh, email: 'owner+one@example.test', role: 'admin', userId: first.user.id, expiresAt: first.expiresAt });
   assert.equal((await store.findUser(' OWNER+ONE@example.test ')).id, first.user.id);
-  const member = invite('owner+one@example.test', 'member');
+  const member = await invite('owner+one@example.test', 'member');
   assert.equal(member.user.id, first.user.id);
   assert.equal((await store.invitation(member.token)).role, 'member');
   assert.equal(await store.invitation(first.token), null, 'a reissue revokes the earlier link');
-  const admin = invite('owner+one@example.test', 'admin');
+  const admin = await invite('owner+one@example.test', 'admin');
   assert.equal((await store.invitation(admin.token)).role, 'admin');
-  assert.notEqual(invite('owner@example.test', 'member').user.id, first.user.id);
+  assert.notEqual((await invite('owner@example.test', 'member')).user.id, first.user.id);
   assert.equal((await store.listPeople(hh)).length, 2);
   assert.equal(await store.membership(first.user.id, hh), null, 'a pending invitee has no membership yet');
   assert.equal(await store.getUser('missing'), null);
@@ -88,9 +88,9 @@ test('invitations canonicalize the entire ASCII address, preserve plus tags and 
 test('pending reinvites change either role without replacing the user or WebAuthn handle', async t => {
   const { platform, store, invite } = await fixture(t);
   for (const [initial, replacement] of [['admin', 'member'], ['member', 'admin']]) {
-    const { user } = invite(`${initial}@example.test`, initial);
+    const { user } = await invite(`${initial}@example.test`, initial);
     const before = { ...await platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) };
-    const reissued = invite(` ${initial.toUpperCase()}@EXAMPLE.TEST `, replacement);
+    const reissued = await invite(` ${initial.toUpperCase()}@EXAMPLE.TEST `, replacement);
     assert.equal(reissued.user.id, user.id);
     assert.equal((await store.invitation(reissued.token)).role, replacement);
     assert.deepEqual({ ...await platform.prepare('SELECT * FROM users WHERE id = ?').get(user.id) }, before, 'the role lives on the invitation; the user row is unchanged');
@@ -102,7 +102,7 @@ test('pending reinvites change either role without replacing the user or WebAuth
 test('reinviting an active member directs callers to role changes without changing users, memberships, tokens or sessions', async t => {
   const { platform, store, hh, enroll, roleOf } = await fixture(t);
   for (const initial of ['admin', 'member']) {
-    const user = enroll(`${initial}@example.test`, initial);
+    const user = await enroll(`${initial}@example.test`, initial);
     const recovery = await store.createToken(user.id, 'recovery');
     const add = await store.createToken(user.id, 'add-passkey');
     const session = await store.createSession(user.id);
@@ -111,7 +111,7 @@ test('reinviting an active member directs callers to role changes without changi
     const tokens = await platform.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY hash').all(user.id);
     const invitations = await platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all();
     for (const role of ['admin', 'member']) {
-      await assert.rejects(async () => store.invite(hh, user.email, { role }), err => {
+      await assert.rejects(async () => await store.invite(hh, user.email, { role }), err => {
         assert.equal(err.status, 409);
         assert.match(err.message, /role/i);
         assert.match(err.message, /chang|\/role/i);
@@ -124,7 +124,7 @@ test('reinviting an active member directs callers to role changes without changi
       assert.ok(store.token(recovery.token));
       assert.ok(store.token(add.token));
       assert.equal(store.session(session.token).id, user.id);
-      assert.equal(roleOf(user.id), initial);
+      assert.equal(await roleOf(user.id), initial);
     }
   }
 });
@@ -135,23 +135,23 @@ test('invalid email and roles are refused while safe local characters and DNS la
     '"a"@example.test', 'a(comment)@example.test', 'a b@example.test', 'a\n@example.test', 'é@example.test',
     'a@exämple.test', 'a@-example.test', 'a@example-.test', 'a@example..test', 'a@exam_ple.test',
     `${'a'.repeat(65)}@example.test`, `${'a'.repeat(64)}@${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(63)}.test`]) {
-    await assert.rejects(async () => store.invite(hh, email, { role: 'member' }), status(400), JSON.stringify(email));
+    await assert.rejects(async () => await store.invite(hh, email, { role: 'member' }), status(400), JSON.stringify(email));
   }
-  await assert.rejects(async () => store.invite(hh, 'valid@example.test', { role: 'root' }), status(400));
+  await assert.rejects(async () => await store.invite(hh, 'valid@example.test', { role: 'root' }), status(400));
   assert.equal(await store.findUser('valid@example.test'), null, 'a refused role creates no user');
-  assert.equal(store.invite(hh, "a.b+tag_o'hara@sub-1.example.test", { role: 'member' }).user.email, "a.b+tag_o'hara@sub-1.example.test");
+  assert.equal((await store.invite(hh, "a.b+tag_o'hara@sub-1.example.test", { role: 'member' })).user.email, "a.b+tag_o'hara@sub-1.example.test");
 });
 
 test('users have stable distinct random handles and public metadata contains no handle', async t => {
   const { platform, store, hh, invite, enroll } = await fixture(t);
-  const a = invite('a@example.test', 'admin').user;
-  const b = invite('b@example.test', 'member').user;
-  enroll('c@example.test', 'member');
+  const a = (await invite('a@example.test', 'admin')).user;
+  const b = (await invite('b@example.test', 'member')).user;
+  await enroll('c@example.test', 'member');
   const handle = async id => (await platform.prepare('SELECT user_handle FROM users WHERE id = ?').get(id)).user_handle;
   assert.ok(await handle(a.id));
   assert.notDeepEqual(await handle(a.id), await handle(b.id));
   const before = await handle(a.id);
-  const again = invite('A@example.test', 'member');
+  const again = await invite('A@example.test', 'member');
   assert.equal(again.user.id, a.id);
   assert.deepEqual(await handle(a.id), before);
   const people = await store.listPeople(hh);
@@ -165,7 +165,7 @@ test('users have stable distinct random handles and public metadata contains no 
 // token rules are asserted for both auth tokens (recovery) and invitations (contradiction 2: 20 min).
 test('tokens contain 32 random bytes, persist only a digest, expire at 20 minutes and consume once', async t => {
   const { platform, store, enroll, advance } = await fixture(t);
-  const user = enroll('enrolled@example.test');
+  const user = await enroll('enrolled@example.test');
   const issued = await store.createToken(user.id, 'recovery');
   assert.match(issued.token, /^[A-Za-z0-9_-]{43}$/);
   assert.equal(issued.expiresAt, START + TOKEN_TTL);
@@ -188,7 +188,7 @@ test('tokens contain 32 random bytes, persist only a digest, expire at 20 minute
 
 test('invitations contain 32 random bytes, persist only a digest, expire at 20 minutes and consume once', async t => {
   const { platform, store, hh, invite, advance } = await fixture(t);
-  const issued = invite('pending@example.test');
+  const issued = await invite('pending@example.test');
   assert.match(issued.token, /^[A-Za-z0-9_-]{43}$/);
   assert.equal(issued.expiresAt, START + TOKEN_TTL);
   const stored = JSON.stringify(await platform.prepare('SELECT * FROM household_invitations').all());
@@ -201,7 +201,7 @@ test('invitations contain 32 random bytes, persist only a digest, expire at 20 m
   assert.deepEqual({ role: (await store.membership(issued.user.id, hh)).role, status: (await store.membership(issued.user.id, hh)).status }, { role: 'member', status: 'active' });
   assert.equal(await store.invitation(issued.token), null);
   await assert.rejects(async () => await store.consumeInvitation(issued.token, issued.user.id), status(410), 'a consumed invitation is single use');
-  const other = invite('later@example.test');
+  const other = await invite('later@example.test');
   advance(TOKEN_TTL - 1);
   assert.ok(await store.invitation(other.token));
   advance(1);
@@ -212,7 +212,7 @@ test('invitations contain 32 random bytes, persist only a digest, expire at 20 m
 
 test('reissue invalidates every prior same-purpose token and leaves the other purpose live', async t => {
   const { store, enroll } = await fixture(t);
-  const user = enroll('enrolled@example.test');
+  const user = await enroll('enrolled@example.test');
   const first = await store.createToken(user.id, 'add-passkey');
   const recovery = await store.createToken(user.id, 'recovery');
   const second = await store.createToken(user.id, 'add-passkey');
@@ -228,9 +228,9 @@ test('reissue invalidates every prior same-purpose token and leaves the other pu
 
 test('malformed bearer input never resolves while a valid token, invitation and session still resolve', async t => {
   const { store, enroll, invite } = await fixture(t);
-  const user = enroll('session@example.test');
+  const user = await enroll('session@example.test');
   const token = await store.createToken(user.id, 'recovery');
-  const invited = invite('pending@example.test');
+  const invited = await invite('pending@example.test');
   const session = await store.createSession(user.id);
   for (const raw of [undefined, null, {}, [], '', 'a', 'A'.repeat(42), 'A'.repeat(44), ' '.repeat(43),
     token.token + '=', '\n' + token.token, invited.token + '=', randomBytes(32).toString('base64url')]) {
@@ -246,9 +246,9 @@ test('malformed bearer input never resolves while a valid token, invitation and 
 
 test('sessions require enrollment, store only a digest and use seven-day absolute expiry', async t => {
   const { platform, store, enroll, invite, advance } = await fixture(t);
-  const pending = invite('pending@example.test').user;
+  const pending = (await invite('pending@example.test')).user;
   await assert.rejects(async () => await store.createSession(pending.id));
-  const user = enroll('active@example.test');
+  const user = await enroll('active@example.test');
   const session = await store.createSession(user.id);
   assert.match(session.token, /^[A-Za-z0-9_-]{43}$/);
   assert.equal(session.expiresAt, START + SESSION_TTL);
@@ -270,7 +270,7 @@ test('sessions record their actual creation wall time without exposing it as use
   assert.ok(column, 'auth_sessions has a signed_in_at column');
   assert.equal(column.type.toUpperCase(), 'INTEGER');
   assert.equal(column.notnull, 1);
-  const user = enroll('wall-clock@example.test');
+  const user = await enroll('wall-clock@example.test');
   advance(2 * 60 * 60 * 1000 + 123);
   const firstAt = now();
   const first = await store.createSession(user.id);
@@ -293,8 +293,8 @@ test('sessions record their actual creation wall time without exposing it as use
 
 test('revoking one session preserves another and revoking user sessions preserves other users', async t => {
   const { store, enroll } = await fixture(t);
-  const a = enroll('a@example.test');
-  const b = enroll('b@example.test');
+  const a = await enroll('a@example.test');
+  const b = await enroll('b@example.test');
   const first = await store.createSession(a.id);
   const second = await store.createSession(a.id);
   const other = await store.createSession(b.id);
@@ -309,24 +309,24 @@ test('revoking one session preserves another and revoking user sessions preserve
 // Contradiction 3: removal removes the membership; the account goes only when nothing else holds it.
 test('pending admins do not defeat the last enrolled admin removal and demotion guard', async t => {
   const { store, hh, enroll, invite, roleOf } = await fixture(t);
-  const admin = enroll('admin@example.test', 'admin');
-  invite('pending-admin@example.test', 'admin');
+  const admin = await enroll('admin@example.test', 'admin');
+  await invite('pending-admin@example.test', 'admin');
   await assert.rejects(async () => await store.setRole(hh, admin.id, 'member'), status(409));
   await assert.rejects(async () => await store.removeMember(hh, admin.id), status(409));
-  assert.equal(roleOf(admin.id), 'admin');
-  const replacement = enroll('replacement@example.test', 'admin');
+  assert.equal(await roleOf(admin.id), 'admin');
+  const replacement = await enroll('replacement@example.test', 'admin');
   await store.setRole(hh, admin.id, 'member');
-  assert.equal(roleOf(admin.id), 'member');
+  assert.equal(await roleOf(admin.id), 'member');
   await store.removeMember(hh, admin.id);
   assert.equal(await store.getUser(admin.id), null, 'no other membership or operator grant holds the account');
   assert.equal(await store.membership(admin.id, hh), null);
-  assert.equal(roleOf(replacement.id), 'admin');
+  assert.equal(await roleOf(replacement.id), 'admin');
 });
 
 // Contradiction 5: the last-admin guard counts active enrolled admins of this household only.
 test('an enrolled admin of another household does not satisfy this household last-admin guard', async t => {
   const { store, hh, enroll, roleOf } = await fixture(t);
-  const admin = enroll('admin@example.test', 'admin');
+  const admin = await enroll('admin@example.test', 'admin');
   await store.grantOperator(admin.id);
   await store.setPlatformSetting('multi_household_enabled', true);
   const provisioned = await store.provisionHousehold({ displayName: 'Synthetic second household', adminEmail: 'other-admin@example.test' }, { actorId: admin.id });
@@ -342,23 +342,23 @@ test('an enrolled admin of another household does not satisfy this household las
   await assert.rejects(async () => await store.setRole(hh, admin.id, 'member'), status(409));
   await assert.rejects(async () => await store.removeMember(hh, admin.id), status(409));
   await assert.rejects(async () => await store.setRole(provisioned.household.id, pending.userId, 'member'), status(409));
-  assert.equal(roleOf(admin.id), 'admin');
+  assert.equal(await roleOf(admin.id), 'admin');
 });
 
 test('role changes bump the membership version and a second enrolled admin permits removal', async t => {
   const { store, hh, enroll, roleOf } = await fixture(t);
-  const a = enroll('a@example.test', 'admin');
-  const b = enroll('b@example.test', 'admin');
+  const a = await enroll('a@example.test', 'admin');
+  const b = await enroll('b@example.test', 'admin');
   const live = await store.createSession(a.id);
   await assert.rejects(async () => await store.setRole(hh, a.id, 'root'), status(400));
-  assert.equal(roleOf(a.id), 'admin');
+  assert.equal(await roleOf(a.id), 'admin');
   const v0 = (await store.membership(a.id, hh)).version;
   await store.setRole(hh, a.id, 'member');
-  assert.equal(roleOf(a.id), 'member');
+  assert.equal(await roleOf(a.id), 'member');
   assert.ok((await store.membership(a.id, hh)).version > v0, 'a role change bumps the membership version');
   assert.equal(store.session(live.token).id, a.id, 'a role change keeps the session; the role is read per request');
   await store.setRole(hh, a.id, 'admin');
-  assert.equal(roleOf(a.id), 'admin');
+  assert.equal(await roleOf(a.id), 'admin');
   await store.removeMember(hh, b.id);
   await assert.rejects(async () => await store.setRole(hh, a.id, 'member'), status(409));
   await assert.rejects(async () => await store.setRole(hh, 'missing-user', 'admin'), status(404));
@@ -366,8 +366,8 @@ test('role changes bump the membership version and a second enrolled admin permi
 
 test('passkey metadata hides material and revoking any credential invalidates every user session', async t => {
   const { platform, store, enroll } = await fixture(t);
-  const a = enroll('a@example.test');
-  const b = enroll('b@example.test');
+  const a = await enroll('a@example.test');
+  const b = await enroll('b@example.test');
   await passkey(platform, a.id, 'credential-a');
   await passkey(platform, a.id, 'credential-a2');
   await passkey(platform, b.id, 'credential-b');
@@ -390,8 +390,8 @@ test('passkey metadata hides material and revoking any credential invalidates ev
 
 test('removal cascades tokens, credentials and sessions while unrelated users remain live', async t => {
   const { platform, store, hh, enroll } = await fixture(t);
-  const a = enroll('remove@example.test');
-  const b = enroll('keep@example.test', 'admin');
+  const a = await enroll('remove@example.test');
+  const b = await enroll('keep@example.test', 'admin');
   await passkey(platform, a.id, 'remove-key');
   const token = await store.createToken(a.id, 'recovery');
   const session = await store.createSession(a.id);
@@ -410,12 +410,12 @@ test('removal cascades tokens, credentials and sessions while unrelated users re
 // the membership is marked removed and the sessions and issued invitations go.
 test('removing a member who is also an operator removes only the membership and revokes sessions and issued invitations', async t => {
   const { platform, store, hh, enroll, advance } = await fixture(t);
-  enroll('keep@example.test', 'admin');
-  const operator = enroll('operator@example.test', 'admin');
+  await enroll('keep@example.test', 'admin');
+  const operator = await enroll('operator@example.test', 'admin');
   await store.grantOperator(operator.id);
   await passkey(platform, operator.id, 'operator-key');
   const session = await store.createSession(operator.id);
-  const issued = store.invite(hh, 'invited-by-operator@example.test', { role: 'member', inviterId: operator.id });
+  const issued = await store.invite(hh, 'invited-by-operator@example.test', { role: 'member', inviterId: operator.id });
   const before = await store.membership(operator.id, hh);
   advance(1);
   await store.removeMember(hh, operator.id);
