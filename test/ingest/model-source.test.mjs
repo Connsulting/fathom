@@ -1,0 +1,95 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { writeXlsx } from '../helpers/xlsx.mjs';
+import { indexSource, resolveField } from '../../src/ingest/model-source.mjs';
+
+const file = (bytes, format = 'xlsx') => ({ fileId: 'f-synthetic', bytes: Buffer.from(bytes), format });
+const field = (refs, transform = { op: 'identity' }) => ({ refs, transform });
+
+test('indexes all sheets, hidden cells, cached formulas, merged anchors and both epochs', async () => {
+  for (const epoch of ['1900', '1904']) {
+    const source = await indexSource(file(writeXlsx([
+      { name: 'Synthetic private', rows: [['Label', 'Amount'], ['Income', 25], [{ formula: 'B2*2', cached: 50 }, { formula: 'B2*3' }]], merges: ['A1:B1'] },
+      { name: 'Other', hidden: true, rows: [['Hidden', 0], [{ empty: true }]] },
+    ], { workbookExtra: `<workbookPr date1904="${epoch === '1904' ? 1 : 0}"/>` })));
+    assert.equal(source.epoch, epoch);
+    assert.equal(source.sheets.length, 2);
+    const refs = Object.entries(source.refs);
+    const id = (sheet, cell) => refs.find(([, r]) => r.sheet.index === sheet && r.cell === cell)[0];
+    assert.equal(source.refs[id(0, 'A1')].mergedAnchor, 'A1');
+    assert.equal(source.refs[id(1, 'B1')].hidden, true);
+    assert.equal(resolveField(source, field([id(1, 'B1')])), 0);
+    assert.equal(resolveField(source, field([id(0, 'A3')])), 50);
+    assert.throws(() => resolveField(source, field([id(0, 'B3')])));
+    assert.equal(Object.values(source.inventory).find(region => region.refs.includes(id(0, 'B3'))).disposition, 'uncached_formula');
+    assert.throws(() => resolveField(source, field([id(1, 'A2')])));
+    assert.equal(Object.keys(source.inventory).length, source.regions.length);
+    assert.ok(Object.values(source.inventory).every(r => r.disposition));
+  }
+});
+
+test('CSV and TSV keep duplicate headers and column ordinals', async () => {
+  for (const format of ['csv', 'tsv']) {
+    const sep = format === 'csv' ? ',' : '\t';
+    const s = await indexSource(file(`Amount${sep}Amount\n12${sep}34\n`, format));
+    const values = Object.entries(s.refs).filter(([, r]) => r.row === 2);
+    assert.equal(values.length, 2);
+    assert.equal(resolveField(s, field([values[1][0]], { op: 'currency_decode', currency: 'USD' })), 34);
+    assert.notEqual(values[0][1].headerRef, values[1][1].headerRef);
+  }
+});
+
+test('UTF-8 spans and scrubbed leaves preserve quantities only as local references', async () => {
+  const original = 'Syntheticperson café paid $123.45 on 2032-04-17, 18%. Account 123456789012. token=syntheticcredential';
+  const s = await indexSource(file(original, 'text'), { householdNames: { owner: 'Syntheticperson' } });
+  const sent = JSON.stringify(s.envelope);
+  for (const value of ['Syntheticperson', '123.45', '2032-04-17', '18%', '123456789012', 'syntheticcredential', s.sha256]) assert.ok(!sent.includes(value), value);
+  const amount = Object.entries(s.values).find(([, value]) => value === '$123.45');
+  assert.ok(amount);
+  const ref = s.refs[amount[0]];
+  assert.equal(s.bytes.subarray(ref.byteStart, ref.byteEnd).toString(), '$123.45');
+  assert.equal(resolveField(s, field([amount[0]], { op: 'currency_decode', currency: 'USD' })), 123.45);
+});
+
+test('long semantic leaves split without losing covered bytes; invalid formats refuse', async () => {
+  const s = await indexSource(file('ordinary text '.repeat(150), 'text'));
+  assert.ok(s.regions.length > 1);
+  const chunks = Object.values(s.refs).filter(r => r.valueType === 'text');
+  assert.equal(chunks.reduce((n, r) => n + r.byteEnd - r.byteStart, 0), s.bytes.length);
+  await assert.rejects(indexSource(file('a,"unterminated', 'csv')));
+  await assert.rejects(indexSource(file('x', 'unsupported')));
+});
+
+test('readable PDF text has page/span references; raw scans have no interpretation envelope', async () => {
+  const { textPdf, imagePdf, multiPagePdf } = await import('../helpers/pdf.mjs');
+  const readable = await indexSource(file(textPdf(['Synthetic amount $12.34']), 'pdf'));
+  assert.equal(readable.status, 'indexed');
+  assert.ok(Object.values(readable.refs).every(ref => ref.page === 1));
+  const pages = await indexSource(file(multiPagePdf(2), 'pdf'));
+  assert.ok(Object.values(pages.refs).some(ref => ref.page === 2));
+  const scan = await indexSource(file(imagePdf(), 'pdf'));
+  assert.equal(scan.status, 'needs_source_text');
+  assert.equal(Object.keys(scan.refs).length, 0);
+});
+
+test('deterministic sums, signs, USD and date transforms reject invalid source values', async () => {
+  const s = await indexSource(file(writeXlsx([{ name: 'Synthetic', rows: [[0.1, 0.2, '17/04/2032', 'bad date', '2032-04']] }])));
+  const ids = Object.keys(s.refs);
+  assert.equal(resolveField(s, field(ids.slice(0, 2), { op: 'sum' })), 0.3);
+  assert.equal(resolveField(s, field([ids[1]], { op: 'sign', mode: 'negate' })), -0.2);
+  assert.equal(resolveField(s, field([ids[2]], { op: 'date_decode', locale: 'en-GB', epoch: '1900' })), '2032-04-17');
+  assert.equal(resolveField(s, field([ids[4]], { op: 'month_anchor', locale: 'iso', epoch: '1900' })), '2032-04-01');
+  assert.throws(() => resolveField(s, field([ids[3]], { op: 'date_decode', locale: 'iso', epoch: '1900' })));
+  assert.throws(() => resolveField(s, field([ids[0]], { op: 'currency_decode', currency: 'EUR' })));
+  s.values[ids[0]] = 99;
+  assert.throws(() => resolveField(s, field([ids[0]])), /changed/);
+});
+
+test('private names and credential identifiers crossing leaf boundaries remain masked', async () => {
+  const prefix = 'a'.repeat(494);
+  const s = await indexSource(file(`${prefix} Syntheticperson token=${'secret'.repeat(120)}`, 'text'), { householdNames: { me: 'Syntheticperson' } });
+  const wire = JSON.stringify(s.envelope);
+  assert.ok(!wire.includes('Synthe'));
+  assert.ok(!wire.includes('person'));
+  assert.ok(!wire.includes('secret'));
+});
