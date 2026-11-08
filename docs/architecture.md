@@ -3022,8 +3022,10 @@ Every number is a figure key into `figures`: `{v, src, kind: 'a', label, notes, 
 input and output token counts, actual USD cost, and accounting metadata. Errors use the fixed
 codes exported as `MODEL_ERROR_CODES`; provider response bodies never become product errors.
 Admission preserves existing refusal objects, and `modelErrorCode` provides a normalized code
-without changing those objects. Every outbound adapter body uses the shared
-`redactProviderText` scrub, including JSON-schema prompts, tool arguments and tool-result replay.
+without changing those objects. The engine applies the shared `redactProviderText` scrub immediately before every
+`port.complete`, including JSON-schema prompts, typed choices, tool arguments and tool-result
+replay. Existing transport scrubs remain in place. Zero input-token reports hold accounting;
+a zero reported charge cannot override positive configured token rates.
 
 The engine admits every household response before calling an adapter. It checks the outbound
 engine pause, instance funding and the request budget, then reserves in the platform ledger

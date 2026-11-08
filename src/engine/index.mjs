@@ -1,5 +1,6 @@
 import { open } from 'node:fs/promises';
 import { constants } from 'node:fs';
+import { redactProviderText } from '../ingest/redact.mjs';
 import { checkGrounding } from './grounding.mjs';
 import { compileSchema } from './schema.mjs';
 import { createRegistryServer } from './tools.mjs';
@@ -381,8 +382,9 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
               content: Array.isArray(script.content) ? script.content : [{ type: 'text', text }], details: { maxBudgetUsd } };
           } else {
             try {
-              round = await port.complete({ credential: auth, system, systemDynamic, messages: transcript, tools, maxTokens, maxBudgetUsd, model, choices, budget,
-                registry, schema, ...(transport ? { baseURL: transport.baseURL } : {}), ...(budget ? { timeoutMs: budget.timeoutMs } : {}),
+              const outbound = redactProviderText({ system, systemDynamic, messages: transcript, tools, schema, choices });
+              round = await port.complete({ credential: auth, ...outbound, maxTokens, maxBudgetUsd, model, budget,
+                registry, ...(transport ? { baseURL: transport.baseURL } : {}), ...(budget ? { timeoutMs: budget.timeoutMs } : {}),
                 ...(emit ? { onEvent: emit } : {}) });
             } catch {
               round = { text: '', content: [], status: 'transport_error', is_error: true,

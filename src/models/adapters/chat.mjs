@@ -1,4 +1,3 @@
-import { redactProviderText } from '../../ingest/redact.mjs';
 import { compileSchema } from '../../engine/schema.mjs';
 
 const statusCode = status => status === 401 || status === 403 ? 'authentication' : status === 429 ? 'rate_limit'
@@ -79,7 +78,7 @@ export function createChatAdapter(selection, transport = fetch, credential) {
         const result = await Promise.race([(async () => {
           const response = await transport(`${baseUrl.replace(/\/$/, '')}/${ollama ? 'api/chat' : 'chat/completions'}`, {
             method: 'POST', headers: { 'Content-Type': 'application/json', ...(auth?.value ? { Authorization: `Bearer ${auth.value}` } : {}) },
-            body: JSON.stringify(redactProviderText(body)), signal: controller.signal,
+            body: JSON.stringify(body), signal: controller.signal,
           });
           if (!response.ok) return failure(model, statusCode(response.status), 0);
           const data = await response.json();
@@ -87,10 +86,11 @@ export function createChatAdapter(selection, transport = fetch, credential) {
           const input = ollama ? data.prompt_eval_count : data.usage?.prompt_tokens;
           const output = ollama ? data.eval_count : data.usage?.completion_tokens;
           const tokens = { input_tokens: input, output_tokens: output };
-          if (!count(input) || !count(output)) return failure(model, 'accounting', undefined, tokens);
+          if (!count(input) || input === 0 || !count(output)) return failure(model, 'accounting', undefined, tokens);
           const reportedCost = ollama ? undefined : data.usage?.cost;
           if (reportedCost !== undefined && (!Number.isFinite(reportedCost) || reportedCost < 0)) return failure(model, 'accounting', undefined, tokens);
-          const costUsd = reportedCost ?? cost(input, output);
+          const derivedCost = cost(input, output);
+          const costUsd = reportedCost === 0 ? derivedCost : reportedCost ?? derivedCost;
           if (!message || (ollama && data.done !== true)) return failure(model, 'invalid_response', costUsd, tokens);
           const text = typeof message.content === 'string' ? message.content : '';
           const content = text ? [{ type: 'text', text }] : [];
