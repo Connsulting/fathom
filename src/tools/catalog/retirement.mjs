@@ -78,8 +78,9 @@ async function target(args,ctx) {
   const wr = await rateInput(args.withdrawalRate,'withdrawalRate',ctx,TARGET_PARAMETERS.withdrawalRate);
   const rr = await rateInput(args.realReturn,'realReturn',ctx,TARGET_PARAMETERS.realReturn);
   const sp = spendingInputs(data);
+  const savingsRows = new Set(sp.windowTransactionIds);
   const savings = args.monthlySavings === undefined ? {
-    value:sp.monthlySavings ?? null,unit:'usd_per_month',asOf:latest(data.transactions.filter(t => sp.windowTransactionIds.includes(t.id)).map(t => t.date)),
+    value:sp.monthlySavings ?? null,unit:'usd_per_month',asOf:latest(data.transactions.filter(t => savingsRows.has(t.id)).map(t => t.date)),
     inputs:[],assumptions:[],steps:[],gaps:sp.monthlySavings === undefined ? [gap('Monthly savings needs a complete spending window.')] : [],
   } : await input(args.monthlySavings,'monthlySavings','usd_per_month',ctx);
   const selector = args.invested ?? {};
@@ -91,6 +92,8 @@ async function target(args,ctx) {
   const total = holdingsTotal(holdings.map(h => ({...h.account,value:h.value === null ? null : {v:h.value,locator:{sources:h.sources.map(rows => ({rows}))},dataThrough:h.asOf}})));
   const invested = holdings.length === 0 ? 0 : total.total;
   const hgaps = holdings.flatMap(h => h.gaps);
+  if (!holdings.length) hgaps.push(gap('No investment accounts match this selection; only tracked selected accounts count as invested.'));
+  for (const a of data.accounts.filter(a => ids?.includes(a.id) && isBusiness(a))) hgaps.push({code:'outside_household_ledger',message:'A selected business account was excluded from household investments.'});
   const gaps = uniqueGaps([...(spend.gaps ?? []),...savings.gaps,...hgaps]);
   const annual = spend.value;
   const rounding = args.roundTo ?? 1000;
@@ -116,9 +119,10 @@ async function target(args,ctx) {
 function personDate(facts,person,age) {
   const born = facts[`household.${person}BirthDate`];
   if (isoDate(born)) {
-    const d = new Date(born);
-    d.setUTCFullYear(d.getUTCFullYear()+Math.floor(age));
-    d.setUTCMonth(d.getUTCMonth()+Math.round((age%1)*12));
+    const birth = new Date(born);
+    const month = birth.getUTCMonth()+Math.round(age*12);
+    const lastDay = new Date(Date.UTC(birth.getUTCFullYear(),month+1,0)).getUTCDate();
+    const d = new Date(Date.UTC(birth.getUTCFullYear(),month,Math.min(birth.getUTCDate(),lastDay)));
     return {date:d.toISOString().slice(0,10),gaps:[],keys:[`household.${person}BirthDate`]};
   }
   const year = facts['household.birthYears']?.[person];
