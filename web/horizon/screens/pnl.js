@@ -511,7 +511,10 @@ function dlgTable(st) {
   };
   const rows = items.map((t) => {
     const acct = [t.account, st.spec.k === 'pnl' && t.kind === 'workbook' ? 'Workbook' : ''].filter(Boolean).map(esc).join(', ');
-    return `<tr data-pl-dlg-row><td class="pl-d-date"><time datetime="${esc(t.date)}">${esc(plDay(t.date))}</time></td><td class="pl-d-desc">${esc(t.description || 'No description')}</td><td class="pl-d-acct">${acct}</td><td class="num pl-d-amt">${amt(t.fig, t.value)}</td></tr>`;
+    // The readable name leads; the bank's raw text stays one hover away when it differs.
+    const name = t.name || t.description;
+    const raw = t.description && t.description !== name ? ` title="${esc(t.description)}"` : '';
+    return `<tr data-pl-dlg-row><td class="pl-d-date"><time datetime="${esc(t.date)}">${esc(plDay(t.date))}</time></td><td class="pl-d-desc"${raw}>${esc(name || 'No description')}</td><td class="pl-d-acct">${acct}</td><td class="num pl-d-amt">${amt(t.fig, t.value)}</td></tr>`;
   }).join('');
   const shown = H.arr(d.items).length, total = Number(d.total) || 0;
   const count = shown < total ? `Showing ${shown} of ${total} rows; the total counts all ${total}` : plural(total, 'row');

@@ -1648,11 +1648,13 @@ function goalInput(t, { commit = false } = {}) {
 function spark([key, sr]) {
   const pts = arr(sr.points);
   if (pts.length < 2) return '';
-  const W = 260, H = 56, P = 4;
+  // The svg stretches to its box (preserveAspectRatio none), so it holds only the line; the x
+  // labels are HTML below it, where text keeps its own proportions.
+  const W = 260, H = 46, P = 4;
   const vs = pts.map((p) => p.v);
   const lo = Math.min(...vs), hi = Math.max(...vs);
   const sx = (i) => P + (i / (pts.length - 1)) * (W - P * 2);
-  const sy = (v) => P + (1 - (v - lo) / ((hi - lo) || 1)) * (H - P * 2 - 10);
+  const sy = (v) => P + (1 - (v - lo) / ((hi - lo) || 1)) * (H - P * 2);
   const lastA = pts.map((p) => p.kind).lastIndexOf('a');
   const a = pts.slice(0, lastA + 1).map((p, i) => `${sx(i)},${sy(p.v)}`).join(' ');
   const pr = lastA >= 0 ? pts.slice(lastA).map((p, i) => `${sx(i + lastA)},${sy(p.v)}`).join(' ') : pts.map((p, i) => `${sx(i)},${sy(p.v)}`).join(' ');
@@ -1660,8 +1662,8 @@ function spark([key, sr]) {
   // A series built from uploaded accounts carries imported text: plain text, no tokens or markup.
   return `<div class="h-spark" data-series="${esc(key)}"><div class="h-spark-h"><span>${sr.imported ? esc(sr.label) : T(sr.label)}</span><b>${figHtml(`series.${key}.${pts.length - 1}`, { k: true })}</b></div>
     <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">${a ? `<polyline class="a" points="${a}"/>` : ''}${pr && lastA < pts.length - 1 ? `<polyline class="p" points="${pr}"/>` : ''}
-    ${lastA >= 0 ? `<circle class="pt" cx="${sx(lastA)}" cy="${sy(pts[lastA].v)}" r="2.5"/>` : ''}
-    <text x="${P}" y="${H - 1}">${X(pts[0].x)}</text><text x="${W - P}" y="${H - 1}" text-anchor="end">${X(last.x)}</text></svg></div>`;
+    ${lastA >= 0 ? `<circle class="pt" cx="${sx(lastA)}" cy="${sy(pts[lastA].v)}" r="2.5"/>` : ''}</svg>
+    <div class="h-spark-x"><span>${X(pts[0].x)}</span><span>${X(last.x)}</span></div></div>`;
 }
 
 // The account mirror: balances by kind, trend, connections, files and sources, on the Money
@@ -1836,8 +1838,9 @@ function pOnboarding(step) {
     ];
     const b = ui.build;
     body = `<h1>${b >= lines.length ? 'Your year is ready' : 'Building your year'}</h1>
-      <div class="h-build"><svg viewBox="0 0 600 40" preserveAspectRatio="none" aria-hidden="true"><line class="bg" x1="0" x2="600" y1="20" y2="20"/><line class="fg" x1="0" x2="${(b / lines.length) * 600}" y1="20" y2="20"/>
-      ${MON.map((m, i) => `<line class="tk" x1="${i * 50 + 25}" x2="${i * 50 + 25}" y1="14" y2="26"/><text x="${i * 50 + 25}" y="40" text-anchor="middle">${m}</text>`).join('')}</svg></div>
+      <div class="h-build"><svg viewBox="0 0 600 20" preserveAspectRatio="none" aria-hidden="true"><line class="bg" x1="0" x2="600" y1="10" y2="10"/><line class="fg" x1="0" x2="${(b / lines.length) * 600}" y1="10" y2="10"/>
+      ${MON.map((_, i) => `<line class="tk" x1="${i * 50 + 25}" x2="${i * 50 + 25}" y1="4" y2="16"/>`).join('')}</svg>
+      <div class="h-build-x" aria-hidden="true">${MON.map((m, i) => `<span style="left:${((i * 50 + 25) / 600) * 100}%">${m}</span>`).join('')}</div></div>
       <ul class="h-build-l">${lines.map((l, i) => `<li class="${i < b ? 'done' : i === b ? 'cur' : ''}"><i>${i < b ? icon('check') : ''}</i>${l}</li>`).join('')}</ul>
       <div class="h-ob-nav">${back}${b >= lines.length ? btn(`${api.demo() === 'fresh' ? 'Open my first brief' : 'Back to my brief'}${icon('arrow')}`, 'data-onboard="6"', 'pri') : ''}</div>`;
     if (b < lines.length && !ui.buildTimer) {

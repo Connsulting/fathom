@@ -728,7 +728,7 @@ export function ingestScreens(h) {
     const amount = t ? cash(t.amount) : '';
     const when = t ? dateText(t.date) : '';
     const side = amount || when ? `<div class="h-decided-s">${amount ? `<span class="h-decided-amt">${esc(amount)}</span>` : ''}${when ? `<span>${esc(when)}</span>` : ''}</div>` : '';
-    return `<li data-decided="${esc(id)}"><div class="h-decided-b"><div class="h-decided-t"><span class="h-decided-n">${esc(t ? (t.name || t.raw) : (d.question || KIND[d.kind] || 'Question'))}</span><span class="h-decided-cat">${esc(d.answerLabel || d.answer || '')}</span></div>${why ? `<p class="h-decided-e">${esc(why)}</p>` : ''}</div>${side}${ctl}</li>`;
+    return `<li data-decided="${esc(id)}"><div class="h-decided-b"><div class="h-decided-t"><span class="h-decided-n"${t && t.raw && t.name && t.raw !== t.name ? ` title="${esc(t.raw)}"` : ''}>${esc(t ? (t.name || t.raw) : (d.question || KIND[d.kind] || 'Question'))}</span><span class="h-decided-cat">${esc(d.answerLabel || d.answer || '')}</span></div>${why ? `<p class="h-decided-e">${esc(why)}</p>` : ''}</div>${side}${ctl}</li>`;
   }
 
   function decidedSection() {

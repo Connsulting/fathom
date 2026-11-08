@@ -60,6 +60,33 @@ const ROWS = `SELECT r.account_id AS account, coalesce(f.source_id, '') AS sourc
   WHERE r.account_id IS NOT NULL AND (f.id IS NULL OR f.removed_at IS NULL)
   GROUP BY r.account_id, coalesce(f.source_id, '')`;
 
+// The per-account half of the rule. Returns {archived, bySource, covered}: bySource maps account ->
+// source -> newest row date from it, and covered(account, source) says whether that file source is
+// history for that one account: it fed the account, and the account is connected, archived, or has
+// a newer row from another source. sourceStates calls a source history when it is covered for every
+// account it fed; the account dialog marks one account's feed with it.
+function historyRule(db) {
+  const connected = connectedAccountIds(db);
+  const archived = new Set(db.prepare('SELECT id FROM accounts WHERE archived_at IS NOT NULL').all().map((r) => r.id));
+  const bySource = new Map();
+  for (const r of db.prepare(ROWS).all()) {
+    if (!bySource.has(r.account)) bySource.set(r.account, new Map());
+    bySource.get(r.account).set(r.source, isoDay(r.d) ?? '');
+  }
+  const covered = (account, source) => {
+    const per = bySource.get(account);
+    if (!source || !per || !per.has(source)) return false;
+    const d = per.get(source);
+    return connected.has(account) || archived.has(account) || [...per].some(([other, od]) => other !== source && od > d);
+  };
+  return { archived, bySource, covered };
+}
+
+// covered(accountId, sourceId) from historyRule, for a caller that asks about one account's feeds.
+export function fileSourceHistory(db) {
+  return historyRule(db).covered;
+}
+
 // The shared rule, at `clock` (an ISO day). Returns {sources, accounts}, Maps keyed by id:
 //   accounts (every account with an ingest source): {state, asOf, ageDays, kind, sourceId,
 //     archived}. state is 'archived' for an archived account (never stale, never counted);
@@ -70,17 +97,9 @@ const ROWS = `SELECT r.account_id AS account, coalesce(f.source_id, '') AS sourc
 //     from another source; otherwise, and for a source that fed no account, its freshness by date:
 //     'fresh' | 'stale' | 'unknown'. fed maps each account it fed to its newest row date from it.
 export function sourceStates(db, clock) {
-  const connected = connectedAccountIds(db);
   const rows = db.prepare("SELECT id, kind, as_of FROM sources WHERE substr(id, 1, 4) = 'ing:' ORDER BY id").all();
   const kindOf = new Map(rows.map((r) => [r.id, r.kind]));
-  const archived = new Set(db.prepare('SELECT id FROM accounts WHERE archived_at IS NOT NULL').all().map((r) => r.id));
-
-  // account -> source -> newest row date
-  const bySource = new Map();
-  for (const r of db.prepare(ROWS).all()) {
-    if (!bySource.has(r.account)) bySource.set(r.account, new Map());
-    bySource.get(r.account).set(r.source, isoDay(r.d) ?? '');
-  }
+  const { archived, bySource, covered } = historyRule(db);
   const newest = (id) => [...(bySource.get(id)?.values() ?? [])].sort().at(-1) ?? '';
 
   const accounts = new Map();
@@ -98,9 +117,7 @@ export function sourceStates(db, clock) {
     const fed = new Map();
     for (const [account, per] of bySource) if (per.has(s.id)) fed.set(account, per.get(s.id));
     const f = freshnessOf({ kind: s.kind, asOf: s.as_of }, clock);
-    const newerElsewhere = (account, d) => [...bySource.get(account)].some(([source, other]) => source !== s.id && other > d);
-    const history = s.kind !== 'simplefin' && fed.size > 0
-      && [...fed].every(([account, d]) => connected.has(account) || archived.has(account) || newerElsewhere(account, d));
+    const history = s.kind !== 'simplefin' && fed.size > 0 && [...fed.keys()].every((account) => covered(account, s.id));
     sources.set(s.id, { state: history ? 'history' : f.state, asOf: s.as_of ?? '', ageDays: f.ageDays, cadence: f.cadence, kind: s.kind, fed });
   }
   return { sources, accounts };

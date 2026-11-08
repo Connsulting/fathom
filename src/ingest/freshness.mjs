@@ -13,7 +13,7 @@ import { cardDetail } from './context.mjs';
 import { bestGuess } from './bestguess.mjs';
 import { sourceStates } from './coverage.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
-import { merchantDisplayName, plainEvidence } from '../categories/display.mjs';
+import { transactionDisplayName, plainEvidence } from '../categories/display.mjs';
 
 const MONTHLY = Object.freeze({ label: 'monthly', staleAfterDays: 45 });
 
@@ -138,13 +138,13 @@ const GROUPED = new Set(['account_owner', 'account_kind']);
 const rankOf = (kind) => RANK[kind] ?? 5;
 const balanceSize = (item) => Math.abs(item.detail?.account?.balance?.amount ?? 0);
 
-// The transaction a category question is about, as the Confirm screen shows it: a clean merchant
-// name, the raw bank text (behind a toggle), signed amount, ISO date and account. null for any
+// The transaction a category question is about, as the Confirm screen shows it: a readable name
+// (structured bank text read first, else the clean merchant name), the raw bank text (behind a toggle), signed amount, ISO date and account. null for any
 // other kind of question.
 function txnOf(kind, context) {
   if (kind !== 'transaction_category') return null;
   const c = context && typeof context === 'object' ? context : {};
-  return { name: merchantDisplayName(c.description), raw: String(c.description ?? ''), amount: c.amount ?? null, date: c.date ?? null, account: String(c.account ?? '') };
+  return { name: transactionDisplayName(c.description), raw: String(c.description ?? ''), amount: c.amount ?? null, date: c.date ?? null, account: String(c.account ?? '') };
 }
 // Category evidence is shown to a person: no vendor name, model id or percentage.
 const evidenceFor = (kind, text) => (kind === 'transaction_category' ? plainEvidence(text) : String(text ?? ''));
