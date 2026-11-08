@@ -24,6 +24,8 @@ import { writeBrief, namesOf, upsertContent } from './planner/brief.mjs';
 import { evaluateCatalog } from './triggers/index.mjs';
 import { reasonText } from './triggers/missing-data.mjs';
 import { wargameFigurePrefixes } from './planner/wargame.mjs';
+import { prepareRecFacts } from '../facts/derive.mjs';
+import { sendToAdvisor } from '../advisor/index.mjs';
 import { liftStaleVetoes } from '../advisor/index.mjs';
 
 export const PLAN_JOB_ID = 'plan';
@@ -64,7 +66,13 @@ async function run(db, engine, { now, packDirs, runId }) {
 async function plan(db, engine, { clock, runId, packDirs }) {
   const packs = loadPacks(packDirs);
   const data = loadPlanningData(db, clock);
+  const recFacts = prepareRecFacts(db, data);
   const stored = storedFacts(db);
+  for (const key of recFacts.deletes) delete stored[key];
+  for (const [key, value] of Object.entries(recFacts.values)) {
+    if (!stored[key] || recFacts.writes.some(w => w.key === key)) stored[key] = { value, src: `derived:${clock}`, confirmed: false };
+    else stored[key] = { ...stored[key], value };
+  }
   const owner = ownerFactsOf(stored);
   const storedValues = Object.fromEntries(Object.entries(stored).map(([k, r]) => [k, r.value]));
   const entities = resolveEntities(data, storedValues);
@@ -96,7 +104,7 @@ async function plan(db, engine, { clock, runId, packDirs }) {
   const ctx = {
     clock, year: data.taxYear, facts: merged.values, owner, fig,
     names, model: computed.model, data, packs, packStatus,
-    info: computed.info, freshness: data.freshness, warnings: [...warnings], entities, goals: prefs.goals, curve: prefs.curve,
+    assumptions: recFacts.assumptions, info: computed.info, freshness: data.freshness, warnings: [...warnings], entities, goals: prefs.goals, curve: prefs.curve,
   };
   const results = evaluateCatalog(ctx);
 
@@ -113,6 +121,11 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     const pr = prRows.get(id);
     const stored = pr ? { hash: pr.grounding_hash, src: pr.prose_src, def: parseJson(recRows.get(id).def, {}) } : null;
     const p = await writeProse(r.hit, ctx, { engine, stored });
+    if (r.hit.rec.advisorQuestions?.length) {
+      p.fields = { summary: 'Your advisor will confirm the plan terms and any reasonable salary range. Planning uses the salary of record as an assumption while you wait.',
+        why: ['These professional judgments are included in the advisor packet.'], qa: [] };
+      p.src = 'template';
+    }
     prose[id] = p;
     costUsd += p.costUsd;
     proseCounts[p.kept ? 'kept' : p.src] += 1;
@@ -121,7 +134,8 @@ async function plan(db, engine, { clock, runId, packDirs }) {
 
   const now = new Date().toISOString();
   const out = tx(db, () => {
-    let factsWritten = 0;
+    recFacts.write();
+    let factsWritten = recFacts.writes.length + recFacts.deletes.length;
     for (const w of merged.writes) {
       const res = upsertFact(db, { key: w.key, value: w.value, src: PLANNER_SRC, asOf: clock, confirmed: false, provenance: factProvenance(w) });
       if (res.written && res.changed) factsWritten += 1;
@@ -140,6 +154,17 @@ async function plan(db, engine, { clock, runId, packDirs }) {
     const changes = applyRecs(db, results, {
       clock, now, runId, prose, packOverride: id => overrides[id] ?? null, warn: code => warnings.add(code), prefs,
     });
+    for (const r of results.filter(r => r.state === 'hit' && r.hit.rec.advisorQuestions?.length)) {
+      const id = r.trigger.id;
+      const row = db.prepare('SELECT status FROM recs WHERE id = ?').get(id);
+      if (row && ['proposed', 'doing', 'waiting'].includes(row.status)) {
+        db.prepare("UPDATE recs SET status = 'waiting', waiting_on = 'advisor' WHERE id = ?").run(id);
+        sendToAdvisor(db, id, { now });
+      }
+    }
+    for (const r of results.filter(r => r.state === 'hit' && !r.hit.rec.advisorQuestions?.length)) {
+      db.prepare("UPDATE recs SET status = 'proposed', waiting_on = NULL WHERE id = ? AND status = 'waiting' AND waiting_on = 'advisor'").run(r.trigger.id);
+    }
     // What each blocked rec is waiting on (plain reason, the task that clears it, where it is done),
     // read back by the scenario for recs in the waiting status.
     upsertContent(db, 'rec.blockers', Object.fromEntries(results.filter(r => r.state === 'blocked' && r.blocker).map(r => [r.trigger.id, r.blocker])), now);
