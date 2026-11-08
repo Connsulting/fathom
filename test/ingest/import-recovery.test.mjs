@@ -837,6 +837,24 @@ test('Add files on a needs_source_text row replaces the scan once a different fi
   assert.deepEqual(await run([same]), []);
 });
 
+// Review round 2: a failed file whose latest proposal is a note's change proposal (reachable after
+// an Undo and a Retry that hit a busy store) is never restaged by the background pass, whose actor the
+// owner could not review. It drops its automatic mark and waits for the owner's Retry.
+test('the background pass leaves a failed note change proposal to the owner', async () => {
+  const x = await setup();
+  try {
+    const file = csvOf('note actions');
+    const failed = await P.ingestFile(x.db, file, { ...x.opts, parser: throwing(lockedError()) });
+    assert.equal(fileRowOf(x.db, failed.fileId).note, 'retry:store_locked');
+    x.db.prepare(`INSERT INTO import_proposals (id, version, file_id, source_sha256, status, proposal, interpreter_version, actor_id, created_at, updated_at, review_state)
+      VALUES ('p-synthetic-note', 1, ?, ?, 'rejected', '{}', '1', 'owner-synthetic', ?, ?, ?)`)
+      .run(failed.fileId, x.db.prepare('SELECT sha256 FROM files WHERE id = ?').get(failed.fileId).sha256, NOW, NOW, JSON.stringify({ kind: 'actions' }));
+    assert.deepEqual((await P.resumeImports(x.db, bg(x))).resumed, []);
+    assert.deepEqual([fileRowOf(x.db, failed.fileId).status, fileRowOf(x.db, failed.fileId).note], ['failed', 'store_locked']);
+    assert.equal(serviceStatus({ db: x.db, now: new Date(NOW) }).imports.state, 'needs_you');
+  } finally { x.close(); }
+});
+
 test('persistImport records warning rows per code, at most five, and warningText names them in plain words', async () => {
   const x = await setup();
   try {

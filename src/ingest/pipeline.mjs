@@ -160,9 +160,17 @@ export async function resumeImports(db, opts = {}) {
   const rows = db.prepare(`SELECT id, status FROM files WHERE removed_at IS NULL AND stored_path IS NOT NULL
                            AND (status = 'pending' OR (status = 'failed' AND note LIKE 'retry:%')
                              OR (status = 'waiting_for_engine' AND note = 'model_transient')) ORDER BY uploaded_at, rowid`).all();
+  // A note's change proposal (actions) is only restaged by its owner: a background pass would stage
+  // it under the background actor, which the owner cannot review. Such a failed file drops its
+  // automatic mark and waits for the owner's Retry.
+  const latest = db.prepare('SELECT review_state FROM import_proposals WHERE file_id = ? ORDER BY version DESC, rowid DESC LIMIT 1');
   const resumed = [];
   for (const row of rows) {
     if (inFlight.has(row.id)) continue;
+    if (parseJson(latest.get(row.id)?.review_state, {})?.kind === 'actions') {
+      if (row.status === 'failed') db.prepare("UPDATE files SET note = substr(note, 7) WHERE id = ? AND note LIKE 'retry:%'").run(row.id);
+      continue;
+    }
     try {
       const out = await retryFile(db, row.id, { ...opts, mode: 'retry', autoRetried: row.status !== 'pending' });
       resumed.push({ fileId: row.id, status: out.status });
