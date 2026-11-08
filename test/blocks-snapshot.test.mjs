@@ -27,7 +27,9 @@ const check = (op, spec) => {
   return snapshot;
 };
 const sameFigure = (snapshot, figure, source) => {
-  for (const key of ['value', 'unit', 'label', 'kind', 'asOf', 'quote', 'gaps']) assert.deepEqual(snapshot[key], figure[key], key);
+  for (const key of ['value', 'unit', 'label', 'kind', 'asOf', 'gaps']) assert.deepEqual(snapshot[key], figure[key], key);
+  // A stored figure's quote is its {f:key} token for prose; a block draws the value, so the token stays out.
+  assert.deepEqual(snapshot.quote, String(figure.quote).includes('{f:') ? undefined : figure.quote, 'quote');
   assert.equal(snapshot.source, source);
 };
 

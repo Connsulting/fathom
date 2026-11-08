@@ -479,17 +479,19 @@
 .d-horizon .h-blk-empty { padding: 10px 0 2px; color: var(--fa); font-size: 13px; }
 .d-horizon .h-blk-more { margin-top: 8px; }
 
-/* Compare: stacked option cards; side by side once the block is 560px wide (4 options at most). */
-.d-horizon .h-blk-cmp { display: grid; gap: 10px; }
+/* Compare: option cards in an auto-fit grid, as many 240px columns as the block holds (one on a
+   phone, side by side when there is room; 4 options at most, more stay stacked). In a field row
+   the label takes the room left and wraps; the value never wraps and drops below the label when
+   both do not fit, so a label never runs under its value. Pick and Decide wrap their text. */
+.d-horizon .h-blk-cmp { display: grid; gap: 10px; min-width: 0; }
+.d-horizon .h-blk-cmp.cols { grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); }
 .d-horizon .h-blk-opt { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 .d-horizon .h-blk-opt h4 { margin: 0 0 6px; color: var(--tx); font-size: 14px; font-weight: 500; overflow-wrap: anywhere; }
 .d-horizon .h-blk-opt dl { margin: 0; }
-.d-horizon .h-blk-cf { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 6px 0; border-top: 1px solid var(--line); }
-.d-horizon .h-blk-cf dt { min-width: 0; color: var(--mu); font-size: 13px; }
-.d-horizon .h-blk-cf dd { margin: 0; text-align: right; white-space: nowrap; }
-@container (min-width: 560px) {
-  .d-horizon .h-blk-cmp.cols { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
-}
+.d-horizon .h-blk-cf { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; column-gap: 12px; row-gap: 2px; padding: 6px 0; border-top: 1px solid var(--line); }
+.d-horizon .h-blk-cf dt { flex: 1 1 auto; min-width: 0; color: var(--mu); font-size: 13px; overflow-wrap: anywhere; }
+.d-horizon .h-blk-cf dd { flex: none; max-width: 100%; margin: 0 0 0 auto; text-align: right; white-space: nowrap; }
+.d-horizon .h-blk-compare .h-btn { max-width: 100%; height: auto; min-height: 32px; padding-block: 6px; white-space: normal; text-align: center; }
 
 /* Charts and timelines (ask-block-chart.js, ask-block-timeline.js). The Table toggle sits in the
    caption row; series take the ramp through .c1 .. .c4. */

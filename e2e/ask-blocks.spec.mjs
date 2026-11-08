@@ -12,11 +12,14 @@ import { mainDataDir } from './data-dir.mjs';
 import { servedStore } from '../test/helpers/server.mjs';
 import { callTool } from '../src/tools/index.mjs';
 import { buildSnapshot } from '../src/blocks/snapshot.mjs';
+import { DROP_REASONS, dropNoteText } from '../web/core/block-notes.js';
 
 const fx = (name) => JSON.parse(readFileSync(new URL(`../test/fixtures/blocks/${name}.json`, import.meta.url), 'utf8'));
 const TABLE = fx('table');
 const COMPARE = fx('compare');
 const NOTES = fx('notes');
+// A stored note with a known reason shows its plain cause; any other keeps its stored text.
+const noteText = (n) => (DROP_REASONS.includes(n.reason) ? dropNoteText(n.op, n.reason, n.name) : n.text);
 const LINE = fx('chart-line');
 const SCATTER = fx('chart-scatter');
 const TIMELINE = fx('timeline');
@@ -68,7 +71,7 @@ async function expectBlocks(scope, page) {
   await expect(c.locator('figcaption')).toHaveText(COMPARE.snapshot.title);
   await expect(t.locator('th[scope="col"]')).toHaveText(TABLE.snapshot.columns.map((x) => x.label));
   await expect(c.locator('section[role="group"] h4')).toHaveText(COMPARE.snapshot.options.map((o) => o.label));
-  for (const n of NOTES.blockNotes) await expect(scope.getByText(n.text, { exact: true }).first()).toBeVisible();
+  for (const n of NOTES.blockNotes) await expect(scope.getByText(noteText(n), { exact: true }).first()).toBeVisible();
   for (const b of DRAWN) await expect(blk(scope, b).locator('figcaption')).toHaveText(b.snapshot.title);
   await expect(blk(scope, LINE).locator('svg[role="img"]')).toHaveAttribute('aria-label', /^Line chart of /);
   await expect(blk(scope, TIMELINE).locator('ol > li')).toHaveCount(TIMELINE.snapshot.events.length);
