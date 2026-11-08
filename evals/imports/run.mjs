@@ -75,7 +75,7 @@ function expectedRows(c) {
   const refs = new Map(c.oracle.source.refs.map(ref => [ref.id, ref]));
   if (c.family === 'january_tax_year') return [];
   return typedRows(c).map(row => ({ ...attributes(row), fields: Object.fromEntries(Object.entries(row.fields).map(([key, value]) => [key, value === null ? null : {
-    ...value, value: key === 'dueDate' ? refs.get(value.refs[0]).value.trim() : key === 'statement' ? refs.get(value.refs[0]).value.trim() : key === 'actor' ? 'owner' : row[key] ?? refs.get(value.refs[0])?.value,
+    ...value, references: value.refs.map(id => { const { id: refId, value: raw, ...ref } = refs.get(id); return ref; }), value: key === 'dueDate' ? refs.get(value.refs[0]).value.trim() : key === 'statement' ? refs.get(value.refs[0]).value.trim() : key === 'actor' ? 'owner' : row[key] ?? refs.get(value.refs[0])?.value,
   }])) }));
 }
 async function observedRows(c, x, file) {
@@ -83,7 +83,7 @@ async function observedRows(c, x, file) {
   if (!record) return [];
   const source = await indexSource({ fileId: file.fileId, bytes: c.bytes, format: c.format });
   return JSON.parse(record.proposal).rows.map(row => ({ ...attributes(row), fields: Object.fromEntries(Object.entries(row.fields).map(([key, value]) => [key, value === null ? null : {
-    ...value, refs: value.refs.map(id => coordinate(source.refs[id])), value: resolveField(source, value),
+    ...value, refs: value.refs.map(id => coordinate(source.refs[id])), references: value.refs.map(id => source.refs[id]), value: resolveField(source, value),
   }])) }));
 }
 async function contextMatches(c, x, file) {

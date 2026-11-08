@@ -19,9 +19,9 @@ test('all 96 generated lifecycle cases have committed independent source and out
 });
 
 test('row matching counts multiplicity, precision, identity, signs and citations exactly', () => {
-  const a = { target: 'transaction', accountId: 'a', amount: -3, datePrecision: 'day', refs: ['s0:A2'] };
+  const a = { target: 'transaction', accountId: 'a', amount: -3, datePrecision: 'day', refs: ['s0:A2'], references: [{ rawHash: 'synthetic-hash', valueType: 'number', precision: 'exact' }] };
   assert.equal(scoreRows([a, a], [a]).f1, 2 / 3);
-  for (const patch of [{ accountId: 'b' }, { amount: 3 }, { datePrecision: 'month' }, { refs: ['s0:A3'] }]) {
+  for (const patch of [{ accountId: 'b' }, { amount: 3 }, { datePrecision: 'month' }, { refs: ['s0:A3'] }, { references: [{ rawHash: 'synthetic-hash', valueType: 'number', precision: 'cent' }] }, { references: [{ rawHash: 'different-hash', valueType: 'number', precision: 'exact' }] }]) {
     assert.equal(scoreRows([a], [{ ...a, ...patch }]).f1, 0);
   }
 });

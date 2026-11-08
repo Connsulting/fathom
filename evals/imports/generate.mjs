@@ -188,7 +188,7 @@ function build(family, seed, ordinal, variant) {
     if (raw == null) return;
     const formula = typeof raw === 'object' && typeof raw.formula === 'string';
     const empty = typeof raw === 'object' && raw.empty;
-    const cached = formula && typeof raw.cached === 'number';
+    const cached = formula ? typeof raw.cached === 'number' : typeof raw === 'number';
     const value = formula ? cached ? raw.cached : null : empty ? null : raw;
     const cell = `${column(c)}${r + 1}`;
     refs.push({ id: ref(s, cell), sheet: { index: s, nameRef: `s${s}` }, cell, row: r + 1, column: c + 1,
