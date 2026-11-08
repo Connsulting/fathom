@@ -7,6 +7,8 @@
 // householdTax(parts, ctx) -> re-exported from household.mjs
 
 import { isCollegeAccount } from '../../shared/account-kinds.mjs';
+import { ageAtYearEnd, accountOwnerAge } from '../../shared/ages.mjs';
+import { activeInference } from '../../shared/va529-plan.mjs';
 import { estimatedPaymentSafeHarbor, solo401kRoom, sepRoom, hsaLimit, payrollTax, TAX_2026 } from '../../calc/index.mjs';
 import { cents } from '../../store/db.mjs';
 import { accountLabel, sourceLabel } from '../../shared/account-label.mjs';
@@ -299,11 +301,10 @@ export function computeFigures(data, facts, ctx) {
     out.put('inc.ytd.w2', sum(outsideYtd.map(r => r.ytdWages)), 'a', label, 'docs',
       rowsLoc('documents', outsideYtd.flatMap(r => r.docIds), { assumptions: outsideYtd.some(r => r.section125Unknown) ? ['section125_unknown'] : [] }), outsideYtd[0].fileId);
   }
-  const ageOf = p => {
-    const v = owner[p === 'spouse' ? 'household.spouseAge' : 'household.ownerAge'];
-    return typeof v === 'number' && Number.isFinite(v) ? v : null;
-  };
-  const ageKey = p => (p === 'spouse' ? 'household.spouseAge' : 'household.ownerAge');
+  // Every age comes from the one household.birthYears answer (age by the end of the planning year).
+  const birthYears = owner['household.birthYears'];
+  const ageOf = p => ageAtYearEnd(birthYears, p, data.year);
+  const ageKey = () => 'household.birthYears';
   const sstbOf = e => (e && typeof e.sstb === 'boolean' ? e.sstb : typeof facts['business.sstb'] === 'boolean' ? facts['business.sstb'] : (out.warn('sstb_assumed'), true));
 
   // Inputs (parts) and what blocks them.
@@ -442,28 +443,37 @@ export function computeFigures(data, facts, ctx) {
     if (a && contrib[a.owner]) contrib[a.owner].ira = cents(contrib[a.owner].ira + t.amount);
   }
 
-  // Virginia529 accounts (S8, T5, MG9, R2-4). An entry is complete when virginiaPlan is boolean and,
-  // for a Virginia plan, ownerAge70Plus is boolean and carryforward is a number of at least zero.
-  // Capped accounts deduct up to the cap; an owner seventy or older deducts in full (Va. Code
-  // 58.1-322.03(7)(a), (7)(b)).
+  // Virginia529 accounts (S8, T5, MG9, R2-4). The plan answer is the owner's, else inferred from the
+  // institution unless the owner undid the inference. An entry is complete when the plan answer is
+  // known and, for a Virginia plan, the carryforward is a number of at least zero and the account
+  // owner's age is known (from household.birthYears). Capped accounts deduct up to the cap; an owner
+  // seventy or older deducts in full (Va. Code 58.1-322.03(7)(a), (7)(b)).
   const vaPlans = owner['accounts.va529'] && typeof owner['accounts.va529'] === 'object' ? owner['accounts.va529'] : null;
   const cap = law('va529Cap');
   const college = collegeAccts.map(a => {
     const entry = vaPlans && vaPlans[a.id] && typeof vaPlans[a.id] === 'object' ? vaPlans[a.id] : null;
     const contribYtd = sum(inflows([a]).map(t => t.amount));
     const cf = entry ? entry.carryforward : undefined;
-    const completeEntry = !!entry && typeof entry.virginiaPlan === 'boolean'
-      && (entry.virginiaPlan === false || (typeof entry.ownerAge70Plus === 'boolean' && typeof cf === 'number' && Number.isFinite(cf) && cf >= 0));
-    const va = completeEntry && entry.virginiaPlan === true;
-    const age70 = va && entry.ownerAge70Plus === true;
+    const inference = entry && typeof entry.virginiaPlan === 'boolean' ? null : activeInference(a, owner);
+    const plan = entry && typeof entry.virginiaPlan === 'boolean' ? entry.virginiaPlan : inference ? inference.value : null;
+    const ownerAge = plan === true ? accountOwnerAge(birthYears, a.owner, data.year, { married: facts['household.filingStatus'] === 'mfj' }) : null;
+    const cfKnown = typeof cf === 'number' && Number.isFinite(cf) && cf >= 0;
+    const answersMissing = plan === null || (plan === true && !cfKnown);
+    const ageMissing = plan === true && ownerAge === null;
+    const completeEntry = !answersMissing && !ageMissing;
+    const va = completeEntry && plan === true;
+    const age70 = va && ownerAge >= 70;
     const capped = va && !age70;
     const deduction = capped ? Math.min(cap, cents(contribYtd + cf)) : age70 ? cents(contribYtd + cf) : 0;
-    return { account: a, entry, contribYtd, carryforward: va ? cf : null, complete: completeEntry, capped, age70, deduction };
+    return { account: a, entry, contribYtd, carryforward: va ? cf : null, complete: completeEntry, answersMissing, ageMissing, inferred: !!inference, capped, age70, deduction };
   });
   const va529Deduction = cents(sum(college.map(c => c.deduction)));
   out.info.va529 = {
     accounts: college.length,
     missing: college.filter(c => !c.complete).map(c => accountLabel(c.account)),
+    answersMissing: college.filter(c => c.answersMissing).map(c => accountLabel(c.account)),
+    ageMissing: college.filter(c => c.ageMissing && !c.answersMissing).map(c => accountLabel(c.account)),
+    inferred: college.filter(c => c.inferred).map(c => accountLabel(c.account)),
     age70: college.filter(c => c.age70).map(c => accountLabel(c.account)),
     eligible: college.filter(c => c.capped).length,
     age70Count: college.filter(c => c.age70).length,
@@ -475,7 +485,10 @@ export function computeFigures(data, facts, ctx) {
   const vaBlocked = !isVa ? null
     : itemized > stdDeduction(f) && vaItemized == null ? 'va_itemized_missing'
       : out.info.va529.missing.length ? 'va529_answers_missing' : null;
-  const ages = Array.isArray(facts['household.dependentAges']) ? facts['household.dependentAges'] : [];
+  // Dependent ages: from the birth years the owner told us, else the dependent ages a note or the
+  // seed recorded (the pack gates read that fact too).
+  const ages = Array.isArray(birthYears?.dependents) ? birthYears.dependents.map((_, i) => ageAtYearEnd(birthYears, { dependent: i }, data.year)).filter(a => a !== null)
+    : Array.isArray(facts['household.dependentAges']) ? facts['household.dependentAges'] : [];
   // D2: an owner-stated prior-year qualified business loss carryforward, else none (with a note).
   const qbiCarry = owner['tax.prior.qbiLossCarryforward'];
   const parts = {
