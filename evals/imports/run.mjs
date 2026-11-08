@@ -156,6 +156,7 @@ export async function runEvaluation({ offline = false, seed = SEED, caseIds, inj
       if (gate?.report().stopReason) { expectedCount += expectedRows(c).length; report.unrun++; report.cases.push({ id: c.id, status: 'unrun', errors: ['evaluation_cap'] }); continue; }
       if (group !== c.baseId) { await x?.close(); await foreign.close(); x = await environment(factory); foreign = await environment(factory); group = c.baseId; current = c; if (offline) await upload(foreign, c); }
       current = c;
+      expectedCount += expectedRows(c).length;
       const errors = [], before = snapshot(x), other = snapshot(foreign), beforeCalls = calls;
       try {
         let file = await upload(x, c);
@@ -168,7 +169,7 @@ export async function runEvaluation({ offline = false, seed = SEED, caseIds, inj
         if (file.status !== (auto ? 'imported' : c.oracle.outcome)) errors.push('unexpected_status');
         if (!auto && snapshot(x) !== before) { errors.push('writes_before_approval'); report.safety.unsafeAccepted++; }
         const scored = scoreRows(expectedRows(c), await observedRows(c, x, file));
-        expectedCount += scored.expected; actualCount += scored.actual; matchedCount += scored.matched;
+        actualCount += scored.actual; matchedCount += scored.matched;
         if (scored.f1 !== 1) errors.push('typed_rows_or_references');
         if (!await contextMatches(c, x, file)) { errors.push('coverage_or_exclusions'); contextErrors++; }
         if (file.fileId !== c.oracle.source.fileId || x.db.prepare('SELECT sha256 FROM files WHERE id=?').get(file.fileId)?.sha256 !== c.oracle.source.sha256) errors.push('source_identity');
