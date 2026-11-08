@@ -205,3 +205,19 @@ test('a file source whose account has newer rows from another file is history; t
   const notes = c.state.staleNotes.map((n) => n.text).join(' ');
   assert.ok(!notes.includes(c.source(agg.source_id).label), 'no note names the history source');
 }));
+
+test('one recent account does not hide another stale account from the missing-data rec', () => withStore(async (s) => {
+  const posFile = await ingest(s, 'positions.csv');
+  const bankFile = await ingest(s, 'Chase7766_Activity_20320305.csv');
+  const invest = accountOfFile(s, posFile);
+  const cash = accountOfFile(s, bankFile);
+  // A recent balance on the cash account keeps the household's newest date inside the window.
+  s.db.prepare('INSERT INTO balances (account_id, date, amount, file_id) VALUES (?, ?, ?, ?)').run(cash.id, '2032-08-30', 100, bankFile.id);
+  const rule = shared(s.db, OLD_CLOCK);
+  assert.equal(rule.account(cash.id), 'fresh');
+  assert.equal(rule.account(invest.id), 'stale');
+  const c = callers(s.db, OLD_CLOCK);
+  assert.ok(c.cashCard() > 0, 'the Cash card counts the stale account');
+  assert.equal(c.planner('balances'), 'stale', 'the missing-data rec sees it too');
+  assertAgree(s.db, OLD_CLOCK);
+}));

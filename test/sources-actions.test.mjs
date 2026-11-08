@@ -332,3 +332,29 @@ test('the public demo sandboxes archive and the Sources list, but not file remov
   assert.equal(demoRouteBehavior('GET', '/api/sources'), 'sandbox');
   assert.equal(demoRouteBehavior('POST', '/api/files/:id/remove'), 'off');
 });
+
+test('an archived account leaves accounts.holdings, with or without an account filter', () => withStore(async ({ s, invest }) => {
+  const holdings = (args = {}) => T.callTool('accounts', { operation: 'holdings', ...args }, toolCtx(s));
+  assert.ok((await holdings()).some((p) => p.accountId === invest), 'precondition: the investment account has holdings');
+  const out = await T.callTool('sources', { operation: 'archive_account', id: invest }, toolCtx(s));
+  assert.ok(!(await holdings()).some((p) => p.accountId === invest));
+  assert.deepEqual(await holdings({ id: invest }), []);
+  await T.callTool('undo', { operation: 'undo', id: out.receipt.id }, toolCtx(s));
+  assert.ok((await holdings({ id: invest })).length > 0);
+}));
+
+test('removing a file removes its documents and recomputes a balance figure it owned without rows', () => withStore(async ({ s, bank, invest }) => {
+  // A synthetic document read from the bank file, and the investment account's balance figure
+  // pointed at that file the way an empty holdings snapshot owns a figure with no rows.
+  s.db.prepare("INSERT INTO documents (doc_type, tax_year, fields, file_id) VALUES ('w2', 2031, '{}', ?)").run(bank.fileId);
+  const fig = one(s.db, 'SELECT fig_key FROM accounts WHERE id = ?', invest).fig_key;
+  assert.ok(fig, 'precondition: the investment account has a balance figure');
+  s.db.prepare('UPDATE figures SET file_id = ? WHERE key = ?').run(bank.fileId, fig);
+  const docs = () => s.db.prepare('SELECT count(*) AS n FROM documents WHERE file_id = ?').get(bank.fileId).n;
+  const out = await T.callTool('sources', { operation: 'remove_file', id: bank.fileId }, toolCtx(s));
+  assert.equal(docs(), 0, 'the planner no longer reads the removed file\'s documents');
+  const after = one(s.db, 'SELECT fig_key FROM accounts WHERE id = ?', invest).fig_key;
+  assert.ok(after && one(s.db, 'SELECT key FROM figures WHERE key = ?', after), 'the balance figure is recomputed from the remaining holdings');
+  await T.callTool('undo', { operation: 'undo', id: out.receipt.id }, toolCtx(s));
+  assert.equal(docs(), 1);
+}));
