@@ -26,6 +26,7 @@ export function evaluate(ctx) {
 }
 
 export function build(ctx, hit) {
+  const payment = { jurisdiction: 'VA', taxYear: ctx.year, quarter: 4, amount: ctx.fig['sh.va.remaining']?.v };
   return {
     title: 'Pay the fourth-quarter Virginia estimate',
     effort: 'Under an hour',
@@ -34,9 +35,9 @@ export function build(ctx, hit) {
     cross: ['The federal estimate is due on the same day.'],
     tasks: padTasks([
       'Check the amount against your accountant worksheet',
-      'Pay through Virginia Tax online services',
+      { t: 'Pay through Virginia Tax online services', kind: 'payment', payment },
       'Save the payment confirmation',
-      'Add the payment to your tax payment log',
+      { t: 'Add the payment to your tax payment log', kind: 'payment', payment },
     ]),
   };
 }
