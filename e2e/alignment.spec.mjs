@@ -352,7 +352,7 @@ test.describe('optional markers sit on the label line', { tag: '@al-ac5' }, () =
       expect(res.status()).toBe(200);
       const { goal } = await res.json();
       await gotoRoute(page, 'goals');
-      await page.locator(`article.h-goal[data-goal-id="${goal.id}"]`).getByRole('button', { name: 'Edit' }).click();
+      await page.locator(`article.h-goal[data-goal-id="${goal.id}"]`).getByRole('button', { name: 'Edit', exact: true }).click();
       const form = page.locator('form.h-gform');
       await expect(form).toBeVisible();
       const marks = await form.locator('.h-opt').count();
