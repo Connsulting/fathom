@@ -257,7 +257,7 @@ describe('loadEmailSettings and emailStatus', () => {
 
 describe('dev transport', () => {
   // MT-03: the outbox directory is the caller's (a household root's outbox/, or the instance's).
-  test('writes one 0600 JSON file per message under the given outboxDir and logs only subject and count', async () => {
+  test('writes one 0600 JSON file per message under the given outboxDir and logs only the recipient count', async () => {
     const s = await secretsDir();
     try {
       const log = captureLog();
@@ -281,8 +281,8 @@ describe('dev transport', () => {
       assert.ok(!Number.isNaN(Date.parse(first.date)));
 
       const logged = log.text();
-      assert.ok(logged.includes(MSG.subject), 'subject is logged');
-      assert.match(logged, /1 recipient/);
+      assert.ok(!logged.includes(MSG.subject), 'subject stays private');
+      assert.match(logged, /recipients=1/);
       for (const secret of [BODY_TEXT, 'SYNTHETIC-BODY-HTML', 'owner@example.invalid', 'fathom@example.invalid']) {
         assert.ok(!logged.includes(secret), `log carries no ${secret}`);
       }

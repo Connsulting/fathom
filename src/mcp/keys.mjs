@@ -52,9 +52,11 @@ export function hashKey(secret, serverSecret) {
   return createHmac('sha256', serverSecret).update(secret).digest('hex');
 }
 
+export const isMcpTool = tool => !tool.askOnly;
+
 // Registry entries a key with `scopes` may see and call.
 export function toolsForScopes(scopes, registry = tools) {
-  return registry.flatMap(t => {
+  return registry.filter(isMcpTool).flatMap(t => {
     const allowed = t.operations.filter(o => operationScopes(o).some(scope => scopes.includes(scope)));
     if (!allowed.length) return [];
     return [{ ...t, inputSchema: { ...t.inputSchema, properties: { ...t.inputSchema.properties, operation: { ...t.inputSchema.properties.operation, enum: allowed.map(o => o.name) } } } }];

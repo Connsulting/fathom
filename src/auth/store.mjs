@@ -269,6 +269,9 @@ export function createAuthStore(platform, { now = () => Date.now() } = {}) {
           if (role !== 'admin') guardLastAdmin(householdId, userId);
           db.prepare('UPDATE household_memberships SET role = ?, version = version + 1, updated_at = ? WHERE user_id = ? AND household_id = ?')
             .run(role, now(), userId, householdId);
+          db.prepare(`UPDATE notification_subscriptions SET membership_version = ?, updated_at = ?
+            WHERE household_id = ? AND user_id = ? AND membership_version = ?`)
+            .run(m.version + 1, now(), householdId, userId, m.version);
         } else {
           const pending = row ? pendingInvitationRow(householdId, userId) : null;
           if (!pending) throw new HttpError(404, 'no such user');
