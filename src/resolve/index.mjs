@@ -8,9 +8,10 @@ import { cardDetail } from '../ingest/context.mjs';
 import { ask, getItem, pendingItems, recordAutoAnswer, ConfirmError } from '../ingest/confirm.mjs';
 import { answerShape } from '../jobs/triggers/common.mjs';
 import { guessCategories } from '../categories/guess.mjs';
+import { JEV_MODEL } from '../categories/jev.mjs';
 import { confidenceBand, jevEvidence, categoryEvidence } from '../categories/policy.mjs';
 import { createSpendLedger } from '../engine/runtime.mjs';
-import { estimateUnknownCost, modelFor } from '../engine/pricing.mjs';
+import { estimateCompletion } from '../models/port.mjs';
 import { activePacks, loadPacks } from '../packs/index.mjs';
 import { defaultPackDirs } from '../packs/state.mjs';
 
@@ -140,9 +141,9 @@ export async function resolvePending(db, engine, { now = new Date().toISOString(
   }
   for (const item of pendingItems(db)) {
     if (!eligible(item) || declined(db, item.id)) continue;
-    const guess = db.prepare('SELECT option_id,reason FROM confirm_guesses WHERE item_id=?').get(item.id);
+    const guess = db.prepare('SELECT option_id,reason,model FROM confirm_guesses WHERE item_id=?').get(item.id);
     const proposal = parseJson(guess?.reason, null);
-    if (confidenceBand(proposal?.confidence) !== 'auto' || !item.options.some(o => o.id === guess.option_id)) continue;
+    if (guess?.model !== JEV_MODEL || confidenceBand(proposal?.confidence) !== 'auto' || !item.options.some(o => o.id === guess.option_id)) continue;
     if (apply(db, item, guess.option_id, { text: jevEvidence(), refs: [`confirm_guesses:${item.id}`] }, now)) answered++;
   }
   const candidates = pendingItems(db).filter(i => eligible(i) && !declined(db, i.id));
@@ -171,7 +172,7 @@ export async function resolvePending(db, engine, { now = new Date().toISOString(
     const cap = getSetting(db, 'cap', { usd: 200 })?.usd;
     const monthlyRemaining = Number.isFinite(cap) && cap >= 0 ? cap - ledger.monthSpendUsd(now.slice(0, 7)) : 0;
     const budgetUsd = Math.min(runCap() - spent, monthlyRemaining);
-    const reserve = estimateUnknownCost({ model: modelFor('job'), ...request }).costUsd;
+    const reserve = estimateCompletion(request, engine.modelConfig).costUsd;
     if (budgetUsd < reserve) { stopped = 'budget'; break; }
     let response;
     const beforeCall = cost();
