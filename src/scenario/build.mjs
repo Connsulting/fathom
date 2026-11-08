@@ -618,7 +618,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
   const jobs = db.prepare('SELECT * FROM jobs ORDER BY sort, id').all().map(j => ({
     id: j.id, name: j.name, cadence: j.cadence || '', last: j.last_label || '', next: j.next_label || '', does: j.does || '', cost: j.cost,
   }));
-  // The models the engine runs per purpose, read from the engine's own configuration (not content).
+  // Product labels omit provider and model identifiers.
   const models = MODEL_PURPOSES.map(purpose => ({ purpose, model: 'Configured' }));
   const engine = { mode: engineMode, budget: { monthly, used }, chat: section(content, 'engine.chat'), models, jobs, ledger: loadLedger(db) };
 

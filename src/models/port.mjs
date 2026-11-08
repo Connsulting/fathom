@@ -10,6 +10,7 @@ export const MODEL_ERROR_CODES = Object.freeze(['paused', 'funding_unavailable',
 
 export function modelErrorCode(error) {
   if (MODEL_ERROR_CODES.includes(error?.code)) return error.code;
+  if (error?.code === 'engine_paused') return 'paused';
   return ({ EngineOffError: 'paused', BudgetExceededError: 'budget', RoundLimitError: 'round_limit',
     ModelAccountingError: 'accounting', TypeError: 'invalid_request' })[error?.name] ?? 'unavailable';
 }
@@ -30,8 +31,15 @@ export function createModelPort({ selection, transport, credential, purpose = 'c
     responseBound: runner === messagesRound || runner === messagesToolRound ? 1 : 2,
     estimate: req => estimateUnknownCost({ ...prepare(req), model: selection.model }),
     async complete(request) {
-      const r = await runner({ ...prepare(request), model: selection.model, credential: credential ?? request.credential,
-        ...(testTransport ? { baseURL: testTransport.baseURL } : {}) });
+      let r;
+      try {
+        r = await runner({ ...prepare(request), model: selection.model, credential: credential ?? request.credential,
+          ...(testTransport ? { baseURL: testTransport.baseURL } : {}) });
+      } catch (error) {
+        return { text: '', content: [], model: selection.model, tokens: {}, status: 'model_error', is_error: true,
+          accountingUnknown: true, errorCode: /timeout|abort/i.test(error?.name ?? '') ? 'timeout' : 'unavailable',
+          toolResults: request.registry?.results ?? [], details: {} };
+      }
       if (r.api_error_status != null) r.errorCode = r.api_error_status === 429 ? 'rate_limit'
         : [401, 403].includes(r.api_error_status) ? 'authentication' : r.api_error_status >= 500 ? 'unavailable' : 'invalid_request';
       else if (r.status === 'error_max_budget_usd') r.errorCode = 'budget';

@@ -27,8 +27,9 @@ export function createJevAdapter({ transport = fetch, credential } = {}) {
       const inputTokens = jevEstimate(choices);
       return { inputTokens, outputTokens: 0, costUsd: inputTokens * JEV_INPUT_USD };
     },
-    async complete({ choices, credential: auth = credential, timeoutMs = 10000 }) {
+    async complete({ choices, credential: auth = credential, timeoutMs = 10000, tools = [], schema }) {
       const base = { model: JEV_MODEL, content: [], text: '', tokens: {}, toolResults: [], details: {} };
+      if (tools.length || schema) return { ...base, status: 'model_error', is_error: true, errorCode: 'invalid_request', costUsd: 0 };
       const controller = new AbortController();
       let timer;
       try {
@@ -37,6 +38,7 @@ export function createJevAdapter({ transport = fetch, credential } = {}) {
           const response = await transport('https://api.typesafe.ai/v1/systemone', { method: 'POST',
             headers: { Authorization: `Bearer ${auth.value}`, 'Content-Type': 'application/json' }, body: JSON.stringify(jevBody(choices)), signal: controller.signal });
           if (!response.ok) return { ...base, status: 'model_error', is_error: true, costUsd: 0, httpStatus: response.status,
+            retryAfterMs: Math.min(10000, Math.max(0, Number(response.headers?.get('retry-after')) * 1000 || 0)),
             errorCode: response.status === 429 ? 'rate_limit' : response.status === 401 || response.status === 403 ? 'authentication'
               : response.status >= 500 ? 'unavailable' : 'invalid_request' };
           const data = await response.json();

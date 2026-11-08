@@ -282,6 +282,9 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     if (typeof system !== 'string' || typeof systemDynamic !== 'string' || !Array.isArray(messages) || messages.length === 0 || !Number.isInteger(maxTokens) || maxTokens <= 0 || maxTokens > 128000) {
       throw new TypeError('Invalid model request');
     }
+    if (schema && choices || choices && tools.length) throw new TypeError('Choices cannot include a schema or tools');
+    if (choices && (!Array.isArray(choices) || choices.length===0 || choices.some(q => !Array.isArray(q.options) || q.options.length<2
+      || q.options.length>255 || new Set(q.options).size!==q.options.length || q.options.some(o => typeof o!=='string' || !o)))) throw new TypeError('Invalid choices');
     if (fake !== undefined && !Array.isArray(fake)) throw new TypeError('Invalid fake script list');
     if (!Number.isInteger(extraInputTokens) || extraInputTokens < 0) throw new TypeError('Invalid model request');
     const queue = fake === undefined ? scripted : structuredClone(fake);
@@ -432,7 +435,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       }
       const toolBoundary = round.status === 'error_max_turns' && round.toolResults.length > 0;
       if (round.api_error_status != null || (round.is_error && !toolBoundary && round.status !== 'error_max_budget_usd')) {
-        throw Object.assign(new ModelCallError('Model did not complete a valid response'), { accounting, code: round.errorCode ?? 'unavailable' });
+        throw Object.assign(new ModelCallError('Model did not complete a valid response'), { accounting, code: round.errorCode ?? 'unavailable', ...(round.retryAfterMs ? {retryAfterMs:round.retryAfterMs} : {}) });
       }
       if (round.status === 'error_max_budget_usd') {
         const error = new BudgetExceededError(); error.toolResults = allResults; throw error;
@@ -453,7 +456,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     }
     const error = new RoundLimitError(); error.toolResults = allResults; throw error;
   };
-  const call = req => complete(req).catch(error => { error.code ??= modelErrorCode(error); throw error; });
+  const call = req => complete(req).catch(error => { error.code = modelErrorCode(error); throw error; });
   return { call, complete: call, async extract({ document, schema, system = 'Extract documented rows without guessing.', maxTokens = 4096, fake } = {}) {
     if (mode === 'off') throw new EngineOffError();
     const responseSchema = { type: 'object', properties: { rows: { type: 'array', items: schema } }, required: ['rows'], additionalProperties: false };
