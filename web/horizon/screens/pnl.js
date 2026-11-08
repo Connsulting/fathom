@@ -174,7 +174,8 @@ function chooser() {
   const { esc } = H;
   const ents = H.arr(P.entities);
   const one = (key, label, sub) => `<button type="button" class="pl-view${P.view === key ? ' on' : ''}" data-pl-view="${esc(key)}" aria-pressed="${P.view === key}"><span>${label}</span>${sub ? `<small>${sub}</small>` : ''}</button>`;
-  const btns = ents.map((e) => one(e.key, esc(e.label), e.kind === 'account' ? 'Business account' : 'Business'));
+  const group = (label, list) => list.length ? `<div class="pl-view-group" role="group" aria-label="${label}"><span class="pl-view-heading">${label}</span>${list.map(e => one(e.key, esc(e.label), e.kind === 'spending' ? 'Card spending' : e.kind === 'account' ? 'Business account' : 'Business')).join('')}</div>` : '';
+  const btns = [group('Businesses', ents.filter(e => e.kind !== 'spending')), group('Spending ledgers', ents.filter(e => e.kind === 'spending'))];
   btns.push(one(PL_HOUSEHOLD, 'Household spending', 'Personal accounts'));
   return `<div class="pl-views" data-pl-views role="group" aria-label="Choose a P&amp;L">${btns.join('')}</div>`;
 }
@@ -579,7 +580,7 @@ export function render() {
     });
   }
   afterDraw();
-  return shell(`<section class="pl">${pageHead('Money', 'P&amp;L', 'Profit and loss for each business, and what the household spends. Every amount opens to where it came from.')}${body}</section>`);
+  return shell(`<section class="pl">${pageHead('Money', 'P&amp;L', 'Business profit and loss, imported spending ledgers, and household spending. Every amount opens to where it came from.')}${body}</section>`);
 }
 
 // Before the entities are known (their read failed), household spending is still reachable.
