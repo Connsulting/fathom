@@ -117,8 +117,14 @@ function setBusy(el, on) {
 
 // Same-origin JSON. A browser sends Origin on every POST, which the server requires on a real
 // store. Resolves the body; rejects with err.status (0 when the server could not be reached).
+// Household administration acts on the session's household: those calls assert the household and
+// context version this page loaded with, so a switch in another tab is refused (409) here.
 async function call(method, path, body) {
   const init = { method, headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' };
+  if (path.startsWith('/api/admin/') && me && me.householdId && me.contextVersion) {
+    init.headers['X-Fathom-Household'] = me.householdId;
+    init.headers['X-Fathom-Context-Version'] = String(me.contextVersion);
+  }
   if (method !== 'GET') {
     init.headers['content-type'] = 'application/json';
     init.body = JSON.stringify(body || {});
@@ -289,6 +295,7 @@ function explain(err, ctx) {
   if (s === 401) return 'Your session ended. Sign in again.';
   if (s === 403) return 'Only household admins can do that.';
   if (s === 404) return 'That is not available here.';
+  if (s === 409 && err.code === 'household_context_stale') return 'The household changed in another tab. Reload this page to continue; nothing was changed.';
   if (s === 409) return ctx === 'admin' ? 'A household needs at least one enrolled admin. Make someone else an admin first.' : (sentence(err.message) || 'That conflicts with the current state. Reload and try again.');
   if (s === 410) return 'This link has expired or was already used.';
   if (s === 429) return 'Too many attempts. Wait a few minutes, then try again.';
@@ -836,8 +843,12 @@ async function adminView() {
   if (!s.identity) { leave(signInTarget(PATH, window.location.hash), 'expired'); return; }
   me = s.identity;
   if (me.role !== 'admin') { deniedView(); return; }
+  // With several households, name the one this page administers.
+  const mine = Array.isArray(me.memberships) ? me.memberships : [];
+  const current = mine.length > 1 ? mine.find((m) => m && m.householdId === me.householdId) : null;
+  const heading = current ? `Household: ${esc(current.name || 'Household ' + (mine.indexOf(current) + 1))}` : 'Household';
   root.innerHTML = frame('admin', `
-    <div class="au-ph"><h1>Household</h1>
+    <div class="au-ph"><h1>${heading}</h1>
       <p class="au-lede">Everyone here shares one household: the same accounts, plan, files and recommendations. Admins also invite people, change roles and remove access.</p></div>
     <section class="au-sec" aria-labelledby="au-inv-h">
       <div class="au-sec-h"><h2 id="au-inv-h">Invite someone</h2></div>

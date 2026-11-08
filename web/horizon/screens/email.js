@@ -43,7 +43,7 @@ async function readJson(res) {
 async function getJson(path) {
   let res;
   try {
-    res = await fetch(path, { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
+    res = await window.Fathom.api.fetch(path, { headers: { accept: 'application/json' }, credentials: 'same-origin', cache: 'no-store' });
   } catch {
     throw new Error('The server could not be reached.');
   }
@@ -53,7 +53,7 @@ async function getJson(path) {
 async function postJson(path) {
   let res;
   try {
-    res = await fetch(path, {
+    res = await window.Fathom.api.fetch(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
       body: '{}',

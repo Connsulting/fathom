@@ -72,7 +72,8 @@ export function render() {
     const st = r ? statusText(r) : d.done ? 'Decided' : d.status === 'open' ? 'Open' : 'Upcoming';
     return `<li class="${d.done ? 'have' : 'expected'}"><i>${d.done ? icon('check') : ''}</i><div><b>${link}</b><p>${st}${d.when && !d.done ? `, ${T(d.when)}` : ''}</p></div></li>`;
   }).join('')}</ul>` : '<p class="h-mute">No year-end decisions.</p>';
-  const href = `/api/yearend/packet?year=${encodeURIComponent(year)}`;
+  // A real store's download link carries the household context in its query (api.downloadHref).
+  const href = H.api.downloadHref(`/api/yearend/packet?year=${encodeURIComponent(year)}`);
   const packets = arr(ye.packets);
   const last = packets[0];
   const packetBox = `<div class="h-packet">${icon('doc')}<div><b>${last ? `Last assembled ${esc(dateLabel(last.at))}` : 'Packet for your accountant'}</b><p>${last

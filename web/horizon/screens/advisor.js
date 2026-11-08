@@ -92,7 +92,7 @@ export function render() {
   const vet = arr(a.reviewed).filter((v) => v.verdict === 'vetoed').length;
   const packets = arr(a.packets).map((p) => {
     const label = S.packetOk && p.id === S.packetOk ? 'Download again' : `Packet, ${p.date}`;
-    return `<li><a href="/api/advisor/packets/${encodeURIComponent(p.id)}" download data-adv-dl>${icon('arrow')}<span>${esc(label)}</span></a><span class="h-mute sm">${arr(p.recIds).length} for review</span></li>`;
+    return `<li><a href="${esc(H.api.downloadHref(`/api/advisor/packets/${encodeURIComponent(p.id)}`))}" download data-adv-dl>${icon('arrow')}<span>${esc(label)}</span></a><span class="h-mute sm">${arr(p.recIds).length} for review</span></li>`;
   }).join('');
   const notAsk = arr(a.notAsking).map((q) => `<li><b>${T(q.q)}</b><p>${T(q.why)}</p></li>`).join('');
   const shared = arr(a.shared).map((s) => `<li><span>${T(s.title)}</span><time>${T(s.when)}</time></li>`).join('');
@@ -157,7 +157,7 @@ export function onClick(e) {
         S.packetErr = '';
         H.draw();
         const a = document.createElement('a');
-        a.href = `/api/advisor/packets/${encodeURIComponent(id)}`;
+        a.href = H.api.downloadHref(`/api/advisor/packets/${encodeURIComponent(id)}`);
         a.setAttribute('download', '');
         document.body.appendChild(a); a.click(); a.remove();
       } else {
