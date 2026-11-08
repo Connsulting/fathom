@@ -573,3 +573,26 @@ for (const scorp of [true, false]) test(`AC20/AC21: a household payroll employer
   await planRun(db);
   assert.equal(getFacts(db)['business.entities'].find(e => e.name === 'Payroll Studio').inferred, undefined);
 });
+
+
+for (const scorp of [true, false]) test(`an owner account assignment replaces payroll inference after replanning (S corp ${scorp})`, async t => {
+  const { db, ctx } = await store(t);
+  budgetAndBusiness(db, { named: false });
+  addFact(db, 'income.sCorp', scorp);
+  await addPayroll(db, { docType: 'w2', fields: { taxYear: 2026, employerName: 'Payroll Studio', wages: 40000, medicareWages: 40000, federalWithheld: 4000, box12: [] }, recipient: 'owner', relation: 'household' });
+  await planRun(db);
+  assert.equal(getFacts(db)['business.entities'].find(e => e.name === 'Payroll Studio').accountId, 'business-cash');
+  const evidence = 'Current Studio is my S corp, paid from business checking';
+  const out = await callTool('answer', { operation: 'fact', key: 'business.entities', value: [{ name: 'Current Studio', type: 's_corp', owner: 'owner', accountId: 'business-cash' }], evidence }, { ...ctx, channel: 'mcp', scopes: ['write:facts'], ownerText: evidence });
+  const entities = resolveEntities(loadPlanningData(db, '2026-11-05'), getFacts(db));
+  assert.deepEqual(entities.find(e => e.name === 'Current Studio').accountIds, ['business-cash']);
+  assert.deepEqual(entities.find(e => e.name === 'Payroll Studio')?.accountIds || [], []);
+  const pnl = pnlEntities({ db, clock: '2026-11-05' });
+  assert.deepEqual(pnl.find(e => e.label === 'Current Studio').accounts.map(a => a.id), ['business-cash']);
+  assert.ok(!pnl.some(e => e.label === 'Payroll Studio' && e.accounts.length));
+  assert.ok(!buildScenario(db).recs.find(r => r.id === 'missing-data')?.tasks.some(t => t.kind === 'classify' && !t.done));
+  await planRun(db);
+  assert.deepEqual(resolveEntities(loadPlanningData(db, '2026-11-05'), getFacts(db)).find(e => e.name === 'Current Studio').accountIds, ['business-cash']);
+  await callTool('undo', { operation: 'undo', id: out.receipt.id }, { ...ctx, channel: 'mcp', scopes: ['write:facts'] });
+  assert.equal(getFacts(db)['business.entities'].find(e => e.name === 'Payroll Studio').accountId, 'business-cash');
+});
