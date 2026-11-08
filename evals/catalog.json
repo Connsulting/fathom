@@ -4252,7 +4252,7 @@
       },
       "turns": [
         {
-          "question": "Compare when we reach the target at 3 and 4 percent returns.",
+          "question": "Compare when we reach the target at 3 percent and 4 percent returns.",
           "required": [
             {
               "name": "retirement",

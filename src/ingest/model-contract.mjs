@@ -26,7 +26,8 @@ export const SOURCE_REF_SCHEMA = { oneOf: [
 ] };
 
 export const TRANSFORM_SCHEMA = { oneOf: [
-  ...['identity', 'trim', 'sum', 'debit_credit'].map(op => object({ op: { const: op } })),
+  ...['identity', 'trim', 'debit_credit'].map(op => object({ op: { const: op } })),
+  object({ op: { const: 'sum' }, signs: { type: 'array', items: choice('as_is', 'negate'), minItems: 1 } }, ['op']),
   ...['date_decode', 'month_anchor'].map(op => object({ op: { const: op }, locale: choice('iso', 'en-US', 'en-GB'), epoch: choice('1900', '1904') })),
   object({ op: { const: 'currency_decode' }, currency: { const: 'USD' } }),
   object({ op: { const: 'sign' }, mode: choice('as_is', 'negate') }),
@@ -68,7 +69,10 @@ export const PROPOSAL_SCHEMA = object({
     disposition: choice('imported_detail', 'control_total', 'duplicate_summary', 'forecast', 'explanatory_text', 'unresolved', 'empty', 'error', 'uncached_formula', 'hidden', 'excluded'),
     refs: refIds, reason: FIELD_SCHEMA }, ['regionId', 'disposition', 'refs']) },
   completeness: choice('complete', 'incomplete'),
-});
+  controls: { type: 'array', items: object({ field: FIELD_SCHEMA,
+    rows: { type: 'array', minItems: 1, uniqueItems: true, items: { type: 'integer', minimum: 0 } },
+    precision: choice('cent', 'dollar') }) },
+}, ['version', 'fileId', 'sha256', 'proposalId', 'interpreterVersion', 'mappingId', 'mappingVersion', 'rows', 'coverage', 'completeness']);
 
 export const LOCATOR_SCHEMA = object({
   version: positive, fileId: string, proposalId: string, mappingId: nullable(string), mappingVersion: nullable(positive),
@@ -120,14 +124,16 @@ export function validateProposal(proposal, source) {
       refs(value.refs);
       const n = value.refs.length, op = value.transform.op;
       if (op === 'debit_credit' ? n !== 2 : op === 'month_anchor' ? n > 2 : op !== 'sum' && n !== 1) errors.push('transform_arity');
+      if (op === 'sum' && value.transform.signs && value.transform.signs.length !== n) errors.push('transform_arity');
     } else for (const child of Object.values(value)) visit(child);
   }
   for (const row of proposal.rows) visit(row.fields);
+  for (const control of proposal.controls ?? []) visit(control.field);
   const seen = new Set();
   for (const region of proposal.coverage) {
     if (!source.regions.includes(region.regionId) || seen.has(region.regionId)) errors.push('unknown_or_duplicate_region');
     seen.add(region.regionId);
-    refs(region.refs, !['empty', 'error', 'uncached_formula', 'unresolved'].includes(region.disposition));
+    refs(region.refs, false);
     if (!['imported_detail', 'control_total', 'unresolved'].includes(region.disposition) && !region.reason) errors.push('missing_exclusion_reason');
     if (region.reason) visit(region.reason);
     if (proposal.completeness === 'complete' && region.disposition === 'unresolved') errors.push('unresolved_coverage');

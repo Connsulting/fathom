@@ -1,8 +1,11 @@
-/* Horizon Memories screen (#/memories): what Fathom has been told to remember, as calm rows.
-   Add at the top, a filter once the list is long, edit in place, delete with Undo. Writes go through
-   api.preferenceSave, api.preferenceDelete and api.actionUndo; failures show the error toast. */
+/* Horizon What Fathom knows screen (#/memories): what Fathom has been told to remember, the
+   knowledge packs that are on, and what it decided for you. Memories are calm rows: add at the top,
+   a filter once the list is long, edit in place, delete with Undo. Writes go through
+   api.preferenceSave, api.preferenceDelete and api.actionUndo; failures show the error toast. The
+   packs and the Decided for you log are rendered by their own screens (packs.js, ingest.js). */
 
 import { FILTER_MIN, filterMemories, sourceOf, summaryLine, whenLabel } from './memories-model.js';
+import { activeHtml as packsHtml } from './packs.js';
 
 let H = null;
 
@@ -14,7 +17,7 @@ export function bind(kit) { H = kit; }
 const fresh = () => ({ add: '', query: '', edit: null, undo: null, focus: null });
 let S = fresh();
 
-const INTRO = 'What Fathom has been told to remember about your household. It uses these when it answers.';
+const INTRO = 'What Fathom remembers about your household, the knowledge it answers from and what it settled for you. Change anything here.';
 const EMPTY = 'Nothing yet. When you tell Ask to remember something, or add it above, it shows up here.';
 
 const memories = () => H.arr(H.api.s?.preferences);
@@ -57,7 +60,7 @@ function keepFocus() {
 }
 
 export function render() {
-  const { api, esc, shell, pageHead } = H;
+  const { api, esc, shell, pageHead, section } = H;
   if (!S.focus) keepFocus();
   const list = memories();
   if (S.edit && !list.some((m) => m.id === S.edit.id)) S.edit = null;
@@ -77,7 +80,9 @@ export function render() {
     ? `<p class="h-mem-sum h-mute">${esc(summaryLine(list.length))}</p><ul class="h-mem-list" aria-label="Memories">${items.join('')}</ul>
       <p class="h-mem-none h-mute" data-mem-none${none ? '' : ' hidden'}>No memories match that search.</p>`
     : `<p class="h-mem-empty h-mute">${EMPTY}</p>`;
-  return shell(`<section class="h-mem h-narrow">${pageHead('Settings', 'Memories', INTRO)}${add}${filter}${body}</section>`);
+  const mem = section('Memories', `${add}${filter}${body}`, '', 'h-mem-sec');
+  const decided = H.ingest?.decidedSection?.() || '';
+  return shell(`<section class="h-mem h-narrow">${pageHead('Settings', 'What Fathom knows', INTRO)}${mem}${packsHtml()}${decided}</section>`);
 }
 
 // Called after every draw: on another route the screen forgets its state; here it puts focus back.

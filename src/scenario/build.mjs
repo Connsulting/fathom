@@ -604,8 +604,8 @@ export function loadCurve(db, content) {
   return axes.map(a => ({ ...a, value: Object.hasOwn(told, a.id) ? told[a.id] : curvePosition(positions, a) }));
 }
 
-// {axisId: 0 | 1} from the newest remembered preference that names exactly one end of the axis by
-// its label (any case): 0 the left end, 1 the right. The label match is plain text, not a model call.
+// The newest remembered position for an axis: an end label selects 0 or 1, and an explicit
+// "Tradeoff toward <right label>: <position>." preference retains a position between them.
 // A label with a negation shortly before it ("I do not want to optimize everything") is not a
 // choice of that end, so that preference is skipped rather than read either way.
 const NEGATED = /\b(?:not|no|never|don'?t|without|stop|less|rather than|instead of|over)\b[^.;]{0,30}$/;
@@ -614,11 +614,17 @@ const names = (t, label) => {
   return i >= 0 && !NEGATED.test(t.slice(Math.max(0, i - 40), i));
 };
 export function rememberedCurve(db, axes) {
-  const texts = db.prepare('SELECT text FROM preferences ORDER BY updated_at DESC, created_at DESC, id').all().map(r => String(r.text).toLowerCase());
+  const texts = db.prepare('SELECT text FROM preferences ORDER BY updated_at DESC, created_at DESC, rowid DESC').all().map(r => String(r.text).toLowerCase());
   const out = {};
   for (const a of axes) {
     const [l, r] = [a.left, a.right].map(x => String(x ?? '').trim().toLowerCase());
     for (const t of texts) {
+      const prefix = `tradeoff toward ${JSON.stringify(r)}: `;
+      if (r && t.startsWith(prefix)) {
+        const numeric = /^(0(?:\.\d+)?|1(?:\.0+)?)\.$/.exec(t.slice(prefix.length));
+        if (numeric) { out[a.id] = Number(numeric[1]); break; }
+        continue;
+      }
       const hasL = names(t, l), hasR = names(t, r);
       if (hasL !== hasR) { out[a.id] = hasL ? 0 : 1; break; }
     }
@@ -631,7 +637,7 @@ function onboardingWithPriorities(onboarding, curve, positions) {
   const ob = structuredClone(onboarding);
   const list = Array.isArray(ob.priorities) && ob.priorities.length ? ob.priorities
     : curve.map(c => ({ id: c.id, label: `${c.left} vs ${c.right}`, value: c.value }));
-  ob.priorities = list.map(p => ({ ...p, value: curvePosition(positions, p) }));
+  ob.priorities = list.map(p => ({ ...p, value: curve.find(a => a.id === p.id)?.value ?? curvePosition(positions, p) }));
   return ob;
 }
 

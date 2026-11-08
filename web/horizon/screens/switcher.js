@@ -8,18 +8,15 @@
 import { normalizeKey, rankItems } from '../keys.js';
 import { ASK_KEYS, askNew, newConversation } from './chat.js';
 import { deckBindings } from './ingest.js';
+import { GO, GO_MORE } from '../nav.js';
 
 let H = null;
 
 export function bind(kit) { H = kit; }
 
-// G sequences: letter, route, label. design.js reads these for its tab and gear hints.
-export const GO = [
-  ['h', 'home', 'Home'], ['p', 'plan', 'Plan'], ['d', 'plan', 'Decide', 'decide'], ['a', 'ask', 'Ask'],
-  ['c', 'confirm', 'Confirm'], ['k', 'packs', 'Packs'], ['f', 'add', 'Files'], ['e', 'engine', 'Engine'],
-  ['m', 'email', 'Email'], ['n', 'connect', 'Connect'], ['o', 'money', 'Money'], ['s', 'settings', 'Settings']
-];
-const GO_MORE = [['goals', 'Goals'], ['accounts', 'Accounts'], ['pnl', 'P&L'], ['advisor', 'Advisor'], ['yearend', 'Year end'], ['memories', 'Memories']];
+// G sequences and the other Go to pages live in nav.js with the tabs; design.js reads GO for its
+// tab and gear hints.
+export { GO };
 
 export function goHint(route) {
   const g = GO.find((x) => x[1] === route);
@@ -112,7 +109,7 @@ function actionSource() {
     { key: 'act:shortcuts', title: 'Show keyboard shortcuts', group: 'Actions', sub: 'Action', hint: '?', run: () => openSheet() },
     { key: 'act:ask', title: 'Ask a question', group: 'Actions', sub: 'Action', hint: '', run: () => newConversation() },
     { key: 'act:add', title: 'Add files', group: 'Actions', sub: 'Action', hint: '', run: () => go('add') },
-    { key: 'act:connect-accounts', title: 'Connect accounts', group: 'Actions', sub: 'SimpleFIN, read-only', hint: '', run: () => go('accounts') },
+    { key: 'act:connect-accounts', title: 'Connect accounts', group: 'Actions', sub: 'SimpleFIN, read-only', hint: '', run: () => go('money') },
     { key: 'act:goal', title: 'New goal', group: 'Actions', sub: 'Action', hint: '', run: () => H.newGoal() },
     { key: 'act:tour', title: 'Take the tour', group: 'Actions', sub: 'A short guided walk', hint: '', run: (ret) => H.startTour(ret) },
     ...pendingChecks()

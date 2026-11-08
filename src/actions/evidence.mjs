@@ -43,7 +43,8 @@ function stated(value, text, shape, evidence) {
     if (shape.ownerInterpreted === true && typeof value === 'string') return shape.choices.some(c => c.value === value);
     const escape = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const matches = shape.choices.filter(c => [c.value, c.label].some(label => new RegExp(`\\b${escape(label)}\\b`, 'i').test(text)));
-    return matches.length === 1 && matches[0].value === value;
+    const values = [...new Set(matches.map(c => c.value))];
+    return values.length === 1 && values[0] === value;
   }
   if (typeof value === 'string') return /^\d{4}-\d{2}-\d{2}$/.test(value)
     ? dates(text).includes(value) : text.toLowerCase().includes(value.toLowerCase());
@@ -77,6 +78,15 @@ const HEDGE = /\b(?:no|not|don't|wait|hold|later|maybe|except|but|however|unless
 export function isExplicitYes(text) {
   const t = String(text ?? '').trim();
   return t.length <= 160 && YES.test(t) && !HEDGE.test(t);
+}
+
+export function requireImportReviewEvidence(ctx, evidence, { approve = false } = {}) {
+  if (typeof evidence !== 'string' || evidence.length < 1 || evidence.length > 4000 || !evidence.trim() || ctx.ownerText !== evidence) {
+    throw new ToolError('bad_input', 'Use the exact current owner statement as evidence.');
+  }
+  if (approve && !/^(?:yes|yeah|yep|yup|ok|okay|sure|looks right|looks good|go ahead|do it|import(?: it| this| the file)?|approve(?: it| this)?)[.!\s]*$/i.test(evidence.trim())) {
+    throw new ToolError('bad_input', 'Explicitly accept this proposal or submit a correction.');
+  }
 }
 
 function confirmedProposal(ctx, value, shape) {
