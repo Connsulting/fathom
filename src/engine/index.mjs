@@ -238,8 +238,9 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
   const scripted = [...responses];
   let poisoned = false;
   const call = async ({ purpose, system = '', systemDynamic = '', messages, tools = [], maxTokens = 1024, schema, grounding = {}, fake,
-    toolContext: callContext, onEvent, extraInputTokens = 0 } = {}) => {
+    toolContext: callContext, onEvent, budgetUsd, extraInputTokens = 0 } = {}) => {
     if (mode === 'off') throw new EngineOffError();
+    if (budgetUsd !== undefined && (!Number.isFinite(budgetUsd) || budgetUsd < 0)) throw new TypeError('Invalid call budget');
     const answer = createAnswerAssembler();
     // The text streamed in the current round since its last interim event.
     let roundStream = '';
@@ -294,12 +295,19 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
         if (allowed() !== true) { const error = new EngineOffError(); error.toolResults = allResults; throw error; }
         if (mode === 'live' && funded() !== true) { const error = fundingUnavailable(); error.toolResults = allResults; throw error; }
         const ts = new Date(now()).toISOString();
+        // The call's own budget (budgetUsd, spent across its rounds) refuses a round whose worst case
+        // no longer fits, in every mode; the platform reservation below is the live authority.
+        const callRemaining = budgetUsd === undefined ? Infinity : budgetUsd - cost;
+        const perResponseCost = () => estimateUnknownCost({ model, maxTokens,
+          system: systemDynamic ? `${system}\n${systemDynamic}` : system, messages: transcript, tools, extraInputTokens }).costUsd;
         let maxBudgetUsd;
         if (!reserving) {
           const spend = await ledger.monthSpendUsd(monthKey(ts));
           if (!Number.isFinite(spend) || spend < 0) throw new ModelAccountingError();
+          const remainingBudget = Math.min(capUsd - spend, callRemaining);
+          if (budgetUsd !== undefined && perResponseCost() > remainingBudget) throw new BudgetExceededError();
           if (spend >= capUsd) { const error = new BudgetExceededError(); error.toolResults = allResults; throw error; }
-          maxBudgetUsd = capUsd - spend;
+          maxBudgetUsd = remainingBudget;
         }
         if (admitRound) await admitRound({ purpose, system, systemDynamic, messages: transcript, tools, maxTokens });
         const auth = mode === 'live' ? explicitCredential(credential) : undefined;
@@ -314,6 +322,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
           if (reserving) {
             const perResponseUsd = unknownCost().costUsd;
             const boundUsd = runner === messagesRound || runner === messagesToolRound ? perResponseUsd : SDK_RESPONSE_BOUND * perResponseUsd;
+            if (budgetUsd !== undefined && boundUsd > callRemaining) { const error = new BudgetExceededError(); error.toolResults = allResults; throw error; }
             try { admission = await reservations.reserve({ purpose, model, boundUsd }); }
             catch (error) { error.toolResults = allResults; throw error; }
             maxBudgetUsd = perResponseUsd;
