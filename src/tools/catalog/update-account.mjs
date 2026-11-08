@@ -84,13 +84,13 @@ function update(operation,args,ctx) {
   return {...result,receipt};
 }
 const id={type:'string',minLength:1};
-const op=(name,params,required,summary)=>({tool:'update_account',name,scope:'write:accounts',summary,route:'Change account '+name,
+const op=(name,params,required,summary)=>({tool:'update_account',name,scope:'write:accounts',summary,route:'Account '+name,
   routes:[`POST /api/accounts/:id/${name==='rename'?'name':name}`],params:{id,...params},required:['id',...required],handler:(args,ctx)=>update(name,args,ctx)});
 export const operations=[
-  op('rename',{displayName:{anyOf:[{type:'string'},{type:'null'}]}},['displayName'],'Set or clear the account display name.'),
-  op('mask',{mask:{type:'string',pattern:'^\\d{4}$'}},['mask'],'Set last four only while absent and not bridge-owned.'),
-  op('owner',{owner:{type:'string',enum:OWNER_OPTIONS.map(o=>o.id)}},['owner'],'Set the account owner through Confirm.'),
-  op('kind',{kind:{type:'string',enum:KIND_OPTIONS.map(o=>o.id)}},['kind'],'Set the account kind through Confirm.'),
-  op('merge',{withId:id,confirm:{type:'boolean',enum:[true]},evidence:{type:'string',minLength:1}},['withId','confirm','evidence'],'Merge shown candidates only after a later explicit owner yes.'),
+  op('rename',{displayName:{anyOf:[{type:'string'},{type:'null'}]}},['displayName'],'Set or clear a display name.'),
+  op('mask',{mask:{type:'string',pattern:'^\\d{4}$'}},['mask'],'Set absent last four on unconnected accounts.'),
+  op('owner',{owner:{type:'string',enum:OWNER_OPTIONS.map(o=>o.id)}},['owner'],'Set owner through Confirm.'),
+  op('kind',{kind:{type:'string',enum:KIND_OPTIONS.map(o=>o.id)}},['kind'],'Set kind through Confirm.'),
+  op('merge',{withId:id,confirm:{type:'boolean',enum:[true]},evidence:{type:'string',minLength:1}},['withId','confirm','evidence'],'Merge shown candidates after a later owner yes.'),
 ];
-export const rules=['For an account merge, show accounts.merge_candidates and the moves, then ask for confirmation. Call update_account.merge with confirm true only after a later owner yes, quoting it as evidence.'];
+export const rules=['Show accounts.merge_candidates and moves; only after a later owner yes call update_account.merge with confirm true and quote that yes as evidence.'];

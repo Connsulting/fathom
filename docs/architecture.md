@@ -535,6 +535,8 @@ Migration 030 adds durable per-file engine accounting. The internal interpreter 
 
 Migration 029 adds `schema_version`, `mapping_version`, `approval_status`, `approved_by`, `approved_at`, and `structural_context` to `column_mappings`. Existing mappings are unapproved; historical financial rows and locators remain intact. The new proposal contract is internal until upload cutover. It accepts cited fields and declarative transforms only, with complete source-region coverage required for completeness claims. This migration does not change live mapping reuse.
 
+Migration 034 adds `review_state` to `import_proposals` and an indexed `header_signature` to `column_mappings`. It follows migration 033 for spending definitions and preserves existing financial rows.
+
 Migration 002 (`002-ingest.sql`) adds the ingest columns above (`files.parser` through
 `files.coverage`, `accounts.source_id` and `identity`, `transactions.occurrence`, every
 `dedupe_key` and `source_slot`, `tax_payments.payer`, `date_precision` and `tax_year_basis`) and
@@ -972,6 +974,7 @@ known path with the wrong method is 405; signed out, both are 401. Every action 
 | `POST /api/files` | multipart/form-data, field `files` (one or more) | `{scenario, files: [result], pending}`. A result is `{fileId, name, status, sourceKind, parser, counts, duplicateOf?}` with status `imported`, `duplicate`, `needs_mapping`, `needs_extraction`, `unsupported`, `too_large` (past a parse limit, see Ingest) or `failed`. 400 no files or malformed body, 409 a real household without `FATHOM_PLATFORM_KEY_FILE` (nothing stored), 413 over a size cap, 415 not multipart with a boundary. |
 | `GET /api/files` | | `{files: [{id, name, status, sourceKind, parser, counts, uploadedAt}]}`, newest first; removed files are omitted and a list over 256 KB is shortened with `truncated: true`. |
 | `POST /api/files/:id/retry` | `{}` | `{scenario, file: result}`. Routes a `needs_mapping` or `needs_extraction` file again under the same id; 404 unknown file, 409 a file that is not waiting. |
+| `POST /api/import-proposals/:proposalId/review` | `{version, decision, evidence}` | Internal staged import review. `approve` validates current owner evidence, source and stored state before committing; `correct` queues a new version. Requires `write:imports` and underlying action scopes. Stale proposals return 409 `proposal_stale` with a deterministic diff. Upload routing is unchanged pending the model-import cutover. |
 | `POST /api/files/:id/remove` | `{}` | `{scenario, receipt}`. Deletes an uploaded file's transactions (with their category rows), balances, positions, P&L lines, tax payments, facts, held facts and documents and its pending questions, drops figures read from it and recomputes each fed account's balance figure, archives an account left with no rows that no live bank connection feeds, and sets `files.removed_at`. The captured change log is stored in `source_changes` under the receipt id; `POST /api/actions/:id/undo` replays it and refuses (409) when a touched row changed since. 404 unknown, 409 already removed, 400 for a file with no stored bytes. Same code as `sources.remove_file`; off on the public demo. |
 | `GET /api/confirm` | | `{items: [pending confirm items]}`. |
 | `POST /api/confirm/list` | `{status?: pending (default), answered or all}` | `{items}`; 400 for another status. |

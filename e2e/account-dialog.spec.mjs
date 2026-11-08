@@ -31,7 +31,7 @@ async function firstTransactions(request) {
 }
 
 async function openFromAccounts(page) {
-  await gotoRoute(page, 'accounts');
+  await gotoRoute(page, 'money');
   await page.locator(`[data-account="${ID}"] .h-acc-m`).click();
   await expect(recDialog(page)).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`#/account/${ID}$`));
@@ -53,7 +53,7 @@ test.describe('account dialog', { tag: '@ad-acN' }, () => {
     await expect(dlg.locator('.h-ad-sources li').first()).toBeVisible();
     await expect(dlg.locator('.h-ad-balance .fx-fig').first()).toBeVisible();
     await closeDialogWithX(page);
-    await expect(page).toHaveURL(/#\/accounts$/);
+    await expect(page).toHaveURL(/#\/money$/);
 
     await gotoRoute(page, 'money');
     await page.locator(`[data-account="${ID}"] .h-acc-m`).click();
@@ -124,7 +124,7 @@ test.describe('account dialog', { tag: '@ad-acN' }, () => {
   });
 
   test('deep link survives a reload, Escape closes, and Back does not reopen it', async ({ page }) => {
-    await gotoRoute(page, 'accounts');
+    await gotoRoute(page, 'money');
     await page.goto(`/#/account/${ID}`);
     await page.reload();
     const dlg = recDialog(page);
@@ -249,6 +249,6 @@ test.describe('account dialog on a phone', { tag: ['@mobile', '@mobile-only', '@
     await dlg.locator('[data-ad="q"]').fill('zzzz-no-such-text');
     await expect(dlg.locator('.h-ad-count')).toContainText('0');
     await closeDialogWithX(page);
-    await expect(page).toHaveURL(/#\/accounts$/);
+    await expect(page).toHaveURL(/#\/money$/);
   });
 });

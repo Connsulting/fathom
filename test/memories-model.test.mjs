@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { summaryLine, filterMemories, FILTER_MIN, sourceOf, whenLabel, settingsRow } from '../web/horizon/screens/memories-model.js';
+import { summaryLine, filterMemories, FILTER_MIN, sourceOf, whenLabel, settingsRow, packLine, activePacks } from '../web/horizon/screens/memories-model.js';
 
 const mem = (id, text, extra = {}) => ({ id, text, actorId: 'person-a', origin: 'you', conversationKey: null, createdAt: '2026-11-06T12:00:00.000Z', updatedAt: '2026-11-06T12:00:00.000Z', ...extra });
 
@@ -10,9 +10,9 @@ test('summaryLine counts memories in plain words', () => {
   assert.equal(summaryLine(6), 'Fathom remembers 6 things');
 });
 
-test('settingsRow links the Memories page with the summary', () => {
-  assert.deepEqual(settingsRow([mem('a', 'x'), mem('b', 'y')]), { route: 'memories', label: 'Memories', desc: 'Fathom remembers 2 things' });
-  assert.deepEqual(settingsRow([]), { route: 'memories', label: 'Memories', desc: 'Fathom does not remember anything yet' });
+test('settingsRow links the What Fathom knows page with the summary', () => {
+  assert.deepEqual(settingsRow([mem('a', 'x'), mem('b', 'y')]), { route: 'memories', label: 'What Fathom knows', desc: 'Fathom remembers 2 things' });
+  assert.deepEqual(settingsRow([]), { route: 'memories', label: 'What Fathom knows', desc: 'Fathom does not remember anything yet' });
   assert.equal(settingsRow(undefined).desc, 'Fathom does not remember anything yet');
 });
 
@@ -56,4 +56,22 @@ test('whenLabel is a UTC short month and day, with the year only outside the cur
   assert.equal(whenLabel('not a date', now), '');
   assert.equal(whenLabel('', now), '');
   assert.equal(whenLabel(null, now), '');
+});
+
+// The pack status line drops the developer rule text the server explains a status with.
+test('packLine drops the activation rule and keeps plain sentences', () => {
+  assert.equal(packLine({ status: 'active', why: 'Matching activation rule: income.sCorp is true (eq true: true).' }), 'On because it applies to your household.');
+  assert.equal(packLine({ status: 'suggested', why: 'Matching suggestion rule: income.w2 is false (eq true: false); x is 1 (gte 1: true). S corp owner wages and shareholder benefit rules differ from outside-employer benefits.' }),
+    'S corp owner wages and shareholder benefit rules differ from outside-employer benefits.');
+  assert.equal(packLine({ status: 'suggested', why: 'Matching suggestion rule without fact conditions.' }), 'Might apply to your household.');
+  assert.equal(packLine({ status: 'available', why: 'No matching activation or suggestion rule.' }), 'Not on for your household. Ask a what-if to explore it.');
+  assert.equal(packLine({ status: 'active', why: 'Grounds answers about the household S corporation.' }), 'Grounds answers about the household S corporation.');
+  assert.equal(packLine({ status: 'exploring', why: '' }), 'You are exploring this with a what-if.');
+  assert.doesNotMatch(packLine({ status: 'active', why: 'Matching activation rule: a.b is true (eq true: true).' }), /eq true|a\.b/);
+});
+
+test('activePacks lists only the packs that are on', () => {
+  const list = [{ id: 'a', status: 'active' }, { id: 'b', status: 'suggested' }, { id: 'c', status: 'active' }, null];
+  assert.deepEqual(activePacks(list).map((p) => p.id), ['a', 'c']);
+  assert.deepEqual(activePacks(undefined), []);
 });

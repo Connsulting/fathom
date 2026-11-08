@@ -183,11 +183,13 @@ test('compare uses two totals and folds their group union with unequal-period ga
   assert.equal(zero.ratio, undefined);
 });
 
-test('C4 eval scripts call valid operations', async (t) => {
+test('available eval scripts call valid operations through the Ask tool boundary', async (t) => {
   const { loadCases } = await import('../evals/cases.mjs');
   const { createEvalStore } = await import('../evals/harness.mjs');
   const store = await createEvalStore();
   t.after(() => store.close());
+  const { tools } = await import('../src/tools/index.mjs');
+  const { proposalTools } = await import('../src/actions/proposals.mjs');
   for (const c of await loadCases()) {
     if (!c.requires?.script || c.expectedFail || c.requires.operations.some(pair => getTool(pair.split('.')[0])?.kind === 'write')) continue;
     const { script, setup } = await import(`../evals/scripts/${c.id}.mjs`);
@@ -195,10 +197,10 @@ test('C4 eval scripts call valid operations', async (t) => {
     for (const turn of c.turns) {
       const frames = await script({ turn, db: store.db, clock: '2026-11-05' });
       assert.ok(frames[0].toolCalls.length, c.id);
-      const registry = createRegistryServer(tools, { purpose: 'chat', ctx: { db: store.db, dataDir: store.root, clock: '2026-11-05', now: '2026-11-05T00:00:00.000Z', onBlock() {} } });
+      const server = createRegistryServer(proposalTools(tools), { purpose: 'chat', ctx: { db: store.db, dataDir: store.root, clock: '2026-11-05', now: '2026-11-05T00:00:00.000Z', actorId: 'demo', channel: 'ask', ownerStatements: () => [turn.question], onProposal() {}, onBlock() {} } });
       for (const call of frames[0].toolCalls) {
-        const result = await registry.invoke(call.name, call.args);
-        assert.equal(result.isError, undefined, `${c.id}: ${result.content[0].text}`);
+        const result = await server.invoke(call.name, call.args);
+        assert.notEqual(result.isError, true, `${c.id}: ${result.content[0].text}`);
       }
     }
   }

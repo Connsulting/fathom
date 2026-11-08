@@ -112,7 +112,7 @@ export function buildRegistry(modules, toolHeaders = headers) {
       const op = validateArgs(args);
       const { operation, ...params } = args;
       const result = await op.handler(params, ctx);
-      if (header.kind === 'write' && result?.receipt && !result.undo) {
+      if (header.kind === 'write' && result?.receipt && result.undo === undefined) {
         result.undo = result.receipt.undone ? { available: false, reason: 'Already undone.' } : { available: true, tool: 'undo', args: { operation: 'undo', id: result.receipt.id } };
       }
       return result;
@@ -120,7 +120,7 @@ export function buildRegistry(modules, toolHeaders = headers) {
   }).sort((a, b) => a.name.localeCompare(b.name));
   for (const route of Object.keys(parity)) parity[route] = [...new Set(parity[route])].sort();
   const rules = [...new Set(modules.flatMap(m => m.rules || []))];
-  const routing = tools.filter(t => !t.askOnly).flatMap(t => t.operations.map(o => `${o.route}: ${t.name}.${o.name}`)).join('\n');
+  const routing = tools.filter(t => !t.askOnly).map(t => t.operations.map((o, i) => `${i === 0 ? `${t.name}.` : ''}${o.name} (${o.route})`).join('; ')).join('\n');
   const mcpInstructions = [
     'Route by question shape. Every call requires operation.', routing,
     'When no tool covers the question, say "Fathom does not have that" and what it does have. No securities selection, live market quotes, money movement or tax filing.',

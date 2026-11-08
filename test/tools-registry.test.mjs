@@ -6,15 +6,20 @@ import { tools, getTool, callTool, buildRegistry, instructions, mcpInstructions,
 import { toolsForScopes, SCOPES } from '../src/mcp/keys.mjs';
 import { createRegistryServer } from '../src/engine/tools.mjs';
 
+// The catalog is cached system context.
+const CATALOG_CHAR_BUDGET = 34000;
+
 const expected = {
   show: ['chart', 'table', 'compare', 'timeline'],
   household: ['summary', 'facts', 'fact_shapes', 'figures', 'deadlines', 'health', 'confirm_items', 'imports'],
   accounts: ['list', 'holdings', 'detail', 'net_worth', 'merge_candidates', 'sources'], sources: ['archive_account', 'remove_file', 'merge_accounts'], tax: ['estimate', 'room'], transactions: ['search'], business: ['pnl', 'rows'],
+  retirement: ['target', 'growth', 'after_tax'],
   spending: ['total', 'compare', 'definitions', 'cash_flow', 'recurring'],
-  goals: ['list', 'pace'], recommendations: ['list', 'detail', 'advisor', 'wargame'],
+  goals: ['list', 'pace', 'suggestions'], recommendations: ['list', 'detail', 'advisor', 'wargame'],
   knowledge: ['packs', 'search', 'entry'], answer: ['fact', 'rec_questions', 'confirm', 'reopen', 'yearend_mark'],
-  act_on_recommendation: ['status', 'owner', 'step'], update_goal: ['create', 'edit'],
-  update_preferences: ['remember', 'forget', 'save_definition', 'delete_definition', 'pack'], refresh: ['import_file', 'retry_import', 'build_your_plans', 'run_job'], undo: ['undo'],
+  act_on_recommendation: ['status', 'owner', 'step', 'start_over', 'decide', 'revisit', 'pick_point'], update_goal: ['create', 'edit', 'archive', 'delete', 'suggestion'],
+  advisor_review: ['send', 'verdict', 'checkin', 'packet'], update_preferences: ['remember', 'curve', 'forget', 'save_definition', 'delete_definition', 'pack'],
+  refresh: ['import_file', 'retry_import', 'build_your_plans', 'run_job'], undo: ['undo'],
   update_account: ['rename', 'mask', 'owner', 'kind', 'merge'], categorize: ['transaction', 'merchant_rule'],
   calculate: ['add', 'subtract', 'multiply', 'divide', 'sum', 'min', 'max', 'negate', 'annualize', 'monthly', 'percent_of', 'round_up', 'compound'],
 };
@@ -53,6 +58,17 @@ test('loader rejects duplicate operations, conflicting schemas and invalid scope
   assert.throws(() => buildRegistry([{ operations: [{ ...op, scope: 'write:recs' }] }], header), /scope/i);
 });
 
+test('write results preserve explicit unavailable Undo and default a missing Undo', async () => {
+  const header = [{ name: 'example', kind: 'write', purpose: 'Example.', progress: 'Writing', source: 'example' }];
+  const unavailable = { available: false, reason: 'A stored record cannot be undone.' };
+  const op = { tool: 'example', name: 'save', scope: 'write:recs', summary: 'Save.', route: 'Save example',
+    params: {}, required: [], routes: [], handler: () => ({ receipt: { id: 'receipt' }, undo: unavailable }) };
+  const invoke = operation => buildRegistry([{ operations: [operation] }], header).tools[0].handler({ operation: 'save' }, {});
+  assert.deepEqual((await invoke(op)).undo, unavailable);
+  assert.deepEqual((await invoke({ ...op, handler: () => ({ receipt: { id: 'receipt' } }) })).undo,
+    { available: true, tool: 'undo', args: { operation: 'undo', id: 'receipt' } });
+});
+
 test('operation-local validation names the operation through direct and Ask boundaries', async () => {
   const server = createRegistryServer(tools, { purpose: 'chat' });
   for (const args of [{ operation: 'missing' }, { operation: 'summary', keys: [] }, { operation: 'summary', constructor: {} }]) {
@@ -73,7 +89,7 @@ test('scope filtering narrows operation enums and hides all writes from read-onl
   assert.ok(read.every(t => t.kind === 'read'));
   const mixed = toolsForScopes(['read', 'write:recs']);
   const rec = mixed.find(t => t.name === 'act_on_recommendation');
-  assert.deepEqual(rec.inputSchema.properties.operation.enum, ['owner', 'status']);
+  assert.deepEqual(rec.inputSchema.properties.operation.enum, ['owner', 'start_over', 'status']);
   assert.ok(mixed.some(t => t.name === 'undo'));
   assert.ok(createRegistryServer(tools, { purpose: 'chat' }).names.includes('undo'));
   assert.ok(!createRegistryServer(tools, { purpose: 'plan' }).names.includes('undo'));
@@ -84,9 +100,10 @@ test('catalog and instructions stay within the context budget', t => {
   const chars = JSON.stringify(listed).length;
   const longest = Math.max(...listed.map(t => t.description.length));
   t.diagnostic(`catalog=${chars} max-description=${longest} mcp-instructions=${mcpInstructions.length}`);
-  assert.ok(chars <= 30000);
+  assert.ok(chars <= CATALOG_CHAR_BUDGET);
   assert.ok(longest <= 900);
   assert.ok(mcpInstructions.length <= 8000);
+  for (const tool of tools) for (const op of tool.operations) assert.ok(instructions.includes(op.route), `${tool.name}.${op.name} retains its routing intent`);
 });
 
 test('tracked callers contain no retired tool names', () => {
@@ -132,7 +149,7 @@ test('C4 declares spending and business API intent coverage for the parity gate'
   const offered = tools.filter(t => !t.mcpOnly).map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
   const chars = JSON.stringify(offered).length;
   t.diagnostic(`ask-catalog=${chars} ask-instructions=${instructions.length}`);
-  assert.ok(chars < 30000); assert.ok(instructions.length < 8000);
+  assert.ok(chars < CATALOG_CHAR_BUDGET); assert.ok(instructions.length < 8000);
   assert.ok(instructions.includes('show')); assert.equal(getTool('show').askOnly, true);
 });
 

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { openDb, migrate, listTables } from '../../src/store/db.mjs';
+import { openDb, migrate, listTables, listMigrations, schemaVersion } from '../../src/store/db.mjs';
 
 const now = '2032-04-17T12:00:00.000Z';
 function legacy() {
@@ -57,4 +57,32 @@ test('household-local proposal versions, batches and mapping approval cannot cro
     assert.throws(() => a.prepare("UPDATE import_proposals SET status = 'fabricated'").run());
     assert.throws(() => a.prepare('UPDATE import_proposals SET version = 0').run());
   } finally { a.close(); b.close(); }
+});
+
+test('migration 034 preserves populated proposal, mapping and financial rows', () => {
+  const db = legacy();
+  try {
+    migrate(db, { through: 33 });
+    db.prepare(`INSERT INTO import_proposals (id,version,file_id,source_sha256,status,proposal,interpreter_version,created_at,updated_at)
+      VALUES ('proposal-synthetic',1,'f-synthetic',?,'needs_confirmation','{}','1',?,?)`).run('a'.repeat(64), now, now);
+    const oldProposal = db.prepare('SELECT * FROM import_proposals').get();
+    const oldMapping = db.prepare('SELECT * FROM column_mappings').get();
+    const before = snapshot(db);
+    assert.deepEqual(migrate(db, { through: 34 }).applied, [34]);
+    assert.equal(schemaVersion(db), 34);
+    const proposal = db.prepare('SELECT * FROM import_proposals').get(), mapping = db.prepare('SELECT * FROM column_mappings').get();
+    for (const [key, value] of Object.entries(oldProposal)) assert.deepEqual(proposal[key], value);
+    for (const [key, value] of Object.entries(oldMapping)) assert.deepEqual(mapping[key], value);
+    assert.equal(proposal.review_state, null); assert.equal(mapping.header_signature, null);
+    assert.deepEqual(snapshot(db), before);
+    assert.deepEqual(migrate(db, { through: 34 }).applied, []);
+    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
+  } finally { db.close(); }
+});
+
+test('store migrations have unique numbers and import review follows spending definitions', () => {
+  const migrations = listMigrations();
+  assert.equal(new Set(migrations.map(m => m.id)).size, migrations.length);
+  assert.equal(migrations.find(m => m.id === 33).name, 'spending-definitions');
+  assert.equal(migrations.find(m => m.id === 34).name, 'import-review');
 });
