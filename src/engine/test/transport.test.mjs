@@ -520,3 +520,19 @@ test('PDF extraction scrubs outbound system and schema text and preserves the bi
     assert.equal(data.toString(), '%PDF-synthetic');
   } finally { stub.restore(); }
 });
+
+test('provider scrubbing preserves base64 document and image bytes while scrubbing text', async () => {
+ const {redactProviderText}=await import('../../ingest/redact.mjs');
+ const data='900 12 3456 AAA';
+ for(const type of ['document','image']) {
+  const block={type,source:{type:'base64',media_type:type==='document'?'application/pdf':'image/png',data},title:'SSN 900123456'};
+  const out=redactProviderText(block);
+  assert.equal(out.source.data,data);
+  assert.deepEqual(Buffer.from(out.source.data,'base64'),Buffer.from(data,'base64'));
+  assert.equal(out.title,'SSN XXXXXXXXX');
+ }
+ assert.equal(redactProviderText({type:'text',text:data}).text,'XXX-XX-XXXX AAA');
+ assert.equal(redactProviderText({source:{type:'base64',data}}).source.data,'XXX-XX-XXXX AAA');
+ assert.equal(redactProviderText({type:'document',source:{type:'url',data}}).source.data,'XXX-XX-XXXX AAA');
+ assert.deepEqual(redactProviderText({type:'document',source:{type:'base64',data:{ssn:'900123456'}}}).source.data,{ssn:'XXXXXXXXX'});
+});

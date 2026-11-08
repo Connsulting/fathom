@@ -64,14 +64,16 @@ test('all account operations deny a read key before validating arguments',async(
   }
 });
 
-test('account proposals do not mutate and stale when a merge source changes',async t=>{
+test('account rename proposals ignore unrelated postings and stale on the target account',async t=>{
   const s=await realStore();t.after(()=>s.close());account(s);const ctx=context(s);let pending;
   const p=proposalTools(tools).find(t=>t.name==='update_account');
   await p.handler({operation:'rename',id:'manual',displayName:'Reserve',propose:true},{...ctx,onProposal:v=>{pending=v;}});
   assert.equal(row(s).display_name,null);assert.equal(pending.scopes[0],'write:accounts');
-  const basis=proposalBasis(s.db,'update_account',['write:accounts'],{id:'manual',withId:'other'});
+  const basis=pending.basis;
   s.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('manual','2032-03-01',-1,'New posting')").run();
-  assert.notEqual(proposalBasis(s.db,'update_account',['write:accounts'],{id:'manual',withId:'other'}),basis);
+  assert.equal(proposalBasis(s.db,pending.tool,pending.scopes,pending.args),basis);
+  s.db.prepare("UPDATE accounts SET display_name='Later' WHERE id='manual'").run();
+  assert.notEqual(proposalBasis(s.db,pending.tool,pending.scopes,pending.args),basis);
 });
 
 for (const confirmation of ['yes','Confirmed']) test(`a stored Ask merge proposal executes on ${confirmation} and its own scope can undo`,async t=>{
@@ -103,4 +105,17 @@ test('source-operation proposals retain the merged catalog scope and durable Und
  const claim=claimProposal(s.db,{key,id,decision:'confirm',scopes:ctx.scopes,at:NOW});assert.equal(claim.status,'confirmed');
  const out=await executeProposal(claim.pending,ctx);assert.ok(row(s).archived_at);assert.equal(out.receipt.scope,'write:sources');
  await undo(ctx,out);assert.equal(row(s).archived_at,null);
+});
+
+for (const [operation,params] of [
+ ['mask',{mask:'1234'}],['owner',{owner:'owner'}],['kind',{kind:'taxable'}],
+]) test(`account ${operation} proposals ignore unrelated rows and guard the target`,async t=>{
+ const s=await realStore();t.after(()=>s.close());account(s);account(s,'unrelated');let pending;
+ await proposalTools(tools).find(t=>t.name==='update_account').handler({operation,id:'manual',...params,propose:true},{...context(s),onProposal:p=>{pending=p;}});
+ const basis=()=>proposalBasis(s.db,pending.tool,pending.scopes,pending.args);
+ s.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES ('unrelated','2032-03-01',-10,'New posting')").run();
+ s.db.prepare("UPDATE accounts SET display_name='Other reserve' WHERE id='unrelated'").run();
+ assert.equal(basis(),pending.basis);
+ s.db.prepare("UPDATE accounts SET display_name='Target reserve' WHERE id='manual'").run();
+ assert.notEqual(basis(),pending.basis);
 });

@@ -222,6 +222,7 @@ export function mergeAccounts(db, item, { now = new Date().toISOString() } = {})
   // The survivor's figure key is set inside the logged merge, so undo clears it again.
   const valued = db.prepare('SELECT 1 FROM balances WHERE account_id=?1 UNION ALL SELECT 1 FROM positions WHERE account_id=?1 LIMIT 1').get(keepId);
   if (!keep.fig_key && (own.fig_key || valued)) db.prepare('UPDATE accounts SET fig_key=? WHERE id=?').run(`acct.${keepId}.balance`,keepId);
+  db.prepare('UPDATE expected_transactions SET account_id=? WHERE account_id=?').run(keepId, ownId);
   db.prepare('DELETE FROM accounts WHERE id=?').run(ownId);
   for (const id of movedTransactions) {
     const a = db.prepare('SELECT * FROM transactions WHERE id=?').get(id);

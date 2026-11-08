@@ -38,7 +38,7 @@ function validate(value, shape, year) {
   } else fail();
 }
 
-export function recordFactAnswers(db, answers, { now = new Date().toISOString(), recId = null, channel = null, actorId = null, onWrite } = {}) {
+export function recordFactAnswers(db, answers, { now = new Date().toISOString(), recId = null, channel = null, actorId = null, sourceEvidence = null, onWrite } = {}) {
   if (!Array.isArray(answers) || !answers.length || answers.length > 50) fail();
   const date = now.slice(0, 10);
   if (isoDate(date) !== date) fail();
@@ -95,7 +95,7 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
       const before = db.prepare('SELECT * FROM facts WHERE key = ?').get(w.key) || null;
       if (!channel || !before || before.value !== JSON.stringify(w.value)) {
         upsertFact(db, { ...w, src, asOf: date, confirmed: true, now, provenance: { parser: channel || 'answer', locator: { note: label,
-          ...(actorId ? { actorId } : {}), ...(recId ? { recId } : {}) } } });
+          ...(actorId ? { actorId } : {}), ...(recId ? { recId } : {}), ...(sourceEvidence ? { sourceSpan: sourceEvidence.span } : {}) } } });
       }
       onWrite?.(before, db.prepare('SELECT * FROM facts WHERE key = ?').get(w.key));
     }

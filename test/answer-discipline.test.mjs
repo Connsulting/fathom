@@ -87,7 +87,8 @@ test('a still-violating correction is delivered intact with kinds only and no th
   assert.equal(calls.length, 2);
   assert.equal(text, corrected);
   assert.deepEqual(reply.provenance.discipline.violations.toSorted(), ['figures.spelled_out', 'figures.unsourced', 'length']);
-  assert.deepEqual(Object.keys(reply.provenance.discipline), ['violations']);
+  assert.deepEqual(Object.keys(reply.provenance.discipline), ['violations', 'triggeredBy']);
+  assert.deepEqual(reply.provenance.discipline.triggeredBy, ['length']);
 });
 
 test('one unsourced figure triggers correction and asks for tool evidence', async t => {
@@ -107,8 +108,8 @@ test('a clean first draft makes exactly one call', async t => {
 test('the figure rules are stated once and the existing word-limit sentence remains', () => {
   const { system } = buildChatPrompt({ summary: {}, question: 'Describe the plan.' });
   assert.equal([...system.matchAll(/write every figure as digits/gi)].length, 1);
-  assert.match(system, /derived figures.*calculate/i);
-  assert.match(system, /no figure without a tool source/i);
+  assert.match(system, /call calculate for every sum, difference, ratio or change/i);
+  assert.match(system, /never compute a figure yourself or state one without a tool source/i);
   assert.match(ANSWER_STYLE, /Keep the whole reply under 150 words unless the owner asks for more detail\./);
 });
 

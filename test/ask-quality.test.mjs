@@ -316,3 +316,56 @@ test('C7 reads are offered through the shared Ask tool registry', () => {
     for (const operation of operations) assert.ok(byName.get(name).operations.some(op => op.name === operation && op.scope === 'read'));
   }
 });
+
+
+for (const [rule, names, pattern] of [
+  ['stored figures', ['household'], /call household\.figures[^\n]*\{f:key\}[^\n]*summary/i],
+  ['arithmetic', ['calculate'], /(?:call|use) calculate[^\n]*sum[^\n]*difference[^\n]*ratio[^\n]*change/i],
+  ['spending and purchases', ['spending', 'transactions'], /spending\.total[^\n]*spending[^\n]*transactions\.search[^\n]*recent purchases/i],
+  ['digits', ['calculate'], /write every figure as digits/i],
+]) {
+  test(`first-draft ${rule} steer reaches the prompt and offered descriptions once`, async t => {
+    const s = await cardStore(t);
+    const { calls } = await ask(s, [[{ text: 'The requested information is unavailable.' }]]);
+    const { system, tools } = calls[0];
+    assert.match(system, pattern);
+    assert.equal(system.split('\n').filter(line => pattern.test(line)).length, 1);
+    const descriptions = tools.filter(tool => names.includes(tool.name)).map(tool => tool.description).join(' ');
+    assert.match(descriptions, pattern);
+  });
+}
+
+test('correction provenance keeps the triggering kinds after a clean replacement without figures', async t => {
+  const s = await cardStore(t);
+  const { reply } = await ask(s, [[{ text: 'The total is forty dollars.' }], [{ text: 'The total is unavailable.' }]]);
+  assert.equal(reply.provenance.grounding.retried, true);
+  assert.deepEqual(reply.provenance.discipline, { violations: [], triggeredBy: ['figures.spelled_out'] });
+  const clean = await ask(s, [[{ text: 'The total is unavailable.' }]]);
+  assert.deepEqual(clean.reply.provenance.discipline, { violations: [], triggeredBy: [] });
+});
+
+
+test('a failed corrective round still records the triggering kinds', async t => {
+  const s = await cardStore(t);
+  const { reply } = await ask(s, [[{ text: 'The total is forty dollars.' }], [{ text: '', costUsd: null }]]);
+  assert.equal(reply.notice, true);
+  assert.deepEqual(reply.provenance.discipline.triggeredBy, ['figures.spelled_out']);
+});
+
+
+test('an empty corrective answer still records the triggering kinds', async t => {
+  const s = await cardStore(t);
+  const { reply } = await ask(s, [[{ text: 'The total is forty dollars.' }], [{ text: '', costUsd: 0 }]]);
+  assert.equal(reply.notice, true);
+  assert.deepEqual(reply.provenance.discipline.triggeredBy, ['figures.spelled_out']);
+});
+
+
+test('Ask rule blocks fit their character budget and reach the assembled prompt', t => {
+  const { system } = buildChatPrompt({ packContextText: '', summary: {}, question: 'Describe the plan.' });
+  for (const [name, rules] of [['product', PRODUCT_RULES], ['registry', instructions]]) {
+    t.diagnostic(`ask-${name}-rules=${rules.length}`);
+    assert.ok(rules.length <= 8000, `Ask ${name} rules use ${rules.length} of 8000 characters`);
+    assert.ok(system.includes(rules), `Ask receives the ${name} rules`);
+  }
+});

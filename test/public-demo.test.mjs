@@ -152,6 +152,7 @@ test('turn cap survives reset and returns a fixed notice without another model c
   assert.equal(calls(s), before);
 });
 test('IP limits ignore spoofed forwarded addresses and survive restarts', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-08T12:00:00Z') });
   const s = await app(t, { FATHOM_PUBLIC_DEMO_REQUESTS_PER_MINUTE: '2' });
   const v = visitor(s);
   assert.equal((await v('/api/auth/session')).status, 200);

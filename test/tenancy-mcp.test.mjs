@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mcpHouseholds, mcp, toolText, result, digest, refreshImportFixture, accountCategoryFixtures, c7ReadFixtures } from './helpers/tenancy-mcp.mjs';
-import { tools } from '../src/tools/index.mjs';
+import { mcpHouseholds, mcp, toolText, result, digest, expectedTransactionFixture, refreshImportFixture, accountCategoryFixtures, c7ReadFixtures } from './helpers/tenancy-mcp.mjs';
+import { callTool, tools } from '../src/tools/index.mjs';
 import { isMcpTool } from '../src/mcp/keys.mjs';
 
+import { groupReceipts } from '../src/actions/receipts.mjs';
 import { request } from './helpers/server.mjs';
 
 const mcpTools = tools.filter(isMcpTool);
@@ -52,7 +53,7 @@ test('each registered MCP tool executes with only its bearer household context',
         update_goal: { operation: 'create', title: 'Synthetic reserve' },
         update_preferences: { operation: 'remember', text: 'Prefer a steady reserve', evidence: 'Prefer a steady reserve' },
       };
-      const thread = await own.admin.client.post('/api/threads', { text: 'Set the expected date to 2027-03-19. Prefer a steady reserve' });
+      const thread = await own.admin.client.post('/api/threads', { text: 'Set the expected date to 2027-03-19. Prefer a steady reserve. ' + expectedTransactionFixture(own).evidence });
       assert.equal(thread.status, 200, thread.text);
       for (const name of ['answer', 'update_preferences']) samples[name].conversationKey = `ask:${thread.json.thread.id}`;
       const changed = result(await f.call(own, 'act_on_recommendation', { operation: 'status', id: 'colliding-rec', status: 'doing' }));
@@ -67,6 +68,9 @@ test('each registered MCP tool executes with only its bearer household context',
         }
         assert.ok(!toolText(response).includes(other.canary), tool.name);
       }
+      const expectation = result(await f.call(own, 'answer', { ...expectedTransactionFixture(own), conversationKey: `ask:${thread.json.thread.id}` }));
+      assert.equal(expectation.expectedTransaction.subject, own.canary);
+      assert.equal(own.db.prepare('SELECT count(*) n FROM expected_transactions').get().n, 1);
       assert.equal(digest(other.db), before, 'no foreign writes or receipts');
     }
   } finally { await f.close(); }
@@ -107,5 +111,28 @@ test('C7 obligation and access operations use only the bearer household facts an
       }
       assert.equal(digest(other.db),before);
     }
+  } finally { await f.close(); }
+});
+
+test('an imports-only MCP key cannot apply or undo fact, goal or step actions in a group', async () => {
+  const f = await mcpHouseholds();
+  try {
+    const own = f.A, other = f.B, before = digest(other.db);
+    const imports = await f.create(own, own.admin.client, ['read', 'write:imports']);
+    const ctx = { db: own.db, actorId: own.admin.userId, ownerText: 'Set expected date to 2032-06-19', now: '2032-03-02T14:00:00Z' };
+    const fact = { operation: 'fact', key: 'household.expectedDate', value: '2032-06-19', evidence: ctx.ownerText };
+    const goal = { operation: 'create', title: 'Synthetic reserve' };
+    const step = { operation: 'step', id: 'colliding-rec', index: 0, checked: true };
+    const children = [await callTool('answer', fact, ctx), await callTool('update_goal', goal, ctx), await callTool('act_on_recommendation', step, ctx)];
+    const receipt = groupReceipts(ctx, children.map(c => c.receipt), { id: 'synthetic-group' });
+    for (const [name, args] of [['answer', fact], ['update_goal', goal], ['act_on_recommendation', step], ['undo', { operation: 'undo', id: receipt.id }]]) {
+      const response = await mcp(f.baseUrl, imports.key, 'tools/call', { name, arguments: args });
+      assert.equal(response.json.result.isError, true);
+      assert.match(toolText(response), /Permission denied/);
+    }
+    assert.equal(own.db.prepare('SELECT undone_at FROM action_receipts WHERE id=?').get(receipt.id).undone_at, null);
+    result(await f.call(own, 'undo', { operation: 'undo', id: receipt.id }));
+    assert.equal(own.db.prepare('SELECT count(*) n FROM goals').get().n, 0);
+    assert.equal(digest(other.db), before);
   } finally { await f.close(); }
 });

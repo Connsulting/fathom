@@ -1,8 +1,8 @@
 import { parseJson as parse } from '../store/db.mjs';
-import { answerFacts } from '../facts/answers.mjs';
+import { recordFactAnswers } from '../facts/answers.mjs';
 import { createGoal, updateGoal } from '../goals/write.mjs';
 import { writeRec } from '../store/recs.mjs';
-import { requireActor, saveReceipt, replanAction } from './receipts.mjs';
+import { requireActor, requireScope, saveReceipt } from './receipts.mjs';
 import { requireEvidence } from './evidence.mjs';
 import { answerShape } from '../jobs/triggers/common.mjs';
 import { goalStatusOf } from '../shared/goals.mjs';
@@ -34,28 +34,29 @@ function goalEvidence(fields) {
 }
 const at = (obj, path) => path.reduce((o, k) => (o != null && typeof o === 'object' ? o[k] : undefined), obj);
 
-export async function recordFact(args, ctx) {
+export function recordFact(args, ctx) {
+  requireScope(ctx, 'write:facts');
   const actorId = requireActor(ctx);
   const shape = answerShape(args.key);
   const prior = ctx.db.prepare('SELECT value FROM facts WHERE key = ?').get(args.key);
   requireEvidence(ctx, args.value, { evidence: args.evidence, shape, stored: prior ? [parse(prior.value, null)] : [] });
   let receipt = null;
-  await answerFacts(ctx.db, [{ key: args.key, value: args.value }], { now: new Date(ctx.now ?? Date.now()).toISOString(),
-    channel: ctx.channel === 'mcp' ? 'mcp' : 'ask', actorId,
-    replan: async () => {}, onWrite(before, after) {
+  recordFactAnswers(ctx.db, [{ key: args.key, value: args.value }], { now: new Date(ctx.now ?? Date.now()).toISOString(),
+    channel: ctx.channel === 'mcp' ? 'mcp' : 'ask', actorId, sourceEvidence: ctx.sourceEvidence,
+    onWrite(before, after) {
       receipt = saveReceipt(ctx, { scope: 'write:facts', kind: 'fact', id: args.key, label: shape.label ?? args.key,
         before: select(before, FACT_FIELDS), after: select(after, FACT_FIELDS),
         from: before ? parse(before.value, null) : null, to: parse(after.value, null) });
     } });
   ctx.onReceipt?.(receipt);
-  const planningPending = await replanAction(ctx, receipt);
-  return { key: args.key, value: parse(ctx.db.prepare('SELECT value FROM facts WHERE key = ?').get(args.key).value, null), receipt, planningPending };
+  return { key: args.key, value: parse(ctx.db.prepare('SELECT value FROM facts WHERE key = ?').get(args.key).value, null), receipt };
 }
 
 export function changeRec(args, ctx, kind) {
+  requireScope(ctx, kind === 'step' ? 'write:steps' : 'write:recs');
   const actor = requireActor(ctx);
   let receipt = null;
-  const fields = { step: ['tasks_done'], status: ['status', 'wake'], owner: ['owner', 'owner_override'] }[kind];
+  const fields = { step: ['tasks_done', 'def'], status: ['status', 'wake'], owner: ['owner', 'owner_override'] }[kind];
   const values = row => kind === 'step' ? !!parse(row.tasks_done, [])[args.index]
     : kind === 'owner' ? row.owner : { status: row.status, wake: row.wake };
   const row = writeRec(ctx.db, args.id, kind, kind === 'owner' ? args.owner : args, {
@@ -72,6 +73,7 @@ export function changeRec(args, ctx, kind) {
 }
 
 export function changeGoal(args, ctx, editing = false) {
+  requireScope(ctx, 'write:goals');
   requireActor(ctx);
   const { id, ...fields } = args;
   const current = editing ? ctx.db.prepare('SELECT * FROM goals WHERE id = ?').get(id) : null;

@@ -6,9 +6,11 @@
 // basis is a sha256 hex digest of the rows the operation and its sources depend on: its target row
 // (the `id` or `key` argument) or, without one, the whole target table; for goals always the whole
 // goals table (a value may come from another goal's note); plus every goal, every fact and every
-// figure value. A changed basis makes the proposal stale.
+// figure value. Account field, category and account Confirm proposals use their affected rows
+// instead. A changed basis makes the proposal stale.
 
 import { queueCategoryChecks } from '../categories/store.mjs';
+import { normalizeMerchant } from '../categories/resolve.mjs';
 import { resolveClock } from '../scenario/build.mjs';
 import { queueAccountPairs } from '../ingest/account-merge.mjs';
 import { createHash } from 'node:crypto';
@@ -17,7 +19,7 @@ import { ToolError } from '../tools/errors.mjs';
 import { getTool, callTool } from '../tools/index.mjs';
 import { operationScopes } from '../tools/tools.mjs';
 import { WRITE_SCOPES } from '../shared/action-scopes.mjs';
-import { requireActor } from './receipts.mjs';
+import { requireActor, receiptScopes } from './receipts.mjs';
 
 // The reply rule lives in evidence.mjs (confirmedProposal uses it); the tool catalog imports
 // evidence.mjs, so it cannot import this module without a cycle through the registry.
@@ -48,9 +50,63 @@ const DOMAIN_TABLES = {
   'write:confirm': ['accounts','transactions','balances','positions','documents','tax_payments','pnl_lines','sources','files','confirm_items','confirm_undo','confirm_auto','confirm_auto_declined','ingest_epoch','held_facts','entity_aliases','category_source_rules','category_merchant_rules','transaction_category_corrections','yearend_marks'],
 };
 
-export function proposalBasis(db, tool, scopes, args = {}) {
+function localProposalRows(db, tool, args) {
   const parts = [];
-  if (tool === 'undo') parts.push(['action_receipts', db.prepare('SELECT * FROM action_receipts WHERE id = ?').all(args.id)]);
+  const rows = (table, column, values) => {
+    const ids = [...new Set(values)].filter(v => v !== undefined && v !== null).sort();
+    parts.push([table, ids.length ? db.prepare(`SELECT * FROM ${table} WHERE ${column} IN (${ids.map(() => '?').join(',')}) ORDER BY rowid`).all(...ids) : []]);
+  };
+  if (tool === 'update_account' && !args.withId) {
+    rows('accounts', 'id', [args.id]);
+    if (args.owner !== undefined || args.kind !== undefined) {
+      const kind = args.owner !== undefined ? 'account_owner' : 'account_kind';
+      parts.push(['confirm_items', db.prepare('SELECT * FROM confirm_items WHERE kind=? AND subject=? ORDER BY id').all(kind, args.id)]);
+    }
+    return parts;
+  }
+  if (tool === 'categorize') {
+    const transactions = args.transactionId !== undefined
+      ? db.prepare('SELECT * FROM transactions WHERE id=?').all(args.transactionId)
+      : db.prepare('SELECT * FROM transactions ORDER BY id').all().filter(t => normalizeMerchant(t.description) === normalizeMerchant(args.merchant));
+    parts.push(['transactions', transactions]);
+    const ids = transactions.map(t => t.id);
+    rows('accounts', 'id', transactions.map(t => t.account_id));
+    for (const table of ['transaction_category_corrections', 'transaction_category_imports', 'transaction_category_guesses']) rows(table, 'transaction_id', ids);
+    rows('category_merchant_rules', 'merchant', args.transactionId !== undefined ? transactions.map(t => normalizeMerchant(t.description)) : [normalizeMerchant(args.merchant)]);
+    const parsers = new Set(transactions.map(t => t.parser));
+    parts.push(['category_source_rules', db.prepare('SELECT * FROM category_source_rules ORDER BY rowid').all().filter(r => parsers.has(r.parser) || r.category === args.category)]);
+    return parts;
+  }
+  if (tool === 'answer' && (args.items || args.ids)) {
+    const ids = args.ids ?? args.items.map(i => i.id);
+    const items = ids.map(id => db.prepare('SELECT * FROM confirm_items WHERE id=?').get(id) ?? null);
+    if (items.some(i => i && !['account_owner', 'account_kind'].includes(i.kind))) return null;
+    parts.push(['confirm_items', items]);
+    rows('accounts', 'id', items.map(i => i?.subject));
+    for (const table of ['confirm_undo', 'confirm_auto', 'confirm_auto_declined']) rows(table, 'item_id', ids);
+    if (args.ids) parts.push(['ingest_epoch', db.prepare('SELECT * FROM ingest_epoch ORDER BY rowid').all()]);
+    return parts;
+  }
+  return null;
+}
+
+export function proposalBasis(db, tool, scopes, args = {}) {
+  const local = localProposalRows(db, tool, args);
+  if (local) return createHash('sha256').update(JSON.stringify(local)).digest('hex');
+  const parts = [];
+  if (tool === 'undo') {
+    const selected = db.prepare('SELECT * FROM action_receipts WHERE id=?').get(args.id);
+    const receipts = selected?.kind === 'receipt_group' ? [selected, ...(parse(selected.after_state, {}).childIds ?? [])
+      .map(id => db.prepare('SELECT * FROM action_receipts WHERE id=?').get(id))] : [selected];
+    for (const receipt of receipts) {
+      parts.push(['receipt', receipt ?? null]);
+      if (!receipt) continue;
+      const target = { fact: ['facts', 'key'], goal: ['goals', 'id'], step: ['recs', 'id'], status: ['recs', 'id'],
+        owner: ['recs', 'id'], expected_transaction: ['expected_transactions', 'id'] }[receipt.kind];
+      if (target) parts.push([target[0], db.prepare(`SELECT * FROM ${target[0]} WHERE ${target[1]}=?`).get(receipt.entity_id) ?? null]);
+    }
+    return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+  }
   else for (const scope of scopes) {
     if (DOMAIN_TABLES[scope]) {
       for (const table of DOMAIN_TABLES[scope]) parts.push([table, db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]);
@@ -65,6 +121,8 @@ export function proposalBasis(db, tool, scopes, args = {}) {
       continue;
     }
     if (scope === 'write:imports' || scope === 'write:jobs') {
+      parts.push(['expected_transactions', db.prepare('SELECT * FROM expected_transactions ORDER BY id').all()]);
+      parts.push(['accounts', db.prepare('SELECT id,kind FROM accounts ORDER BY id').all()]);
       parts.push(['files', db.prepare('SELECT * FROM files ORDER BY id').all()]);
       parts.push(['settings', db.prepare('SELECT * FROM settings ORDER BY key').all()]);
       parts.push(['job_runs', db.prepare('SELECT * FROM job_runs ORDER BY id').all()]);
@@ -100,7 +158,7 @@ export function proposalBasis(db, tool, scopes, args = {}) {
       content(['meta', 'names', 'law', 'pct', 'advisor', 'wargame']);
     }
   }
-  if (tool === 'update_goal' && args.action === 'undo') settings(['goals.suggestions']);
+  if (tool === 'update_goal') settings(['clock', 'goals.suggestions']);
   if (tool === 'update_preferences' && args.positions) {
     settings(['curve.positions']);
     content(['curve', 'onboarding']);
@@ -119,7 +177,7 @@ function refusal(pending, scopes) {
   if (!tool || tool.kind !== 'write' || tool.mcpOnly || !op) return 'This change is no longer available.';
   const allowed = allowedScopes(scopes);
   const needed = tool.name === 'undo' ? pending.scopes : operationScopes(op);
-  if (!Array.isArray(needed) || !needed.length || (tool.name === 'undo' && (needed.length !== 1 || !operationScopes(op).includes(needed[0])))) return 'This change is no longer available.';
+  if (!Array.isArray(needed) || !needed.length || (tool.name === 'undo' && needed.some(scope => !operationScopes(op).includes(scope)))) return 'This change is no longer available.';
   const missing = needed.find(s => !allowed.includes(s));
   return missing ? `Permission denied: this change needs ${missing}.` : null;
 }
@@ -131,9 +189,9 @@ async function propose(tool, args, ctx) {
   const op = tool.validateArgs(input);
   let scopes = operationScopes(op);
   if (tool.name === 'undo') {
-    const receipt = ctx.db.prepare('SELECT scope, actor_id FROM action_receipts WHERE id = ?').get(input.id);
+    const receipt = ctx.db.prepare('SELECT * FROM action_receipts WHERE id = ?').get(input.id);
     if (!receipt || receipt.actor_id !== actor) throw new ToolError('forbidden', 'This change is not available to you.');
-    scopes = [receipt.scope];
+    scopes = receiptScopes(receipt);
   }
   const allowed = allowedScopes(ctx.scopes);
   const missing = scopes.find(s => !allowed.includes(s));
