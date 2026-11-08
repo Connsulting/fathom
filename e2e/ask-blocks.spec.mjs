@@ -198,6 +198,25 @@ test.describe('ask blocks', () => {
     await expect(pop).toContainText(gap.gaps[0].message);
   });
 
+  test('a block figure keeps its provenance in the figure registry and the popover lists its assumptions', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await gotoRoute(page, `ask/${thread.id}`);
+    const c = blk(page.locator('.h-root'), COMPARE);
+    await expect(c).toBeVisible();
+    const target = COMPARE.snapshot.options[0].cells[0].fig;
+    const fig = c.locator('section[role="group"]').first().locator('.fx-fig').first();
+    const key = await fig.getAttribute('data-fig');
+    expect(key).toMatch(/^blk:/);
+    const stored = await page.evaluate((k) => window.Fathom.api.fig(k), key);
+    expect(stored.provenance).toEqual(target.provenance);
+    await fig.click();
+    const pop = page.locator('.fx-pop');
+    await expect(pop).toBeVisible();
+    for (const a of target.provenance.assumptions) {
+      await expect(pop.locator('.fx-pop-row', { hasText: 'Assumes' }).locator('.fx-pop-v')).toContainText(a.stated);
+    }
+  });
+
   test('@mobile the rec dialog draws the same blocks', async ({ page }) => {
     await gotoRoute(page, `rec/${REC_ID}`);
     await expect(recDialog(page)).toBeVisible();
