@@ -57,3 +57,12 @@ test('SEC2: map evidence retains key attribution and the shared numeric guard', 
   assert.throws(() => requireEvidence({ ownerText: 'Rental account ending in 4821.' }, { rental: 4821 }, { shape }), /stated/);
   assert.throws(() => requireEvidence({ ownerText: 'Income is $4,821.' }, { rental: 4821 }, { shape }), /stated/);
 });
+
+test('SEC2: a generic number phrase is evidence while labelled identifier numbers are excluded', () => {
+ assert.deepEqual(statedAmounts('Use the number 5000 for the target'),[5000]);
+ assert.doesNotThrow(()=>requireEvidence({ownerText:'Use the number 5000 for the target'},5000));
+ for(const text of ['invoice number 12','account number 5000','routing number 5000','policy number 5000','reference number 5000','ID number 5000']) {
+  assert.deepEqual(statedAmounts(text),[],text);
+  assert.throws(()=>requireEvidence({ownerText:text},Number(text.match(/\d+/)[0])),/stated/);
+ }
+});

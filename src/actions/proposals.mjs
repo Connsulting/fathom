@@ -6,9 +6,11 @@
 // basis is a sha256 hex digest of the rows the operation and its sources depend on: its target row
 // (the `id` or `key` argument) or, without one, the whole target table; for goals always the whole
 // goals table (a value may come from another goal's note); plus every goal, every fact and every
-// figure value. A changed basis makes the proposal stale.
+// figure value. Account field, category and account Confirm proposals use their affected rows
+// instead. A changed basis makes the proposal stale.
 
 import { queueCategoryChecks } from '../categories/store.mjs';
+import { normalizeMerchant } from '../categories/resolve.mjs';
 import { resolveClock } from '../scenario/build.mjs';
 import { queueAccountPairs } from '../ingest/account-merge.mjs';
 import { createHash } from 'node:crypto';
@@ -48,7 +50,49 @@ const DOMAIN_TABLES = {
   'write:confirm': ['accounts','transactions','balances','positions','documents','tax_payments','pnl_lines','sources','files','confirm_items','confirm_undo','confirm_auto','confirm_auto_declined','ingest_epoch','held_facts','entity_aliases','category_source_rules','category_merchant_rules','transaction_category_corrections','yearend_marks'],
 };
 
+function localProposalRows(db, tool, args) {
+  const parts = [];
+  const rows = (table, column, values) => {
+    const ids = [...new Set(values)].filter(v => v !== undefined && v !== null).sort();
+    parts.push([table, ids.length ? db.prepare(`SELECT * FROM ${table} WHERE ${column} IN (${ids.map(() => '?').join(',')}) ORDER BY rowid`).all(...ids) : []]);
+  };
+  if (tool === 'update_account' && !args.withId) {
+    rows('accounts', 'id', [args.id]);
+    if (args.owner !== undefined || args.kind !== undefined) {
+      const kind = args.owner !== undefined ? 'account_owner' : 'account_kind';
+      parts.push(['confirm_items', db.prepare('SELECT * FROM confirm_items WHERE kind=? AND subject=? ORDER BY id').all(kind, args.id)]);
+    }
+    return parts;
+  }
+  if (tool === 'categorize') {
+    const transactions = args.transactionId !== undefined
+      ? db.prepare('SELECT * FROM transactions WHERE id=?').all(args.transactionId)
+      : db.prepare('SELECT * FROM transactions ORDER BY id').all().filter(t => normalizeMerchant(t.description) === normalizeMerchant(args.merchant));
+    parts.push(['transactions', transactions]);
+    const ids = transactions.map(t => t.id);
+    rows('accounts', 'id', transactions.map(t => t.account_id));
+    for (const table of ['transaction_category_corrections', 'transaction_category_imports', 'transaction_category_guesses']) rows(table, 'transaction_id', ids);
+    rows('category_merchant_rules', 'merchant', args.transactionId !== undefined ? transactions.map(t => normalizeMerchant(t.description)) : [normalizeMerchant(args.merchant)]);
+    const parsers = new Set(transactions.map(t => t.parser));
+    parts.push(['category_source_rules', db.prepare('SELECT * FROM category_source_rules ORDER BY rowid').all().filter(r => parsers.has(r.parser) || r.category === args.category)]);
+    return parts;
+  }
+  if (tool === 'answer' && (args.items || args.ids)) {
+    const ids = args.ids ?? args.items.map(i => i.id);
+    const items = ids.map(id => db.prepare('SELECT * FROM confirm_items WHERE id=?').get(id) ?? null);
+    if (items.some(i => i && !['account_owner', 'account_kind'].includes(i.kind))) return null;
+    parts.push(['confirm_items', items]);
+    rows('accounts', 'id', items.map(i => i?.subject));
+    for (const table of ['confirm_undo', 'confirm_auto', 'confirm_auto_declined']) rows(table, 'item_id', ids);
+    if (args.ids) parts.push(['ingest_epoch', db.prepare('SELECT * FROM ingest_epoch ORDER BY rowid').all()]);
+    return parts;
+  }
+  return null;
+}
+
 export function proposalBasis(db, tool, scopes, args = {}) {
+  const local = localProposalRows(db, tool, args);
+  if (local) return createHash('sha256').update(JSON.stringify(local)).digest('hex');
   const parts = [];
   if (tool === 'undo') {
     const selected = db.prepare('SELECT * FROM action_receipts WHERE id=?').get(args.id);
@@ -114,7 +158,7 @@ export function proposalBasis(db, tool, scopes, args = {}) {
       content(['meta', 'names', 'law', 'pct', 'advisor', 'wargame']);
     }
   }
-  if (tool === 'update_goal' && args.action === 'undo') settings(['goals.suggestions']);
+  if (tool === 'update_goal') settings(['clock', 'goals.suggestions']);
   if (tool === 'update_preferences' && args.positions) {
     settings(['curve.positions']);
     content(['curve', 'onboarding']);

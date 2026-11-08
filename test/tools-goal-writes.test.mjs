@@ -200,3 +200,16 @@ test('a thread-title settings write between an archive proposal and HTTP confirm
   assert.equal(chatCalls, calls);
   assert.ok(ctx.db.prepare('SELECT archived_at FROM goals WHERE id = ?').get(row.id).archived_at);
 });
+
+for (const operation of ['create','edit']) test(`goal ${operation} proposals ignore unrelated settings and transactions`, async () => {
+ const ctx=await store(),row=add(ctx),tool=proposalTools([getTool('update_goal')])[0];let pending;
+ await tool.handler({operation,...(operation==='edit'?{id:row.id}:{}),title:'Synthetic reserve',target:5000,propose:true},{...ctx,onProposal:p=>{pending=p;}});
+ const basis=()=>proposalBasis(ctx.db,pending.tool,pending.scopes,pending.args);
+ setSetting(ctx.db,'ask.titleRejects',{unparsable:7});
+ const account=ctx.db.prepare('SELECT id FROM accounts LIMIT 1').get().id;
+ ctx.db.prepare("INSERT INTO transactions (account_id,date,amount,description) VALUES (?,'2026-11-05',-10,'Unrelated posting')").run(account);
+ assert.equal(basis(),pending.basis);
+ if(operation==='edit')ctx.db.prepare("UPDATE goals SET updated_at='later' WHERE id=?").run(row.id);
+ else setSetting(ctx.db,'goals.suggestions',{[row.id]:{declined:true}});
+ assert.notEqual(basis(),pending.basis);
+});
