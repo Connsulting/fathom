@@ -441,3 +441,24 @@ test('an incomplete recommendation answer proposal preserves the confirmation an
   assert.ok(JSON.stringify(fake.calls.at(-1)).includes('answer each question on this recommendation'));
   assert.equal(receiptCount(s.db), 0);
 });
+
+
+test('INF1 the entity proposal card names each business, tax type, person and final-year status', async () => {
+  const chat = await loadChat();
+  chat.bind({ esc, T: esc, X: esc, arr: v => Array.isArray(v) ? v : [], root: null, api: { s: { goals: [] } } });
+  const html = chat.pendingActionHtml({ id: 'm19', role: 'fathom', provenance: { pendingAction: {
+    tool: 'answer', operation: 'fact', args: { key: 'business.entities', value: [
+      { name: 'Example <Studio>', type: 's_corp', owner: 'owner', status: 'active', accountId: 'synthetic-business' },
+      { name: 'Spouse LLC', type: 'llc_single', owner: 'spouse', status: 'active' },
+      { name: 'Former partnership', type: 'partnership', owner: 'spouse', status: 'final_year', finalYear: 2026 },
+    ] },
+  } } });
+  assert.match(html, /Example &lt;Studio&gt;/);
+  assert.match(html, /S corp/);
+  assert.match(html, /single-member LLC.*Schedule C/i);
+  assert.match(html, /your spouse/i);
+  assert.match(html, /final year.*final K-1/i);
+  assert.match(html, /linked business account/i);
+  assert.ok(!html.includes('synthetic-business'), 'raw account identifiers stay out of the card');
+  assert.match(html, /data-proposal-decide="confirm"/);
+});

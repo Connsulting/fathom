@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { scratch, createRealStore, closeRealStore, addFact, householdOf, factRow, figureRow } from './helpers/real-store.mjs';
+import { scratch, createRealStore, closeRealStore, addFact, householdOf, factRow, figureRow, addPayroll } from './helpers/real-store.mjs';
 import { planRun } from './helpers/plan.mjs';
 import { getFacts } from '../src/store/facts.mjs';
 import { buildScenario } from '../src/scenario/build.mjs';
@@ -8,7 +8,7 @@ import { recordFactAnswers, FactAnswerError } from '../src/facts/answers.mjs';
 import { callTool } from '../src/tools/index.mjs';
 import { createEngine } from '../src/engine/index.mjs';
 import { createLiveAnswerer } from '../src/api/answerer.mjs';
-import { threadCreate } from '../src/api/handlers.mjs';
+import { threadCreate, proposalDecide } from '../src/api/handlers.mjs';
 import { writePreference } from '../src/actions/preferences.mjs';
 import { loadPlanningData, resolveEntities } from '../src/jobs/planner/data.mjs';
 import { pnlEntities, businessPnl, businessPnlRows } from '../src/pnl/index.mjs';
@@ -436,4 +436,66 @@ test('stated escrow and payment corrections override inferred mortgage terms and
   assert.equal(ambiguous.obligations.length, 1, 'a second loan without a positive balance is not an active mortgage candidate');
   db.prepare("INSERT INTO balances(account_id,date,amount) VALUES ('second-loan','2026-10-31',20000)").run();
   assert.equal((await callTool('spending', { operation: 'obligations', obligations: ['mortgage'] }, ctx)).obligations.length, 0);
+});
+
+
+test('AC15-AC19: one missing-data Ask proposal records owner S corp, spouse LLC and final-year partnership with ledger link and Undo', async t => {
+  const { db, ctx } = await store(t);
+  budgetAndBusiness(db, { named: false });
+  await addPayroll(db, { docType: 'w2', fields: { taxYear: 2026, employerName: 'Current Studio', wages: 40000, medicareWages: 40000, federalWithheld: 4000, box12: [] }, recipient: 'owner', relation: 'household' });
+  await planRun(db);
+  const before = getFacts(db)['business.entities'];
+  assert.match(JSON.stringify(buildScenario(db).recs), /does not match any business on file/);
+  const text = "mine is an S-Corp, the spouse's is an LLC; the spouse left a K-1 partnership this year and has to file a final K-1.";
+  const value = [
+    { name: 'Current Studio', type: 's_corp', owner: 'owner', status: 'active', accountId: 'business-cash' },
+    { name: 'Spouse LLC', type: 'llc_single', owner: 'spouse', status: 'active' },
+    { name: 'Spouse partnership', type: 'partnership', owner: 'spouse', status: 'final_year', finalYear: 2026 },
+  ];
+  const transport = createEngine({ mode: 'fake' });
+  const engine = { mode: 'live', isOn: () => true, call: request => request.purpose === 'title'
+    ? Promise.resolve({ text: 'Household businesses', toolResults: [] })
+    : transport.call({ ...request, fake: [
+      { toolCalls: [{ name: 'household', args: { operation: 'fact_shapes' } }, { name: 'household', args: { operation: 'summary' } }] },
+      { toolCalls: [{ name: 'answer', args: { operation: 'fact', key: 'business.entities', value, evidence: text, propose: true } }] },
+      { text: 'Record your S corp linked to business checking, your spouse’s single-member LLC taxed on Schedule C, and the partnership’s final year? Confirm below. Tell Fathom if the LLC has multiple members or a corporate tax election.' },
+    ] }) };
+  const root = householdOf(db).root;
+  const answerer = createLiveAnswerer({ engine, root, services: { ...householdOf(db).services, engine, config: { dataDir: root } } });
+  const api = { db, config: { clock: '2026-11-05' }, identity: { id: ctx.actorId }, scheduler: { runNow: () => planRun(db) }, answerer };
+  const out = await threadCreate({ ...api, body: { recId: 'missing-data', text } });
+  const pending = out.message.provenance.pendingAction;
+  assert.deepEqual(pending.args.value, value);
+  assert.deepEqual(getFacts(db)['business.entities'], before, 'proposal does not save before confirmation');
+  assert.ok(out.message.provenance.tools.some(c => c.args.operation === 'fact_shapes' && !c.isError));
+  const shapes = await callTool('household', { operation: 'fact_shapes' }, ctx);
+  assert.ok(shapes['business.entities'].items.fields.status);
+  assert.ok(shapes['business.entities'].items.fields.accountId);
+  const saved = await proposalDecide({ ...api, params: { id: out.thread.id, messageId: out.message.id }, body: { decision: 'confirm' } });
+  const listed = getFacts(db)['business.entities'];
+  for (const entry of value) assert.deepEqual(listed.find(e => e.name === entry.name), entry);
+  assert.equal(listed.find(e => e.name === 'Aster').type, 'personal');
+  assert.equal(listed.find(e => e.name === 'Birch').type, 'personal');
+  assert.deepEqual(pnlEntities({ db, clock: '2026-11-05' }).find(e => e.label === 'Current Studio').accounts.map(a => a.id), ['business-cash']);
+  assert.ok(!JSON.stringify(saved.scenario.recs).includes('does not match any business on file'));
+  const tasks = saved.scenario.recs.find(r => r.id === 'missing-data').tasks.filter(t => !t.done);
+  assert.ok(tasks.some(t => /final K-1.*Spouse partnership|Spouse partnership.*final K-1/.test(t.t)));
+  assert.ok(!tasks.some(t => /how (?:Aster|Birch) is taxed/i.test(t.t)));
+  assert.ok(!tasks.some(t => t.kind === 'classify'));
+  const receipt = saved.message.provenance.actions[0];
+  await callTool('undo', { operation: 'undo', id: receipt.id }, { ...ctx, channel: 'mcp', scopes: ['write:facts'] });
+  assert.deepEqual(getFacts(db)['business.entities'], before);
+  assert.match(JSON.stringify(buildScenario(db).recs), /does not match any business on file/);
+});
+
+test('entity status and account links validate atomically without accepting missing final years or personal accounts', async t => {
+  const { db } = await store(t);
+  budgetAndBusiness(db);
+  for (const entry of [
+    { name: 'Past partnership', type: 'partnership', status: 'final_year' },
+    { name: 'Past partnership', type: 'partnership', status: 'active', finalYear: 2026 },
+    { name: 'Current Studio', type: 's_corp', accountId: 'missing-account' },
+  ]) assert.throws(() => recordFactAnswers(db, [{ key: 'business.entities', value: [entry] }], { now }), FactAnswerError);
+  recordFactAnswers(db, [{ key: 'business.entities', value: [{ name: 'Past partnership', type: 'partnership', owner: 'spouse', status: 'final_year', finalYear: 2025 }] }], { now });
+  assert.ok(!resolveEntities(loadPlanningData(db, '2026-11-05'), getFacts(db)).some(e => e.name === 'Past partnership'), 'prior final years do not enter current business calculations');
 });
