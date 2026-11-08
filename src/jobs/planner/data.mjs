@@ -14,7 +14,7 @@ import { parseJson, cents } from '../../store/db.mjs';
 import { accountNaming } from '../../accounts/naming.mjs';
 import { addDays, daysBetween } from '../../scenario/build.mjs';
 import { monthEnd } from '../../ingest/format.mjs';
-import { ledgerDisplayName, ledgerKind, looksLikeSpending, spendingStatement, businessEntry, ownerEntityIdentity, summaryPerson } from '../../pnl/ledgers.mjs';
+import { ledgerDisplayName, ledgerKind, looksLikeSpending, spendingStatement, businessEntry, ownerEntityIdentity, summaryPerson, accountEntityLink } from '../../pnl/ledgers.mjs';
 import { loadCategoryInputs } from '../../categories/store.mjs';
 import { resolveCategories } from '../../categories/resolve.mjs';
 import { staleAccountIds } from '../../../web/core/account-freshness.js';
@@ -213,7 +213,7 @@ export function resolveEntities(data, facts) {
     out.push({
       name: e.name.trim(), slug: slugOf(e.name), type: TYPES.includes(e.type) ? e.type : null,
       owner: e.owner === 'spouse' ? 'spouse' : 'owner', sstb: typeof e.sstb === 'boolean' ? e.sstb : null,
-      docId: null, fileId: null, payrollEmployer: e.inferenceKind === 'household_payroll', status: e.status || 'active', finalYear: e.finalYear, classified: TYPES.includes(e.type), lines: [], accountIds: [],
+      docId: null, fileId: null, payrollEmployer: e.inferenceKind === 'household_payroll', ownerAccountLink: !e.inferred && !!e.accountId, status: e.status || 'active', finalYear: e.finalYear, classified: TYPES.includes(e.type), lines: [], accountIds: [],
     });
   };
   const listed = facts['business.entities'];
@@ -230,7 +230,7 @@ export function resolveEntities(data, facts) {
   for (const activity of data.businessActivity || []) {
     if (!activity.rows.length) continue;
     const account = data.accounts.find(a => a.id === activity.accountId);
-    const name = (Array.isArray(listed) ? listed.find(e => e?.accountId === account.id)?.name : null) || facts['accounts.businessEntity']?.[account.id] || account.entity || ownerNames.find(e => e.accountIds?.includes(account.id))?.name || (ownerNames.length === 1 ? ownerNames[0].name : null);
+    const name = accountEntityLink(listed, account.id)?.name || facts['accounts.businessEntity']?.[account.id] || account.entity || ownerNames.find(e => e.accountIds?.includes(account.id))?.name || (ownerNames.length === 1 ? ownerNames[0].name : null);
     const candidate = activity.rows.some(r => r.section === 'income') && activity.rows.some(r => r.section === 'expenses');
     let e = name ? out.find(e => sameName(e.name, name)) : null;
     if (!e && !candidate) continue;
@@ -279,6 +279,8 @@ export function inferEntities(data, facts) {
     if (existing?.classified || ledgerKind(baseFacts, employer.name)) continue;
     const prior = value.findIndex(e => sameName(e?.name, employer.name));
     const soleAccount = businessAccounts.length === 1 ? businessAccounts[0] : null;
+    const explicitLink = soleAccount ? accountEntityLink(value, soleAccount.id) : null;
+    if (explicitLink && !explicitLink.inferred && ['s_corp', 'sole_prop', 'llc_single', 'partnership', 'c_corp'].includes(explicitLink.type)) continue;
     const assigned = soleAccount ? facts['accounts.businessEntity']?.[soleAccount.id] : null;
     const assignedBusiness = assigned ? matchEntity(data, resolveEntities(data, baseFacts), assigned) : null;
     const linkAccount = soleAccount && (!assignedBusiness?.classified || sameName(assignedBusiness.name, employer.name));

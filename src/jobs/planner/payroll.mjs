@@ -75,7 +75,11 @@ function docKind(data, entities, doc) {
   const entity = matchEntity(data, entities, doc.fields.employerName);
   if (entity) return { household: true, entity };
   const relation = (data.confirm || []).find(i => i.kind === 'employer_relation' && i.subject === nameKey(doc.fields.employerName));
-  if (relation && relation.status === 'answered' && relation.answer === 'household') return { household: true, classificationPending: true, entity: null };
+  if (relation && relation.status === 'answered' && relation.answer === 'household') {
+    const linked = entities.filter(e => e.ownerAccountLink && e.classified);
+    if (data.accounts.filter(a => a.kind === 'business').length === 1 && linked.length === 1) return { household: true, entity: linked[0] };
+    return { household: true, classificationPending: true, entity: null };
+  }
   if (relation && relation.status === 'answered' && relation.answer === 'outside') return { household: false };
   if (relation && relation.status === 'pending') return { blocked: 'employer_relation_pending' };
   return { household: false };

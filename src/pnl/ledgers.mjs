@@ -19,8 +19,13 @@ export function ledgerKind(facts, name, lines = []) {
   return null;
 }
 
+export function accountEntityLink(listed, accountId) {
+  return (Array.isArray(listed) ? listed : []).filter(e => e?.accountId === accountId)
+    .sort((a, b) => Number(!!a.inferred) - Number(!!b.inferred))[0] || null;
+}
+
 export function ownerEntityIdentity(entity) {
-  const { type, inferred, evidence, accountIds, nameSource, personSource, ...identity } = entity;
+  const { type, inferred, evidence, accountIds, accountId, inferenceKind, nameSource, personSource, ...identity } = entity;
   return identity;
 }
 

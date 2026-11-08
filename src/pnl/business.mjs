@@ -8,7 +8,7 @@
 //   sum: a figure over every matching row (not just the capped items), equal to the cell it opens from.
 //   Each item: amount (raw signed), value (counted: income as is, expenses negated) and fig (at value).
 
-import { ledgerDisplayName, ledgerKind, businessEntry, summaryPerson } from './ledgers.mjs';
+import { ledgerDisplayName, ledgerKind, businessEntry, summaryPerson, accountEntityLink } from './ledgers.mjs';
 import { normalizeName } from '../ingest/confirm.mjs';
 import { businessAccount } from '../categories/resolve.mjs';
 import {
@@ -61,7 +61,7 @@ function loadBusiness(db, clock) {
   const only = businessNames.length === 1 ? businessNames[0] : null;
   const owner = new Map();
   for (const a of base.accounts.filter(businessAccount)) {
-    const entityName = (Array.isArray(listed) ? listed.find(e => e?.accountId === a.id)?.name : null) || stated[a.id] || a.entity || (Array.isArray(listed) ? listed.find(e => e?.accountIds?.includes(a.id))?.name : null);
+    const entityName = accountEntityLink(listed, a.id)?.name || stated[a.id] || a.entity || (Array.isArray(listed) ? listed.find(e => e?.accountIds?.includes(a.id))?.name : null);
     const named = typeof entityName === 'string' && entityName.trim() ? canon(entityName).norm : null;
     owner.set(a.id, named && !businessNames.includes(named) ? null : named ?? only);
   }
