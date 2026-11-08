@@ -70,6 +70,15 @@ function householdValues(db) {
 const goalTextStates = (value, text, shape) => typeof value === 'number'
   ? statedAmounts(text).includes(value) && checkGrounding(`$${value}`, { data: [text] }).ok : stated(value, text, shape);
 
+const YES = /^(?:yes|yeah|yep|yup|sure|ok(?:ay)?|do it|go ahead|absolutely|correct|confirmed)\b/i;
+const HEDGE = /\b(?:no|not|don't|wait|hold|later|maybe|except|but|however|unless|instead|change)\b/i;
+
+// A short, unhedged confirmation such as "yes" or "go ahead" (re-exported by proposals.mjs).
+export function isExplicitYes(text) {
+  const t = String(text ?? '').trim();
+  return t.length <= 160 && YES.test(t) && !HEDGE.test(t);
+}
+
 function confirmedProposal(ctx, value, shape) {
   if (!ctx.conversationKey || !ctx.actorId) return false;
   const rows = ctx.db.prepare(`SELECT role, text, provenance FROM messages WHERE conversation_key = ? AND id <= ? ORDER BY id DESC LIMIT 2`)
@@ -81,9 +90,7 @@ function confirmedProposal(ctx, value, shape) {
     reply = previous.text;
     previous = rows[1];
   }
-  const text = String(reply).trim();
-  if (text.length > 160 || !/^(?:yes|yeah|yep|yup|sure|ok(?:ay)?|do it|go ahead|absolutely|correct|confirmed)\b/i.test(text)
-    || /\b(?:no|not|don't|wait|hold|later|maybe|except|but|however|unless|instead|change)\b/i.test(text)) return false;
+  if (!isExplicitYes(reply)) return false;
   if (previous?.role !== 'fathom') return false;
   const provenance = parse(previous.provenance, null);
   return (provenance?.literals ?? []).some(l => typeof l.source === 'string' && l.source.trim()

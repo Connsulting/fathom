@@ -961,6 +961,8 @@ function pPlan() {
 
 function thread(msgs, selfId = '') {
   if (!msgs.length) return '';
+  // The latest stored message: only its proposal card offers Confirm and Not now.
+  const lastStored = [...msgs].reverse().find((m) => /^m\d+$/.test(String(m.id)));
   return `<div class="h-thread">${msgs.map((m) => {
     const who = m.role === 'me' ? 'You' : m.role === 'advisor' ? (api.s.advisor?.name ? T(api.s.advisor.name) : esc(api.s.names?.advisor || 'Advisor')) : m.role === 'claude' ? 'Claude' : esc(api.s.meta.product || 'Fathom');
     const refs = arr(m.refs).filter((id) => id !== selfId).map((id) => recById(id)).filter(Boolean);
@@ -968,6 +970,7 @@ function thread(msgs, selfId = '') {
       + (refs.length ? `<div class="h-refs">${refs.map((r) => `<a href="${href('rec', { id: r.id })}" data-go="rec" data-id="${esc(r.id)}"><span>${T(r.title)}</span><em>${T(r.window?.label || '')}</em>${icon('arrow')}</a>`).join('')}</div>` : '')
       + chatScreen.proposalHtml(m)
       + chatScreen.goalProposalHtml(m)
+      + chatScreen.pendingActionHtml(m, { latest: m === lastStored })
       + chatScreen.sourcesHtml(m)
       + '</div>';
   }).join('')}</div>`;
