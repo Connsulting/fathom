@@ -4,7 +4,7 @@ const IDENTIFIERS = [
   /\b(?:end(?:s|ing)(?:\s+(?:in|with))?|last\s*(?:four|4)(?:\s+digits)?(?:\s+(?:are|is))?)\s*[:#]?\s*\d+\b/gi,
   /\b\d+\s*\(\s*last\s*(?:four|4)\s*\)/gi,
   /\(\s*last\s*(?:four|4)\s*\)\s*\d+\b/gi,
-  /\b(?:account|acct|card|routing|reference|confirmation|transaction|invoice|policy|phone|telephone|SSN|EIN|tax\s+ID|ID|identifier|number)(?:\s+(?:number|no\.?|ID))?\s*[:#]?\s*\d+(?:[- /]\d+)*\b/gi,
+  /\b(?:account|acct|card|routing|reference|confirmation|transaction|invoice|policy|phone|telephone|SSN|EIN|tax\s+ID|ID|identifier)(?:\s+(?:number|no\.?|ID))?\s*[:#]?\s*\d+(?:[- /]\d+)*\b/gi,
   /(?:\b[xX]+|\*+|\.{2,}|…|#)\s*\d+\b/g,
   /\b(?:401\s*(?:\(\s*k\s*\)|k)|(?:403|457)\s*(?:\(\s*b\s*\)|b)|529|Virginia529)(?:\([a-z0-9]+\))*/gi,
   /\b(?:W[- ]?[24]|1099(?:-[a-z0-9]+)?|K-12|K-1|I-9)\b/gi,
