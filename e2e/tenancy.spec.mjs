@@ -226,15 +226,17 @@ test.describe('household selection and isolation', () => {
     await expect(page.getByText(ALPHA_GOAL)).toHaveCount(0);
     await page.getByRole('button', { name: `Stay in ${BRAVO_NAME}` }).click();
     await expect(page.locator('select[data-hh-switch]')).toHaveValue(fx.B, { timeout: 15_000 });
-    await expect(page).toHaveURL((url) => !url.search.includes('household'));
+    await expect(page).toHaveURL((url) => !url.search.includes('household') && !url.hash.includes('goals'));
     await page.goto(`${base}/?household=${encodeURIComponent(fx.A)}#/goals`);
     await page.getByRole('button', { name: `Open ${ALPHA_LABEL}` }).click();
     await expect(page.locator('select[data-hh-switch]')).toHaveValue(fx.A, { timeout: 15_000 });
     await expect(page).toHaveURL((url) => url.hash === '#/goals' && !url.search.includes('household'));
     await expect(page.getByText(ALPHA_GOAL).first()).toBeVisible();
-    await page.goto(`${base}/?household=hh-00000000-0000-4000-8000-000000000000#/goals`);
+    // A refused link's fragment is dropped, so a record id it names never opens in the current household.
+    await page.goto(`${base}/?household=hh-00000000-0000-4000-8000-000000000000#/confirm/1`);
     await expect(page.getByRole('alert').filter({ hasText: 'That link is for a household you cannot open here' })).toBeVisible();
     await expect(page.locator('select[data-hh-switch]')).toHaveValue(fx.A);
+    await expect(page).toHaveURL((url) => !url.search.includes('household') && !url.hash.includes('confirm'));
   });
 
   test('download links and the admin page carry the household; signing out leaves nothing to the next sign-in', async ({ context, page }) => {

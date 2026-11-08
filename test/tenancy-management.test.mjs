@@ -181,7 +181,7 @@ before(async () => {
 
 // A refused stream's handler still finishes and stores its turn in the household it started in
 // (src/api/handlers.mjs stores the question with its answer); wait for those turns before closing.
-const STREAMED = ['Synthetic delayed stream question', 'Synthetic stream at sign out'];
+const STREAMED = ['Synthetic delayed stream question', 'Synthetic stream at sign out', 'Synthetic stream before removal', 'Synthetic stream at removal'];
 async function answersSettled() {
   const stored = () => [f.A, f.B].filter(Boolean).flatMap(id => threadTexts(id));
   for (let i = 0; i < 150 && !STREAMED.every(q => stored().includes(q)); i++) await new Promise(r => setTimeout(r, 100));
@@ -462,7 +462,19 @@ describe('role-aware management', () => {
 
   test('removal from one household leaves the other membership usable', T, async () => {
     const member = await session(f.dual);
+    // Liveness: an Ask stream nobody revokes ends with its final event.
+    const whole = await askStream(f.dual, { text: 'Synthetic stream before removal' }, ctxHeaders(member)).done;
+    assert.ok(whole.events.some(e => e.name === 'final'), `an unrevoked stream finishes: ${whole.events.map(e => e.name).join(',')}`);
+    // A stream in flight at removal ends without B's later data: the admin's new goal never reaches it.
+    const stream = askStream(f.dual, { text: 'Synthetic stream at removal' }, ctxHeaders(member));
+    await stream.started;
     await ok(post(f.bravo, `/api/admin/users/${member.id}/remove`, {}), 'B removes the member');
+    await ok(post(f.bravo, '/api/goals', { title: `${BRAVO} after removal`, horizon: '1-3y' }), 'B admin writes after the removal');
+    const cut = await stream.done;
+    const cutNames = cut.events.map(e => e.name);
+    assert.ok(!cutNames.includes('final'), `the removed member's stream had no final event: ${cutNames.join(',')}`);
+    assert.equal(cut.events.find(e => e.name === 'error')?.data.status, 401, `the stream ended signed out: ${cutNames.join(',')}`);
+    assert.ok(!JSON.stringify(cut.events).includes(`${BRAVO} after removal`), 'the removed member never saw the new goal');
     assert.equal((await get(f.dual, '/api/scenario')).status, 401, 'removal signs the member out');
     const again = await signIn(f.baseUrl, f.dual.device, f.dual.credentialId);
     assert.equal(again.verify.status, 200);

@@ -1154,7 +1154,10 @@ Memberships and invitations.
    malformed or conflicting, or a query assertion on a POST, is 400 `household_context_invalid`.
    Responses carry the captured `X-Fathom-Household` and `X-Fathom-Context-Version`. A switch or
    sign-out ends that session's answer streams with a 409 error event
-   (`src/api/household-context.mjs`). The web client sends the assertion on every request, drops
+   (`src/api/household-context.mjs`), and every stream event and final body is sent only while
+   the session still holds that context, so a removal or passkey revocation mid-request ends the
+   stream with a 401 error event instead. A deep link's fragment is kept only when its household
+   is the current one. The web client sends the assertion on every request, drops
    a response for a context it left, reloads after a switch and keys its per-household browser
    storage by user and household. Engine on/off and cap are admin routes.
 

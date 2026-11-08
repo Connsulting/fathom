@@ -350,13 +350,23 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
             && now.contextVersion === caller.contextVersion && auth.servedMember(now);
         } } : null;
         const run = fn => (principal ? runWithPrincipal(principal, fn) : fn());
+        // Nothing household-scoped leaves (a stream event or the final body) once the session no
+        // longer holds this context: a member removed, a passkey revoked, a sign-out or a switch
+        // meanwhile ends the stream or refuses the response, whichever path revoked the session.
+        const contextLost = () => (!principal || principal.check() ? null
+          : identityOf(req, auth) ? staleContext() : new HttpError(401, 'unauthorized'));
+        const onEvent = events ? event => {
+          const lost = contextLost();
+          if (lost) events.fail(lost);
+          else events.send(event);
+        } : null;
         let out;
         try {
           out = await run(() => r.handler({
             household, db: household?.db, engine: household?.engine, packs: household?.packs, answerer: household?.answerer,
             scheduler: household?.scheduler, transport: household?.transport, platform, config, identity, auth, backups,
             get keys() { if (config.publicDemo) throw demoOff(); return keys; },
-            params, query, body, uploads, req, res, ...(events ? { onEvent: events.send } : {}),
+            params, query, body, uploads, req, res, ...(onEvent ? { onEvent } : {}),
           }));
         } catch (err) {
           // Once the event stream has started, an error is its last event.
@@ -368,6 +378,12 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
           if (seeded && seeded.prepare('SELECT total_changes() AS n').get().n !== changesBefore) {
             seeded.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
           }
+        }
+        const lost = contextLost();
+        if (lost) {
+          if (!events) throw lost;
+          events.fail(lost);
+          return;
         }
         if (r.download) {
           res.writeHead(200, {

@@ -1822,13 +1822,16 @@ function chooseHousehold() {
   const params = new URLSearchParams(window.location.search);
   const wanted = params.get('household');
   const hash = window.location.hash || '';
+  const list = households();
+  const current = currentHousehold();
   if (wanted !== null) {
     params.delete('household');
     const q = params.toString();
-    try { window.history.replaceState(null, '', window.location.pathname + (q ? '?' + q : '') + hash); } catch (e) { /* ignore */ }
+    // The fragment names the linked household's records, so it stays only when that household is
+    // the current one; refusing the link or staying never opens a same-id record here.
+    const kept = current && wanted === current.id ? hash : '';
+    try { window.history.replaceState(null, '', window.location.pathname + (q ? '?' + q : '') + kept); } catch (e) { /* ignore */ }
   }
-  const list = households();
-  const current = currentHousehold();
   if (wanted !== null && current && wanted === current.id) return false;
   const target = wanted !== null ? list.find(h => h.id === wanted) || null : null;
   if (wanted !== null && !target && current) {
