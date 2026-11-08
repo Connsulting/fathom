@@ -338,7 +338,7 @@ test('MG12: D2 D3 every householdTax path blocks an over-limit contribution and 
       assert.ok(itemReason(x), `${c.name}: ${c.item} is offered as a current choice with no reason: ${JSON.stringify(x)}`);
       if (c.game === 'deferral') assert.ok(!(x.tax2026 < 0), `${c.name}: ${c.item} claims a tax cut of ${x.tax2026}`);
     }
-    assert.throws(async () => await pick(db, clock, c.game, c.item), e => e.status >= 400 && e.status < 500,
+    await assert.rejects(async () => await pick(db, clock, c.game, c.item), e => e.status >= 400 && e.status < 500,
       `${c.name}: wargamePick refuses ${c.item}`);
   });
 });
@@ -371,7 +371,7 @@ test('MG12: D3 a November game with a 22,000 SEP added and planned in January re
   const d100 = kept.options.find(o => o.id === 'd100');
   assert.ok(nonEmpty(info.wargameInvalid.deferral) || nonEmpty(kept.unavailable) || itemReason(d100),
     `the retained game carries a reason: ${JSON.stringify({ invalid: info.wargameInvalid, unavailable: kept.unavailable, d100 })}`);
-  assert.throws(async () => await pick(db, JAN, 'deferral', 'd100'), e => e.status >= 400 && e.status < 500, 'wargamePick refuses d100');
+  await assert.rejects(async () => await pick(db, JAN, 'deferral', 'd100'), e => e.status >= 400 && e.status < 500, 'wargamePick refuses d100');
 });
 
 // ================================================================ D5 (MG13, K5): allowlist literal check

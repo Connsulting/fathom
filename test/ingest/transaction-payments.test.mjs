@@ -271,7 +271,7 @@ test('a changed connected posting invalidates the old inference and its pending 
   await syncSimplefin(s.db, opts);
   assert.equal((await payments(s.db)).some(r => r.amount === 1800), false);
   assert.equal(deriveSteps([taxTask()], [], await stepEnvOf(s.db))[0].done, false);
-  assert.throws(async () => await answer(s.db, pending.id, 'estimate', { now: NOW }), e => ['stale','answered'].includes(e.code));
+  await assert.rejects(async () => await answer(s.db, pending.id, 'estimate', { now: NOW }), e => ['stale','answered'].includes(e.code));
 }));
 
 test('a four-day separation and a different jurisdiction do not suppress real estimates', async () => fixture(async (s, opts) => {

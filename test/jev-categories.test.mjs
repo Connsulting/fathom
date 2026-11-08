@@ -203,7 +203,7 @@ test('export enrichment retires its Jev review card and preserves another unreso
   assert.equal((await db.prepare('SELECT count(*) AS n FROM transactions WHERE account_id=?').get(accountId)).n,1);
   assert.equal((await resolutions(db)).get(target).layer,'import');assert.equal((await resolutions(db)).get(target).category,'Business');
   assert.equal(await getItem(db,card.id),null);
-  assert.throws(async ()=>await answerItem(db,card.id,'Groceries'));
+  await assert.rejects(async ()=>await answerItem(db,card.id,'Groceries'));
   assert.equal((await db.prepare('SELECT count(*) AS n FROM transaction_category_corrections WHERE transaction_id=?').get(target)).n,0);
   assert.ok((await pendingItems(db)).find(q=>q.kind==='transaction_category'&&q.subject===String(other))?.context.jev);
 });

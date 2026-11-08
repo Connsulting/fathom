@@ -88,7 +88,7 @@ test('platform enforces immutable household and creator bindings', async () => {
   const f = await mcpHouseholds();
   try {
     for (const [column, value] of [['household_id', f.B.id], ['user_id', f.B.admin.userId], ['user_id', null], ['household_generation', 42], ['membership_version', 42]]) {
-      assert.throws(async () => await f.platform.prepare(`UPDATE api_keys SET ${column} = ? WHERE id = ?`).run(value, f.A.key.record.id));
+      await assert.rejects(async () => await f.platform.prepare(`UPDATE api_keys SET ${column} = ? WHERE id = ?`).run(value, f.A.key.record.id));
     }
     await live(f, f.A.key);
     await live(f, f.B.key);
@@ -137,7 +137,7 @@ test('platform migration binds existing hashes and preserves account and passkey
     assert.equal((await keys.verify(token)).id, 'owned');
     assert.ok((await db.prepare("SELECT revoked_at FROM api_keys WHERE id = 'unbound'").get()).revoked_at);
     assert.equal((await db.prepare("SELECT revoked_at FROM api_keys WHERE id = 'demo'").get()).revoked_at, null);
-    assert.throws(async () => await keys.create({ householdId: 'alpha', name: 'Unbound real key' }), { code: 'forbidden' });
+    await assert.rejects(async () => await keys.create({ householdId: 'alpha', name: 'Unbound real key' }), { code: 'forbidden' });
     const fresh = await keys.create({ householdId: 'alpha', userId: 'creator', name: 'Bound real key' });
     assert.equal((await keys.verify(fresh.key)).id, fresh.record.id);
     assert.deepEqual(await db.prepare("SELECT name, sql FROM sqlite_master WHERE name IN ('users', 'passkeys') ORDER BY name").all(), before);

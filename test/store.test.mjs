@@ -100,11 +100,11 @@ test('every data-derived table carries provenance columns', async () => {
 test('accounts keep only a four digit mask', async () => {
   const t = await tempDb();
   try {
-    assert.throws(async () => await insertAccount(t.db, 'a1', '123456789'));
-    assert.throws(async () => await insertAccount(t.db, 'a2', '12a4'));
-    assert.throws(async () => await insertAccount(t.db, 'a3', '123'));
-    assert.throws(async () => await insertAccount(t.db, 'a6', '1234\u00005678901'), 'an embedded NUL must not smuggle extra digits past the check');
-    assert.throws(async () => await insertAccount(t.db, 'a7', Buffer.from('1234')), 'a blob mask is rejected');
+    await assert.rejects(async () => await insertAccount(t.db, 'a1', '123456789'));
+    await assert.rejects(async () => await insertAccount(t.db, 'a2', '12a4'));
+    await assert.rejects(async () => await insertAccount(t.db, 'a3', '123'));
+    await assert.rejects(async () => await insertAccount(t.db, 'a6', '1234\u00005678901'), 'an embedded NUL must not smuggle extra digits past the check');
+    await assert.rejects(async () => await insertAccount(t.db, 'a7', Buffer.from('1234')), 'a blob mask is rejected');
     await insertAccount(t.db, 'a4', '1234');
     await insertAccount(t.db, 'a5', null);
     const masks = (await t.db.prepare('SELECT id, mask FROM accounts ORDER BY id').all()).map(r => [r.id, r.mask]);
@@ -122,17 +122,17 @@ test('enumerated columns reject unknown values and accept known ones', async () 
                 VALUES ('s1', 'Test source', '2026-08-30', 'other', NULL, '')`).run();
     const fig = db.prepare(`INSERT INTO figures (key, v, src, kind, label, file_id, parser, locator, updated_at)
                             VALUES (?, 1.5, ?, ?, ?, NULL, 'test', 'row 1', '2026-11-05T09:00:00Z')`);
-    assert.throws(async () => await fig.run('f_bad', 's1', 'z', 'Bad kind'));
+    await assert.rejects(async () => await fig.run('f_bad', 's1', 'z', 'Bad kind'));
     for (const k of ['a', 'p', 'e', 'm']) await fig.run('f_' + k, 's1', k, 'Kind ' + k);
 
     await db.prepare("INSERT INTO conversations (key, created_at) VALUES ('ask:0123456789ab', '2026-11-05T09:00:00Z')").run();
     const msg = db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES ('ask:0123456789ab', ?, '<p>x</p>', '[]', 0, '2026-11-05T09:00:00Z')");
-    assert.throws(async () => await msg.run('bot'));
+    await assert.rejects(async () => await msg.run('bot'));
     for (const role of ['me', 'fathom', 'advisor', 'claude']) await msg.run(role);
 
     const dec = db.prepare(`INSERT INTO decisions (id, title, status, wargame, rec_id, opens_on, when_label, note, decided_line, sort)
                             VALUES (?, 'A decision', ?, NULL, NULL, NULL, 'Soon', 'A note', NULL, 0)`);
-    assert.throws(async () => await dec.run('d_bad', 'maybe'));
+    await assert.rejects(async () => await dec.run('d_bad', 'maybe'));
     for (const st of ['open', 'decided', 'upcoming']) await dec.run('d_' + st, st);
   } finally {
     await t.close();
@@ -192,7 +192,7 @@ test('migration 022 refuses a store that still holds account rows and no store_i
   try {
     await addUser(db);
     await db.prepare(`INSERT INTO api_keys (id, name, key_hash, scopes, created_at, user_id) VALUES ('key-owner', 'Synthetic key', ?, '["read"]', '2032-03-10T12:00:00.000Z', 'user-owner')`).run('b'.repeat(64));
-    assert.throws(async () => await migrate(db), new RegExp(`migration ${IDENTITY.id}-platform-identity failed`));
+    await assert.rejects(async () => await migrate(db), new RegExp(`migration ${IDENTITY.id}-platform-identity failed`));
     const tables = await listTables(db);
     for (const name of ACCOUNT_TABLES) assert.ok(tables.includes(name), `${name} is kept`);
     assert.equal((await db.prepare('SELECT count(*) AS n FROM users').get()).n, 1);
@@ -212,7 +212,7 @@ test('migration 022 applies to a store without users and drops the account table
     assert.ok(tables.includes('store_identity'));
     assert.deepEqual({ ...await db.prepare("SELECT * FROM api_keys WHERE id = 'key-ownerless'").get() }, before);
     assert.deepEqual((await migrate(db, BEFORE_KEYS_MOVED)).applied, []);
-    assert.throws(async () => await migrate(db), new RegExp(`migration ${KEYS_MOVED.id}-platform-api-keys failed`), '025 refuses while a key row remains');
+    await assert.rejects(async () => await migrate(db), new RegExp(`migration ${KEYS_MOVED.id}-platform-api-keys failed`), '025 refuses while a key row remains');
     assert.deepEqual({ ...await db.prepare("SELECT * FROM api_keys WHERE id = 'key-ownerless'").get() }, before, 'the refusal keeps the row');
   } finally { await db.close(); }
 });

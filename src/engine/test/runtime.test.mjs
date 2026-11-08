@@ -49,7 +49,7 @@ test('spend ledger maps a YYYYMM or YYYY-MM key to the stored YYYY-MM month and 
   assert.equal(rows[1].purpose, 'chat');
   assert.equal(rows[1].cost_usd, 0.25);
   for (const bad of ['2027', '20270', '2027011', '202713', 'abcdef', '']) {
-    assert.throws(async () => await ledger.monthSpendUsd(bad), TypeError, `month key ${JSON.stringify(bad)} is rejected`);
+    await assert.rejects(async () => await ledger.monthSpendUsd(bad), TypeError, `month key ${JSON.stringify(bad)} is rejected`);
   }
 });
 

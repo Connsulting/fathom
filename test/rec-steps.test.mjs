@@ -50,7 +50,7 @@ test('an upload step completes itself when the file lands and stays listed as do
   const code = balances?.code;
   assert.ok(balances && balances.kind === 'upload' && balances.auto && !balances.done, JSON.stringify(rec.tasks));
   const i = rec.tasks.indexOf(balances);
-  assert.throws(async () => await writeRec(db, 'missing-data', 'step', { index: i, checked: true }, { now: LATE }), /completes itself/);
+  await assert.rejects(async () => await writeRec(db, 'missing-data', 'step', { index: i, checked: true }, { now: LATE }), /completes itself/);
   // Updating another institution cannot clear this institution's upload step.
   await db.prepare('INSERT INTO balances(account_id,date,amount) SELECT id,?,100 FROM accounts WHERE inst IS NOT (SELECT inst FROM accounts WHERE id=?) LIMIT 1').run('2026-12-27', balances.accountIds[0]);
   await planRun(db, { now: LATE });

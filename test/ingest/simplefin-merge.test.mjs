@@ -192,12 +192,12 @@ test('stale repair answers refuse without changing the store; valid repairs rema
   const p=await seedDuplicate(s,{sure:true});
   await M.queueAccountPairs(s.db,{now:NOW}); const q=(await pending(s.db))[0];
   await s.db.prepare("UPDATE accounts SET mask='5837' WHERE id=?").run(p.own);
-  assert.throws(async ()=>await C.answer(s.db,q.id,'same'),e=>e.code==='stale');
+  await assert.rejects(async ()=>await C.answer(s.db,q.id,'same'),e=>e.code==='stale');
   assert.equal((await s.db.prepare('SELECT count(*) n FROM accounts').get()).n,2);
   await s.db.prepare("UPDATE accounts SET mask='6294' WHERE id=?").run(p.own);
   await C.answer(s.db,q.id,'different',{now:NOW});
   await s.db.prepare("UPDATE accounts SET kind='card' WHERE id=?").run(p.own);
-  assert.throws(async ()=>await C.reviseItem(s.db,q.id,'same',{now:NOW}),e=>e.code==='stale');
+  await assert.rejects(async ()=>await C.reviseItem(s.db,q.id,'same',{now:NOW}),e=>e.code==='stale');
   await s.db.prepare("UPDATE accounts SET kind='cash' WHERE id=?").run(p.own);
   await C.reviseItem(s.db,q.id,'same',{now:NOW});
   assert.equal((await s.db.prepare('SELECT count(*) n FROM accounts').get()).n,1);

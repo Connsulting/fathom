@@ -235,7 +235,7 @@ test('seedDemo itself refuses a populated store with no mode and leaves it untou
   const t = await tempDb();
   await t.db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
                 VALUES ('household.state', '"VA"', 'you', '2026-11-01', 1, NULL, NULL, NULL, '2026-11-01T09:00:00Z')`).run();
-  assert.throws(async () => await seedDemo(t.db), /refusing/);
+  await assert.rejects(async () => await seedDemo(t.db), /refusing/);
   assert.equal(await getSetting(t.db, 'mode', null), null);
   assert.equal((await t.db.prepare('SELECT COUNT(*) AS n FROM facts').get()).n, 1);
   await t.close();
@@ -245,7 +245,7 @@ test('seedDemo itself refuses a real store', T, async () => {
   const { seedDemo } = await import('../demo/seed.mjs');
   const t = await tempDb();
   await setSetting(t.db, 'mode', 'real');
-  assert.throws(async () => await seedDemo(t.db), /refusing/);
+  await assert.rejects(async () => await seedDemo(t.db), /refusing/);
   assert.equal(await getSetting(t.db, 'mode', null), 'real');
   await t.close();
 });

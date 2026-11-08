@@ -52,7 +52,7 @@ test('the served household is a single opaque platform row and creating it popul
   const served = { ...await platform.prepare('SELECT * FROM households WHERE id = ?').get(hh) };
   const duplicate = { ...served, id: `${hh}-duplicate` };
   const columns = Object.keys(duplicate);
-  assert.throws(async () => await platform.prepare(`INSERT INTO households (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`).run(...Object.values(duplicate)),
+  await assert.rejects(async () => await platform.prepare(`INSERT INTO households (${columns.join(', ')}) VALUES (${columns.map(() => '?').join(', ')})`).run(...Object.values(duplicate)),
     'a second household cannot also be served by the singleton store');
   for (const table of ['facts', 'files', 'accounts', 'transactions', 'recs']) {
     assert.equal((await db.prepare(`SELECT count(*) AS n FROM ${table}`).get()).n, 0, table);
@@ -111,7 +111,7 @@ test('reinviting an active member directs callers to role changes without changi
     const tokens = await platform.prepare('SELECT * FROM auth_tokens WHERE user_id = ? ORDER BY hash').all(user.id);
     const invitations = await platform.prepare('SELECT * FROM household_invitations ORDER BY hash').all();
     for (const role of ['admin', 'member']) {
-      assert.throws(async () => store.invite(hh, user.email, { role }), err => {
+      await assert.rejects(async () => store.invite(hh, user.email, { role }), err => {
         assert.equal(err.status, 409);
         assert.match(err.message, /role/i);
         assert.match(err.message, /chang|\/role/i);
@@ -135,9 +135,9 @@ test('invalid email and roles are refused while safe local characters and DNS la
     '"a"@example.test', 'a(comment)@example.test', 'a b@example.test', 'a\n@example.test', 'é@example.test',
     'a@exämple.test', 'a@-example.test', 'a@example-.test', 'a@example..test', 'a@exam_ple.test',
     `${'a'.repeat(65)}@example.test`, `${'a'.repeat(64)}@${'b'.repeat(63)}.${'c'.repeat(63)}.${'d'.repeat(63)}.test`]) {
-    assert.throws(async () => store.invite(hh, email, { role: 'member' }), status(400), JSON.stringify(email));
+    await assert.rejects(async () => store.invite(hh, email, { role: 'member' }), status(400), JSON.stringify(email));
   }
-  assert.throws(async () => store.invite(hh, 'valid@example.test', { role: 'root' }), status(400));
+  await assert.rejects(async () => store.invite(hh, 'valid@example.test', { role: 'root' }), status(400));
   assert.equal(await store.findUser('valid@example.test'), null, 'a refused role creates no user');
   assert.equal(store.invite(hh, "a.b+tag_o'hara@sub-1.example.test", { role: 'member' }).user.email, "a.b+tag_o'hara@sub-1.example.test");
 });
@@ -183,7 +183,7 @@ test('tokens contain 32 random bytes, persist only a digest, expire at 20 minute
   advance(1);
   assert.equal(store.token(later.token), null);
   assert.equal(await store.consumeToken(later.token), null);
-  assert.throws(async () => await store.createToken(user.id, 'invite'), status(400), 'invite is no longer an auth token purpose');
+  await assert.rejects(async () => await store.createToken(user.id, 'invite'), status(400), 'invite is no longer an auth token purpose');
 });
 
 test('invitations contain 32 random bytes, persist only a digest, expire at 20 minutes and consume once', async t => {
@@ -200,13 +200,13 @@ test('invitations contain 32 random bytes, persist only a digest, expire at 20 m
   await store.consumeInvitation(issued.token, issued.user.id);
   assert.deepEqual({ role: (await store.membership(issued.user.id, hh)).role, status: (await store.membership(issued.user.id, hh)).status }, { role: 'member', status: 'active' });
   assert.equal(await store.invitation(issued.token), null);
-  assert.throws(async () => await store.consumeInvitation(issued.token, issued.user.id), status(410), 'a consumed invitation is single use');
+  await assert.rejects(async () => await store.consumeInvitation(issued.token, issued.user.id), status(410), 'a consumed invitation is single use');
   const other = invite('later@example.test');
   advance(TOKEN_TTL - 1);
   assert.ok(await store.invitation(other.token));
   advance(1);
   assert.equal(await store.invitation(other.token), null);
-  assert.throws(async () => await store.consumeInvitation(other.token, other.user.id), status(410));
+  await assert.rejects(async () => await store.consumeInvitation(other.token, other.user.id), status(410));
   assert.equal(await store.membership(other.user.id, hh), null, 'an expired invitation creates no membership');
 });
 
@@ -247,7 +247,7 @@ test('malformed bearer input never resolves while a valid token, invitation and 
 test('sessions require enrollment, store only a digest and use seven-day absolute expiry', async t => {
   const { platform, store, enroll, invite, advance } = await fixture(t);
   const pending = invite('pending@example.test').user;
-  assert.throws(async () => await store.createSession(pending.id));
+  await assert.rejects(async () => await store.createSession(pending.id));
   const user = enroll('active@example.test');
   const session = await store.createSession(user.id);
   assert.match(session.token, /^[A-Za-z0-9_-]{43}$/);
@@ -311,8 +311,8 @@ test('pending admins do not defeat the last enrolled admin removal and demotion 
   const { store, hh, enroll, invite, roleOf } = await fixture(t);
   const admin = enroll('admin@example.test', 'admin');
   invite('pending-admin@example.test', 'admin');
-  assert.throws(async () => await store.setRole(hh, admin.id, 'member'), status(409));
-  assert.throws(async () => await store.removeMember(hh, admin.id), status(409));
+  await assert.rejects(async () => await store.setRole(hh, admin.id, 'member'), status(409));
+  await assert.rejects(async () => await store.removeMember(hh, admin.id), status(409));
   assert.equal(roleOf(admin.id), 'admin');
   const replacement = enroll('replacement@example.test', 'admin');
   await store.setRole(hh, admin.id, 'member');
@@ -339,9 +339,9 @@ test('an enrolled admin of another household does not satisfy this household las
   await store.markEnrolled(pending.userId);
   assert.equal((await store.membership(pending.userId, provisioned.household.id)).role, 'admin');
   assert.equal(await store.membership(pending.userId, hh), null);
-  assert.throws(async () => await store.setRole(hh, admin.id, 'member'), status(409));
-  assert.throws(async () => await store.removeMember(hh, admin.id), status(409));
-  assert.throws(async () => await store.setRole(provisioned.household.id, pending.userId, 'member'), status(409));
+  await assert.rejects(async () => await store.setRole(hh, admin.id, 'member'), status(409));
+  await assert.rejects(async () => await store.removeMember(hh, admin.id), status(409));
+  await assert.rejects(async () => await store.setRole(provisioned.household.id, pending.userId, 'member'), status(409));
   assert.equal(roleOf(admin.id), 'admin');
 });
 
@@ -350,7 +350,7 @@ test('role changes bump the membership version and a second enrolled admin permi
   const a = enroll('a@example.test', 'admin');
   const b = enroll('b@example.test', 'admin');
   const live = await store.createSession(a.id);
-  assert.throws(async () => await store.setRole(hh, a.id, 'root'), status(400));
+  await assert.rejects(async () => await store.setRole(hh, a.id, 'root'), status(400));
   assert.equal(roleOf(a.id), 'admin');
   const v0 = (await store.membership(a.id, hh)).version;
   await store.setRole(hh, a.id, 'member');
@@ -360,8 +360,8 @@ test('role changes bump the membership version and a second enrolled admin permi
   await store.setRole(hh, a.id, 'admin');
   assert.equal(roleOf(a.id), 'admin');
   await store.removeMember(hh, b.id);
-  assert.throws(async () => await store.setRole(hh, a.id, 'member'), status(409));
-  assert.throws(async () => await store.setRole(hh, 'missing-user', 'admin'), status(404));
+  await assert.rejects(async () => await store.setRole(hh, a.id, 'member'), status(409));
+  await assert.rejects(async () => await store.setRole(hh, 'missing-user', 'admin'), status(404));
 });
 
 test('passkey metadata hides material and revoking any credential invalidates every user session', async t => {
@@ -453,7 +453,7 @@ test('the accounts migration preserves existing MCP bearers as ownerless and is 
   const after = { ...await db.prepare('SELECT * FROM api_keys WHERE id = ?').get('legacy-key') };
   assert.deepEqual(after, { ...before, user_id: null });
   assert.deepEqual((await migrate(db, { through: dropped.id - 1 })).applied, []);
-  assert.throws(async () => await migrate(db), /CHECK constraint failed/, '025 refuses while the store holds a key row');
+  await assert.rejects(async () => await migrate(db), /CHECK constraint failed/, '025 refuses while the store holds a key row');
   assert.deepEqual({ ...await db.prepare('SELECT * FROM api_keys WHERE id = ?').get('legacy-key') }, after, 'the refused migration changed nothing');
   await db.prepare('DELETE FROM api_keys').run();
   await migrate(db);

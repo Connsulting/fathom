@@ -78,9 +78,9 @@ test('migration 015 rewrites rec history so it reads in the new vocabulary', asy
 test('migration 015 leaves the recs table refusing accepted, with its index and foreign keys intact', async () => {
   const db = await storeBefore();
   await migrate(db);
-  assert.throws(async () => await db.prepare("UPDATE recs SET status = 'accepted' WHERE id = 'r0'").run(), /CHECK/);
-  assert.throws(async () => await db.prepare(`INSERT INTO rec_events (rec_id, ts, action, actor) VALUES ('nope', 'x', 'start', 'ui')`).run(), /FOREIGN KEY/);
-  assert.doesNotThrow(async () => await db.prepare("UPDATE recs SET status = 'doing' WHERE id = 'r0'").run());
+  await assert.rejects(async () => await db.prepare("UPDATE recs SET status = 'accepted' WHERE id = 'r0'").run(), /CHECK/);
+  await assert.rejects(async () => await db.prepare(`INSERT INTO rec_events (rec_id, ts, action, actor) VALUES ('nope', 'x', 'start', 'ui')`).run(), /FOREIGN KEY/);
+  await assert.doesNotReject(async () => await db.prepare("UPDATE recs SET status = 'doing' WHERE id = 'r0'").run());
   const cols = (await db.prepare('PRAGMA table_info(recs)').all()).map(c => c.name);
   // Later migrations add columns (019: owner, owner_override, goal_kinds) after the rebuilt ones.
   assert.deepEqual(cols, ['id', 'def', 'status', 'waiting_on', 'wake', 'tasks_done', 'window_close', 'window_label', 'pack_id', 'sort', 'updated_at', 'file_id', 'parser', 'locator', 'owner', 'owner_override', 'goal_kinds']);
@@ -105,7 +105,7 @@ test('migration 015 keeps the planner able to restore a rec parked or retired wh
   ]);
   // The planner's unblock writes held_from back as the rec status; the recs CHECK must take it.
   for (const r of await db.prepare('SELECT rec_id, held_from FROM planner_recs WHERE held_from IS NOT NULL').all()) {
-    assert.doesNotThrow(async () => await db.prepare('UPDATE recs SET status = ? WHERE id = ?').run(r.held_from, r.rec_id), r.rec_id);
+    await assert.doesNotReject(async () => await db.prepare('UPDATE recs SET status = ? WHERE id = ?').run(r.held_from, r.rec_id), r.rec_id);
   }
 });
 

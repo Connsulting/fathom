@@ -30,7 +30,7 @@ test('all five linkage rules: one atomic preference, updates, linked edit refusa
   assert.equal((await listPreferences(db)).length, 1);
   assert.equal((await listPreferences(db))[0].id, saved.definition.preferenceId);
   assert.match((await listPreferences(db))[0].text, /Selected spending/);
-  assert.throws(async () => await writePreference(ctx, { id: saved.definition.preferenceId, text: 'new words' }), /Change the definition instead/);
+  await assert.rejects(async () => await writePreference(ctx, { id: saved.definition.preferenceId, text: 'new words' }), /Change the definition instead/);
   await assert.rejects(callTool('update_preferences', { operation: 'remember', id: saved.definition.preferenceId, text: words, evidence: words }, ctx), /Change the definition instead/);
   await callTool('undo', { operation: 'undo', id: edited.receipt.id }, ctx);
   assert.deepEqual(await snapshot(db), first);

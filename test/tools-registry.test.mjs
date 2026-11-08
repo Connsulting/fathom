@@ -34,7 +34,7 @@ const oldNames = [
   ...['fact','goal','preference','recommendation','step'].map(k => ['undo',k,'action']),
 ].map(parts => parts.join('_'));
 
-test('only the declared operation tools register, with no old aliases', () => {
+test('only the declared operation tools register, with no old aliases', async () => {
   assert.deepEqual(tools.map(t => t.name), Object.keys(expected).sort());
   for (const tool of tools) {
     assert.deepEqual(new Set(tool.operations.map(o => o.name)), new Set(expected[tool.name]));
@@ -46,7 +46,7 @@ test('only the declared operation tools register, with no old aliases', () => {
     if (tool.kind === 'read' && tool.name !== 'calculate' && !tool.askOnly) assert.deepEqual(tool.operations[0].required, []);
   }
   for (const name of oldNames) assert.equal(getTool(name), null);
-  assert.doesNotThrow(async () => await createRegistryServer(tools, { purpose: 'chat' }));
+  await assert.doesNotReject(async () => await createRegistryServer(tools, { purpose: 'chat' }));
 });
 
 test('loader rejects duplicate operations, conflicting schemas and invalid scope kinds', () => {

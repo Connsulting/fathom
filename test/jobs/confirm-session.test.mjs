@@ -71,7 +71,7 @@ test('a planner check whose derived value differs from the notes fact is answere
 test('a planner check goes stale only when the notes fact changes, and the next run asks it again', async () => {
   const { db, check } = await disagreeing();
   await db.prepare('UPDATE facts SET value = ? WHERE key = ?').run(JSON.stringify(NOTES_VALUE + 1), KEY);
-  assert.throws(async () => await answerItem(db, check.id, 'yes'), e => e instanceof ConfirmError && e.code === 'stale');
+  await assert.rejects(async () => await answerItem(db, check.id, 'yes'), e => e instanceof ConfirmError && e.code === 'stale');
   assert.equal((await getItem(db, check.id)).status, 'pending', 'a stale refusal changes nothing');
   await plan(db);
   const again = await getItem(db, check.id);
@@ -87,7 +87,7 @@ test('heal: a pending planner check asked before context.stored existed is refus
   const { stored, ...old } = check.context;
   void stored;
   await db.prepare('UPDATE confirm_items SET context = ? WHERE id = ?').run(JSON.stringify(old), check.id);
-  assert.throws(async () => await answerConfirm({ db, config: {}, params: { id: String(check.id) }, body: { answer: 'yes' } }),
+  await assert.rejects(async () => await answerConfirm({ db, config: {}, params: { id: String(check.id) }, body: { answer: 'yes' } }),
     e => e.status === 409 && e.code === 'stale');
   await plan(db);
   const healed = await getItem(db, check.id);

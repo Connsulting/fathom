@@ -74,7 +74,7 @@ test('facts and goals use shared actions, defer planning, and require their chil
 test('a failed later shared action rolls back earlier actions and receipts', async () => {
   const x = await updateFixture();
   try {
-    assert.throws(async () => await stageUpdate(x.ctx, { source: x.source, actions: [x.step, { ...x.expected, args: { ...x.expected.args, amount: 1234 } }], capturedAt: '2032-03-02T14:00:00Z' }));
+    await assert.rejects(async () => await stageUpdate(x.ctx, { source: x.source, actions: [x.step, { ...x.expected, args: { ...x.expected.args, amount: 1234 } }], capturedAt: '2032-03-02T14:00:00Z' }));
     assert.equal((await x.db.prepare('SELECT count(*) n FROM action_receipts').get()).n, 0);
     assert.deepEqual(JSON.parse((await x.db.prepare("SELECT tasks_done FROM recs WHERE id='payroll'").get()).tasks_done), []);
   } finally { x.close(); }

@@ -102,9 +102,9 @@ test('a live runtime engine without a platform ledger is refused (no unreserved 
   const { createRuntimeEngine } = await src('src/engine/runtime.mjs');
   const store = await tempDb();
   try {
-    assert.throws(async () => await createRuntimeEngine({ db: store.db, config: { engine: 'live' } }), TypeError);
+    await assert.rejects(async () => await createRuntimeEngine({ db: store.db, config: { engine: 'live' } }), TypeError);
     // Liveness: fake mode needs no platform.
-    assert.doesNotThrow(async () => await createRuntimeEngine({ db: store.db, config: { engine: 'fake' } }));
+    await assert.doesNotReject(async () => await createRuntimeEngine({ db: store.db, config: { engine: 'fake' } }));
   } finally {
     await store.close();
     rmSync(store.dataDir, { recursive: true, force: true });

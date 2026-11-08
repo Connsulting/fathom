@@ -32,7 +32,7 @@ test('Settings validates, edits and deletes preferences through the same writer,
   const db = await s.store();
   const ctx = { db, config: {}, identity: { id: 'person-a' }, params: {}, body: { text: 'Keep answers short' } };
   const saved = await preferenceSave(ctx);
-  for (const text of ['', 'x'.repeat(301), 'line\nbreak']) assert.throws(async () => await preferenceSave({ ...ctx, body: { text } }));
+  for (const text of ['', 'x'.repeat(301), 'line\nbreak']) await assert.rejects(async () => await preferenceSave({ ...ctx, body: { text } }));
   const edited = await preferenceSave({ ...ctx, params: { id: saved.preference.id }, body: { text: 'Use plain language' } });
   assert.equal(edited.scenario.preferences[0].text, 'Use plain language');
   const removed = await preferenceDelete({ ...ctx, params: { id: saved.preference.id }, body: {} });

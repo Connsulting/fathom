@@ -63,7 +63,7 @@ test('members manage their own keys, admins manage all keys, and session ownersh
     const legacy = await create(server, 'Existing household key');
     await platformOf(server, async db => {
       assert.equal((await db.prepare('SELECT user_id FROM api_keys WHERE id = ?').get(own.record.id)).user_id, alice.fixture.user.id);
-      assert.throws(async () => await db.prepare('UPDATE api_keys SET user_id = NULL WHERE id = ?').run(legacy.record.id));
+      await assert.rejects(async () => await db.prepare('UPDATE api_keys SET user_id = NULL WHERE id = ?').run(legacy.record.id));
     });
     const listed = await alice.request({ path: '/api/keys' });
     assert.equal(listed.status, 200);

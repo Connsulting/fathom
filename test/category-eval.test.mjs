@@ -16,7 +16,7 @@ test('deterministic holdout and aggregate calibration never return per-row value
   for(let i=0;i<5;i++) await s.db.prepare("INSERT INTO transactions (account_id,date,description,amount,category,parser) VALUES ('a','2032-01-01',?,-25,?,'aggregator')").run('Secret payee '+i,i%2?'Business':'Groceries');
   const before=readFileSync(join(s.root,'fathom.sqlite')); const ro=await openReadOnlyHousehold({dataDir:dir},s.householdId);
   t.after(async ()=>{await ro.db.close();await ro.platform.close();});
-  assert.throws(async ()=>await ro.db.applySchema("UPDATE settings SET value='true' WHERE key='mode'"),/readonly/i);
+  await assert.rejects(async ()=>await ro.db.applySchema("UPDATE settings SET value='true' WHERE key='mode'"),/readonly/i);
   const jev={stats:()=>({costUsd:.001,latenciesMs:[10,20]}),choose:async qs=>qs.map(q=>{
     assert.equal(q.state.category,undefined); assert.equal(q.state.mask,undefined);
     return {choice:'Groceries',confidence:.9,probabilities:{Groceries:.8,Business:.2}};
@@ -60,8 +60,8 @@ test('read-only store refuses missing identity and missing eval schema without c
   const dir=mkdtempSync(join(tmpdir(),'category-ro-')); const s=await createInstance(dir,{mode:'real'});
   t.after(async ()=>{await s.db.close();await s.platform.close();rmSync(dir,{recursive:true,force:true});});
   await s.db.applySchema('DROP TABLE transaction_category_imports');
-  assert.throws(async ()=>await openReadOnlyHousehold({dataDir:dir},s.householdId),/store_schema_required/);
-  assert.throws(async ()=>await openReadOnlyHousehold({dataDir:dir},'hh-synthetic-unknown'),/household_unavailable/);
+  await assert.rejects(async ()=>await openReadOnlyHousehold({dataDir:dir},s.householdId),/store_schema_required/);
+  await assert.rejects(async ()=>await openReadOnlyHousehold({dataDir:dir},'hh-synthetic-unknown'),/household_unavailable/);
   assert.equal((await s.db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='transaction_category_imports'").get()).n,0);
 });
 

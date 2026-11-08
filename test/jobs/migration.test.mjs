@@ -89,7 +89,7 @@ test('upgrading a store at the latest main migration keeps planner-shaped job_ru
     const keyed = db.prepare("INSERT INTO job_runs (job_id, started_at, status, period_key, trigger) VALUES ('plan', '2026-11-07T07:00:00.000Z', 'ok', ?, 'scheduled')");
     await keyed.run('2026-11-07');
     await keyed.run('2026-11-08'); // liveness: another period is fine
-    assert.throws(async () => await keyed.run('2026-11-07'), /UNIQUE/i, 'one attempt per (job_id, period_key)');
+    await assert.rejects(async () => await keyed.run('2026-11-07'), /UNIQUE/i, 'one attempt per (job_id, period_key)');
   } finally { await s.done(); }
 });
 

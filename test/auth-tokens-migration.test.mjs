@@ -108,18 +108,18 @@ test('after migration 020 auth_tokens takes add-passkey, refuses unknown purpose
   const db = await storeBefore();
   await migrate(db, THROUGH);
   const insert = db.prepare('INSERT INTO auth_tokens (hash, user_id, purpose, expires_at) VALUES (?, ?, ?, ?)');
-  assert.doesNotThrow(async () => await insert.run(hex('5'), 'user-owner', 'add-passkey', 1_900_000_005_000));
-  assert.throws(async () => await insert.run(hex('6'), 'user-owner', 'add-passkey', 1_900_000_006_000), /UNIQUE/, 'one pending add-passkey token per user');
-  assert.doesNotThrow(async () => await insert.run(hex('6'), 'user-member', 'add-passkey', 1_900_000_006_000));
-  assert.throws(async () => await insert.run(hex('9'), 'user-owner', 'bogus', 1_900_000_007_000), /CHECK/);
-  assert.throws(async () => await insert.run(hex('9'), 'user-owner', 'Add-Passkey', 1_900_000_007_000), /CHECK/);
-  assert.throws(async () => await insert.run(hex('5'), 'user-pending', 'recovery', 1_900_000_007_000), /UNIQUE|PRIMARY/, 'hash stays the primary key');
-  assert.throws(async () => await insert.run(hex('9'), 'user-absent', 'recovery', 1_900_000_007_000), /FOREIGN KEY/);
-  assert.throws(async () => await db.prepare('INSERT INTO auth_tokens (hash, user_id, purpose) VALUES (?, ?, ?)').run(hex('9'), 'user-pending', 'recovery'), /NOT NULL/);
+  await assert.doesNotReject(async () => await insert.run(hex('5'), 'user-owner', 'add-passkey', 1_900_000_005_000));
+  await assert.rejects(async () => await insert.run(hex('6'), 'user-owner', 'add-passkey', 1_900_000_006_000), /UNIQUE/, 'one pending add-passkey token per user');
+  await assert.doesNotReject(async () => await insert.run(hex('6'), 'user-member', 'add-passkey', 1_900_000_006_000));
+  await assert.rejects(async () => await insert.run(hex('9'), 'user-owner', 'bogus', 1_900_000_007_000), /CHECK/);
+  await assert.rejects(async () => await insert.run(hex('9'), 'user-owner', 'Add-Passkey', 1_900_000_007_000), /CHECK/);
+  await assert.rejects(async () => await insert.run(hex('5'), 'user-pending', 'recovery', 1_900_000_007_000), /UNIQUE|PRIMARY/, 'hash stays the primary key');
+  await assert.rejects(async () => await insert.run(hex('9'), 'user-absent', 'recovery', 1_900_000_007_000), /FOREIGN KEY/);
+  await assert.rejects(async () => await db.prepare('INSERT INTO auth_tokens (hash, user_id, purpose) VALUES (?, ?, ?)').run(hex('9'), 'user-pending', 'recovery'), /NOT NULL/);
 
   await db.prepare('INSERT INTO auth_challenges (hash, ceremony, user_id, token_hash, session_hash, challenge, expires_at) VALUES (?, ?, ?, ?, NULL, ?, ?)')
     .run(hex('0'), 'register', 'user-owner', hex('5'), 'synthetic-challenge-add', 1_900_000_000_900);
-  assert.throws(async () => await db.prepare('INSERT INTO auth_challenges (hash, ceremony, user_id, token_hash, session_hash, challenge, expires_at) VALUES (?, ?, ?, ?, NULL, ?, ?)')
+  await assert.rejects(async () => await db.prepare('INSERT INTO auth_challenges (hash, ceremony, user_id, token_hash, session_hash, challenge, expires_at) VALUES (?, ?, ?, ?, NULL, ?, ?)')
     .run(hex('9'), 'register', 'user-owner', hex('9'), 'synthetic-challenge-orphan', 1_900_000_000_900), /FOREIGN KEY/);
 
   await db.prepare('DELETE FROM auth_tokens WHERE hash = ?').run(hex('b'));
@@ -160,7 +160,7 @@ test('after 020, a populated store without store_identity refuses migration 022 
   const before = await snapshot(db);
   const identity = listMigrations().find(m => m.name === 'platform-identity');
   assert.ok(identity && identity.id > TARGET.id, 'migration 022-platform-identity is registered after 020');
-  assert.throws(async () => await migrate(db), new RegExp(`migration ${identity.id}-platform-identity failed`));
+  await assert.rejects(async () => await migrate(db), new RegExp(`migration ${identity.id}-platform-identity failed`));
   assert.equal((await db.prepare('SELECT max(id) AS id FROM schema_migrations').get()).id, identity.id - 1, 'only the migrations between 020 and the platform migration are recorded');
   assert.deepEqual(await snapshot(db), before, 'the refused migration rolls back');
   assert.equal((await db.prepare('PRAGMA foreign_keys').get()).foreign_keys, 1);

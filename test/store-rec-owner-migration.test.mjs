@@ -156,11 +156,11 @@ test('migration 019 applies once; a second migrate does nothing', async () => {
 test('migration 019 CHECKs the owner and override and defaults new rows', async () => {
   const db = await plannerStore();
   await migrate(db);
-  assert.throws(async () => await db.prepare("UPDATE recs SET owner = 'nobody' WHERE id = 'va529'").run(), /CHECK/);
-  assert.throws(async () => await db.prepare("UPDATE recs SET owner = 'Spouse' WHERE id = 'va529'").run(), /CHECK/);
-  assert.throws(async () => await db.prepare("UPDATE recs SET owner_override = 2 WHERE id = 'va529'").run(), /CHECK/);
+  await assert.rejects(async () => await db.prepare("UPDATE recs SET owner = 'nobody' WHERE id = 'va529'").run(), /CHECK/);
+  await assert.rejects(async () => await db.prepare("UPDATE recs SET owner = 'Spouse' WHERE id = 'va529'").run(), /CHECK/);
+  await assert.rejects(async () => await db.prepare("UPDATE recs SET owner_override = 2 WHERE id = 'va529'").run(), /CHECK/);
   for (const o of ['you', 'spouse', 'both', 'advisor', 'automatic']) {
-    assert.doesNotThrow(async () => await db.prepare('UPDATE recs SET owner = ?, owner_override = 1 WHERE id = ?').run(o, 'va529'), o);
+    await assert.doesNotReject(async () => await db.prepare('UPDATE recs SET owner = ?, owner_override = 1 WHERE id = ?').run(o, 'va529'), o);
   }
   await db.prepare(`INSERT INTO recs (id, def, status, sort, updated_at) VALUES ('later', '{}', 'proposed', 0, ?)`).run(TS);
   assert.deepEqual({ ...await db.prepare("SELECT owner, owner_override, goal_kinds FROM recs WHERE id = 'later'").get() }, { owner: 'you', owner_override: 0, goal_kinds: '[]' });

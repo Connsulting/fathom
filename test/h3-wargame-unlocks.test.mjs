@@ -156,7 +156,7 @@ test('AC2: a salary point over its contribution limit is dropped alone and the c
   const quoted = scenario.fig['wg.salary.s50.tax'];
   assert.match(quoted.unavailable, /limit/i, 'a quoted figure of the left-out point says why');
   assert.equal(quoted.unavailableFix?.key, 'retirement.contributions', 'and carries its fix');
-  assert.throws(async () => await wargamePick(api(db, { name: 'salary' }, { index: 's50' })), e => e.status >= 400 && e.status < 500);
+  await assert.rejects(async () => await wargamePick(api(db, { name: 'salary' }, { index: 's50' })), e => e.status >= 400 && e.status < 500);
 });
 
 test('AC2: a deferral option over its contribution limit is dropped alone and the comparison still shows', async () => {
@@ -170,7 +170,7 @@ test('AC2: a deferral option over its contribution limit is dropped alone and th
   assert.deepEqual(stored.options.map(o => o.id), ['d0', 'd50']);
   assertExcluded(stored, 'd100', 'deferral');
   assert.equal(stored.excluded.find(e => e.id === 'd100').label, 'Move it all to January');
-  assert.throws(async () => await wargamePick(api(db, { name: 'deferral' }, { index: 'd100' })), e => e.status >= 400 && e.status < 500);
+  await assert.rejects(async () => await wargamePick(api(db, { name: 'deferral' }, { index: 'd100' })), e => e.status >= 400 && e.status < 500);
   assert.ok((await wargamePick(api(db, { name: 'deferral' }, { index: 'd50' }))).scenario, 'a remaining option can still be picked');
 });
 

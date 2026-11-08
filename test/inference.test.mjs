@@ -291,7 +291,7 @@ test('AC2: scripted Ask records an S corp classification with a receipt and exac
   assert.equal(receipts.length, 1);
   await callTool('undo', { operation: 'undo', id: receipts[0].id }, { ...ctx, channel: 'mcp', scopes: ['write:facts'] });
   assert.equal((await getFacts(db))['business.entities'], undefined);
-  assert.throws(async () => await recordFactAnswers(db, [{ key: 'business.entities', value: [{ name: 'Example Studio', type: 'invented' }] }], { now }), FactAnswerError);
+  await assert.rejects(async () => await recordFactAnswers(db, [{ key: 'business.entities', value: [{ name: 'Example Studio', type: 'invented' }] }], { now }), FactAnswerError);
 });
 
 test('AC3/AC4: mortgage uses matched payments and balance snapshots, infers rate and payoff, and asks only escrow', async t => {
@@ -497,7 +497,7 @@ test('entity status and account links validate atomically without accepting miss
     { name: 'Past partnership', type: 'partnership', status: 'final_year' },
     { name: 'Past partnership', type: 'partnership', status: 'active', finalYear: 2026 },
     { name: 'Current Studio', type: 's_corp', accountId: 'missing-account' },
-  ]) assert.throws(async () => await recordFactAnswers(db, [{ key: 'business.entities', value: [entry] }], { now }), FactAnswerError);
+  ]) await assert.rejects(async () => await recordFactAnswers(db, [{ key: 'business.entities', value: [entry] }], { now }), FactAnswerError);
   await recordFactAnswers(db, [{ key: 'business.entities', value: [{ name: 'Past partnership', type: 'partnership', owner: 'spouse', status: 'final_year', finalYear: 2025 }] }], { now });
   assert.ok(!resolveEntities(await loadPlanningData(db, '2026-11-05'), await getFacts(db)).some(e => e.name === 'Past partnership'), 'prior final years do not enter current business calculations');
   await recordFactAnswers(db, [{ key: 'business.entities', value: [{ name: 'Final partnership', type: 'partnership', owner: 'spouse', status: 'final_year', finalYear: 2026 }] }], { now });

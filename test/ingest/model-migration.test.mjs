@@ -32,8 +32,8 @@ test('populated additive upgrade preserves financial rows and provenance; old ma
     assert.equal(mapping.structural_context, null);
     assert.deepEqual((await migrate(db, { through: 29 })).applied, []);
     assert.deepEqual(await db.prepare('PRAGMA foreign_key_check').all(), []);
-    assert.throws(async () => await db.prepare("UPDATE column_mappings SET approval_status = 'guessed'").run());
-    assert.throws(async () => await db.prepare('UPDATE column_mappings SET mapping_version = 0').run());
+    await assert.rejects(async () => await db.prepare("UPDATE column_mappings SET approval_status = 'guessed'").run());
+    await assert.rejects(async () => await db.prepare('UPDATE column_mappings SET mapping_version = 0').run());
   } finally { await db.close(); }
 });
 
@@ -47,15 +47,15 @@ test('household-local proposal versions, batches and mapping approval cannot cro
       (id, version, file_id, source_sha256, status, proposal, interpreter_version, created_at, updated_at)
       VALUES ('proposal-synthetic', 1, 'f-synthetic', ?, 'needs_confirmation', '{}', '1', ?, ?)`).run('a'.repeat(64), now, now);
     await insert(a); await insert(b);
-    assert.throws(async () => await insert(a));
+    await assert.rejects(async () => await insert(a));
     await a.prepare(`INSERT INTO import_proposals (id, version, file_id, source_sha256, status, proposal, interpreter_version, created_at, updated_at)
       VALUES ('proposal-synthetic', 2, 'f-synthetic', ?, 'needs_clarification', '{}', '1', ?, ?)`).run('a'.repeat(64), now, now);
     await a.prepare(`INSERT INTO import_batches (id, proposal_id, proposal_version, file_id, status, before_state, after_state, created_at)
       VALUES ('batch-synthetic', 'proposal-synthetic', 2, 'f-synthetic', 'committed', '[]', '[]', ?)`).run(now);
     assert.equal((await b.prepare('SELECT count(*) AS n FROM import_batches').get()).n, 0);
-    assert.throws(async () => await a.prepare("UPDATE import_batches SET proposal_version = 99").run());
-    assert.throws(async () => await a.prepare("UPDATE import_proposals SET status = 'fabricated'").run());
-    assert.throws(async () => await a.prepare('UPDATE import_proposals SET version = 0').run());
+    await assert.rejects(async () => await a.prepare("UPDATE import_batches SET proposal_version = 99").run());
+    await assert.rejects(async () => await a.prepare("UPDATE import_proposals SET status = 'fabricated'").run());
+    await assert.rejects(async () => await a.prepare('UPDATE import_proposals SET version = 0').run());
   } finally { a.close(); b.close(); }
 });
 

@@ -317,8 +317,8 @@ test('provisioned keys: swapped wrapped rows, a wrong platform key, a second pro
 
   // The unique active index allows one active row per household; a retired row is fine.
   const insert = p.prepare('INSERT INTO household_data_keys (household_id, key_version, wrapped_key, status, created_at) VALUES (?, ?, ?, ?, ?)');
-  assert.throws(async () => await insert.run(A, 2, randomBytes(64), 'active', NOW_MS), err => err.code === 'ERR_SQLITE_ERROR' && /UNIQUE/i.test(err.message));
-  assert.throws(async () => await insert.run(A, 1, randomBytes(64), 'retired', NOW_MS), err => err.code === 'ERR_SQLITE_ERROR', 'primary key (household_id, key_version)');
+  await assert.rejects(async () => await insert.run(A, 2, randomBytes(64), 'active', NOW_MS), err => err.code === 'ERR_SQLITE_ERROR' && /UNIQUE/i.test(err.message));
+  await assert.rejects(async () => await insert.run(A, 1, randomBytes(64), 'retired', NOW_MS), err => err.code === 'ERR_SQLITE_ERROR', 'primary key (household_id, key_version)');
   await insert.run(A, 2, randomBytes(64), 'retired', NOW_MS);
   const active = await HV.unwrapDataKey(p, { householdId: A, platformKey: pk });
   assert.equal(active.version, 1, 'the active version is chosen when none is named');
@@ -559,7 +559,7 @@ test('platform migration 002 gives every fresh platform an empty household_data_
   assert.ok(indexes.some(i => i.unique === 1 && i.partial === 1), 'a unique partial index (one active key per household)');
   assert.ok(await p.prepare('SELECT 1 AS x FROM schema_migrations WHERE id = 2').get(), 'migration 002 recorded');
   assert.equal((await p.prepare('SELECT count(*) AS n FROM household_data_keys').get()).n, 0, 'empty after migration');
-  assert.throws(async () => await p.prepare('INSERT INTO household_data_keys (household_id, key_version, wrapped_key, status, created_at) VALUES (?, 1, ?, ?, ?)')
+  await assert.rejects(async () => await p.prepare('INSERT INTO household_data_keys (household_id, key_version, wrapped_key, status, created_at) VALUES (?, 1, ?, ?, ?)')
     .run('hh-synthetic-unknown', randomBytes(64), 'active', NOW_MS), err => err.code === 'ERR_SQLITE_ERROR', 'household must exist');
 
   const instanceDir = await tempDir(t);

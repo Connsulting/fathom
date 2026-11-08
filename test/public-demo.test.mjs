@@ -94,7 +94,7 @@ test('startup refuses unmarked demo and real stores without changing them', asyn
     if (mode === 'demo') await opened.db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
     await opened.db.close(); await opened.platform.close();
     const before = readFileSync(await storeFile(dir));
-    assert.throws(async () => await openOrCreateInstance(config(dir)), /public.demo/i);
+    await assert.rejects(async () => await openOrCreateInstance(config(dir)), /public.demo/i);
     assert.deepEqual(readFileSync(await storeFile(dir)), before);
   }
 });
@@ -219,7 +219,7 @@ test('public startup refuses a demo after an import attempt', async t => {
     await ingestFile(household.db, { name: 'sample.csv', bytes: Buffer.from('Date,Description,Amount\n2026-11-01,Sample,10\n') }, { config: privateConfig, household });
     assert.equal(await getSetting(household.db, 'synthetic_demo', null), null);
   } finally { await s.close(); }
-  assert.throws(async () => await openOrCreateInstance(config(dir)), /synthetic seeder marker/);
+  await assert.rejects(async () => await openOrCreateInstance(config(dir)), /synthetic seeder marker/);
 });
 test('a refused private-demo request preserves the marker and a successful write invalidates it', async t => {
   const dir = directory(t);
@@ -337,10 +337,10 @@ test('global USD reservations, sandbox TTL/cap and per-IP creation cap are enfor
   const first = await ctl.sandbox(null, 'ip');
   assert.match(first.id, /^[a-f0-9]{64}$/);
   assert.equal((await ctl.sandbox(first.id, 'ip')).id, first.id);
-  assert.throws(async () => await ctl.sandbox(null, 'ip2'), /busy/i);
+  await assert.rejects(async () => await ctl.sandbox(null, 'ip2'), /busy/i);
   time += 61000;
   await ctl.cleanup();
-  assert.throws(async () => await ctl.sandbox(null, 'ip'), /creation limit/i);
+  await assert.rejects(async () => await ctl.sandbox(null, 'ip'), /creation limit/i);
   assert.notEqual((await ctl.sandbox(null, 'ip2')).id, first.id);
   await ctl.close();
 });

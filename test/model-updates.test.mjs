@@ -46,7 +46,7 @@ test('historical unanchored notes ask for the anchor and guessed amounts or date
     assert.equal(p.status, 'needs_clarification'); assert.equal(p.reasonCode, 'needs_date_anchor');
     await assert.rejects(await approve(x, p));
     for (const args of [{ amount: 1250 }, { dueDate: '2032-03-16' }]) {
-      assert.throws(async () => await stageUpdate(x.ctx, { source: x.source, capturedAt: '2032-03-02T14:00:00Z', actions: [{ ...x.expected, args: { ...x.expected.args, ...args } }] }), /stated|date|evidence/);
+      await assert.rejects(async () => await stageUpdate(x.ctx, { source: x.source, capturedAt: '2032-03-02T14:00:00Z', actions: [{ ...x.expected, args: { ...x.expected.args, ...args } }] }), /stated|date|evidence/);
     }
     assert.equal((await x.db.prepare('SELECT count(*) n FROM action_receipts').get()).n, 0);
   } finally { x.close(); }
@@ -56,7 +56,7 @@ test('source spans bind the exact file, bytes and actor instead of conversation 
   const x = await updateFixture();
   try {
     for (const span of [{ ...x.span, sha256: '0'.repeat(64) }, { ...x.span, fileId: 'foreign' }, { ...x.span, byteEnd: 99999 }, { ...x.span, byteStart: -1 }]) {
-      assert.throws(async () => await stageUpdate(x.ctx, { source: x.source, capturedAt: '2032-03-02T14:00:00Z', actions: [{ ...x.expected, span }] }), /source|span/);
+      await assert.rejects(async () => await stageUpdate(x.ctx, { source: x.source, capturedAt: '2032-03-02T14:00:00Z', actions: [{ ...x.expected, span }] }), /source|span/);
     }
     const p = await stageUpdate(x.ctx, { source: x.source, capturedAt: '2032-03-02T14:00:00Z', actions: [x.expected] });
     await assert.rejects(await approve(x, p, { actorId: 'foreign-actor' }), /owner|available/);
@@ -85,7 +85,7 @@ test('corrections ground new values and date anchors in the exact current owner 
     const evidence = 'This was written 2032-03-02. The payroll provider pays next Tuesday, amount $200.';
     await reviewImport({ ...x.ctx, ownerText: evidence }, { proposalId: p.proposalId, version: 1, decision: 'correct', evidence });
     const action = { ...x.expected, args: { ...x.expected.args, amount: 200, evidence } };
-    assert.throws(async () => await stageUpdate(x.ctx, { source: x.source, actions: [action], proposalId: p.proposalId, version: 2, capturedAt: '2032-03-03' }), /anchor|stated/);
+    await assert.rejects(async () => await stageUpdate(x.ctx, { source: x.source, actions: [action], proposalId: p.proposalId, version: 2, capturedAt: '2032-03-03' }), /anchor|stated/);
     const revised = await stageUpdate(x.ctx, { source: x.source, actions: [action], proposalId: p.proposalId, version: 2, capturedAt: '2032-03-02' });
     assert.equal(revised.status, 'needs_confirmation');
     await approve(x, revised);

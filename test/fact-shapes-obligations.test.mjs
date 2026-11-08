@@ -31,12 +31,12 @@ test('C7 facts accept their declared shapes and reject malformed neighbors atomi
     assert.ok(out.receipt);
     assert.deepEqual(out.value,value);
     const before=(await s.db.prepare('SELECT value FROM facts WHERE key=?').get(key)).value;
-    assert.throws(async ()=>await recordFactAnswers(s.db,[{key,value:invalid}],{now}),FactAnswerError,key);
+    await assert.rejects(async ()=>await recordFactAnswers(s.db,[{key,value:invalid}],{now}),FactAnswerError,key);
     assert.equal((await s.db.prepare('SELECT value FROM facts WHERE key=?').get(key)).value,before);
   }
   await recordFactAnswers(s.db,[{key:'accounts.rothFirstContributionYear',value:{ira:2021}}],{now});
-  assert.throws(async ()=>await recordFactAnswers(s.db,[{key:'household.dependentBirthDates',value:[]}],{now}),FactAnswerError);
-  assert.throws(async ()=>await recordFactAnswers(s.db,[{key:'household.dependentAges',value:[1.5]}],{now}),FactAnswerError);
+  await assert.rejects(async ()=>await recordFactAnswers(s.db,[{key:'household.dependentBirthDates',value:[]}],{now}),FactAnswerError);
+  await assert.rejects(async ()=>await recordFactAnswers(s.db,[{key:'household.dependentAges',value:[1.5]}],{now}),FactAnswerError);
   const q=questionFor(['accounts.separationDate'],{accounts:await s.db.prepare('SELECT * FROM accounts').all(),facts:{'accounts.planType':{ret:'401k',ira:'roth_ira'}}});
   assert.deepEqual(q.fields.map(f=>f.path[0]),['ret']);
 });
@@ -48,7 +48,7 @@ test('account eligibility follows the plan type in the same atomic answer batch 
  await recordFactAnswers(s.db,[separation,plan],{now});
  await s.db.prepare("DELETE FROM facts WHERE key IN ('accounts.planType','accounts.separationDate')").run();
  await recordFactAnswers(s.db,[plan,separation],{now});
- assert.throws(async ()=>await recordFactAnswers(s.db,[{...plan,value:{plan:'traditional_ira'}},separation],{now}),FactAnswerError);
+ await assert.rejects(async ()=>await recordFactAnswers(s.db,[{...plan,value:{plan:'traditional_ira'}},separation],{now}),FactAnswerError);
  assert.equal(JSON.parse((await s.db.prepare("SELECT value FROM facts WHERE key='accounts.planType'").get()).value).plan,'401k');
 });
 

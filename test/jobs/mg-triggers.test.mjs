@@ -624,7 +624,7 @@ test('MG14: kb excerpts are cut before escaping, so no entity is split', () => {
 
 // ================================================================ MG12: invalid inputs keep history, unavailable for current use (D3, R2-8, R2-9, R3-3, R3-7)
 
-const pickRefused = (db, name, clock = NOW) => assert.throws(
+const pickRefused = async (db, name, clock = NOW) => await assert.rejects(
   async () => await wargamePick(api(db, { clock, params: { name }, body: { index: 0 } })),
   err => err instanceof HttpError && err.status === 409,
 );
@@ -650,7 +650,7 @@ test('MG12: a salary war game whose inputs became invalid stays as history and i
   assert.equal(dec.status, 'unavailable');
   assert.equal(dec.unavailable, row.unavailable_reason);
   assert.equal(scenario.wargame.salary.status, 'unavailable');
-  pickRefused(db, 'salary');
+  await pickRefused(db, 'salary');
 });
 
 test('MG12: restoring the inputs clears the marker', async () => {
@@ -668,7 +668,7 @@ test('MG12: restoring the inputs clears the marker', async () => {
   const scenario = await getScenario(api(db));
   assert.equal(scenario.decisions.find(d => d.id === 'salary-2026').status, 'open');
   assert.equal(scenario.wargame.salary.status, 'open');
-  assert.doesNotThrow(async () => await wargamePick(api(db, { params: { name: 'salary' }, body: { index: 0 } })), 'a current game can be picked');
+  await assert.doesNotReject(async () => await wargamePick(api(db, { params: { name: 'salary' }, body: { index: 0 } })), 'a current game can be picked');
 });
 
 test('MG12: a decided salary decision stays decided when the game becomes unavailable', async () => {
