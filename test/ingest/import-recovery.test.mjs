@@ -622,6 +622,141 @@ test('Replace uploads the new file and removes the replaced one only when the ne
   }
 });
 
+// Review fix 3: a replacement upload whose returned file is the replaced file itself (identical
+// bytes answer the same file id) keeps it. Drives the Replace control as the test above does and
+// returns the calls the screen made.
+async function replaceWith(waiting, returned) {
+  const { screens, calls } = harness({ ...EMPTY, waiting: [waiting] }, { uploadResult: { files: returned, pending: 0 } });
+  const row = rowOf(screens.addFiles('add'), waiting.id);
+  const button = tagsOf(row).find((t) => /^<button/.test(t) && t.includes(`data-replace="${waiting.id}"`));
+  assert.ok(button, 'a replace button carries the replaced file id');
+  const inputTag = tagsOf(row).find((t) => /^<input/.test(t) && /type="file"/.test(t));
+  assert.ok(inputTag && inputTag.includes(`data-replace-for="${waiting.id}"`), 'the replace input names the replaced file');
+  const input = { ...element(inputTag), files: returned.map((f) => ({ name: f.name })), value: 'x', click() {} };
+  const el = { ...element(button), parentElement: { querySelector: (sel) => (/input/.test(sel) ? input : null) } };
+  assert.equal(screens.handleClick({ target: { closest: () => el }, preventDefault() {} }), true);
+  assert.equal(screens.handleChange({ type: 'change', target: input }), true);
+  for (let i = 0; i < 5; i++) await settle();
+  assert.deepEqual(calls.filter((c) => c[0] === 'upload'), [['upload', returned.length]]);
+  return calls.filter((c) => c[0] === 'removeFile');
+}
+
+test('Replace with the identical bytes keeps the file; a different file that was read still removes it once', async () => {
+  const OLD = 'f-scan-old-synthetic';
+  // A PDF Fathom could not read: its control is Replace, and an identical re-upload answers its own
+  // stored status (not an unread one) under the same file id.
+  const waiting = { id: OLD, name: 'scan-synthetic.pdf', status: 'needs_extraction', reasonCode: 'pdf_unreadable', sourceKind: null, parser: null, uploadedAt: NOW,
+    counts: { rows: {}, warnings: 0, warningCodes: {} } };
+  const same = { fileId: OLD, name: 'scan-synthetic.pdf', status: 'needs_extraction', reasonCode: 'pdf_unreadable', duplicateOf: OLD, counts: { rows: {} } };
+  const fresh = { fileId: 'f-scan-new-synthetic', name: 'export-synthetic.csv', status: 'imported', counts: { rows: { transaction: 2 } } };
+
+  assert.deepEqual(await replaceWith(waiting, [same]), [], 'identical bytes: the replaced file is kept');
+  assert.deepEqual(await replaceWith(waiting, [same, fresh]), [], 'the identical file among others: still kept');
+  // Liveness: a different file that was read replaces it.
+  assert.deepEqual(await replaceWith(waiting, [fresh]), [['removeFile', OLD]]);
+});
+
+// Review fix 2: a transient engine failure on a model import. The household's fake-mode runtime
+// engine is wrapped at its call: each listed error is thrown by one call, after the request was
+// dispatched (its beforeDispatch reservation ran), and once the list is spent calls go to the real
+// fake engine. `calls` counts every call.
+function failEngine(x, errors) {
+  const engine = x.household.engine;
+  const real = engine.call;
+  const calls = [];
+  engine.call = async (req) => {
+    calls.push(req.purpose);
+    const error = errors.shift();
+    if (!error) return real(req);
+    await req.beforeDispatch?.({});
+    throw error;
+  };
+  return { calls, restore() { engine.call = real; } };
+}
+const timeoutError = () => Object.assign(new Error('synthetic engine timeout naming Synthetic Private Payee'), { name: 'TimeoutError' });
+const connectionTimeout = () => Object.assign(new Error('synthetic connection timeout naming Synthetic Private Payee'), { code: 'ETIMEDOUT' });
+
+test('a transient model failure waits for the engine, shows that Fathom tries again, and is retried once automatically', async () => {
+  const x = await setup();
+  const eng = failEngine(x, [timeoutError()]);
+  try {
+    const csv = MODEL_CSV('model transient');
+    const r = await P.ingestFile(x.db, modelFile(csv), x.opts);
+    assert.equal(r.status, 'waiting_for_engine');
+    assert.equal(r.reasonCode, 'model_transient');
+    const stored = fileRowOf(x.db, r.fileId);
+    assert.deepEqual([stored.status, stored.note], ['waiting_for_engine', 'model_transient']);
+    assert.ok(!String(stored.note).includes('Synthetic Private Payee'));
+    assert.equal(eng.calls.length, 1);
+
+    // Reload, Home and Files.
+    const state = ingestState(x.db);
+    const w = state.waiting.find((f) => f.id === r.fileId);
+    assert.equal(w?.status, 'waiting_for_engine');
+    assert.equal(w?.reasonCode, 'model_transient');
+    const svc = serviceStatus({ db: x.db, now: new Date(NOW) });
+    assert.deepEqual([svc.imports.state, svc.imports.files, svc.imports.cause], ['retrying', 1, '1 file resumes automatically.']);
+    assert.equal(svc.attention, null, 'retrying is not on Home until a day passes');
+    for (const engineOn of [true, false]) {
+      const row = rowOf(harness(state, { engineOn }).screens.addFiles('add'), r.fileId);
+      assert.ok(row, 'shown on Files');
+      assert.match(causeOf(row), /Fathom tries once more automatically/, `engineOn ${engineOn}`);
+      assert.doesNotMatch(text(row), /model_transient|TimeoutError/, 'no codes on Files');
+    }
+
+    // The one automatic retry interprets the saved file and stages it for review.
+    const first = await P.resumeImports(x.db, { ...bg(x), fake: await fakeFor(csv) });
+    assert.deepEqual(first.resumed, [{ fileId: r.fileId, status: 'needs_confirmation' }]);
+    assert.equal(fileRowOf(x.db, r.fileId).status, 'needs_confirmation');
+    assert.equal(eng.calls.length, 2);
+    // Nothing is left for a further pass.
+    assert.deepEqual((await P.resumeImports(x.db, bg(x))).resumed, []);
+    assert.equal(eng.calls.length, 2);
+  } finally { eng.restore(); x.close(); }
+});
+
+test('a transient model failure that fails again on its automatic retry asks the owner and is not retried again', async () => {
+  const x = await setup();
+  const eng = failEngine(x, [timeoutError(), connectionTimeout()]);
+  try {
+    const csv = MODEL_CSV('model transient twice');
+    const r = await P.ingestFile(x.db, modelFile(csv), x.opts);
+    assert.deepEqual([fileRowOf(x.db, r.fileId).status, fileRowOf(x.db, r.fileId).note], ['waiting_for_engine', 'model_transient']);
+
+    const first = await P.resumeImports(x.db, { ...bg(x), fake: await fakeFor(csv) });
+    assert.deepEqual(first.resumed, [{ fileId: r.fileId, status: 'needs_clarification' }]);
+    assert.deepEqual([fileRowOf(x.db, r.fileId).status, fileRowOf(x.db, r.fileId).note], ['needs_clarification', 'model_failed']);
+    assert.equal(eng.calls.length, 2);
+    const svc = serviceStatus({ db: x.db, now: new Date(NOW) });
+    assert.equal(svc.imports.state, 'needs_you');
+    assert.equal(svc.imports.cause, '1 file needs you on Files.');
+
+    // No further automatic retry, even with a working engine response on offer.
+    const second = await P.resumeImports(x.db, { ...bg(x), fake: await fakeFor(csv) });
+    assert.deepEqual(second.resumed, []);
+    assert.equal(eng.calls.length, 2);
+    assert.deepEqual([fileRowOf(x.db, r.fileId).status, fileRowOf(x.db, r.fileId).note], ['needs_clarification', 'model_failed']);
+  } finally { eng.restore(); x.close(); }
+});
+
+test('a non-transient model failure asks the owner on the first attempt and is never retried automatically', async () => {
+  const x = await setup();
+  // The real fake engine with no scripted response refuses the call (ModelCallError), a class
+  // isTransient rejects.
+  const eng = failEngine(x, []);
+  try {
+    const csv = MODEL_CSV('model refused');
+    const r = await P.ingestFile(x.db, modelFile(csv), x.opts);
+    assert.equal(r.status, 'needs_clarification');
+    assert.equal(r.reasonCode, 'model_failed');
+    assert.deepEqual([fileRowOf(x.db, r.fileId).status, fileRowOf(x.db, r.fileId).note], ['needs_clarification', 'model_failed']);
+    assert.equal(eng.calls.length, 1);
+    assert.equal(serviceStatus({ db: x.db, now: new Date(NOW) }).imports.state, 'needs_you');
+    assert.deepEqual((await P.resumeImports(x.db, { ...bg(x), fake: await fakeFor(csv) })).resumed, []);
+    assert.equal(eng.calls.length, 1);
+  } finally { eng.restore(); x.close(); }
+});
+
 test('persistImport records warning rows per code, at most five, and warningText names them in plain words', async () => {
   const x = await setup();
   try {
