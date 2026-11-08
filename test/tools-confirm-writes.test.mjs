@@ -140,3 +140,64 @@ test('Confirm proposals retain the target item row',async t=>{
  s.db.prepare("UPDATE confirm_items SET question='Updated question' WHERE id=?").run(id);
  assert.notEqual(proposalBasis(s.db,pending.tool,pending.scopes,pending.args),pending.basis);
 });
+
+
+for (const kind of ['entity_alias', 'tax_year', 'fact_check', 'near_duplicate', 'employer_relation',
+  'employer_recipient', 'document_recipient', 'withholding_conflict', 'account_match',
+  'transaction_category', 'category_mapping', 'resolver_fact']) {
+ test(`${kind} proposals ignore unrelated transactions and retain affected rows`, async t => {
+  const s = await setup(t), db = s.db;
+  const transaction = key => Number(db.prepare("INSERT INTO transactions(account_id,date,amount,description,dedupe_key) VALUES ('manual','2032-03-01',-20,'Synthetic posting',?)").run(key).lastInsertRowid);
+  const payment = (payer, slot, key) => Number(db.prepare("INSERT INTO tax_payments(jurisdiction,tax_year,date,amount,payer,source_slot,dedupe_key,recipient) VALUES ('federal',2031,'2032-01-10',20,?,?,?,'unknown')").run(payer,slot,key).lastInsertRowid);
+  let subject = 'synthetic', context = {}, answer = 'yes', change;
+  if (kind === 'entity_alias') {
+   subject = 'exampleco'; answer = 'entity:Canonical Co';
+   const id = Number(db.prepare("INSERT INTO pnl_lines(entity,period,category,amount) VALUES ('Example Co','2031-01','Revenue',10)").run().lastInsertRowid);
+   change = () => db.prepare('UPDATE pnl_lines SET amount=11 WHERE id=?').run(id);
+  } else if (kind === 'tax_year') {
+   subject = 'tax:2031'; answer = 'payment_year';
+   const id = payment('tax', 'tax:2031:federal', 'tax-row');
+   change = () => db.prepare('UPDATE tax_payments SET amount=21 WHERE id=?').run(id);
+  } else if (kind === 'fact_check' || kind === 'resolver_fact') {
+   context = { key:'benefits.hsaCoverage', value:'family', values:{family:'family'} };
+   answer = kind === 'fact_check' ? 'yes' : 'family';
+   change = () => db.prepare("INSERT INTO facts(key,value,confirmed) VALUES ('benefits.hsaCoverage','\"individual\"',1)").run();
+  } else if (kind === 'near_duplicate') {
+   transaction('near-first'); const id = transaction('near-second');
+   subject = 'near-first|near-second'; context = { keys:subject.split('|') }; answer = 'same';
+   change = () => db.prepare('UPDATE transactions SET amount=-21 WHERE id=?').run(id);
+  } else if (kind === 'employer_relation') {
+   subject = 'exampleco'; answer = 'outside';
+   const id = Number(db.prepare("INSERT INTO held_facts(hold,key,value,confidence,created_at) VALUES ('employer:exampleco','income.w2','true',1,?)").run(NOW).lastInsertRowid);
+   change = () => db.prepare("UPDATE held_facts SET value='false' WHERE id=?").run(id);
+  } else if (['employer_recipient','document_recipient','withholding_conflict'].includes(kind)) {
+   const id = payment('w2:exampleco:doc:1','wh:exampleco:2031:federal:unknown','withholding-first');
+   answer = 'owner'; subject = kind === 'employer_recipient' ? 'exampleco' : 'w2:exampleco:doc:1';
+   if (kind === 'withholding_conflict') {
+    const second = payment('w2:exampleco:doc:2','wh:exampleco:2031:federal:unknown','withholding-second');
+    context = { first:{id,key:'withholding-first',fileId:null,cents:2000}, second:{id:second,key:'withholding-second',fileId:null,cents:2000} };
+    answer = 'first';
+   }
+   change = () => db.prepare('UPDATE tax_payments SET amount=21 WHERE id=?').run(id);
+  } else if (kind === 'account_match') {
+   db.prepare("INSERT INTO simplefin_accounts(sf_key,account_id,status,name,created_at) VALUES ('synthetic','manual','pending','Synthetic',?)").run(NOW);
+   context = { sfKey:'synthetic', candidateId:'manual', ownId:'manual' }; answer = 'same';
+   change = () => db.prepare("UPDATE simplefin_accounts SET status='mapped' WHERE sf_key='synthetic'").run();
+  } else if (kind === 'transaction_category') {
+   const id = transaction('category-target'); context = { transactionId:id }; answer = 'Groceries';
+   change = () => db.prepare('UPDATE transactions SET amount=-21 WHERE id=?').run(id);
+  } else {
+   context = { parser:'synthetic', category:'Synthetic category' }; answer = 'household';
+   db.prepare("INSERT INTO category_source_rules(parser,category,bucket,updated_at) VALUES ('synthetic','Synthetic category','income',?)").run(NOW);
+   change = () => db.prepare("UPDATE category_source_rules SET bucket='excluded' WHERE parser='synthetic'").run();
+  }
+  const id = ask(db, {kind,subject,context,options:[{id:answer,label:answer}],question:'Synthetic question',now:NOW}).id;
+  let pending;
+  await proposalTools(tools).find(t => t.name === 'answer').handler({operation:'confirm',items:[{id,answer}],propose:true},{...s.ctx,onProposal:p => {pending=p;}});
+  const basis = () => proposalBasis(db,pending.tool,pending.scopes,pending.args);
+  transaction('unrelated');
+  assert.equal(basis(),pending.basis);
+  change();
+  assert.notEqual(basis(),pending.basis);
+ });
+}
