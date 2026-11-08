@@ -1347,7 +1347,7 @@ route's response shape is the screen's, not the tool's.
 
 ### Route map
 
-All 100 routes on main at this revision: 52 covered, 48 excluded. "Ticket" is the ticket that
+All 103 routes on main at this revision: 55 covered, 48 excluded. "Ticket" is the ticket that
 lands the covering operation.
 
 | Route | Covered by | Ticket | Note |
@@ -1411,7 +1411,8 @@ lands the covering operation.
 | `POST /api/accounts/:id/owner` | `update_account.owner` | C8 |  |
 | `POST /api/accounts/:id/kind` | `update_account.kind` | C8 |  |
 | `GET /api/accounts/:id/merge-candidates` | `accounts.merge_candidates` | C8 |  |
-| `POST /api/accounts/:id/merge` | `update_account.merge` | C8 | explicit confirm |
+| `POST /api/accounts/:id/merge` | `sources.merge_accounts`, `update_account.merge` | SRC1, C8 | Undo reopens the merge; C8 adds the explicit confirm |
+| `POST /api/accounts/:id/archive` | `sources.archive_account` | SRC1 | `{archived: false}` restores; Undo by receipt |
 | `GET /api/goals/suggestions` | `goals.suggestions` | C9 |  |
 | `POST /api/goals` | `update_goal.create` | C1 |  |
 | `POST /api/goals/:id` | `update_goal.edit` | C1 |  |
@@ -1429,6 +1430,8 @@ lands the covering operation.
 | `POST /api/files` | `refresh.import_file` | C10 |  |
 | `GET /api/files` | `household.imports` | C10 |  |
 | `POST /api/files/:id/retry` | `refresh.retry_import` | C10 |  |
+| `POST /api/files/:id/remove` | `sources.remove_file` | SRC1 | rows archived in a change log; Undo by receipt |
+| `GET /api/sources` | `accounts.sources` | SRC1 | real names, range, history or stale |
 | `GET /api/confirm` | `household.confirm_items` | C8 | status pending |
 | `POST /api/confirm/list` | `household.confirm_items` | C8 | a read despite POST |
 | `POST /api/confirm/answers` | `answer.confirm` | C8 |  |
