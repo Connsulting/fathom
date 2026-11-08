@@ -1,5 +1,5 @@
 export const headers = [
-  ['household', 'read', 'Call household.figures; quote {f:key} tokens, never summary amounts.', 'Looking at your household', 'household summary'],
+  ['household', 'read', 'Stored figures: call household.figures; quote {f:key} tokens, never summary amounts.', 'Looking at your household', 'household summary'],
   ['accounts', 'read', 'Accounts, balances and holdings; masks only.', 'Looking at your accounts', 'your accounts'],
   ['transactions', 'read', 'Call transactions.search for recent purchases in cash accounts and credit cards by category.', 'Looking through your transactions', 'your transactions'],
   ['spending', 'read', 'Call spending.total for spending totals or breakdowns and transactions.search for recent purchases.', 'Looking at your spending', 'your spending'],
