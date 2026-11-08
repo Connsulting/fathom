@@ -425,7 +425,9 @@ export const priorReturn = ({ agi = SYNTH.prior.agi, totalTax = SYNTH.prior.fede
 export async function buildRealStore(dataDir, { clock = CLOCK, variant = {} } = {}) {
   const db = await createRealStore(dataDir, { clock });
   const entities = variant.entities || ENTITIES;
-  const hints = { ...HINTS, ...(variant.hints || {}) };
+  const businessHint = `${INST.bank}|${MASKS.business}`;
+  const selectedBusiness = entities.find(e => e.type === 's_corp') || entities.find(e => e.owner === 'owner') || entities[0];
+  const hints = { ...HINTS, ...(variant.entities ? { [businessHint]: { ...HINTS[businessHint], entity: selectedBusiness?.name || null } } : {}), ...(variant.hints || {}) };
   const taxYear = variant.taxYear === undefined ? 'tax_year' : variant.taxYear;
   const files = variant.files === false ? [] : [
     pnlWorkbook(entities, variant.pnlExtra || []),

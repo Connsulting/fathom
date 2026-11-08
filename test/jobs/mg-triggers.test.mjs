@@ -781,7 +781,7 @@ test('MG12: federal targets turn unavailable when household tax is blocked', asy
   await plan(db);
   const f = getScenario(api(db)).fig['sh.fed.remaining'];
   assert.ok(f, 'retained while the fed-q4 rec cites it');
-  assert.match(f.unavailable || '', /how Quill Works is taxed/);
+  assert.match(f.unavailable || '', /How is Quill Works taxed/);
 });
 
 test('MG12: restoring the data clears the marker', async () => {

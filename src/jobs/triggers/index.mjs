@@ -64,7 +64,7 @@ function recOf(ctx, t, hit, window) {
   if (questions.length) {
     const primary = !!hit.confirm?.length && !advisorQuestions.length;
     const people = ['year-end-retirement', 'scorp-salary'].includes(t.id) && ctx.info.solo?.person ? [ctx.info.solo.person] : undefined;
-    rec.question = { ...questionFor(questions, { accounts: ctx.data?.accounts || [], facts: ctx.facts, names: ctx.names, people }), primary };
+    rec.question = { ...questionFor(questions, { accounts: ctx.data?.accounts || [], facts: ctx.facts, names: ctx.names, people, mortgage: ctx.mortgage }), primary };
     // A listed rec keeps its steps beside the form; each answer step clears as its fact lands.
     if (primary && !LISTED_RECS.has(t.id)) {
       rec.title = dataText(rec.question.title);

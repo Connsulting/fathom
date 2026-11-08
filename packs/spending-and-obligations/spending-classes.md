@@ -10,7 +10,7 @@ Built-in definitions, with no arithmetic in this entry: household_spending is th
 
 housing covers aggregator category Home & Garden. The demo seed has no housing-class category. Home & Garden is rent, upkeep, HOA, and escrowed property tax and insurance.
 
-debt_service covers aggregator category Mortgage and demo-seed category housing. The demo's housing rows are mortgage payments. A mortgage payment is debt service. Its interest share is a housing cost and its principal share is saving. When only the payment is known, the whole payment is debt_service.
+debt_service covers aggregator category Mortgage and demo-seed category housing. Label its aggregate as all debt payments: it can contain other debts or miscategorized transfers, so it cannot identify the mortgage payment. The demo's housing rows are mortgage payments. A mortgage payment is debt service. Its interest share is a housing cost and its principal share is saving. When only the payment is known, the whole payment is debt_service.
 
 healthcare covers aggregator categories Medical, Healthcare Premiums and Health & Wellness, and demo-seed category health. Health & Wellness can hold gym memberships. A saved definition can move it.
 

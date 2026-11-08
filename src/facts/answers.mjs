@@ -11,7 +11,13 @@ const object = v => !!v && typeof v === 'object' && !Array.isArray(v);
 const fail = () => { throw new FactAnswerError('Check the answer type, required fields and units.'); };
 
 function validate(value, shape, year) {
-  if (shape.type === 'map') {
+  if (shape.type === 'array') {
+    if (!Array.isArray(value) || value.length < shape.minItems || value.length > shape.maxItems) fail();
+    for (const entry of value) validate(entry, shape.items, year);
+    if (new Set(value.map(e => normalizeName(e.name))).size !== value.length) fail();
+  } else if (shape.type === 'string') {
+    if (typeof value !== 'string' || !normalizeName(value) || value.length > shape.maxLength) fail();
+  } else if (shape.type === 'map') {
     if (!object(value) || !Object.keys(value).length || Object.keys(value).some(k => !normalizeName(k)) || new Set(Object.keys(value).map(normalizeName)).size !== Object.keys(value).length) fail();
     for (const entry of Object.values(value)) validate(entry, shape.values, year);
   } else if (shape.type === 'object') {
@@ -66,11 +72,29 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
       value = { ...(object(prior) ? prior : {}), ...value };
     } else {
       // Birth years are told a person at a time: a later answer keeps the years it does not name.
-      if (a.key === 'household.birthYears' && object(value)) {
+      if (['household.birthYears', 'obligations.mortgage'].includes(a.key) && object(value)) {
         const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
         value = { ...(object(prior) ? prior : {}), ...value };
       }
       validate(value, shape, year);
+      if (a.key === 'business.entities') {
+        const links = value.map(e => e.accountId).filter(Boolean);
+        if (new Set(links).size !== links.length) fail();
+        for (const entry of value) {
+          if ((entry.status === 'final_year') !== (entry.finalYear !== undefined)) fail();
+          if (entry.accountId && (!['s_corp', 'sole_prop', 'llc_single', 'partnership', 'c_corp'].includes(entry.type)
+            || !db.prepare("SELECT id FROM accounts WHERE id=? AND kind='business' AND archived_at IS NULL").get(entry.accountId))) fail();
+        }
+        const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, []);
+        const names = new Set(value.map(e => normalizeName(e.name)));
+        value = [...(Array.isArray(prior) ? prior : []).filter(e => !names.has(normalizeName(e?.name))
+          && !(e?.inferred && (links.includes(e.accountId) || e.accountIds?.some(id => links.includes(id)))))
+          .map(e => {
+            if (!links.includes(e?.accountId)) return e;
+            const { accountId, ...unlinked } = e;
+            return unlinked;
+          }), ...value];
+      }
       if (shape.type === 'map') {
         const prior = parseJson(db.prepare('SELECT value FROM facts WHERE key = ?').get(a.key)?.value, {});
         const changed = new Set(Object.keys(value).map(normalizeName));
@@ -78,7 +102,7 @@ export function recordFactAnswers(db, answers, { now = new Date().toISOString(),
         value = { ...Object.fromEntries(keep), ...value };
       }
     }
-    if (a.key === 'obligations.mortgage' && value.escrowMonthly >= value.monthlyPayment) fail();
+    if (a.key === 'obligations.mortgage' && (!Object.keys(value).length || value.escrowMonthly >= value.monthlyPayment)) fail();
     if (/^household\.(owner|spouse)BirthDate$/.test(a.key) && value > date) fail();
     if (a.key === 'business.salaryRange' && value.min > value.max) fail();
     // A birth year in the future is a typo, not an answer.

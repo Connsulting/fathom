@@ -109,10 +109,12 @@ export function c7ReadFixtures(household) {
   fact('household.ownerBirthDate',canary.includes('Alpha')?'1980-06-15':'1985-08-31');
   fact('household.retireAge',{owner:50});
   fact('obligations.mortgage',{balance:10000,rate:0,monthlyPayment:monthly,escrowMonthly:100,payoffDate:'2027-01-01'});
+  db.prepare("INSERT INTO accounts(id,name,kind) VALUES ('mortgage-loan',?,'loan')").run(`${canary} mortgage`);
+  db.prepare("INSERT INTO balances(account_id,date,amount) VALUES ('mortgage-loan','2026-10-31',-10000)").run();
   for(let month=1;month<=10;month++) {
     const date=`2026-${String(month).padStart(2,'0')}-10`;
     db.prepare('INSERT INTO transactions(account_id,date,amount,category,description,parser,dedupe_key) VALUES (?,?,?,?,?,?,?)')
-      .run('colliding-account',date,-monthly,'Mortgage',canary,'aggregator',`${canary}-${month}`);
+      .run('colliding-account',date,-monthly,'Mortgage',`${canary} mortgage payment`,'aggregator',`${canary}-${month}`);
   }
   return [
     {tool:'spending',args:{operation:'obligations',obligations:['mortgage']},path:'obligations.0.monthly.value',expected:monthly},

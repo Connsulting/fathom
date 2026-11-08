@@ -74,15 +74,30 @@ const dollars = label => ({ type: 'number', unit: 'USD', min: 0, label });
 const birthYear = label => ({ type: 'number', unit: 'year', min: MIN_BIRTH_YEAR, max: 2200, integer: true, label });
 
 export const ANSWER_SHAPES = Object.freeze({
+  'business.entities': { scope: 'household', type: 'array', minItems: 1, maxItems: 100, label: 'Business entity classifications', guidance: 'Record multiple businesses in one answer.fact proposal. Use known employer and business names, never personal summary tab names. Link the owner S corp to its business account. For unnamed spouse businesses use Spouse LLC and Spouse partnership as provisional labels. LLC means single-member LLC taxed on Schedule C unless multiple members or a corporate election is unclear. Record a departing partnership as final_year with finalYear; this year uses the household clock. The final K-1 remains expected.', items: { type: 'object', fields: {
+    name: { type: 'string', label: 'Entity name', maxLength: 200 },
+    type: { type: 'choice', ownerInterpreted: true, label: 'Entity classification', choices: [
+      ['s_corp', 'S corp'], ['sole_prop', 'sole proprietorship'], ['llc_single', 'single member LLC'], ['partnership', 'partnership'],
+      ['c_corp', 'C corp'], ['personal', 'personal summary'], ['income_history', 'income history'], ['inactive', 'inactive past business'], ['not_mine', 'not mine'],
+    ].map(([value, label]) => ({ value, label })) },
+    owner: { type: 'choice', ownerInterpreted: true, optional: true, label: 'Person or business owner', choices: [{ value: 'owner', label: 'you' }, { value: 'spouse', label: 'your spouse' }] },
+    status: { type: 'choice', ownerInterpreted: true, optional: true, label: 'Business status', choices: [{ value: 'active', label: 'active' }, { value: 'final_year', label: 'final year' }] },
+    finalYear: { type: 'number', unit: 'year', integer: true, min: 1900, max: 2200, optional: true, label: 'Final tax year' },
+    accountId: { type: 'string', maxLength: 200, optional: true, label: 'Linked business account ID' },
+    sstb: { ...yesNo('Specified service trade or business'), optional: true },
+  } } },
+  'business.entityInference': { scope: 'household', type: 'map', label: 'Undo an inferred entity classification', values: { type: 'object', fields: { undone: yesNo('Undo this inferred classification?') } } },
+  'accounts.businessEntity': { scope: 'account', accountKind: 'business', type: 'string', maxLength: 200, label: 'Business name for {account}' },
   'household.dependentAges': { scope: 'household', type: 'years', min: 0, max: 120, maxItems: 10, label: 'Dependent ages' },
   'household.dependentBirthDates': { scope: 'household', type: 'dates', maxItems: 10, label: 'Dependent birth dates' },
   'household.ownerBirthDate': { scope: 'household', type: 'date', label: 'Your birth date' },
   'household.spouseBirthDate': { scope: 'household', type: 'date', label: 'Your spouse birth date' },
   'household.retireAge': { scope: 'person', type: 'number', min: 18, max: 100, half: true, unit: 'age', label: 'Retirement age for {person}' },
   'obligations.mortgage': { scope: 'household', type: 'object', fields: {
-    balance: dollars('Mortgage balance'), rate: { type: 'number', min: 0, max: 1, unit: 'ratio', label: 'Annual mortgage rate' },
-    monthlyPayment: { ...dollars('Monthly mortgage payment including escrow'), exclusiveMin: 0 },
-    escrowMonthly: dollars('Monthly escrow continuing after payoff'), payoffDate: { type: 'date', optional: true, label: 'Mortgage payoff date' },
+    paidOff: { ...yesNo('Mortgage is paid off'), optional: true, ask: false },
+    balance: { ...dollars('Mortgage balance'), optional: true }, rate: { type: 'number', min: 0, max: 1, unit: 'ratio', optional: true, label: 'Annual mortgage rate' },
+    monthlyPayment: { ...dollars('Monthly mortgage payment including escrow'), exclusiveMin: 0, optional: true },
+    escrowMonthly: { ...dollars('Monthly escrow continuing after payoff'), optional: true }, payoffDate: { type: 'date', optional: true, ask: false, label: 'Mortgage payoff date' },
   } },
   'obligations.childcare': { scope: 'household', type: 'object', fields: {
     schoolAgeMonthly: { ...dollars('Monthly care at school age'), optional: true },
@@ -101,6 +116,8 @@ export const ANSWER_SHAPES = Object.freeze({
   'pnl.ledgers': { scope: 'household', type: 'map', label: 'Which imported ledgers are spending or businesses?', values: {
     type: 'object', fields: { kind: { type: 'choice', ownerInterpreted: true, label: 'What does this ledger track?', choices: [{ value: 'spending', label: 'Spending ledger' }, { value: 'business', label: 'Business' }] } },
   } },
+  'pnl.people': { scope: 'household', type: 'map', label: 'Who each personal summary belongs to', values: { type: 'choice', ownerInterpreted: true,
+    label: 'Whose summary is this?', choices: [{ value: 'owner', label: 'you' }, { value: 'spouse', label: 'your spouse' }] } },
   'retirement.planTermsConfirmed': { scope: 'household', ...yesNo('Has your advisor confirmed your retirement plan terms and eligibility?') },
   'retirement.aggregationConfirmed': { scope: 'household', ...yesNo('Has your advisor confirmed no related business shares your plan limits?') },
   'benefits.hsaEligible': { scope: 'household', ...yesNo('Is your health plan HSA eligible for the whole year?') },
@@ -152,7 +169,7 @@ const asked = (def, facts) => def.ask !== false && (!def.requires || facts[def.r
 // A Virginia plan field with no saved answer takes the answer inferred from the account's
 // institution (`inferred` holds the evidence and the account, for Undo). `answered` is true when
 // every active field holds a value, so the rec shows Answered instead of the questions.
-export function questionFor(keys, { accounts = [], facts = {}, names = {}, people } = {}) {
+export function questionFor(keys, { accounts = [], facts = {}, names = {}, people, mortgage } = {}) {
   const fields = [];
   const unique = [...new Set(keys)].filter(key => !ADVISOR_KEYS.has(key));
   for (const key of unique) {
@@ -165,6 +182,7 @@ export function questionFor(keys, { accounts = [], facts = {}, names = {}, peopl
     for (const group of groups) {
       const parts = shape.type === 'object' ? Object.entries(shape.fields).filter(([, def]) => asked(def, facts)) : [['', shape]];
       for (const [part, def] of parts) {
+        if (key === 'obligations.mortgage' && mortgage?.inferred[part]) continue;
         const path = [...group.path, ...(part ? [part] : [])];
         let value = path.reduce((v, p) => v && typeof v === 'object' && Object.hasOwn(v, p) ? v[p] : undefined, facts[key]);
         const inference = key === 'accounts.va529' && part === 'virginiaPlan' && value === undefined ? activeInference(group.record, facts) : null;
@@ -188,7 +206,7 @@ export function questionFor(keys, { accounts = [], facts = {}, names = {}, peopl
   const years = unique.includes('household.birthYears') ? ' Tell us your birth year, and your spouse\'s when you file jointly; every age comes from it.' : '';
   const summary = labels.length
     ? `For ${labels.map(dataText).join(', ')}, tell us whether it is Virginia's own 529 program. For each Virginia plan, enter the unused deduction carryforward.${years}`
-    : years ? years.trim() : 'Save these answers to update your plan automatically.';
+    : years ? years.trim() : unique.includes('obligations.mortgage') ? 'Tell Fathom only the missing mortgage terms. The other terms are inferred from loan data; correct them in Ask.' : 'Save these answers to update your plan automatically.';
   const first = fields[0];
   const title = first ? (first.group ? `${first.group}: ${first.label}` : first.label) : 'Answer the questions for your plan';
   return { keys: unique, ...(people ? { people } : {}), title, summary, answered, fields };

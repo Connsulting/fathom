@@ -5,6 +5,7 @@
 // notesFor(codes) -> ['sentence', ...] (unknown codes skipped, duplicates dropped, at most five)
 
 export const ASSUMPTION_TEXT = Object.freeze({
+  household_business_tax_pending: 'Business tax treatment is pending. This projection uses known payroll and excludes business profit until its tax type is confirmed.',
   va_exemptions_omitted: 'Virginia personal exemptions are left out, so Virginia tax may be a little high.',
   agi_as_magi_proxy: 'Adjusted gross income stands in for modified adjusted gross income.',
   parameters_2026_proxy: "Next year uses this year's brackets and limits, because next year's are not published yet.",
