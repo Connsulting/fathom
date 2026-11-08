@@ -1,16 +1,18 @@
 import { tx, parseJson, getSetting } from '../store/db.mjs';
-import { resolveCategories, importedCategory, historyExamples, createHistoryIndex } from './resolve.mjs';
+import { resolveCategories, importedCategory, historyExamples, createHistoryIndex, normalizeMerchant } from './resolve.mjs';
 import { loadCategoryInputs, queueCategoryChecks, categoryOptions, categoryNames, isJevProposal } from './store.mjs';
 import { categoryQuestions, JEV_MODEL } from './jev.mjs';
-import { confidenceBand, jevEvidence } from './policy.mjs';
+import { confidenceBand, jevEvidence, categoryEvidence } from './policy.mjs';
 import { ask, getItem, recordAutoAnswer } from '../ingest/confirm.mjs';
+import { accountLabel } from '../shared/account-label.mjs';
+import { merchantDisplayName } from './display.mjs';
 
 export const householdNames = db => parseJson(db.prepare("SELECT value FROM facts WHERE key='household.names'").get()?.value,{});
 
-function categoryItem(db,options,t,resolution,at,prediction) {
+function categoryItem(db,options,t,resolution,at,prediction,account) {
   const context={kind:'transaction_category',subject:String(t.id),transactionId:t.id,amount:t.amount,date:t.date,
     description:t.description,category:'Uncategorized',bucket:t.amount>0?'income':'household',layer:'uncategorized',
-    guess:resolution.category,...(prediction?{jev:prediction}:{})};
+    guess:resolution.category,account:accountLabel(account),merchant:normalizeMerchant(t.description),...(prediction?{jev:prediction}:{})};
   const prior=db.prepare("SELECT id,status FROM confirm_items WHERE kind='transaction_category' AND subject=?").get(String(t.id));
   if(prior?.status==='answered') return null;
   const item=prior ?? ask(db,{kind:'transaction_category',subject:String(t.id),question:'Check this transaction category',options,context,now:at});
@@ -20,22 +22,55 @@ function categoryItem(db,options,t,resolution,at,prediction) {
   return pending;
 }
 
+const investmentKind = kind => ['taxable','brokerage','investment','retirement','ira','roth','529'].includes(kind);
+const reinvestment = text => /\breinvest(?:ment|ed)?\b/i.test(text ?? '');
+const incomeActivity = text => reinvestment(text) ? null : /\bdividends?\b/i.test(text ?? '') ? 'dividend' : /\binterest\b/i.test(text ?? '') ? 'interest' : null;
+const investmentActivity = text => /\b(?:trades?|bought|sold|buys?|sells?|purchas(?:e|ed)|sale|dividends?|interest|reinvest(?:ment|ed)?|fees?|contributions?)\b/i.test(text ?? '');
+
+export function autoDecideCategories(db,{now}={}) {
+  const at=now ?? new Date().toISOString(), input=loadCategoryInputs(db), deterministic=resolveCategories(input);
+  const choices=categoryOptions(input), accounts=new Map(input.accounts.map(a=>[a.id,a])), index=createHistoryIndex(input);
+  const ownerLabels=new Set(input.corrections.filter(c=>!c.auto).map(c=>c.transaction_id));
+  const guesses=new Map(input.guesses.map(g=>[g.transaction_id,g.category]));
+  const invested=new Set(db.prepare('SELECT DISTINCT account_id FROM positions').all().map(p=>p.account_id));
+  let applied=0;
+  for(const t of input.transactions) {
+    if(t.category_declined || ownerLabels.has(t.id)) continue;
+    let c=deterministic.get(t.id);
+    if(!['merchant','structural','uncategorized'].includes(c.layer) || c.evidence.imported) continue;
+    const account=accounts.get(t.account_id);
+    const prior=db.prepare("SELECT context,status FROM confirm_items WHERE kind='transaction_category' AND subject=?").get(String(t.id));
+    if(prior?.status==='answered') continue;
+    const guess=guesses.get(t.id) ?? parseJson(prior?.context,{}).guess;
+    const samples=historyExamples(t,input,index,Infinity).filter(s=>ownerLabels.has(s.id) && accounts.get(s.account_id)?.kind===account?.kind);
+    const matching=samples.filter(s=>s.merchant===normalizeMerchant(t.description));
+    const consistent=rows=>rows.length && rows.every(s=>s.category===rows[0].category && s.bucket===rows[0].bucket);
+    if(c.bucket!=='transfer' && (investmentKind(account?.kind) || (account?.kind==='hsa' && invested.has(account.id)))
+      && (guess==='Investment' || investmentActivity(t.description))) {
+      const activity=incomeActivity(t.description), income=samples.filter(s=>activity && incomeActivity(s.description)===activity);
+      c={category:consistent(income) ? income[0].category : 'Investment',evidence:{stage:'investment_account',
+        transactionIds:income.map(s=>s.id),text:'Investment account activity'}};
+    } else if(c.bucket!=='transfer' && matching.length>=3 && consistent(matching) && matching[0].category===guess) {
+      c={category:guess,evidence:{stage:'history',transactionIds:matching.map(s=>s.id),
+        text:categoryEvidence(`Matches how you categorized ${merchantDisplayName(normalizeMerchant(t.description))}`)}};
+    } else if(!['merchant','structural'].includes(c.layer)
+      || (c.layer==='merchant' && matching.length && (!consistent(matching) || (guess && guess!==c.category)))) continue;
+    const item=categoryItem(db,choices,t,c,at,undefined,account);
+    if(!item || db.prepare('SELECT 1 FROM confirm_auto_declined WHERE item_id=?').get(item.id)) continue;
+    recordAutoAnswer(db,item.id,c.category,{rule:'jev_category',evidence:{text:c.evidence.text,
+      refs:{stage:c.evidence.stage,transactionIds:c.evidence.transactionIds??[]}},now:at});
+    applied++;
+  }
+  return applied;
+}
+
 export async function guessCategories(db, jev, { now, batchSize = 10, maxBatches = Infinity, policy } = {}) {
   let guessed=0, applied=0;
   const stats=()=>jev?.stats?.().costUsd??0;
   const at=now ?? new Date().toISOString();
   try {
-    const initial=loadCategoryInputs(db), deterministic=resolveCategories(initial), localChoices=categoryOptions(initial);
-    for(const t of initial.transactions) {
-      const c=deterministic.get(t.id);
-      if(!['merchant','structural'].includes(c.layer) || c.evidence.imported) continue;
-      const item=categoryItem(db,localChoices,t,c,at);
-      if(!item || db.prepare('SELECT 1 FROM confirm_auto_declined WHERE item_id=?').get(item.id)) continue;
-      // The category auto rule keeps the existing cross-import undo and duplicate-move contract.
-      recordAutoAnswer(db,item.id,c.category,{rule:'jev_category',evidence:{text:c.evidence.text,
-        refs:{stage:c.evidence.stage,transactionIds:c.evidence.transactionIds??[]}},now:at});
-      guessed++; applied++;
-    }
+    applied=autoDecideCategories(db,{now:at});
+    guessed=applied;
     if(!jev?.isOn() || getSetting(db,'engine',{on:true})?.on===false) {
       queueCategoryChecks(db,{now,policy});
       return {guessed,applied,costUsd:stats(),...(!guessed?{skipped:'provider_off'}:{})};
@@ -61,14 +96,16 @@ export async function guessCategories(db, jev, { now, batchSize = 10, maxBatches
             .run(t.id,JSON.stringify(prediction),jev.model??JEV_MODEL,at);
           const band=confidenceBand(a.confidence,jev.model && jev.model!==JEV_MODEL ? {autoApply:null,review:0} : policy);
           if(band==='uncategorized') continue;
-          const item=categoryItem(db,choices,t,{category:a.choice},at,prediction);
+          const item=categoryItem(db,choices,t,{category:a.choice},at,prediction,input.accounts.find(account=>account.id===t.account_id));
           if(!item) continue;
           guessed++;
           const declined=db.prepare('SELECT 1 FROM confirm_auto_declined WHERE item_id=?').get(item.id);
           if(band==='auto' && !declined) auto.push({id:item.id,choice:a.choice});
         }
       });
+      applied+=autoDecideCategories(db,{now:at});
       for(const a of auto) {
+        if(getItem(db,a.id)?.status!=='pending') continue;
         recordAutoAnswer(db,a.id,a.choice,{rule:'jev_category',evidence:{text:jevEvidence(),refs:{stage:'model'}},now:at});
         applied++;
       }
