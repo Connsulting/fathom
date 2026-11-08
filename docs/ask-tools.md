@@ -1432,6 +1432,8 @@ lands the covering operation.
 | `GET /api/confirm/:id` | `household.confirm_items` | C8 | `ids` |
 | `POST /api/confirm/:id/answer` | `answer.confirm` | C8 | one item; `revise` |
 | `POST /api/confirm/:id/reopen` | `answer.reopen` | C8 |  |
+| `GET /api/email/subscriptions` | excluded: outbound email | | |
+| `POST /api/email/subscriptions` | excluded: outbound email | | |
 | `GET /api/email` | excluded: outbound email | | |
 | `POST /api/email/test` | excluded: outbound email | | |
 | `POST /api/email/brief` | excluded: outbound email | | |
