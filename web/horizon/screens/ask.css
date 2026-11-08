@@ -475,7 +475,10 @@
 .d-horizon .h-blk-table .n { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .d-horizon .h-blk-sort { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0; border: 0; background: none; color: var(--fa); font: inherit; font-size: 12px; letter-spacing: 0.04em; cursor: pointer; }
 .d-horizon .h-blk-sort:hover, .d-horizon th[aria-sort="ascending"] .h-blk-sort, .d-horizon th[aria-sort="descending"] .h-blk-sort { color: var(--tx); }
-.d-horizon .h-blk-sort i { width: 10px; font-style: normal; color: var(--ac); }
+.d-horizon .h-blk-sort i { font-style: normal; color: var(--ac); }
+.d-horizon .h-blk-sort i:empty { display: none; }
+/* A number column's arrow sits before its label, so the label lines up with the values. */
+.d-horizon .h-blk-table th.n .h-blk-sort { flex-direction: row-reverse; }
 .d-horizon .h-blk-empty { padding: 10px 0 2px; color: var(--fa); font-size: 13px; }
 .d-horizon .h-blk-more { margin-top: 8px; }
 
