@@ -46,7 +46,8 @@ function stated(value, text, shape, evidence) {
     if (shape.ownerInterpreted === true && typeof value === 'string') return shape.choices.some(c => c.value === value);
     const escape = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const matches = shape.choices.filter(c => [c.value, c.label].some(label => new RegExp(`\\b${escape(label)}\\b`, 'i').test(text)));
-    return matches.length === 1 && matches[0].value === value;
+    const values = [...new Set(matches.map(c => c.value))];
+    return values.length === 1 && values[0] === value;
   }
   if (typeof value === 'string') return /^\d{4}-\d{2}-\d{2}$/.test(value)
     ? dates(text).includes(value) : text.toLowerCase().includes(value.toLowerCase());

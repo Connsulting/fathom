@@ -112,7 +112,7 @@ export function buildRegistry(modules, toolHeaders = headers) {
       const op = validateArgs(args);
       const { operation, ...params } = args;
       const result = await op.handler(params, ctx);
-      if (header.kind === 'write' && result?.receipt && !result.undo) {
+      if (header.kind === 'write' && result?.receipt && result.undo === undefined) {
         result.undo = result.receipt.undone ? { available: false, reason: 'Already undone.' } : { available: true, tool: 'undo', args: { operation: 'undo', id: result.receipt.id } };
       }
       return result;

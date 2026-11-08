@@ -1,9 +1,10 @@
+import { decide, revisit, pickWargame } from '../decisions/write.mjs';
 import { setPackActive, packIsActive } from '../packs/state.mjs';
 import { writePreference } from '../actions/preferences.mjs';
 import { adoptSuggestions } from '../goals/write.mjs';
 import { randomUUID } from 'node:crypto';
 import { requireActor, undoAction, ensureActionConversation, receiptsFor, receiptMessages } from '../actions/receipts.mjs';
-import { writeRec } from '../store/recs.mjs';
+import { writeRec, detachRecThreads } from '../store/recs.mjs';
 import { latestProposal, claimProposal, markProposal, executeProposal, isPlainConfirmation } from '../actions/proposals.mjs';
 import { ownerStatements } from '../actions/evidence.mjs';
 import { ToolError } from '../tools/errors.mjs';
@@ -33,7 +34,7 @@ import { queueAccountPairs } from '../ingest/account-merge.mjs';
 // and passed to the answerer as `refs`.
 
 import { getSetting, setSetting, schemaVersion, listMigrations, tx, cents, parseJson as parse } from '../store/db.mjs';
-import { buildScenario, clockNow, loadContent, defaultPicks, wargameLists } from '../scenario/build.mjs';
+import { buildScenario, clockNow, loadContent } from '../scenario/build.mjs';
 import { ACTION_STATUS } from '../shared/rules.mjs';
 import { OWNERS, isOwner } from '../shared/rec-links.mjs';
 import { escapeUserText } from '../shared/tokens.mjs';
@@ -43,7 +44,6 @@ import { clearStoredFiles, openVault, VaultError } from '../ingest/vault.mjs';
 import { HttpError } from './http.mjs';
 import { tourPending, setTourPending } from '../auth/tour.mjs';
 import { parseRefs } from './context-refs.mjs';
-import { upsertFact } from '../store/facts.mjs';
 import { setRecOwner } from '../store/recs.mjs';
 import { findQuestion, isIndex } from './questions.mjs';
 import { whatIfOwnerText } from './answerer.mjs';
@@ -177,64 +177,11 @@ export function recAction(ctx) {
 // The rec action path's write (callers hold the transaction): sets the status ACTION_STATUS gives
 // `action` and records it. `arg` is the wake label for snooze, a reason otherwise (the advisor
 // veto dismisses with 'advisor vetoed').
-export function applyStatusAction(db, row, action, arg = null) {
-  const status = ACTION_STATUS[action];
-  if (!status) throw new HttpError(400, `unknown action ${action}`);
-  const wake = action === 'snooze' ? arg : (parse(row.def, {}).wake ?? null);
-  db.prepare('UPDATE recs SET status = ?, wake = ?, updated_at = ? WHERE id = ?').run(status, wake, nowIso(), row.id);
-  recEvent(db, row.id, action, arg, row.status, status);
-}
+export { applyStatusAction } from '../store/recs.mjs';
 
-// The index of a point (salary) or option (deferral) from a request value: an index, a digit string
-// or a point id. Throws 400 outside the list.
-function pickIndexOf(list, index) {
-  let i = index;
-  if (typeof index === 'string' && !/^\d+$/.test(index)) i = list.findIndex(x => x && x.id === index);
-  else if (typeof index === 'string') i = Number(index);
-  if (!Number.isInteger(i) || i < 0 || i >= list.length) throw new HttpError(400, `index must be 0 to ${list.length - 1}`);
-  return i;
-}
-
-function currentWargame(db, name) {
-  if (name !== 'salary' && name !== 'deferral') throw new HttpError(404, `no war game ${name}`);
-  const wargame = loadContent(db).wargame || {};
-  if (!wargame[name]) throw new HttpError(404, `no war game ${name}`);
-  // D3: a war game kept only for reference is not a current choice.
-  if (typeof wargame[name].unavailable === 'string') throw new HttpError(409, 'war game unavailable');
-  return wargame;
-}
-
-export function wargamePick(ctx) {
-  const { db } = ctx;
-  const { name } = ctx.params;
-  const wargame = currentWargame(db, name);
-  const i = pickIndexOf(wargameLists(wargame)[name], ctx.body.index);
-  const picks = { ...defaultPicks(wargame), ...(getSetting(db, 'wargame.picks', null) || {}), [name]: i };
-  setSetting(db, 'wargame.picks', picks);
-  return { scenario: scenarioOf(ctx) };
-}
-
-// ---------------------------------------------------------------- Decide on a picked point
-
-const DECIDE_SRC = { salary: 'decide:salary', deferral: 'decide:deferral' };
-const DECIDED_FACT = { salary: 'business.salaryDecided', deferral: 'business.deferralDecided' };
-
-// The decided line for a picked point: its own label plus the figure tokens the registry holds for
-// it, so every number resolves to a figure with its provenance. Keys the registry lacks are left out.
-function decidedLineFor(name, point, fig) {
-  const has = key => Object.hasOwn(fig, key);
-  const k = (field) => `wg.${name}.${point.id}.${field}`;
-  const label = String(point.label ?? point.id);
-  if (name === 'salary') {
-    const parts = [];
-    if (has(k('tax'))) parts.push(`total tax of {f:${k('tax')}}`);
-    if (has(k('x'))) parts.push(`pre-tax retirement room of {f:${k('x')}}`);
-    return `You decided on ${label}${parts.length ? `, with ${parts.join(' and ')}` : ''}. Revisit it if your numbers change.`;
-  }
-  const parts = [];
-  if (has(k('net'))) parts.push(`net tax change of {f:${k('net')}}`);
-  if (has(k('decCash'))) parts.push(`December business cash of {f:${k('decCash')}}`);
-  return `You decided: ${label}${parts.length ? `, with ${parts.join(' and ')}` : ''}. Revisit it if your numbers change.`;
+function decisionWrite(ctx, fn) {
+  try { return fn(); }
+  catch (err) { if (err instanceof ToolError) throw new HttpError(err.code === 'not_found' ? 404 : err.code === 'conflict' ? 409 : 400, err.message); throw err; }
 }
 
 function scheduleReplan(ctx) {
@@ -242,76 +189,19 @@ function scheduleReplan(ctx) {
   try { ctx.scheduler.soon('plan', 'decide', { immediate: true }); } catch { /* the next scheduled run picks it up */ }
 }
 
-// POST /api/decisions/:id/decide {index?}: decide the open war-game decision on the picked point
-// (the index in the body, else the stored pick). It marks the decision decided with a decided line
-// built from the point's figures, records the pick, writes the owner-stated assumption fact the
-// planner reads on later runs (salary only: the chosen salary becomes the payroll assumption), and
-// logs the action on the linked recommendation.
+export function wargamePick(ctx) {
+  decisionWrite(ctx, () => pickWargame(ctx.db, ctx.params.name, ctx.body.index));
+  return { scenario: scenarioOf(ctx) };
+}
+
 export function decisionDecide(ctx) {
-  const { db } = ctx;
-  const row = db.prepare('SELECT * FROM decisions WHERE id = ?').get(ctx.params.id);
-  if (!row) throw new HttpError(404, `no decision ${ctx.params.id}`);
-  const name = row.wargame;
-  if (name !== 'salary' && name !== 'deferral') throw new HttpError(400, 'this decision has no war game to pick from');
-  if (row.status === 'decided') throw new HttpError(409, 'already decided; revisit it first');
-  if (row.status !== 'open' || row.unavailable_reason) throw new HttpError(409, 'this decision is not open');
-  const scenario = scenarioOf(ctx);
-  const live = scenario.decisions.find(d => d.id === row.id);
-  if (!live || live.status !== 'open') throw new HttpError(409, 'this decision is not open');
-  const wargame = currentWargame(db, name);
-  const list = wargameLists(wargame)[name];
-  const stored = getSetting(db, 'wargame.picks', null) || {};
-  const index = ctx.body.index ?? stored[name] ?? defaultPicks(wargame)[name];
-  const i = pickIndexOf(list, index);
-  const point = list[i];
-  const line = decidedLineFor(name, point, scenario.fig);
-  const now = nowIso();
-  tx(db, () => {
-    db.prepare("UPDATE decisions SET status = 'decided', decided_line = ? WHERE id = ?").run(line, row.id);
-    setSetting(db, 'wargame.picks', { ...defaultPicks(wargame), ...stored, [name]: i });
-    if (name === 'salary') {
-      const salaryFig = scenario.fig[`wg.salary.${point.id}.salary`];
-      // The game names the S corp it was built for; a decided salary binds to that business only.
-      if (salaryFig && Number.isFinite(salaryFig.v) && salaryFig.v > 0 && typeof wargame.salary.entity === 'string') {
-        upsertFact(db, {
-          key: DECIDED_FACT.salary, value: { entity: wargame.salary.entity, salary: salaryFig.v }, src: DECIDE_SRC.salary, asOf: scenario.meta.clock, confirmed: true, now,
-          provenance: { parser: 'decide', locator: { decision: row.id, point: point.id, figure: `wg.salary.${point.id}.salary` } },
-        });
-      }
-    } else {
-      const amountFig = scenario.fig[`wg.deferral.${point.id}.amount`];
-      if (amountFig && Number.isFinite(amountFig.v)) {
-        upsertFact(db, {
-          key: DECIDED_FACT.deferral, value: { option: point.id, amount: amountFig.v }, src: DECIDE_SRC.deferral, asOf: scenario.meta.clock,
-          confirmed: true, now, provenance: { parser: 'decide', locator: { decision: row.id, option: point.id, figure: `wg.deferral.${point.id}.amount` } },
-        });
-      }
-    }
-    if (row.rec_id && db.prepare('SELECT 1 FROM recs WHERE id = ?').get(row.rec_id)) {
-      const rec = db.prepare('SELECT status FROM recs WHERE id = ?').get(row.rec_id);
-      recEvent(db, row.rec_id, 'decide', point.id, rec.status, rec.status);
-    }
-  });
+  decisionWrite(ctx, () => decide(ctx.db, ctx.params.id, { point: ctx.body.index, clock: ctx.config?.clock }));
   scheduleReplan(ctx);
   return { scenario: scenarioOf(ctx) };
 }
 
-// POST /api/decisions/:id/revisit: reopen a decision this action decided. The decided line and the
-// assumption fact go, so the next planning run goes back to the data.
 export function decisionRevisit(ctx) {
-  const { db } = ctx;
-  const row = db.prepare('SELECT * FROM decisions WHERE id = ?').get(ctx.params.id);
-  if (!row) throw new HttpError(404, `no decision ${ctx.params.id}`);
-  const name = row.wargame;
-  if (row.status !== 'decided' || (name !== 'salary' && name !== 'deferral')) throw new HttpError(409, 'only a decision you decided here can be revisited');
-  tx(db, () => {
-    db.prepare("UPDATE decisions SET status = 'open', decided_line = NULL WHERE id = ?").run(row.id);
-    db.prepare('DELETE FROM facts WHERE key = ? AND src = ?').run(DECIDED_FACT[name], DECIDE_SRC[name]);
-    if (row.rec_id && db.prepare('SELECT 1 FROM recs WHERE id = ?').get(row.rec_id)) {
-      const rec = db.prepare('SELECT status FROM recs WHERE id = ?').get(row.rec_id);
-      recEvent(db, row.rec_id, 'revisit', null, rec.status, rec.status);
-    }
-  });
+  decisionWrite(ctx, () => revisit(ctx.db, ctx.params.id));
   scheduleReplan(ctx);
   return { scenario: scenarioOf(ctx) };
 }
@@ -680,8 +570,7 @@ function dropIfEmpty(db, key) {
 export function recStartOver(ctx) {
   const { db } = ctx;
   const { id } = ctx.params;
-  visibleRec(db, id);
-  db.prepare('UPDATE conversations SET rec_detached_at = ? WHERE rec_id = ? AND rec_detached_at IS NULL').run(stamp(ctx), id);
+  decisionWrite(ctx, () => detachRecThreads(db, id, { now: stamp(ctx) }));
   return { scenario: scenarioOf(ctx) };
 }
 

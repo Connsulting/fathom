@@ -44,6 +44,7 @@ test('each registered MCP tool executes with only its bearer household context',
       const before = digest(other.db);
       const samples = {
         accounts: { operation: 'list' }, act_on_recommendation: { operation: 'owner', id: 'colliding-rec', owner: 'both' },
+        advisor_review: { operation: 'send', recId: 'colliding-rec' },
         answer: { operation: 'fact', key: 'household.expectedDate', value: '2027-03-19', evidence: 'Set the expected date to 2027-03-19' },
         business: { operation: 'pnl' }, calculate: { operation: 'sum', operands: [{ ref: { tool: 'accounts', args: { operation: 'net_worth' }, path: 'total' } }], label: 'Synthetic balance' },
         goals: { operation: 'list' }, household: { operation: 'summary' }, knowledge: { operation: 'packs' },
