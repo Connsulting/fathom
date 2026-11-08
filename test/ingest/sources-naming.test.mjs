@@ -176,3 +176,14 @@ test('sources sort stale first, then fresh, then history, then by name', () => w
     assert.ok(ra < rb || (ra === rb && a.name.localeCompare(b.name) <= 0), `order at ${i}: ${a.state} ${a.name} before ${b.state} ${b.name}`);
   }
 }));
+
+test('two sources named for the same institution each add their newest file name', () => withStore(async (s) => {
+  await ingest(s, fixture('aggregator.csv', 'text/csv'));
+  await ingest(s, fixture('Chase7766_Activity_20320305.csv', 'text/csv'));
+  const agg = sourceOfFile(s, 'aggregator.csv');
+  const bank = sourceOfFile(s, 'Chase7766_Activity_20320305.csv');
+  const inst = one(s.db, 'SELECT inst FROM accounts WHERE id = ?', agg.accounts[0].id).inst;
+  assert.equal(agg.name, `${inst}, aggregator.csv`);
+  assert.equal(bank.name, `${inst}, Chase7766_Activity_20320305.csv`);
+  assert.notEqual(agg.name, bank.name);
+}));

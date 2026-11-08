@@ -285,6 +285,11 @@ function sourceList(db, at, states) {
       howTo: howToFor(row.kind),
     });
   }
+  // Two sources named for the same institution (an export and a newer activity file of one bank)
+  // add their newest file name, so each row says which one it is.
+  const count = new Map();
+  for (const s of out) count.set(s.name, (count.get(s.name) ?? 0) + 1);
+  for (const s of out) if (count.get(s.name) > 1 && s.files.length) s.name = `${s.name}, ${s.files[0].name}`;
   return out.sort((a, b) => rankOfState(a.state) - rankOfState(b.state) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
 }
 
