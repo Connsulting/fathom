@@ -77,7 +77,7 @@ for (const phase of ['validated', 'suspended', 'switched', 'finalized']) {
         import { openInstance } from './src/platform/ready.mjs';
         import { restoreHousehold } from './src/platform/household-backup.mjs';
         const config = loadConfig();
-        const { platform } = openInstance(config);
+        const { platform } = await openInstance(config);
         await restoreHousehold({ platform, config, householdId: process.argv[1], confirmation: process.argv[1], file: process.argv[2],
           onPhase: reached => { if (reached === process.argv[3]) process.exit(71); } });
       `, f.A.id, snap.file, phase], { env: { ...process.env, ...f.server.env }, encoding: 'utf8', timeout: 30000 });
@@ -105,7 +105,7 @@ test('backup drains an acquired request while B continues serving', async () => 
     const ctx = await f.context(f.A.id);
     f.server.app.runtimes.acquire(ctx);
     let finished = false;
-    const pending = backup(f).then(r => { finished = true; return r; });
+    const pending = (await backup(f)).then(r => { finished = true; return r; });
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(finished, false);
     assert.equal((await f.B.admin.client.get('/api/scenario')).status, 200);

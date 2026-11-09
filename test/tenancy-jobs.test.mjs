@@ -21,15 +21,19 @@ async function fixture(t, handler, count = 3) {
     ids.push(id);
   }
   const config = { dataDir: instance.dataDir, engine: 'off', clock: '2026-11-05', emailTransport: 'dev' };
+  // Records each run's arrival at the shared dispatcher: storage is async, so a run reaches
+  // admission only after its scheduler's store reads, not when runNow is called.
+  const arrivals = [];
+  const recording = inner => ({ run(householdId, work) { arrivals.push(householdId); return inner.run(householdId, work); } });
   const makeRegistry = () => createRuntimeRegistry({
     platform: instance.platform, config, secrets: instance.secrets,
-    build: async opts => await createHouseholdContext({ ...opts, db: await openHouseholdDb({ dataDir: opts.config.dataDir, householdId: opts.householdId, storageRoot: opts.relativeRoot }), handlers: {
+    build: async opts => await createHouseholdContext({ ...opts, dispatcher: recording(opts.dispatcher), db: await openHouseholdDb({ dataDir: opts.config.dataDir, householdId: opts.householdId, storageRoot: opts.relativeRoot }), handlers: {
       plan: handler, freshness: handler, 'simplefin-sync': handler,
     }, now: () => new Date('2026-11-05T12:00:00Z'), log: quiet }),
   });
   let registry = makeRegistry();
   t.after(async () => { await registry.close(); await instance.close(); rmSync(instance.dataDir, { recursive: true, force: true }); });
-  return { ...instance, ids, get registry() { return registry; }, contexts: async () => await mapSeries(ids, async id => (await registry.get(id))),
+  return { ...instance, ids, arrivals, get registry() { return registry; }, contexts: async () => await mapSeries(ids, async id => (await registry.get(id))),
     async restart() { await registry.close(); registry = makeRegistry(); } };
 }
 
@@ -52,11 +56,15 @@ test('one handler per household, two instance-wide, with round-robin admission',
     return { note: { local: ctx.db === ctx.household.db } };
   });
   const [a, b, c] = await fx.contexts();
-  const runs = [a.scheduler.runNow('plan'), a.scheduler.runNow('freshness'), b.scheduler.runNow('plan'), c.scheduler.runNow('plan')];
-  await turn();
+  // Each run reaches the dispatcher before the next is requested, so admission sees them in call order.
+  const admitted = async call => { const n = fx.arrivals.length; const p = call(); p.catch(() => {}); while (fx.arrivals.length === n) await turn(); return p; };
+  const runs = [];
+  for (const call of [() => a.scheduler.runNow('plan'), () => a.scheduler.runNow('freshness'), () => b.scheduler.runNow('plan'), () => c.scheduler.runNow('plan')]) runs.push(await admitted(call));
+  while (started.length < 2) await turn();
+  for (let i = 0; i < 20; i++) await turn();
   assert.deepEqual(started, [a.householdId, b.householdId]);
   releases.shift()();
-  await turn();
+  while (started.length < 3) await turn();
   assert.equal(started[2], c.householdId, 'waiting household precedes a second turn');
   while (releases.length) { releases.shift()(); await turn(); }
   const results = await Promise.all(runs);
@@ -74,7 +82,7 @@ test('scheduled periods, failures and restart remain independent', { timeout: 15
   }, 2);
   const [a, b] = await fx.contexts(); failId = a.householdId;
   await Promise.all([await a.scheduler.tick(), await b.scheduler.tick()]);
-  const ar = a.scheduler.runs({ limit: 20 }); const br = b.scheduler.runs({ limit: 20 });
+  const ar = (await a.scheduler.runs({ limit: 20 })); const br = (await b.scheduler.runs({ limit: 20 }));
   assert.equal(ar.length, 3); assert.equal(br.length, 3);
   assert.ok(ar.every(r => r.status === 'error' && r.errorClass === 'synthetic_failure'));
   assert.ok(br.every(r => r.status === 'ok'));
@@ -87,8 +95,8 @@ test('scheduled periods, failures and restart remain independent', { timeout: 15
   for (const reason of ['ingest', 'confirm', 'decide']) await bb.scheduler.trigger('plan', reason);
   bb.scheduler.soon('plan', 'confirm', { immediate: true });
   await turn();
-  assert.equal(aa.scheduler.runs({ limit: 20 }).length, 3);
-  assert.equal(bb.scheduler.runs({ limit: 20 }).length, 7);
+  assert.equal((await aa.scheduler.runs({ limit: 20 })).length, 3);
+  assert.equal((await bb.scheduler.runs({ limit: 20 })).length, 7);
 });
 
 test('queued work rechecks pause and generation before claiming, and valid work resumes', { timeout: 15000 }, async t => {
@@ -101,7 +109,7 @@ test('queued work rechecks pause and generation before claiming, and valid work 
   await fx.platform.prepare('UPDATE household_outbound SET jobs = 0 WHERE household_id = ?').run(c.householdId);
   gates.forEach(g => g.resolve());
   await Promise.all([first, second, refused]);
-  assert.equal(c.scheduler.runs().length, 0);
+  assert.equal((await c.scheduler.runs()).length, 0);
   await fx.platform.prepare('UPDATE household_outbound SET jobs = 1 WHERE household_id = ?').run(c.householdId);
   assert.equal((await c.scheduler.runNow('plan')).status, 'ok');
   await fx.platform.prepare('UPDATE households SET generation = generation + 1 WHERE id = ?').run(c.householdId);
@@ -125,7 +133,7 @@ test('manual HTTP, successful upload and Confirm dispatch only to the initiating
     await fx.B.client.postJson('/api/household/outbound', { jobs: true });
     const a = await fx.ctx(fx.A.id); const b = await fx.ctx(fx.B.id);
     await b.scheduler.tick();
-    const before = b.scheduler.runs({ limit: 200 });
+    const before = (await b.scheduler.runs({ limit: 200 }));
     assert.equal((await fx.A.client.postJson('/api/jobs/freshness/run', {})).status, 200);
     const uploaded = await uploadFiles(fx.baseUrl, fx.A.admin, [{ name: 'synthetic.csv', bytes: Buffer.from(aggregatorCsv([
       { date: '2026-11-01', amount: '18.25', description: 'Synthetic household purchase', number: '5550098765' },
@@ -133,17 +141,17 @@ test('manual HTTP, successful upload and Confirm dispatch only to the initiating
     assert.equal(uploaded.status, 200, uploaded.text);
     assert.equal(uploaded.json.files[0].status, 'imported');
     for (let i = 0; i < 30; i++) await turn();
-    assert.ok(a.scheduler.runs({ limit: 200 }).some(r => r.jobId === 'plan' && r.trigger === 'ingest'));
+    assert.ok((await a.scheduler.runs({ limit: 200 })).some(r => r.jobId === 'plan' && r.trigger === 'ingest'));
     const item = await ask(a.db, { kind: 'fact_check', subject: 'synthetic.scheduler', question: 'Use this synthetic fact?',
       options: FACT_CHECK_OPTIONS, context: { key: 'synthetic.scheduler', value: true }, now: '2026-11-05T12:00:00Z' });
     const answer = await fx.A.client.postJson(`/api/confirm/${item.id}/answer`, { answer: 'yes' });
     assert.equal(answer.status, 200, answer.text);
     const deadline = Date.now() + 35000;
-    while (!a.scheduler.runs({ limit: 200 }).some(r => r.jobId === 'plan' && r.trigger === 'confirm') && Date.now() < deadline) {
+    while (!(await a.scheduler.runs({ limit: 200 })).some(r => r.jobId === 'plan' && r.trigger === 'confirm') && Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 50));
     }
-    assert.ok(a.scheduler.runs({ limit: 200 }).some(r => r.jobId === 'plan' && r.trigger === 'confirm'));
-    assert.deepEqual(b.scheduler.runs({ limit: 200 }), before);
+    assert.ok((await a.scheduler.runs({ limit: 200 })).some(r => r.jobId === 'plan' && r.trigger === 'confirm'));
+    assert.deepEqual((await b.scheduler.runs({ limit: 200 })), before);
   } finally { await fx.close(); }
 });
 
@@ -163,10 +171,10 @@ test('SimpleFIN sync queues local planning and freshness without holding its han
     assert.equal(run.status, 'ok');
     assert.equal(run.note.changed, true);
     for (let i = 0; i < 30; i++) await turn();
-    const runs = a.scheduler.runs();
+    const runs = (await a.scheduler.runs());
     assert.ok(runs.some(r => r.jobId === 'plan' && r.trigger === 'ingest'));
     assert.ok(runs.some(r => r.jobId === 'freshness' && r.trigger === 'ingest'));
-    assert.equal(b.scheduler.runs().length, 0);
+    assert.equal((await b.scheduler.runs()).length, 0);
     assert.equal((await b.db.prepare('SELECT count(*) AS n FROM transactions').get()).n, 0);
   } finally {
     await registry.close(); await instance.close(); rmSync(instance.dataDir, { recursive: true, force: true });
@@ -193,13 +201,13 @@ test('resolver answers queue a separate local plan claim after releasing the hou
     assert.equal(resolved.status, 'ok', resolved.errorClass);
     assert.equal((await a.db.prepare('SELECT status FROM confirm_items WHERE id = ?').get(own)).status, 'answered');
     for (let i = 0; i < 30; i++) await turn();
-    const planned = a.scheduler.runs().find(r => r.jobId === 'plan');
+    const planned = (await a.scheduler.runs()).find(r => r.jobId === 'plan');
     assert.ok(planned, 'resolver queues a plan through its scheduler');
     assert.equal(planned.status, 'ok', planned.errorClass);
     assert.notEqual(planned.id, resolved.id);
     assert.equal(planned.trigger, 'resolve');
     assert.equal((await b.db.prepare('SELECT status FROM confirm_items WHERE id = ?').get(foreign)).status, 'pending');
-    assert.equal(b.scheduler.runs().length, 0);
+    assert.equal((await b.scheduler.runs()).length, 0);
   } finally {
     await registry.close(); await instance.close(); rmSync(instance.dataDir, { recursive: true, force: true });
   }

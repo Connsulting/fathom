@@ -33,7 +33,7 @@ for (const kind of ['decision_decide', 'decision_revisit']) registerReceiptKind(
 async function changeDecision(args, ctx, operation) {
   const actor = await requireActor(ctx);
   let receipt;
-  const result = (operation === 'decide' ? decide : revisit)(ctx.db, args.decisionId, {
+  const result = await (operation === 'decide' ? decide : revisit)(ctx.db, args.decisionId, {
     point: args.point, clock: await clockOf(ctx), now: stamp(ctx), actor,
     async onWrite(before, after, meta) {
       receipt = await saveReceipt(ctx, { scope: 'write:decisions', kind: `decision_${operation}`, id: args.decisionId,

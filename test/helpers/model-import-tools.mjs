@@ -42,11 +42,11 @@ export async function modelApp(t) {
   } };
   const app = await serveAppFixture({ ...x, engine, authenticated: true });
   t.after(async () => { await app.household.scheduler.stop(); await app.close(); await x.close(); });
-  const { key } = app.keys.create({ householdId: app.household.householdId, userId: app.session.user.id, name: 'Synthetic import key', scopes: SCOPES });
+  const { key } = await app.keys.create({ householdId: app.household.householdId, userId: app.session.user.id, name: 'Synthetic import key', scopes: SCOPES });
   return { ...x, app, engine, responses, get extracts() { return extracts; },
     set chat(value) { chat = value; }, set onExtract(value) { onExtract = value; }, set onChat(value) { onChat = value; },
     async tool(name, args, scopes) {
-      const scoped = scopes ? app.keys.create({ householdId: app.household.householdId, userId: app.session.user.id, name: 'Synthetic scoped key', scopes }).key : key;
+      const scoped = scopes ? (await app.keys.create({ householdId: app.household.householdId, userId: app.session.user.id, name: 'Synthetic scoped key', scopes })).key : key;
       const result = rpcResult(await callToolRpc(app.baseUrl, scoped, name, args));
       if (result.isError) return { error: result.content[0].text };
       return JSON.parse(result.content[0].text);

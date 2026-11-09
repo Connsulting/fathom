@@ -159,7 +159,7 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
       if (caseScript !== null && typeof caseScript !== 'function') throw new TypeError(`Invalid eval script ${c.id}`);
       const missingCapabilities = (c.expectedFail?.missingCapabilities ?? []).filter(name => !CAPABILITIES.includes(name));
       capabilitiesMissing = missingCapabilities.length > 0;
-      const beforeCost = ledger.costUsd;
+      const beforeCost = await ledger.costUsd;
       const beforeReserved = ledger.reservedUsd;
       const result = { id: c.id, family: c.family, status: 'pass', missingOperations: missing, missingCapabilities, ...(scriptMissing ? { missingScript: c.expectedFail.missingScript } : {}), turns: [] };
       let key;
@@ -216,7 +216,7 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
         result.title = gradeThreadTitle(row, fallbackTitle(await tokenScope(db), first?.text));
         if (!result.title.ok) result.status = 'fail';
       }
-      result.costUsd = rounded(ledger.costUsd - beforeCost);
+      result.costUsd = rounded((await ledger.costUsd) - beforeCost);
       result.reservedUsd = rounded(ledger.reservedUsd - beforeReserved);
       if (ledger.state.stopped) result.reason = ledger.state.reason ?? `${ledger.state.stopped}: no remaining budget for another round`;
       result.failingChecks = [...new Set([...result.turns.flatMap(t => t.failingChecks), ...(result.title && !result.title.ok ? ['title'] : [])])];
@@ -229,9 +229,9 @@ export async function runCases({ cases, live = false, maxUsd = 100, outDir, scri
       for (const kind of new Set(turn.discipline?.triggeredBy ?? []))
         correctionTriggers[kind] = (correctionTriggers[kind] ?? 0) + 1;
     }
-    const scorecard = { correctionTriggers, version: 2, live, generatedAt: new Date().toISOString(), maxUsd, costUsd: ledger.costUsd,
+    const scorecard = { correctionTriggers, version: 2, live, generatedAt: new Date().toISOString(), maxUsd, costUsd: await ledger.costUsd,
       reservedUsd: ledger.reservedUsd, outstandingReservedUsd: ledger.outstandingReservedUsd,
-      releasedUsd: rounded(ledger.reservedUsd - ledger.costUsd),
+      releasedUsd: rounded(ledger.reservedUsd - await ledger.costUsd),
       stopped: ledger.state.stopped ?? (rows.some(r => r.status === 'budget-stopped') ? 'budget' : null), selected: cases.length,
       failedDrafts: rows.reduce((sum, c) => sum + (c.failedDrafts ?? 0), 0),
       attempted: rows.filter(r => r.status !== 'unrun').length,

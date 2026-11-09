@@ -111,7 +111,7 @@ describe('the confirm-guess job definition', () => {
   test('jobs() lists confirm-guess with a next label at the next 03:00', async () => withStore(async (t) => {
     const s = schedulerFor(t.db, { engine: await offRuntime(t.db), handlers: defaultHandlers({ publicUrl: null }) });
     try {
-      const job = s.jobs().find((j) => j.id === JOB);
+      const job = (await s.jobs()).find((j) => j.id === JOB);
       assert.ok(job, 'jobs() lists confirm-guess');
       assert.equal(job.name, 'Resolve open questions');
       assert.equal(job.cadence, 'Daily, 3:00 AM');

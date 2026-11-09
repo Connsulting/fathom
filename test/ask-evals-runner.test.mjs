@@ -76,7 +76,7 @@ test('budget ledger excludes demo spend and refuses a later round inside one eng
   const store = await createEvalStore();
   try {
     const ledger = await createEvalLedger({ db: store.db, maxUsd: 1 });
-    assert.equal(ledger.costUsd, 0);
+    assert.equal(await ledger.costUsd, 0);
     const request = { purpose: 'chat', system: 'Use tools.', messages: [{ role: 'user', content: 'Read the value.' }], maxTokens: 1024,
       tools: [{ name: 'read', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: 'Read a value.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, handler: () => ({ value: 10 }) }] };
     const wrapped = ledger.begin({ ...request, fake: [
@@ -87,7 +87,7 @@ test('budget ledger excludes demo spend and refuses a later round inside one eng
     ] });
     await assert.rejects(engine.call(wrapped), BudgetExceededError);
     assert.equal(ledger.state.stopped, 'budget');
-    assert.equal(ledger.costUsd, 0.99);
+    assert.equal(await ledger.costUsd, 0.99);
     assert.equal(ledger.reserves.length, 2);
     assert.equal(ledger.reserves[1], 0.02);
   } finally { await store.close(); }
@@ -101,7 +101,7 @@ test('budget admits valid neighboring rounds and records existing engine account
     const engine = createEngine({ admitRound: async req => await ledger.admitRound(req), mode: 'fake', ledger, capUsd: 1, responses: [{ text: 'Hi.', costUsd: 0.01 }] });
     await engine.call(req);
     assert.equal(ledger.state.stopped, null);
-    assert.equal(ledger.costUsd, 0.01);
+    assert.equal(await ledger.costUsd, 0.01);
     assert.equal(await ledger.monthSpendUsd('203201'), 0.01);
   } finally { await store.close(); }
 });
@@ -136,9 +136,9 @@ test('CLI entrypoint exits nonzero and writes evidence for a self-computed answe
   try {
     const program = `import {main} from './evals/run.mjs';
       process.exitCode=await main(['--cases','retirement-hsa-room','--out',process.env.EVAL_TEST_OUTPUT],{
-        scripts:({db})=>[
+        scripts:async ({db})=>[
           {toolCalls:[{name:'household',args:{ operation: 'figures', keys:['hsa_left','hsa_paid']}}],costUsd:0},
-          {text:String(db.prepare("SELECT sum(v) AS v FROM figures WHERE key IN ('hsa_left','hsa_paid')").get().v),costUsd:0}
+          {text:String((await db.prepare("SELECT sum(v) AS v FROM figures WHERE key IN ('hsa_left','hsa_paid')").get()).v),costUsd:0}
         ]});`;
     const r = spawnSync(process.execPath, ['--input-type=module', '-e', program], {
       cwd: new URL('../', import.meta.url), env: { ...process.env, EVAL_TEST_OUTPUT: dir }, encoding: 'utf8', timeout: 60000,

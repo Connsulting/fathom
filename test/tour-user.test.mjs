@@ -54,10 +54,10 @@ describe('the onboarding-complete transition', () => {
   test('a new user finishing onboarding gets the tour pending, shown on the scenario', async () => {
     const f = await fixture();
     try {
-      assert.equal(H.scenarioOf(f.ctxFor('u-owner')).live.tourPending, false);
-      H.onboarding(f.ctxFor('u-owner', { step: 3 }));
+      assert.equal((await H.scenarioOf(f.ctxFor('u-owner'))).live.tourPending, false);
+      await H.onboarding(f.ctxFor('u-owner', { step: 3 }));
       assert.equal(await f.pending('u-owner'), 0, 'a step before the end does not start it');
-      const out = H.onboarding(f.ctxFor('u-owner', { step: 6 }));
+      const out = (await H.onboarding(f.ctxFor('u-owner', { step: 6 })));
       assert.equal(out.scenario.live.tourPending, true);
       assert.equal(await f.pending('u-owner'), 1);
       assert.equal(await f.pending('u-spouse'), 0, 'only the user who finished onboarding');
@@ -67,11 +67,11 @@ describe('the onboarding-complete transition', () => {
   test('a user who finished onboarding before the change is never flagged, even on the done step again', async () => {
     const f = await fixture();
     try {
-      D.setSetting(f.store.db, 'onboarding', { done: true, step: 6 });
-      const out = H.onboarding(f.ctxFor('u-owner', { step: 6 }));
+      await D.setSetting(f.store.db, 'onboarding', { done: true, step: 6 });
+      const out = (await H.onboarding(f.ctxFor('u-owner', { step: 6 })));
       assert.equal(out.scenario.live.tourPending, false);
       assert.equal(await f.pending('u-owner'), 0);
-      H.onboarding(f.ctxFor('u-owner', { step: 2 }));
+      await H.onboarding(f.ctxFor('u-owner', { step: 2 }));
       assert.equal(await f.pending('u-owner'), 0, 'revisiting Setup does not flag either');
     } finally { await f.close(); }
   });
@@ -79,7 +79,7 @@ describe('the onboarding-complete transition', () => {
   test('a demo or signed-out caller has no identity to flag', async () => {
     const f = await fixture();
     try {
-      const out = H.onboarding(f.ctxFor(null, { step: 6 }));
+      const out = (await H.onboarding(f.ctxFor(null, { step: 6 })));
       assert.equal(out.scenario.live.tourPending, false);
       assert.equal((await f.platform.prepare('SELECT COUNT(*) AS n FROM users WHERE tour_pending = 1').get()).n, 0);
     } finally { await f.close(); }
@@ -90,12 +90,12 @@ describe('POST /api/tour/seen', () => {
   test('clears the flag, so a second session or device of the same user does not see the tour', async () => {
     const f = await fixture();
     try {
-      H.onboarding(f.ctxFor('u-owner', { step: 6 }));
-      assert.equal(H.scenarioOf(f.ctxFor('u-owner')).live.tourPending, true, 'a second session before it is dismissed');
-      const out = T.tourSeen(f.ctxFor('u-owner'));
+      await H.onboarding(f.ctxFor('u-owner', { step: 6 }));
+      assert.equal((await H.scenarioOf(f.ctxFor('u-owner'))).live.tourPending, true, 'a second session before it is dismissed');
+      const out = (await T.tourSeen(f.ctxFor('u-owner')));
       assert.equal(out.scenario.live.tourPending, false);
-      assert.equal(H.scenarioOf(f.ctxFor('u-owner')).live.tourPending, false, 'a second session after');
-      H.onboarding(f.ctxFor('u-owner', { step: 6 }));
+      assert.equal((await H.scenarioOf(f.ctxFor('u-owner'))).live.tourPending, false, 'a second session after');
+      await H.onboarding(f.ctxFor('u-owner', { step: 6 }));
       assert.equal(await f.pending('u-owner'), 0, 'finishing onboarding again does not bring it back');
     } finally { await f.close(); }
   });
@@ -104,9 +104,9 @@ describe('POST /api/tour/seen', () => {
     const f = await fixture();
     try {
       await f.platform.prepare('UPDATE users SET tour_pending = 1').run();
-      assert.throws(() => T.tourSeen(f.ctxFor(null)), (e) => e.status === 401);
+      await assert.rejects(async () => await T.tourSeen(f.ctxFor(null)), (e) => e.status === 401);
       assert.equal(await f.pending('u-owner'), 1);
-      T.tourSeen({ ...f.ctxFor('u-owner'), body: { userId: 'u-spouse' }, params: { id: 'u-spouse' } });
+      await T.tourSeen({ ...f.ctxFor('u-owner'), body: { userId: 'u-spouse' }, params: { id: 'u-spouse' } });
       assert.equal(await f.pending('u-owner'), 0);
       assert.equal(await f.pending('u-spouse'), 1, 'a body or path id never selects another user');
     } finally { await f.close(); }

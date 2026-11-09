@@ -55,7 +55,7 @@ test('disconnecting an in-flight MCP tool cannot leak its request or abandon its
     f = await backupFixture({ engine: 'live', engineOptions: { testTransport: { baseURL: emulator.baseURL } } });
     await f.A.admin.client.post('/api/household/outbound', { jobs: false, engine: true });
     await setInstanceCap(f.platform, 100); await setAllocation(f.platform, f.A.id, 50);
-    ctx = f.context(f.A.id);
+    ctx = await f.context(f.A.id);
     const key = await f.A.admin.client.post('/api/keys', { name: 'Synthetic disconnect probe', scopes: ['read', 'write:imports'] });
     assert.equal(key.status, 200, key.text);
     const body = JSON.stringify({ jsonrpc: '2.0', id: 11, method: 'tools/call', params: { name: 'refresh', arguments: {
@@ -84,7 +84,7 @@ test('disconnecting an in-flight MCP tool cannot leak its request or abandon its
     const status = await f.A.admin.client.get(`/api/household/backups/${queued.json.operationId}/status`);
     assert.equal(status.json.status, 'done', status.text);
     assert.equal((await f.platform.prepare('SELECT status FROM households WHERE id = ?').get(f.A.id)).status, 'active');
-    assert.equal((await f.context(f.A.id).db.prepare("SELECT count(*) AS n FROM action_receipts WHERE scope = 'write:imports' AND json_extract(after_state, '$.status') = 'built'").get()).n, 1);
+    assert.equal((await (await f.context(f.A.id)).db.prepare("SELECT count(*) AS n FROM action_receipts WHERE scope = 'write:imports' AND json_extract(after_state, '$.status') = 'built'").get()).n, 1);
   } finally {
     clearTimeout(timer); response.open(); client?.destroy();
     if (f && ctx && !finished) f.server.app.runtimes.release(ctx);

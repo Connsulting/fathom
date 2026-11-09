@@ -40,8 +40,8 @@ test('confirmed Ask proposals keep household services and owner statements', asy
   assert.equal(confirmedContext.services, app.household.services);
   assert.equal(confirmedContext.household, app.household);
   assert.equal(confirmedContext.dataDir, s.root);
-  assert.ok(confirmedContext.ownerStatements().includes('Undo my change.'));
-  assert.ok(confirmedContext.ownerStatements().includes('yes'));
+  assert.ok((await confirmedContext.ownerStatements()).includes('Undo my change.'));
+  assert.ok((await confirmedContext.ownerStatements()).includes('yes'));
   assert.equal((await s.db.prepare("SELECT value FROM settings WHERE key = 'confirmation-setting'").get()).value, '1');
 });
 
@@ -96,7 +96,7 @@ test('Ask and MCP share the resolved household services and root, with actor-bou
   const app = await serveAppFixture({ db: s.db, platform: s.platform, config, secrets: s.secrets, engine, scheduler });
   t.after(() => app.close());
   const creator = await createSessionFixture(s.platform, { email: 'services@example.test', role: 'member' });
-  const { key } = app.keys.create({ householdId: s.householdId, userId: creator.user.id, name: 'Synthetic services' });
+  const { key } = await app.keys.create({ householdId: s.householdId, userId: creator.user.id, name: 'Synthetic services' });
   const mcp = rpcResult(await callToolRpc(app.baseUrl, key, 'transactions', { operation: 'search' }));
   assert.ok(!mcp.isError, mcp.content[0].text);
   assert.equal(JSON.parse(mcp.content[0].text).statements, null, 'MCP uses its explicit evidence, never a conversation');
@@ -120,7 +120,7 @@ test('Ask and MCP share the resolved household services and root, with actor-bou
   assert.equal(askCtx.dataDir, s.root); assert.equal(mcpCtx.dataDir, s.root);
   assert.equal(askCtx.household, app.household); assert.equal(mcpCtx.household, app.household);
   assert.equal(askCtx.services.vault, app.household.vault);
-  assert.deepEqual(askCtx.ownerStatements(), ['Keep that assumption.', 'Use 4 percent.']);
+  assert.deepEqual(await askCtx.ownerStatements(), ['Keep that assumption.', 'Use 4 percent.']);
   assert.ok(CAPABILITIES.includes('ownerStatements'));
   const second = await tempInstance(); t.after(async () => { await second.close(); rmSync(second.dataDir, { recursive: true, force: true }); });
   const otherHousehold = await second.household(null, { engine, scheduler });

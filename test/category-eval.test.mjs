@@ -16,7 +16,7 @@ test('deterministic holdout and aggregate calibration never return per-row value
   for(let i=0;i<5;i++) await s.db.prepare("INSERT INTO transactions (account_id,date,description,amount,category,parser) VALUES ('a','2032-01-01',?,-25,?,'aggregator')").run('Secret payee '+i,i%2?'Business':'Groceries');
   const before=readFileSync(join(s.root,'fathom.sqlite')); const ro=await openReadOnlyHousehold({dataDir:dir},s.householdId);
   t.after(async ()=>{await ro.db.close();await ro.platform.close();});
-  await assert.rejects(async ()=>await ro.db.applySchema("UPDATE settings SET value='true' WHERE key='mode'"),/readonly/i);
+  await assert.rejects(async ()=>await ro.db.applySchema("UPDATE settings SET value='true' WHERE key='mode'"),{code:'storage_unavailable'});
   const jev={stats:()=>({costUsd:.001,latenciesMs:[10,20]}),choose:async qs=>qs.map(q=>{
     assert.equal(q.state.category,undefined); assert.equal(q.state.mask,undefined);
     return {choice:'Groceries',confidence:.9,probabilities:{Groceries:.8,Business:.2}};

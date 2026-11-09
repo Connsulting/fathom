@@ -105,7 +105,7 @@ test('every write scope lists undo and restores a receipt through MCP and Ask', 
   t.after(() => app.close());
   const creator = await createSessionFixture(s.platform, { email: 'scopes@example.test', role: 'member' });
   for (const scope of WRITE_SCOPES) {
-    const { key } = app.keys.create({ householdId: s.householdId, userId: creator.user.id, name: 'Synthetic scope', scopes: [scope] });
+    const { key } = await app.keys.create({ householdId: s.householdId, userId: creator.user.id, name: 'Synthetic scope', scopes: [scope] });
     assert.ok((await listToolNames(app.baseUrl, key)).includes('undo'), scope);
     assert.ok(!toolsForScopes(['read']).some(t => t.name === 'undo'));
     for (const channel of ['mcp', 'ask']) {
@@ -140,7 +140,7 @@ test('every write scope lists undo and restores a receipt through MCP and Ask', 
       assert.equal((await s.db.prepare("SELECT value FROM settings WHERE key = 'surface'").get()).value, '1');
     }
   }
-  const { key } = app.keys.create({ householdId: s.householdId, userId: creator.user.id, name: 'Restricted', scopes: ['write:recs'] });
+  const { key } = await app.keys.create({ householdId: s.householdId, userId: creator.user.id, name: 'Restricted', scopes: ['write:recs'] });
   const r = await receipts.saveReceipt({ db: s.db, actorId: creator.user.id, now }, {
     scope: 'write:facts', kind: 'setting', id: 'surface', label: 'Restricted', before: null, after: { key: 'surface', value: '1' } });
   const denied = rpcResult(await callToolRpc(app.baseUrl, key, 'undo', { operation: 'undo', id: r.id }));
@@ -157,7 +157,7 @@ test('every write scope lists undo and restores a receipt through MCP and Ask', 
   const actorDenied = await otherActor.invoke('undo', { operation: 'undo', id: r.id, propose: true });
   assert.equal(actorDenied.isError, true); assert.match(actorDenied.content[0].text, /not available to you/);
   await otherActor.instance.close();
-  const readKey = app.keys.create({ householdId: s.householdId, userId: creator.user.id, name: 'Read only' }).key;
+  const readKey = (await app.keys.create({ householdId: s.householdId, userId: creator.user.id, name: 'Read only' })).key;
   const readDenied = rpcResult(await callToolRpc(app.baseUrl, readKey, 'undo', { operation: 'undo' }));
   assert.equal(readDenied.isError, true); assert.match(readDenied.content[0].text, /^Permission denied:/);
 });

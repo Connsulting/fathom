@@ -52,7 +52,7 @@ const accountOfFile = async (s, fileId) => await one(s.db, `SELECT * FROM accoun
 // cash account (the activity file adds its balances and a newer transaction), and a positions
 // export of an investment account.
 async function seeded(s) {
-  DB.setSetting(s.db, 'clock', CLOCK);
+  await DB.setSetting(s.db, 'clock', CLOCK);
   const agg = await ingest(s, fixture('aggregator.csv', 'text/csv'));
   const bank = await ingest(s, fixture('Chase7766_Activity_20320305.csv', 'text/csv'));
   const pos = await ingest(s, fixture('positions.csv', 'text/csv'));
@@ -197,7 +197,7 @@ test('unknown ids are 404', async () => withApp(async ({ api }) => {
 // A file account with no mask (aggregator export) and a connected account written the way the
 // SimpleFIN sync writes one, so the detector proposes nothing and the merge is manual.
 async function mergePair(s) {
-  DB.setSetting(s.db, 'clock', CLOCK);
+  await DB.setSetting(s.db, 'clock', CLOCK);
   const name = 'Household spending';
   await ingest(s, aggregatorFile('household-spending.csv', [
     { date: '2032-02-20', amount: '25.00', type: 'Checking', inst: INST, account: name, number: '', description: `${name} posting` },
@@ -240,7 +240,7 @@ async function withStore(fn, seed = seeded) {
   const s = await realStore();
   try { await fn({ s, ...(await seed(s)) }); } finally { await s.close(); }
 }
-const scenarioIds = (s) => idsOf(B.buildScenario(s.db, { clock: CLOCK }));
+const scenarioIds = async (s) => idsOf(await B.buildScenario(s.db, { clock: CLOCK }));
 const askIds = async (s) => (await T.callTool('accounts', { operation: 'list' }, toolCtx(s))).map((a) => a.id);
 const txCount = async (s, id) => (await s.db.prepare('SELECT count(*) AS n FROM transactions WHERE account_id = ?').get(id)).n;
 
@@ -250,32 +250,32 @@ test('sources.archive_account archives with a receipt and Undo; another actor or
   assert.ok(out.receipt?.id, 'a valid archive is not refused');
   assert.equal(out.receipt.scope, 'write:sources');
   assert.deepEqual(out.undo, undoArgs(out.receipt));
-  assert.ok(!scenarioIds(s).includes(cash));
+  assert.ok(!(await scenarioIds(s)).includes(cash));
   assert.ok(!(await askIds(s)).includes(cash));
   assert.equal(await txCount(s, cash), txBefore);
   for (const other of [{ actorId: 'person-b' }, { scopes: ['write:goals'], channel: 'mcp' }]) {
     await assert.rejects(T.callTool('undo', { operation: 'undo', id: out.receipt.id }, toolCtx(s, other)));
-    assert.ok(!scenarioIds(s).includes(cash));
+    assert.ok(!(await scenarioIds(s)).includes(cash));
   }
   await T.callTool('undo', { operation: 'undo', id: out.receipt.id }, toolCtx(s, { scopes: ['write:sources'], channel: 'mcp' }));
-  assert.ok(scenarioIds(s).includes(cash));
+  assert.ok((await scenarioIds(s)).includes(cash));
   assert.ok((await askIds(s)).includes(cash));
   await assert.rejects(T.callTool('sources', { operation: 'archive_account', id: 'acct-no-such-account' }, toolCtx(s)), isCode('not_found'));
 }));
 
 test('sources.remove_file removes rows with a receipt; the undo tool restores them; removing twice is a conflict', async () => withStore(async ({ s, bank, cash }) => {
   const txBefore = await txCount(s, cash);
-  const scenarioBefore = B.buildScenario(s.db, { clock: CLOCK });
+  const scenarioBefore = (await B.buildScenario(s.db, { clock: CLOCK }));
   const out = await T.callTool('sources', { operation: 'remove_file', id: bank.fileId }, toolCtx(s));
   assert.ok(out.receipt?.id, 'a valid removal is not refused');
   assert.deepEqual(out.undo, undoArgs(out.receipt));
   assert.equal(await txCount(s, cash), txBefore - bank.counts.rows.transaction);
-  assert.notEqual(totalOf(B.buildScenario(s.db, { clock: CLOCK })), totalOf(scenarioBefore));
+  assert.notEqual(totalOf((await B.buildScenario(s.db, { clock: CLOCK }))), totalOf(scenarioBefore));
   await assert.rejects(T.callTool('sources', { operation: 'remove_file', id: bank.fileId }, toolCtx(s)), isCode('conflict'));
   await assert.rejects(T.callTool('sources', { operation: 'remove_file', id: 'f-000000000000000000000000' }, toolCtx(s)), isCode('not_found'));
   await T.callTool('undo', { operation: 'undo', id: out.receipt.id }, toolCtx(s));
   assert.equal(await txCount(s, cash), txBefore);
-  assert.equal(totalOf(B.buildScenario(s.db, { clock: CLOCK })), totalOf(scenarioBefore));
+  assert.equal(totalOf((await B.buildScenario(s.db, { clock: CLOCK }))), totalOf(scenarioBefore));
 }));
 
 test('sources.merge_accounts merges with a receipt and the undo tool reopens it', async () => withStore(async ({ s, file, own }) => {

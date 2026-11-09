@@ -193,7 +193,7 @@ test('HTTP proposal confirmation executes a pasted-note refresh and persisted re
   assert.equal(receipt.after.file.status, 'waiting_for_engine');
   assert.equal(receipt.undo.available, false);
   assert.ok(!confirmed.json.message.text.includes('undo it below'));
-  const { key } = app.keys.create({ householdId: instance.householdId, name: 'Synthetic importer', scopes: ['read','write:imports'], userId: app.session.user.id });
+  const { key } = await app.keys.create({ householdId: instance.householdId, name: 'Synthetic importer', scopes: ['read','write:imports'], userId: app.session.user.id });
   const imports = rpcResult(await callToolRpc(app.baseUrl, key, 'household', { operation: 'imports' }));
   assert.deepEqual(JSON.parse(imports.content[0].text), (await app.request({ path: '/api/files' })).json);
   const result = rpcResult(await callToolRpc(app.baseUrl, key, 'refresh', { operation: 'import_file', name: 'Other notes.md', mime: note.mime,

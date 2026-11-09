@@ -281,7 +281,7 @@ test('unknown job id is unknown_job; jobs() lists only jobs with a handler; trig
     const s = schedulerFor(t, { handlers: { freshness: counter() }, clock: clockAt('2026-11-05T15:00:00Z') });
     await assert.rejects(() => s.runNow('no-such-job'), (e) => e instanceof SchedulerError && e.code === 'unknown_job');
     await s.tick();
-    assert.deepEqual(s.jobs().map((j) => j.id), ['freshness']);
+    assert.deepEqual((await s.jobs()).map((j) => j.id), ['freshness']);
     await s.trigger('plan', 'ingest');
     assert.equal((await runsOf(t.db, 'plan')).length, 0, 'no plan handler: nothing runs');
     assert.ok(await t.db.prepare("SELECT 1 AS x FROM jobs WHERE id = 'freshness'").get(), 'ensureJobs wrote the jobs row');
@@ -406,21 +406,21 @@ test('jobs() returns lastRun and next for each handled job; runs() lists recent 
   const t = await store();
   try {
     const s = schedulerFor(t, { handlers: { 'brief-email': counter(), freshness: counter() }, clock: clockAt('2026-11-05T15:00:00Z') });
-    const before = s.jobs();
+    const before = await s.jobs();
     assert.deepEqual(before.map((j) => j.id).sort(), ['brief-email', 'freshness']);
     for (const j of before) assert.ok(!j.lastRun, `${j.id} has no last run yet`);
     await s.tick();
-    for (const j of s.jobs()) {
+    for (const j of await s.jobs()) {
       for (const k of ['name', 'cadence', 'does']) assert.equal(typeof j[k], 'string', `${j.id}.${k}`);
       assert.ok(j.lastRun, `${j.id} lastRun after a run`);
       assert.equal(typeof j.next, 'string');
       assert.ok(j.next.length > 0, `${j.id} next label`);
       assert.ok(Date.parse(j.nextAt) > Date.parse('2026-11-05T15:00:00Z'), `${j.id} nextAt is after now`);
     }
-    const brief = s.jobs().find((j) => j.id === 'brief-email');
+    const brief = (await s.jobs()).find((j) => j.id === 'brief-email');
     assert.equal(new Date(brief.nextAt).toISOString(), '2026-12-01T12:00:00.000Z', 'next brief: Dec 1 07:00 New York');
-    assert.equal(s.runs({ limit: 1 }).length, 1);
-    assert.equal(s.runs({ limit: 10 }).length, 2);
+    assert.equal((await s.runs({ limit: 1 })).length, 1);
+    assert.equal((await s.runs({ limit: 10 })).length, 2);
   } finally { await t.done(); }
 });
 
@@ -429,7 +429,7 @@ test('start() and stop() leave no timer running', async () => {
   try {
     const s = schedulerFor(t, { handlers: { freshness: counter() }, clock: clockAt('2026-11-05T15:00:00Z') });
     s.start();
-    s.stop();
+    await s.stop();
   } finally { await t.done(); }
 });
 
@@ -474,10 +474,10 @@ test('ensureJobs inserts a jobs row for every JOBS entry via tick, start and job
         s.start();
         for (let i = 0; i < 50 && (await t.db.prepare('SELECT count(*) AS n FROM jobs').get()).n < JOBS.length; i++) await settle(20);
       }
-      if (how === 'jobs') s.jobs();
+      if (how === 'jobs') await s.jobs();
       const ids = (await t.db.prepare('SELECT id FROM jobs').all()).map((r) => r.id).sort();
       assert.deepEqual(ids, JOBS.map((j) => j.id).sort(), `${how}: every JOBS entry has a row, plan included`);
-      assert.deepEqual(s.jobs().map((j) => j.id), ['freshness'], `${how}: jobs() lists only handled jobs`);
+      assert.deepEqual((await s.jobs()).map((j) => j.id), ['freshness'], `${how}: jobs() lists only handled jobs`);
       await s.stop();
     } finally { await t.done(); }
   }

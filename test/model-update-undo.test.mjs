@@ -5,6 +5,7 @@ import { stageUpdate } from '../src/ingest/model-updates.mjs';
 import { reviewImport } from '../src/ingest/model-review.mjs';
 import { proposalBasis } from '../src/actions/proposals.mjs';
 import { callTool } from '../src/tools/index.mjs';
+import { currentHandle } from '../src/storage/index.mjs';
 
 async function apply(x, actions = [x.step, x.expected]) {
   const p = await stageUpdate(x.ctx, { source: x.source, actions, capturedAt: '2032-03-02T14:00:00Z' });
@@ -54,7 +55,7 @@ test('facts and goals use shared actions, defer planning, and require their chil
   const x = await updateFixture(text);
   try {
     let planned = 0;
-    x.ctx.replan = async () => { assert.equal(x.db.isTransaction, false); planned++; return { status: 'ok' }; };
+    x.ctx.replan = async () => { assert.equal(currentHandle(x.db), x.db); planned++; return { status: 'ok' }; };
     const actions = [
       { tool: 'answer', operation: 'fact', args: { key: 'household.expectedDate', value: '2032-06-19', evidence: 'expected date to 2032-06-19' }, span: x.span },
       { tool: 'update_goal', operation: 'create', args: { title: 'Reserve', target: 64000 }, span: x.span },

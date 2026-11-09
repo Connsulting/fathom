@@ -9,6 +9,7 @@ import { rmSync } from 'node:fs';
 import { tempDb } from '../helpers/server.mjs';
 import { JOBS, localParts, periodKey, nextRunAt, createScheduler, JobFailure } from '../../src/jobs/scheduler.mjs';
 import { serviceStatus } from '../../src/jobs/service-status.mjs';
+import { sqliteError } from '../../src/storage/errors.mjs';
 
 const NY = 'America/New_York';
 const RETRY_MS = 15 * 60000;
@@ -52,7 +53,7 @@ test('schedule() lists handled jobs with their next run and retryMs and writes n
   try {
     const clock = clockAt(START);
     const s = schedulerFor(t, { handlers: { 'simplefin-sync': async () => ({}), plan: async () => ({}) }, clock });
-    const out = s.schedule();
+    const out = await s.schedule();
     assert.deepEqual(out.map((x) => x.id).sort(), ['plan', 'simplefin-sync']);
     for (const x of out) {
       const job = JOBS.find((j) => j.id === x.id);
@@ -62,7 +63,7 @@ test('schedule() lists handled jobs with their next run and retryMs and writes n
     assert.equal((await t.db.prepare('SELECT count(*) AS n FROM jobs').get()).n, 0, 'schedule() writes no job rows');
     assert.equal((await t.db.prepare('SELECT count(*) AS n FROM job_runs').get()).n, 0, 'schedule() claims nothing');
     const d = schedulerFor(t, { handlers: { plan: async () => ({}) }, clock, retryMs: null });
-    assert.equal(d.schedule()[0].retryMs, 15 * MIN, 'retryMs defaults to 15 minutes');
+    assert.equal((await d.schedule())[0].retryMs, 15 * MIN, 'retryMs defaults to 15 minutes');
   } finally { await t.done(); }
 });
 
@@ -167,7 +168,8 @@ test('SQLite busy (5) and locked (6) errors are recorded as store_locked and ret
       let calls = 0;
       const handler = async () => {
         calls += 1;
-        if (calls === 1) throw Object.assign(new Error('synthetic store busy'), { code: 'ERR_SQLITE_ERROR', errcode });
+        // The storage port translates a raw SQLite busy or locked error before any caller sees it.
+        if (calls === 1) throw sqliteError(Object.assign(new Error('synthetic store busy'), { code: 'ERR_SQLITE_ERROR', errcode }));
         return {};
       };
       const s = schedulerFor(t, { handlers: { 'simplefin-sync': handler }, clock });

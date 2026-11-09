@@ -411,9 +411,9 @@ describe('no passkey is lost', T, () => {
       const fx = fresh();
       const before = await passkeyRows(PLATFORM(fx));
       let undo;
-      await refuses(runMigration(fx, { onPhase: async name => {
+      await refuses((await runMigration(fx, { onPhase: async name => {
         if (name === 'before-manifest') undo = await withSqlite(PLATFORM(fx), change);
-      } }), 'passkeys_changed', label);
+      } })), 'passkeys_changed', label);
       await withSqlite(PLATFORM(fx), async p => {
         assert.equal((await p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId)).storage_root ?? null, null, 'nothing published');
         assert.ok((await p.prepare('SELECT count(*) AS n FROM auth_sessions').get()).n > 0, 'the manifest transaction never ran');
@@ -489,7 +489,7 @@ describe('risk probe: the process dies mid-migration and restarts', T, () => {
     const store = join(fx.dataDir, 'fathom.sqlite');
     const original = await withSqlite(store, async db => (await db.prepare("SELECT value FROM content WHERE key = 'synthetic.note'").get()).value);
     await withSqlite(store, async db => await db.prepare("UPDATE content SET value = '\"Synthetic later edit\"' WHERE key = 'synthetic.note'").run());
-    await refuses(runMigration(fx), 'source_changed', 'a changed source');
+    await refuses((await runMigration(fx)), 'source_changed', 'a changed source');
     await withSqlite(join(fx.dataDir, 'platform.sqlite'), async p => {
       assert.equal((await p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId)).storage_root ?? null, null, 'nothing published');
     });
@@ -531,7 +531,7 @@ describe('risk probe: the process dies mid-migration and restarts', T, () => {
       const first = await migrateExitingAt(fx, 'before-manifest');
       assert.equal(first.code, 9, first.stderr);
       const restore = change(fx);
-      await refuses(runMigration(fx), 'source_changed', label);
+      await refuses((await runMigration(fx)), 'source_changed', label);
       await withSqlite(join(fx.dataDir, 'platform.sqlite'), async p => {
         assert.equal((await p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId)).storage_root ?? null, null, 'nothing published');
       });
@@ -548,7 +548,7 @@ describe('risk probe: the process dies mid-migration and restarts', T, () => {
     const first = await migrateExitingAt(fx, 'before-manifest');
     assert.equal(first.code, 9, first.stderr);
     const other = writePrivate(join(fx.root, 'other-keys', 'mcp-other.secret'), randomBytes(32).toString('hex') + '\n');
-    await refuses(runMigration(fx, { mcpSecretFile: other }), 'mcp_secret_mismatch', 'another MCP secret');
+    await refuses((await runMigration(fx, { mcpSecretFile: other })), 'mcp_secret_mismatch', 'another MCP secret');
     await withSqlite(join(fx.dataDir, 'platform.sqlite'), async p => {
       assert.equal((await p.prepare('SELECT storage_root FROM households WHERE id = ?').get(fx.householdId)).storage_root ?? null, null, 'nothing published');
       assert.equal((await p.prepare('SELECT count(*) AS n FROM api_keys').get()).n, 0, 'no key moved');
@@ -630,7 +630,7 @@ describe('source ambiguity and missing prerequisites refuse before any change', 
       const households = join(fx.dataDir, 'households');
       const entriesBefore = existsSync(households) ? readdirSync(households).sort() : [];
       const before = stableHashes(fx.dataDir);
-      await refuses(runMigration(fx, overrides), code, label);
+      await refuses((await runMigration(fx, overrides)), code, label);
       assert.deepEqual(stableHashes(fx.dataDir), before, 'source files unchanged');
       assert.deepEqual(existsSync(households) ? readdirSync(households).sort() : [], entriesBefore, 'no household root published');
       assert.ok(!existsSync(join(fx.dataDir, M.LOCK_FILE)), 'no lock left');

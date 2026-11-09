@@ -132,7 +132,7 @@ test('ledger failures stop work, malformed responses retain known costs, and loo
 test('concurrent calls sharing a ledger check spend after the prior round records', async () => {
   const ledger = createMemoryLedger();
   const engine = createEngine({ mode: 'fake', ledger, capUsd: 0.01, responses: [{ text: 'ok', costUsd: 0.02 }, { text: 'bad', costUsd: 0.02 }] });
-  const results = await Promise.allSettled([await engine.call(request), await engine.call(request)]);
+  const results = await Promise.allSettled([engine.call(request), engine.call(request)]);
   assert.equal(results.filter(r => r.status === 'fulfilled').length, 1);
   assert.equal(ledger.entries.length, 1);
 });
