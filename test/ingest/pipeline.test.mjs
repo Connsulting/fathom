@@ -288,8 +288,8 @@ describe('interrupted ingest', () => {
     const file = csv();
     const eng = await offEngine();
     const results = await Promise.all([
-      P.ingestFile(s.db, { ...file }, s.opts(eng)),
-      P.ingestFile(s.db, { ...file }, s.opts(eng)),
+      await P.ingestFile(s.db, { ...file }, s.opts(eng)),
+      await P.ingestFile(s.db, { ...file }, s.opts(eng)),
     ]);
     assert.deepEqual(results.map((x) => x.status).sort(), ['duplicate', 'imported']);
     assert.equal(await count(s.db, 'files'), 1);
@@ -617,7 +617,7 @@ describe('no silently dropped transactions (D3)', () => {
     await P.ingestFile(s.db, coffeeB('Chase4321_Activity_coffee_B.csv'), s.opts(off));
     const [q] = await pendingNear(s.db);
     assert.ok(q, 'the second coffee is asked about');
-    C.answer(s.db, q.id, 'same', { now: NOW });
+    await C.answer(s.db, q.id, 'same', { now: NOW });
     const tomb = await all(s.db, "SELECT * FROM superseded_rows WHERE reason = 'duplicate_confirmed'");
     assert.equal(tomb.length, 1);
     assert.ok(JSON.stringify(tomb[0]).includes(normalize('MORNING BREW COFFEE')), 'the tombstone stores the normalized description');
@@ -637,7 +637,7 @@ describe('no silently dropped transactions (D3)', () => {
       assert.equal(asked.length, 1, 'the lunch is asked about');
       assert.ok(asked[0].subject.split('|').includes(kept.dedupe_key));
 
-      C.answer(s.db, asked[0].id, answer, { now: NOW });
+      await C.answer(s.db, asked[0].id, answer, { now: NOW });
       const before = await count(s.db, 'transactions');
       const questions = await count(s.db, 'confirm_items', "kind = 'near_duplicate'");
       for (const [i, file] of [coffeeB('Chase4321_Activity_coffee_B2.csv', [filler(1)]), lunch('Chase4321_Activity_lunch_2.csv', [filler(2)])].entries()) {
@@ -751,7 +751,7 @@ describe('no silently dropped transactions (D3)', () => {
     assert.equal(await count(s.db, 'accounts'), 1, 'one account for both formats');
     const [q] = await pendingNear(s.db);
     assert.ok(q, 'the bank check is asked about against the aggregator posting');
-    C.answer(s.db, q.id, 'same', { now: NOW });
+    await C.answer(s.db, q.id, 'same', { now: NOW });
     assert.equal(await count(s.db, 'superseded_rows', "reason = 'duplicate_confirmed'"), 1);
     const rows = await all(s.db, 'SELECT * FROM transactions');
     assert.deepEqual(rows.map((t) => [t.date, t.amount, t.description]), [['2032-03-01', -125, 'Check 1042']], 'only the aggregator posting is stored');
@@ -782,7 +782,7 @@ describe('no silently dropped transactions (D3)', () => {
       await P.ingestFile(s.db, checkBank('Chase0042_Activity_F2_B.csv', '03/11/2032', PLUMBER), s.opts(off));
       const [q] = await pendingNear(s.db);
       assert.ok(q, 'the March 11 check is asked about');
-      if (answer) C.answer(s.db, q.id, answer, { now: NOW });
+      if (answer) await C.answer(s.db, q.id, answer, { now: NOW });
       const before = await count(s.db, 'transactions');
       const questions = await count(s.db, 'confirm_items', "kind = 'near_duplicate'");
       const pending = (await pendingNear(s.db)).length;
@@ -827,8 +827,8 @@ describe('no silently dropped transactions (D3)', () => {
     const bc = await nearBetween(s.db, b.dedupe_key, c.dedupe_key);
     assert.ok(ab && bc, 'A and B, and B and C, are asked about');
     assert.equal((await pendingNear(s.db)).length, 2, 'A and C are five days apart: not asked');
-    C.answer(s.db, bc.id, 'same', { now: NOW });
-    C.answer(s.db, ab.id, 'same', { now: NOW });
+    await C.answer(s.db, bc.id, 'same', { now: NOW });
+    await C.answer(s.db, ab.id, 'same', { now: NOW });
     assert.deepEqual((await all(s.db, 'SELECT dedupe_key FROM transactions')).map((t) => t.dedupe_key), [a.dedupe_key], 'only A is stored');
     const tomb = async (key) => (await one(s.db, "SELECT survivor_key FROM superseded_rows WHERE reason = 'duplicate_confirmed' AND dedupe_key = ?", key))?.survivor_key;
     assert.equal(await tomb(c.dedupe_key), b.dedupe_key, "C's tombstone names B");
@@ -1071,7 +1071,7 @@ describe('authoritative position snapshots (D5)', () => {
   };
   // The scenario's figure for the 4321 account plus the stored figure row behind it.
   const holdingsFigure = async (db) => {
-    const sc = Bld.buildScenario(db, { clock: '2032-05-10' });
+    const sc = (await Bld.buildScenario(db, { clock: '2032-05-10' }));
     const acct = sc.accounts.find((a) => a.mask === '4321');
     assert.ok(acct?.fig, 'the account names a figure');
     return { shown: sc.fig[acct.fig], row: await one(db, 'SELECT * FROM figures WHERE key = ?', acct.fig) };

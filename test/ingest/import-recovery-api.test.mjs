@@ -6,14 +6,17 @@
 //
 // A parser cannot be injected through HTTP, so failed states are reached with a store fault at the
 // storage boundary: a TEMP trigger on the household's own connection makes every transaction insert
-// raise, with SQLite's lock message ('database is locked') for the transient case or another message
-// for a plain failure. Nothing in src/ is replaced; the upload, the retry route and the scheduler run
+// raise, with a real SQLITE_BUSY (a lock held by another connection) for the transient case or a plain
+// constraint error for a plain failure. Nothing in src/ is replaced; the upload, the retry route and the scheduler run
 // their real paths.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { tempInstance, serveAppFixture } from '../helpers/server.mjs';
 import { fakeEngine, aggregatorCsv } from '../helpers/ingest.mjs';
 import { loadConfig } from '../../src/config.mjs';
@@ -75,7 +78,31 @@ async function leavePending(app, name, text) {
 }
 
 const faultStore = async (db, message) => await db.applySchema(`CREATE TEMP TRIGGER IF NOT EXISTS h1_store_fault BEFORE INSERT ON main.transactions BEGIN SELECT RAISE(ABORT, '${message}'); END;`);
-const healStore = async (db) => await db.applySchema('DROP TRIGGER IF EXISTS temp.h1_store_fault');
+// A busy store at the storage boundary, from SQLite itself: a TEMP trigger on this connection writes
+// to an attached database whose write lock another connection holds, so every transaction insert
+// fails with SQLITE_BUSY after a short wait. Nothing in src/ is replaced. Returns heal().
+let healBusy = null;
+async function busyFault(db) {
+  const dir = mkdtempSync(join(tmpdir(), 'fathom-busy-'));
+  const file = join(dir, 'lock.sqlite');
+  const holder = new DatabaseSync(file);
+  holder.exec('CREATE TABLE t (x)');
+  holder.exec('BEGIN IMMEDIATE');
+  await db.applySchema(`ATTACH DATABASE '${file}' AS busy_lock`);
+  await db.applySchema('PRAGMA busy_timeout = 20');
+  await db.applySchema('CREATE TEMP TRIGGER IF NOT EXISTS h1_store_fault BEFORE INSERT ON main.transactions BEGIN INSERT INTO busy_lock.t VALUES (1); END;');
+  healBusy = async () => {
+    await db.applySchema('DROP TRIGGER IF EXISTS temp.h1_store_fault');
+    holder.exec('ROLLBACK');
+    holder.close();
+    await db.applySchema('DETACH DATABASE busy_lock');
+    await db.applySchema('PRAGMA busy_timeout = 5000');
+    rmSync(dir, { recursive: true, force: true });
+  };
+}
+const healStore = async (db) => {
+  if (healBusy) { const heal = healBusy; healBusy = null; await heal(); } else await db.applySchema('DROP TRIGGER IF EXISTS temp.h1_store_fault');
+};
 
 const waitingIn = (sc, id) => sc.live.ingest.waiting.find((f) => f.id === id);
 const fileIn = (sc, id) => sc.live.ingest.files.find((f) => f.id === id);
@@ -148,12 +175,12 @@ test('a failed file imports on Retry and on an identical re-upload, never as a d
     for (const id of [idA, idB]) {
       const row = await rowOf(db, id);
       assert.equal(row.status, 'failed');
-      assert.equal(row.note, 'ERR_SQLITE_ERROR', 'a non-transient class, never the message');
+      assert.equal(row.note, 'storage_invalid', 'a non-transient class, never the message');
       assert.ok(!String(row.note).includes('synthetic store failure'));
     }
     let sc = await s.app.getScenario();
     assert.equal(waitingIn(sc, idA)?.status, 'failed', 'a reload lists the failed file');
-    assert.equal(waitingIn(sc, idA)?.reasonCode, 'ERR_SQLITE_ERROR');
+    assert.equal(waitingIn(sc, idA)?.reasonCode, 'storage_invalid');
     assert.equal(sc.live.services.imports.state, 'needs_you');
     assert.equal(sc.live.services.imports.files, 2);
 
@@ -196,7 +223,7 @@ test('a transient failure is retried once by a tick and imports', T, async () =>
   const s = await serve(instance);
   const db = instance.db;
   try {
-    await faultStore(db, 'database is locked');
+    await busyFault(db);
     const up = await uploadOver(s.app, 'transient-once-synthetic.csv', csv('transient once', '41.00'));
     await healStore(db);
     assert.equal(up.status, 200, up.text.slice(0, 300));
@@ -220,7 +247,7 @@ test('a transient failure that fails again on its automatic retry is left failed
   const s = await serve(instance);
   const db = instance.db;
   try {
-    await faultStore(db, 'database is locked');
+    await busyFault(db);
     const up = await uploadOver(s.app, 'transient-twice-synthetic.csv', csv('transient twice', '42.00'));
     const id = up.json.files[0].fileId;
     assert.deepEqual(await rowOf(db, id), { status: 'failed', note: 'retry:store_locked' });

@@ -48,13 +48,13 @@ async function connect(db, accountId) {
   await db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, 100)').run(accountId, '2032-08-31');
 }
 
-const detail = (s, id) => A.accountDetail({ db: s.db, config: { ...s.config, clock: OLD_CLOCK }, params: { id }, query: {} });
+const detail = async (s, id) => await A.accountDetail({ db: s.db, config: { ...s.config, clock: OLD_CLOCK }, params: { id }, query: {} });
 const feedOf = (d, sourceId) => d.feeds.find((f) => f.id === sourceId);
 
 // The planner's freshness and the missing-data steps built from it, at OLD_CLOCK.
-function missingData(db) {
-  const data = D.loadPlanningData(db, OLD_CLOCK);
-  const refreshNeeds = C.refreshDependencies(db, computeFigures(data, {}, { clock: OLD_CLOCK, entities: [] }).figures, OLD_CLOCK);
+async function missingData(db) {
+  const data = (await D.loadPlanningData(db, OLD_CLOCK));
+  const refreshNeeds = (await C.refreshDependencies(db, computeFigures(data, {}, { clock: OLD_CLOCK, entities: [] }).figures, OLD_CLOCK));
   const list = M.items({ refreshNeeds, facts: {}, data, freshness: data.freshness, warnings: [], info: {}, blockedReasons: [] });
   return { freshness: data.freshness, uploads: list.filter((i) => i.kind === 'upload' && i.code.startsWith('balances:')) };
 }
@@ -65,20 +65,20 @@ test('a connected fresh account lists its older file sources as history, and not
   const acct = await accountOfFile(s, bank);
   assert.equal((await accountOfFile(s, agg)).id, acct.id, 'precondition: both files feed one account');
   assert.notEqual(agg.source_id, bank.source_id, 'precondition: two sources');
-  assert.equal(feedOf(detail(s, acct.id), bank.source_id).state, 'stale', 'precondition: before the connection the newest file is stale');
+  assert.equal(feedOf(await detail(s, acct.id), bank.source_id).state, 'stale', 'precondition: before the connection the newest file is stale');
 
   await connect(s.db, acct.id);
 
-  const states = C.sourceStates(s.db, OLD_CLOCK);
+  const states = (await C.sourceStates(s.db, OLD_CLOCK));
   assert.equal(states.sources.get(agg.source_id).state, 'history');
   assert.equal(states.sources.get(bank.source_id).state, 'history');
 
-  const covered = C.fileSourceHistory(s.db);
+  const covered = (await C.fileSourceHistory(s.db));
   assert.equal(covered(acct.id, agg.source_id), true);
   assert.equal(covered(acct.id, bank.source_id), true);
   assert.equal(covered(acct.id, 'ing:not-a-source'), false, 'a source that did not feed the account is not history for it');
 
-  const d = detail(s, acct.id);
+  const d = await detail(s, acct.id);
   for (const source of [agg.source_id, bank.source_id]) {
     const feed = feedOf(d, source);
     assert.ok(feed, `${source} is a feed of the account`);
@@ -87,10 +87,10 @@ test('a connected fresh account lists its older file sources as history, and not
     assert.equal(feed.howTo, null, `${source} has no How to refresh`);
   }
   assert.notEqual(d.fresh, 'stale', 'the account itself is not stale');
-  assert.equal(d.fresh, FR.accountFreshness(s.db, acct.id, { clock: OLD_CLOCK }).fresh, 'the account keeps its newest-row freshness');
+  assert.equal(d.fresh, (await FR.accountFreshness(s.db, acct.id, { clock: OLD_CLOCK })).fresh, 'the account keeps its newest-row freshness');
 
-  assert.deepEqual(FR.ingestState(s.db, { clock: OLD_CLOCK }).staleNotes, [], 'no stale note');
-  const { freshness, uploads } = missingData(s.db);
+  assert.deepEqual((await FR.ingestState(s.db, { clock: OLD_CLOCK })).staleNotes, [], 'no stale note');
+  const { freshness, uploads } = (await missingData(s.db));
   for (const id of ['balances', 'transactions']) assert.notEqual(freshness.find((f) => f.id === id).state, 'stale', `planner ${id} is not stale`);
   assert.deepEqual(uploads, [], 'no upload step for balances or transactions');
 }));
@@ -103,18 +103,18 @@ test('an unconnected account with an old file stays stale with How to refresh, b
   assert.notEqual(cash.id, invest.id, 'precondition: two accounts');
   await connect(s.db, cash.id);
 
-  const states = C.sourceStates(s.db, OLD_CLOCK);
+  const states = (await C.sourceStates(s.db, OLD_CLOCK));
   assert.equal(states.sources.get(pos.source_id).state, 'stale');
   assert.equal(states.sources.get(agg.source_id).state, 'history');
-  assert.equal(C.fileSourceHistory(s.db)(invest.id, pos.source_id), false);
+  assert.equal((await C.fileSourceHistory(s.db))(invest.id, pos.source_id), false);
 
-  const feed = feedOf(detail(s, invest.id), pos.source_id);
+  const feed = feedOf(await detail(s, invest.id), pos.source_id);
   assert.ok(feed, 'the positions file is a feed of the investment account');
   assert.equal(feed.state, 'stale');
   assert.ok(feed.howTo && Array.isArray(feed.howTo.steps) && feed.howTo.steps.length > 0, 'a stale feed says how to refresh');
-  assert.equal(feedOf(detail(s, cash.id), agg.source_id).state, 'history', 'the connected account beside it shows history');
+  assert.equal(feedOf(await detail(s, cash.id), agg.source_id).state, 'history', 'the connected account beside it shows history');
 
-  const { uploads } = missingData(s.db);
+  const { uploads } = (await missingData(s.db));
   const balances = uploads.find((i) => i.code.startsWith('balances:'));
   assert.ok(balances, 'the missing-data steps ask for the latest balances');
   assert.ok(balances.accountIds.includes(invest.id), 'the step names the stale account');

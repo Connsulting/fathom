@@ -33,7 +33,7 @@ export async function openConnection({ path, readOnly = false, journal = 'wal', 
     throw storageError(exclusive && [5, 6].includes(error?.errcode & 255) ? 'storage_busy' : 'storage_unavailable');
   }
   const cache = new Map();
-  let capture = null;
+  const captures = [];
   function driver(action) {
     try { return action(); } catch (error) { throw sqliteError(error); }
   }
@@ -97,17 +97,14 @@ export async function openConnection({ path, readOnly = false, journal = 'wal', 
       try { await backup(db, target); } catch (error) { throw sqliteError(error); }
     },
     async captureBegin() {
-      if (capture) throw storageError();
-      capture = driver(() => captureBegin(db));
+      captures.push(driver(() => captureBegin(db)));
     },
     async captureEnd() {
-      const active = capture;
-      capture = null;
+      const active = captures.pop();
       return driver(() => captureEnd(db, active));
     },
     async captureDrop() {
-      const active = capture;
-      capture = null;
+      const active = captures.pop();
       if (active) driver(() => captureDrop(db, active));
     },
     async close() {

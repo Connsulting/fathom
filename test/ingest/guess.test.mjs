@@ -45,13 +45,13 @@ const marker = (i) => `Q${pad(i)}Q`;
 const cellOf = (i) => `CELL-SECRET-${pad(i)}`;
 
 // Queue n synthetic account_kind questions with no file. Item i has last4 4000 + i in its context.
-function queue(db, n, { start = 1 } = {}) {
+async function queue(db, n, { start = 1 } = {}) {
   const ids = [];
   for (let i = start; i < start + n; i++) {
-    const r = C.ask(db, {
+    const r = (await C.ask(db, {
       kind: 'account_kind', subject: `acct-synthetic-${pad(i)}`, question: `What kind of account is Synthetic account ${marker(i)}?`,
       options: C.KIND_OPTIONS, context: { last4: String(4000 + i), locator: { cells: [cellOf(i)] } }, now: NOW,
-    });
+    }));
     assert.equal(r.queued, true);
     ids.push(r.id);
   }
@@ -59,8 +59,8 @@ function queue(db, n, { start = 1 } = {}) {
 }
 
 // The runtime engine over the store's spend ledger, with a fixed clock, wrapped to record calls.
-function runtimeEngine(db, mode = 'fake') {
-  const rt = RT.createRuntimeEngine({ db, config: { engine: mode }, now: () => new Date(NOW) });
+async function runtimeEngine(db, mode = 'fake') {
+  const rt = (await RT.createRuntimeEngine({ db, config: { engine: mode }, now: () => new Date(NOW) }));
   const calls = [];
   return { mode: rt.mode, isOn: () => rt.isOn(), calls, call: (req) => { calls.push(structuredClone(req)); return rt.call(req); } };
 }
@@ -125,7 +125,7 @@ describe("engine purpose 'confirm'", () => {
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
       handler: () => { ran += 1; return { ok: true }; },
     };
-    assert.deepEqual(T.createRegistryServer([probe], { purpose: 'confirm' }).names, [], 'the registry offers nothing for confirm');
+    assert.deepEqual((await T.createRegistryServer([probe], { purpose: 'confirm' })).names, [], 'the registry offers nothing for confirm');
     const ledger = E.createMemoryLedger();
     const engine = E.createEngine({ mode: 'fake', ledger });
     const text = JSON.stringify({ guesses: [] });
@@ -147,11 +147,11 @@ describe('guessPending', () => {
     const off = await offEngine();
     const r = await P.ingestFile(s.db, fixture('Chase7766_Activity_20320305.csv', 'text/csv'), s.opts(off));
     assert.equal(r.status, 'imported');
-    const pending = C.pendingItems(s.db);
+    const pending = (await C.pendingItems(s.db));
     const owner = pending.find((i) => i.kind === 'account_owner');
     const kind = pending.find((i) => i.kind === 'account_kind');
     assert.ok(owner && kind);
-    const engine = runtimeEngine(s.db);
+    const engine = (await runtimeEngine(s.db));
     const guesses = [
       { item: owner.id, option: 'owner', basis: 'account_name' },
       { item: kind.id, option: 'checking', basis: 'source_file' },
@@ -175,7 +175,7 @@ describe('guessPending', () => {
     assert.equal(await count(s.db, 'confirm_guesses'), pending.length, 'a row for every item sent');
     assert.equal(await count(s.db, 'spend_ledger', "purpose = 'confirm'"), 1, 'the cost is recorded under confirm');
 
-    const items = FR.ingestState(s.db).items;
+    const items = (await FR.ingestState(s.db)).items;
     const byId = (id) => items.find((i) => i.id === id);
     assertScenarioGuess(byId(owner.id).guess, { option: 'owner', label: 'You' });
     assertScenarioGuess(byId(kind.id).guess, { option: 'checking', label: 'Checking' });
@@ -183,12 +183,12 @@ describe('guessPending', () => {
   }));
 
   test('the scenario guess is null when the stored row has no option or an option no longer offered', async () => withStore(async (s) => {
-    const [a, b, c] = queue(s.db, 3);
+    const [a, b, c] = (await queue(s.db, 3));
     const insert = s.db.prepare('INSERT INTO confirm_guesses (item_id, option_id, reason, model, ts) VALUES (?, ?, ?, ?, ?)');
     await insert.run(a, null, null, 'fake', NOW);
     await insert.run(b, 'retired-option', 'Synthetic reason', 'fake', NOW);
     await insert.run(c, 'cash', 'Synthetic reason', 'fake', NOW);
-    const items = FR.ingestState(s.db).items;
+    const items = (await FR.ingestState(s.db)).items;
     const byId = (id) => items.find((i) => i.id === id);
     assert.equal(byId(a).guess, null);
     assert.equal(byId(b).guess, null);
@@ -198,10 +198,10 @@ describe('guessPending', () => {
   }));
 
   test('validation drops bad guesses, stores a null row for each, and never re-sends the batch', async () => withStore(async (s) => {
-    const ids = queue(s.db, 11);
+    const ids = (await queue(s.db, 11));
     const id = (i) => ids[i - 1];
-    const [answered] = queue(s.db, 1, { start: 12 });
-    C.answerItem(s.db, answered, 'checking', { now: NOW });
+    const [answered] = (await queue(s.db, 1, { start: 12 }));
+    await C.answerItem(s.db, answered, 'checking', { now: NOW });
     const guesses = [
       { item: id(1), option: 'not-an-option', basis: 'question' },
       { item: 999999, option: 'checking', basis: 'question' },
@@ -216,7 +216,7 @@ describe('guessPending', () => {
       { item: id(10), option: 'checking', basis: 'account_name' },
       { item: id(11), option: 'cash', basis: 'document_type' },
     ];
-    const engine = runtimeEngine(s.db);
+    const engine = (await runtimeEngine(s.db));
     await G.guessPending(s.db, engine, { now: NOW, fake: [script(guesses)] });
     assert.equal(engine.calls.length, 1);
 
@@ -235,7 +235,7 @@ describe('guessPending', () => {
     assert.equal(await rowOf(s.db, 999999), undefined);
     assert.equal(await rowOf(s.db, answered), undefined);
 
-    const second = runtimeEngine(s.db);
+    const second = (await runtimeEngine(s.db));
     const again = await G.guessPending(s.db, second, { now: NOW, fake: [] });
     assert.equal(second.calls.length, 0, 'nothing is re-sent');
     assert.ok(again.skipped === 'none_pending' || (Array.isArray(again.batches) && again.batches.length === 0), JSON.stringify(again));
@@ -244,8 +244,8 @@ describe('guessPending', () => {
   }));
 
   test('validateGuesses keeps only guesses that pass every rule', async () => withStore(async (s) => {
-    const [a, b] = queue(s.db, 2);
-    const batch = C.pendingItems(s.db);
+    const [a, b] = (await queue(s.db, 2));
+    const batch = (await C.pendingItems(s.db));
     const accepted = G.validateGuesses(batch, { guesses: [
       { item: a, option: 'checking', basis: 'account_name' },
       { item: b, option: 'checking', basis: 'made_up' },
@@ -264,8 +264,8 @@ describe('guessPending', () => {
       imported_values: 'The values imported with this question suggest this answer.',
       document_type: 'The type of document suggests this answer.',
     };
-    function queueOne(db, subject = 'acct-basis') {
-      const r = C.ask(db, { kind: 'account_kind', subject, question: 'What kind of account is this synthetic account?', options: OPTIONS, context: { amount: '100' }, now: NOW });
+    async function queueOne(db, subject = 'acct-basis') {
+      const r = (await C.ask(db, { kind: 'account_kind', subject, question: 'What kind of account is this synthetic account?', options: OPTIONS, context: { amount: '100' }, now: NOW }));
       assert.equal(r.queued, true);
       return r.id;
     }
@@ -286,16 +286,16 @@ describe('guessPending', () => {
     });
 
     test('a guess with a valid basis keeps the fixed text for each code', async () => withStore(async (s) => {
-      const id = queueOne(s.db);
-      const batch = C.pendingItems(s.db);
+      const id = (await queueOne(s.db));
+      const batch = (await C.pendingItems(s.db));
       for (const code of G.REASON_CODES) {
         assert.deepEqual(keptWith(batch, id, { basis: code }), [{ item: id, option: 'checking', reason: EXPECTED[code] }], code);
       }
     }));
 
     test('an unknown, missing or wrongly typed basis is dropped', async () => withStore(async (s) => {
-      const id = queueOne(s.db);
-      const batch = C.pendingItems(s.db);
+      const id = (await queueOne(s.db));
+      const batch = (await C.pendingItems(s.db));
       for (const basis of ['made_up', 'Question', 'account-name', '', ' question', 'question ', 7, null, true, ['question'], { code: 'question' }]) {
         assert.deepEqual(keptWith(batch, id, { basis }), [], `dropped: ${JSON.stringify(basis)}`);
       }
@@ -304,8 +304,8 @@ describe('guessPending', () => {
     }));
 
     test('free text sent next to a valid basis is ignored and only the fixed text is stored', async () => withStore(async (s) => {
-      const id = queueOne(s.db);
-      const batch = C.pendingItems(s.db);
+      const id = (await queueOne(s.db));
+      const batch = (await C.pendingItems(s.db));
       const out = keptWith(batch, id, { basis: 'imported_values', reason: 'The import lists 100, $100, 12.5% and one hundred thousand.', note: 'extra 250' });
       assert.deepEqual(out, [{ item: id, option: 'checking', reason: EXPECTED.imported_values }]);
       assert.equal(/\p{N}/u.test(out[0].reason), false);
@@ -313,10 +313,10 @@ describe('guessPending', () => {
     }));
 
     test('guessPending stores the fixed text, drops a bad basis to a null row, and ignores model-written text', async () => withStore(async (s) => {
-      const good = queueOne(s.db, 'acct-basis-good');
-      const noisy = queueOne(s.db, 'acct-basis-noisy');
-      const bad = queueOne(s.db, 'acct-basis-bad');
-      const engine = runtimeEngine(s.db);
+      const good = (await queueOne(s.db, 'acct-basis-good'));
+      const noisy = (await queueOne(s.db, 'acct-basis-noisy'));
+      const bad = (await queueOne(s.db, 'acct-basis-bad'));
+      const engine = (await runtimeEngine(s.db));
       await G.guessPending(s.db, engine, { now: NOW, fake: [script([
         { item: good, option: 'checking', basis: 'account_name' },
         { item: noisy, option: 'cash', basis: 'source_file', reason: 'The import reports $100k of income, 100 thousand.' },
@@ -328,7 +328,7 @@ describe('guessPending', () => {
       assert.equal((await rowOf(s.db, bad)).option_id, null);
       assert.equal((await rowOf(s.db, bad)).reason, null);
       for (const r of await guessRows(s.db)) if (r.reason !== null) assert.equal(/\p{N}/u.test(r.reason), false);
-      const items = FR.ingestState(s.db).items;
+      const items = (await FR.ingestState(s.db)).items;
       const byId = (id) => items.find((i) => i.id === id);
       assertScenarioGuess(byId(good).guess, { option: 'checking', label: 'Checking' });
       assertScenarioGuess(byId(noisy).guess, { option: 'cash', label: 'Savings or cash' });
@@ -338,8 +338,8 @@ describe('guessPending', () => {
   });
 
   test('25 pending items with batchSize 20 make two calls, each carrying only its own items with no locator', async () => withStore(async (s) => {
-    const ids = queue(s.db, 25);
-    const engine = runtimeEngine(s.db);
+    const ids = (await queue(s.db, 25));
+    const engine = (await runtimeEngine(s.db));
     const out = await G.guessPending(s.db, engine, { now: NOW, batchSize: 20, fake: [script([]), script([])] });
     assert.equal(engine.calls.length, 2);
     assert.equal(out.batches.length, 2);
@@ -376,9 +376,9 @@ describe('guessPending', () => {
     const empty = JSON.stringify({ guesses: [] });
 
     test('a normal two-batch run: costUsd is the ledger delta and the sum of the batch costs', async () => withStore(async (s) => {
-      queue(s.db, 25);
+      await queue(s.db, 25);
       const before = await confirmSpend(s.db);
-      const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, batchSize: 20, fake: [[{ text: empty, costUsd: 0.5 }], [{ text: empty, costUsd: 0.25 }]] });
+      const out = await G.guessPending(s.db, (await runtimeEngine(s.db)), { now: NOW, batchSize: 20, fake: [[{ text: empty, costUsd: 0.5 }], [{ text: empty, costUsd: 0.25 }]] });
       assert.equal(out.batches.length, 2);
       assert.ok(near(out.costUsd, 0.75), `costUsd ${out.costUsd}`);
       assert.ok(near(out.costUsd, await confirmSpend(s.db) - before));
@@ -386,9 +386,9 @@ describe('guessPending', () => {
     }));
 
     test('an unparseable response still counts its cost', async () => withStore(async (s) => {
-      queue(s.db, 2);
+      await queue(s.db, 2);
       const before = await confirmSpend(s.db);
-      const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, fake: [[{ text: 'not json', costUsd: 0.05 }]] });
+      const out = await G.guessPending(s.db, (await runtimeEngine(s.db)), { now: NOW, fake: [[{ text: 'not json', costUsd: 0.05 }]] });
       assert.equal(out.stopped, 'bad_response');
       assert.deepEqual(out.batches, []);
       assert.ok(near(out.costUsd, 0.05), `costUsd ${out.costUsd}`);
@@ -396,9 +396,9 @@ describe('guessPending', () => {
     }));
 
     test('a ledger-recorded failed call counts its cost, after an earlier good batch', async () => withStore(async (s) => {
-      queue(s.db, 25);
+      await queue(s.db, 25);
       const before = await confirmSpend(s.db);
-      const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, batchSize: 20, fake: [[{ text: empty, costUsd: 0.5 }], [{ text: '', status: 'error_max_turns', costUsd: 0.25 }]] });
+      const out = await G.guessPending(s.db, (await runtimeEngine(s.db)), { now: NOW, batchSize: 20, fake: [[{ text: empty, costUsd: 0.5 }], [{ text: '', status: 'error_max_turns', costUsd: 0.25 }]] });
       assert.equal(typeof out.stopped, 'string', JSON.stringify(out));
       assert.notEqual(out.stopped, 'bad_response');
       assert.equal(out.batches.length, 1);
@@ -409,22 +409,22 @@ describe('guessPending', () => {
   });
 
   test('a guess never answers: every item stays pending', async () => withStore(async (s) => {
-    const ids = queue(s.db, 3);
-    const engine = runtimeEngine(s.db);
+    const ids = (await queue(s.db, 3));
+    const engine = (await runtimeEngine(s.db));
     await G.guessPending(s.db, engine, { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', basis: 'question' })))] });
     assert.equal(await count(s.db, 'confirm_guesses', 'option_id IS NOT NULL'), 3, 'precondition: every guess was kept');
     for (const id of ids) {
       assert.deepEqual(await one(s.db, 'SELECT status, answer, answered_at FROM confirm_items WHERE id = ?', id), { status: 'pending', answer: null, answered_at: null });
     }
-    assert.deepEqual(C.pendingItems(s.db).map((i) => i.id), ids);
+    assert.deepEqual((await C.pendingItems(s.db)).map((i) => i.id), ids);
   }));
 });
 
 describe('guessPending makes no guess when it must not', () => {
   test('engine setting off: skipped engine_off, no call and no ledger row', async () => withStore(async (s) => {
-    queue(s.db, 2);
-    DB.setSetting(s.db, 'engine', { on: false });
-    const engine = runtimeEngine(s.db);
+    await queue(s.db, 2);
+    await DB.setSetting(s.db, 'engine', { on: false });
+    const engine = (await runtimeEngine(s.db));
     const out = await G.guessPending(s.db, engine, { now: NOW, fake: [script([])] });
     assert.deepEqual(out, { skipped: 'engine_off' });
     assert.equal(engine.calls.length, 0);
@@ -433,8 +433,8 @@ describe('guessPending makes no guess when it must not', () => {
   }));
 
   test('fake mode with no per-call script: skipped not_live, no call and no ledger row', async () => withStore(async (s) => {
-    queue(s.db, 2);
-    const engine = runtimeEngine(s.db);
+    await queue(s.db, 2);
+    const engine = (await runtimeEngine(s.db));
     const out = await G.guessPending(s.db, engine, { now: NOW });
     assert.deepEqual(out, { skipped: 'not_live' });
     assert.equal(engine.calls.length, 0);
@@ -443,37 +443,37 @@ describe('guessPending makes no guess when it must not', () => {
   }));
 
   test('engine mode off gives no guess', async () => withStore(async (s) => {
-    const ids = queue(s.db, 2);
-    const engine = runtimeEngine(s.db, 'off');
+    const ids = (await queue(s.db, 2));
+    const engine = (await runtimeEngine(s.db, 'off'));
     const out = await G.guessPending(s.db, engine, { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', basis: 'question' })))] });
     assert.equal(out.skipped, 'engine_off');
     assert.equal(engine.calls.length, 0);
     assert.equal(await count(s.db, 'confirm_guesses'), 0);
-    assert.ok(FR.ingestState(s.db).items.every((i) => i.guess === null));
+    assert.ok((await FR.ingestState(s.db)).items.every((i) => i.guess === null));
   }));
 
   test('a zero monthly cap stops the run with no stored guesses', async () => withStore(async (s) => {
-    const ids = queue(s.db, 2);
-    DB.setSetting(s.db, 'cap', { usd: 0 });
-    const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', basis: 'question' })))] });
+    const ids = (await queue(s.db, 2));
+    await DB.setSetting(s.db, 'cap', { usd: 0 });
+    const out = await G.guessPending(s.db, (await runtimeEngine(s.db)), { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', basis: 'question' })))] });
     assert.equal(typeof out.stopped, 'string', JSON.stringify(out));
     assert.equal(await count(s.db, 'confirm_guesses'), 0);
     assert.equal(await count(s.db, 'spend_ledger'), 0);
   }));
 
   test('a month already spent past the cap stops the run with no stored guesses', async () => withStore(async (s) => {
-    const ids = queue(s.db, 2);
+    const ids = (await queue(s.db, 2));
     await s.db.prepare('INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens) VALUES (?, ?, ?, ?, ?, ?)')
       .run(NOW, NOW.slice(0, 7), 'chat', 250, 'fake', '{}');
-    const out = await G.guessPending(s.db, runtimeEngine(s.db), { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', basis: 'question' })))] });
+    const out = await G.guessPending(s.db, (await runtimeEngine(s.db)), { now: NOW, fake: [script(ids.map((item) => ({ item, option: 'checking', basis: 'question' })))] });
     assert.equal(typeof out.stopped, 'string', JSON.stringify(out));
     assert.equal(await count(s.db, 'confirm_guesses'), 0);
     assert.equal(await count(s.db, 'spend_ledger'), 1, 'nothing more is spent');
-    assert.ok(C.pendingItems(s.db).length === 2);
+    assert.ok((await C.pendingItems(s.db)).length === 2);
   }));
 
   test('a model call error stops the run and stores nothing', async () => withStore(async (s) => {
-    queue(s.db, 2);
+    await queue(s.db, 2);
     const engine = stubEngine({ fail: true });
     const out = await G.guessPending(s.db, engine, { now: NOW });
     assert.equal(engine.calls.length, 1);
@@ -528,7 +528,7 @@ describe('imports trigger the confirm-guess job through the scheduler', () => {
       const r = await app.request(multipart('Chase7766_Activity_20320305.csv', readFileSync(fixturePath('Chase7766_Activity_20320305.csv'))));
       assert.equal(r.status, 200, r.text.slice(0, 300));
       assert.equal(r.json.files[0].status, 'imported');
-      assert.ok(C.pendingItems(s.db).length > 0, 'the upload asked questions');
+      assert.ok((await C.pendingItems(s.db)).length > 0, 'the upload asked questions');
       assert.deepEqual(sorted(scheduler.calls), [['confirm-guess', 'ingest'], ['freshness', 'ingest'], ['plan', 'ingest']], 'one trigger each');
       await pause(100);
       assert.equal(await count(s.db, 'confirm_guesses'), 0, 'no guess outside the scheduler job');
@@ -586,9 +586,9 @@ describe('imports trigger the confirm-guess job through the scheduler', () => {
 describe('guess CLI (npm run confirm:guess runs the confirm-guess job once through the scheduler)', () => {
   test('on a migrated real store with the engine off it exits 0, prints one JSON line with a skipped status, and records the run', async () => {
     // A real instance: the store plus its synthetic platform.sqlite, as the CLI requires since MT-01.
-    const store = await tempInstance({ mode: 'real', init: (db) => DB.setSetting(db, 'mode', 'real') });
+    const store = await tempInstance({ mode: 'real', init: async (db) => await DB.setSetting(db, 'mode', 'real') });
     try {
-      queue(store.db, 1);
+      await queue(store.db, 1);
       await store.close();
       const r = await runCommand(process.execPath, ['src/jobs/guess-cli.mjs', '--household', store.householdId], { env: { FATHOM_DATA: store.dataDir, FATHOM_ENGINE: 'off', FATHOM_DEMO: '0' } });
       assert.equal(r.code, 0, r.stderr);
@@ -598,7 +598,7 @@ describe('guess CLI (npm run confirm:guess runs the confirm-guess job once throu
       assert.equal(out.status, 'skipped');
       assert.deepEqual(out.note, { pending: 1 });
       assert.ok(!r.stdout.includes('Synthetic account'), 'no question text is printed');
-      const db = DB.openDb(store.file);
+      const db = (await DB.openDb(store.file));
       try {
         const runs = (await db.prepare("SELECT status, trigger, period_key FROM job_runs WHERE job_id = 'confirm-guess'").all()).map((x) => ({ ...x }));
         assert.equal(runs.length, 1, 'one job_runs row for the CLI run');

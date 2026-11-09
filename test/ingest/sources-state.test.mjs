@@ -63,24 +63,24 @@ const pick = (m, k) => {
   const v = m instanceof Map ? m.get(k) : m?.[k];
   return typeof v === 'string' ? v : v?.state;
 };
-function shared(db, clock) {
+async function shared(db, clock) {
   assert.equal(typeof C.sourceStates, 'function', 'src/ingest/coverage.mjs exports the shared helper sourceStates(db, clock)');
-  const out = C.sourceStates(db, clock);
+  const out = (await C.sourceStates(db, clock));
   assert.ok(out && out.sources && out.accounts, 'sourceStates returns { sources, accounts }');
   return { source: (id) => pick(out.sources, id), account: (id) => pick(out.accounts, id) };
 }
 
 // Every caller at `clock`, read through its public entry.
-function callers(db, clock) {
-  const state = FR.ingestState(db, { clock });
-  const scenario = B.buildScenario(db, { clock });
-  const planner = D.loadPlanningData(db, clock).freshness;
+async function callers(db, clock) {
+  const state = (await FR.ingestState(db, { clock }));
+  const scenario = (await B.buildScenario(db, { clock }));
+  const planner = (await D.loadPlanningData(db, clock)).freshness;
   return {
     state,
     scenario,
     source: (id) => state.sources.find((x) => x.id === id),
     ingestAccount: (id) => state.accounts[id]?.fresh,
-    dialog: (id) => FR.accountFreshness(db, id, { clock }).fresh,
+    dialog: async (id) => (await FR.accountFreshness(db, id, { clock })).fresh,
     scenarioAccount: (id) => scenario.accounts.find((a) => a.id === id),
     planner: (id) => planner.find((f) => f.id === id).state,
     cashCard: () => H.healthLine({ pace: scenario.pace, ingest: scenario.live.ingest, accounts: scenario.accounts }).staleAccounts,
@@ -89,19 +89,19 @@ function callers(db, clock) {
 
 // The one rule: every caller reports the shared helper's answer for every account and source.
 async function assertAgree(db, clock) {
-  const rule = shared(db, clock);
-  const c = callers(db, clock);
+  const rule = await shared(db, clock);
+  const c = await callers(db, clock);
   for (const { id } of await db.prepare('SELECT id FROM accounts').all()) {
     const want = rule.account(id);
     if (want === undefined) continue;
     if (want === 'archived') {
       assert.notEqual(c.ingestAccount(id), 'stale', `${id}: archived is not stale in ingestState`);
-      assert.notEqual(c.dialog(id), 'stale', `${id}: archived is not stale in the account dialog`);
+      assert.notEqual(await c.dialog(id), 'stale', `${id}: archived is not stale in the account dialog`);
       assert.equal(c.scenarioAccount(id), undefined, `${id}: archived is not in scenario.accounts`);
       continue;
     }
     assert.equal(c.ingestAccount(id), want, `${id}: ingestState.accounts agrees with the helper`);
-    assert.equal(c.dialog(id), want, `${id}: accountFreshness agrees with the helper`);
+    assert.equal(await c.dialog(id), want, `${id}: accountFreshness agrees with the helper`);
     assert.equal(c.scenarioAccount(id)?.fresh, want, `${id}: scenario.accounts agrees with the helper`);
   }
   for (const source of c.state.sources) {
@@ -126,10 +126,10 @@ test('a file source whose accounts a live SimpleFIN connection covers is history
 
   await connect(s.db, acct.id);
   c = await assertAgree(s.db, OLD_CLOCK);
-  assert.equal(shared(s.db, OLD_CLOCK).source(file.source_id), 'history');
+  assert.equal((await shared(s.db, OLD_CLOCK)).source(file.source_id), 'history');
   assert.equal(c.source(file.source_id).state, 'history');
   assert.notEqual(c.ingestAccount(acct.id), 'stale');
-  assert.notEqual(c.dialog(acct.id), 'stale');
+  assert.notEqual(await c.dialog(acct.id), 'stale');
   assert.notEqual(c.scenarioAccount(acct.id).fresh, 'stale');
   assert.deepEqual(c.state.staleNotes, [], 'no stale note for a covered export');
   assert.equal(c.cashCard(), 0, 'the Cash card counts no stale account');
@@ -151,9 +151,9 @@ test('an account with no newer source and old data is stale in every caller; a c
   await connect(s.db, cash.id);
 
   const c = await assertAgree(s.db, OLD_CLOCK);
-  assert.equal(shared(s.db, OLD_CLOCK).account(invest.id), 'stale');
+  assert.equal((await shared(s.db, OLD_CLOCK)).account(invest.id), 'stale');
   assert.equal(c.ingestAccount(invest.id), 'stale');
-  assert.equal(c.dialog(invest.id), 'stale');
+  assert.equal(await c.dialog(invest.id), 'stale');
   assert.equal(c.scenarioAccount(invest.id).fresh, 'stale');
   assert.equal(c.source(pos.source_id).state, 'stale');
   assert.ok(c.state.staleNotes.some((n) => n.domain === 'invest'), 'the invest note asks for a fresh positions export');
@@ -169,15 +169,15 @@ test('an archived account is never stale, and its only source becomes history', 
   const cash = await accountOfFile(s, agg);
   const invest = await accountOfFile(s, pos);
   await connect(s.db, cash.id);
-  assert.equal(callers(s.db, OLD_CLOCK).ingestAccount(invest.id), 'stale', 'precondition: the positions account is stale');
+  assert.equal((await callers(s.db, OLD_CLOCK)).ingestAccount(invest.id), 'stale', 'precondition: the positions account is stale');
 
   const out = await T.callTool('sources', { operation: 'archive_account', id: invest.id }, { db: s.db, now: new Date(NOW), actorId: 'person-a' });
   assert.ok(out.receipt, 'archiving returns a receipt');
 
   const c = await assertAgree(s.db, OLD_CLOCK);
-  assert.equal(shared(s.db, OLD_CLOCK).account(invest.id), 'archived');
+  assert.equal((await shared(s.db, OLD_CLOCK)).account(invest.id), 'archived');
   assert.notEqual(c.ingestAccount(invest.id), 'stale');
-  assert.notEqual(c.dialog(invest.id), 'stale');
+  assert.notEqual(await c.dialog(invest.id), 'stale');
   assert.equal(c.scenarioAccount(invest.id), undefined, 'the archived account leaves the current accounts');
   assert.equal(c.source(pos.source_id).state, 'history');
   assert.deepEqual(c.state.staleNotes, [], 'no stale note for an archived account or a covered one');

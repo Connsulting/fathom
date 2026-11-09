@@ -29,12 +29,12 @@ async function withStore(fn) {
   try { return await fn(s); } finally { await s.close(); }
 }
 
-const sourcesOf = (s) => FR.ingestState(s.db, { clock: CLOCK }).sources;
+const sourcesOf = async (s) => (await FR.ingestState(s.db, { clock: CLOCK })).sources;
 const fileRow = async (s, name) => await one(s.db, 'SELECT * FROM files WHERE name = ?', name);
 const sourceOfFile = async (s, name) => {
   const f = await fileRow(s, name);
   assert.ok(f, `${name} was stored`);
-  const source = sourcesOf(s).find((x) => x.id === f.source_id);
+  const source = (await sourcesOf(s)).find((x) => x.id === f.source_id);
   assert.ok(source, `${name} has a source in ingestState`);
   return source;
 };
@@ -140,7 +140,7 @@ test('several live files in one source: newest file name plus the count of the o
   await ingest(s, aggregatorFile('export-b.csv', rows('11', '23.00', '24.00')), '2032-03-02T10:00:00.000Z');
   const ids = await mapSeries(['export-a.csv', 'export-b.csv', 'export-c.csv'], async (n) => (await fileRow(s, n)).source_id);
   assert.equal(new Set(ids).size, 1, 'precondition: the three exports feed one source');
-  const source = sourcesOf(s).find((x) => x.id === ids[0]);
+  const source = (await sourcesOf(s)).find((x) => x.id === ids[0]);
   assertNotParserLabel(source);
   assert.equal(source.name, 'export-c.csv and 2 more files');
   assert.deepEqual(source.range, { from: '2031-10-04', to: '2031-12-18' });
@@ -156,7 +156,7 @@ test('a bank connection source is named for its institutions', async () => withS
     transactions: [{ date: '2032-03-01', amount: -10, description: 'Bridge posting', externalId: 'bridge-naming' }] }] };
   const r = await P.ingestFile(s.db, textFile('bridge-naming.json', JSON.stringify(doc)), s.opts(null, { parser: SF.parser }));
   assert.equal(r.status, 'imported');
-  const source = sourcesOf(s).find((x) => x.kind === 'simplefin');
+  const source = (await sourcesOf(s)).find((x) => x.kind === 'simplefin');
   assert.ok(source, 'the bridge sync has a source');
   assertNotParserLabel(source);
   assert.equal(source.name, 'Example Bank');
@@ -170,7 +170,7 @@ test('sources sort stale first, then fresh, then history, then by name', async (
   await ingest(s, fixture('Chase7766_Activity_20320305.csv', 'text/csv'));
   await ingest(s, fixture('positions.csv', 'text/csv'));
   await ingest(s, aggregatorFile('old-reserve.csv', [{ ...account(7, 'Example Bank'), date: '2031-06-01', amount: '30.00' }]));
-  const list = sourcesOf(s);
+  const list = (await sourcesOf(s));
   const states = list.map((x) => x.state);
   assert.ok(states.includes('stale') && states.includes('fresh') && states.includes('history'), `stale, fresh and history present: ${states}`);
   const rank = { stale: 0, fresh: 1, history: 2 };

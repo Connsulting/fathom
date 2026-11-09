@@ -14,6 +14,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { NOW, aggregatorFile, textFile } from '../helpers/ingest.mjs';
 import { setup, upload, approve } from '../helpers/model-cutover.mjs';
 import { recipe } from '../helpers/model-import.mjs';
@@ -521,15 +525,36 @@ for (const row of ROWS) {
   });
 }
 
+// A busy store at the storage boundary, from SQLite itself: a TEMP trigger on this connection writes
+// to an attached database whose write lock another connection holds, so every transaction insert
+// fails with SQLITE_BUSY after a short wait. Nothing in src/ is replaced. 
+async function busyFault(db) {
+  const dir = mkdtempSync(join(tmpdir(), 'fathom-busy-'));
+  const file = join(dir, 'lock.sqlite');
+  const holder = new DatabaseSync(file);
+  holder.exec('CREATE TABLE t (x)');
+  holder.exec('BEGIN IMMEDIATE');
+  await db.applySchema(`ATTACH DATABASE '${file}' AS busy_lock`);
+  await db.applySchema('PRAGMA busy_timeout = 20');
+  await db.applySchema('CREATE TEMP TRIGGER IF NOT EXISTS h1_store_fault BEFORE INSERT ON main.transactions BEGIN INSERT INTO busy_lock.t VALUES (1); END;');
+  return async () => {
+    await db.applySchema('DROP TRIGGER IF EXISTS temp.h1_store_fault');
+    holder.exec('ROLLBACK');
+    holder.close();
+    await db.applySchema('DETACH DATABASE busy_lock');
+    await db.applySchema('PRAGMA busy_timeout = 5000');
+    rmSync(dir, { recursive: true, force: true });
+  };
+}
+
 test('a busy or locked store is a transient failure: retried once, then left for the owner', async () => {
   const x = await setup();
+  let healOnce = null;
+  const heal = async () => { const h = healOnce; healOnce = null; if (h) await h(); };
   try {
-    // A store fault at the storage boundary: SQLite reports a lock with the message 'database is
-    // locked'. A TEMP trigger on this connection raises it on every transaction insert; nothing in
-    // src/ is replaced.
-    const fault = async () => await x.db.applySchema("CREATE TEMP TRIGGER IF NOT EXISTS h1_store_fault BEFORE INSERT ON main.transactions BEGIN SELECT RAISE(ABORT, 'database is locked'); END;");
-    const heal = async () => await x.db.applySchema('DROP TRIGGER IF EXISTS temp.h1_store_fault');
-    await fault();
+    // A store fault at the storage boundary: SQLite reports SQLITE_BUSY. A TEMP trigger on this
+    // connection hits a held lock on every transaction insert; nothing in src/ is replaced.
+    healOnce = await busyFault(x.db);
     const r = await P.ingestFile(x.db, csvOf('locked'), x.opts);
     assert.equal(r.status, 'failed');
     assert.equal(r.reasonCode, 'retry:store_locked');
@@ -553,7 +578,7 @@ test('a busy or locked store is a transient failure: retried once, then left for
 
     // The owner's Retry still imports it.
     assert.equal((await P.retryFile(x.db, r.fileId, x.opts)).status, 'imported');
-  } finally { await x.close(); }
+  } finally { await heal(); await x.close(); }
 });
 
 test('resumeImports skips a file this household is already routing, then resumes it', async () => {
