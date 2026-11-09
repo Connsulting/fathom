@@ -168,7 +168,7 @@ test('TX2-6 the tax meter with no reserve shows paid against projected, not a ba
 
 // TX2-7: each assumption behind a shown figure is listed once in plain words, after the gaps, with its
 // existing fix where one exists; an assumption with no fix is words only, never dropped.
-const ASSUMES = [...Object.keys(ASSUMPTION_FIXES), 'agi_as_magi_proxy', 'va_exemptions_omitted'];
+const ASSUMES = [...Object.keys(ASSUMPTION_FIXES), 'agi_as_magi_proxy', 'va_exemptions_omitted', 'section125_unknown', 'qbi_no_prior_loss'];
 for (const code of ASSUMES) test(`TX2-7 panel model lists the ${code} assumption with its fix when one exists`, () => {
   const a = { code, text: ASSUMPTION_TEXT[code], fix: ASSUMPTION_FIXES[code] ? { ...ASSUMPTION_FIXES[code] } : null };
   const S = { 'tax.fed.proj': fig(30000, { kind: 'm', assumes: [a] }), 'tax.fed.remaining': fig(20000, { assumes: [a] }), 'tax.va.proj': fig(5000, { kind: 'm', assumes: [a] }) };
@@ -182,4 +182,11 @@ for (const code of ASSUMES) test(`TX2-7 panel model lists the ${code} assumption
   else assert.equal(m.assumes[0].fix, null);
   const asGap = taxPanelModel({ ...S, 'tax.fed.remaining': fig(20000, { assumes: [a], gaps: [{ ...taxGap('no_income_inputs'), code }] }) });
   assert.equal(asGap.assumes.length, 0, 'an assumption already listed as a gap is not repeated');
+});
+
+// A fix is offered only where it supplies the assumed input: these two have no import field or answer
+// shape that reaches the planner, so they are words only.
+test('TX2-8 assumptions whose input no fix can supply carry no fix control', () => {
+  for (const code of ['section125_unknown', 'qbi_no_prior_loss']) assert.ok(!Object.hasOwn(ASSUMPTION_FIXES, code), code);
+  assert.deepEqual(Object.keys(ASSUMPTION_FIXES).sort(), ['addl_medicare_withholding_not_read', 'paid_rows_as_estimates']);
 });

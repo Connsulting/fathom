@@ -58,12 +58,12 @@ export const ESTIMATE_GAP_RULES = Object.freeze({
 });
 
 // TX2: the existing fix for a planner assumption code (src/jobs/planner/assumptions.mjs) that shapes a
-// tax figure, where one exists. Codes with no fix (a modelling choice such as agi_as_magi_proxy) are
-// shown as plain words only.
+// tax figure, only where that fix supplies the input the assumption stands in for. Codes with no such
+// fix are shown as plain words only: a modelling choice (agi_as_magi_proxy), section125_unknown (no
+// paystub field or answer holds pre-tax benefits) and qbi_no_prior_loss (the planner reads only an
+// owner fact that no import or answer shape writes).
 export const ASSUMPTION_FIXES = Object.freeze({
-  section125_unknown: upload('paystub', 'Upload a paystub with deductions'),
   addl_medicare_withholding_not_read: answer('tax.withholding.federal', 'Enter the withholding total', 'Record my total federal withholding for this tax year, including any Additional Medicare tax withheld. Ask me for the amount.'),
-  qbi_no_prior_loss: upload('taxforms', "Upload last year's return"),
   paid_rows_as_estimates: upload('estimates', 'Upload a labeled payment log'),
 });
 
