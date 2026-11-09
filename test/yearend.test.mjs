@@ -290,7 +290,7 @@ test('demo: the seeded store builds the year-end section through the same tables
     const sc = await (await fetch(`${srv.baseUrl}/api/scenario`)).json();
     const ye = sc.yearend;
     assert.equal(ye.year, 2026);
-    assert.ok(ye.docs.find((d) => d.key === 'w2:brightline'));
+    assert.ok(ye.docs.find((d) => d.key === 'w2:lakeviewschoolofdesign'));
     assert.equal(ye.docs.find((d) => d.key === '1098:mortgage').status, 'have');
     assert.deepEqual(ye.unmatched.map((u) => u.name), ['property-tax-receipt-2026.pdf']);
     assert.ok(ye.docs.every((d) => !/\{[a-z]+:/.test(d.t)), 'demo tokens are resolved to plain text');
@@ -308,7 +308,7 @@ test('demo: the seeded store builds the year-end section through the same tables
     const res = await fetch(`${srv.baseUrl}/api/yearend/packet`);
     assert.equal(res.status, 200);
     const names = readZip(Buffer.from(await res.arrayBuffer())).map((e) => e.name);
-    assert.deepEqual(names, ['index.html', 'documents/01-1098-Harbor-Bank-2026.txt', 'documents/02-Document-County-treasurer-2026.txt']);
+    assert.deepEqual(names, ['index.html', 'documents/01-1098-Lakeshore-Credit-Union-2026.txt', 'documents/02-Document-County-treasurer-2026.txt']);
   } finally { await srv.close(); inst.close(); await rm(dataDir, { recursive: true, force: true }); }
 });
 

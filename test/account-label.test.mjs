@@ -105,7 +105,7 @@ test('the demo owner tokens stay tokens for the screen to resolve', () => {
 });
 
 test('a caller that already worked out the prefix passes labelPrefix', () => {
-  assert.equal(accountLabel({ ...base, owner: 'You', labelPrefix: "Sam's", displayName: 'VentureX' }), "Sam's VentureX (4455)");
+  assert.equal(accountLabel({ ...base, owner: 'You', labelPrefix: "Blair's", displayName: 'VentureX' }), "Blair's VentureX (4455)");
   assert.equal(accountLabel({ ...base, owner: 'You', householdNames: names, labelPrefix: '', displayName: 'VentureX' }), 'VentureX (4455)');
 });
 
@@ -122,21 +122,21 @@ test('the demo store names accounts with resolved owner names, before and after 
   t.after(() => s.close());
   seedDemo(s.db);
   const label = (id) => accountLabel(accountNaming(s.db).byId.get(id));
-  assert.equal(label('a_biz'), 'Northbeam Labs Business checking (1918)');
-  assert.equal(label('a_bsep'), "Alex's SEP-IRA (3657)");
-  assert.equal(label('a_jsep'), "Sam's SEP-IRA (3276)");
-  assert.equal(label('a_personal'), 'Joint checking (6643)');
-  assert.equal(label('a_jcash'), 'Sam\u2019s checking', 'a name that starts with the prefix is not doubled');
+  assert.equal(label('a_biz'), 'Copperleaf Studio Business checking (5043)');
+  assert.equal(label('a_roll'), "Morgan's Rollover IRA (3016)");
+  assert.equal(label('a_jsep'), "Riley's SEP-IRA (4817)");
+  assert.equal(label('a_personal'), 'Joint checking (1314)');
+  assert.equal(label('a_jcash'), 'Riley\u2019s checking', 'a name that starts with the prefix is not doubled');
 
   s.db.prepare("UPDATE accounts SET display_name = 'Studio operating' WHERE id = 'a_biz'").run();
-  s.db.prepare("UPDATE accounts SET display_name = 'Retirement' WHERE id = 'a_bsep'").run();
+  s.db.prepare("UPDATE accounts SET display_name = 'Retirement' WHERE id = 'a_roll'").run();
   const naming = accountNaming(s.db);
   const raw = s.db.prepare("SELECT * FROM accounts WHERE id = 'a_biz'").get();
-  assert.equal(label('a_biz'), 'Northbeam Labs Studio operating (1918)');
-  assert.equal(label('a_bsep'), "Alex's Retirement (3657)");
-  assert.equal(naming.label(raw), 'Northbeam Labs Studio operating (1918)', 'a raw row with the stored tokens reads the same');
-  assert.equal(accountLabels(s.db).get('a_biz').label, 'Northbeam Labs Studio operating (1918)');
+  assert.equal(label('a_biz'), 'Copperleaf Studio Studio operating (5043)');
+  assert.equal(label('a_roll'), "Morgan's Retirement (3016)");
+  assert.equal(naming.label(raw), 'Copperleaf Studio Studio operating (5043)', 'a raw row with the stored tokens reads the same');
+  assert.equal(accountLabels(s.db).get('a_biz').label, 'Copperleaf Studio Studio operating (5043)');
   const scenario = buildScenario(s.db, {});
-  assert.equal(scenario.accounts.find((a) => a.id === 'a_biz').name, 'Northbeam Labs Studio operating (1918)');
+  assert.equal(scenario.accounts.find((a) => a.id === 'a_biz').name, 'Copperleaf Studio Studio operating (5043)');
   for (const a of scenario.accounts) assert.doesNotMatch(a.name, /[{}]|ending/, `${a.id} has no token in its label`);
 });

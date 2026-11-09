@@ -58,7 +58,7 @@ export default {
     plan: { label: "Plan of record, revision 6", asOf: "Aug 20, 2026" },
     ret2025: { label: "2025 filed return", asOf: "May 2026" },
     model: { label: "Fathom model run on your plan", asOf: "Nov 5, 2026" },
-    you: { label: "You told us", asOf: "Nov 3, 2026" }
+    you: { label: "You told us", asOf: "Nov 4, 2026" }
   },
   fig: {
     biz_cash: { v: 21500, src: "biz", kind: "a", label: "Business checking balance" },
@@ -76,7 +76,7 @@ export default {
     my_roth: { v: 135000, src: "broker", kind: "a", label: "Morgan Roth IRA" },
     sp_sep_ira: { v: 395000, src: "broker", kind: "a", label: "Riley SEP-IRA" },
     sp_roth: { v: 68000, src: "broker", kind: "a", label: "Riley Roth IRA" },
-    sp_tod: { v: 72000, src: "broker", kind: "a", label: "Riley individual account" },
+    sp_tod: { v: 72000, src: "broker", kind: "a", label: "Riley direct-index account" },
     plan529: { v: 38000, src: "broker", kind: "a", label: "529 balance" },
     home_equity: { v: 420000, src: "plan", kind: "e", label: "Home equity" },
     net_worth: { v: 1780000, src: "plan", kind: "e", label: "Net worth, approximate" },
@@ -261,13 +261,13 @@ export default {
   ],
   events: [
     {
-      date: "Nov 3",
+      date: "Nov 4",
       kind: "life",
       title: "You told us: {n:spouse}’s sabbatical runs January to March",
       body: "Her relief income pauses for three months. We re-ran cash for Q1 2027 and opened three items."
     },
     {
-      date: "Nov 3",
+      date: "Nov 4",
       kind: "income",
       title: "Fixed-fee design work delivered, not invoiced",
       body: "About {f:fixed_fee} for a finished design phase you can bill now or in January. Cash basis, so the timing is your call."
@@ -298,7 +298,7 @@ export default {
     }
   ],
   deadlines: [
-    { date: "2026-11-19", label: "Nov 19", title: "Open enrollment closes (assumed)", recId: "dcfsa", hard: true },
+    { date: "2026-11-20", label: "Nov 20", title: "Open enrollment closes (assumed)", recId: "dcfsa", hard: true },
     { date: "2026-12-01", label: "Dec 1", title: "Decide on fixed-fee invoicing", recId: "deferral", hard: false },
     { date: "2026-12-01", label: "Dec 1", title: "Schedule the off-cycle payroll run", recId: "offcycle", hard: false },
     { date: "2026-12-10", label: "Dec 10", title: "Quarterly check-in with your advisor", hard: false },
@@ -439,7 +439,7 @@ export default {
       trigger: "life",
       triggerText: "Window: open enrollment",
       domain: "family",
-      window: { label: "Nov 19 (assumed)", days: 14 },
+      window: { label: "Nov 20 (assumed)", days: 15 },
       effort: "5 min",
       status: "proposed",
       advisor: { verdict: "pending", note: "Likely yes. Check the teaching wages can carry the election." },
@@ -1089,7 +1089,7 @@ export default {
   },
   decisions: [
     { id: "deferral", title: "Invoice now or in January?", status: "open", wargame: "deferral", recId: "deferral", when: "Decide by Dec 1", note: "Tax timing against December payroll cash." },
-    { id: "dcfsa", title: "How much dependent care FSA can your paychecks carry?", status: "open", recId: "dcfsa", when: "Nov 19 (assumed)", note: "One answer from HR settles it." },
+    { id: "dcfsa", title: "How much dependent care FSA can your paychecks carry?", status: "open", recId: "dcfsa", when: "Nov 20 (assumed)", note: "One answer from HR settles it." },
     { id: "salary26", title: "What should you pay yourself in 2026?", status: "decided", wargame: "salary", recId: "compmemo", when: "Decided Aug 20", note: "{f:salary}, locked in by the payroll already run." },
     { id: "salary27", title: "What should you pay yourself in 2027?", status: "upcoming", wargame: "salary", when: "Opens in January", note: "Reopens if the {f:baseline} baseline holds into 2027." },
     { id: "spouseentity", title: "{n:spouse}’s relief practice: S corp or not?", status: "upcoming", recId: "spouseentity", when: "Before Mar 15", note: "Opens once her schedule after the sabbatical is known." },
@@ -1147,7 +1147,7 @@ export default {
     { id: "a_roll", inst: "{n:broker}", name: "Rollover IRA", owner: "{n:me}", kind: "retirement", fig: "my_rollover", mirror: "connected", note: "Counts toward pro-rata" },
     { id: "a_broth", inst: "{n:broker}", name: "Roth IRA", owner: "{n:me}", kind: "roth", fig: "my_roth", mirror: "connected", note: "" },
     { id: "a_jsep", inst: "{n:broker}", name: "SEP-IRA", owner: "{n:spouse}", kind: "retirement", fig: "sp_sep_ira", mirror: "connected", note: "Balance far above contribution history. Likely a rollover; confirm." },
-    { id: "a_jtod", inst: "{n:broker}", name: "Individual", owner: "{n:spouse}", kind: "taxable", fig: "sp_tod", mirror: "connected", note: "" },
+    { id: "a_jtod", inst: "{n:broker}", name: "Direct-index account", owner: "{n:spouse}", kind: "taxable", fig: "sp_tod", mirror: "connected", note: "" },
     { id: "a_jroth", inst: "{n:broker}", name: "Roth IRA", owner: "{n:spouse}", kind: "roth", fig: "sp_roth", mirror: "connected", note: "" },
     { id: "a_529", inst: "{n:broker}", name: "529", owner: "{n:kid}", kind: "529", fig: "plan529", mirror: "connected", note: "" },
     { id: "a_payroll", inst: "{n:payroll}", name: "Payroll", owner: "{n:biz}", kind: "business", fig: null, mirror: "connected", note: "Runs and year-to-date wages" },
@@ -1176,8 +1176,8 @@ export default {
     shared: [
       { title: "Can we afford the sabbatical?", when: "Sep 22" },
       { title: "Backdoor Roth for both of us", when: "Oct 6" },
-      { title: "Invoice timing before the sabbatical", when: "Nov 3" },
-      { title: "Salary for next year", when: "Nov 3" }
+      { title: "Invoice timing before the sabbatical", when: "Nov 4" },
+      { title: "Salary for next year", when: "Nov 4" }
     ],
     experts: [
       { name: "{n:specialist}", role: "Tax specialist", when: "Joins the Dec 10 check-in for the filing plan" },

@@ -30,7 +30,7 @@ import { stripSources, markdownBlocks } from '../src/shared/answer-text.mjs';
 import { ROOT, tempDb } from './helpers/server.mjs';
 import { writeSyntheticPack, ALWAYS } from './helpers/packs.mjs';
 
-const ACTIVE_DEMO_PACKS = ['account-tax-treatment', 'advanced-retirement', 'kids-dependents', 's-corp-owner', 'self-employed-partnership', 'spending-and-obligations', 'virginia-resident', 'w2-benefits'];
+const ACTIVE_DEMO_PACKS = ['account-tax-treatment', 'advanced-retirement', 'kids-dependents', 's-corp-owner', 'self-employed-partnership', 'spending-and-obligations', 'w2-benefits'];
 const UNCHECKED = '<span class="fx-checking fx-unchecked" title="Not checked against your data">';
 const INVENTED = '$987,654';
 // A second invented amount exercises a correction with multiple unsupported figures.

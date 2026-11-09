@@ -423,8 +423,8 @@ test('goals.list serializes the demo kind goals for the model, the contribution 
   assert.equal(reserve.statusLabel, 'on track', 'seed goals keep their display text as statusLabel');
   assert.equal(reserve.kind, 'balance');
 
-  assert.deepEqual(by('checking-range').range, { low: { amount: 5000, source: 'plan' }, high: { amount: 8000, source: 'plan' } });
-  assert.deepEqual(by('biz-floor').floor, { amount: 15000, source: 'plan' });
+  assert.deepEqual(by('checking-range').range, { low: { amount: 9000, source: 'plan' }, high: { amount: 16000, source: 'plan' } });
+  assert.deepEqual(by('biz-floor').floor, { amount: 12000, source: 'plan' });
   assert.equal(by('biz-floor').ownerLabel, demo.names.me);
   assert.equal(by('biz-floor').priority, 'high');
 
@@ -456,7 +456,7 @@ test('goals.list serializes the demo kind goals for the model, the contribution 
         { person: 'owner', label: demo.names.me, amount: 7500, source: 'plan' },
         { person: 'spouse', label: demo.names.spouse, amount: 7500, source: 'plan' },
       ],
-      entered: { asOf: '2026-10-31', people: [{ person: 'owner', amount: 7500 }, { person: 'spouse', amount: 4000 }], source: 'you' },
+      entered: { asOf: '2026-10-31', people: [{ person: 'owner', amount: 6000 }, { person: 'spouse', amount: 7500 }], source: 'you' },
     },
   });
 });

@@ -80,7 +80,7 @@ window.FATHOM_SCENARIO = {
     },
     "you": {
       "label": "You told us",
-      "asOf": "Nov 3, 2026"
+      "asOf": "Nov 4, 2026"
     }
   },
   "fig": {
@@ -182,7 +182,7 @@ window.FATHOM_SCENARIO = {
       "v": 72000,
       "src": "broker",
       "kind": "a",
-      "label": "Riley individual account"
+      "label": "Riley direct-index account"
     },
     "plan529": {
       "v": 38000,
@@ -842,13 +842,13 @@ window.FATHOM_SCENARIO = {
   ],
   "events": [
     {
-      "date": "Nov 3",
+      "date": "Nov 4",
       "kind": "life",
       "title": "You told us: {n:spouse}’s sabbatical runs January to March",
       "body": "Her relief income pauses for three months. We re-ran cash for Q1 2027 and opened three items."
     },
     {
-      "date": "Nov 3",
+      "date": "Nov 4",
       "kind": "income",
       "title": "Fixed-fee design work delivered, not invoiced",
       "body": "About {f:fixed_fee} for a finished design phase you can bill now or in January. Cash basis, so the timing is your call."
@@ -880,8 +880,8 @@ window.FATHOM_SCENARIO = {
   ],
   "deadlines": [
     {
-      "date": "2026-11-19",
-      "label": "Nov 19",
+      "date": "2026-11-20",
+      "label": "Nov 20",
       "title": "Open enrollment closes (assumed)",
       "recId": "dcfsa",
       "hard": true
@@ -1184,8 +1184,8 @@ window.FATHOM_SCENARIO = {
       "triggerText": "Window: open enrollment",
       "domain": "family",
       "window": {
-        "label": "Nov 19 (assumed)",
-        "days": 14
+        "label": "Nov 20 (assumed)",
+        "days": 15
       },
       "effort": "5 min",
       "status": "proposed",
@@ -2448,7 +2448,7 @@ window.FATHOM_SCENARIO = {
       "title": "How much dependent care FSA can your paychecks carry?",
       "status": "open",
       "recId": "dcfsa",
-      "when": "Nov 19 (assumed)",
+      "when": "Nov 20 (assumed)",
       "note": "One answer from HR settles it."
     },
     {
@@ -2628,7 +2628,7 @@ window.FATHOM_SCENARIO = {
     {
       "id": "a_jtod",
       "inst": "{n:broker}",
-      "name": "Individual",
+      "name": "Direct-index account",
       "owner": "{n:spouse}",
       "kind": "taxable",
       "fig": "sp_tod",
@@ -2761,11 +2761,11 @@ window.FATHOM_SCENARIO = {
       },
       {
         "title": "Invoice timing before the sabbatical",
-        "when": "Nov 3"
+        "when": "Nov 4"
       },
       {
         "title": "Salary for next year",
-        "when": "Nov 3"
+        "when": "Nov 4"
       }
     ],
     "experts": [

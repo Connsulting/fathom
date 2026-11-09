@@ -93,7 +93,7 @@ export const KIND_GOALS = Object.freeze([
     prose: 'Each of us puts in the full amount before the April deadline.', owner: 'joint', priority: 'medium',
     target: 15000, taxYear: 2026, targetDate: '2027-04-15', accounts: ['a_broth', 'a_jroth'],
     split: [{ person: 'owner', amount: 7500 }, { person: 'spouse', amount: 7500 }],
-    entered: { asOf: '2026-10-31', people: [{ person: 'owner', amount: 3000 }, { person: 'spouse', amount: 7500 }] } },
+    entered: { asOf: '2026-10-31', people: [{ person: 'owner', amount: 6000 }, { person: 'spouse', amount: 7500 }] } },
 ].map(g => Object.freeze(g)));
 const CONFIRM_TAX_YEAR = 2025;
 const CONFIRM_GUESS = { option: 'owner', reason: REASON_TEXT.institution };
@@ -101,7 +101,7 @@ const CONFIRM_GUESS = { option: 'owner', reason: REASON_TEXT.institution };
 function seedConfirm(db, { clock, now }) {
   const base = { fileId: SEED_ID, now };
   const owner = ask(db, { ...base, kind: 'account_owner', subject: 'a_tod', question: 'Whose account is the Individual brokerage account?', options: OWNER_OPTIONS, context: {} });
-  ask(db, { ...base, kind: 'account_kind', subject: 'a_jtod', question: 'What kind of account is the Individual account?', options: KIND_OPTIONS, context: {} });
+  ask(db, { ...base, kind: 'account_kind', subject: 'a_jtod', question: 'What kind of account is the Direct-index account?', options: KIND_OPTIONS, context: {} });
   const { key, value } = CONFIRM_FACT;
   const json = canonicalJson(value);
   ask(db, {

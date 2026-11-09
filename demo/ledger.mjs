@@ -36,7 +36,7 @@ const BUSINESS_FLOWS = [
   { description: 'Owner distribution', category: 'transfer', sign: -1, min: 2000, max: 5500, per: [1, 2] },
 ];
 const HOUSEHOLD_FLOWS = [
-  { description: 'Paycheck deposit', category: 'income', sign: 1, min: 1800, max: 3200, per: [2, 2] },
+  { description: 'Paycheck deposit', category: 'income', sign: 1, min: 3800, max: 5600, per: [2, 2] },
   { description: 'Grocery', category: 'groceries', sign: -1, min: 55, max: 310, per: [5, 8] },
   { description: 'Utilities', category: 'utilities', sign: -1, min: 70, max: 280, per: [2, 3] },
   { description: 'Restaurant', category: 'dining', sign: -1, min: 25, max: 160, per: [3, 5] },

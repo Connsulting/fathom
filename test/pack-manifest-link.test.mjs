@@ -18,12 +18,11 @@ const LINKS = {
   scorp: 's-corp-owner',
   selfemp: 'self-employed-partnership',
   w2: 'w2-benefits',
-  virginia: 'virginia-resident',
   kids: 'kids-dependents',
   retire: 'advanced-retirement',
   giving: 'charitable-giving',
 };
-const UNLINKED = ['contractor', 'abroad', 'rental'];
+const UNLINKED = ['illinois', 'contractor', 'abroad', 'rental'];
 
 const defs = db => Object.fromEntries(db.prepare('SELECT id, def FROM packs_state').all().map(r => [r.id, parseJson(r.def, null)]));
 const manifestOf = (db, id) => {
@@ -44,7 +43,7 @@ describe('the demo seed tags the demo pack rows', () => {
   });
   after(() => t && t.close());
 
-  test('the seven rows with a manifest carry that manifest id, and each target exists on disk', () => {
+  test('the six rows with a manifest carry that manifest id, and each target exists on disk', () => {
     const all = defs(t.db);
     for (const [row, manifest] of Object.entries(LINKS)) {
       assert.ok(all[row], `seeded row ${row}`);
@@ -53,7 +52,7 @@ describe('the demo seed tags the demo pack rows', () => {
     }
   });
 
-  test('contractor, abroad and rental have no manifest', () => {
+  test('illinois, contractor, abroad and rental have no manifest', () => {
     const all = defs(t.db);
     for (const row of UNLINKED) {
       assert.ok(all[row], `seeded row ${row}`);

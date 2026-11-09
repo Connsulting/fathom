@@ -119,7 +119,7 @@ test('monthly series and meters return explicit missing reasons and live when st
 test('demo targets match the existing synthetic scenario and stale health is detected', async t => {
   const { db } = await store(t); setSetting(db, 'mode', 'demo'); seedDemo(db);
   const r = buildPace(db, { clock: demo.meta.clock });
-  for (const [id, amount] of [['reserve',117900], ['port3',1978000]]) {
+  for (const [id, amount] of [['reserve',96000], ['port3',1240000]]) {
     const g = r.goals.find(g => g.id === id);
     assert.equal(g.actual.v, amount);
     assert.equal(g.status, 'unknown');
@@ -130,7 +130,7 @@ test('demo targets match the existing synthetic scenario and stale health is det
   }
   const fresh = buildPace(db, { clock: '2026-08-30' });
   assert.notEqual(fresh.goals.find(g => g.id === 'port3').status, 'unknown');
-  assert.equal(r.goals.find(g => g.id === 'port3').targetDate, '2029-12-31');
+  assert.equal(r.goals.find(g => g.id === 'port3').targetDate, '2031-12-31');
   assert.equal(r.goals.find(g => g.id === 'arena').status, 'no target');
 });
 
