@@ -90,8 +90,8 @@ async function ok(promise, label) {
   return r.json;
 }
 
-const goalTitles = async id => (await f.app.runtimes.get(id).db.prepare('SELECT def FROM goals ORDER BY id').all()).map(r => JSON.parse(r.def).title);
-const threadTexts = async id => (await f.app.runtimes.get(id).db.prepare("SELECT text FROM messages WHERE role = 'me'").all()).map(r => r.text);
+const goalTitles = async id => (await (await f.app.runtimes.get(id)).db.prepare('SELECT def FROM goals ORDER BY id').all()).map(r => JSON.parse(r.def).title);
+const threadTexts = async id => (await (await f.app.runtimes.get(id)).db.prepare("SELECT text FROM messages WHERE role = 'me'").all()).map(r => r.text);
 const tableCounts = async id => {
   const db = (await f.app.runtimes.get(id)).db;
   return Object.fromEntries(await mapSeries(['goals', 'conversations', 'messages', 'settings', 'facts', 'files'], async t => [t, (await db.prepare(`SELECT count(*) AS n FROM ${t}`).get()).n]));

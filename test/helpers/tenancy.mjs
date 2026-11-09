@@ -276,8 +276,8 @@ export function migrateWithFault(dataDir, keyFile, phase, mode) {
 }
 
 const HOLDER_CHILD = `
-import { openScope } from '../../src/storage/index.mjs';
-const db = await openScope({ path: process.env.HOLD_FILE, journal: null, busyTimeout: 5000 });
+import { openScope } from '${pathToFileURL(join(ROOT, 'src/storage/index.mjs')).href}';
+const db = await openScope({ path: process.env.HOLD_FILE, journal: 'wal', busyTimeout: 5000 });
 await db.prepare('SELECT count(*) AS n FROM settings').get();
 console.log('holding');
 setInterval(() => {}, 1000);

@@ -25,7 +25,7 @@ before(async () => {
 async function fixture() {
   const store = await tempDb();
   const dir = await tempDir();
-  const platform = P.openPlatform(join(dir, PLATFORM_FILE));
+  const platform = await P.openPlatform(join(dir, PLATFORM_FILE));
   const addUser = async (id) => await platform.prepare('INSERT INTO users (id, email, user_handle, created_at, enrolled_at) VALUES (?, ?, ?, 1, 1)')
     .run(id, `${id}@example.test`, `handle-${id}`);
   await addUser('u-owner');

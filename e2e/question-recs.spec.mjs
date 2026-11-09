@@ -48,7 +48,7 @@ test.describe('answerable questions on the synthetic planning household', () => 
     session = await auth.createSession(user.id);
     householdId = (await auth.servedHousehold()).id;
     // The served household's own store, through the server's runtime registry.
-    store = app.runtimes.get((await auth.servedHousehold()).id).db;
+    store = (await app.runtimes.get((await auth.servedHousehold()).id)).db;
   });
   test.afterAll(async () => {
     if (app) await app.close();

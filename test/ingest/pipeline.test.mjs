@@ -879,10 +879,10 @@ describe('no silently dropped transactions (D3)', () => {
         const { createInstanceSecrets } = await import(workerData.secretsUrl);
         const { createHouseholdContext } = await import(workerData.runtimeUrl);
         const P = await import(workerData.pipelineUrl);
-        const db = openDb(workerData.file);
-        const platform = openPlatform(workerData.platformFile);
+        const db = await openDb(workerData.file);
+        const platform = await openPlatform(workerData.platformFile);
         try {
-          const household = createHouseholdContext({
+          const household = await createHouseholdContext({
             householdId: workerData.householdId, mode: 'real', db, config: workerData.config, platform,
             secrets: createInstanceSecrets({ config: workerData.config, mode: 'real' }),
           });
@@ -891,7 +891,7 @@ describe('no silently dropped transactions (D3)', () => {
           parentPort.postMessage({ ok: true, result: r });
         } catch (error) {
           parentPort.postMessage({ ok: false, error: String(error && error.stack || error) });
-        } finally { db.close(); platform.close(); }
+        } finally { await db.close(); await platform.close(); }
       })();`;
     const { ROOT } = await import('../helpers/server.mjs');
     const worker = new Worker(code, {
