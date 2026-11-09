@@ -1,4 +1,4 @@
-import { taxGap, rankGaps } from '../../shared/tax-gaps.mjs';
+import { taxGap, rankGaps, estimateGap } from '../../shared/tax-gaps.mjs';
 import { figureInputs, inputsOf } from '../../shared/rec-inputs.mjs';
 // Figures: every amount the planner shows, computed by deterministic code from the data and the
 // merged facts, each with a kind (a actual, p projected, e estimate, m model output), a source and
@@ -37,13 +37,16 @@ const SPEND_ACCOUNT = a => !a.entity && (PERSONAL_CASH.includes(a.kind) || a.kin
 const PLAN_TERMS = 'plan_terms_confirmed';
 // Figures the planner withholds as a group (R2-9): household tax and its targets, Virginia, solo room.
 const TAX_KEYS = ['agi.est', 'tax.fed.qbi', 'tax.fed.taxable', 'tax.fed.income', 'tax.fed.se', 'tax.fed.proj', 'tax.va.proj',
+  'tax.fed.paidToDate', 'tax.fed.remaining', 'tax.va.paidToDate', 'tax.va.remaining',
   'sh.fed.required', 'sh.fed.remaining', 'sh.fed.priorTarget', 'sh.fed.priorRemaining', 'sh.fed.currentTarget',
   'sh.va.required', 'sh.va.remaining', 'va529.deduction', 'va529.deductionLeft', 'va529.taxSaved'];
-const VA_KEYS = ['tax.va.proj', 'sh.va.required', 'sh.va.remaining', 'va529.deduction', 'va529.deductionLeft', 'va529.taxSaved'];
+const VA_KEYS = ['tax.va.proj', 'tax.va.paidToDate', 'tax.va.remaining', 'sh.va.required', 'sh.va.remaining', 'va529.deduction', 'va529.deductionLeft', 'va529.taxSaved'];
 const SOLO_KEYS = ['room.solo401k', 'room.solo401k.employee', 'room.solo401k.employer', 'room.solo401k.catchUp', 'room.solo401k.rothCatchUp', 'room.solo401k.pretax'];
 // Safe-harbor figures that use payments or withholding (R6-2 item 4).
 const SH_FED_PAID = ['sh.fed.required', 'sh.fed.remaining', 'sh.fed.priorRemaining'];
 const SH_VA_PAID = ['sh.va.required', 'sh.va.remaining'];
+// TX2: estimate assumptions the tax left to pay carries when warned, by jurisdiction.
+const REMAINING_ASSUMPTIONS = { fed: ['prior_year_missing', 'sstb_assumed', 'filing_status_assumed'], va: ['filing_status_assumed'] };
 const IRA_ANY = a => /\bIRA\b/i.test(a.name) || a.kind === 'roth';
 const IRA_PRETAX = a => /\bIRA\b/i.test(a.name) && !/roth/i.test(a.name) && a.kind !== 'roth';
 
@@ -838,13 +841,27 @@ function finish(out) {
   out.info.gaps = gaps;
   out.info.partial = gaps.length > 0;
   out.info.rough = gaps.some(g => g.rough);
+  const onInputs = key => { const inputs = figureInputs(key); return gaps.filter(g => inputsOf(g.code).some(i => inputs.includes(i))); };
   for (const f of Object.values(out.figures)) {
     if (!/^(agi\.|tax\.|sh\.|room\.|wg\.|va529\.(deduction|taxSaved)|inc\.ytd\.(w2|total))/.test(f.key)) continue;
-    const dependent = !/^(tax\.[^.]+\.(paid|withheld)|sh\.fed\.priorTarget)$/.test(f.key);
+    const dependent = !/^(tax\.[^.]+\.(paid|withheld|paidToDate)|sh\.fed\.priorTarget)$/.test(f.key);
     // RQ2: a dependent figure carries only the gaps on inputs it is computed from (room.hsa never
     // carries a wage gap); the household lists in info stay whole for missing-data.
     const inputs = figureInputs(f.key);
-    const applicable = dependent ? gaps.filter(g => inputsOf(g.code).some(i => inputs.includes(i))) : gaps.filter(g => g.figureKeys?.includes(f.key));
+    // TX2: paid so far carries its payment gaps; the tax left to pay carries the projection's gaps,
+    // the payment gaps and the warned estimate assumptions (never added to info.gaps).
+    const jur = f.key.match(/^tax\.(fed|va)\.(paidToDate|remaining)$/);
+    let applicable;
+    if (!jur) applicable = dependent ? onInputs(f.key) : gaps.filter(g => g.figureKeys?.includes(f.key));
+    else {
+      const paymentGaps = gaps.filter(g => g.figureKeys?.some(k => k === `tax.${jur[1]}.paid` || k === `tax.${jur[1]}.withheld`));
+      if (jur[2] === 'paidToDate') applicable = paymentGaps;
+      else {
+        const own = [...new Set([...onInputs(`tax.${jur[1]}.proj`), ...paymentGaps])];
+        const assumed = REMAINING_ASSUMPTIONS[jur[1]].filter(code => out.warnings.has(code) && !own.some(g => g.code === code)).map(estimateGap);
+        applicable = [...own, ...assumed];
+      }
+    }
     f.locator = { ...f.locator, completeness: applicable.length ? `estimate with ${applicable.length} gap${applicable.length === 1 ? '' : 's'}` : 'complete',
       partial: applicable.length > 0, rough: dependent && applicable.some(g => g.rough), gaps: applicable,
       payroll: dependent && inputs.includes('income') ? out.info.payroll : [], notes: [...applicable.map(g => g.message), ...(f.locator.notes || [])].slice(0, 5) };
@@ -940,6 +957,8 @@ function writeTax(data, out, { hh, parts, owner, f, isVa, pay, section125 }) {
   if (!vaW.blocked && (vaW.v > 0 || pay.va.withheld.hasGap)) out.put('tax.va.withheld', vaW.v, 'a', 'Virginia tax withheld from wages', vaW.src, vaW.loc);
   if (out.figures['tax.fed.withheld'] && out.figures['tax.fed.withheld'].src === 'docs') out.source('docs', SOURCES.docs.label, dateLabel(data.clock), SOURCES.docs.kind);
   if (out.figures['tax.va.withheld'] && out.figures['tax.va.withheld'].src === 'docs') out.source('docs', SOURCES.docs.label, dateLabel(data.clock), SOURCES.docs.kind);
+  paidAndLeft(out, 'fed', 'Federal', data.year);
+  if (out.figures['tax.va.proj']) paidAndLeft(out, 'va', 'Virginia', data.year);
   // A blocked payment or withholding figure holds the safe-harbor figures that use it (already
   // withheld with its code in computeFigures).
   const fedHeld = !!(fedW.blocked || pay.fed.paid.blocked);
@@ -1008,6 +1027,30 @@ function writeTax(data, out, { hh, parts, owner, f, isVa, pay, section125 }) {
     out.put('sh.va.required', required, kind, 'Virginia safe-harbor target for the year', 'calc:tax', l);
     out.put('sh.va.remaining', remaining, kind, 'Virginia estimate still to pay', 'calc:tax', l);
   }
+}
+
+// TX2: tax paid so far (estimated payments plus withholding, only those on file, missing counts as
+// zero) and the tax left to pay (projection less paid so far; negative means overpaid), so the
+// estimate is never blank while a projection exists.
+function paidAndLeft(out, j, name, taxYear) {
+  const proj = out.figures[`tax.${j}.proj`];
+  if (!proj) return;
+  const parts = [`tax.${j}.paid`, `tax.${j}.withheld`];
+  const onFile = parts.filter(k => out.figures[k]);
+  const inputs = Object.fromEntries(parts.map(k => [k, out.figures[k] ? out.figures[k].v : null]));
+  const paid = cents(sum(onFile.map(k => out.figures[k].v)));
+  const onFileText = onFile.length ? `on file: ${onFile.map(k => (k.endsWith('.paid') ? 'estimated payments' : 'withholding')).join(' and ')}` : 'none on file';
+  out.put(`tax.${j}.paidToDate`, paid, 'a', `${name} tax paid so far this year`, 'calc:tax', {
+    calc: 'taxPaidToDate', taxYear, ...rowsLoc('figures', onFile), inputs,
+    steps: [{ label: 'Payments on file', formula: `estimated payments + withholding, ${onFileText}, missing counts as zero`, value: paid }],
+  });
+  const left = cents(proj.v - paid);
+  out.put(`tax.${j}.remaining`, left, 'e', `${name} tax left to pay this year`, 'calc:tax', {
+    calc: 'taxRemaining', taxYear, ...rowsLoc('figures', [`tax.${j}.proj`, `tax.${j}.paidToDate`]),
+    inputs: { [`tax.${j}.proj`]: proj.v, [`tax.${j}.paidToDate`]: paid },
+    steps: [{ label: 'Paid so far', formula: `estimated payments + withholding, ${onFileText}`, value: paid },
+      { label: 'Left to pay', formula: 'projected tax - paid so far, negative means overpaid', value: left }],
+  });
 }
 
 function summarizeParts(parts, hh) {

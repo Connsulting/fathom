@@ -30,6 +30,8 @@ import { getFacts } from '../store/facts.mjs';
 import { inferMortgage } from '../calc/mortgage-inference.mjs';
 import { deriveSteps } from '../shared/rec-steps.mjs';
 import { gapsFor, TRIGGER_INPUTS } from '../shared/rec-inputs.mjs';
+import { ASSUMPTION_FIXES } from '../shared/tax-gaps.mjs';
+import { ASSUMPTION_TEXT } from '../jobs/planner/assumptions.mjs';
 import { advisorWait } from '../shared/advisor-waits.mjs';
 import { ADVISOR_KEYS } from '../facts/derive.mjs';
 import { observedPayments } from '../ingest/transaction-payments.mjs';
@@ -173,6 +175,16 @@ export function loadFigures(db) {
     const loc = parse(r.locator, null);
     const notes = loc && Array.isArray(loc.notes) ? loc.notes.filter(n => typeof n === 'string' && n.trim()) : [];
     if (notes.length) f.notes = notes.slice(0, 5);
+    // TX2: the tax year a paid-so-far or left-to-pay figure was planned for (the planner keeps planning
+    // last year until its return is due).
+    if (Number.isInteger(loc?.taxYear)) f.taxYear = loc.taxYear;
+    // TX2: a tax figure's assumptions in plain words with the existing fix where there is one, so the
+    // Tax this year screen lists each beside the estimate (notes alone carry no fix and stop at five).
+    if (/^tax\./.test(r.key) && Array.isArray(loc?.assumptions)) {
+      const assumes = [...new Set(loc.assumptions)].filter(c => typeof c === 'string' && ASSUMPTION_TEXT[c])
+        .map(code => ({ code, text: ASSUMPTION_TEXT[code], fix: ASSUMPTION_FIXES[code] ? { ...ASSUMPTION_FIXES[code] } : null }));
+      if (assumes.length) f.assumes = assumes;
+    }
     if (loc?.completeness) {
       f.completeness = loc.completeness;
       f.partial = loc.partial;
@@ -374,13 +386,15 @@ export const ASK_STARTERS = Object.freeze([
   Object.freeze({ id: 'wargame-salary', q: 'Compare the salary options for my S corp side by side.' }),
   Object.freeze({ id: 'wargame-deferral', q: 'Should I move some December invoices into January? Compare the options.' }),
   Object.freeze({ id: 'attention', q: 'What needs my attention right now?' }),
+  Object.freeze({ id: 'tax-estimate', q: "What's my tax estimate?" }),
   Object.freeze({ id: 'taxes', q: 'How are our tax payments tracking this year?' }),
   Object.freeze({ id: 'scorp', q: 'How is the S corp doing this year?' }),
   Object.freeze({ id: 'yearend', q: 'What should we do before the year ends?' }),
 ]);
 
-// The starters whose condition holds: attention (a visible rec proposed or doing), taxes
-// (any tax payment), scorp (fact income.sCorp is true or any P&L line), yearend (always).
+// Ask shows the first four that hold (web/horizon/screens/chat.js), so tax-estimate sits within the
+// first four entries. The starters whose condition holds: attention (a visible rec proposed or doing), taxes
+// (any tax payment), tax-estimate (a stored federal tax projection), scorp (fact income.sCorp is true or any P&L line), yearend (always).
 export function loadAskStarters(db, recs, wargame = {}) {
   const exists = table => !!db.prepare(`SELECT EXISTS (SELECT 1 FROM ${table}) AS x`).get().x;
   const sCorp = parse(db.prepare("SELECT value FROM facts WHERE key = 'income.sCorp'").get()?.value, null) === true;
@@ -389,6 +403,7 @@ export function loadAskStarters(db, recs, wargame = {}) {
     'wargame-deferral': ['open', 'upcoming'].includes(wargame.deferral?.status),
     attention: recs.some(r => ['proposed', 'doing'].includes(r.status)),
     taxes: exists('tax_payments'),
+    'tax-estimate': !!db.prepare("SELECT 1 FROM figures WHERE key = 'tax.fed.proj' AND v IS NOT NULL AND unavailable_reason IS NULL").get(),
     scorp: sCorp || exists('pnl_lines'),
     yearend: true,
   };
