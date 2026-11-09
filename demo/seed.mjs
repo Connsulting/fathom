@@ -26,14 +26,13 @@ export const SEED_ID = 'demo-seed';
 export const OPENS_ON = Object.freeze({ salary27: '2027-01-01' });
 
 // Demo pack row id to the repo pack manifest it stands for (stored as def.manifest). The other
-// demo packs (contractor, abroad, rental) have no manifest. A tagged row also keeps its demo name
+// demo packs (illinois, contractor, abroad, rental) have no manifest. A tagged row also keeps its demo name
 // as a label, so the pack refresh rewrites it in place under its demo id. Keep in step with
 // migrations 005 (manifest) and 006 (label).
 export const PACK_MANIFEST = Object.freeze({
   scorp: 's-corp-owner',
   selfemp: 'self-employed-partnership',
   w2: 'w2-benefits',
-  virginia: 'virginia-resident',
   kids: 'kids-dependents',
   retire: 'advanced-retirement',
   giving: 'charitable-giving',
@@ -44,15 +43,15 @@ const CONTENT_KEYS = ['names', 'law', 'pct', 'series', 'verdict', 'domains', 'cu
 
 // Synthetic household facts consistent with the demo scenario (frozen fact keys).
 const FACTS = {
-  'household.state': 'VA',
+  'household.state': 'IL',
   'household.filingStatus': 'mfj',
-  'household.dependents': 1,
-  'household.expectingChild': true,
-  'household.dependentAges': [2],
+  'household.dependents': 2,
+  'household.expectingChild': false,
+  'household.dependentAges': [9, 6],
   'income.w2': true,
   'income.sCorp': true,
   'income.selfEmployed': true,
-  'income.partnership': true,
+  'income.partnership': false,
   'benefits.hsa': true,
   'benefits.employer401k': true,
   'retirement.solo401k': true,
@@ -60,7 +59,7 @@ const FACTS = {
   'retirement.backdoorRothCandidate': true,
   'accounts.has529': true,
   'giving.charitable': false,
-  'income.agiEstimate': 380000,
+  'income.agiEstimate': 472000,
 };
 
 // Children before parents so foreign keys hold while clearing.
@@ -86,15 +85,15 @@ const CONFIRM_FACT = { key: 'retirement.planOffersRoth', value: true };
 export const KIND_GOALS = Object.freeze([
   { id: 'checking-range', kind: 'range', title: 'Keep household checking in a working range', horizon: 'now', status: 'on track',
     prose: 'Enough for the month ahead, with the rest swept to the reserve.', owner: 'joint', priority: 'medium',
-    targetLow: 5000, targetHigh: 8000, targetDate: '2026-12-31', track: { accounts: ['a_personal'] } },
+    targetLow: 9000, targetHigh: 16000, targetDate: '2026-12-31', track: { accounts: ['a_personal'] } },
   { id: 'biz-floor', kind: 'floor', title: 'Business cash never drops below its floor', horizon: 'now', status: 'on track',
     prose: '{n:biz} keeps a standing minimum for payroll.', owner: 'owner', priority: 'high',
-    floor: 15000, track: { accounts: ['a_biz'] } },
+    floor: 12000, track: { accounts: ['a_biz'] } },
   { id: 'ira-fill', kind: 'contribution', title: 'Fill both IRAs for 2026', horizon: 'now', status: 'open',
     prose: 'Each of us puts in the full amount before the April deadline.', owner: 'joint', priority: 'medium',
     target: 15000, taxYear: 2026, targetDate: '2027-04-15', accounts: ['a_broth', 'a_jroth'],
     split: [{ person: 'owner', amount: 7500 }, { person: 'spouse', amount: 7500 }],
-    entered: { asOf: '2026-10-31', people: [{ person: 'owner', amount: 7500 }, { person: 'spouse', amount: 4000 }] } },
+    entered: { asOf: '2026-10-31', people: [{ person: 'owner', amount: 3000 }, { person: 'spouse', amount: 7500 }] } },
 ].map(g => Object.freeze(g)));
 const CONFIRM_TAX_YEAR = 2025;
 const CONFIRM_GUESS = { option: 'owner', reason: REASON_TEXT.institution };
@@ -102,7 +101,7 @@ const CONFIRM_GUESS = { option: 'owner', reason: REASON_TEXT.institution };
 function seedConfirm(db, { clock, now }) {
   const base = { fileId: SEED_ID, now };
   const owner = ask(db, { ...base, kind: 'account_owner', subject: 'a_tod', question: 'Whose account is the Individual brokerage account?', options: OWNER_OPTIONS, context: {} });
-  ask(db, { ...base, kind: 'account_kind', subject: 'a_jdirect', question: 'What kind of account is the Direct-index account?', options: KIND_OPTIONS, context: {} });
+  ask(db, { ...base, kind: 'account_kind', subject: 'a_jtod', question: 'What kind of account is the Individual account?', options: KIND_OPTIONS, context: {} });
   const { key, value } = CONFIRM_FACT;
   const json = canonicalJson(value);
   ask(db, {
@@ -129,7 +128,7 @@ function seedYearendDocs(db, S, { year, now }) {
   const docs = [
     { type: 'paystub', fields: { employerName: S.names.w2, payDate: `${year}-10-31` }, file: SEED_ID },
     { type: 'paystub', fields: { employerName: S.names.biz, payDate: `${year}-10-31` }, file: SEED_ID },
-    { type: '1098', fields: { issuer: S.names.bank, note: 'Mortgage paid off this year' }, file: 'demo-doc-1098', name: `1098-${year}-mortgage-payoff.pdf`, at: `${year}-10-14T12:00:00.000Z` },
+    { type: '1098', fields: { issuer: S.names.bank, note: 'Mortgage interest statement' }, file: 'demo-doc-1098', name: `1098-${year}-mortgage.pdf`, at: `${year}-10-14T12:00:00.000Z` },
     { type: 'other', fields: { issuer: 'County treasurer', note: 'Property tax receipt' }, file: 'demo-doc-proptax', name: `property-tax-receipt-${year}.pdf`, at: `${year}-10-02T12:00:00.000Z` },
   ];
   docs.forEach((d, i) => {

@@ -28,21 +28,21 @@ export function isoFromLabel(label) {
 }
 
 const BUSINESS_FLOWS = [
-  { description: 'Client payment', category: 'income', sign: 1, min: 4000, max: 14000, per: [2, 3] },
-  { description: 'Payroll', category: 'payroll', sign: -1, min: 3000, max: 6500, per: [2, 2] },
-  { description: 'Software subscription', category: 'software', sign: -1, min: 20, max: 400, per: [3, 5] },
-  { description: 'Contractor invoice', category: 'contractors', sign: -1, min: 300, max: 2500, per: [0, 2] },
-  { description: 'Bank fee', category: 'fees', sign: -1, min: 5, max: 40, per: [0, 1] },
-  { description: 'Owner distribution', category: 'transfer', sign: -1, min: 1000, max: 4000, per: [1, 1] },
+  { description: 'Client payment', category: 'income', sign: 1, min: 6000, max: 18000, per: [2, 3] },
+  { description: 'Payroll', category: 'payroll', sign: -1, min: 2800, max: 3600, per: [2, 2] },
+  { description: 'Software subscription', category: 'software', sign: -1, min: 30, max: 650, per: [2, 4] },
+  { description: 'Contractor invoice', category: 'contractors', sign: -1, min: 500, max: 3000, per: [0, 1] },
+  { description: 'Bank fee', category: 'fees', sign: -1, min: 8, max: 30, per: [0, 1] },
+  { description: 'Owner distribution', category: 'transfer', sign: -1, min: 2000, max: 5500, per: [1, 2] },
 ];
 const HOUSEHOLD_FLOWS = [
-  { description: 'Paycheck deposit', category: 'income', sign: 1, min: 2500, max: 4500, per: [2, 2] },
-  { description: 'Grocery', category: 'groceries', sign: -1, min: 40, max: 260, per: [4, 7] },
-  { description: 'Utilities', category: 'utilities', sign: -1, min: 90, max: 320, per: [1, 2] },
-  { description: 'Restaurant', category: 'dining', sign: -1, min: 18, max: 140, per: [2, 4] },
-  { description: 'Childcare', category: 'childcare', sign: -1, min: 800, max: 1600, per: [1, 1] },
-  { description: 'Mortgage payment', category: 'housing', sign: -1, min: 1800, max: 2400, per: [1, 1] },
-  { description: 'Pharmacy', category: 'health', sign: -1, min: 10, max: 90, per: [0, 2] },
+  { description: 'Paycheck deposit', category: 'income', sign: 1, min: 1800, max: 3200, per: [2, 2] },
+  { description: 'Grocery', category: 'groceries', sign: -1, min: 55, max: 310, per: [5, 8] },
+  { description: 'Utilities', category: 'utilities', sign: -1, min: 70, max: 280, per: [2, 3] },
+  { description: 'Restaurant', category: 'dining', sign: -1, min: 25, max: 160, per: [3, 5] },
+  { description: 'Childcare', category: 'childcare', sign: -1, min: 600, max: 1200, per: [1, 1] },
+  { description: 'Mortgage payment', category: 'housing', sign: -1, min: 2900, max: 2900, per: [1, 1] },
+  { description: 'Pharmacy', category: 'health', sign: -1, min: 12, max: 75, per: [0, 2] },
 ];
 
 const FUNDS = [
@@ -55,11 +55,11 @@ const FUNDS = [
 ];
 
 const PNL_CATEGORIES = [
-  { category: 'revenue', sign: 1, min: 9000, max: 26000 },
-  { category: 'payroll', sign: -1, min: 5000, max: 9000 },
-  { category: 'software', sign: -1, min: 150, max: 900 },
-  { category: 'contractors', sign: -1, min: 0, max: 3500 },
-  { category: 'other', sign: -1, min: 100, max: 1200 },
+  { category: 'revenue', sign: 1, min: 20000, max: 34000 },
+  { category: 'payroll', sign: -1, min: 6500, max: 7500 },
+  { category: 'software', sign: -1, min: 200, max: 1100 },
+  { category: 'contractors', sign: -1, min: 0, max: 4500 },
+  { category: 'other', sign: -1, min: 250, max: 1500 },
 ];
 
 const TRANSACTION_KINDS = ['checking', 'business'];
@@ -67,7 +67,7 @@ const POSITION_KINDS = ['taxable', 'retirement', 'roth', '529'];
 
 // Build the ledger. accounts: [{id, kind, fig}] in scenario order; fig: scenario.fig;
 // entities: business names for P and L; year: the clock year; through: ISO data-through date.
-export function buildLedger({ accounts, fig, entities, year, through, seed = 20261105 }) {
+export function buildLedger({ accounts, fig, entities, year, through, seed = 73019 }) {
   const rnd = prng(seed);
   const history = prng(seed + 7);
   const between = (min, max) => min + (max - min) * rnd();
@@ -107,7 +107,7 @@ export function buildLedger({ accounts, fig, entities, year, through, seed = 202
     }
   }
   const personal = accounts.find(a => a.kind === 'checking' && a.fig);
-  if (personal) for (const month of [4,6]) transactions.push({ accountId:personal.id,date:`${year}-${pad(month)}-12`,amount:-640,description:'Example Service',category:'Uncategorized' });
+  if (personal) for (const month of [4,6]) transactions.push({ accountId:personal.id,date:`${year}-${pad(month)}-12`,amount:-415,description:'Example Service',category:'Uncategorized' });
   transactions.sort((x, y) => (x.accountId < y.accountId ? -1 : x.accountId > y.accountId ? 1 : 0) || (x.date < y.date ? -1 : x.date > y.date ? 1 : 0));
   transactions.forEach((t, i) => { t.locator = `ledger:row ${i + 1}`; t.dedupeKey = `demo-seed:${i + 1}`; });
 
@@ -160,8 +160,8 @@ export function buildLedger({ accounts, fig, entities, year, through, seed = 202
     { date: `${year}-06-15`, taxYear: Number(year) },
   ];
   for (const q of quarters) {
-    taxPayments.push({ jurisdiction: 'federal', taxYear: q.taxYear, date: q.date, amount: cents(between(4000, 9000)), kind: 'estimate' });
-    taxPayments.push({ jurisdiction: 'state', taxYear: q.taxYear, date: q.date, amount: cents(between(800, 2200)), kind: 'estimate' });
+    taxPayments.push({ jurisdiction: 'federal', taxYear: q.taxYear, date: q.date, amount: cents(between(15000, 24000)), kind: 'estimate' });
+    taxPayments.push({ jurisdiction: 'state', taxYear: q.taxYear, date: q.date, amount: cents(between(3500, 6500)), kind: 'estimate' });
   }
   taxPayments.forEach((p, i) => { p.locator = `tax:row ${i + 1}`; });
 
