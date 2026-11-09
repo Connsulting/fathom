@@ -290,7 +290,7 @@ window.FATHOM_SCENARIO = {
     "va_safe": {
       "v": 22600,
       "src": "plan",
-      "kind": "m",
+      "kind": "e",
       "label": "Illinois safe harbor (100% of 2025)"
     },
     "fed_paid": {
@@ -499,8 +499,8 @@ window.FATHOM_SCENARIO = {
     },
     "va529_save": {
       "v": 990,
-      "src": "model",
-      "kind": "m",
+      "src": "plan",
+      "kind": "e",
       "label": "Illinois tax saved at the full deduction"
     },
     "vaq4_amt": {
@@ -511,8 +511,8 @@ window.FATHOM_SCENARIO = {
     },
     "vaq4_save": {
       "v": 110,
-      "src": "model",
-      "kind": "m",
+      "src": "plan",
+      "kind": "e",
       "label": "Federal tax saved by paying in December"
     },
     "reserve_target": {
