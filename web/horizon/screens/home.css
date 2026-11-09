@@ -249,6 +249,41 @@
 .d-horizon .h-pace-fresh .h-i { margin-top: 3px; }
 .d-horizon .h-pace-fresh a { color: var(--ac); margin-left: 8px; }
 
+/* ---------- tax this year ---------- */
+.d-horizon .h-tax-head h1 { font-size: 34px; line-height: 1.15; letter-spacing: -0.015em; }
+.d-horizon .h-tax-head .h-kicker { margin-bottom: 10px; }
+.d-horizon .h-tax-cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 36px; }
+.d-horizon .h-tax-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 14px; }
+.d-horizon .h-tax-card { min-width: 0; padding: 16px 18px; background: var(--s1); border: 1px solid var(--line); border-radius: 12px; }
+.d-horizon .h-tax-card h3 { font-size: 13.5px; color: var(--tx2); margin-bottom: 8px; }
+.d-horizon .h-tax-card dl { margin: 0; }
+.d-horizon .h-tax-r { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 9px 0; border-top: 1px solid var(--line); }
+.d-horizon .h-tax-r:first-child { border-top: 0; }
+.d-horizon .h-tax-r dt { color: var(--tx2); font-size: 13.5px; min-width: 0; }
+.d-horizon .h-tax-r dd { margin: 0; font-family: var(--mono); font-size: 13.5px; color: var(--tx); white-space: nowrap; }
+.d-horizon .h-tax-r.sub { padding: 5px 0 5px 14px; border-top: 0; }
+.d-horizon .h-tax-r.sub dt, .d-horizon .h-tax-r.sub dd { color: var(--mu); font-size: 12.5px; }
+.d-horizon .h-tax-r.total { margin-top: 4px; border-top: 1px solid var(--line2); }
+.d-horizon .h-tax-r.total dt { color: var(--tx); font-weight: 500; }
+.d-horizon .h-tax-r.total dd { font-size: 16px; color: var(--ac); }
+.d-horizon .h-tax-r.total.over dd { color: var(--tx); }
+.d-horizon .h-tax-gaps { display: grid; gap: 0; }
+.d-horizon .h-tax-gaps li { display: grid; gap: 8px; justify-items: start; padding: 12px 0 12px 14px; border-bottom: 1px solid var(--line); border-left: 2px solid var(--line2); }
+.d-horizon .h-tax-gaps li:first-child { border-top: 1px solid var(--line); }
+.d-horizon .h-tax-gaps li.rough { border-left-color: var(--ac); }
+.d-horizon .h-tax-gaps p { color: var(--tx2); font-size: 13.5px; line-height: 1.45; overflow-wrap: anywhere; }
+.d-horizon .h-tax-none { margin-top: 28px; color: var(--tx2); display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
+.d-horizon a.h-taxh { display: grid; gap: 4px; padding: 14px 18px; background: var(--s1); border: 1px solid var(--line); border-radius: 12px; }
+.d-horizon a.h-taxh:hover { border-color: var(--line2); }
+.d-horizon .h-taxh-r { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; color: var(--tx2); font-size: 13.5px; }
+.d-horizon .h-taxh-r b { font-family: var(--mono); font-weight: 400; color: var(--tx); }
+.d-horizon .h-taxh-go { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--ac); font-size: 13px; }
+.d-horizon .h-tax-meter { color: var(--tx2); }
+.d-horizon .h-tax-meter-acts { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; }
+@media (min-width: 1000px) {
+  .d-horizon .h-tax-cols { grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); }
+}
+
 /* ---------- phone ---------- */
 @media (max-width: 720px) {
   .d-horizon .h-home { display: flex; flex-direction: column; gap: 16px; }
@@ -274,6 +309,10 @@
   .d-horizon .h-pace-why { font-size: 14.5px; }
   .d-horizon .h-pchart { padding: 14px 12px 4px; }
   .d-horizon .h-pace-fresh a { display: inline-flex; align-items: center; min-height: 40px; }
+  .d-horizon .h-tax-head h1 { font-size: 26px; }
+  .d-horizon .h-tax-card { padding: 14px; }
+  .d-horizon .h-tax-gaps .h-btn { min-height: 40px; }
+  .d-horizon .h-tax-meter-acts > * { display: inline-flex; align-items: center; min-height: 40px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .d-horizon article.h-next, .d-horizon details.h-hk summary .h-i { transition: none; }

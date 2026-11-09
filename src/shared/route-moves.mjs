@@ -1,7 +1,7 @@
 // The hash routes the app knows, the old routes that moved and where each one lands now, and the
 // onboarding steps that still run. Pure; the browser core and node tests both import it.
 
-export const ROUTES = new Set(['onboarding', 'home', 'pace', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
+export const ROUTES = new Set(['onboarding', 'home', 'pace', 'tax', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
   'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm', 'add', 'money', 'settings', 'memories', 'account', 'pnl', 'pnlrows']);
 
 // Old route, new home. 'brief' is the old name of Home (email links still carry #/brief). Accounts

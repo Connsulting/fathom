@@ -375,12 +375,13 @@ export const ASK_STARTERS = Object.freeze([
   Object.freeze({ id: 'wargame-deferral', q: 'Should I move some December invoices into January? Compare the options.' }),
   Object.freeze({ id: 'attention', q: 'What needs my attention right now?' }),
   Object.freeze({ id: 'taxes', q: 'How are our tax payments tracking this year?' }),
+  Object.freeze({ id: 'tax-estimate', q: "What's my tax estimate?" }),
   Object.freeze({ id: 'scorp', q: 'How is the S corp doing this year?' }),
   Object.freeze({ id: 'yearend', q: 'What should we do before the year ends?' }),
 ]);
 
 // The starters whose condition holds: attention (a visible rec proposed or doing), taxes
-// (any tax payment), scorp (fact income.sCorp is true or any P&L line), yearend (always).
+// (any tax payment), tax-estimate (a stored federal tax projection), scorp (fact income.sCorp is true or any P&L line), yearend (always).
 export function loadAskStarters(db, recs, wargame = {}) {
   const exists = table => !!db.prepare(`SELECT EXISTS (SELECT 1 FROM ${table}) AS x`).get().x;
   const sCorp = parse(db.prepare("SELECT value FROM facts WHERE key = 'income.sCorp'").get()?.value, null) === true;
@@ -389,6 +390,7 @@ export function loadAskStarters(db, recs, wargame = {}) {
     'wargame-deferral': ['open', 'upcoming'].includes(wargame.deferral?.status),
     attention: recs.some(r => ['proposed', 'doing'].includes(r.status)),
     taxes: exists('tax_payments'),
+    'tax-estimate': !!db.prepare("SELECT 1 FROM figures WHERE key = 'tax.fed.proj' AND v IS NOT NULL AND unavailable_reason IS NULL").get(),
     scorp: sCorp || exists('pnl_lines'),
     yearend: true,
   };
