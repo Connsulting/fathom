@@ -157,7 +157,7 @@ async function ask(page, base, idle) {
   await answer.waitFor({ state: 'visible' });
   // The stream is over when the pending block is gone and the figures are sourced.
   await page.locator('.h-askx-pend').waitFor({ state: 'detached' });
-  await answer.locator('.fx-src').first().waitFor({ state: 'visible' });
+  await answer.locator('.fx-fig, .fx-src').first().waitFor({ state: 'visible' });
   if (await page.locator('.fx-checking').count()) fail('ask: figures still checking after the stream ended');
   // Show where the figures came from.
   const sources = answer.locator('details.h-src');

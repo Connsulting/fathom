@@ -137,8 +137,8 @@ test('CLI entrypoint exits nonzero and writes evidence for a self-computed answe
     const program = `import {main} from './evals/run.mjs';
       process.exitCode=await main(['--cases','retirement-hsa-room','--out',process.env.EVAL_TEST_OUTPUT],{
         scripts:({db})=>[
-          {toolCalls:[{name:'household',args:{ operation: 'figures', keys:['hsa_left','hsa_paid']}}],costUsd:0},
-          {text:String(db.prepare("SELECT sum(v) AS v FROM figures WHERE key IN ('hsa_left','hsa_paid')").get().v),costUsd:0}
+          {toolCalls:[{name:'household',args:{ operation: 'figures', keys:['hsa_left','va529_save']}}],costUsd:0},
+          {text:String(db.prepare("SELECT sum(v) AS v FROM figures WHERE key IN ('hsa_left','va529_save')").get().v),costUsd:0}
         ]});`;
     const r = spawnSync(process.execPath, ['--input-type=module', '-e', program], {
       cwd: new URL('../', import.meta.url), env: { ...process.env, EVAL_TEST_OUTPUT: dir }, encoding: 'utf8', timeout: 60000,

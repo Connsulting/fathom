@@ -58,8 +58,12 @@ test('sourced-number table grades answers over real demo tool results', async ()
     assert.equal(ratioCall.result[0].unit, 'ratio');
     assert.equal(gradeFigures(`${ratio * 100}%`, [ratioCall]).ok, true);
     assert.equal(gradeFigures(`${ratio * 100 + 0.1}%`, [ratioCall]).ok, false);
-    const rounded = `$${Math.round(expense / 10) * 10}`;
-    assert.equal(gradeFigures(rounded, [health]).rounded.length, 1);
+    // A coarse rounding that is not also the dropped-cents reading of any row in the result.
+    const many = await call('transactions', { operation: 'search', category: 'health', limit: 50 });
+    const amounts = many.result.rows.map(row => Math.abs(row.amount));
+    const coarse = amounts.map(a => Math.round(a / 10) * 10).find(v => !amounts.some(a => Math.trunc(a) === v || a === v));
+    assert.ok(coarse, 'a health row rounds to a coarse value');
+    assert.equal(gradeFigures(`$${coarse}`, [many]).rounded.length, 1);
     assert.equal(gradeFigures(`${Math.round(target / 1e6 * 10) / 10}m`, [pace]).rounded.length, 1);
     assert.equal(gradeFigures('seventeen dollars', [health]).spelledOut.length, 1);
     const context = store.db.prepare('SELECT v FROM figures WHERE v > 0 LIMIT 1').get().v;

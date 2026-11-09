@@ -439,7 +439,7 @@ test('a reset demo store has one goal of each kind (balance, range, floor, contr
   assert.equal(pace('biz-floor').status, 'unknown', 'the demo balances are stale');
   const ira = pace('ira-fill');
   assert.equal(ira.contribution.basis, 'entered', 'the IRAs have no transactions, so the entered amount is used');
-  assert.equal(ira.actual.v, 11500);
+  assert.equal(ira.actual.v, 13500);
   assert.equal(ira.status, 'ahead', 'the entered amount is current and ahead of the straight-line plan');
   assert.equal(ira.contribution.people.length, 2);
 });

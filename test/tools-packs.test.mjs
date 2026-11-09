@@ -41,7 +41,6 @@ const LINKS = {
   scorp: 's-corp-owner',
   selfemp: 'self-employed-partnership',
   w2: 'w2-benefits',
-  virginia: 'virginia-resident',
   kids: 'kids-dependents',
   retire: 'advanced-retirement',
   giving: 'charitable-giving',
@@ -55,7 +54,7 @@ const SEEDED_STATUS = {
   'self-employed-partnership': 'active',
   'account-tax-treatment': 'active',
   'spending-and-obligations': 'active',
-  'virginia-resident': 'active',
+  'virginia-resident': 'suggested',
   'w2-benefits': 'active',
 };
 const ON = 'Turned on by the owner.';
@@ -320,7 +319,7 @@ describe('owner overrides on the demo rows reach the pack tools', () => {
     assert.equal(got.markdown, entryOf('s-corp-owner').body, 'knowledge.entry works for a pack that is off');
 
     // The other demo packs are untouched.
-    for (const id of ['kids-dependents', 'w2-benefits', 'virginia-resident']) assert.equal((await listed(ctx, id)).status, 'active', id);
+    for (const id of ['kids-dependents', 'w2-benefits', 'advanced-retirement']) assert.equal((await listed(ctx, id)).status, 'active', id);
   });
 
   test('turning scorp back on, or clearing the override, restores s-corp-owner', async () => {
@@ -435,11 +434,11 @@ describe('owner overrides on the demo rows reach the pack tools', () => {
   });
 
   test('an empty row why falls back to the activation why', async () => {
-    run("UPDATE packs_state SET def = json_set(def, '$.why', '') WHERE id = 'virginia'");
-    const p = await listed(ctx, 'virginia-resident');
+    run("UPDATE packs_state SET def = json_set(def, '$.why', '') WHERE id = 'kids'");
+    const p = await listed(ctx, 'kids-dependents');
     assert.equal(p.status, 'active');
-    assert.equal(p.why, viewOf(t.db, 'virginia-resident').why);
-    assert.match(p.why, /household\.state/);
+    assert.equal(p.why, viewOf(t.db, 'kids-dependents').why);
+    assert.match(p.why, /household\.dependents/);
   });
 
   test('a manifest pack with no linked row falls back to the facts-derived activation status', async () => {
@@ -475,7 +474,7 @@ describe('owner overrides on the demo rows reach the pack tools', () => {
   test('the whole list follows the rule after a mix of overrides', async () => {
     run("UPDATE packs_state SET active = 0 WHERE id IN ('scorp', 'w2')");
     run("UPDATE packs_state SET active = 1 WHERE id = 'giving'");
-    run("UPDATE packs_state SET exploring = 1 WHERE id = 'virginia'");
+    run("UPDATE packs_state SET exploring = 1 WHERE id = 'kids'");
     const list = (await callTool('knowledge', { operation: 'packs' }, ctx)).filter(p => p.entries);
     const want = expectedView(t.db);
     assert.deepEqual(list.map(p => [p.id, p.status, p.why]), want.map(v => [v.pack.id, v.status, v.why]));
@@ -487,7 +486,7 @@ describe('owner overrides on the demo rows reach the pack tools', () => {
       'self-employed-partnership': 'active',
       'account-tax-treatment': 'active',
       'spending-and-obligations': 'active',
-      'virginia-resident': 'active',
+      'virginia-resident': 'suggested',
       'w2-benefits': 'available',
     });
     const all = await callTool('knowledge', { operation: 'search',  query: 'tax', limit: 20 }, ctx);

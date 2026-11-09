@@ -1,7 +1,7 @@
 // AC4: live packs. Facts in the store (upsertFact, getFacts) drive manifest activation through
 // refreshPackState in real stores (rows keyed by manifest id, overrides kept); demo stores keep
 // their seeded rows, and the live view (src/packs/live.mjs) adds the backing manifest's fields to
-// the seven tagged demo rows (D7, D8, R2, R3). A Your plans pack in the data dir loads, a broken one
+// the six tagged demo rows (D7, D8, R2, R3). A Your plans pack in the data dir loads, a broken one
 // is skipped with a warning, and loaded() follows packs.generation and the Your plans dir (D9, R12).
 
 import test from 'node:test';
@@ -19,12 +19,13 @@ import demo from '../../../demo/scenario.mjs';
 
 const REPO_PACKS = resolve(fileURLToPath(new URL('../../../packs/', import.meta.url)));
 const ALIASES = {
-  scorp: 's-corp-owner', selfemp: 'self-employed-partnership', w2: 'w2-benefits', virginia: 'virginia-resident',
+  scorp: 's-corp-owner', selfemp: 'self-employed-partnership', w2: 'w2-benefits',
   kids: 'kids-dependents', retire: 'advanced-retirement', giving: 'charitable-giving',
 };
-const ILLUSTRATIVE = ['contractor', 'abroad', 'rental'];
+const ILLUSTRATIVE = ['illinois', 'contractor', 'abroad', 'rental'];
 const ALWAYS_ACTIVE = ['account-tax-treatment', 'spending-and-obligations'];
-const PUBLIC_IDS = [...Object.values(ALIASES), ...ALWAYS_ACTIVE].sort();
+// virginia-resident has no demo row; the facts suggest it (a 529 outside Virginia), so real stores list it.
+const PUBLIC_IDS = [...Object.values(ALIASES), 'virginia-resident', ...ALWAYS_ACTIVE].sort();
 const DEMO_IDS = demo.packs.map(p => p.id).sort();
 const manifestOf = id => JSON.parse(readFileSync(join(REPO_PACKS, id, 'manifest.json'), 'utf8'));
 
@@ -158,7 +159,7 @@ test('in a real store the refresh writes manifest rows, keeps overrides, and a f
   assert.equal(row(db, 's-corp-owner').active, 0);
 });
 
-test('a demo store keeps its seeded rows; the view adds the backing manifest fields to the seven tagged rows', t => {
+test('a demo store keeps its seeded rows; the view adds the backing manifest fields to the six tagged rows', t => {
   const { db, dataDir } = store(t);
   const before = rows(db);
   const packs = createLivePacks(db, { dataDir });

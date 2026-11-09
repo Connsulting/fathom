@@ -110,7 +110,7 @@ function pageDesc(route, c, view) {
     return r && r.status !== 'hidden' ? desc(name, 'rec', id, `Plan > ${String(txt(String(r.title ?? '')))}`) : desc(name, 'page', 'plan', 'Plan');
   }
   // The rows dialog sits over the P&L and shares its chip. The chip names the page first, then the
-  // entity on screen: "Money > P&L > Field and Fern".
+  // entity on screen: "Money > P&L > Bluestem Veterinary Relief".
   if (name === 'pnl' || name === 'pnlrows') {
     const v = view.pnl;
     return v && typeof v === 'object' && v.id ? desc(name, 'pnl', String(v.id), `Money > P&L > ${String(v.label ?? '')}`) : desc(name, 'page', 'pnl', 'Money > P&L');

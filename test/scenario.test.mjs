@@ -208,7 +208,7 @@ test('engine budget comes from settings.cap and the spend ledger for the clock m
   const month = db.prepare("SELECT coalesce(sum(cost_usd), 0) AS s FROM spend_ledger WHERE yyyymm = '2026-11'").get().s;
   assert.equal(sc.engine.budget.used, demo.engine.budget.used, 'demo shows the mock numbers');
   assert.equal(sc.engine.budget.used, Math.round(month * 100) / 100, 'used is the ledger sum for the month');
-  assert.equal(sc.engine.budget.monthly, 200);
+  assert.equal(sc.engine.budget.monthly, demo.engine.budget.monthly);
   assert.deepEqual(sc.engine.jobs.map(j => j.id), demo.engine.jobs.map(j => j.id));
 
   const used = sc.engine.budget.used;

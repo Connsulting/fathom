@@ -129,7 +129,7 @@ export function accountSubtitle(account) {
   return [inst, owner].filter(Boolean).join(', ');
 }
 
-// The label of an account: owner prefix, name, then the sure last 4, as "Alex's Everyday (1234)".
+// The label of an account: owner prefix, name, then the sure last 4, as "Morgan's Everyday (1234)".
 // The name is the owner's custom name if set, otherwise the default name. A name that already
 // starts with the prefix is not prefixed twice, and one that already carries the digits does not
 // get them twice.
@@ -174,7 +174,7 @@ const OWNER_WORDS = {
 const firstName = (n) => String(n ?? '').trim().split(/\s+/)[0];
 const possessive = (n) => (firstName(n) ? `${firstName(n)}'s` : '');
 
-// The owner prefix: the person's first name, possessive, from the household names ("Alex's"),
+// The owner prefix: the person's first name, possessive, from the household names ("Morgan's"),
 // "Joint" for a joint account, the business's name for a business account when one is on file,
 // and nothing when the owner is unknown. The demo's owner tokens ({n:me}) stay tokens, resolved
 // where the label is shown. A caller that already worked the prefix out passes it as labelPrefix.

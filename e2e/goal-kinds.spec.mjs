@@ -212,7 +212,7 @@ test.describe('goal kinds', TAGS, () => {
   });
 
   test('household names with markup show as text in the contribution share labels', async ({ page, request }) => {
-    const NAMES = { me: '<img src=x onerror=1>', spouse: '<b class="injected">Sam</b>' };
+    const NAMES = { me: '<img src=x onerror=1>', spouse: '<b class="injected">Blair</b>' };
     // There is no fact or answer route that sets household.names directly (answers go through a
     // recommendation's open questions), so the scenario the app loads is rewritten in the browser.
     await page.route('**/api/scenario', async (route) => {

@@ -331,8 +331,8 @@ test('addButtonHtml works for every kind', () => {
 });
 
 test('routeContext: the P&L route names the page and then the entity on screen (view.pnl), else the P&L page', () => {
-  assert.deepEqual(routeContext({ name: 'pnl', params: {} }, { view: { pnl: { id: 'entity:fieldandfern', label: 'Field and Fern' } } }),
-    { route: 'pnl', kind: 'pnl', id: 'entity:fieldandfern', title: 'Field and Fern', label: 'Money > P&L > Field and Fern', q: '' });
+  assert.deepEqual(routeContext({ name: 'pnl', params: {} }, { view: { pnl: { id: 'entity:bluestemveterinaryrelief', label: 'Bluestem Veterinary Relief' } } }),
+    { route: 'pnl', kind: 'pnl', id: 'entity:bluestemveterinaryrelief', title: 'Bluestem Veterinary Relief', label: 'Money > P&L > Bluestem Veterinary Relief', q: '' });
   assert.deepEqual(routeContext({ name: 'pnl', params: {} }, { view: { pnl: null } }),
     { route: 'pnl', kind: 'page', id: 'pnl', title: 'P&L', label: 'Money > P&L', q: '' });
   assert.deepEqual(routeContext({ name: 'pnl', params: {} }, {}),
