@@ -47,6 +47,33 @@ export function taxGap(code, { employer = 'this business', person = null, messag
   return { code, employer, person, message: message || rule.text(employer), action: fix, rough: !!rule.rough, impact };
 }
 
+// Estimate assumptions (TX2): warned codes that shape the tax left to pay but are not TAX1 gaps, so
+// they stay out of TAX_GAP_RULES (missing-data fixes and rec gaps read that map). Only the figures
+// for the tax left to pay carry them.
+export const ESTIMATE_GAP_RULES = Object.freeze({
+  prior_year_missing: { text: () => "Last year's tax return is missing, so the federal target uses this year's projection.", fix: upload('taxforms', "Upload last year's return") },
+  sstb_assumed: { text: () => 'Assumed each business is a specified service business, which can limit the business income deduction, because it has not been stated.',
+    fix: answer('business.entities', 'Say which businesses are specified service', 'Record whether each household business is a specified service trade or business. Preserve existing business entries and explicit account links.') },
+  filing_status_assumed: { text: TAX_GAP_RULES.filing_status_assumed.text, fix: TAX_GAP_RULES.filing_status_assumed.fix },
+});
+
+// TX2: the existing fix for a planner assumption code (src/jobs/planner/assumptions.mjs) that shapes a
+// tax figure, only where that fix supplies the input the assumption stands in for. Codes with no such
+// fix are shown as plain words only: a modelling choice (agi_as_magi_proxy), section125_unknown (no
+// paystub field or answer holds pre-tax benefits) and qbi_no_prior_loss (the planner reads only an
+// owner fact that no import or answer shape writes).
+export const ASSUMPTION_FIXES = Object.freeze({
+  addl_medicare_withholding_not_read: answer('tax.withholding.federal', 'Enter the withholding total', 'Record my total federal withholding for this tax year, including any Additional Medicare tax withheld. Ask me for the amount.'),
+  paid_rows_as_estimates: upload('estimates', 'Upload a labeled payment log'),
+});
+
+// The same shape as taxGap for an estimate assumption code.
+export function estimateGap(code) {
+  const rule = ESTIMATE_GAP_RULES[code];
+  if (!rule) throw new TypeError(`No estimate gap rule for ${code}`);
+  return { code, employer: null, person: null, message: rule.text(), action: { ...rule.fix }, rough: !!rule.rough, impact: null };
+}
+
 export function rankGaps(gaps) {
   return [...gaps].sort((a, b) => Number(b.rough) - Number(a.rough) || (b.impact ?? (b.rough ? Infinity : 0)) - (a.impact ?? (a.rough ? Infinity : 0)) || a.code.localeCompare(b.code));
 }

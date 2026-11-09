@@ -29,6 +29,7 @@ import * as askPanel from './screens/ask-panel.js';
 import { addButtonHtml } from './screens/ask-context.js';
 import * as pnlScreen from './screens/pnl.js';
 import * as tour from './screens/tour.js';
+import * as taxScreen from './screens/tax.js';
 import { createKeys } from './keys.js';
 import { ownWordsInput, ownWordsSend } from './own-words.js';
 import { createSwipe } from './screens/swipe.js';
@@ -779,7 +780,7 @@ function pHome() {
     + `${dhealthHtml(homeHealth())}${serviceStatus.homeServiceHtml(api.s.live?.services)}</div>`;
   const cards = `<div class="h-gcards">${m.cards.map(goalCardHome).join('')}</div>`;
   const goalsH = `<div class="h-home-sec"><h2>Goals</h2>${goA('goals', 'All goals')}</div>`;
-  const rest = `${goalsH}${cards}${hkHtml(m.housekeeping)}`;
+  const rest = `${goalsH}${cards}${taxScreen.homeHtml()}${hkHtml(m.housekeeping)}`;
   const inner = isPhone()
     ? `${ownerFilterHtml(m)}${head}${nextHtml(m, subject)}${afterHtml(m)}${rest}`
     : `<header class="h-home-top">${head}${ownerFilterHtml(m)}</header>${m.nextThing?.question?.primary ? `${nextHtml(m, subject)}${dueHtml(m, m.nextThing)}` : dueHtml(m)}${rest}`;
@@ -798,6 +799,11 @@ function meterHtml([k, label]) {
   const mt = api.s.pace?.meters?.[k];
   const base = `pace.meters.${k}.meter`;
   const ratio = mt?.meter ? (figVal(`${base}.ratio`) ?? (Number.isFinite(mt.meter.ratio?.v) ? mt.meter.ratio.v : null)) : null;
+  // The tax meter with no reserve recorded says paid so far against projected, never a bare reason.
+  if (ratio == null && k === 'tax') {
+    const fb = taxScreen.meterFallbackHtml(label);
+    if (fb) return fb;
+  }
   if (ratio == null) {
     return `<div class="h-meter" data-meter="${k}"><div class="h-meter-top"><span>${label}</span></div>${whyHtml(mt?.reason, null, 'h-meter-none')}</div>`;
   }
@@ -879,7 +885,7 @@ function pPace() {
     : whyHtml(pace?.series?.householdSavings?.reason, null, 'h-pchart-none');
   const h = homeHealth();
   // Only meters with a figure; with none, no This year panel at all.
-  const shown = paceMeters(pace?.meters);
+  const shown = paceMeters(pace?.meters, api.s.fig);
   const thisYear = METERS.filter(([k]) => shown.includes(k));
   return shell(`<section class="h-pace"><a class="h-back" href="${href('home')}" data-go="home">${icon('back')}Home</a>
     <div class="h-pace-head"><span class="h-hchip ${hc.tone}">${esc(hc.label)}</span><h1>${esc(pace?.rollup?.headline || 'No goals with targets')}</h1><p class="h-pace-why">${esc(paceReason(pace))}</p></div>
@@ -2169,6 +2175,7 @@ function draw() {
   switch (r.name) {
     case 'onboarding': html = pOnboarding(Number(r.params?.step ?? onboardStep())); break;
     case 'pace': html = pPace(); break;
+    case 'tax': html = taxScreen.render(); break;
     case 'plan': html = pPlan(); break;
     case 'ask': html = chatScreen.render(r.params?.id); break;
     case 'wargame': html = pWargame(r.params?.name); break;
@@ -2599,7 +2606,7 @@ function trapTab(e) {
 }
 
 // Helpers the screen modules use. Getters, because api, root and ui change on mount.
-const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, serviceStatus, advisorScreen, yearendScreen, simplefin, recAnswers, recBlocker, recSteps, accountScreen, trendScreen, pnlScreen, tour, memoriesScreen];
+const SCREENS = [askPanel, switcher, chatScreen, packsScreen, engineScreen, serviceStatus, advisorScreen, yearendScreen, simplefin, recAnswers, recBlocker, recSteps, accountScreen, trendScreen, pnlScreen, tour, memoriesScreen, taxScreen];
 const KIT = {
   get api() { return api; }, get root() { return root; }, get ui() { return ui; }, get keys() { return keys; }, get ingest() { return ingest; },
   draw: () => draw(), composeLabel,

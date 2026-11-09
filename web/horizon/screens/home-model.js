@@ -1,4 +1,5 @@
 import { staleAccountIds } from '../../core/account-freshness.js';
+import { taxMeterFallback } from './tax-model.js';
 
 /* Home view model: goals first, pace per goal, the next action per goal, one data-health line.
    Pure functions over the scenario (pace, goals, recs, suggestions, ingest, accounts); no DOM and no api, so
@@ -389,9 +390,11 @@ export function healthLine({ pace, ingest, accounts, metaDataThrough } = {}) {
 }
 
 // The pace board's This year meters that have a figure to show, in board order. None means no panel.
+// fig (the stored figures, optional): the tax meter also shows with no reserve recorded whenever a
+// federal tax projection is stored, as paid so far against projected (taxMeterFallback).
 export const METER_KEYS = Object.freeze(['retirement', 'tax', 'income']);
-export function paceMeters(meters) {
-  return METER_KEYS.filter((k) => finite(meters?.[k]?.meter?.ratio?.v));
+export function paceMeters(meters, fig = null) {
+  return METER_KEYS.filter((k) => finite(meters?.[k]?.meter?.ratio?.v) || (k === 'tax' && !!taxMeterFallback(fig)));
 }
 
 export function boardCharts(pace) {

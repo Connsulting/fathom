@@ -73,7 +73,7 @@ function accountName(a, txt) {
 }
 
 const PAGES = {
-  home: 'Home', pace: 'Home > Pace', brief: 'Home > Brief', goals: 'Home > Goals',
+  home: 'Home', pace: 'Home > Pace', tax: 'Home > Tax this year', brief: 'Home > Brief', goals: 'Home > Goals',
   plan: 'Plan', yearend: 'Plan > Year end', advisor: 'Plan > Advisor',
   wargame: 'Ask > What-if', add: 'Money > Files',
   settings: 'Settings', memories: 'Settings > Memories', connect: 'Settings > Connect', engine: 'Settings > Engine', email: 'Settings > Email',

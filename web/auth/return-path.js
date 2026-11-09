@@ -6,7 +6,7 @@
 // as the household parameter, so the app still asks before opening another household.
 
 export const APP_ROUTES = Object.freeze([
-  'onboarding', 'home', 'pace', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
+  'onboarding', 'home', 'pace', 'tax', 'brief', 'plan', 'rec', 'ask', 'wargame', 'goals', 'accounts',
   'advisor', 'yearend', 'connect', 'engine', 'email', 'packs', 'confirm', 'add', 'money', 'settings',
 ]);
 

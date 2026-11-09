@@ -18,7 +18,7 @@ export const SUBNAV = {
 // Routes with no sub-nav are listed by hand; every sub-nav view maps to its tab. Packs live under
 // What Fathom knows (the memories route) in the gear.
 export const TAB_OF = {
-  home: 'home', pace: 'home', goals: 'home', confirm: 'home',
+  home: 'home', pace: 'home', tax: 'home', goals: 'home', confirm: 'home',
   ask: 'ask', wargame: 'ask',
   settings: 'settings', memories: 'settings', packs: 'settings', connect: 'settings', engine: 'settings', email: 'settings', onboarding: 'settings',
   ...Object.fromEntries(Object.entries(SUBNAV).flatMap(([tab, views]) => views.map(([k]) => [k, tab])))
