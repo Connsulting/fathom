@@ -35,8 +35,8 @@ import {
 
 const NOW = '2026-11-05';
 const S = scratch();
-after(() => S.cleanup());
-const plan = (db, now = NOW, engine = null) => planRun(db, { engine, now });
+after(async () => await S.cleanup());
+const plan = async (db, now = NOW, engine = null) => planRun(db, { engine, now });
 const api = (db, { clock = NOW, params = {}, body = {} } = {}) => ({ db, config: { clock }, params, body });
 
 const EVIL = '<img src=x onerror=alert(1)>';
@@ -507,15 +507,15 @@ const unescape = s => String(s).replace(/&#39;/g, "'").replace(/&quot;/g, '"').r
 test('MG13: every template on the synthetic household passes the planner check', async () => {
   const db = await S.store();
   await plan(db);
-  const scenario = buildScenario(db, { clock: NOW });
+  const scenario = await buildScenario(db, { clock: NOW });
   const allowed = {
     fig: Object.fromEntries(Object.entries(scenario.fig).map(([k, f]) => [k, f.v])),
     law: lawContent(), pct: pctContent(), names: scenario.names,
   };
-  const ids = activeRecIds(db);
+  const ids = await activeRecIds(db);
   assert.ok(ids.length > 5);
   for (const id of ids) {
-    const def = recRow(db, id).def;
+    const def = (await recRow(db, id)).def;
     const fields = { summary: unescape(def.summary), why: def.why.map(unescape), qa: def.qa.map(q => ({ q: unescape(q.q), a: q.a.map(unescape) })) };
     const res = checkProse(fields, allowed);
     assert.ok(res.ok, `${id} template fails the planner check (${res.reason}): ${JSON.stringify(fields)}`);
@@ -530,18 +530,18 @@ for (const [what, tamper] of [
     const db = await S.store();
     await plan(db);
     const id = 'fed-q4-estimate';
-    const template = recRow(db, id).def;
-    const hash = plannerRec(db, id).grounding_hash;
-    const def = parseJson(db.prepare('SELECT def FROM recs WHERE id = ?').get(id).def, {});
+    const template = (await recRow(db, id)).def;
+    const hash = (await plannerRec(db, id)).grounding_hash;
+    const def = parseJson((await db.prepare('SELECT def FROM recs WHERE id = ?').get(id)).def, {});
     tamper(def);
-    db.prepare('UPDATE recs SET def = ? WHERE id = ?').run(JSON.stringify(def), id);
-    db.prepare("UPDATE planner_recs SET prose_src = 'model' WHERE rec_id = ?").run(id);
+    await db.prepare('UPDATE recs SET def = ? WHERE id = ?').run(JSON.stringify(def), id);
+    await db.prepare("UPDATE planner_recs SET prose_src = 'model' WHERE rec_id = ?").run(id);
     const result = await plan(db);
-    const after = recRow(db, id).def;
-    assert.equal(plannerRec(db, id).grounding_hash, hash, 'same grounding: only the recheck can replace it');
+    const after = (await recRow(db, id)).def;
+    assert.equal((await plannerRec(db, id)).grounding_hash, hash, 'same grounding: only the recheck can replace it');
     assert.equal(after.summary, template.summary, 'the template summary is back');
     assert.deepEqual(after.qa, template.qa, 'the template qa is back');
-    assert.equal(plannerRec(db, id).prose_src, 'template');
+    assert.equal((await plannerRec(db, id)).prose_src, 'template');
     assert.ok(result.counts.prose.template >= 1, 'the rec was rewritten, not kept');
     assert.equal(result.counts.prose.kept, result.counts.recs.active - result.counts.prose.template, 'every other rec is kept');
   });
@@ -550,9 +550,9 @@ for (const [what, tamper] of [
 test('MG13: unchanged stored prose that passes the check is kept on the next run', async () => {
   const db = await S.store();
   await plan(db);
-  const before = recRow(db, 'fed-q4-estimate').def;
+  const before = (await recRow(db, 'fed-q4-estimate')).def;
   const result = await plan(db);
-  assert.deepEqual(recRow(db, 'fed-q4-estimate').def, before);
+  assert.deepEqual((await recRow(db, 'fed-q4-estimate')).def, before);
   assert.equal(result.counts.prose.kept, result.counts.recs.active, 'every rec is kept');
   assert.equal(result.counts.prose.template, 0);
 });
@@ -561,32 +561,32 @@ test('MG13: unchanged stored prose that passes the check is kept on the next run
 
 test('MG14: markup in a name renders as text', async () => {
   const db = await S.store();
-  addFact(db, 'household.names', { advisor: EVIL, me: EVIL });
+  await addFact(db, 'household.names', { advisor: EVIL, me: EVIL });
   await plan(db);
-  const names = contentValue(db, 'names');
+  const names = await contentValue(db, 'names');
   assert.equal(names.advisor, EVIL, 'stored as given');
   assert.equal(names.me, EVIL);
-  const scenario = buildScenario(db, { clock: NOW });
+  const scenario = await buildScenario(db, { clock: NOW });
   assert.equal(scenario.names.advisor, EVIL);
-  assert.equal(resolveTokens(tokenScope(db), '{n:advisor}', true), esc(EVIL), 'escaped once when it becomes HTML');
+  assert.equal(resolveTokens(await tokenScope(db), '{n:advisor}', true), esc(EVIL), 'escaped once when it becomes HTML');
   // No stored HTML carries the raw markup: names reach rec text and messages as tokens or escaped.
-  for (const r of db.prepare('SELECT text FROM messages').all()) assert.ok(!r.text.includes('<img'), r.text);
-  for (const r of db.prepare('SELECT def FROM recs').all()) assert.ok(!r.def.includes('<img'), 'rec def');
-  for (const r of db.prepare("SELECT key, value FROM content WHERE key NOT IN ('names', 'meta')").all()) assert.ok(!r.value.includes('<img'), `content ${r.key}`);
+  for (const r of await db.prepare('SELECT text FROM messages').all()) assert.ok(!r.text.includes('<img'), r.text);
+  for (const r of await db.prepare('SELECT def FROM recs').all()) assert.ok(!r.def.includes('<img'), 'rec def');
+  for (const r of await db.prepare("SELECT key, value FROM content WHERE key NOT IN ('names', 'meta')").all()) assert.ok(!r.value.includes('<img'), `content ${r.key}`);
 });
 
 test('MG14: an ampersand in a name shows once', async () => {
   const db = await S.store();
-  addFact(db, 'household.names', { household: 'Lee & Park', advisor: 'Lee & Park Advisory' });
+  await addFact(db, 'household.names', { household: 'Lee & Park', advisor: 'Lee & Park Advisory' });
   await plan(db);
-  assert.equal(contentValue(db, 'names').household, 'Lee & Park');
-  assert.equal(contentValue(db, 'meta').household, 'Lee & Park', 'meta keeps the plain name');
-  const scope = tokenScope(db);
+  assert.equal((await contentValue(db, 'names')).household, 'Lee & Park');
+  assert.equal((await contentValue(db, 'meta')).household, 'Lee & Park', 'meta keeps the plain name');
+  const scope = await tokenScope(db);
   assert.equal(resolveTokens(scope, '{n:household}', true), 'Lee &amp; Park', 'one escape, displays one ampersand');
   assert.equal(resolveTokens(scope, '{n:household}', false), 'Lee & Park');
   for (const table of ['content', 'recs', 'messages']) {
     const col = table === 'recs' ? 'def' : table === 'messages' ? 'text' : 'value';
-    for (const r of db.prepare(`SELECT ${col} AS v FROM ${table}`).all()) assert.ok(!String(r.v).includes('&amp;amp;'), `${table}: double escape`);
+    for (const r of await db.prepare(`SELECT ${col} AS v FROM ${table}`).all()) assert.ok(!String(r.v).includes('&amp;amp;'), `${table}: double escape`);
   }
 });
 
@@ -624,61 +624,61 @@ test('MG14: kb excerpts are cut before escaping, so no entity is split', () => {
 
 // ================================================================ MG12: invalid inputs keep history, unavailable for current use (D3, R2-8, R2-9, R3-3, R3-7)
 
-const pickRefused = (db, name, clock = NOW) => assert.throws(
-  () => wargamePick(api(db, { clock, params: { name }, body: { index: 0 } })),
+const pickRefused = async (db, name, clock = NOW) => await assert.rejects(
+  async () => await wargamePick(api(db, { clock, params: { name }, body: { index: 0 } })),
   err => err instanceof HttpError && err.status === 409,
 );
-const decisionRow = (db, id) => db.prepare('SELECT * FROM decisions WHERE id = ?').get(id);
+const decisionRow = async (db, id) => await db.prepare('SELECT * FROM decisions WHERE id = ?').get(id);
 
 test('MG12: a salary war game whose inputs became invalid stays as history and is not selectable', async () => {
   const db = await S.store();
   await plan(db);
-  const before = contentValue(db, 'wargame').salary;
+  const before = (await contentValue(db, 'wargame')).salary;
   assert.ok(before && before.points.length > 1);
-  removeFact(db, 'business.salaryRange');
+  await removeFact(db, 'business.salaryRange');
   await plan(db);
-  const row = decisionRow(db, 'salary-2026');
+  const row = await decisionRow(db, 'salary-2026');
   assert.ok(row, 'the decision row is kept');
   assert.equal(row.status, 'open');
   assert.equal(typeof row.unavailable_reason, 'string');
   assert.ok(row.unavailable_reason.trim().length > 0);
-  const stored = contentValue(db, 'wargame').salary;
+  const stored = (await contentValue(db, 'wargame')).salary;
   assert.deepEqual(stored.points, before.points, 'the curve is kept as history');
   assert.equal(typeof stored.unavailable, 'string');
-  const scenario = getScenario(api(db));
+  const scenario = await getScenario(api(db));
   const dec = scenario.decisions.find(d => d.id === 'salary-2026');
   assert.equal(dec.status, 'unavailable');
   assert.equal(dec.unavailable, row.unavailable_reason);
   assert.equal(scenario.wargame.salary.status, 'unavailable');
-  pickRefused(db, 'salary');
+  await pickRefused(db, 'salary');
 });
 
 test('MG12: restoring the inputs clears the marker', async () => {
   const db = await S.store();
   await plan(db);
-  const range = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'business.salaryRange'").get().value);
-  removeFact(db, 'business.salaryRange');
+  const range = parseJson((await db.prepare("SELECT value FROM facts WHERE key = 'business.salaryRange'").get()).value);
+  await removeFact(db, 'business.salaryRange');
   await plan(db);
-  addFact(db, 'business.salaryRange', range);
+  await addFact(db, 'business.salaryRange', range);
   await plan(db);
-  const row = decisionRow(db, 'salary-2026');
+  const row = await decisionRow(db, 'salary-2026');
   assert.equal(row.unavailable_reason, null);
   assert.equal(row.status, 'open');
-  assert.ok(!('unavailable' in contentValue(db, 'wargame').salary));
-  const scenario = getScenario(api(db));
+  assert.ok(!('unavailable' in (await contentValue(db, 'wargame')).salary));
+  const scenario = await getScenario(api(db));
   assert.equal(scenario.decisions.find(d => d.id === 'salary-2026').status, 'open');
   assert.equal(scenario.wargame.salary.status, 'open');
-  assert.doesNotThrow(() => wargamePick(api(db, { params: { name: 'salary' }, body: { index: 0 } })), 'a current game can be picked');
+  await assert.doesNotReject(async () => await wargamePick(api(db, { params: { name: 'salary' }, body: { index: 0 } })), 'a current game can be picked');
 });
 
 test('MG12: a decided salary decision stays decided when the game becomes unavailable', async () => {
   const db = await S.store();
   await plan(db);
-  db.prepare("UPDATE decisions SET status = 'decided' WHERE id = 'salary-2026'").run();
-  removeFact(db, 'business.salaryRange');
+  await db.prepare("UPDATE decisions SET status = 'decided' WHERE id = 'salary-2026'").run();
+  await removeFact(db, 'business.salaryRange');
   await plan(db);
-  assert.equal(decisionRow(db, 'salary-2026').status, 'decided');
-  assert.equal(getScenario(api(db)).decisions.find(d => d.id === 'salary-2026').status, 'decided', 'a stored decided row wins over unavailable');
+  assert.equal((await decisionRow(db, 'salary-2026')).status, 'decided');
+  assert.equal((await getScenario(api(db))).decisions.find(d => d.id === 'salary-2026').status, 'decided', 'a stored decided row wins over unavailable');
 });
 
 // Source: IRC 402(g)(1) (one regular deferral limit per person across plans, so unknown outside
@@ -688,33 +688,33 @@ test('MG12: a salary game remains available with a labeled unreadable-deferral a
   await plan(db);
   await addPayroll(db, w2Doc({ employerName: 'Example Employer Inc', person: 'owner', relation: 'outside', wages: 200000, medicareWages: 200000 }));
   await plan(db);
-  const scenario = getScenario(api(db));
-  assert.ok(contentValue(db, 'wargame').salary.points.length);
+  const scenario = await getScenario(api(db));
+  assert.ok((await contentValue(db, 'wargame')).salary.points.length);
   assert.notEqual(scenario.wargame.salary.status, 'unavailable');
   assert.ok(scenario.fig['tax.fed.proj'].gaps.some(g => g.code === 'w2_box12_unreadable'));
 });
 
-const vaAnswersMissing = db => {
-  const id = accountIdByMask(db, MASKS.college);
-  addFact(db, 'accounts.va529', { [id]: { virginiaPlan: true } });
-  addFact(db, 'accounts.va529CarryforwardDefault', { [id]: { undone: true } });
+const vaAnswersMissing = async db => {
+  const id = await accountIdByMask(db, MASKS.college);
+  await addFact(db, 'accounts.va529', { [id]: { virginiaPlan: true } });
+  await addFact(db, 'accounts.va529CarryforwardDefault', { [id]: { undone: true } });
 };
-const vaAnswersComplete = db => addFact(db, 'accounts.va529', { [accountIdByMask(db, MASKS.college)]: { virginiaPlan: true, carryforward: 0 } });
+const vaAnswersComplete = async db => await addFact(db, 'accounts.va529', { [await accountIdByMask(db, MASKS.college)]: { virginiaPlan: true, carryforward: 0 } });
 const JAN = '2027-01-10';
 
 // Source: Va. Code 58.1-322.03(7) (the carryforward is needed to know the Virginia deduction).
 test('MG12: seasonal deferral history remains visible while current tax names missing college savings details', async () => {
   const db = await S.store();
   await plan(db, '2026-10-31');
-  const october = contentValue(db, 'wargame').deferral;
+  const october = (await contentValue(db, 'wargame')).deferral;
   assert.ok(october.options.length === 3);
-  vaAnswersMissing(db);
+  await vaAnswersMissing(db);
   await plan(db, JAN);
-  const g = contentValue(db, 'wargame').deferral;
+  const g = (await contentValue(db, 'wargame')).deferral;
   assert.deepEqual(g.options, october.options, 'seasonal options stay as history');
   assert.equal(g.unavailable, undefined);
-  assert.equal(decisionRow(db, 'deferral-2026').unavailable_reason, null);
-  const scenario = getScenario(api(db, { clock: JAN }));
+  assert.equal((await decisionRow(db, 'deferral-2026')).unavailable_reason, null);
+  const scenario = await getScenario(api(db, { clock: JAN }));
   assert.notEqual(scenario.wargame.deferral.status, 'unavailable');
   assert.ok(scenario.fig['tax.va.proj'].gaps.some(g => g.code === 'va529_answers_missing'));
 });
@@ -722,10 +722,10 @@ test('MG12: seasonal deferral history remains visible while current tax names mi
 test('MG12: the same January run without broken inputs keeps the October game as is', async () => {
   const db = await S.store();
   await plan(db, '2026-10-31');
-  const october = contentValue(db, 'wargame').deferral;
+  const october = (await contentValue(db, 'wargame')).deferral;
   await plan(db, JAN);
-  assert.deepEqual(contentValue(db, 'wargame').deferral, october, 'seasonal absence changes nothing');
-  assert.equal(decisionRow(db, 'deferral-2026').unavailable_reason, null);
+  assert.deepEqual((await contentValue(db, 'wargame')).deferral, october, 'seasonal absence changes nothing');
+  assert.equal((await decisionRow(db, 'deferral-2026')).unavailable_reason, null);
 });
 
 const quillWorks = async db => {
@@ -739,22 +739,22 @@ test('MG12: an unclassified January business leaves the tax estimate visible wit
   await plan(db, '2026-10-31');
   await quillWorks(db);
   await plan(db, JAN);
-  const scenario = getScenario(api(db, { clock: JAN }));
-  assert.equal(contentValue(db, 'wargame').deferral.unavailable, undefined);
+  const scenario = await getScenario(api(db, { clock: JAN }));
+  assert.equal((await contentValue(db, 'wargame')).deferral.unavailable, undefined);
   assert.ok(scenario.fig['tax.fed.proj'].gaps.some(g => g.code.startsWith('entity_unclassified:') && /Quill Works/.test(g.employer)));
 });
 
 test('MG12: Virginia targets remain current estimates when college savings details are missing', async () => {
   const db = await S.store();
   await plan(db);
-  vaAnswersMissing(db);
+  await vaAnswersMissing(db);
   await plan(db);
-  const scenario = getScenario(api(db));
+  const scenario = await getScenario(api(db));
   const f = scenario.fig['sh.va.remaining'];
   assert.ok(Number.isFinite(f.v));
   assert.equal(f.unavailable, undefined);
   assert.ok(f.gaps.some(g => g.code === 'va529_answers_missing' && g.action.key === 'accounts.va529'));
-  assert.equal(recRow(db, 'va-q4-estimate').status, 'proposed');
+  assert.equal((await recRow(db, 'va-q4-estimate')).status, 'proposed');
   assert.doesNotMatch(resolveTokens(scenario, '{f:sh.va.remaining}', false), /not current/);
   const tool = await callTool('household', { operation: 'figures', keys: ['sh.va.remaining'] }, { db });
   assert.equal(tool.length, 1);
@@ -766,7 +766,7 @@ test('MG12: federal targets expose the excluded unclassified business as a preci
   await plan(db);
   await quillWorks(db);
   await plan(db);
-  const f = getScenario(api(db)).fig['sh.fed.remaining'];
+  const f = (await getScenario(api(db))).fig['sh.fed.remaining'];
   assert.ok(Number.isFinite(f.v));
   assert.equal(f.unavailable, undefined);
   assert.ok(f.gaps.some(g => g.code.startsWith('entity_unclassified:') && /Quill Works/.test(g.employer)));
@@ -776,20 +776,20 @@ test('MG12: federal targets expose the excluded unclassified business as a preci
 test('MG12: restoring the data clears the marker', async () => {
   const va = await S.store();
   await plan(va);
-  vaAnswersMissing(va);
+  await vaAnswersMissing(va);
   await plan(va);
-  vaAnswersComplete(va);
+  await vaAnswersComplete(va);
   await plan(va);
-  assert.ok(!('unavailable' in getScenario(api(va)).fig['sh.va.remaining']));
-  assert.ok(!resolveTokens(getScenario(api(va)), '{f:sh.va.remaining}', false).includes('not current'));
+  assert.ok(!('unavailable' in (await getScenario(api(va))).fig['sh.va.remaining']));
+  assert.ok(!resolveTokens(await getScenario(api(va)), '{f:sh.va.remaining}', false).includes('not current'));
 
   const fed = await S.store();
   await plan(fed);
   await quillWorks(fed);
   await plan(fed);
-  addFact(fed, 'business.entities', [...factRow(fed, 'business.entities').value, { name: 'Quill Works', type: 'sole_prop', owner: 'owner' }]);
+  await addFact(fed, 'business.entities', [...(await factRow(fed, 'business.entities')).value, { name: 'Quill Works', type: 'sole_prop', owner: 'owner' }]);
   await plan(fed);
-  const f = getScenario(api(fed)).fig['sh.fed.remaining'];
+  const f = (await getScenario(api(fed))).fig['sh.fed.remaining'];
   assert.ok(f && !('unavailable' in f), JSON.stringify(f));
 });
 
@@ -806,12 +806,12 @@ test('MG12: plain token text marks an unavailable figure and leaves a current on
 test('MGN1: the scenario serves figure notes', async () => {
   const db = await S.store();
   await plan(db);
-  const set = (key, locator) => db.prepare('UPDATE figures SET locator = ? WHERE key = ?').run(JSON.stringify(locator), key);
-  set('cash.total', { calc: 'synthetic', notes: ['A sentence.'] });
-  set('cash.business', { calc: 'synthetic' });
-  set('cash.personal', { calc: 'synthetic', notes: ['One.', 'Two.', 'Three.', 'Four.', 'Five.', 'Six.', 'Seven.'] });
-  set('cash.monthlyOut', { calc: 'synthetic', notes: [] });
-  const fig = buildScenario(db, { clock: NOW }).fig;
+  const set = async (key, locator) => await db.prepare('UPDATE figures SET locator = ? WHERE key = ?').run(JSON.stringify(locator), key);
+  await set('cash.total', { calc: 'synthetic', notes: ['A sentence.'] });
+  await set('cash.business', { calc: 'synthetic' });
+  await set('cash.personal', { calc: 'synthetic', notes: ['One.', 'Two.', 'Three.', 'Four.', 'Five.', 'Six.', 'Seven.'] });
+  await set('cash.monthlyOut', { calc: 'synthetic', notes: [] });
+  const fig = (await buildScenario(db, { clock: NOW })).fig;
   assert.deepEqual(fig['cash.total'].notes, ['A sentence.']);
   assert.ok(!('notes' in fig['cash.business']), 'no notes key without notes');
   assert.deepEqual(fig['cash.personal'].notes, ['One.', 'Two.', 'Three.', 'Four.', 'Five.'], 'at most five');
@@ -820,41 +820,41 @@ test('MGN1: the scenario serves figure notes', async () => {
 
 // ================================================================ MGN2: retire events for owner-closed recs
 
-const lastStatusEvent = (db, id) => recEvents(db, id).filter(e => e.from_status !== e.to_status).at(-1);
+const lastStatusEvent = async (db, id) => (await recEvents(db, id)).filter(e => e.from_status !== e.to_status).at(-1);
 
 for (const [label, close, status] of [
-  ['done', db => recAction(api(db, { params: { id: 'va529' }, body: { action: 'complete' } })), 'done'],
-  ['dismissed', db => recAction(api(db, { params: { id: 'va529' }, body: { action: 'dismiss' } })), 'dismissed'],
-  ['hidden', db => db.prepare("UPDATE recs SET status = 'hidden' WHERE id = 'va529'").run(), 'hidden'],
+  ['done', async db => await recAction(api(db, { params: { id: 'va529' }, body: { action: 'complete' } })), 'done'],
+  ['dismissed', async db => await recAction(api(db, { params: { id: 'va529' }, body: { action: 'dismiss' } })), 'dismissed'],
+  ['hidden', async db => await db.prepare("UPDATE recs SET status = 'hidden' WHERE id = 'va529'").run(), 'hidden'],
 ]) {
   test(`MGN2: retiring a ${label} rec writes a retire event and keeps ${status}`, async () => {
     const db = await S.store();
     await plan(db);
     close(db);
-    addFact(db, 'accounts.has529', false);
+    await addFact(db, 'accounts.has529', false);
     await plan(db);
-    const pr = plannerRec(db, 'va529');
+    const pr = await plannerRec(db, 'va529');
     assert.ok(pr.retired_at, 'retired_at set');
-    const ev = recEvents(db, 'va529').at(-1);
+    const ev = (await recEvents(db, 'va529')).at(-1);
     assert.deepEqual([ev.action, ev.actor, ev.from_status, ev.to_status], ['retire', 'planner', status, status]);
     assert.equal(ev.arg, pr.retired_reason);
-    assert.equal(recRow(db, 'va529').status, status);
+    assert.equal((await recRow(db, 'va529')).status, status);
   });
 
   test(`MGN2: a revived ${label} rec stays ${status}`, async () => {
     const db = await S.store();
     await plan(db);
     close(db);
-    addFact(db, 'accounts.has529', false);
+    await addFact(db, 'accounts.has529', false);
     await plan(db);
-    const retiredAt = recEvents(db, 'va529').length;
-    removeFact(db, 'accounts.has529');
+    const retiredAt = (await recEvents(db, 'va529')).length;
+    await removeFact(db, 'accounts.has529');
     await plan(db);
-    assert.equal(recRow(db, 'va529').status, status);
-    assert.equal(plannerRec(db, 'va529').retired_at, null);
-    const later = recEvents(db, 'va529').slice(retiredAt);
+    assert.equal((await recRow(db, 'va529')).status, status);
+    assert.equal((await plannerRec(db, 'va529')).retired_at, null);
+    const later = (await recEvents(db, 'va529')).slice(retiredAt);
     assert.ok(!later.some(e => e.action === 'revive' && e.from_status !== e.to_status), JSON.stringify(later));
-    const last = lastStatusEvent(db, 'va529');
+    const last = await lastStatusEvent(db, 'va529');
     if (label !== 'hidden') assert.equal(last.actor, 'ui', 'the owner keeps the last word');
   });
 }

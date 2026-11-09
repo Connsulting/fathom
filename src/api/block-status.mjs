@@ -24,13 +24,13 @@ function hasRowAccount(value) {
 }
 
 export async function blockStatus(ctx) {
-  const thread = getThread(ctx.db, ctx.params.id);
+  const thread = await getThread(ctx.db, ctx.params.id);
   if (!thread) throw new HttpError(404, 'no such conversation');
-  const messages = ctx.db.prepare(`SELECT id, provenance FROM messages WHERE conversation_key = ? AND role = 'fathom'
+  const messages = await ctx.db.prepare(`SELECT id, provenance FROM messages WHERE conversation_key = ? AND role = 'fathom'
     AND json_valid(provenance) AND json_array_length(provenance, '$.blocks') > 0 ORDER BY id DESC LIMIT 20`).all(thread.key);
   const cache = [];
   const now = new Date();
-  const context = { db: ctx.db, now, clock: resolveClock(ctx.db, ctx.config?.clock), household: ctx.household,
+  const context = { db: ctx.db, now, clock: await resolveClock(ctx.db, ctx.config?.clock), household: ctx.household,
     services: ctx.household?.services, dataDir: ctx.household?.root };
   async function replay(call) {
     const cached = cache.find(c => c.name === call.tool && isDeepStrictEqual(c.args, call.args));

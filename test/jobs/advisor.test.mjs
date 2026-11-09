@@ -22,7 +22,7 @@ import { planRun } from '../helpers/plan.mjs';
 const NOW = '2026-11-05';
 const REC = 'fed-q4-estimate';
 const S = scratch();
-after(() => S.cleanup());
+after(async () => await S.cleanup());
 
 // The instance secrets the store helper wrapped the household data key under.
 const configFor = dir => ({ ...loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_CLOCK: NOW, ...secretEnv(secretsFor(dir)) }) });
@@ -44,7 +44,7 @@ async function planned() {
 
 const scen = async srv => (await srv.request({ path: '/api/scenario' })).json;
 const recOf = (s, id) => s.recs.find(r => r.id === id);
-const status = (db, id) => db.prepare('SELECT status FROM recs WHERE id = ?').get(id).status;
+const status = async (db, id) => (await db.prepare('SELECT status FROM recs WHERE id = ?').get(id)).status;
 
 describe('advisor workflow, real store', () => {
   test('send marks the rec for review with a timestamp, idempotently, and lists it as waiting', async () => {
@@ -60,7 +60,7 @@ describe('advisor workflow, real store', () => {
       assert.equal(recOf(s, REC).advisor.verdict, 'pending');
       assert.deepEqual(s.advisor.pending, [REC]);
       assert.equal(s.advisor.waiting[0].sentOn, NOW);
-      const row = db.prepare('SELECT * FROM advisor_reviews WHERE rec_id = ?').get(REC);
+      const row = await db.prepare('SELECT * FROM advisor_reviews WHERE rec_id = ?').get(REC);
       assert.match(row.sent_at, /^2026-11-05T/);
       assert.equal((await srv.postJson('/api/advisor/reviews', { recId: 'nope' })).status, 404);
       assert.equal((await srv.postJson('/api/advisor/reviews', {})).status, 400);
@@ -74,8 +74,8 @@ describe('advisor workflow, real store', () => {
       const note = '<img src=x onerror=alert(1)> {f:agi.est} & more';
       const v = await srv.postJson(`/api/advisor/reviews/${json.reviewId}/verdict`, { verdict: 'vetoed', note, date: '2026-11-04' });
       assert.equal(v.status, 200, v.text);
-      assert.equal(status(db, REC), 'dismissed');
-      const ev = db.prepare("SELECT * FROM rec_events WHERE rec_id = ? AND action = 'dismiss' ORDER BY id DESC").get(REC);
+      assert.equal(await status(db, REC), 'dismissed');
+      const ev = await db.prepare("SELECT * FROM rec_events WHERE rec_id = ? AND action = 'dismiss' ORDER BY id DESC").get(REC);
       assert.equal(ev.arg, 'advisor vetoed');
       assert.equal(ev.actor, 'ui');
       const a = recOf(v.json.scenario, REC).advisor;
@@ -87,17 +87,17 @@ describe('advisor workflow, real store', () => {
       assert.equal((await srv.postJson(`/api/advisor/reviews/${json.reviewId}/verdict`, { verdict: 'confirmed', note: '', date: NOW })).status, 409);
 
       await planRun(db, { now: NOW });
-      assert.equal(status(db, REC), 'dismissed', 'the planner keeps a vetoed rec dismissed');
+      assert.equal(await status(db, REC), 'dismissed', 'the planner keeps a vetoed rec dismissed');
       assert.equal(recOf(await scen(srv), REC).advisor.verdict, 'vetoed');
 
       // The rec's inputs changed since the verdict: the next run lifts the veto.
-      db.prepare("UPDATE advisor_reviews SET grounding_hash = 'older-inputs' WHERE id = ?").run(json.reviewId);
+      await db.prepare("UPDATE advisor_reviews SET grounding_hash = 'older-inputs' WHERE id = ?").run(json.reviewId);
       await planRun(db, { now: NOW });
-      assert.equal(status(db, REC), 'proposed');
-      const lifted = db.prepare("SELECT * FROM rec_events WHERE rec_id = ? ORDER BY id DESC").get(REC);
+      assert.equal(await status(db, REC), 'proposed');
+      const lifted = await db.prepare("SELECT * FROM rec_events WHERE rec_id = ? ORDER BY id DESC").get(REC);
       assert.deepEqual([lifted.action, lifted.actor], ['advisor_veto_lifted', 'planner']);
       assert.equal(recOf(await scen(srv), REC).advisor, null);
-      assert.equal(db.prepare('SELECT closed_reason FROM advisor_reviews WHERE id = ?').get(json.reviewId).closed_reason, 'inputs changed');
+      assert.equal((await db.prepare('SELECT closed_reason FROM advisor_reviews WHERE id = ?').get(json.reviewId)).closed_reason, 'inputs changed');
     } finally { await srv.close(); }
   });
 
@@ -108,7 +108,7 @@ describe('advisor workflow, real store', () => {
       const { json } = await srv.postJson('/api/advisor/reviews', { recId: REC });
       const v = await srv.postJson(`/api/advisor/reviews/${json.reviewId}/verdict`, { verdict: 'confirmed', note: 'Fine as written.', date: NOW });
       assert.equal(v.status, 200);
-      assert.equal(status(db, REC), 'doing', 'a confirmation does not change the owner status');
+      assert.equal(await status(db, REC), 'doing', 'a confirmation does not change the owner status');
       await planRun(db, { now: NOW });
       await planRun(db, { now: NOW });
       const s = await scen(srv);
@@ -136,7 +136,7 @@ describe('advisor workflow, real store', () => {
       const r = await srv.postJson('/api/advisor/checkin', { date: '2026-12-10', time: '14:00', lengthMin: 45 });
       assert.equal(r.status, 200, r.text);
       assert.deepEqual(r.json.scenario.advisor.next, { when: 'Thu, Dec 10, 2026, 2:00 PM', length: '45 min', date: '2026-12-10', time: '14:00', lengthMin: 45 });
-      assert.equal(db.prepare('SELECT length_min FROM advisor_checkin').get().length_min, 45);
+      assert.equal((await db.prepare('SELECT length_min FROM advisor_checkin').get()).length_min, 45);
       assert.equal((await srv.postJson('/api/advisor/checkin', { date: 'soon', lengthMin: 30 })).status, 400);
       assert.equal((await srv.postJson('/api/advisor/checkin', { date: '2026-12-10', lengthMin: 2 })).status, 400);
       assert.equal((await srv.postJson('/api/advisor/checkin', { date: '2026-12-10', time: '25:00', lengthMin: 30 })).status, 400);
@@ -162,7 +162,7 @@ describe('advisor workflow, real store', () => {
       assert.match(d.headers['content-type'], /^text\/html/);
       assert.match(d.headers['content-disposition'], /^attachment; filename="advisor-packet-2026-11-05\.html"$/);
       assert.match(d.text, /Advisor review packet/);
-      assert.ok(d.text.includes(db.prepare('SELECT def FROM recs WHERE id = ?').get(REC).def.match(/"title":"([^"]+)"/)[1].replace(/&/g, '&amp;')));
+      assert.ok(d.text.includes((await db.prepare('SELECT def FROM recs WHERE id = ?').get(REC)).def.match(/"title":"([^"]+)"/)[1].replace(/&/g, '&amp;')));
       assert.equal((await srv.request({ path: '/api/advisor/packets/advpkt-0000000000000000' })).status, 404);
       assert.equal((await srv.request({ path: '/api/advisor/packets/..%2Fx' })).status, 404);
       assert.equal((await request(srv.baseUrl, { path: `/api/advisor/packets/${id}` })).status, 401, 'session gate');
@@ -171,15 +171,15 @@ describe('advisor workflow, real store', () => {
 });
 
 describe('advisor packet content', () => {
-  const demo = () => {
-    const db = openMigrated(':memory:');
-    seedDemo(db);
+  const demo = async () => {
+    const db = await openMigrated(':memory:');
+    await seedDemo(db);
     return db;
   };
 
-  test('every money figure in the packet carries a provenance note, and the notes name a source', () => {
-    const db = demo();
-    const s = buildScenario(db);
+  test('every money figure in the packet carries a provenance note, and the notes name a source', async () => {
+    const db = await demo();
+    const s = await buildScenario(db);
     const html = buildPacketHtml(s, { generatedOn: s.meta.clock });
     const body = html.split('<h2>Where each figure comes from</h2>')[0];
     const amounts = [...body.matchAll(/\$[\d,.]+[KM]?/g)];
@@ -196,13 +196,13 @@ describe('advisor packet content', () => {
     for (const id of s.advisor.pending) assert.ok(html.includes(`id="rec-${id}"`), `pending ${id} is in the packet`);
     assert.ok(!/<script/i.test(html), 'no scripts');
     assert.ok(!/(src|href)="(https?:)?\/\//i.test(html), 'no external resources');
-    db.close();
+    await db.close();
   });
 
-  test('every percentage and statutory amount carries a note naming its source (review fix)', () => {
-    const db = demo();
-    const s = buildScenario(db);
-    const sources = contentSources(db);
+  test('every percentage and statutory amount carries a note naming its source (review fix)', async () => {
+    const db = await demo();
+    const s = await buildScenario(db);
+    const sources = await contentSources(db);
     assert.ok(sources.pct && sources.law, 'the demo law and pct rows have a source');
     const html = buildPacketHtml(s, { generatedOn: s.meta.clock, sources });
     const body = html.split('<h2>Where each figure comes from</h2>')[0];
@@ -214,26 +214,26 @@ describe('advisor packet content', () => {
     const bare = buildPacketHtml(s, { generatedOn: s.meta.clock });
     assert.ok(!/\d%/.test(bare.split('<h2>Where each figure comes from</h2>')[0]));
     assert.ok(bare.includes('[figure unavailable]'));
-    db.prepare("UPDATE content SET src = 'planner' WHERE key = 'pct'").run();
-    assert.equal(contentSources(db).pct.label, 'Tax parameters for the year, from the tax calculator');
-    db.close();
+    await db.prepare("UPDATE content SET src = 'planner' WHERE key = 'pct'").run();
+    assert.equal((await contentSources(db)).pct.label, 'Tax parameters for the year, from the tax calculator');
+    await db.close();
   });
 
-  test('a figure with no source is shown as unavailable, never as a number', () => {
-    const db = demo();
-    const s = buildScenario(db);
+  test('a figure with no source is shown as unavailable, never as a number', async () => {
+    const db = await demo();
+    const s = await buildScenario(db);
     const rec = s.recs.find(r => r.id === s.advisor.pending[0]);
     rec.summary = 'Orphan {f:orphan.fig} and sourced.';
     s.fig['orphan.fig'] = { v: 123456, kind: 'e', label: 'Orphan', src: 'no-such-source' };
     const html = buildPacketHtml(s, {});
     assert.ok(html.includes('Orphan <span class="nofig">[figure unavailable]</span>'));
     assert.ok(!html.includes('123,456'));
-    db.close();
+    await db.close();
   });
 
-  test('titles, notes and names are escaped and markup is stripped', () => {
-    const db = demo();
-    const s = buildScenario(db);
+  test('titles, notes and names are escaped and markup is stripped', async () => {
+    const db = await demo();
+    const s = await buildScenario(db);
     const rec = s.recs.find(r => r.id === s.advisor.pending[0]);
     rec.title = '<script>alert(1)</script> & "quoted"';
     rec.why = ['<img src=x onerror=alert(2)>Plain &amp; simple'];
@@ -246,29 +246,29 @@ describe('advisor packet content', () => {
     assert.ok(html.includes('Plain &amp; simple'));
     assert.ok(html.includes('<li>bold question?</li>'));
     assert.ok(!html.includes('<i>House</i>'));
-    db.close();
+    await db.close();
   });
 });
 
 describe('upgrade from migration 010 (review fix)', () => {
-  test('existing review state in rec defs and the content row carries over', () => {
-    const db = openDb(':memory:');
-    db.exec('CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
+  test('existing review state in rec defs and the content row carries over', async () => {
+    const db = await openDb(':memory:');
+    await db.applySchema('CREATE TABLE schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
     for (const m of listMigrations().filter(m => m.id <= 10)) {
-      db.exec(readFileSync(m.file, 'utf8'));
-      db.prepare('INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)').run(m.id, m.name, '2026-11-01T00:00:00.000Z');
+      await db.applySchema(readFileSync(m.file, 'utf8'));
+      await db.prepare('INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)').run(m.id, m.name, '2026-11-01T00:00:00.000Z');
     }
     const rec = db.prepare("INSERT INTO recs (id, def, status, sort, updated_at) VALUES (?, ?, ?, ?, '2026-10-20T09:00:00.000Z')");
-    rec.run('a', JSON.stringify({ id: 'a', title: 'Waiting one', advisor: { verdict: 'pending', note: 'On the agenda' } }), 'proposed', 0);
-    rec.run('b', JSON.stringify({ id: 'b', title: 'Confirmed one', advisor: { verdict: 'confirmed', note: 'Agree.' } }), 'doing', 1);
-    rec.run('c', JSON.stringify({ id: 'c', title: 'Vetoed one', advisor: { verdict: 'vetoed', note: 'Not for you.' } }), 'dismissed', 2);
-    rec.run('d', JSON.stringify({ id: 'd', title: 'Never sent', advisor: null }), 'proposed', 3);
-    db.prepare("INSERT INTO content (key, value, src, updated_at) VALUES ('advisor', ?, 'x', '2026-10-21T09:00:00.000Z')").run(JSON.stringify({
+    await rec.run('a', JSON.stringify({ id: 'a', title: 'Waiting one', advisor: { verdict: 'pending', note: 'On the agenda' } }), 'proposed', 0);
+    await rec.run('b', JSON.stringify({ id: 'b', title: 'Confirmed one', advisor: { verdict: 'confirmed', note: 'Agree.' } }), 'doing', 1);
+    await rec.run('c', JSON.stringify({ id: 'c', title: 'Vetoed one', advisor: { verdict: 'vetoed', note: 'Not for you.' } }), 'dismissed', 2);
+    await rec.run('d', JSON.stringify({ id: 'd', title: 'Never sent', advisor: null }), 'proposed', 3);
+    await db.prepare("INSERT INTO content (key, value, src, updated_at) VALUES ('advisor', ?, 'x', '2026-10-21T09:00:00.000Z')").run(JSON.stringify({
       name: 'Advisor', next: { when: 'Thu, Dec 10, 2:00 PM', length: '30 min' }, pending: ['a'],
       reviewed: [{ recId: 'b', title: 'Confirmed one', verdict: 'confirmed', note: 'dup' }, { title: 'Outside the plan', verdict: 'confirmed', note: 'Hold.' }],
     }));
-    migrate(db);
-    const s = buildScenario(db, { clock: '2026-11-05' });
+    await migrate(db);
+    const s = await buildScenario(db, { clock: '2026-11-05' });
     const by = id => s.recs.find(r => r.id === id).advisor;
     assert.equal(by('a').verdict, 'pending');
     assert.deepEqual([by('b').verdict, by('b').note], ['confirmed', 'Agree.']);
@@ -277,29 +277,29 @@ describe('upgrade from migration 010 (review fix)', () => {
     assert.deepEqual(s.advisor.pending, ['a']);
     assert.deepEqual(s.advisor.reviewed.map(v => v.title).sort(), ['Confirmed one', 'Outside the plan', 'Vetoed one']);
     assert.deepEqual([s.advisor.next.when, s.advisor.next.length], ['Thu, Dec 10, 2:00 PM', '30 min']);
-    db.close();
+    await db.close();
   });
 });
 
 describe('demo seed and recommendations.advisor', () => {
-  test('the demo seeds the advisor tables and the scenario reads them', () => {
-    const db = openMigrated(':memory:');
-    seedDemo(db);
-    const s = buildScenario(db);
-    assert.ok(db.prepare('SELECT count(*) AS n FROM advisor_reviews').get().n > 5);
+  test('the demo seeds the advisor tables and the scenario reads them', async () => {
+    const db = await openMigrated(':memory:');
+    await seedDemo(db);
+    const s = await buildScenario(db);
+    assert.ok((await db.prepare('SELECT count(*) AS n FROM advisor_reviews').get()).n > 5);
     assert.deepEqual(s.advisor.pending, ['deferral', 'dcfsa', 'backdoor', 'spouseentity', 'filingplan']);
     assert.equal(s.advisor.next.length, '30 min');
     assert.ok(s.advisor.reviewed.some(v => v.verdict === 'vetoed' && v.recId === 'megabackdoor'));
     assert.ok(s.advisor.reviewed.some(v => !v.recId), 'a reviewed item outside the plan');
-    const content = JSON.parse(db.prepare("SELECT value FROM content WHERE key = 'advisor'").get().value);
+    const content = JSON.parse((await db.prepare("SELECT value FROM content WHERE key = 'advisor'").get()).value);
     assert.ok(!('pending' in content) && !('reviewed' in content) && !('next' in content), 'review state is not narrative content');
-    for (const r of db.prepare('SELECT def FROM recs').all()) assert.ok(!('advisor' in JSON.parse(r.def)), 'no advisor in rec defs');
-    db.close();
+    for (const r of await db.prepare('SELECT def FROM recs').all()) assert.ok(!('advisor' in JSON.parse(r.def)), 'no advisor in rec defs');
+    await db.close();
   });
 
   test('recommendations.advisor is a read tool that reports who reviewed what, when', async () => {
-    const db = openMigrated(':memory:');
-    seedDemo(db);
+    const db = await openMigrated(':memory:');
+    await seedDemo(db);
     const tool = getTool('recommendations');
     assert.equal(tool.kind, 'read');
     const out = await callTool('recommendations', { operation: 'advisor', }, { db, now: new Date('2026-11-05T12:00:00Z') });
@@ -314,6 +314,6 @@ describe('demo seed and recommendations.advisor', () => {
     const rec = await callTool('recommendations', { operation: 'detail',  id: 'megabackdoor' }, { db, now: new Date('2026-11-05T12:00:00Z') });
     assert.equal(rec.advisor.verdict, 'vetoed');
     await assert.rejects(callTool('recommendations', { operation: 'advisor',  extra: 1 }, { db }), /not a known argument/);
-    db.close();
+    await db.close();
   });
 });

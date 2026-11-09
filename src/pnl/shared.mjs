@@ -11,6 +11,7 @@ import { loadCategoryInputs } from '../categories/store.mjs';
 import { resolveCategories } from '../categories/resolve.mjs';
 import { transactionDisplayName } from '../categories/display.mjs';
 import { summaryAssumptions } from './ledgers.mjs';
+import { forEachSeries } from '../shared/series.mjs';
 
 export const MAX_MONTHS = 120;
 export const ROW_IDS = 50;
@@ -76,9 +77,9 @@ export function checkRange(from, to) {
   return monthsBetween(from, to);
 }
 
-export function clockOf(db, clock) {
+export async function clockOf(db, clock) {
   if (clock != null && (typeof clock !== 'string' || !DAY.test(clock))) throw new PnlError('bad_input', 'clock must be a date as YYYY-MM-DD');
-  return resolveClock(db, clock || undefined);
+  return await resolveClock(db, clock || undefined);
 }
 
 export function checkDb(db) {
@@ -88,29 +89,29 @@ export function checkDb(db) {
 // ---------------------------------------------------------------- store reads
 
 // An owner fact's value (any src but the planner's own), as the planner and loadCategoryInputs read it.
-export function ownerFact(db, key) {
-  const row = db.prepare("SELECT value FROM facts WHERE key = ? AND (src IS NULL OR src != 'planner')").get(key);
+export async function ownerFact(db, key) {
+  const row = await db.prepare("SELECT value FROM facts WHERE key = ? AND (src IS NULL OR src != 'planner')").get(key);
   return row ? parseJson(row.value, undefined) : undefined;
 }
 
 // Every transaction on or before the clock with its resolved category (default transfer priority).
-export function classified(db, clock) {
-  const input = loadCategoryInputs(db);
+export async function classified(db, clock) {
+  const input = await loadCategoryInputs(db);
   input.transactions = input.transactions.filter((t) => t.date <= clock);
   const resolved = resolveCategories(input);
   return { accounts: input.accounts, transactions: input.transactions, resolved };
 }
 
 // Account labels by id. Demo rows resolve their tokens first; imported text stays plain text.
-export function accountLabels(db) {
-  const rows = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
+export async function accountLabels(db) {
+  const rows = await db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
   let plain = null;
-  const naming = accountNaming(db);
+  const naming = await accountNaming(db);
   const out = new Map();
-  rows.forEach((a, i) => {
+  await forEachSeries(rows, async (a, i) => {
     let label = accountLabel({ ...a, ...naming.hint(a.id) });
     if (a.parser === 'demo-seed') {
-      if (!plain) { const scope = tokenScope(db); plain = (s) => resolveTokens(scope, s, false); }
+      if (!plain) { const scope = await tokenScope(db); plain = (s) => resolveTokens(scope, s, false); }
       label = plain(label);
     }
     out.set(a.id, { label, order: i });
@@ -118,7 +119,7 @@ export function accountLabels(db) {
   return out;
 }
 
-export const fileNames = (db) => new Map(db.prepare('SELECT id, name FROM files').all().map((f) => [f.id, f.name]));
+export const fileNames = async (db) => new Map((await db.prepare('SELECT id, name FROM files').all()).map((f) => [f.id, f.name]));
 
 // ---------------------------------------------------------------- rows and keys
 

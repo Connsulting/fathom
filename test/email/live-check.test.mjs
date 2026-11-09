@@ -44,7 +44,7 @@ test('with FATHOM_LIVE_EMAIL=1 and the dev transport it writes one outbox file a
     for (const line of bodyLines) assert.ok(!out.includes(line), `body line not printed: ${line.slice(0, 40)}`);
     assert.ok(!out.includes('<'), 'no html printed');
     for (const addr of [msg.from, ...[msg.to].flat()]) assert.ok(!out.includes(addr), 'no address printed');
-  } finally { instance.close(); rmSync(dir, { recursive: true, force: true }); }
+  } finally { await instance.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('a non-dev transport with no configuration fails with a fixed code and no stack', T, async () => {
@@ -58,5 +58,5 @@ test('a non-dev transport with no configuration fails with a fixed code and no s
     assert.match(r.stdout + r.stderr, /missing_config/);
     assert.ok(!/\n\s+at /.test(r.stdout + r.stderr), 'no stack trace');
     assert.deepEqual(outboxFiles(dir), []);
-  } finally { instance.close(); rmSync(dir, { recursive: true, force: true }); }
+  } finally { await instance.close(); rmSync(dir, { recursive: true, force: true }); }
 });

@@ -2,13 +2,14 @@ import { businessPnl, businessPnlRows, pnlEntities } from '../../pnl/index.mjs';
 import { resolveClock } from '../../scenario/build.mjs';
 import { bindFigures, periodOf, figureFor, boundResult } from '../../calc/aggregate.mjs';
 import { ToolError } from '../errors.mjs';
+import { mapSeries } from '../../shared/series.mjs';
 
 const month = { type: 'string', pattern: '^\\d{4}-(0[1-9]|1[0-2])$' };
 const base = { entity: { type: 'string' }, from: month, to: month };
-const clockOf = (ctx) => resolveClock(ctx.db, ctx.clock ?? ctx.household?.clock);
-const pnlCall = (fn, args) => {
+const clockOf = async (ctx) => await resolveClock(ctx.db, ctx.clock ?? ctx.household?.clock);
+const pnlCall = async (fn, args) => {
   try {
-    return fn(args);
+    return await fn(args);
   } catch (e) {
     if (e.code) throw new ToolError(e.code === 'unknown_entity' ? 'not_found' : 'bad_input', e.message);
     throw e;
@@ -18,18 +19,18 @@ function requireBusiness(entity) {
   if (entity.kind === 'spending') throw new ToolError('bad_input', 'A spending ledger is not a business entity.');
   if (['inactive', 'income_history'].includes(entity.kind)) throw new ToolError('bad_input', 'Historical income is not a current business entity.');
 }
-function pnl(args, ctx) {
-  const clock = clockOf(ctx),
+async function pnl(args, ctx) {
+  const clock = await clockOf(ctx),
     window = periodOf(args, clock, null, 'ytd');
-  let entities = pnlEntities({ db: ctx.db, clock }).filter(entity => !['spending', 'inactive', 'income_history'].includes(entity.kind));
+  let entities = (await pnlEntities({ db: ctx.db, clock })).filter(entity => !['spending', 'inactive', 'income_history'].includes(entity.kind));
   if (args.entity) {
-    const single = pnlCall(businessPnl, { db: ctx.db, entity: args.entity, from: window.from, to: window.to, clock });
+    const single = await pnlCall(businessPnl, { db: ctx.db, entity: args.entity, from: window.from, to: window.to, clock });
     requireBusiness(single.entity);
     entities = entities.filter((e) => e.key === single.entity.key);
   }
   const gaps = [];
-  const result = entities.map((entity) => {
-    const p = pnlCall(businessPnl, { db: ctx.db, entity: entity.key, from: window.from, to: window.to, clock });
+  const result = await mapSeries(entities, async (entity) => {
+    const p = await pnlCall(businessPnl, { db: ctx.db, entity: entity.key, from: window.from, to: window.to, clock });
     if (p.monthSources.at(-1)?.source === 'none')
       gaps.push({
         code: 'incomplete_month',
@@ -179,10 +180,10 @@ export const operations = [
       category: { type: 'string', minLength: 1 },
       month,
     },
-    handler(args, ctx) {
-      const clock = clockOf(ctx);
-      requireBusiness(pnlCall(businessPnl, { db: ctx.db, entity: args.entity, from: args.from, to: args.to, clock }).entity);
-      return pnlCall(businessPnlRows, { db: ctx.db, ...args, clock });
+    async handler(args, ctx) {
+      const clock = await clockOf(ctx);
+      requireBusiness((await pnlCall(businessPnl, { db: ctx.db, entity: args.entity, from: args.from, to: args.to, clock })).entity);
+      return await pnlCall(businessPnlRows, { db: ctx.db, ...args, clock });
     },
   },
 ];

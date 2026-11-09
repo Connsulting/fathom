@@ -8,8 +8,8 @@ export const operations = [
     params: {},
     required: [],
     scope: 'read',
-    handler(args, ctx) {
-      return goalsForModel(ctx.db);
+    async handler(args, ctx) {
+      return await goalsForModel(ctx.db);
     },
   },
 {
@@ -18,8 +18,8 @@ export const operations = [
     params: {},
     required: [],
     scope: 'read', referenceable: true,
-    handler(args, ctx) {
-      return withEnvelopes(buildPace(ctx.db, { clock: clockOf(ctx) }));
+    async handler(args, ctx) {
+      return withEnvelopes(await buildPace(ctx.db, { clock: await clockOf(ctx) }));
     },
   },
 ];

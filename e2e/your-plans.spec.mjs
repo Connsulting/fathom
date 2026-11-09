@@ -43,11 +43,11 @@ async function addPlanDocument(dataDir, name = FILE_NAME, text = PLAN_TEXT, { do
   await withLocalHousehold(new Date().toISOString(), async ({ db, household }) => {
     const vault = await openVault(household);
     const storedPath = await storeFile({ vault, id: FILE_ID, bytes: Buffer.from(text, 'utf8'), purpose: 'upload' });
-    db.prepare(`INSERT INTO files (id, name, mime, size, sha256, source_kind, uploaded_at, stored_path, status, note)
+    await db.prepare(`INSERT INTO files (id, name, mime, size, sha256, source_kind, uploaded_at, stored_path, status, note)
                 VALUES (?, ?, 'text/plain', ?, ?, 'upload', ?, ?, 'parsed', 'Synthetic e2e plan document')`)
       .run(FILE_ID, name, Buffer.byteLength(text), createHash('sha256').update(text).digest('hex'), new Date().toISOString(), storedPath);
     if (document) {
-      db.prepare(`INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES ('plan', ?, '{}', ?, NULL, NULL)`)
+      await db.prepare(`INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES ('plan', ?, '{}', ?, NULL, NULL)`)
         .run(Number(S.meta.clock.slice(0, 4)), FILE_ID);
     }
   }, { dataDir });
@@ -170,12 +170,12 @@ const TEXT_ONLY = [
 
 test('a text-only plan document is enough to build the Your plans pack', async ({ page }, testInfo) => {
   const { base, dataDir } = yp(testInfo);
-  const db = openDb(householdStoreFile(dataDir));
+  const db = await openDb(await householdStoreFile(dataDir));
   try {
-    db.prepare(`INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES ('plan', ?, ?, NULL, NULL, NULL)`)
+    await db.prepare(`INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES ('plan', ?, ?, NULL, NULL, NULL)`)
       .run(Number(S.meta.clock.slice(0, 4)), JSON.stringify({ text: TEXT_ONLY }));
   } finally {
-    db.close();
+    await db.close();
   }
 
   await gotoYp(page, base, 'packs');

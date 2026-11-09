@@ -36,7 +36,7 @@ async function main() {
     const handlers = { [JOB]: defaults[JOB], plan: defaults.plan };
     scheduler = createScheduler({
       db: household.db, config, engine: household.engine, handlers, log: quiet,
-      allowed: () => household.outbound.enabled('jobs'), household: () => household,
+      allowed: async () => await household.outbound.enabled('jobs'), household: () => household,
     });
     const run = await scheduler.runNow(JOB);
     if (!run || !['ok', 'skipped'].includes(run.status)) {

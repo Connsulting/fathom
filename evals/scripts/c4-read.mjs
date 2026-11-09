@@ -1,7 +1,8 @@
 import { callTool } from '../../src/tools/index.mjs';
+import { mapSeries } from '../../src/shared/series.mjs';
 
 export async function script({ turn, db, clock }) {
-  const calls = turn.required.map((r) => {
+  const calls = await mapSeries(turn.required, async (r) => {
     const args = { operation: r.operation };
     for (const p of r.predicates) {
       let out = args;
@@ -12,7 +13,7 @@ export async function script({ turn, db, clock }) {
       else if (p.op !== 'exists') out[key] = p.value;
     }
     if (r.name === 'spending' && args.annualize) {
-      const meta = JSON.parse(db.prepare("SELECT value FROM content WHERE key='meta'").get().value);
+      const meta = JSON.parse((await db.prepare("SELECT value FROM content WHERE key='meta'").get()).value);
       const through = new Date(meta.dataThrough),
         year = through.getUTCFullYear(),
         month = through.getUTCMonth();

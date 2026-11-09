@@ -8,6 +8,7 @@ import { digest } from '../src/auth/store.mjs';
 import { ask, OWNER_OPTIONS } from '../src/ingest/confirm.mjs';
 import { createLocalData, localPort, removeLocalData, refuseSuppliedTarget, householdStoreFile } from './local-store.mjs';
 import { secretEnv, secretsFor } from '../test/helpers/server.mjs';
+import { mapSeries } from '../src/shared/series.mjs';
 
 const REPO = fileURLToPath(new URL('..', import.meta.url));
 const REMOTE = !!(process.env.BASE_URL || process.env.FATHOM_SMOKE_BASE_URL);
@@ -138,19 +139,19 @@ test.describe('passkey accounts through the browser', () => {
       expect(await refused.json()).toEqual({ error: 'a discoverable passkey is required' });
       await expect(admin.page.locator('body')).toContainText('Try another browser or passkey provider.');
       // Accounts live in platform.sqlite; the bootstrap link is a household invitation, not an auth token.
-      const db = openDb(join(dataDir, 'platform.sqlite'));
+      const db = await openDb(join(dataDir, 'platform.sqlite'));
       try {
-        const user = db.prepare('SELECT id, enrolled_at FROM users WHERE email = ?').get(OWNER);
+        const user = await db.prepare('SELECT id, enrolled_at FROM users WHERE email = ?').get(OWNER);
         expect(user.enrolled_at).toBe(null);
-        expect(db.prepare('SELECT count(*) AS n FROM passkeys WHERE user_id = ?').get(user.id).n).toBe(0);
-        expect(db.prepare('SELECT count(*) AS n FROM auth_challenges WHERE user_id = ?').get(user.id).n).toBe(0);
-        expect(db.prepare('SELECT count(*) AS n FROM auth_tokens WHERE user_id = ?').get(user.id).n).toBe(0);
-        expect(db.prepare('SELECT count(*) AS n FROM household_invitations WHERE user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL').get(user.id).n).toBe(1);
-        expect(db.prepare('SELECT count(*) AS n FROM household_memberships WHERE user_id = ?').get(user.id).n).toBe(0);
-      } finally { db.close(); }
+        expect((await db.prepare('SELECT count(*) AS n FROM passkeys WHERE user_id = ?').get(user.id)).n).toBe(0);
+        expect((await db.prepare('SELECT count(*) AS n FROM auth_challenges WHERE user_id = ?').get(user.id)).n).toBe(0);
+        expect((await db.prepare('SELECT count(*) AS n FROM auth_tokens WHERE user_id = ?').get(user.id)).n).toBe(0);
+        expect((await db.prepare('SELECT count(*) AS n FROM household_invitations WHERE user_id = ? AND consumed_at IS NULL AND revoked_at IS NULL').get(user.id)).n).toBe(1);
+        expect((await db.prepare('SELECT count(*) AS n FROM household_memberships WHERE user_id = ?').get(user.id)).n).toBe(0);
+      } finally { await db.close(); }
       expect((await householdGet(admin, '/api/scenario')).status()).toBe(401);
       await admin.auth.replace();
-      const notice = securitySnapshot();
+      const notice = await securitySnapshot();
       const registration = await register(admin, 'Primary device');
       await securityNotices(notice, 'Fathom passkey added', [OWNER]);
       expect(registration.options.authenticatorSelection).toMatchObject({
@@ -182,7 +183,7 @@ test.describe('passkey accounts through the browser', () => {
     });
 
     await test.step('authenticated boot precedes scenario fetch and the Settings page links to real auth pages', async () => {
-      seedReturningHousehold();
+      await seedReturningHousehold();
       await admin.page.goto(`${base}/`);
       await expect(admin.page).toHaveURL(/#\/home$/);
       // Home's data-health line counts the open question and links to Confirm.
@@ -212,7 +213,7 @@ test.describe('passkey accounts through the browser', () => {
     await test.step('adding a second device preserves both passkeys and the current session', async () => {
       await admin.auth.replace();
       const beforeSession = await sessionCookie(admin);
-      const notice = securitySnapshot();
+      const notice = await securitySnapshot();
       const registration = await register(admin, 'Secondary device', 'Add passkey');
       await securityNotices(notice, 'Fathom passkey added', [OWNER]);
       expect(await sessionCookie(admin)).toBe(beforeSession);
@@ -283,7 +284,7 @@ test.describe('passkey accounts through the browser', () => {
       const link = await mailedLink(before, SECOND_ADMIN);
       secondAdmin = await browserClient(browser, { authenticator: true });
       await visitEnrollment(secondAdmin, link);
-      const notice = securitySnapshot();
+      const notice = await securitySnapshot();
       const registration = await register(secondAdmin, 'Second admin device');
       expect(registration.identity).toMatchObject({ email: SECOND_ADMIN, role: 'admin', householdId: ownerIdentity.householdId, operator: false });
       expect(registration.identity.memberships).toEqual([{ householdId: ownerIdentity.householdId, role: 'admin', name: null }]);
@@ -297,7 +298,7 @@ test.describe('passkey accounts through the browser', () => {
       await secondAdmin.page.goto(`${base}/account`);
       await secondAdmin.auth.replace();
       const beforeSession = await sessionCookie(secondAdmin);
-      const sendsBefore = emailSendCount();
+      const sendsBefore = await emailSendCount();
       const outputStart = serverOutput.length;
       const outbox = join(dataDir, 'outbox');
       const saved = join(dataDir, 'saved-notice-outbox');
@@ -318,7 +319,7 @@ test.describe('passkey accounts through the browser', () => {
       for (const value of [SECOND_ADMIN, dataDir, 'Synthetic transport obstruction', 'EEXIST', 'ENOTDIR', 'ENOENT']) {
         expect(failureLog.includes(value), 'notice failure logs contain no transport diagnostics or addresses').toBe(false);
       }
-      expect(emailSendCount()).toBe(sendsBefore);
+      expect(await emailSendCount()).toBe(sendsBefore);
       expect(await sessionCookie(secondAdmin)).toBe(beforeSession);
       await assertPasskeyNames(secondAdmin, ['Second admin device', 'Second admin backup']);
       expect((await householdGet(secondAdmin, '/api/admin/users')).status()).toBe(200);
@@ -338,7 +339,7 @@ test.describe('passkey accounts through the browser', () => {
       member = await browserClient(browser, { authenticator: true });
       const link = await mailedLink(before, MEMBER);
       await visitEnrollment(member, link);
-      const notice = securitySnapshot();
+      const notice = await securitySnapshot();
       const registration = await register(member, 'Member device');
       await securityNotices(notice, 'Fathom passkey added', [MEMBER]);
       expect(registration.identity).toMatchObject({ email: MEMBER, role: 'member', householdId: ownerIdentity.householdId, operator: false });
@@ -428,7 +429,7 @@ test.describe('passkey accounts through the browser', () => {
       const recoveryLink = await mailedLink(before, OWNER);
       expect((await householdGet(otherOwner, '/api/scenario')).status()).toBe(200);
       await visitEnrollment(admin, recoveryLink);
-      const notice = securitySnapshot();
+      const notice = await securitySnapshot();
       const registration = await register(admin, 'Recovered device');
       await securityNotices(notice, 'Fathom account recovered', [OWNER, SECOND_ADMIN]);
       expect(registration.identity.id).toBe(ownerIdentity.id);
@@ -457,9 +458,9 @@ test.describe('passkey accounts through the browser', () => {
       await signin(returning, 200, '#/plan');
       await expect(returning.page).toHaveURL(/#\/plan$/);
       const raw = (await returning.context.cookies(base)).find((item) => item.name === '__Host-fathom-session').value;
-      const db = openDb(join(dataDir, 'platform.sqlite'));
-      try { db.prepare('DELETE FROM auth_sessions WHERE hash = ?').run(digest(raw)); }
-      finally { db.close(); }
+      const db = await openDb(join(dataDir, 'platform.sqlite'));
+      try { await db.prepare('DELETE FROM auth_sessions WHERE hash = ?').run(digest(raw)); }
+      finally { await db.close(); }
       await returning.page.evaluate(() => window.Fathom.api.goalCreate({ name: 'Synthetic' })).catch(() => {});
       await expect(returning.page).toHaveURL(/\/signin#\/plan$/);
       expect((await householdGet(returning, '/api/scenario')).status()).toBe(401);
@@ -641,7 +642,7 @@ async function signin(client, expectedStatus = 200, hash = '#/home') {
 }
 
 async function assertAuthenticatedBoot(client) {
-  const sessions = await Promise.all(client.sessionResponses.map(async (entry) => ({ ...entry, body: await entry.body })));
+  const sessions = await Promise.all(await mapSeries(client.sessionResponses, async (entry) => ({ ...entry, body: await entry.body })));
   expect(client.scenarioRequests.length, 'authenticated app fetched the scenario').toBeGreaterThan(0);
   for (const request of client.scenarioRequests) {
     expect(sessions.some((entry) => entry.document === request.document && entry.sequence < request.sequence && entry.body?.identity), 'scenario fetch must follow authenticated identity in the same document').toBe(true);
@@ -731,14 +732,14 @@ async function mailedLink(before, email) {
   return extractLink(`${message.text} ${message.html}`);
 }
 
-function emailSendCount() {
-  const db = openDb(householdStoreFile(dataDir));
-  try { return db.prepare('SELECT count(*) AS n FROM email_sends').get().n; }
-  finally { db.close(); }
+async function emailSendCount() {
+  const db = await openDb(await householdStoreFile(dataDir));
+  try { return (await db.prepare('SELECT count(*) AS n FROM email_sends').get()).n; }
+  finally { await db.close(); }
 }
 
-function securitySnapshot() {
-  return { names: outboxNames(), emailSends: emailSendCount() };
+async function securitySnapshot() {
+  return { names: outboxNames(), emailSends: await emailSendCount() };
 }
 
 async function securityNotices(before, subject, recipients) {
@@ -776,7 +777,7 @@ async function securityNotices(before, subject, recipients) {
       expect(body.includes(value), 'security notices contain no link tokens, sessions or credential material').toBe(false);
     }
   }
-  expect(emailSendCount(), 'security notices bypass financial email_sends').toBe(before.emailSends);
+  expect(await emailSendCount(), 'security notices bypass financial email_sends').toBe(before.emailSends);
 }
 
 async function bootstrapInvite() {
@@ -819,17 +820,17 @@ async function usedLinkIsDenied(browser, link) {
   expect((await replay.context.request.get('/healthz')).status()).toBe(200);
 }
 
-function seedReturningHousehold() {
-  const db = openDb(householdStoreFile(dataDir));
+async function seedReturningHousehold() {
+  const db = await openDb(await householdStoreFile(dataDir));
   try {
-    db.prepare("INSERT INTO accounts (id, inst, name, owner, kind, mirror, parser) VALUES ('acct-auth-e2e', 'Synthetic Bank', 'Synthetic Checking', NULL, 'checking', 'manual', 'e2e')").run();
-    const result = ask(db, {
+    await db.prepare("INSERT INTO accounts (id, inst, name, owner, kind, mirror, parser) VALUES ('acct-auth-e2e', 'Synthetic Bank', 'Synthetic Checking', NULL, 'checking', 'manual', 'e2e')").run();
+    const result = await ask(db, {
       kind: 'account_owner', subject: 'acct-auth-e2e', question: 'Whose account is Synthetic Checking?',
       options: OWNER_OPTIONS, context: {}, now: '2026-11-05T12:00:00.000Z',
     });
     expect(result.queued).toBe(true);
     confirmationId = result.id;
-  } finally { db.close(); }
+  } finally { await db.close(); }
 }
 
 // A household request as the web client sends it: the session's household context asserted

@@ -129,14 +129,14 @@ test('after an interim round the assembler starts over: no separator, and a repl
 
 async function demoStore(t) {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
-  seedDemo(s.db);
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  await seedDemo(s.db);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' });
-  const runtime = createRuntimeEngine({ db: s.db, config });
+  const runtime = await createRuntimeEngine({ db: s.db, config });
   // The temp store's directory stands in as the household root.
   const root = s.dataDir;
   const packs = createLivePacks(s.db, { dataDir: root });
-  packs.refresh();
+  await packs.refresh();
   return { ...s, root, config, runtime, packs };
 }
 
@@ -331,12 +331,12 @@ test('a notice reply has no work', async t => {
 
 test('fakeAnswerScript scripts three rounds for "show your work", reading goals or the rec, and leaves other questions alone', async t => {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
-  seedDemo(s.db);
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  await seedDemo(s.db);
   const now = '2026-11-05T09:00:00.000Z';
-  s.db.prepare('INSERT INTO conversations (key, created_at, last_at, rec_id) VALUES (?, ?, ?, ?)').run('ask:aaaaaaaaaaaa', now, now, 'deferral');
-  s.db.prepare('INSERT INTO conversations (key, created_at, last_at) VALUES (?, ?, ?)').run('ask:bbbbbbbbbbbb', now, now);
-  const scenario = buildScenario(s.db);
+  await s.db.prepare('INSERT INTO conversations (key, created_at, last_at, rec_id) VALUES (?, ?, ?, ?)').run('ask:aaaaaaaaaaaa', now, now, 'deferral');
+  await s.db.prepare('INSERT INTO conversations (key, created_at, last_at) VALUES (?, ?, ?)').run('ask:bbbbbbbbbbbb', now, now);
+  const scenario = await buildScenario(s.db);
   const summary = { needsYouCount: 3 };
   const script = (key, text) => fakeAnswerScript({ scenario, key, text, summary, propose: true });
 
@@ -370,12 +370,12 @@ test('fakeAnswerScript scripts three rounds for "show your work", reading goals 
 
 /* ---------- D. grounding: an ordered list stays a list for the structural count ---------- */
 
-test('a spelled count matching the ordered list that follows grounds; a mismatch flags the count', () => {
+test('a spelled count matching the ordered list that follows grounds; a mismatch flags the count', async () => {
   const opts = { scenario: { fig: {} }, toolResults: [], data: [] };
   for (const gap of ['\n', '\n\n']) {
-    const three = groundAnswer(`There are three things to watch:${gap}1. Pay the estimate.\n2. Keep a reserve.\n3. File on time.`, opts);
+    const three = await groundAnswer(`There are three things to watch:${gap}1. Pay the estimate.\n2. Keep a reserve.\n3. File on time.`, opts);
     assert.equal(three.ok, true, JSON.stringify(three.violations));
-    const two = groundAnswer(`There are three things to watch:${gap}1. Pay the estimate.\n2. Keep a reserve.`, opts);
+    const two = await groundAnswer(`There are three things to watch:${gap}1. Pay the estimate.\n2. Keep a reserve.`, opts);
     assert.equal(two.ok, false);
     assert.ok(two.violations.some(v => /three/i.test(v.text)), JSON.stringify(two.violations));
   }
@@ -427,11 +427,11 @@ async function showYourWork(s, body, recStep) {
   return { evs, stored };
 }
 
-test('POST /api/threads streams interim events for "show your work" and stores the work with the message', T, () => withServer({ env: FAKE }, async s => {
+test('POST /api/threads streams interim events for "show your work" and stores the work with the message', T, async () => withServer({ env: FAKE }, async s => {
   await showYourWork(s, { text: SHOW }, progressLabel('goals'));
 }));
 
-test('a thread asked from a rec streams and stores the same work, reading the recommendation', T, () => withServer({ env: FAKE }, async s => {
+test('a thread asked from a rec streams and stores the same work, reading the recommendation', T, async () => withServer({ env: FAKE }, async s => {
   const { stored } = await showYourWork(s, { recId: 'deferral', text: SHOW }, progressLabel('recommendations'));
   assert.ok(!stored.provenance.work.items.some(x => x.k === 'step' && x.label === progressLabel('goals')));
 }));

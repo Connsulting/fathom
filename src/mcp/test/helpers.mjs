@@ -62,13 +62,13 @@ export function callToolRpc(baseUrl, key, name, args = {}, headers = {}) {
 // Run fn(db) on a store or platform file (opened without migrating) and close it.
 export async function withStore(file, fn) {
   const db = await openStore(file);
-  try { return await fn(db); } finally { db.close(); }
+  try { return await fn(db); } finally { await db.close(); }
 }
 
 // The platform api_keys row of a key (MT-03: keys live in platform.sqlite, bound to a household).
-export function apiKeyRow(platformFile, id) {
-  return withStore(platformFile, db => {
-    const row = db.prepare('SELECT * FROM api_keys WHERE id = ?').get(id);
+export async function apiKeyRow(platformFile, id) {
+  return withStore(platformFile, async db => {
+    const row = await db.prepare('SELECT * FROM api_keys WHERE id = ?').get(id);
     return row ? { ...row } : null;
   });
 }

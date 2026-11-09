@@ -23,12 +23,13 @@ import { createHash, randomBytes } from 'node:crypto';
 import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { DatabaseSync, backup } from 'node:sqlite';
+import { openScope } from '../../src/storage/index.mjs';
 import { ROOT, src, tempDir, freePort, migrateLegacyStore, runCommand, sessionClient, contextHeaders } from './server.mjs';
 import { buildLegacyStore, fileHashes } from './tenancy.mjs';
 import { aggregatorCsv } from './ingest.mjs';
 import { writeSyntheticPack } from './packs.mjs';
 import { openDb, listTables, listMigrations, setSetting } from '../../src/store/db.mjs';
+import { filterSeries } from '../../src/shared/series.mjs';
 
 export const CLOCK = '2026-11-05';
 export const T0 = '2026-10-01T09:00:00.000Z';
@@ -134,16 +135,16 @@ export async function startRefusal({ dataDir, keys, engine = 'fake', extra = {} 
 export async function enrollSession(platform, householdId, email, role = 'member') {
   const { createAuthStore } = await src('src/auth/store.mjs');
   const store = createAuthStore(platform);
-  let user = store.findUser(email);
-  if (!user || store.membership(user.id, householdId)?.status !== 'active') {
-    const invited = store.invite(householdId, email, { role });
-    store.consumeInvitation(invited.token, invited.user.id);
+  let user = await store.findUser(email);
+  if (!user || (await store.membership(user.id, householdId))?.status !== 'active') {
+    const invited = await store.invite(householdId, email, { role });
+    await store.consumeInvitation(invited.token, invited.user.id);
     user = invited.user;
   }
-  if (store.getUser(user.id).enrolledAt == null) store.markEnrolled(user.id);
-  user = store.getUser(user.id);
-  const { token } = store.createSession(user.id);
-  return { user, householdId, role: store.membership(user.id, householdId).role, token, cookie: `__Host-fathom-session=${token}` };
+  if ((await store.getUser(user.id)).enrolledAt == null) await store.markEnrolled(user.id);
+  user = await store.getUser(user.id);
+  const { token } = await store.createSession(user.id);
+  return { user, householdId, role: (await store.membership(user.id, householdId)).role, token, cookie: `__Host-fathom-session=${token}` };
 }
 
 export const sessionHash = token => sha256(token);
@@ -210,13 +211,13 @@ export async function twoHouseholds({ engine = 'fake', extra = {}, engineOptions
     const platform = app.platform;
     const { createAuthStore } = await src('src/auth/store.mjs');
     const store = createAuthStore(platform);
-    const served = platform.prepare('SELECT id FROM households WHERE serves_store = 1').get();
+    const served = await platform.prepare('SELECT id FROM households WHERE serves_store = 1').get();
     if (!served) throw new Error('fixture: the fresh instance has no household');
     const A = { id: served.id };
     A.admin = await enrollSession(platform, A.id, 'alpha-admin@example.test', 'admin');
     A.client = sessionClient(baseUrl, A.admin);
-    store.grantOperator(A.admin.user.id);
-    store.setPlatformSetting('multi_household_enabled', true);
+    await store.grantOperator(A.admin.user.id);
+    await store.setPlatformSetting('multi_household_enabled', true);
     const made = await A.client.postJson('/api/operator/households', { displayName: 'Synthetic Bravo Household', adminEmail: 'bravo-admin@example.test' });
     if (made.status !== 200) throw new Error(`fixture: operator route -> ${made.status} ${made.text.slice(0, 200)}`);
     const B = { id: made.json.household.id };
@@ -224,14 +225,14 @@ export async function twoHouseholds({ engine = 'fake', extra = {}, engineOptions
     B.client = sessionClient(baseUrl, B.admin);
     const dualA = await enrollSession(platform, A.id, 'both-member@example.test', 'member');
     await enrollSession(platform, B.id, 'both-member@example.test', 'member');
-    const dualSession = store.createSession(dualA.user.id);
-    platform.prepare('UPDATE auth_sessions SET household_id = NULL WHERE hash = ?').run(sessionHash(dualSession.token));
+    const dualSession = await store.createSession(dualA.user.id);
+    await platform.prepare('UPDATE auth_sessions SET household_id = NULL WHERE hash = ?').run(sessionHash(dualSession.token));
     const dual = { user: dualA.user, token: dualSession.token, cookie: `__Host-fathom-session=${dualSession.token}` };
     dual.client = sessionClient(baseUrl, dual);
     return {
       root, dataDir, keys, server, app, baseUrl, platform, store, A, B, dual,
       rootOf: id => join(dataDir, 'households', id),
-      ctx: id => app.runtimes.get(id),
+      ctx: async id => (await app.runtimes.get(id)),
       async close() {
         await server.close();
         rmSync(root, { recursive: true, force: true });
@@ -257,25 +258,25 @@ export async function sideHousehold({ dataDir, env, householdId, engineOptions =
   const { buildHouseholdContext } = await src('src/platform/runtime.mjs');
   const { createInstanceSecrets } = await src('src/platform/secrets.mjs');
   const config = loadConfig(env);
-  const platform = openPlatform(join(dataDir, PLATFORM_FILE));
+  const platform = await openPlatform(join(dataDir, PLATFORM_FILE));
   try {
-    const row = platform.prepare('SELECT mode, storage_root, generation FROM households WHERE id = ?').get(householdId);
+    const row = await platform.prepare('SELECT mode, storage_root, generation FROM households WHERE id = ?').get(householdId);
     if (!row) throw new Error('fixture: no such household');
-    const instanceMode = platform.prepare('SELECT mode FROM households WHERE serves_store = 1').get().mode;
-    const household = buildHouseholdContext({
+    const instanceMode = (await platform.prepare('SELECT mode FROM households WHERE serves_store = 1').get()).mode;
+    const household = await buildHouseholdContext({
       householdId, generation: Number(row.generation), mode: row.mode, relativeRoot: row.storage_root, platform, config,
       secrets: createInstanceSecrets({ config, mode: instanceMode }), ...(engineOptions ? { engineOptions } : {}),
     });
     let closing = null;
     return {
       household, engine: household.engine, platform,
-      close() {
-        closing ??= household.close().finally(() => { try { platform.close(); } catch { /* already closed */ } });
+      async close() {
+        closing ??= household.close().finally(async () => { try { await platform.close(); } catch { /* already closed */ } });
         return closing;
       },
     };
   } catch (e) {
-    platform.close();
+    await platform.close();
     throw e;
   }
 }
@@ -302,8 +303,8 @@ export async function liveTwoHouseholds({ emulator, fundingNow = () => Date.now(
   const closeTwo = two.close;
   try {
     const { setOutbound } = await src('src/platform/outbound.mjs');
-    setOutbound(two.platform, two.A.id, { jobs: false });
-    setOutbound(two.platform, two.B.id, { engine: true });
+    await setOutbound(two.platform, two.A.id, { jobs: false });
+    await setOutbound(two.platform, two.B.id, { engine: true });
     if (instanceCapUsd != null) {
       const budget = await src('src/platform/model-budget.mjs');
       await budget.setInstanceCap(two.platform, instanceCapUsd);
@@ -343,22 +344,22 @@ export function writePlansPack(rootPath, canary) {
 const plainValue = v => (v instanceof Uint8Array ? `blob:${Buffer.from(v).toString('hex')}` : typeof v === 'bigint' ? String(v) : v);
 const canonical = row => JSON.stringify(Object.keys(row).sort().map(k => [k, plainValue(row[k])]));
 
-export function withSqlite(file, fn) {
+export async function withSqlite(file, fn) {
   if (!existsSync(file)) throw new Error(`no database at ${file}`);
-  const db = new DatabaseSync(file);
-  try { return fn(db); } finally { db.close(); }
+  const db = await openScope({ path: file, journal: null, busyTimeout: 0 });
+  try { return await fn(db); } finally { await db.close(); }
 }
 
-const hasRowid = (db, table) => {
-  try { db.prepare(`SELECT rowid FROM "${table}" LIMIT 1`).all(); return true; } catch { return false; }
+const hasRowid = async (db, table) => {
+  try { await db.prepare(`SELECT rowid FROM "${table}" LIMIT 1`).all(); return true; } catch { return false; }
 };
 
 // Rows of a table as canonical strings, rowid included (as __rowid) for rowid tables, in rowid
 // order. `omit` drops columns; `where` filters rows.
-export function tableRows(db, table, { omit = [], where = null } = {}) {
-  const rowid = hasRowid(db, table);
+export async function tableRows(db, table, { omit = [], where = null } = {}) {
+  const rowid = await hasRowid(db, table);
   const sql = `SELECT ${rowid ? 'rowid AS __rowid, ' : ''}* FROM "${table}"${where ? ` WHERE ${where}` : ''}${rowid ? ' ORDER BY rowid' : ''}`;
-  const rows = db.prepare(sql).all().map(r => {
+  const rows = (await db.prepare(sql).all()).map(r => {
     const out = { ...r };
     for (const c of omit) delete out[c];
     return canonical(out);
@@ -368,11 +369,11 @@ export function tableRows(db, table, { omit = [], where = null } = {}) {
 
 // table -> { count, digest } for every table of a store file. `rules` maps a table to
 // { omit, where } for tableRows.
-export function tableDigests(file, rules = {}) {
-  return withSqlite(file, db => {
+export async function tableDigests(file, rules = {}) {
+  return await withSqlite(file, async db => {
     const out = {};
-    for (const t of listTables(db)) {
-      const rows = tableRows(db, t, rules[t] ?? {});
+    for (const t of await listTables(db)) {
+      const rows = await tableRows(db, t, rules[t] ?? {});
       out[t] = { count: rows.length, digest: sha256(rows.join('\n')) };
     }
     return out;
@@ -408,142 +409,143 @@ async function populateLegacy(dataDir, legacyKey) {
   const packet = { id: `advpkt-${randomBytes(8).toString('hex')}`, bytes: Buffer.from(PACKET_HTML) };
   const [f1, f2] = uploads.map(u => u.id);
 
-  const db = openDb(join(dataDir, 'fathom.sqlite'));
+  const db = await openDb(join(dataDir, 'fathom.sqlite'));
   let confirmItemId;
   try {
-    const run = (sql, ...args) => db.prepare(sql).run(...args);
-    setSetting(db, 'clock', CLOCK);
-    setSetting(db, 'onboarding', { done: true, step: 6 });
-    run("INSERT INTO content (key, value, src, updated_at) VALUES ('synthetic.note', '\"Synthetic content\"', 'you', ?)", T0);
-    run("INSERT INTO sources (id, label, as_of, kind, last_ingest_at, note) VALUES ('src-synthetic', 'Synthetic bank export', '2026-10-01', 'file', ?, 'Synthetic source')", T0);
+    const run = async (sql, ...args) => await db.prepare(sql).run(...args);
+    const insert = async (sql, ...args) => (await db.prepare(`${sql} RETURNING id`).get(...args)).id;
+    await setSetting(db, 'clock', CLOCK);
+    await setSetting(db, 'onboarding', { done: true, step: 6 });
+    await run("INSERT INTO content (key, value, src, updated_at) VALUES ('synthetic.note', '\"Synthetic content\"', 'you', ?)", T0);
+    await run("INSERT INTO sources (id, label, as_of, kind, last_ingest_at, note) VALUES ('src-synthetic', 'Synthetic bank export', '2026-10-01', 'file', ?, 'Synthetic source')", T0);
     for (const u of uploads) {
-      run(`INSERT INTO files (id, name, mime, size, sha256, source_kind, uploaded_at, stored_path, status, note, parser, counts, source_id)
+      await run(`INSERT INTO files (id, name, mime, size, sha256, source_kind, uploaded_at, stored_path, status, note, parser, counts, source_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, '{}', 'src-synthetic')`,
       u.id, u.name, u.mime, u.bytes.length, sha256(u.bytes), u.kind, T0, `files/${u.id}.bin`, u.status, u.parser);
       writeBlob(u.id, u.bytes);
     }
     // A files row deleted again: a rowid gap in a table whose rowid is not its key.
-    run("INSERT INTO files (id, name, uploaded_at, status) VALUES ('f-synthetic-gap-00000001', 'gap.csv', ?, 'error')", T0);
+    await run("INSERT INTO files (id, name, uploaded_at, status) VALUES ('f-synthetic-gap-00000001', 'gap.csv', ?, 'error')", T0);
 
-    const account = (id, mask, name, kind, sort, inst = 'Example Bank') => run(
+    const account = async (id, mask, name, kind, sort, inst = 'Example Bank') => await run(
       `INSERT INTO accounts (id, inst, mask, name, owner, kind, file_id, parser, locator, sort, source_id)
        VALUES (?, ?, ?, ?, 'You', ?, ?, 'aggregator', ?, ?, 'src-synthetic')`, id, inst, mask, name, kind, f1, `row:${sort}`, sort);
-    account('acct-syn-check', '1111', 'Synthetic checking', 'checking', 0);
-    account('acct-syn-gap', '9999', 'Synthetic gap account', 'checking', 9);
-    account('acct-syn-save', '2222', 'Synthetic savings', null, 1);
-    account('acct-syn-broker', '3333', 'Synthetic brokerage', 'taxable', 2, 'Example Brokerage');
-    run("INSERT INTO account_holders (account_id, holder, file_id, locator, created_at) VALUES ('acct-syn-check', 'Synthetic Holder', ?, 'row:1', ?)", f1, T0);
-    run("INSERT INTO balances (account_id, date, amount, file_id, parser, locator, dedupe_key) VALUES ('acct-syn-check', '2026-10-31', 5400.25, ?, 'aggregator', 'row:1', 'bal:1')", f1);
-    run("INSERT INTO balances (account_id, date, amount, file_id, parser, locator, dedupe_key) VALUES ('acct-syn-save', '2026-10-31', 12000, ?, 'aggregator', 'row:2', 'bal:2')", f1);
-    const tx = (n, amount, description) => Number(run(
+    await account('acct-syn-check', '1111', 'Synthetic checking', 'checking', 0);
+    await account('acct-syn-gap', '9999', 'Synthetic gap account', 'checking', 9);
+    await account('acct-syn-save', '2222', 'Synthetic savings', null, 1);
+    await account('acct-syn-broker', '3333', 'Synthetic brokerage', 'taxable', 2, 'Example Brokerage');
+    await run("INSERT INTO account_holders (account_id, holder, file_id, locator, created_at) VALUES ('acct-syn-check', 'Synthetic Holder', ?, 'row:1', ?)", f1, T0);
+    await run("INSERT INTO balances (account_id, date, amount, file_id, parser, locator, dedupe_key) VALUES ('acct-syn-check', '2026-10-31', 5400.25, ?, 'aggregator', 'row:1', 'bal:1')", f1);
+    await run("INSERT INTO balances (account_id, date, amount, file_id, parser, locator, dedupe_key) VALUES ('acct-syn-save', '2026-10-31', 12000, ?, 'aggregator', 'row:2', 'bal:2')", f1);
+    const tx = async (n, amount, description) => Number(await insert(
       `INSERT INTO transactions (account_id, date, amount, description, category, external_id, dedupe_key, file_id, parser, locator, occurrence)
-       VALUES ('acct-syn-check', ?, ?, ?, 'Other', NULL, ?, ?, 'aggregator', ?, 1)`, `2026-10-0${n}`, amount, description, `tx:${n}`, f1, `row:${n}`).lastInsertRowid);
-    const t1 = tx(1, -42.17, 'Synthetic grocer');
-    const t2 = tx(2, -18.5, 'Synthetic gap row');
-    const t3 = tx(3, -27.4, 'Synthetic diner');
-    const t4 = tx(4, -15, 'Synthetic software');
-    tx(5, 2500, 'Synthetic client payment');
-    run("INSERT INTO transaction_category_corrections (transaction_id, category, bucket, updated_at) VALUES (?, 'Groceries', 'household', ?)", t1, T0);
-    run("INSERT INTO transaction_category_guesses (transaction_id, category, model, updated_at) VALUES (?, 'Dining', 'fake', ?)", t3, T0);
-    run(`INSERT INTO transaction_category_imports (transaction_id, dedupe_key, category, parser, file_id, locator, date, description, updated_at)
+       VALUES ('acct-syn-check', ?, ?, ?, 'Other', NULL, ?, ?, 'aggregator', ?, 1)`, `2026-10-0${n}`, amount, description, `tx:${n}`, f1, `row:${n}`));
+    const t1 = await tx(1, -42.17, 'Synthetic grocer');
+    const t2 = await tx(2, -18.5, 'Synthetic gap row');
+    const t3 = await tx(3, -27.4, 'Synthetic diner');
+    const t4 = await tx(4, -15, 'Synthetic software');
+    await tx(5, 2500, 'Synthetic client payment');
+    await run("INSERT INTO transaction_category_corrections (transaction_id, category, bucket, updated_at) VALUES (?, 'Groceries', 'household', ?)", t1, T0);
+    await run("INSERT INTO transaction_category_guesses (transaction_id, category, model, updated_at) VALUES (?, 'Dining', 'fake', ?)", t3, T0);
+    await run(`INSERT INTO transaction_category_imports (transaction_id, dedupe_key, category, parser, file_id, locator, date, description, updated_at)
       VALUES (?, 'imp:4', 'Software', 'aggregator', ?, 'row:4', '2026-10-04', 'Synthetic software', ?)`, t4, f1, T0);
-    run("INSERT INTO category_merchant_rules (merchant, category, bucket, updated_at) VALUES ('synthetic grocer', 'Groceries', 'household', ?)", T0);
-    run("INSERT INTO category_source_rules (parser, category, bucket, updated_at) VALUES ('aggregator', 'Software', 'business', ?)", T0);
-    run(`INSERT INTO positions (account_id, as_of, symbol, name, quantity, price, value, cost_basis, file_id, parser, locator, dedupe_key)
+    await run("INSERT INTO category_merchant_rules (merchant, category, bucket, updated_at) VALUES ('synthetic grocer', 'Groceries', 'household', ?)", T0);
+    await run("INSERT INTO category_source_rules (parser, category, bucket, updated_at) VALUES ('aggregator', 'Software', 'business', ?)", T0);
+    await run(`INSERT INTO positions (account_id, as_of, symbol, name, quantity, price, value, cost_basis, file_id, parser, locator, dedupe_key)
       VALUES ('acct-syn-broker', '2026-10-31', 'SYNX', 'Synthetic Index Fund', 10, 100, 1000, 800, ?, 'positions', 'row:1', 'pos:1')`, f1);
-    run("INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES ('sig-synthetic', '{\"date\":0,\"amount\":1}', 'owner', ?, 2)", T0);
-    run("INSERT INTO entity_aliases (alias, entity, created_at) VALUES ('Synthetic Studio LLC', 'Synthetic Studio', ?)", T0);
-    run("INSERT INTO pnl_lines (entity, period, category, amount, file_id, parser, locator, dedupe_key) VALUES ('Synthetic Studio', '2026-09', 'Income', 4200, ?, 'pnl', 'r1', 'pnl:1')", f1);
-    run(`INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator, dedupe_key)
+    await run("INSERT INTO column_mappings (signature, mapping, src, created_at, uses) VALUES ('sig-synthetic', '{\"date\":0,\"amount\":1}', 'owner', ?, 2)", T0);
+    await run("INSERT INTO entity_aliases (alias, entity, created_at) VALUES ('Synthetic Studio LLC', 'Synthetic Studio', ?)", T0);
+    await run("INSERT INTO pnl_lines (entity, period, category, amount, file_id, parser, locator, dedupe_key) VALUES ('Synthetic Studio', '2026-09', 'Income', 4200, ?, 'pnl', 'r1', 'pnl:1')", f1);
+    await run(`INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind, file_id, parser, locator, dedupe_key)
       VALUES ('federal', 2026, '2026-09-15', 1500, 'estimate', ?, 'aggregator', 'row:9', 'tax:1')`, f1);
-    run("INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator, dedupe_key) VALUES ('w2', 2025, '{\"employer\":\"Example Employer\"}', ?, 'notes', 'doc:1', 'doc:1')", f2);
-    run("INSERT INTO held_facts (hold, key, value, file_id, parser, locator, confidence, created_at) VALUES ('hold-synthetic', 'synthetic.fact', '\"held\"', ?, 'notes', 'l1', 0.5, ?)", f2, T0);
-    run("INSERT INTO facts (key, value, src, as_of, confirmed, updated_at) VALUES ('household.dependents', '2', 'you', '2026-10-01', 1, ?)", T0);
-    run("INSERT INTO figures (key, v, src, kind, label, file_id, parser, locator, updated_at) VALUES ('synthetic.cash', 5400.25, 'src-synthetic', 'a', 'Synthetic cash', ?, 'aggregator', 'row:1', ?)", f1, T0);
-    run("INSERT INTO superseded_rows (table_name, dedupe_key, row, file_id, superseded_by, reason, at, survivor_key) VALUES ('transactions', 'tx:old', '{\"amount\":1}', ?, ?, 'revised', ?, 'tx:1')", f1, f2, T0);
-    run("INSERT INTO events (date, kind, title, body, sort, src) VALUES ('2026-10-02', 'note', 'Synthetic event', 'Synthetic body', 0, 'you')");
+    await run("INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator, dedupe_key) VALUES ('w2', 2025, '{\"employer\":\"Example Employer\"}', ?, 'notes', 'doc:1', 'doc:1')", f2);
+    await run("INSERT INTO held_facts (hold, key, value, file_id, parser, locator, confidence, created_at) VALUES ('hold-synthetic', 'synthetic.fact', '\"held\"', ?, 'notes', 'l1', 0.5, ?)", f2, T0);
+    await run("INSERT INTO facts (key, value, src, as_of, confirmed, updated_at) VALUES ('household.dependents', '2', 'you', '2026-10-01', 1, ?)", T0);
+    await run("INSERT INTO figures (key, v, src, kind, label, file_id, parser, locator, updated_at) VALUES ('synthetic.cash', 5400.25, 'src-synthetic', 'a', 'Synthetic cash', ?, 'aggregator', 'row:1', ?)", f1, T0);
+    await run("INSERT INTO superseded_rows (table_name, dedupe_key, row, file_id, superseded_by, reason, at, survivor_key) VALUES ('transactions', 'tx:old', '{\"amount\":1}', ?, ?, 'revised', ?, 'tx:1')", f1, f2, T0);
+    await run("INSERT INTO events (date, kind, title, body, sort, src) VALUES ('2026-10-02', 'note', 'Synthetic event', 'Synthetic body', 0, 'you')");
 
-    const rec = (id, title, status, sort) => run(`INSERT INTO recs (id, def, status, tasks_done, sort, updated_at, owner)
+    const rec = async (id, title, status, sort) => await run(`INSERT INTO recs (id, def, status, tasks_done, sort, updated_at, owner)
       VALUES (?, ?, ?, '[]', ?, ?, 'you')`, id, JSON.stringify({ id, title, summary: `${title} summary`, domain: 'data' }), status, sort, T0);
-    rec('syn-rec-alpha', 'Synthetic alpha review', 'proposed', 0);
-    rec('syn-rec-gap', 'Synthetic gap rec', 'proposed', 5);
-    rec('syn-rec-beta', 'Synthetic beta task', 'doing', 1);
-    run("INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES ('syn-rec-beta', ?, 'start', NULL, 'proposed', 'doing', 'you')", T0);
-    run("INSERT INTO deadlines (date, label, title, rec_id, hard, src) VALUES ('2027-01-15', 'Q4', 'Synthetic Q4 estimate', 'syn-rec-alpha', 1, 'you')");
-    run(`INSERT INTO decisions (id, title, status, rec_id, note, sort, src) VALUES ('dec-synthetic', 'Synthetic decision', 'open', 'syn-rec-alpha', 'Synthetic note', 0, 'you')`);
-    run("INSERT INTO goals (id, def, sort, origin, created_at, updated_at) VALUES ('g000000000001', ?, 0, 'owner', ?, ?)",
+    await rec('syn-rec-alpha', 'Synthetic alpha review', 'proposed', 0);
+    await rec('syn-rec-gap', 'Synthetic gap rec', 'proposed', 5);
+    await rec('syn-rec-beta', 'Synthetic beta task', 'doing', 1);
+    await run("INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES ('syn-rec-beta', ?, 'start', NULL, 'proposed', 'doing', 'you')", T0);
+    await run("INSERT INTO deadlines (date, label, title, rec_id, hard, src) VALUES ('2027-01-15', 'Q4', 'Synthetic Q4 estimate', 'syn-rec-alpha', 1, 'you')");
+    await run(`INSERT INTO decisions (id, title, status, rec_id, note, sort, src) VALUES ('dec-synthetic', 'Synthetic decision', 'open', 'syn-rec-alpha', 'Synthetic note', 0, 'you')`);
+    await run("INSERT INTO goals (id, def, sort, origin, created_at, updated_at) VALUES ('g000000000001', ?, 0, 'owner', ?, ?)",
       JSON.stringify({ id: 'g000000000001', title: 'Synthetic cushion', note: '', horizon: '1-3y' }), T0, T0);
     // A goal marked done (store migration 026's goals.done_at), which the tenancy migration carries.
-    run("INSERT INTO goals (id, def, sort, origin, created_at, updated_at, done_at) VALUES ('g000000000002', ?, 1, 'owner', ?, ?, ?)",
+    await run("INSERT INTO goals (id, def, sort, origin, created_at, updated_at, done_at) VALUES ('g000000000002', ?, 1, 'owner', ?, ?, ?)",
       JSON.stringify({ id: 'g000000000002', title: 'Synthetic finished goal', note: '', horizon: 'now' }), T0, T0, DONE_AT);
 
-    run("INSERT INTO jobs (id, name, cadence, does, cost, next_label, last_label, enabled, sort) VALUES ('plan', 'Plan', 'nightly', 'Synthetic planning', NULL, NULL, NULL, 1, 0)");
-    const jobRun = (note, period) => Number(run(`INSERT INTO job_runs (job_id, started_at, finished_at, status, cost_usd, note, period_key, trigger, duration_ms)
-      VALUES ('plan', ?, ?, 'ok', 0, ?, ?, 'schedule', 1000)`, T0, T0, note, period).lastInsertRowid);
-    const run1 = jobRun('synthetic first', '2026-09-30');
-    const runGap = jobRun('synthetic gap', '2026-10-01');
-    const run2 = jobRun('synthetic second', '2026-10-02');
-    run(`INSERT INTO planner_recs (rec_id, trigger_id, grounding_hash, prose_src, first_run, last_run)
+    await run("INSERT INTO jobs (id, name, cadence, does, cost, next_label, last_label, enabled, sort) VALUES ('plan', 'Plan', 'nightly', 'Synthetic planning', NULL, NULL, NULL, 1, 0)");
+    const jobRun = async (note, period) => Number(await insert(`INSERT INTO job_runs (job_id, started_at, finished_at, status, cost_usd, note, period_key, trigger, duration_ms)
+      VALUES ('plan', ?, ?, 'ok', 0, ?, ?, 'schedule', 1000)`, T0, T0, note, period));
+    const run1 = await jobRun('synthetic first', '2026-09-30');
+    const runGap = await jobRun('synthetic gap', '2026-10-01');
+    const run2 = await jobRun('synthetic second', '2026-10-02');
+    await run(`INSERT INTO planner_recs (rec_id, trigger_id, grounding_hash, prose_src, first_run, last_run)
       VALUES ('syn-rec-beta', 'trigger-synthetic', 'hash-synthetic', 'template', ?, ?)`, run1, run2);
-    run("INSERT INTO job_lock (id, holder, expires_at) VALUES (1, 'synthetic-holder', '2026-10-01T09:05:00.000Z')");
-    run("INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens) VALUES (?, '2026-10', 'chat', 0.01, 'fake', '{}')", T0);
-    const send = Number(run(`INSERT INTO email_sends (ts, kind, subject, status, error_code, transport, recipients, message_id, job_run_id)
-      VALUES (?, 'test', 'Fathom test email', 'sent', NULL, 'dev', 1, 'msg-synthetic-1', NULL)`, T0).lastInsertRowid);
-    run("INSERT INTO deadline_alerts (key, threshold, deadline_date, sent_at, send_id) VALUES ('syn-deadline', 7, '2027-01-15', ?, ?)", T0, send);
+    await run("INSERT INTO job_lock (id, holder, expires_at) VALUES (1, 'synthetic-holder', '2026-10-01T09:05:00.000Z')");
+    await run("INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens) VALUES (?, '2026-10', 'chat', 0.01, 'fake', '{}')", T0);
+    const send = Number(await insert(`INSERT INTO email_sends (ts, kind, subject, status, error_code, transport, recipients, message_id, job_run_id)
+      VALUES (?, 'test', 'Fathom test email', 'sent', NULL, 'dev', 1, 'msg-synthetic-1', NULL)`, T0));
+    await run("INSERT INTO deadline_alerts (key, threshold, deadline_date, sent_at, send_id) VALUES ('syn-deadline', 7, '2027-01-15', ?, ?)", T0, send);
 
-    run("INSERT INTO conversations (key, created_at, title, title_source, last_at) VALUES ('ask:0a1b2c3d4e5f', ?, 'Synthetic thread', 'auto', ?)", T0, T1);
-    run("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES ('ask:0a1b2c3d4e5f', 'me', 'Synthetic question', '[]', 0, ?)", T0);
-    run("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES ('ask:0a1b2c3d4e5f', 'fathom', '<p>Synthetic answer.</p>', '[]', 0, ?)", T0);
-    run(`INSERT INTO packs_state (id, def, active, exploring, what_if_asked, what_if_done, unhid, sort, updated_at)
+    await run("INSERT INTO conversations (key, created_at, title, title_source, last_at) VALUES ('ask:0a1b2c3d4e5f', ?, 'Synthetic thread', 'auto', ?)", T0, T1);
+    await run("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES ('ask:0a1b2c3d4e5f', 'me', 'Synthetic question', '[]', 0, ?)", T0);
+    await run("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES ('ask:0a1b2c3d4e5f', 'fathom', '<p>Synthetic answer.</p>', '[]', 0, ?)", T0);
+    await run(`INSERT INTO packs_state (id, def, active, exploring, what_if_asked, what_if_done, unhid, sort, updated_at)
       VALUES ('syn-pack-row', ?, NULL, 0, 0, 0, '[]', 50, ?)`, JSON.stringify({ id: 'syn-pack-row', name: 'Synthetic pack row', status: 'available', recIds: [] }), T0);
 
-    run("INSERT INTO advisor_checkin (id, date, time, length_min, updated_at) VALUES (1, '2026-12-01', '10:00', 30, ?)", T0);
-    run("INSERT INTO advisor_reviews (rec_id, title, sent_at, note) VALUES ('syn-rec-alpha', 'Synthetic alpha review', ?, '')", T0);
-    run(`INSERT INTO advisor_packets (id, created_at, clock, rec_ids, stored_path, bytes, sha256) VALUES (?, ?, ?, '["syn-rec-alpha"]', ?, ?, ?)`,
+    await run("INSERT INTO advisor_checkin (id, date, time, length_min, updated_at) VALUES (1, '2026-12-01', '10:00', 30, ?)", T0);
+    await run("INSERT INTO advisor_reviews (rec_id, title, sent_at, note) VALUES ('syn-rec-alpha', 'Synthetic alpha review', ?, '')", T0);
+    await run(`INSERT INTO advisor_packets (id, created_at, clock, rec_ids, stored_path, bytes, sha256) VALUES (?, ?, ?, '["syn-rec-alpha"]', ?, ?, ?)`,
       packet.id, T0, CLOCK, `files/${packet.id}.bin`, packet.bytes.length, sha256(packet.bytes));
     writeBlob(packet.id, packet.bytes);
-    run("INSERT INTO yearend_marks (tax_year, item_key, reason, marked_at) VALUES (2026, 'synthetic-item', 'not_applicable', ?)", T0);
-    run("INSERT INTO yearend_packets (tax_year, generated_at, counts, bytes) VALUES (2025, ?, '{}', 1234)", T0);
+    await run("INSERT INTO yearend_marks (tax_year, item_key, reason, marked_at) VALUES (2026, 'synthetic-item', 'not_applicable', ?)", T0);
+    await run("INSERT INTO yearend_packets (tax_year, generated_at, counts, bytes) VALUES (2025, ?, '{}', 1234)", T0);
 
     const access = encrypt(legacyKey, Buffer.from(SIMPLEFIN_URL, 'utf8'), LEGACY_SIMPLEFIN_AAD).toString('base64');
-    run("INSERT INTO simplefin_connection (id, access_blob, connected_at, last_sync_at, status, accounts) VALUES (1, ?, ?, ?, 'ok', 1)", access, T0, T1);
-    run("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, backfilled, created_at) VALUES ('sf-synthetic-1', 'acct-syn-check', 'linked', 'Synthetic checking', 1, ?)", T0);
-    run("INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES ('sf-synthetic-1', '{\"inst\":\"Example Bank\",\"name\":\"Synthetic checking\",\"mask\":\"1111\"}', ?)", T0);
+    await run("INSERT INTO simplefin_connection (id, access_blob, connected_at, last_sync_at, status, accounts) VALUES (1, ?, ?, ?, 'ok', 1)", access, T0, T1);
+    await run("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, backfilled, created_at) VALUES ('sf-synthetic-1', 'acct-syn-check', 'linked', 'Synthetic checking', 1, ?)", T0);
+    await run("INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES ('sf-synthetic-1', '{\"inst\":\"Example Bank\",\"name\":\"Synthetic checking\",\"mask\":\"1111\"}', ?)", T0);
 
     // Confirm: the epoch first (an answer records it), then a real ask and answer through
     // src/ingest/confirm.mjs, so the undo log references the savings account's rowid (after a gap).
-    run('INSERT INTO ingest_epoch (id, n) VALUES (1, 3) ON CONFLICT(id) DO UPDATE SET n = 3');
+    await run('INSERT INTO ingest_epoch (id, n) VALUES (1, 3) ON CONFLICT(id) DO UPDATE SET n = 3');
     const KIND_OPTIONS = confirm.KIND_OPTIONS;
-    const asked = confirm.ask(db, { kind: 'account_kind', subject: 'acct-syn-save', question: 'What kind of account is Synthetic savings?',
+    const asked = await confirm.ask(db, { kind: 'account_kind', subject: 'acct-syn-save', question: 'What kind of account is Synthetic savings?',
       options: KIND_OPTIONS, context: {}, fileId: f1, now: T0 });
     confirmItemId = asked.id;
-    confirm.answer(db, confirmItemId, 'checking', { now: T1 });
-    const pending = confirm.ask(db, { kind: 'account_owner', subject: 'acct-syn-broker', question: 'Whose account is Synthetic brokerage?',
+    await confirm.answer(db, confirmItemId, 'checking', { now: T1 });
+    const pending = await confirm.ask(db, { kind: 'account_owner', subject: 'acct-syn-broker', question: 'Whose account is Synthetic brokerage?',
       options: confirm.OWNER_OPTIONS, context: {}, fileId: f1, now: T0 });
-    run("INSERT INTO confirm_guesses (item_id, option_id, reason, model, ts) VALUES (?, 'owner', 'Synthetic reason', 'fake', ?)", pending.id, T0);
-    const rawItem = (subject) => Number(run(`INSERT INTO confirm_items (kind, subject, question, options, context, status, answer, file_id, created_at, answered_at)
+    await run("INSERT INTO confirm_guesses (item_id, option_id, reason, model, ts) VALUES (?, 'owner', 'Synthetic reason', 'fake', ?)", pending.id, T0);
+    const rawItem = async (subject) => Number(await insert(`INSERT INTO confirm_items (kind, subject, question, options, context, status, answer, file_id, created_at, answered_at)
       VALUES ('fact_check', ?, 'Is the synthetic fact right?', '[{"id":"yes","label":"Yes"},{"id":"no","label":"No"}]', '{}', 'answered', 'yes', ?, ?, ?)`,
-    subject, f2, T0, T0).lastInsertRowid);
-    run("INSERT INTO confirm_auto (item_id, rule, evidence, created_at) VALUES (?, 'holder_match', '{\"text\":\"Synthetic evidence\",\"basis\":[],\"ancestors\":[]}', ?)", rawItem('synthetic.auto'), T0);
-    run('INSERT INTO confirm_auto_declined (item_id, at) VALUES (?, ?)', rawItem('synthetic.declined'), T0);
+    subject, f2, T0, T0));
+    await run("INSERT INTO confirm_auto (item_id, rule, evidence, created_at) VALUES (?, 'holder_match', '{\"text\":\"Synthetic evidence\",\"basis\":[],\"ancestors\":[]}', ?)", await rawItem('synthetic.auto'), T0);
+    await run('INSERT INTO confirm_auto_declined (item_id, at) VALUES (?, ?)', await rawItem('synthetic.declined'), T0);
 
     // Ask actions (store migration 025): one receipt and one preference.
-    run(`INSERT INTO action_receipts (id, scope, kind, entity_id, actor_id, conversation_key, turn_id, label, before_state, after_state,
+    await run(`INSERT INTO action_receipts (id, scope, kind, entity_id, actor_id, conversation_key, turn_id, label, before_state, after_state,
       before_value, after_value, created_at) VALUES ('syn-receipt-1', 'rec', 'status', 'syn-rec-alpha', 'syn-actor', 'thread:syn', 'syn-turn',
       'Synthetic receipt', 'open', 'doing', '{}', '{}', ?)`, T0);
-    run("INSERT INTO preferences (id, text, actor_id, created_at, updated_at) VALUES ('syn-pref-1', 'Synthetic preference', 'syn-actor', ?, ?)", T0, T0);
+    await run("INSERT INTO preferences (id, text, actor_id, created_at, updated_at) VALUES ('syn-pref-1', 'Synthetic preference', 'syn-actor', ?, ?)", T0, T0);
 
     // Rowid gaps.
-    run("DELETE FROM files WHERE id = 'f-synthetic-gap-00000001'");
-    run("DELETE FROM accounts WHERE id = 'acct-syn-gap'");
-    run("DELETE FROM recs WHERE id = 'syn-rec-gap'");
-    run('DELETE FROM transactions WHERE id = ?', t2);
-    run('DELETE FROM job_runs WHERE id = ?', runGap);
+    await run("DELETE FROM files WHERE id = 'f-synthetic-gap-00000001'");
+    await run("DELETE FROM accounts WHERE id = 'acct-syn-gap'");
+    await run("DELETE FROM recs WHERE id = 'syn-rec-gap'");
+    await run('DELETE FROM transactions WHERE id = ?', t2);
+    await run('DELETE FROM job_runs WHERE id = ?', runGap);
 
-    const empty = listTables(db).filter(t => !BOOKKEEPING_TABLES.includes(t) && db.prepare(`SELECT count(*) AS n FROM "${t}"`).get().n === 0);
+    const empty = await filterSeries((await listTables(db)), async t => !BOOKKEEPING_TABLES.includes(t) && (await db.prepare(`SELECT count(*) AS n FROM "${t}"`).get()).n === 0);
     if (empty.length) throw new Error(`fixture: tables left empty: ${empty.join(', ')}`);
   } finally {
-    db.close();
+    await db.close();
   }
 
   const packDir = writePlansPack(dataDir, 'Synthetic legacy');
@@ -569,10 +571,10 @@ export async function buildMigrationFixture(root, { admins = 1 } = {}) {
   await migrateLegacyStore(dataDir);
   const keys = writeInstanceKeys(join(root, 'keys'), { secretHex: legacy.secretHex });
   const artifacts = await populateLegacy(dataDir, keys.legacyKey);
-  const householdId = withSqlite(join(dataDir, 'platform.sqlite'), p => {
-    const rows = p.prepare('SELECT id FROM households').all();
+  const householdId = await withSqlite(join(dataDir, 'platform.sqlite'), async p => {
+    const rows = await p.prepare('SELECT id FROM households').all();
     if (rows.length !== 1) throw new Error('fixture: expected exactly one household');
-    if (admins === 2) p.prepare("UPDATE household_memberships SET role = 'admin' WHERE user_id = ?").run(legacy.member.id);
+    if (admins === 2) await p.prepare("UPDATE household_memberships SET role = 'admin' WHERE user_id = ?").run(legacy.member.id);
     return rows[0].id;
   });
   const secrets = [...legacy.secrets, SIMPLEFIN_URL, SIMPLEFIN_PASSWORD, keys.legacyKeyHex, keys.platformKeyHex, keys.backupKeyHex];
@@ -652,19 +654,19 @@ export async function legacyScenario(fx) {
   const { createLivePacks } = await src('src/packs/live.mjs');
   const copy = join(fx.root, 'scenario-copy.sqlite');
   rmSync(copy, { force: true });
-  const source = new DatabaseSync(join(fx.dataDir, 'fathom.sqlite'));
-  try { await backup(source, copy); } finally { source.close(); }
-  const db = openDb(copy);
+  const source = await openScope({ path: join(fx.dataDir, 'fathom.sqlite'), journal: null, busyTimeout: 0 });
+  try { await backup(source, copy); } finally { await source.close(); }
+  const db = await openDb(copy);
   try {
     // The pre-tenancy store sits at schema 26. The scenario code reads columns added after 027
     // (which only the tenancy migration applies), so bring this throwaway copy up with those.
-    for (const m of listMigrations().filter(x => x.id > 27)) db.exec(readFileSync(m.file, 'utf8'));
+    for (const m of listMigrations().filter(x => x.id > 27)) await db.applySchema(readFileSync(m.file, 'utf8'));
     const packs = createLivePacks(db, { dataDir: fx.dataDir });
-    packs.refresh();
+    await packs.refresh();
     const config = { clock: CLOCK, engine: 'fake', dataDir: fx.dataDir };
-    return structuredClone(scenarioOf({ db, config, packs, household: { db, root: fx.dataDir, packs, config } }));
+    return structuredClone(await scenarioOf({ db, config, packs, household: { db, root: fx.dataDir, packs, config } }));
   } finally {
-    db.close();
+    await db.close();
     rmSync(copy, { force: true });
     rmSync(`${copy}-wal`, { force: true });
     rmSync(`${copy}-shm`, { force: true });
@@ -674,20 +676,20 @@ export async function legacyScenario(fx) {
 // Everything the success case compares, recorded from the legacy layout before migration.
 export async function recordExpectations(fx) {
   const storeFile = join(fx.dataDir, 'fathom.sqlite');
-  const maxMigration = withSqlite(storeFile, db => db.prepare('SELECT max(id) AS m FROM schema_migrations').get().m);
+  const maxMigration = await withSqlite(storeFile, async db => (await db.prepare('SELECT max(id) AS m FROM schema_migrations').get()).m);
   const plaintexts = {};
   for (const u of fx.artifacts.uploads) plaintexts[`upload:${u.id}`] = sha256(u.bytes);
   plaintexts[`advisor-packet:${fx.artifacts.packet.id}`] = sha256(fx.artifacts.packet.bytes);
   return {
     maxMigration,
-    digests: tableDigests(storeFile, digestRules(maxMigration)),
-    tables: withSqlite(storeFile, db => listTables(db)),
+    digests: await tableDigests(storeFile, digestRules(maxMigration)),
+    tables: await withSqlite(storeFile, async db => await listTables(db)),
     scenario: await legacyScenario(fx),
     plaintexts,
     simplefinUrl: SIMPLEFIN_URL,
     packHashes: fileHashes(join(fx.dataDir, 'packs')),
     outboxHashes: fileHashes(join(fx.dataDir, 'outbox')),
-    apiKeys: withSqlite(storeFile, db => db.prepare('SELECT * FROM api_keys ORDER BY id').all().map(r => ({ ...r }))),
+    apiKeys: await withSqlite(storeFile, async db => (await db.prepare('SELECT * FROM api_keys ORDER BY id').all()).map(r => ({ ...r }))),
   };
 }
 
@@ -695,22 +697,22 @@ export async function recordExpectations(fx) {
 // vault with a handle unwrapped from the platform DB; plus the SimpleFIN access URL.
 export async function migratedPlaintexts(dataDir, householdId, platformKey) {
   const HV = await src('src/platform/household-vault.mjs');
-  const platform = new DatabaseSync(join(dataDir, 'platform.sqlite'));
+  const platform = await openScope({ path: join(dataDir, 'platform.sqlite'), journal: null, busyTimeout: 0 });
   try {
     const handle = await HV.unwrapDataKey(platform, { householdId, platformKey });
     const root = await HV.householdRoot({ dataRoot: dataDir, householdId, relativeRoot: `households/${householdId}` });
     const store = join(dataDir, 'households', householdId, 'fathom.sqlite');
-    const { files, packets, access } = withSqlite(store, db => ({
-      files: db.prepare('SELECT id, stored_path FROM files WHERE stored_path IS NOT NULL ORDER BY id').all(),
-      packets: db.prepare('SELECT id, stored_path FROM advisor_packets ORDER BY id').all(),
-      access: db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get()?.access_blob ?? null,
+    const { files, packets, access } = await withSqlite(store, async db => ({
+      files: await db.prepare('SELECT id, stored_path FROM files WHERE stored_path IS NOT NULL ORDER BY id').all(),
+      packets: await db.prepare('SELECT id, stored_path FROM advisor_packets ORDER BY id').all(),
+      access: (await db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get())?.access_blob ?? null,
     }));
     const out = {};
     for (const r of files) out[`upload:${r.id}`] = sha256(Buffer.from(await HV.readObject({ root, handle, purpose: 'upload', objectId: r.id, storedPath: r.stored_path })));
     for (const r of packets) out[`advisor-packet:${r.id}`] = sha256(Buffer.from(await HV.readObject({ root, handle, purpose: 'advisor-packet', objectId: r.id, storedPath: r.stored_path })));
     return { plaintexts: out, simplefinUrl: access == null ? null : String(await HV.openConnectionSecret(handle, access)) };
   } finally {
-    platform.close();
+    await platform.close();
   }
 }
 
@@ -723,35 +725,35 @@ const dirEntries = dir => (existsSync(dir) ? readdirSync(dir).sort() : null);
 // platform rows, vault plaintexts, pack and outbox files, retired legacy entries and root entries.
 export async function endState(fx) {
   const { dataDir, householdId } = fx;
-  const op = withSqlite(join(dataDir, 'platform.sqlite'), p => p.prepare("SELECT id FROM platform_operations WHERE kind = 'tenancy-migration'").all().map(r => r.id));
+  const op = await withSqlite(join(dataDir, 'platform.sqlite'), async p => (await p.prepare("SELECT id FROM platform_operations WHERE kind = 'tenancy-migration'").all()).map(r => r.id));
   if (op.length !== 1) throw new Error(`expected one tenancy-migration operation, found ${op.length}`);
   const norm = name => name.split(op[0]).join('OP');
   const rootPath = join(dataDir, 'households', householdId);
   const legacyDir = join(dataDir, `legacy-${op[0]}`);
-  const platform = withSqlite(join(dataDir, 'platform.sqlite'), p => ({
-    households: p.prepare('SELECT * FROM households ORDER BY id').all().map(r => strip(r, ['updated_at'])),
-    apiKeys: p.prepare('SELECT * FROM api_keys ORDER BY id').all().map(r => ({ ...r })),
-    outbound: p.prepare('SELECT * FROM household_outbound ORDER BY household_id').all().map(r => strip(r, ['updated_at', 'updated_by'])),
-    memberships: p.prepare('SELECT user_id, household_id, role, status FROM household_memberships ORDER BY user_id, household_id').all().map(r => ({ ...r })),
-    dataKeys: p.prepare('SELECT household_id, key_version, status FROM household_data_keys ORDER BY household_id, key_version').all().map(r => ({ ...r })),
-    sessions: p.prepare('SELECT count(*) AS n FROM auth_sessions').get().n,
-    challenges: p.prepare('SELECT count(*) AS n FROM auth_challenges').get().n,
-    tokens: p.prepare('SELECT count(*) AS n FROM auth_tokens').get().n,
-    liveInvitations: p.prepare('SELECT count(*) AS n FROM household_invitations WHERE consumed_at IS NULL AND revoked_at IS NULL').get().n,
-    operation: p.prepare("SELECT kind, status FROM platform_operations WHERE kind = 'tenancy-migration'").all().map(r => ({ ...r })),
+  const platform = await withSqlite(join(dataDir, 'platform.sqlite'), async p => ({
+    households: (await p.prepare('SELECT * FROM households ORDER BY id').all()).map(r => strip(r, ['updated_at'])),
+    apiKeys: (await p.prepare('SELECT * FROM api_keys ORDER BY id').all()).map(r => ({ ...r })),
+    outbound: (await p.prepare('SELECT * FROM household_outbound ORDER BY household_id').all()).map(r => strip(r, ['updated_at', 'updated_by'])),
+    memberships: (await p.prepare('SELECT user_id, household_id, role, status FROM household_memberships ORDER BY user_id, household_id').all()).map(r => ({ ...r })),
+    dataKeys: (await p.prepare('SELECT household_id, key_version, status FROM household_data_keys ORDER BY household_id, key_version').all()).map(r => ({ ...r })),
+    sessions: (await p.prepare('SELECT count(*) AS n FROM auth_sessions').get()).n,
+    challenges: (await p.prepare('SELECT count(*) AS n FROM auth_challenges').get()).n,
+    tokens: (await p.prepare('SELECT count(*) AS n FROM auth_tokens').get()).n,
+    liveInvitations: (await p.prepare('SELECT count(*) AS n FROM household_invitations WHERE consumed_at IS NULL AND revoked_at IS NULL').get()).n,
+    operation: (await p.prepare("SELECT kind, status FROM platform_operations WHERE kind = 'tenancy-migration'").all()).map(r => ({ ...r })),
   }));
   const vault = await migratedPlaintexts(dataDir, householdId, fx.keys.platformKey);
   return {
     rootEntries: readdirSync(dataDir).filter(n => !/-(wal|shm)$/.test(n)).map(norm).sort(),
     householdEntries: dirEntries(join(dataDir, 'households')),
-    store: tableDigests(join(rootPath, 'fathom.sqlite'), { schema_migrations: { omit: ['applied_at'] }, simplefin_connection: { omit: ['access_blob'] } }),
+    store: await tableDigests(join(rootPath, 'fathom.sqlite'), { schema_migrations: { omit: ['applied_at'] }, simplefin_connection: { omit: ['access_blob'] } }),
     platform,
     vault,
     files: dirEntries(join(rootPath, 'files')),
     packs: fileHashes(join(rootPath, 'packs')),
     outbox: fileHashes(join(rootPath, 'outbox')),
     legacyEntries: dirEntries(legacyDir)?.filter(n => !/-(wal|shm)$/.test(n)),
-    legacyStore: tableDigests(join(legacyDir, 'fathom.sqlite'), { schema_migrations: { omit: ['applied_at'] } }),
+    legacyStore: await tableDigests(join(legacyDir, 'fathom.sqlite'), { schema_migrations: { omit: ['applied_at'] } }),
     legacyFiles: fileHashes(legacyDir, rel => rel.startsWith('fathom.sqlite')),
   };
 }

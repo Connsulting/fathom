@@ -10,16 +10,16 @@ import { parseJson } from '../store/db.mjs';
 
 // Account ids mapped to a SimpleFIN account while a connection exists (a disconnected bridge
 // covers nothing, though its mappings stay).
-export function connectedAccountIds(db) {
-  if (!db.prepare('SELECT 1 FROM simplefin_connection WHERE id = 1').get()) return new Set();
-  return new Set(db.prepare("SELECT account_id FROM simplefin_accounts WHERE status = 'mapped' AND account_id IS NOT NULL").all().map(r => r.account_id));
+export async function connectedAccountIds(db) {
+  if (!await db.prepare('SELECT 1 FROM simplefin_connection WHERE id = 1').get()) return new Set();
+  return new Set((await db.prepare("SELECT account_id FROM simplefin_accounts WHERE status = 'mapped' AND account_id IS NOT NULL").all()).map(r => r.account_id));
 }
 
 // Ids of the file sources (sources that files were read for) whose accounts are all connected.
-export function coveredFileSources(db) {
-  const connected = connectedAccountIds(db);
+export async function coveredFileSources(db) {
+  const connected = await connectedAccountIds(db);
   if (!connected.size) return new Set();
-  const rows = db.prepare(`SELECT DISTINCT f.source_id AS source, r.account_id AS account
+  const rows = await db.prepare(`SELECT DISTINCT f.source_id AS source, r.account_id AS account
     FROM files f JOIN (
       SELECT file_id, account_id FROM transactions UNION SELECT file_id, account_id FROM balances UNION SELECT file_id, account_id FROM positions
     ) r ON r.file_id = f.id
@@ -35,13 +35,13 @@ export function coveredFileSources(db) {
 // The newest row date (on or before `clock`) of the connected accounts when SimpleFIN covers every
 // account that has transactions, else null. A recent balance snapshot can cover an older
 // transaction log; sourceStates still checks the newest date of each account separately.
-export function connectedThrough(db, clock) {
-  const connected = connectedAccountIds(db);
+export async function connectedThrough(db, clock) {
+  const connected = await connectedAccountIds(db);
   if (!connected.size) return null;
-  const withRows = db.prepare('SELECT DISTINCT account_id FROM transactions').all().map(r => r.account_id);
+  const withRows = (await db.prepare('SELECT DISTINCT account_id FROM transactions').all()).map(r => r.account_id);
   if (!withRows.length || !withRows.every(id => connected.has(id))) return null;
   const marks = [...connected].map(() => '?').join(',');
-  const row = db.prepare(`SELECT max(d) AS d FROM (
+  const row = await db.prepare(`SELECT max(d) AS d FROM (
       SELECT max(date) AS d FROM transactions WHERE date <= ? AND account_id IN (${marks})
       UNION ALL SELECT max(date) FROM balances WHERE date <= ? AND account_id IN (${marks})
       UNION ALL SELECT max(as_of) FROM positions WHERE as_of <= ? AND account_id IN (${marks}))`).get(clock, ...connected, clock, ...connected, clock, ...connected);
@@ -66,11 +66,11 @@ const ROWS = `SELECT r.account_id AS account, coalesce(f.source_id, '') AS sourc
 // history for that one account: it fed the account, and the account is connected, archived, or has
 // a newer row from another source. sourceStates calls a source history when it is covered for every
 // account it fed; the account dialog marks one account's feed with it.
-function historyRule(db) {
-  const connected = connectedAccountIds(db);
-  const archived = new Set(db.prepare('SELECT id FROM accounts WHERE archived_at IS NOT NULL').all().map((r) => r.id));
+async function historyRule(db) {
+  const connected = await connectedAccountIds(db);
+  const archived = new Set((await db.prepare('SELECT id FROM accounts WHERE archived_at IS NOT NULL').all()).map((r) => r.id));
   const bySource = new Map();
-  for (const r of db.prepare(ROWS).all()) {
+  for (const r of await db.prepare(ROWS).all()) {
     if (!bySource.has(r.account)) bySource.set(r.account, new Map());
     bySource.get(r.account).set(r.source, isoDay(r.d) ?? '');
   }
@@ -84,17 +84,17 @@ function historyRule(db) {
 }
 
 // covered(accountId, sourceId) from historyRule, for a caller that asks about one account's feeds.
-export function fileSourceHistory(db) {
-  return historyRule(db).covered;
+export async function fileSourceHistory(db) {
+  return (await historyRule(db)).covered;
 }
 
-function payrollThrough(db, source, clock, connected) {
-  const employers = db.prepare(`SELECT d.fields FROM documents d JOIN files f ON f.id=d.file_id
-    WHERE d.doc_type='paystub' AND f.source_id=? AND f.removed_at IS NULL`).all(source)
+async function payrollThrough(db, source, clock, connected) {
+  const employers = (await db.prepare(`SELECT d.fields FROM documents d JOIN files f ON f.id=d.file_id
+    WHERE d.doc_type='paystub' AND f.source_id=? AND f.removed_at IS NULL`).all(source))
     .map(r => parseJson(r.fields, {}).employerName).filter(Boolean);
   if (!employers.length || !connected.size) return null;
   const key = text => String(text).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-  const deposits = db.prepare('SELECT account_id,date,description FROM transactions WHERE amount>0 AND date<=? ORDER BY date').all(clock)
+  const deposits = (await db.prepare('SELECT account_id,date,description FROM transactions WHERE amount>0 AND date<=? ORDER BY date').all(clock))
     .filter(t => connected.has(t.account_id));
   const dates = employers.map(employer => {
     const name = key(employer);
@@ -106,31 +106,31 @@ function payrollThrough(db, source, clock, connected) {
   return dates.every(Boolean) ? dates.sort()[0] : null;
 }
 
-export function refreshDependencies(db, figures, clock) {
+export async function refreshDependencies(db, figures, clock) {
   const accountIds = new Set(), sourceIds = new Set();
   const tables = new Set(['transactions', 'balances', 'positions', 'pnl_lines', 'tax_payments', 'documents', 'facts']);
   const fileSource = db.prepare('SELECT source_id FROM files WHERE id=? AND removed_at IS NULL');
-  const addFile = id => { const source = id && fileSource.get(id)?.source_id; if (source) sourceIds.add(source); };
-  const visit = value => {
+  const addFile = async id => { const source = id && (await fileSource.get(id))?.source_id; if (source) sourceIds.add(source); };
+  const visit = async value => {
     if (!value || typeof value !== 'object') return;
     if (tables.has(value.table) && Array.isArray(value.ids)) {
       const table = value.table;
       for (const id of value.ids) {
-        const row = db.prepare(`SELECT * FROM ${table} WHERE ${table === 'facts' ? 'key' : 'id'}=?`).get(id);
+        const row = await db.prepare(`SELECT * FROM ${table} WHERE ${table === 'facts' ? 'key' : 'id'}=?`).get(id);
         if (row?.account_id) accountIds.add(row.account_id);
-        addFile(row?.file_id);
+        await addFile(row?.file_id);
       }
     }
-    for (const child of Object.values(value)) if (child && typeof child === 'object') visit(child);
+    for (const child of Object.values(value)) if (child && typeof child === 'object') await visit(child);
   };
   for (const [key, figure] of Object.entries(figures)) {
     if (key.startsWith('bal.')) accountIds.add(key.slice(4));
-    addFile(figure.fileId);
-    visit(figure.locator);
+    await addFile(figure.fileId);
+    await visit(figure.locator);
   }
-  const connected = connectedAccountIds(db), states = sourceStates(db, clock);
+  const connected = await connectedAccountIds(db), states = await sourceStates(db, clock);
   for (const source of sourceIds) if (states.sources.get(source)?.state === 'history') sourceIds.delete(source);
-  const accounts = db.prepare('SELECT id,inst,name,display_name,source_id FROM accounts WHERE archived_at IS NULL ORDER BY id').all()
+  const accounts = (await db.prepare('SELECT id,inst,name,display_name,source_id FROM accounts WHERE archived_at IS NULL ORDER BY id').all())
     .filter(a => accountIds.has(a.id) && !connected.has(a.id) && ['stale', 'unknown'].includes(states.accounts.get(a.id)?.state));
   return { accounts, sourceIds };
 }
@@ -144,14 +144,14 @@ export function refreshDependencies(db, figures, clock) {
 //     'history' when every account its live files fed is connected, archived, or has a newer row
 //     from another source; otherwise, and for a source that fed no account, its freshness by date:
 //     'fresh' | 'stale' | 'unknown'. fed maps each account it fed to its newest row date from it.
-export function sourceStates(db, clock) {
-  const rows = db.prepare("SELECT id, kind, as_of FROM sources WHERE substr(id, 1, 4) = 'ing:' ORDER BY id").all();
+export async function sourceStates(db, clock) {
+  const rows = await db.prepare("SELECT id, kind, as_of FROM sources WHERE substr(id, 1, 4) = 'ing:' ORDER BY id").all();
   const kindOf = new Map(rows.map((r) => [r.id, r.kind]));
-  const { archived, bySource, covered } = historyRule(db);
+  const { archived, bySource, covered } = await historyRule(db);
   const newest = (id) => [...(bySource.get(id)?.values() ?? [])].sort().at(-1) ?? '';
 
   const accounts = new Map();
-  for (const a of db.prepare('SELECT id, source_id FROM accounts WHERE source_id IS NOT NULL ORDER BY id').all()) {
+  for (const a of await db.prepare('SELECT id, source_id FROM accounts WHERE source_id IS NOT NULL ORDER BY id').all()) {
     const asOf = newest(a.id);
     const kind = kindOf.get(a.source_id);
     const f = asOf && kind ? freshnessOf({ kind, asOf }, clock) : null;
@@ -160,12 +160,12 @@ export function sourceStates(db, clock) {
     accounts.set(a.id, { state, asOf, ageDays: f ? f.ageDays : null, kind: kind ?? null, sourceId: a.source_id, archived: archived.has(a.id) });
   }
 
-  const connected = connectedAccountIds(db);
+  const connected = await connectedAccountIds(db);
   const sources = new Map();
   for (const s of rows) {
     const fed = new Map();
     for (const [account, per] of bySource) if (per.has(s.id)) fed.set(account, per.get(s.id));
-    const payroll = s.kind === 'paystub' ? payrollThrough(db, s.id, clock, connected) : null;
+    const payroll = s.kind === 'paystub' ? await payrollThrough(db, s.id, clock, connected) : null;
     const asOf = payroll && payroll > s.as_of ? payroll : s.as_of;
     const f = freshnessOf({ kind: s.kind, asOf }, clock);
     const history = s.kind !== 'simplefin' && fed.size > 0 && [...fed.keys()].every((account) => covered(account, s.id));

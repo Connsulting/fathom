@@ -45,40 +45,40 @@ export { isThreadKey };
 
 // ---------------------------------------------------------------- store operations
 
-export function threadRow(db, key) {
+export async function threadRow(db, key) {
   if (!isThreadKey(key)) return null;
-  return db.prepare(`${THREAD_SELECT} WHERE c.key = ?`).get(key) || null;
+  return await db.prepare(`${THREAD_SELECT} WHERE c.key = ?`).get(key) || null;
 }
 
-export function getThread(db, id) {
+export async function getThread(db, id) {
   if (typeof id !== 'string' || !ID.test(id)) return null;
-  const row = threadRow(db, `ask:${id}`);
+  const row = await threadRow(db, `ask:${id}`);
   return row ? threadOut(row) : null;
 }
 
 // An unused thread key.
-export function newThreadKey(db) {
+export async function newThreadKey(db) {
   for (;;) {
     const key = `ask:${randomBytes(6).toString('hex')}`;
-    if (!db.prepare('SELECT 1 AS x FROM conversations WHERE key = ?').get(key)) return key;
+    if (!await db.prepare('SELECT 1 AS x FROM conversations WHERE key = ?').get(key)) return key;
   }
 }
 
 // Inserts the thread row for `key` (from newThreadKey), asked from rec `recId` when given; throws
 // when the key is taken.
-export function insertThread(db, key, now, { recId = null } = {}) {
+export async function insertThread(db, key, now, { recId = null } = {}) {
   if (!isThreadKey(key)) throw new TypeError('Invalid thread key');
-  db.prepare('INSERT INTO conversations (key, created_at, last_at, rec_id) VALUES (?, ?, ?, ?)').run(key, now, now, recId ?? null);
-  return threadOut(threadRow(db, key));
+  await db.prepare('INSERT INTO conversations (key, created_at, last_at, rec_id) VALUES (?, ?, ?, ?)').run(key, now, now, recId ?? null);
+  return threadOut(await threadRow(db, key));
 }
 
-export function createThread(db, now) {
-  return insertThread(db, newThreadKey(db), now);
+export async function createThread(db, now) {
+  return await insertThread(db, await newThreadKey(db), now);
 }
 
-export function listThreads(db) {
+export async function listThreads(db) {
   const out = { active: [], archived: [], trash: [] };
-  for (const t of loadThreads(db)) {
+  for (const t of await loadThreads(db)) {
     if (t.trashedAt) out.trash.push(t);
     else if (t.archivedAt) out.archived.push(t);
     else out.active.push(t);
@@ -86,26 +86,26 @@ export function listThreads(db) {
   return out;
 }
 
-export function deleteThread(db, key) {
-  tx(db, () => {
-    db.prepare('DELETE FROM messages WHERE conversation_key = ?').run(key);
-    db.prepare('DELETE FROM conversations WHERE key = ?').run(key);
-    db.prepare('DELETE FROM settings WHERE key = ?').run(retrySetting(key));
+export async function deleteThread(db, key) {
+  await tx(db, async (db) => {
+    await db.prepare('DELETE FROM messages WHERE conversation_key = ?').run(key);
+    await db.prepare('DELETE FROM conversations WHERE key = ?').run(key);
+    await db.prepare('DELETE FROM settings WHERE key = ?').run(retrySetting(key));
   });
 }
 
-export function purgeTrash(db, now) {
+export async function purgeTrash(db, now) {
   const cutoff = Date.parse(now) - TRASH_DAYS * DAY;
   if (!Number.isFinite(cutoff)) throw new TypeError('purgeTrash needs an ISO time');
-  const old = db.prepare("SELECT key, trashed_at FROM conversations WHERE substr(key, 1, 4) = 'ask:' AND trashed_at IS NOT NULL").all()
+  const old = (await db.prepare("SELECT key, trashed_at FROM conversations WHERE substr(key, 1, 4) = 'ask:' AND trashed_at IS NOT NULL").all())
     .filter(r => { const t = Date.parse(r.trashed_at); return Number.isFinite(t) && t <= cutoff; })
     .map(r => r.key);
   if (!old.length) return 0;
-  tx(db, () => {
+  await tx(db, async (db) => {
     const msgs = db.prepare('DELETE FROM messages WHERE conversation_key = ?');
     const conv = db.prepare('DELETE FROM conversations WHERE key = ?');
     const setting = db.prepare('DELETE FROM settings WHERE key = ?');
-    for (const key of old) { msgs.run(key); conv.run(key); setting.run(retrySetting(key)); }
+    for (const key of old) { await msgs.run(key); await conv.run(key); await setting.run(retrySetting(key)); }
   });
   return old.length;
 }
@@ -280,7 +280,7 @@ async function askTitle(db, engine, scope, messages, fallback) {
         messages: prompt,
         ...(engine.mode === 'fake' ? { fake: [{ text: JSON.stringify({ title: fallback }) }] } : {}) });
     } catch {
-      recordReject(db, 'call_failed');
+      await recordReject(db, 'call_failed');
       return { reason: 'call_failed' };
     }
     let parsed;
@@ -288,7 +288,7 @@ async function askTitle(db, engine, scope, messages, fallback) {
     const got = parsed && typeof parsed === 'object' && !Array.isArray(parsed) && parsed.title !== undefined
       ? checkTitle(parsed.title, { fromModel: true, conversationWords }) : { reason: 'unparsable' };
     if (got.title) return got;
-    recordReject(db, got.reason);
+    await recordReject(db, got.reason);
     if (attempt === 1) return got;
     prompt = [...prompt, { role: 'assistant', content: String(res?.text ?? '') },
       { role: 'user', content: `The title was rejected. ${TITLE_REASONS[got.reason]} Try once more.` }];
@@ -296,46 +296,46 @@ async function askTitle(db, engine, scope, messages, fallback) {
 }
 
 // Counts a rejection reason (never title text) and logs it.
-function recordReject(db, reason) {
+async function recordReject(db, reason) {
   try {
-    const counts = getSetting(db, 'ask.titleRejects', null);
+    const counts = await getSetting(db, 'ask.titleRejects', null);
     const next = counts && typeof counts === 'object' && !Array.isArray(counts) ? counts : {};
     next[reason] = (Number(next[reason]) || 0) + 1;
-    setSetting(db, 'ask.titleRejects', next);
+    await setSetting(db, 'ask.titleRejects', next);
   } catch {
     // Counting is best effort.
   }
   console.info(`fathom: model title rejected (${reason})`);
 }
 
-const engineOn = engine => !!(engine && typeof engine.isOn === 'function' && engine.isOn());
+const engineOn = async engine => !!(engine && typeof engine.isOn === 'function' && await engine.isOn());
 
 export async function nameThread({ db, engine = null, key } = {}) {
-  const row = isThreadKey(key) ? db.prepare('SELECT title, title_source FROM conversations WHERE key = ?').get(key) : null;
+  const row = isThreadKey(key) ? await db.prepare('SELECT title, title_source FROM conversations WHERE key = ?').get(key) : null;
   if (!row) return null;
-  const messages = db.prepare('SELECT role, text, notice FROM messages WHERE conversation_key = ? ORDER BY id').all(key);
+  const messages = await db.prepare('SELECT role, text, notice FROM messages WHERE conversation_key = ? ORDER BY id').all(key);
   const turns = completedTurns(messages);
   if (turns < 1) return null;
-  const scope = tokenScope(db);
+  const scope = await tokenScope(db);
   const fallback = fallbackTitle(scope, messages.find(m => m.role === 'me').text);
   if (row.title_source != null) {
-    if (row.title_source !== 'auto' || row.title == null || row.title !== fallback || !engineOn(engine)
-      || getSetting(db, retrySetting(key), false)) return null;
-    setSetting(db, retrySetting(key), true);
+    if (row.title_source !== 'auto' || row.title == null || row.title !== fallback || !await engineOn(engine)
+      || await getSetting(db, retrySetting(key), false)) return null;
+    await setSetting(db, retrySetting(key), true);
     const got = await askTitle(db, engine, scope, messages, fallback);
     if (!got.title) return null;
     if (got.title === row.title) return null;
-    const r = db.prepare("UPDATE conversations SET title = ? WHERE key = ? AND title_source = 'auto' AND title = ?").run(got.title, key, row.title);
+    const r = await db.prepare("UPDATE conversations SET title = ? WHERE key = ? AND title_source = 'auto' AND title = ?").run(got.title, key, row.title);
     return r.changes ? { title: got.title, titleSource: 'auto', from: 'model' } : null;
   }
   let title = null;
-  if (engineOn(engine)) {
+  if (await engineOn(engine)) {
     const got = await askTitle(db, engine, scope, messages, fallback);
     if (got.title) title = got.title;
   }
   const from = title ? 'model' : 'fallback';
   title = title || fallback;
   // No usable title: mark the thread named with a NULL title so it is never sent for a title again.
-  const r = db.prepare("UPDATE conversations SET title = ?, title_source = 'auto' WHERE key = ? AND title_source IS NULL").run(title || null, key);
+  const r = await db.prepare("UPDATE conversations SET title = ?, title_source = 'auto' WHERE key = ? AND title_source IS NULL").run(title || null, key);
   return title && r.changes ? { title, titleSource: 'auto', from } : null;
 }

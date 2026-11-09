@@ -213,24 +213,24 @@ test('a decision that is not a categorization keeps its question and its evidenc
 // ingestState into the screen. The text a person reads names no vendor and shows no percentage.
 test('real server state renders without a vendor name or a percentage', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'confirm-polish-'));
-  const s = createInstance(dir, { mode: 'real' });
-  t.after(() => { s.db.close(); s.platform.close(); rmSync(dir, { recursive: true, force: true }); });
+  const s = await createInstance(dir, { mode: 'real' });
+  t.after(async () => { await s.db.close(); await s.platform.close(); rmSync(dir, { recursive: true, force: true }); });
   const db = s.db;
-  db.exec("INSERT INTO accounts (id,kind,name,mask) VALUES ('a','checking','Everyday','3456')");
-  setSetting(db, 'clock', '2032-11-05');
-  const tx = (description, patch = {}) => Number(db.prepare('INSERT INTO transactions (account_id,date,amount,description,category,parser) VALUES (?,?,?,?,?,?)')
-    .run('a', patch.date ?? '2032-10-03', patch.amount ?? -20, description, patch.category ?? null, patch.parser ?? 'simplefin').lastInsertRowid);
-  tx('Different historical merchant', { category: 'Groceries', parser: 'aggregator' });
-  tx('Historical service', { category: 'Business', parser: 'aggregator' });
-  const review = tx('SQ *SAMPLE COFFEE #0412', { amount: -25 });
-  const applied = tx('ACH DEBIT EXAMPLE UTILITY CO 8837261', { amount: -61.5, date: '2032-10-04' });
+  await db.applySchema("INSERT INTO accounts (id,kind,name,mask) VALUES ('a','checking','Everyday','3456')");
+  await setSetting(db, 'clock', '2032-11-05');
+  const tx = async (description, patch = {}) => Number((await db.prepare('INSERT INTO transactions (account_id,date,amount,description,category,parser) VALUES (?,?,?,?,?,?) RETURNING id')
+    .get('a', patch.date ?? '2032-10-03', patch.amount ?? -20, description, patch.category ?? null, patch.parser ?? 'simplefin')).id);
+  await tx('Different historical merchant', { category: 'Groceries', parser: 'aggregator' });
+  await tx('Historical service', { category: 'Business', parser: 'aggregator' });
+  const review = await tx('SQ *SAMPLE COFFEE #0412', { amount: -25 });
+  const applied = await tx('ACH DEBIT EXAMPLE UTILITY CO 8837261', { amount: -61.5, date: '2032-10-04' });
   assert.ok(review && applied);
   const jev = {
     isOn: () => true, stats: () => ({ costUsd: 0 }),
     choose: async (qs) => qs.map((q) => ({ choice: 'Groceries', confidence: q.state.amount === -25 ? .9 : .99, probabilities: { Groceries: .9, Business: .1 } })),
   };
   await guessCategories(db, jev, { policy: { autoApply: .95, review: .7 } });
-  const state = ingestState(db, { clock: '2032-11-05' });
+  const state = await ingestState(db, { clock: '2032-11-05' });
 
   const card = state.items.find((i) => i.kind === 'transaction_category');
   assert.ok(card, 'a category check is pending');

@@ -14,24 +14,24 @@ export function knowledgeGap({ stage, name, fileId = null, documentId = null, se
   };
 }
 
-export function planCoverage(db) {
-  return [...getSetting(db, 'yourPlans.coverage', []), ...getSetting(db, 'yourPlans.loadFailure', [])];
+export async function planCoverage(db) {
+  return [...await getSetting(db, 'yourPlans.coverage', []), ...await getSetting(db, 'yourPlans.loadFailure', [])];
 }
 
-export function saveLoadFailure(db, failed) {
-  const sources = getSetting(db, 'yourPlans', null)?.sources || [];
+export async function saveLoadFailure(db, failed) {
+  const sources = (await getSetting(db, 'yourPlans', null))?.sources || [];
   const name = sources.length ? `Your plans (${sources.join(', ')})` : 'Your plans';
   const issues = failed ? [knowledgeGap({ stage: 'pack-load', name,
     reason: 'The saved pack is missing or unreadable. Rebuild it from your documents.' })] : [];
-  if (JSON.stringify(getSetting(db, 'yourPlans.loadFailure', [])) !== JSON.stringify(issues)) {
-    setSetting(db, 'yourPlans.loadFailure', issues);
+  if (JSON.stringify(await getSetting(db, 'yourPlans.loadFailure', [])) !== JSON.stringify(issues)) {
+    await setSetting(db, 'yourPlans.loadFailure', issues);
   }
 }
 
-export function coveredPacks(db, packs) {
-  const gaps = [...planCoverage(db).filter(issue => issue.stage !== 'pack-load'),
-    ...getSetting(db, 'yourPlans.excludedDocuments', []).map(id => ({ name: `document-${id}` })),
-    ...db.prepare('SELECT id AS fileId FROM files WHERE removed_at IS NOT NULL').all()];
+export async function coveredPacks(db, packs) {
+  const gaps = [...(await planCoverage(db)).filter(issue => issue.stage !== 'pack-load'),
+    ...(await getSetting(db, 'yourPlans.excludedDocuments', [])).map(id => ({ name: `document-${id}` })),
+    ...await db.prepare('SELECT id AS fileId FROM files WHERE removed_at IS NOT NULL').all()];
   if (!gaps.length) return packs;
   return packs.map(pack => {
     if (pack.id !== 'your-plans') return pack;

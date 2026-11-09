@@ -23,20 +23,20 @@ export const CONTROL = new Set([
 ]);
 
 export async function seedHousehold(f, hh) {
-  setSetting(hh.db, 'mode', 'demo');
-  seedDemo(hh.db);
-  setSetting(hh.db, 'mode', 'real');
-  setSetting(hh.db, 'engine', { on: true });
-  hh.db.prepare("UPDATE content SET value=? WHERE key='meta'").run(JSON.stringify({ household: hh.canary }));
-  hh.db.prepare("INSERT OR REPLACE INTO facts(key,value,updated_at) VALUES ('synthetic.canary',?,?)").run(JSON.stringify(hh.canary), now);
-  hh.db.prepare("INSERT OR REPLACE INTO accounts(id,name,kind) VALUES ('colliding-account',?,'checking')").run(hh.canary);
+  await setSetting((await hh.ctx()).db, 'mode', 'demo');
+  await seedDemo((await hh.ctx()).db);
+  await setSetting((await hh.ctx()).db, 'mode', 'real');
+  await setSetting((await hh.ctx()).db, 'engine', { on: true });
+  await (await hh.ctx()).db.prepare("UPDATE content SET value=? WHERE key='meta'").run(JSON.stringify({ household: hh.canary }));
+  await (await hh.ctx()).db.prepare("INSERT OR REPLACE INTO facts(key,value,updated_at) VALUES ('synthetic.canary',?,?)").run(JSON.stringify(hh.canary), now);
+  await (await hh.ctx()).db.prepare("INSERT OR REPLACE INTO accounts(id,name,kind) VALUES ('colliding-account',?,'checking')").run(hh.canary);
   hh.retirementBalance = hh === f.A ? 12345 : 67890;
-  hh.db.prepare("INSERT INTO balances(account_id,date,amount) VALUES ('colliding-account','2026-11-05',?)").run(hh.retirementBalance);
-  hh.db.prepare("INSERT OR REPLACE INTO recs(id,def,status,updated_at) VALUES ('colliding-rec',?,'proposed',?)")
+  await (await hh.ctx()).db.prepare("INSERT INTO balances(account_id,date,amount) VALUES ('colliding-account','2026-11-05',?)").run(hh.retirementBalance);
+  await (await hh.ctx()).db.prepare("INSERT OR REPLACE INTO recs(id,def,status,updated_at) VALUES ('colliding-rec',?,'proposed',?)")
     .run(JSON.stringify({ id: 'colliding-rec', title: hh.canary, summary: hh.canary, domain: 'data' }), now);
-  hh.db.prepare("INSERT INTO recs(id,def,status,updated_at) VALUES (?,?,'proposed',?)")
+  await (await hh.ctx()).db.prepare("INSERT INTO recs(id,def,status,updated_at) VALUES (?,?,'proposed',?)")
     .run(hh.canary + '-only', JSON.stringify({ title: hh.canary }), now);
-  writePlansPack(hh.ctx.root, hh.canary); hh.ctx.packs.refresh();
+  writePlansPack((await hh.ctx()).root, hh.canary); await (await hh.ctx()).packs.refresh();
   hh.key = ok(await hh.admin.client.post('/api/keys', { name: hh.canary, scopes: SCOPES }));
   hh.thread = ok(await hh.admin.client.post('/api/threads', { text: hh.canary + ' plan' })).thread;
   hh.packet = ok(await hh.admin.client.post('/api/advisor/packets', {})).packetId;
@@ -47,31 +47,31 @@ export async function seedHousehold(f, hh) {
 const canaryNote = hh => hh.canary + ' synthetic reserve policy';
 
 export async function financialCases(f, hh) {
-  const db = hh.db, canary = hh.canary;
-  const war = db.prepare("SELECT value FROM content WHERE key='wargame'").get().value;
-  const resetWar = () => {
-    db.prepare("UPDATE content SET value=? WHERE key='wargame'").run(war);
-    db.prepare("UPDATE decisions SET status='open',decided_line=NULL,unavailable_reason=NULL WHERE id='deferral'").run();
+  const db = (await hh.ctx()).db, canary = hh.canary;
+  const war = (await db.prepare("SELECT value FROM content WHERE key='wargame'").get()).value;
+  const resetWar = async () => {
+    await db.prepare("UPDATE content SET value=? WHERE key='wargame'").run(war);
+    await db.prepare("UPDATE decisions SET status='open',decided_line=NULL,unavailable_reason=NULL WHERE id='deferral'").run();
   };
   const goal = ok(await hh.admin.client.post('/api/goals', { title: canary, horizon: '1-3y' })).goal;
   const pref = ok(await hh.admin.client.post('/api/preferences', { text: canary + ' reserve' })).preference;
-  const thread = createThread(db, now);
-  db.prepare("UPDATE decisions SET status='open', decided_line=NULL WHERE wargame='deferral'").run();
+  const thread = await createThread(db, now);
+  await db.prepare("UPDATE decisions SET status='open', decided_line=NULL WHERE wargame='deferral'").run();
   const args = { operation: 'wargame', name: 'deferral' };
   const result = await callTool('recommendations', args, { db, clock: '2026-11-05' });
   const spec = { source: { tool: 'recommendations', args, path: 'deferral.options' }, fields: ['figures.amount'] };
   const snapshot = buildSnapshot('compare', spec, [{ name: 'recommendations', args, result }]);
-  const msg = db.prepare("INSERT INTO messages(conversation_key,role,text,ts,provenance) VALUES (?,'fathom',?,?,?)")
-    .run(thread.key, canary, now, JSON.stringify({ blocks: [{ id: 'b1', op: 'compare', spec, snapshot }] })).lastInsertRowid;
-  const proposalThread = createThread(db, now);
-  const proposalMsg = db.prepare("INSERT INTO messages(conversation_key,role,text,ts,provenance) VALUES (?,'fathom',?,?,?)")
-    .run(proposalThread.key, canary, now, JSON.stringify({ pendingAction: { tool: 'act_on_recommendation', operation: 'status', args: { id: 'colliding-rec', status: 'done' } } })).lastInsertRowid;
-  const confirm = Number(db.prepare("INSERT INTO confirm_items(kind,subject,question,options,context,status,created_at) VALUES ('fact_check',?,?,?,?,'pending',?)")
-    .run('synthetic.' + canary, canary, JSON.stringify([{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }]), JSON.stringify({ key: 'synthetic.' + canary, value: canary }), now).lastInsertRowid);
+  const msg = (await db.prepare("INSERT INTO messages(conversation_key,role,text,ts,provenance) VALUES (?,'fathom',?,?,?) RETURNING id")
+    .get(thread.key, canary, now, JSON.stringify({ blocks: [{ id: 'b1', op: 'compare', spec, snapshot }] }))).id;
+  const proposalThread = await createThread(db, now);
+  const proposalMsg = (await db.prepare("INSERT INTO messages(conversation_key,role,text,ts,provenance) VALUES (?,'fathom',?,?,?) RETURNING id")
+    .get(proposalThread.key, canary, now, JSON.stringify({ pendingAction: { tool: 'act_on_recommendation', operation: 'status', args: { id: 'colliding-rec', status: 'done' } } }))).id;
+  const confirm = Number((await db.prepare("INSERT INTO confirm_items(kind,subject,question,options,context,status,created_at) VALUES ('fact_check',?,?,?,?,'pending',?) RETURNING id")
+    .get('synthetic.' + canary, canary, JSON.stringify([{ id: 'yes', label: 'Yes' }, { id: 'no', label: 'No' }]), JSON.stringify({ key: 'synthetic.' + canary, value: canary }), now)).id);
   const review = ok(await hh.admin.client.post('/api/advisor/reviews', { recId: 'colliding-rec' })).reviewId;
-  const entity = db.prepare('SELECT entity FROM pnl_lines LIMIT 1').get()?.entity;
-  const whatif = db.prepare('SELECT id FROM packs_state WHERE json_extract(def,\'$.whatIf\') IS NOT NULL LIMIT 1').get()?.id;
-  const mark = yearendChecklist(db, { year: 2026, clock: '2026-11-05' }).items[0].key;
+  const entity = (await db.prepare('SELECT entity FROM pnl_lines LIMIT 1').get())?.entity;
+  const whatif = (await db.prepare('SELECT id FROM packs_state WHERE json_extract(def,\'$.whatIf\') IS NOT NULL LIMIT 1').get())?.id;
+  const mark = (await yearendChecklist(db, { year: 2026, clock: '2026-11-05' })).items[0].key;
   const basic = (path, body = {}, extra = {}) => ({ path, body, ...extra });
   return {
     'GET /api/scenario': basic('/api/scenario', {}, { own: true }),
@@ -87,7 +87,7 @@ export async function financialCases(f, hh) {
     'POST /api/preferences/:id/delete': basic(`/api/preferences/${pref.id}/delete`),
     'POST /api/recs/:id/answers': basic('/api/recs/colliding-rec/answers', { answers: [{ key: 'household.filingStatus', value: 'mfj' }] }, { async before() {
       ok(await hh.admin.client.post('/api/household/outbound', { jobs: true }));
-      db.prepare('UPDATE recs SET def=? WHERE id=?').run(JSON.stringify({ title: canary, question: { keys: ['household.filingStatus'] } }), 'colliding-rec');
+      await db.prepare('UPDATE recs SET def=? WHERE id=?').run(JSON.stringify({ title: canary, question: { keys: ['household.filingStatus'] } }), 'colliding-rec');
     }, after: async () => { ok(await hh.admin.client.post('/api/household/outbound', { jobs: false })); } }),
     'POST /api/recs/:id/start-over': basic('/api/recs/colliding-rec/start-over'),
     'POST /api/wargame/:name/pick': basic('/api/wargame/deferral/pick', { index: 0 }, { before: resetWar }),
@@ -98,7 +98,7 @@ export async function financialCases(f, hh) {
     'GET /api/packs/:id/entries/:entryId': basic('/api/packs/your-plans/entries/household-plan', {}, { own: true }),
     'POST /api/engine': basic('/api/engine', { on: true }),
     'POST /api/engine/cap': basic('/api/engine/cap', { usd: 0 }),
-    'POST /api/your-plans/build': basic('/api/your-plans/build', {}, { before() { setSetting(db, 'engine', { on: true }); } }),
+    'POST /api/your-plans/build': basic('/api/your-plans/build', {}, { async before() { await setSetting(db, 'engine', { on: true }); } }),
     'POST /api/ask': basic('/api/ask', { key: hh.thread.key, text: canary + ' question' }),
     'GET /api/threads': basic('/api/threads'),
     'POST /api/threads': basic('/api/threads', { text: canary + ' stream' }),
@@ -109,7 +109,7 @@ export async function financialCases(f, hh) {
     'POST /api/threads/:id/archive': basic(`/api/threads/${hh.thread.id}/archive`),
     'POST /api/threads/:id/trash': basic(`/api/threads/${hh.thread.id}/trash`),
     'POST /api/threads/:id/restore': basic(`/api/threads/${hh.thread.id}/restore`),
-    'POST /api/threads/:id/delete': basic(`/api/threads/${hh.thread.id}/delete`, {}, { before() { db.prepare('UPDATE conversations SET trashed_at=? WHERE key=?').run(now, hh.thread.key); } }),
+    'POST /api/threads/:id/delete': basic(`/api/threads/${hh.thread.id}/delete`, {}, { async before() { await db.prepare('UPDATE conversations SET trashed_at=? WHERE key=?').run(now, hh.thread.key); } }),
     'POST /api/threads/:id/proposals/:messageId': basic(`/api/threads/${proposalThread.id}/proposals/m${proposalMsg}`, { decision: 'decline' }),
     'GET /api/accounts/:id': basic('/api/accounts/colliding-account', {}, { own: true }),
     'GET /api/accounts/:id/transactions': basic('/api/accounts/colliding-account/transactions'),
@@ -122,7 +122,7 @@ export async function financialCases(f, hh) {
     'POST /api/accounts/:id/owner': basic('/api/accounts/colliding-account/owner', { owner: 'owner' }),
     'POST /api/accounts/:id/kind': basic('/api/accounts/colliding-account/kind', { kind: 'checking' }),
     'GET /api/accounts/:id/merge-candidates': basic('/api/accounts/colliding-account/merge-candidates'),
-    'POST /api/accounts/:id/merge': basic('/api/accounts/colliding-account/merge', { withId: 'merge-account' }, { before() { db.prepare("INSERT OR IGNORE INTO accounts(id,name,kind,mirror,identity) VALUES ('merge-account','Synthetic merge','checking','connected','simplefin:synthetic')").run(); } }),
+    'POST /api/accounts/:id/merge': basic('/api/accounts/colliding-account/merge', { withId: 'merge-account' }, { async before() { await db.prepare("INSERT OR IGNORE INTO accounts(id,name,kind,mirror,identity) VALUES ('merge-account','Synthetic merge','checking','connected','simplefin:synthetic')").run(); } }),
     'POST /api/accounts/:id/archive': basic('/api/accounts/colliding-account/archive', { archived: false }),
     'GET /api/sources': basic('/api/sources'),
     'GET /api/goals/suggestions': basic('/api/goals/suggestions'),
@@ -144,10 +144,10 @@ export async function financialCases(f, hh) {
     'GET /api/mcp': basic('/api/mcp'),
     'POST /api/files': basic('/api/files', {}, { multipart: true }),
     'GET /api/files': basic('/api/files'),
-    'POST /api/files/:id/retry': basic(`/api/files/${hh.upload}/retry`, {}, { before() { db.prepare("UPDATE files SET status='pending' WHERE id=?").run(hh.upload); } }),
+    'POST /api/files/:id/retry': basic(`/api/files/${hh.upload}/retry`, {}, { async before() { await db.prepare("UPDATE files SET status='pending' WHERE id=?").run(hh.upload); } }),
     'POST /api/import-proposals/:proposalId/review': basic('/api/import-proposals/pending/review', { version: 1, decision: 'correct', evidence: 'The state should be MD instead.' }, { async prepare() {
-      const p = await importProposedRows({ db, platform: f.platform, household: hh.ctx }, [{ target: 'fact', fields: { key: 'household.state', value: 'VA' } }], { approve: false, marker: canary });
-      db.prepare('UPDATE import_proposals SET actor_id=? WHERE id=?').run(hh.admin.identity.id, p.proposalId);
+      const p = await importProposedRows({ db, platform: f.platform, household: (await hh.ctx()) }, [{ target: 'fact', fields: { key: 'household.state', value: 'VA' } }], { approve: false, marker: canary });
+      await db.prepare('UPDATE import_proposals SET actor_id=? WHERE id=?').run(hh.admin.identity.id, p.proposalId);
       return { path: `/api/import-proposals/${p.proposalId}/review`, body: { version: p.version, decision: 'correct', evidence: 'The state should be MD instead.' } };
     } }),
     'POST /api/files/:id/remove': basic(`/api/files/${hh.upload}/remove`),
@@ -177,8 +177,8 @@ export async function financialCases(f, hh) {
     'GET /api/household/outbound': basic('/api/household/outbound'),
     'POST /api/household/outbound': basic('/api/household/outbound', { jobs: false, simplefin: true, email: true, engine: true }),
     'POST /api/household/backups': basic('/api/household/backups'),
-    'GET /api/household/backups/:id/status': basic('/api/household/backups/pending/status', {}, { prepare() {
-      const row = f.platform.prepare('SELECT id FROM household_backup_operations WHERE household_id=? ORDER BY created_at DESC LIMIT 1').get(hh.id);
+    'GET /api/household/backups/:id/status': basic('/api/household/backups/pending/status', {}, { async prepare() {
+      const row = await f.platform.prepare('SELECT id FROM household_backup_operations WHERE household_id=? ORDER BY created_at DESC LIMIT 1').get(hh.id);
       assert.ok(row); return { path: `/api/household/backups/${row.id}/status` };
     } }),
   };

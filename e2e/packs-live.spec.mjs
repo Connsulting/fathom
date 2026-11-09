@@ -174,7 +174,7 @@ test('B4: a manifest What if prompt shows as literal text in the chip and the th
   const dialogs = [];
   page.on('dialog', async (d) => { dialogs.push(d.message()); await d.dismiss(); });
 
-  writeSyntheticPack(householdRootDir(md.ypDataDir), { id: HOSTILE_ID, name: HOSTILE_NAME, prompt: HOSTILE_PROMPT, appliesWhen: NEVER, covers: ['synthetic choices'] });
+  writeSyntheticPack(await householdRootDir(md.ypDataDir), { id: HOSTILE_ID, name: HOSTILE_NAME, prompt: HOSTILE_PROMPT, appliesWhen: NEVER, covers: ['synthetic choices'] });
   try {
     // The reset refreshes the packs, so the server loads the synthetic one.
     await resetDemo(request, md.ypBaseURL);
@@ -203,7 +203,7 @@ test('B4: a manifest What if prompt shows as literal text in the chip and the th
     await expect(page.locator('img')).toHaveCount(0);
     expect(dialogs, 'script dialogs opened by rendered markup').toEqual([]);
   } finally {
-    removeSyntheticPack(householdRootDir(md.ypDataDir));
+    removeSyntheticPack(await householdRootDir(md.ypDataDir));
     await resetDemo(request, md.ypBaseURL);
   }
 });

@@ -169,9 +169,9 @@ test.describe('account dialog', { tag: '@ad-acN' }, () => {
 async function seedDuplicate(request) {
   await resetDemo(request);
   return withLocalHousehold('2032-03-10T12:00:00.000Z', async s => {
-    setSetting(s.db, 'clock', '2032-03-10');
+    await setSetting(s.db, 'clock', '2032-03-10');
     const pair = await seedDuplicateRows(s, { sure: true });
-    refreshMergedAccounts(s.db, { now: '2032-03-10T12:00:00.000Z' });
+    await refreshMergedAccounts(s.db, { now: '2032-03-10T12:00:00.000Z' });
     return pair;
   });
 }

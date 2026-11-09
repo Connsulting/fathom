@@ -14,6 +14,7 @@ import { buildSeries } from './series.mjs';
 import { factEventTitle } from '../../shared/event-labels.mjs';
 import { notBuiltReason } from './unlocks.mjs';
 import { ledgerDisplayName } from '../../pnl/ledgers.mjs';
+import { forEachSeries } from '../../shared/series.mjs';
 
 export const SRC = 'planner';
 export const NEUTRAL_NAMES = Object.freeze({
@@ -33,23 +34,23 @@ export function namesOf(facts) {
   return out;
 }
 
-export function upsertContent(db, key, value, now) {
+export async function upsertContent(db, key, value, now) {
   const text = JSON.stringify(value);
-  const row = db.prepare('SELECT value, src FROM content WHERE key = ?').get(key);
+  const row = await db.prepare('SELECT value, src FROM content WHERE key = ?').get(key);
   if (row && row.value === text && row.src === SRC) return false;
-  db.prepare(`INSERT INTO content (key, value, src, updated_at) VALUES (?, ?, ?, ?)
+  await db.prepare(`INSERT INTO content (key, value, src, updated_at) VALUES (?, ?, ?, ?)
               ON CONFLICT(key) DO UPDATE SET value = excluded.value, src = excluded.src, updated_at = excluded.updated_at`).run(key, text, SRC, now);
   return true;
 }
 
 // Replace this source's rows in a table only when the ordered content differs.
-function replaceRows(db, table, cols, rows) {
-  const current = db.prepare(`SELECT ${cols.join(', ')} FROM ${table} WHERE src = ? ORDER BY id`).all(SRC).map(r => JSON.stringify(cols.map(c => r[c])));
+async function replaceRows(db, table, cols, rows) {
+  const current = (await db.prepare(`SELECT ${cols.join(', ')} FROM ${table} WHERE src = ? ORDER BY id`).all(SRC)).map(r => JSON.stringify(cols.map(c => r[c])));
   const next = rows.map(r => JSON.stringify(cols.map(c => r[c] ?? null)));
   if (current.length === next.length && current.every((x, i) => x === next[i])) return false;
-  db.prepare(`DELETE FROM ${table} WHERE src = ?`).run(SRC);
+  await db.prepare(`DELETE FROM ${table} WHERE src = ?`).run(SRC);
   const insert = db.prepare(`INSERT INTO ${table} (${cols.join(', ')}, src) VALUES (${cols.map(() => '?').join(', ')}, ?)`);
-  for (const r of rows) insert.run(...cols.map(c => r[c] ?? null), SRC);
+  for (const r of rows) await insert.run(...cols.map(c => r[c] ?? null), SRC);
   return true;
 }
 
@@ -58,19 +59,19 @@ export function dataThroughOf(freshness) {
   return latest ? dateLabel(latest) : '';
 }
 
-export function writeBrief(db, ctx, { hits }) {
+export async function writeBrief(db, ctx, { hits }) {
   const { clock, now, facts, fig } = ctx;
   const names = namesOf(facts);
-  upsertContent(db, 'names', names, now);
-  upsertContent(db, 'meta', { product: 'Fathom', household: names.household, dataThrough: dataThroughOf(ctx.freshness) }, now);
-  upsertContent(db, 'law', lawContent(), now);
-  upsertContent(db, 'pct', pctContent(), now);
-  upsertContent(db, 'series', buildSeries(db, clock), now);
+  await upsertContent(db, 'names', names, now);
+  await upsertContent(db, 'meta', { product: 'Fathom', household: names.household, dataThrough: dataThroughOf(ctx.freshness) }, now);
+  await upsertContent(db, 'law', lawContent(), now);
+  await upsertContent(db, 'pct', pctContent(), now);
+  await upsertContent(db, 'series', await buildSeries(db, clock), now);
 
   // War games: replaced only when this run built a new model (S11). A stored game this run could
   // not rebuild because its inputs are invalid is kept as history and marked unavailable for current
   // decisions, whatever the season (D3, R3-7); a game absent only for the season is kept as is.
-  const prev = parseJson((db.prepare('SELECT value FROM content WHERE key = ?').get('wargame') || {}).value, {}) || {};
+  const prev = parseJson((await db.prepare('SELECT value FROM content WHERE key = ?').get('wargame') || {}).value, {}) || {};
   const invalid = (ctx.info && ctx.info.wargameInvalid) || {};
   const wargame = { ...prev };
   const reasonEntities = [...ctx.entities, ...ctx.data.pnl.map(l => ({ name: ledgerDisplayName(l) }))];
@@ -92,10 +93,10 @@ export function writeBrief(db, ctx, { hits }) {
   const notBuilt = {};
   for (const name of ['salary', 'deferral']) if (!wargame[name] && invalid[name]) notBuilt[name] = notBuiltReason(name, invalid[name], reasonEntities);
   if (Object.keys(notBuilt).length) wargame.notBuilt = notBuilt;
-  upsertContent(db, 'wargame', wargame, now);
+  await upsertContent(db, 'wargame', wargame, now);
   // Picks are stored by position. A rebuilt game can drop or add entries (H3: an over-limit point is
   // left out), so each stored pick follows its entry by id, or goes back to the default once gone.
-  const picks = getSetting(db, 'wargame.picks', null);
+  const picks = await getSetting(db, 'wargame.picks', null);
   if (picks && typeof picks === 'object') {
     const listOf = (g, name) => (Array.isArray(g?.[name === 'salary' ? 'points' : 'options']) ? g[name === 'salary' ? 'points' : 'options'] : []);
     const next = { ...picks };
@@ -105,20 +106,20 @@ export function writeBrief(db, ctx, { hits }) {
       const at = id == null ? -1 : listOf(wargame[name], name).findIndex(x => x?.id === id);
       if (at >= 0) next[name] = at; else delete next[name];
     }
-    if (JSON.stringify(next) !== JSON.stringify(picks)) setSetting(db, 'wargame.picks', next);
+    if (JSON.stringify(next) !== JSON.stringify(picks)) await setSetting(db, 'wargame.picks', next);
   }
 
-  writeDeadlines(db, ctx, hits);
-  writeDecisions(db, ctx, hits, wargame);
+  await writeDeadlines(db, ctx, hits);
+  await writeDecisions(db, ctx, hits, wargame);
   // Domains marked changed follow the current "what changed" events, so an identical rerun
   // (which keeps the events) keeps the same statuses.
-  const what = whatChanged(db, ctx);
+  const what = await whatChanged(db, ctx);
   const domainsTouched = new Set(what.domains);
 
-  const recs = loadRecs(db, clock);
+  const recs = await loadRecs(db, clock);
   const ny = needsYou(recs);
   const first = ny[0];
-  upsertContent(db, 'verdict', {
+  await upsertContent(db, 'verdict', {
     attention: {
       headline: '{count} things need you before their windows close.',
       sub: first ? `First up: ${first.title}${first.window && first.window.label ? `, ${first.window.label}` : ''}.` : '',
@@ -143,7 +144,7 @@ export function writeBrief(db, ctx, { hits }) {
     else if (domainsTouched.has(id)) status = 'changed';
     domains.push({ id, name, watching: WATCHING[id](ctx), status, note: NOTES[id](ctx, fig, stale) });
   }
-  upsertContent(db, 'domains', domains, now);
+  await upsertContent(db, 'domains', domains, now);
   return what;
 }
 
@@ -175,7 +176,7 @@ const NOTES = {
 
 // ---------------------------------------------------------------- deadlines
 
-function writeDeadlines(db, ctx, hits) {
+async function writeDeadlines(db, ctx, hits) {
   const { clock, facts } = ctx;
   const rows = hits.filter(h => h.window).map((h, i) => ({ date: h.window.close, label: h.window.label, title: h.rec.title, rec_id: h.rec.id, hard: h.window.hard ? 1 : 0, i }));
   const y = (ctx.year ?? Number(clock.slice(0, 4))) + 1;
@@ -198,12 +199,12 @@ function writeDeadlines(db, ctx, hits) {
     rows.push({ date: s.date, label: s.label, title: s.title, rec_id: null, hard: 1, i: 100 + rows.length });
   }
   rows.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.i - b.i));
-  return replaceRows(db, 'deadlines', ['date', 'label', 'title', 'rec_id', 'hard'], rows);
+  return await replaceRows(db, 'deadlines', ['date', 'label', 'title', 'rec_id', 'hard'], rows);
 }
 
 // ---------------------------------------------------------------- decisions (R14)
 
-function writeDecisions(db, ctx, hits, wargame) {
+async function writeDecisions(db, ctx, hits, wargame) {
   const year = ctx.year;
   const want = [];
   if (year) {
@@ -222,18 +223,18 @@ function writeDecisions(db, ctx, hits, wargame) {
       });
     }
   }
-  const rows = new Map(db.prepare('SELECT * FROM decisions').all().map(r => [r.id, r]));
+  const rows = new Map((await db.prepare('SELECT * FROM decisions').all()).map(r => [r.id, r]));
   const cols = ['title', 'status', 'wargame', 'rec_id', 'opens_on', 'when_label', 'note', 'sort'];
-  want.forEach((d, sort) => {
+  await forEachSeries(want, async (d, sort) => {
     const row = rows.get(d.id);
     const next = { ...d, sort };
     if (row && row.src !== SRC) return;
     if (row && row.status === 'decided') next.status = 'decided';
     if (!row) {
-      db.prepare(`INSERT INTO decisions (id, title, status, wargame, rec_id, opens_on, when_label, note, decided_line, sort, src)
+      await db.prepare(`INSERT INTO decisions (id, title, status, wargame, rec_id, opens_on, when_label, note, decided_line, sort, src)
                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`).run(d.id, d.title, next.status, d.wargame, d.rec_id, d.opens_on, d.when_label, d.note, sort, SRC);
     } else if (cols.some(c => (row[c] ?? null) !== (next[c] ?? null))) {
-      db.prepare('UPDATE decisions SET title = ?, status = ?, wargame = ?, rec_id = ?, opens_on = ?, when_label = ?, note = ?, sort = ? WHERE id = ?')
+      await db.prepare('UPDATE decisions SET title = ?, status = ?, wargame = ?, rec_id = ?, opens_on = ?, when_label = ?, note = ?, sort = ? WHERE id = ?')
         .run(d.title, next.status, d.wargame, d.rec_id, d.opens_on, d.when_label, d.note, sort, d.id);
     }
   });
@@ -241,16 +242,16 @@ function writeDecisions(db, ctx, hits, wargame) {
   const recExists = db.prepare('SELECT 1 FROM recs WHERE id = ?');
   for (const row of rows.values()) {
     if (row.src !== SRC || wanted.has(row.id)) continue;
-    const recGone = row.rec_id != null && !recExists.get(row.rec_id);
-    if (recGone || (row.rec_id == null && row.status === 'upcoming')) db.prepare('DELETE FROM decisions WHERE id = ?').run(row.id);
+    const recGone = row.rec_id != null && !await recExists.get(row.rec_id);
+    if (recGone || (row.rec_id == null && row.status === 'upcoming')) await db.prepare('DELETE FROM decisions WHERE id = ?').run(row.id);
   }
   // D3: a decision on a war game kept only for reference stays as history with the game's reason;
   // the reason clears once the game is rebuilt. An upcoming next-year decision is not affected.
   const setReason = db.prepare('UPDATE decisions SET unavailable_reason = ? WHERE id = ?');
-  for (const row of db.prepare('SELECT id, status, wargame, unavailable_reason FROM decisions WHERE src = ?').all(SRC)) {
+  for (const row of await db.prepare('SELECT id, status, wargame, unavailable_reason FROM decisions WHERE src = ?').all(SRC)) {
     const g = row.wargame ? wargame[row.wargame] : null;
     const reason = row.status !== 'upcoming' && g && typeof g.unavailable === 'string' ? g.unavailable : null;
-    if ((row.unavailable_reason ?? null) !== reason) setReason.run(reason, row.id);
+    if ((row.unavailable_reason ?? null) !== reason) await setReason.run(reason, row.id);
   }
 }
 
@@ -277,11 +278,11 @@ function fileSummaryStatements(db) {
   return tables.map(([table, col]) => ({ col, stmt: db.prepare(`SELECT parser${col ? `, max(${col}) AS d` : ''} FROM ${table} WHERE file_id = ?`) }));
 }
 
-function fileSummary(statements, fileId) {
+async function fileSummary(statements, fileId) {
   let parser = null;
   let latest = null;
   for (const { col, stmt } of statements) {
-    const r = stmt.get(fileId);
+    const r = await stmt.get(fileId);
     if (r && r.parser && !parser) parser = r.parser;
     if (r && r.d) {
       const d = col === 'period' ? monthEnd(r.d) : r.d;
@@ -291,11 +292,11 @@ function fileSummary(statements, fileId) {
   return { parser, latest };
 }
 
-function whatChanged(db, ctx) {
-  const snap = getSetting(db, 'planner.snapshot', null);
-  const files = db.prepare('SELECT id, source_kind FROM files ORDER BY uploaded_at, id').all();
-  const facts = Object.fromEntries(db.prepare('SELECT key, value FROM facts WHERE src = ? ORDER BY key').all(SRC).map(r => [r.key, r.value]));
-  const recStates = db.prepare('SELECT p.rec_id, p.retired_at, p.retired_reason, r.def FROM planner_recs p JOIN recs r ON r.id = p.rec_id ORDER BY p.rec_id').all();
+async function whatChanged(db, ctx) {
+  const snap = await getSetting(db, 'planner.snapshot', null);
+  const files = await db.prepare('SELECT id, source_kind FROM files ORDER BY uploaded_at, id').all();
+  const facts = Object.fromEntries((await db.prepare('SELECT key, value FROM facts WHERE src = ? ORDER BY key').all(SRC)).map(r => [r.key, r.value]));
+  const recStates = await db.prepare('SELECT p.rec_id, p.retired_at, p.retired_reason, r.def FROM planner_recs p JOIN recs r ON r.id = p.rec_id ORDER BY p.rec_id').all();
   const recsNow = Object.fromEntries(recStates.map(r => [r.rec_id, r.retired_at ? 'retired' : 'active']));
   const next = { files: files.map(f => f.id), facts, recs: recsNow, domains: snap && Array.isArray(snap.domains) ? snap.domains : [] };
 
@@ -307,7 +308,7 @@ function whatChanged(db, ctx) {
   const statements = files.some(f => !seenFiles.has(f.id)) ? fileSummaryStatements(db) : [];
   for (const f of files) {
     if (seenFiles.has(f.id)) continue;
-    const s = fileSummary(statements, f.id);
+    const s = await fileSummary(statements, f.id);
     const what = (s.parser && labels[s.parser]) || f.source_kind || 'Uploaded file';
     events.push({ date, kind: 'account', title: `New data: ${what}`, body: s.latest ? `Data through ${dateLabel(s.latest)}.` : 'Uploaded and filed.' });
     domains.add('data');
@@ -336,10 +337,10 @@ function whatChanged(db, ctx) {
   }
   let written = null;
   if (events.length) {
-    replaceRows(db, 'events', ['date', 'kind', 'title', 'body', 'sort'], events.map((e, sort) => ({ ...e, sort })));
+    await replaceRows(db, 'events', ['date', 'kind', 'title', 'body', 'sort'], events.map((e, sort) => ({ ...e, sort })));
     written = events.length;
     next.domains = [...domains].sort();
   }
-  if (JSON.stringify(snap) !== JSON.stringify(next)) setSetting(db, 'planner.snapshot', next);
+  if (JSON.stringify(snap) !== JSON.stringify(next)) await setSetting(db, 'planner.snapshot', next);
   return { events: written, domains: new Set(next.domains) };
 }

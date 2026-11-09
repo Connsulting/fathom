@@ -21,24 +21,24 @@ import {
 const NOW = '2026-11-05';
 const JAN = '2027-01-10';
 const S = scratch('fathom-review-fixes-2-');
-after(() => S.cleanup());
+after(async () => await S.cleanup());
 
-const plan = (db, now = NOW, engine = null) => planRun(db, { engine, now });
+const plan = async (db, now = NOW, engine = null) => planRun(db, { engine, now });
 const api = (db, clock = NOW, params = {}, body = {}) => ({ db, config: { clock }, params, body });
 const near = (actual, expected, what) =>
   assert.ok(typeof actual === 'number' && Math.abs(actual - expected) <= 0.011, `${what}: expected ${expected}, got ${actual}`);
-const fig = (db, key) => {
-  const row = figureRow(db, key);
+const fig = async (db, key) => {
+  const row = await figureRow(db, key);
   assert.ok(row, `figure ${key} exists`);
   return row;
 };
 const nonEmpty = v => typeof v === 'string' && v.trim().length > 0;
 
 // The planner's own path to computeFigures, for reading `info` off a store (as in tax-rules.test.mjs).
-function computeFor(db, clock = NOW) {
-  const data = loadPlanningData(db, clock);
+async function computeFor(db, clock = NOW) {
+  const data = await loadPlanningData(db, clock);
   const stored = {};
-  for (const r of db.prepare('SELECT key, value, src, confirmed FROM facts').all()) {
+  for (const r of await db.prepare('SELECT key, value, src, confirmed FROM facts').all()) {
     stored[r.key] = { value: parseJson(r.value, null), src: r.src, confirmed: !!r.confirmed };
   }
   const owner = ownerFactsOf(stored);
@@ -51,7 +51,7 @@ function computeFor(db, clock = NOW) {
 async function planned(variant = {}, now = NOW) {
   const db = await S.store({ variant });
   const result = await plan(db, now);
-  return { db, result, info: computeFor(db, now).info };
+  return { db, result, info: (await computeFor(db, now)).info };
 }
 
 const withFacts = (variant, facts) => ({ ...variant, facts: { ...(variant.facts || {}), ...facts } });
@@ -99,22 +99,22 @@ const wrenOnly = monthly => ({
 test('MG5: D1 SEP room nets employee deferrals to the same business solo 401(k) (400,000 profit)', async () => {
   const { db, info } = await planned(withFacts(wrenOnly(33333.33), { 'retirement.contributions': [ownPlan('deferral', 24500)] }));
   assert.deepEqual(info.blocked, [], 'a 24,500 deferral is within every limit');
-  near(fig(db, 'room.solo401k.employer').v, 47500, 'precondition: solo 401(k) employer room');
-  near(fig(db, 'room.sep').v, 47500, 'SEP room after the 24,500 deferral (the bug publishes 72,000)');
+  near((await fig(db, 'room.solo401k.employer')).v, 47500, 'precondition: solo 401(k) employer room');
+  near((await fig(db, 'room.sep')).v, 47500, 'SEP room after the 24,500 deferral (the bug publishes 72,000)');
 });
 
 test('MG5: D1 SEP room nets employee deferrals at low profit (30,000 profit)', async () => {
   const { db, info } = await planned(withFacts(wrenOnly(2500), { 'retirement.contributions': [ownPlan('deferral', 24500)] }));
   assert.deepEqual(info.blocked, [], 'a 24,500 deferral fits 27,880.56 of compensation');
-  near(fig(db, 'room.solo401k.employer').v, 1690.28, 'precondition: solo 401(k) employer room');
-  near(fig(db, 'room.sep').v, 1690.28, 'SEP room after the 24,500 deferral (the bug publishes 5,576.11)');
+  near((await fig(db, 'room.solo401k.employer')).v, 1690.28, 'precondition: solo 401(k) employer room');
+  near((await fig(db, 'room.sep')).v, 1690.28, 'SEP room after the 24,500 deferral (the bug publishes 5,576.11)');
 });
 
 test('MG5: D1 liveness: with no deferral SEP room is the full employer limit', async () => {
   const big = await planned(wrenOnly(33333.33));
-  near(fig(big.db, 'room.sep').v, 72000, '400,000 profit: min(76,640.93, 72,000)');
+  near((await fig(big.db, 'room.sep')).v, 72000, '400,000 profit: min(76,640.93, 72,000)');
   const small = await planned(wrenOnly(2500));
-  near(fig(small.db, 'room.sep').v, 5576.11, '30,000 profit: 20% of 27,880.56');
+  near((await fig(small.db, 'room.sep')).v, 5576.11, '30,000 profit: 20% of 27,880.56');
 });
 
 // The S corp SEP path (room.sep from W-2 compensation, used when no sole proprietorship is sized).
@@ -140,14 +140,14 @@ test('MG5: D1 the S corp SEP path nets employee deferrals to the same employer',
   for (const [monthly, income, expected, bug] of [[2500, 10000, 5500, 7500], [20000, 30000, 47500, 60000]]) {
     const { db, info } = await planned(cedarOnly(monthly, income, { 'retirement.contributions': [ownPlan('deferral', 24500)] }));
     assert.deepEqual(info.blocked, [], `salary ${monthly * 12}: nothing blocks`);
-    near(fig(db, 'room.solo401k.employer').v, expected, `salary ${monthly * 12}: solo 401(k) employer room`);
-    near(fig(db, 'room.sep').v, expected, `salary ${monthly * 12}: SEP room (the bug publishes ${bug})`);
+    near((await fig(db, 'room.solo401k.employer')).v, expected, `salary ${monthly * 12}: solo 401(k) employer room`);
+    near((await fig(db, 'room.sep')).v, expected, `salary ${monthly * 12}: SEP room (the bug publishes ${bug})`);
   }
 });
 
 test('MG5: D1 liveness: the S corp SEP path with no deferral is 25% of salary', async () => {
   const { db } = await planned(cedarOnly(2500, 10000));
-  near(fig(db, 'room.sep').v, 7500, '25% x 30,000');
+  near((await fig(db, 'room.sep')).v, 7500, '25% x 30,000');
 });
 
 // ================================================================ D4 (MG5, K4): one record per contribution
@@ -178,21 +178,21 @@ const corpComp = ({ line = false, facts = [] } = {}) => ({
 test('MG5: D4 an employer contribution in a P&L line and an owner fact counts once', async () => {
   const { db, info } = await planned(corpComp({ line: true, facts: [ownPlan('employer', 10000)] }));
   assert.deepEqual(info.blocked, []);
-  near(fig(db, 'room.solo401k.employer').v, 15000, 'employer room (the bug publishes 5,000)');
-  near(fig(db, 'room.sep').v, 15000, 'SEP room (the bug publishes 5,000)');
+  near((await fig(db, 'room.solo401k.employer')).v, 15000, 'employer room (the bug publishes 5,000)');
+  near((await fig(db, 'room.sep')).v, 15000, 'SEP room (the bug publishes 5,000)');
 });
 
 test('MG5: D4 a SEP fact and a P&L employer line for the same sponsor count once', async () => {
   const { db } = await planned(corpComp({ line: true, facts: sepFact(10000) }));
-  near(fig(db, 'room.sep').v, 15000, 'SEP and employer are one type: the P&L line wins');
-  near(fig(db, 'room.solo401k.employer').v, 15000, 'employer room');
+  near((await fig(db, 'room.sep')).v, 15000, 'SEP and employer are one type: the P&L line wins');
+  near((await fig(db, 'room.solo401k.employer')).v, 15000, 'employer room');
 });
 
 test('MG5: D4 liveness: the P&L line alone and the fact alone each give 15,000', async () => {
   for (const variant of [corpComp({ line: true }), corpComp({ facts: [ownPlan('employer', 10000)] })]) {
     const { db } = await planned(variant);
-    near(fig(db, 'room.sep').v, 15000, `SEP room, ${variant.pnlExtra ? 'P&L line' : 'owner fact'}`);
-    near(fig(db, 'room.solo401k.employer').v, 15000, `employer room, ${variant.pnlExtra ? 'P&L line' : 'owner fact'}`);
+    near((await fig(db, 'room.sep')).v, 15000, `SEP room, ${variant.pnlExtra ? 'P&L line' : 'owner fact'}`);
+    near((await fig(db, 'room.solo401k.employer')).v, 15000, `employer room, ${variant.pnlExtra ? 'P&L line' : 'owner fact'}`);
   }
 });
 
@@ -212,25 +212,25 @@ const cedarWages = (box3, fact) => ({
   ...cedarOnly(15000, 40000, { 'household.birthYears': { owner: 1965, spouse: 1983 }, 'retirement.priorYearFicaWages': { owner: fact } }),
   payroll: [priorW2(box3)],
 });
-const priorStep = db => fig(db, 'room.solo401k.employee').locator.steps.find(s => /Social Security wages from the plan sponsor/.test(s.label));
+const priorStep = async db => (await fig(db, 'room.solo401k.employee')).locator.steps.find(s => /Social Security wages from the plan sponsor/.test(s.label));
 
 test('MG5: D4 a prior-year W-2 box 3 from the sponsor beats the owner wage fact', async () => {
   const over = await planned(cedarWages(160000, 140000));
-  assert.equal(figureRow(over.db, 'room.solo401k.catchUp'), null, 'no pre-tax catch-up: box 3 160,000 makes the catch-up Roth only');
-  const roth = fig(over.db, 'room.solo401k.rothCatchUp');
+  assert.equal(await figureRow(over.db, 'room.solo401k.catchUp'), null, 'no pre-tax catch-up: box 3 160,000 makes the catch-up Roth only');
+  const roth = await fig(over.db, 'room.solo401k.rothCatchUp');
   assert.ok((roth.locator.assumptions || []).includes('roth_catch_up_unconfirmed'), `assumptions: ${roth.locator.assumptions}`);
   assert.equal(over.info.retireCatchUp, 'retirement.planOffersRoth');
-  assert.equal(priorStep(over.db) && priorStep(over.db).value, 160000, 'the room names the W-2 box 3 amount');
+  assert.equal(await priorStep(over.db) && (await priorStep(over.db)).value, 160000, 'the room names the W-2 box 3 amount');
 
   const under = await planned(cedarWages(140000, 160000));
-  near(fig(under.db, 'room.solo401k.catchUp').v, 11250, 'box 3 140,000 keeps the catch-up pre-tax');
-  assert.equal(figureRow(under.db, 'room.solo401k.rothCatchUp'), null, 'no Roth-only catch-up');
-  assert.equal(priorStep(under.db) && priorStep(under.db).value, 140000, 'the room names the W-2 box 3 amount');
+  near((await fig(under.db, 'room.solo401k.catchUp')).v, 11250, 'box 3 140,000 keeps the catch-up pre-tax');
+  assert.equal(await figureRow(under.db, 'room.solo401k.rothCatchUp'), null, 'no Roth-only catch-up');
+  assert.equal(await priorStep(under.db) && (await priorStep(under.db)).value, 140000, 'the room names the W-2 box 3 amount');
 });
 
 test('MG5: D4 liveness: with no prior-year W-2 the owner wage fact is used', async () => {
   const { db } = await planned(cedarOnly(15000, 40000, { 'household.birthYears': { owner: 1965, spouse: 1983 }, 'retirement.priorYearFicaWages': { owner: 140000 } }));
-  near(fig(db, 'room.solo401k.catchUp').v, 11250, 'fact 140,000: pre-tax catch-up');
+  near((await fig(db, 'room.solo401k.catchUp')).v, 11250, 'fact 140,000: pre-tax catch-up');
 });
 
 // ================================================================ D2, D3 (MG12, K2, K3): every householdTax path validates contributions
@@ -303,19 +303,19 @@ const PATHS = [
 // H3: an over-limit point or option is listed under excluded with its reason, beside the rest.
 const listOf = (g, game) => [...(game === 'salary' ? (g && g.points) || [] : (g && g.options) || []), ...((g && g.excluded) || [])];
 const itemReason = x => ['unavailable', 'blocked', 'invalid'].map(k => x && x[k]).find(nonEmpty) || null;
-const pick = (db, clock, game, item) => wargamePick(api(db, clock, { name: game }, { index: item }));
+const pick = async (db, clock, game, item) => await wargamePick(api(db, clock, { name: game }, { index: item }));
 
 // Run 1 builds the game from `first` (or the valid aggregate); run 2 applies `change` on the case clock.
 async function twoRuns(c, change) {
   const db = await S.store({ variant: withFacts(c.base, c.first || c.valid) });
   await plan(db, NOW);
-  const built = contentValue(db, 'wargame') || {};
+  const built = await contentValue(db, 'wargame') || {};
   assert.ok(built[c.game], `${c.name}: precondition: the ${c.game} game is built in November`);
   assert.ok(listOf(built[c.game], c.game).some(x => x.id === c.item), `${c.name}: precondition: ${c.item} is offered`);
-  for (const [k, v] of Object.entries(change)) addFact(db, k, v);
+  for (const [k, v] of Object.entries(change)) await addFact(db, k, v);
   const clock = c.clock || NOW;
   await plan(db, clock);
-  return { db, clock, info: computeFor(db, clock).info };
+  return { db, clock, info: (await computeFor(db, clock)).info };
 }
 
 // One test over the class; each path is a subtest so every failing path is reported.
@@ -324,21 +324,21 @@ test('MG12: D2 D3 every householdTax path blocks an over-limit contribution and 
     const { db, clock, info } = await twoRuns(c, c.over);
     if (c.currentBlocked) {
       assert.ok(info.gaps.some(g => g.code === 'retirement_contribution_over_limit'), `${c.name}: the current-year run reports the excluded contribution`);
-      const proj = getScenario(api(db, clock)).fig['tax.fed.proj'];
+      const proj = (await getScenario(api(db, clock))).fig['tax.fed.proj'];
       assert.ok(proj && Number.isFinite(proj.v) && proj.partial && !proj.unavailable, `${c.name}: federal tax remains available with the contribution gap`);
     }
-    const scenario = getScenario(api(db, clock));
+    const scenario = await getScenario(api(db, clock));
     const g = scenario.wargame && scenario.wargame[c.game];
     assert.ok(g, `${c.name}: the ${c.game} game is kept, at least as history`);
     if (g.status === 'unavailable') {
-      assert.ok(nonEmpty(contentValue(db, 'wargame')[c.game].unavailable), `${c.name}: the unavailable game names its reason`);
+      assert.ok(nonEmpty((await contentValue(db, 'wargame'))[c.game].unavailable), `${c.name}: the unavailable game names its reason`);
     } else {
       const x = listOf(g, c.game).find(y => y.id === c.item);
       assert.ok(x, `${c.name}: ${c.item} is marked, not silently dropped: ${JSON.stringify(listOf(g, c.game).map(y => y.id))}`);
       assert.ok(itemReason(x), `${c.name}: ${c.item} is offered as a current choice with no reason: ${JSON.stringify(x)}`);
       if (c.game === 'deferral') assert.ok(!(x.tax2026 < 0), `${c.name}: ${c.item} claims a tax cut of ${x.tax2026}`);
     }
-    assert.throws(() => pick(db, clock, c.game, c.item), e => e.status >= 400 && e.status < 500,
+    await assert.rejects(async () => await pick(db, clock, c.game, c.item), e => e.status >= 400 && e.status < 500,
       `${c.name}: wargamePick refuses ${c.item}`);
   });
 });
@@ -348,12 +348,12 @@ test('MG12: D2 D3 liveness: a valid aggregate publishes every path', async t => 
     const { db, clock, info } = await twoRuns(c, c.valid);
     assert.deepEqual(info.blocked, [], `${c.name}: nothing blocks`);
     if (!c.clock) assert.equal((info.wargameInvalid || {})[c.game], undefined, `${c.name}: ${c.game} invalid: ${(info.wargameInvalid || {})[c.game]}`);
-    assert.ok(fig(db, 'tax.fed.proj'), `${c.name}: federal tax published`);
-    const g = getScenario(api(db, clock)).wargame[c.game];
+    assert.ok(await fig(db, 'tax.fed.proj'), `${c.name}: federal tax published`);
+    const g = (await getScenario(api(db, clock))).wargame[c.game];
     assert.ok(g, `${c.name}: the game is served`);
     assert.notEqual(g.status, 'unavailable', `${c.name}: the game is available`);
     for (const x of listOf(g, c.game)) assert.equal(itemReason(x), null, `${c.name}: ${x.id} is not marked`);
-    const after = pick(db, clock, c.game, c.item);
+    const after = await pick(db, clock, c.game, c.item);
     assert.ok(after && after.scenario, `${c.name}: wargamePick accepts ${c.item}`);
   });
 });
@@ -362,16 +362,16 @@ test('MG12: D2 D3 liveness: a valid aggregate publishes every path', async t => 
 test('MG12: D3 a November game with a 22,000 SEP added and planned in January refuses "Move it all to January"', async () => {
   const db = await S.store({ variant: WREN_HOUSEHOLD });
   await plan(db, NOW);
-  const built = contentValue(db, 'wargame').deferral;
+  const built = (await contentValue(db, 'wargame')).deferral;
   assert.equal(built.options.find(o => o.id === 'd100').label, 'Move it all to January', 'precondition');
-  addFact(db, 'retirement.contributions', sepFact(22000));
+  await addFact(db, 'retirement.contributions', sepFact(22000));
   await plan(db, JAN);
-  const info = computeFor(db, JAN).info;
-  const kept = contentValue(db, 'wargame').deferral;
+  const info = (await computeFor(db, JAN)).info;
+  const kept = (await contentValue(db, 'wargame')).deferral;
   const d100 = kept.options.find(o => o.id === 'd100');
   assert.ok(nonEmpty(info.wargameInvalid.deferral) || nonEmpty(kept.unavailable) || itemReason(d100),
     `the retained game carries a reason: ${JSON.stringify({ invalid: info.wargameInvalid, unavailable: kept.unavailable, d100 })}`);
-  assert.throws(() => pick(db, JAN, 'deferral', 'd100'), e => e.status >= 400 && e.status < 500, 'wargamePick refuses d100');
+  await assert.rejects(async () => await pick(db, JAN, 'deferral', 'd100'), e => e.status >= 400 && e.status < 500, 'wargamePick refuses d100');
 });
 
 // ================================================================ D5 (MG13, K5): allowlist literal check
@@ -405,7 +405,7 @@ function scripted(reply) {
     async call(args) {
       calls.push(args);
       const engine = createEngine({ mode: 'fake', responses: [{ text: reply(args), costUsd: 0.01 }] });
-      return engine.call(args);
+      return await engine.call(args);
     },
   };
 }
@@ -432,10 +432,10 @@ test('MG13: D5 writeProse rejects each phrasing and falls back to the template',
     const engine = scripted(() => JSON.stringify({ ...VALID, summary: text }));
     await plan(db, NOW, engine);
     assert.ok(engine.calls.length > 0, 'the engine was asked');
-    for (const r of db.prepare('SELECT rec_id, prose_src FROM planner_recs WHERE retired_at IS NULL').all()) {
+    for (const r of await db.prepare('SELECT rec_id, prose_src FROM planner_recs WHERE retired_at IS NULL').all()) {
       assert.equal(r.prose_src, 'template', `"${text}": ${r.rec_id} kept model prose`);
     }
-    assert.notEqual(recRow(db, 'fed-q4-estimate').def.summary, text);
+    assert.notEqual((await recRow(db, 'fed-q4-estimate')).def.summary, text);
   }
 });
 
@@ -444,22 +444,22 @@ test('MG13: D5 liveness: writeProse accepts a full-date reply', async () => {
   const engine = scripted(() => JSON.stringify({ ...VALID, summary: 'File by Apr 15, 2027 for tax year 2026.' }));
   await plan(db, NOW, engine);
   assert.ok(engine.calls.length > 0, 'the engine was asked');
-  assert.ok(db.prepare("SELECT count(*) AS n FROM planner_recs WHERE retired_at IS NULL AND prose_src = 'model'").get().n > 0, 'some rec keeps model prose');
+  assert.ok((await db.prepare("SELECT count(*) AS n FROM planner_recs WHERE retired_at IS NULL AND prose_src = 'model'").get()).n > 0, 'some rec keeps model prose');
 });
 
 test('MG13: D5 stored prose with each phrasing is not kept on the next run', async () => {
   const db = await S.store();
   await plan(db);
   const id = 'fed-q4-estimate';
-  const template = recRow(db, id).def;
+  const template = (await recRow(db, id)).def;
   for (const text of D5_REJECTED) {
-    const def = parseJson(db.prepare('SELECT def FROM recs WHERE id = ?').get(id).def, {});
+    const def = parseJson((await db.prepare('SELECT def FROM recs WHERE id = ?').get(id)).def, {});
     def.summary = text;
-    db.prepare('UPDATE recs SET def = ? WHERE id = ?').run(JSON.stringify(def), id);
-    db.prepare("UPDATE planner_recs SET prose_src = 'model' WHERE rec_id = ?").run(id);
+    await db.prepare('UPDATE recs SET def = ? WHERE id = ?').run(JSON.stringify(def), id);
+    await db.prepare("UPDATE planner_recs SET prose_src = 'model' WHERE rec_id = ?").run(id);
     const result = await plan(db);
-    assert.equal(recRow(db, id).def.summary, template.summary, `"${text}": the template summary is back`);
-    assert.equal(plannerRec(db, id).prose_src, 'template', `"${text}"`);
+    assert.equal((await recRow(db, id)).def.summary, template.summary, `"${text}": the template summary is back`);
+    assert.equal((await plannerRec(db, id)).prose_src, 'template', `"${text}"`);
     assert.ok(result.counts.prose.template >= 1, `"${text}": the rec was rewritten, not kept`);
   }
 });

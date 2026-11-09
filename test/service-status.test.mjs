@@ -15,6 +15,7 @@ import { serviceStatus, isTransient } from '../src/jobs/service-status.mjs';
 import { listJobs } from '../src/api/email-handlers.mjs';
 import { scenarioOf } from '../src/api/scenario.mjs';
 import * as view from '../web/horizon/screens/service-status.js';
+import { forEachSeries } from '../src/shared/series.mjs';
 
 const NOW = '2026-11-08T15:00:00.000Z';
 const RAN_AT = '2026-11-08T14:00:00.000Z';
@@ -106,25 +107,25 @@ const ROWS = [
   sfRow('ok', null, 'healthy', null),
 ];
 
-function ensureJobRows(db) {
+async function ensureJobRows(db) {
   const ins = db.prepare("INSERT OR IGNORE INTO jobs (id, name, cadence, does, cost, next_label, last_label, enabled, sort) VALUES (?, ?, ?, ?, NULL, '', '', 1, ?)");
-  JOBS.forEach((j, i) => ins.run(j.id, j.name, j.cadence, j.does, 100 + i));
+  await forEachSeries(JOBS, async (j, i) => await ins.run(j.id, j.name, j.cadence, j.does, 100 + i));
 }
 
-function resetStore(db) {
-  db.exec("DELETE FROM job_runs; DELETE FROM simplefin_connection; DELETE FROM email_sends; DELETE FROM settings WHERE key = 'engine'");
+async function resetStore(db) {
+  await db.applySchema("DELETE FROM job_runs; DELETE FROM simplefin_connection; DELETE FROM email_sends; DELETE FROM settings WHERE key = 'engine'");
 }
 
-function seed(db, row) {
-  ensureJobRows(db);
+async function seed(db, row) {
+  await ensureJobRows(db);
   const ins = db.prepare(`INSERT INTO job_runs (job_id, started_at, finished_at, status, period_key, trigger, duration_ms, error_class, cost_usd, note)
     VALUES (?, ?, ?, ?, ?, 'scheduled', 2000, ?, 0, ?)`);
-  for (const r of row.runs || []) ins.run(r.jobId, RAN_AT, RAN_END, r.status, r.periodKey, r.errorClass, r.note ? JSON.stringify(r.note) : null);
+  for (const r of row.runs || []) await ins.run(r.jobId, RAN_AT, RAN_END, r.status, r.periodKey, r.errorClass, r.note ? JSON.stringify(r.note) : null);
   if (row.sf) {
-    db.prepare(`INSERT INTO simplefin_connection (id, access_blob, connected_at, last_sync_at, status, error_code, messages, accounts)
+    await db.prepare(`INSERT INTO simplefin_connection (id, access_blob, connected_at, last_sync_at, status, error_code, messages, accounts)
       VALUES (1, 'synthetic-sealed-blob', '2026-11-01T12:00:00.000Z', ?, ?, ?, '[]', 2)`).run(RAN_END, row.sf.status, row.sf.errorCode);
   }
-  if (row.setting) setSetting(db, 'engine', row.setting);
+  if (row.setting) await setSetting(db, 'engine', row.setting);
 }
 
 const asList = (x) => (Array.isArray(x) ? x : [x]);
@@ -189,10 +190,10 @@ test('isTransient: network, rate limit, lock and timeout classes retry; access, 
 
 test('every table row maps to a state, a plain cause and an existing control through serviceStatus and statusHtml', async (t) => {
   const store = await tempDb();
-  t.after(() => { try { store.db.close(); } catch { /* closed */ } rmSync(store.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { try { await store.db.close(); } catch { /* closed */ } rmSync(store.dataDir, { recursive: true, force: true }); });
   for (const row of ROWS) {
-    resetStore(store.db);
-    seed(store.db, row);
+    await resetStore(store.db);
+    await seed(store.db, row);
     const out = await serviceStatus({
       db: store.db, outbound: { ...ALL_ON, ...(row.outbound || {}) }, engine: row.engine ?? fakeEngine(), scheduler: fakeScheduler(), now: new Date(NOW),
     });
@@ -206,7 +207,7 @@ test('every table row maps to a state, a plain cause and an existing control thr
 
 test('job keys are job:<id> and the other services are email, engine and simplefin', async (t) => {
   const store = await tempDb();
-  t.after(() => { try { store.db.close(); } catch { /* closed */ } rmSync(store.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { try { await store.db.close(); } catch { /* closed */ } rmSync(store.dataDir, { recursive: true, force: true }); });
   const out = await serviceStatus({ db: store.db, outbound: { ...ALL_ON }, engine: fakeEngine(), scheduler: fakeScheduler(), now: new Date(NOW) });
   for (const j of JOBS) assert.equal(out.jobs[j.id].key, `job:${j.id}`);
   assert.equal(out.email.key, 'email');
@@ -225,7 +226,7 @@ test('job and outbound rows reach GET /api/jobs (listJobs) and the scenario (sce
   const household = await instance.household(config, { handlers, now: () => new Date(NOW) });
   t.after(async () => {
     try { await household.close(); } catch { /* closed */ }
-    instance.close();
+    await instance.close();
     rmSync(instance.dataDir, { recursive: true, force: true });
   });
   const ctx = {
@@ -235,10 +236,10 @@ test('job and outbound rows reach GET /api/jobs (listJobs) and the scenario (sce
   const apiRows = ROWS.filter((r) => r.api);
   assert.ok(apiRows.length >= 10, 'job and outbound rows are driven through the API');
   for (const row of apiRows) {
-    resetStore(household.db);
-    setOutbound(instance.platform, instance.householdId, { ...ALL_ON });
-    if (row.outbound) setOutbound(instance.platform, instance.householdId, row.outbound);
-    seed(household.db, row);
+    await resetStore(household.db);
+    await setOutbound(instance.platform, instance.householdId, { ...ALL_ON });
+    if (row.outbound) await setOutbound(instance.platform, instance.householdId, row.outbound);
+    await seed(household.db, row);
     const body = await listJobs(ctx);
     assert.ok(body.services && typeof body.services === 'object', `${row.name}: GET /api/jobs carries services`);
     for (const svc of asList(row.pick(body.services))) check(svc, row, 'listJobs');
@@ -246,5 +247,5 @@ test('job and outbound rows reach GET /api/jobs (listJobs) and the scenario (sce
     assert.ok(scenario.live.services && typeof scenario.live.services === 'object', `${row.name}: scenario.live.services`);
     for (const svc of asList(row.pick(scenario.live.services))) check(svc, row, 'scenarioOf');
   }
-  setOutbound(instance.platform, instance.householdId, { ...ALL_ON });
+  await setOutbound(instance.platform, instance.householdId, { ...ALL_ON });
 });

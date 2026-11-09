@@ -157,7 +157,7 @@ export function paystubText({ payDate = '2032-03-15', employer = 'Example Employ
 // Returns { db, platform, householdId, dataDir, root, file, config, household, opts(engine), close() }.
 export async function realStore({ engine = 'off' } = {}) {
   const { setSetting } = await src('src/store/db.mjs');
-  const store = await tempInstance({ mode: 'real', init: db => setSetting(db, 'mode', 'real') });
+  const store = await tempInstance({ mode: 'real', init: async db => await setSetting(db, 'mode', 'real') });
   const config = {
     dataDir: store.dataDir, platformKeyFile: store.keys.platformKeyFile, mcpSecretFile: store.keys.mcpSecretFile,
     engine, clock: null, demo: false, port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev',
@@ -168,8 +168,8 @@ export async function realStore({ engine = 'off' } = {}) {
     config,
     household,
     opts: (eng, extra = {}) => ({ actorId: 'actor-synthetic', engine: eng, config, now: NOW, household, ...extra }),
-    close() {
-      store.close();
+    async close() {
+      await store.close();
       rmSync(store.dataDir, { recursive: true, force: true });
     },
   };
@@ -180,7 +180,7 @@ export async function realStore({ engine = 'off' } = {}) {
 export async function fakeEngine(responses = [], { capUsd = 200 } = {}) {
   const { createEngine } = await src('src/engine/index.mjs');
   const inner = createEngine({ mode: 'fake', capUsd, responses: responses.map((rows) => ({ text: JSON.stringify({ rows }) })) });
-  return { responses, mode: 'fake', isOn: () => true, call: (req) => inner.call(req), extract: (req) => inner.extract(req) };
+  return { responses, mode: 'fake', isOn: () => true, call: async (req) => await inner.call(req), extract: async (req) => inner.extract(req) };
 }
 
 // A fake engine that records every request it receives (extract and call), independent of the
@@ -195,8 +195,8 @@ export async function recordingEngine(responses = [], opts) {
     isOn: () => true,
     extracts,
     calls,
-    call(req) { calls.push(structuredClone(req)); return base.call(req); },
-    extract(req) { extracts.push(req); return base.extract(req); },
+    async call(req) { calls.push(structuredClone(req)); return await base.call(req); },
+    async extract(req) { extracts.push(req); return await base.extract(req); },
     sent() {
       const out = [];
       for (const r of extracts) {
@@ -212,13 +212,13 @@ export async function recordingEngine(responses = [], opts) {
 export async function offEngine() {
   const { createEngine } = await src('src/engine/index.mjs');
   const inner = createEngine({ mode: 'off' });
-  return { mode: 'off', isOn: () => false, call: (req) => inner.call(req), extract: (req) => inner.extract(req) };
+  return { mode: 'off', isOn: () => false, call: async (req) => await inner.call(req), extract: async (req) => inner.extract(req) };
 }
 
-export const all = (db, sql, ...args) => db.prepare(sql).all(...args).map((r) => ({ ...r }));
-export const one = (db, sql, ...args) => { const r = db.prepare(sql).get(...args); return r ? { ...r } : r; };
-export const count = (db, table, where = '1 = 1', ...args) => db.prepare(`SELECT count(*) AS n FROM ${table} WHERE ${where}`).get(...args).n;
-export const items = (db, kind) => all(db, 'SELECT * FROM confirm_items WHERE kind = ? ORDER BY id', kind);
+export const all = async (db, sql, ...args) => (await db.prepare(sql).all(...args)).map((r) => ({ ...r }));
+export const one = async (db, sql, ...args) => { const r = await db.prepare(sql).get(...args); return r ? { ...r } : r; };
+export const count = async (db, table, where = '1 = 1', ...args) => (await db.prepare(`SELECT count(*) AS n FROM ${table} WHERE ${where}`).get(...args)).n;
+export const items = async (db, kind) => await all(db, 'SELECT * FROM confirm_items WHERE kind = ? ORDER BY id', kind);
 export const parseJson = (s) => (s == null ? s : JSON.parse(s));
 
 export async function ingest() { return src('src/ingest/pipeline.mjs'); }

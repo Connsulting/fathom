@@ -21,12 +21,12 @@ const CALCULATE = { name: 'calculate', args: { operation: 'add', label: 'Combine
 
 async function ask(t, scripts, question = 'Describe the household plan.', { setup, key = 'ask:0a1b2c3d4e5f', actorId } = {}) {
   const store = await createEvalStore();
-  t.after(() => store.close());
+  t.after(async () => await store.close());
   for (const [key, value] of [['biz_cash', 173.41], ['sp_cash', 89.26]])
-    store.db.prepare('UPDATE figures SET v=? WHERE key=?').run(value, key);
+    await store.db.prepare('UPDATE figures SET v=? WHERE key=?').run(value, key);
   const packs = createLivePacks(store.db, { dataDir: store.root });
   setup?.(store);
-  packs.refresh();
+  await packs.refresh();
   const inner = createEngine({ mode: 'fake' });
   const calls = [];
   const reads = [];
@@ -38,7 +38,7 @@ async function ask(t, scripts, question = 'Describe the household plan.', { setu
     responses.push(response);
     return response;
   } };
-  const scenario = buildScenario(store.db, { packs });
+  const scenario = await buildScenario(store.db, { packs });
   const text = typeof question === 'function' ? question(scenario) : question;
   const reply = await createLiveAnswerer({ engine, packs, root: store.root, services: { engine, packs, config: { dataDir: store.root } }, onRead: r => reads.push(r) }).answer({
     db: store.db, key, text, actorId, ownerText: text,
@@ -128,7 +128,7 @@ test('the shared implementation preserves the graders and exposes kind-only diag
 
 test('every suggested demo answer is clean on its first draft', async t => {
   const store = await createEvalStore();
-  const ids = buildScenario(store.db).ask.suggested.map(q => q.id);
+  const ids = (await buildScenario(store.db)).ask.suggested.map(q => q.id);
   await store.close();
   for (const id of ids) await t.test(id, async sub => {
     const { calls, reads, responses, reply } = await ask(sub, null,
@@ -183,10 +183,10 @@ const ORDINARY = [
 
 test('ordinary answers pass grounding and the shared discipline check as Ask applies it', async t => {
   const { checkAnswerForDelivery } = await import('../src/api/answerer.mjs');
-  for (const fixture of ORDINARY) await t.test(fixture.id, sub => {
+  for (const fixture of ORDINARY) await t.test(fixture.id, async sub => {
     const { text, calls: toolResults = [], data = [] } = fixture;
     const scenario = { fig: {} };
-    const grounding = groundAnswer(text, { scenario, toolResults, data });
+    const grounding = await groundAnswer(text, { scenario, toolResults, data });
     const check = checkAnswerForDelivery(text, { scenario, toolResults, data, grounding });
     sub.diagnostic(JSON.stringify({ id: fixture.id, grounding: grounding.violations, discipline: check.violations }));
     assert.deepEqual(grounding.violations, []);
@@ -200,7 +200,7 @@ test('a known account suffix is an identifier and never sources a balance', asyn
   const scenario = { fig: {} };
   const toolResults = ORDINARY[0].calls;
   const text = 'The balance is $4,321.';
-  const grounding = groundAnswer(text, { scenario, toolResults });
+  const grounding = await groundAnswer(text, { scenario, toolResults });
   assert.equal(grounding.ok, false);
   assert.deepEqual(checkAnswerForDelivery(text, { scenario, toolResults, grounding }).violations, ['figures.unsourced']);
 });

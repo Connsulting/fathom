@@ -50,17 +50,17 @@ function legacyOpen(key, blob, aad) {
 }
 
 // Every vault reader's object, from SELECTs only.
-function inventory(db) {
+async function inventory(db) {
   const rows = [
-    ...db.prepare('SELECT id, stored_path, sha256, size FROM files WHERE stored_path IS NOT NULL ORDER BY id').all()
+    ...(await db.prepare('SELECT id, stored_path, sha256, size FROM files WHERE stored_path IS NOT NULL ORDER BY id').all())
       .map(r => ({ ...r, purpose: PURPOSES.upload })),
-    ...db.prepare('SELECT id, stored_path, sha256, bytes AS size FROM advisor_packets ORDER BY id').all()
+    ...(await db.prepare('SELECT id, stored_path, sha256, bytes AS size FROM advisor_packets ORDER BY id').all())
       .map(r => ({ ...r, purpose: PURPOSES.advisorPacket })),
   ];
   for (const r of rows) {
     if (!isId(r.id) || r.stored_path !== `files/${r.id}.bin`) throw codeError('vault_stored_path_invalid');
   }
-  const conn = db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get();
+  const conn = await db.prepare('SELECT access_blob FROM simplefin_connection WHERE id = 1').get();
   return { rows, secret: conn ? String(conn.access_blob) : null };
 }
 
@@ -70,7 +70,7 @@ export async function convertHouseholdVault({ db, sourceDir, legacyKey, root, ha
   if (!isId(operationId) || typeof sourceDir !== 'string'
     || !(legacyKey instanceof Uint8Array) || legacyKey.length !== 32) throw codeError('vault_invalid_input');
   assertSameHousehold(root, handle);
-  const { rows, secret } = inventory(db);
+  const { rows, secret } = await inventory(db);
 
   const legacyDir = join(sourceDir, 'files');
   const legacyStat = lstatOrNull(legacyDir);

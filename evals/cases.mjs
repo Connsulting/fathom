@@ -4,6 +4,7 @@ import Ajv from 'ajv';
 import { isoFromLabel } from '../demo/ledger.mjs';
 import { classOf } from '../src/calc/classes.mjs';
 import { ANSWER_MAX_WORDS } from '../src/shared/answer-contract.mjs';
+import { mapSeries } from '../src/shared/series.mjs';
 
 const predicate = { type: 'object', additionalProperties: false, required: ['path', 'op'], properties: {
   path: { type: 'string', pattern: '^[A-Za-z][A-Za-z0-9_.]*$' },
@@ -110,10 +111,10 @@ export async function loadCases(file = new URL('./catalog.json', import.meta.url
 }
 
 const round = n => Math.round(n * 100) / 100;
-function annualSpending(db) {
-  const rows = db.prepare(`SELECT t.date,t.amount,t.category,t.description FROM transactions t
+async function annualSpending(db) {
+  const rows = await db.prepare(`SELECT t.date,t.amount,t.category,t.description FROM transactions t
     JOIN accounts a ON a.id=t.account_id WHERE a.kind IN ('checking','credit','card') ORDER BY t.date`).all();
-  const meta = JSON.parse(db.prepare("SELECT value FROM content WHERE key='meta'").get().value);
+  const meta = JSON.parse((await db.prepare("SELECT value FROM content WHERE key='meta'").get()).value);
   const through = isoFromLabel(meta.dataThrough);
   if (!through) throw new TypeError('No spending coverage date');
   const date = new Date(through + 'T00:00:00Z');
@@ -127,25 +128,25 @@ function annualSpending(db) {
     ).reduce((s, r) => s - r.amount, 0);
   return round(spend * 12 / months);
 }
-function netWorth(db, date) {
-  return db.prepare(`SELECT coalesce(sum(b.amount),0) AS v FROM balances b WHERE b.date=(
-    SELECT max(b2.date) FROM balances b2 WHERE b2.account_id=b.account_id AND b2.date<=?)`).get(date).v;
+async function netWorth(db, date) {
+  return (await db.prepare(`SELECT coalesce(sum(b.amount),0) AS v FROM balances b WHERE b.date=(
+    SELECT max(b2.date) FROM balances b2 WHERE b2.account_id=b.account_id AND b2.date<=?)`).get(date)).v;
 }
-export function expectedFigures(db, descriptors) {
-  return descriptors.map(e => {
+export async function expectedFigures(db, descriptors) {
+  return await mapSeries(descriptors, async e => {
     let v;
-    if (e.kind === 'figure') v = db.prepare('SELECT v FROM figures WHERE key=? AND unavailable_reason IS NULL').get(e.key)?.v;
-    if (e.kind === 'transaction') v = db.prepare('SELECT amount FROM transactions WHERE category=? ORDER BY date DESC,id DESC LIMIT 1').get(e.category)?.amount;
-    if (e.kind === 'pnl-month') v = db.prepare('SELECT sum(amount) AS v FROM pnl_lines WHERE period=?').get(e.month).v;
-    if (e.kind === 'annual-spending') v = annualSpending(db);
-    if (e.kind === 'portfolio') v = Math.ceil(annualSpending(db) / e.rate);
-    if (e.kind === 'net-worth') v = netWorth(db, '9999-12-31');
+    if (e.kind === 'figure') v = (await db.prepare('SELECT v FROM figures WHERE key=? AND unavailable_reason IS NULL').get(e.key))?.v;
+    if (e.kind === 'transaction') v = (await db.prepare('SELECT amount FROM transactions WHERE category=? ORDER BY date DESC,id DESC LIMIT 1').get(e.category))?.amount;
+    if (e.kind === 'pnl-month') v = (await db.prepare('SELECT sum(amount) AS v FROM pnl_lines WHERE period=?').get(e.month)).v;
+    if (e.kind === 'annual-spending') v = await annualSpending(db);
+    if (e.kind === 'portfolio') v = Math.ceil(await annualSpending(db) / e.rate);
+    if (e.kind === 'net-worth') v = await netWorth(db, '9999-12-31');
     if (e.kind === 'net-worth-change') {
-      const date = db.prepare('SELECT min(date) AS d FROM balances').get().d;
-      v = netWorth(db, '9999-12-31') - netWorth(db, date);
+      const date = (await db.prepare('SELECT min(date) AS d FROM balances').get()).d;
+      v = await netWorth(db, '9999-12-31') - await netWorth(db, date);
     }
-    if (e.kind === 'cash-flow') v = db.prepare(`SELECT coalesce(sum(t.amount),0) AS v FROM transactions t JOIN accounts a ON a.id=t.account_id
-      WHERE a.kind='checking' AND substr(t.date,1,7)=? AND t.category!='transfer'`).get(e.month).v;
+    if (e.kind === 'cash-flow') v = (await db.prepare(`SELECT coalesce(sum(t.amount),0) AS v FROM transactions t JOIN accounts a ON a.id=t.account_id
+      WHERE a.kind='checking' AND substr(t.date,1,7)=? AND t.category!='transfer'`).get(e.month)).v;
     if (!Number.isFinite(v)) throw new TypeError(`No deterministic expectation for ${e.kind}:${e.key ?? e.month ?? ''}`);
     return round(v);
   });

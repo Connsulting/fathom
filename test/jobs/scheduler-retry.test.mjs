@@ -9,6 +9,7 @@ import { rmSync } from 'node:fs';
 import { tempDb } from '../helpers/server.mjs';
 import { JOBS, localParts, periodKey, nextRunAt, createScheduler, JobFailure } from '../../src/jobs/scheduler.mjs';
 import { serviceStatus } from '../../src/jobs/service-status.mjs';
+import { sqliteError } from '../../src/storage/errors.mjs';
 
 const NY = 'America/New_York';
 const RETRY_MS = 15 * 60000;
@@ -18,7 +19,7 @@ const quiet = { log() {}, info() {}, warn() {}, error() {} };
 
 async function store() {
   const t = await tempDb();
-  return { ...t, done() { try { t.db.close(); } catch { /* closed */ } rmSync(t.dataDir, { recursive: true, force: true }); } };
+  return { ...t, async done() { try { await t.db.close(); } catch { /* closed */ } rmSync(t.dataDir, { recursive: true, force: true }); } };
 }
 
 const configOf = (dataDir) => ({ dataDir, clock: null, demo: false, engine: 'off', emailTransport: 'dev', publicUrl: null });
@@ -31,7 +32,7 @@ function clockAt(iso) {
   return c;
 }
 
-const runsOf = (db, jobId) => db.prepare('SELECT * FROM job_runs WHERE job_id = ? ORDER BY id').all(jobId).map((r) => ({ ...r }));
+const runsOf = async (db, jobId) => (await db.prepare('SELECT * FROM job_runs WHERE job_id = ? ORDER BY id').all(jobId)).map((r) => ({ ...r }));
 const keyAt = (jobId, iso) => periodKey(JOBS.find((j) => j.id === jobId).schedule, localParts(new Date(iso), NY));
 
 function schedulerFor(t, { handlers, clock, holder = 'test-holder', allowed, retryMs = RETRY_MS } = {}) {
@@ -42,7 +43,7 @@ function schedulerFor(t, { handlers, clock, holder = 'test-holder', allowed, ret
   });
 }
 
-const statusOf = (t, s, clock, outbound = ALL_ON) => serviceStatus({ db: t.db, outbound: { ...outbound }, engine: null, scheduler: s, now: clock.now() });
+const statusOf = async (t, s, clock, outbound = ALL_ON) => await serviceStatus({ db: t.db, outbound: { ...outbound }, engine: null, scheduler: s, now: clock.now() });
 
 // 10:00 in New York: simplefin-sync (due 05:00 local) is due for 2026-11-05.
 const START = '2026-11-05T15:00:00.000Z';
@@ -52,18 +53,18 @@ test('schedule() lists handled jobs with their next run and retryMs and writes n
   try {
     const clock = clockAt(START);
     const s = schedulerFor(t, { handlers: { 'simplefin-sync': async () => ({}), plan: async () => ({}) }, clock });
-    const out = s.schedule();
+    const out = await s.schedule();
     assert.deepEqual(out.map((x) => x.id).sort(), ['plan', 'simplefin-sync']);
     for (const x of out) {
       const job = JOBS.find((j) => j.id === x.id);
       assert.equal(new Date(x.nextAt).toISOString(), nextRunAt(job.schedule, clock.now(), NY).toISOString(), `${x.id} nextAt`);
       assert.equal(x.retryMs, RETRY_MS, `${x.id} retryMs`);
     }
-    assert.equal(t.db.prepare('SELECT count(*) AS n FROM jobs').get().n, 0, 'schedule() writes no job rows');
-    assert.equal(t.db.prepare('SELECT count(*) AS n FROM job_runs').get().n, 0, 'schedule() claims nothing');
+    assert.equal((await t.db.prepare('SELECT count(*) AS n FROM jobs').get()).n, 0, 'schedule() writes no job rows');
+    assert.equal((await t.db.prepare('SELECT count(*) AS n FROM job_runs').get()).n, 0, 'schedule() claims nothing');
     const d = schedulerFor(t, { handlers: { plan: async () => ({}) }, clock, retryMs: null });
-    assert.equal(d.schedule()[0].retryMs, 15 * MIN, 'retryMs defaults to 15 minutes');
-  } finally { t.done(); }
+    assert.equal((await d.schedule())[0].retryMs, 15 * MIN, 'retryMs defaults to 15 minutes');
+  } finally { await t.done(); }
 });
 
 test('a transient failure retries once after retryMs and reads retrying, then healthy', async () => {
@@ -76,7 +77,7 @@ test('a transient failure retries once after retryMs and reads retrying, then he
     const key = keyAt('simplefin-sync', START);
 
     await s.tick();
-    let rows = runsOf(t.db, 'simplefin-sync');
+    let rows = await runsOf(t.db, 'simplefin-sync');
     assert.equal(rows.length, 1, 'tick 1 records one run');
     assert.equal(rows[0].status, 'error');
     assert.equal(rows[0].error_class, 'simplefin_network');
@@ -90,12 +91,12 @@ test('a transient failure retries once after retryMs and reads retrying, then he
 
     clock.advance(RETRY_MS - MIN);
     await s.tick();
-    assert.equal(runsOf(t.db, 'simplefin-sync').length, 1, 'no retry before retryMs elapses');
+    assert.equal((await runsOf(t.db, 'simplefin-sync')).length, 1, 'no retry before retryMs elapses');
     assert.equal(calls, 1);
 
     clock.advance(2 * MIN);
     await s.tick();
-    rows = runsOf(t.db, 'simplefin-sync');
+    rows = await runsOf(t.db, 'simplefin-sync');
     assert.equal(rows.length, 2, 'exactly one retry after retryMs');
     assert.equal(rows[1].period_key, `${key}+retry`);
     assert.equal(rows[1].trigger, 'retry');
@@ -110,8 +111,8 @@ test('a transient failure retries once after retryMs and reads retrying, then he
 
     clock.advance(RETRY_MS * 4);
     await s.tick();
-    assert.equal(runsOf(t.db, 'simplefin-sync').length, 2, 'a successful retry is not run again');
-  } finally { t.done(); }
+    assert.equal((await runsOf(t.db, 'simplefin-sync')).length, 2, 'a successful retry is not run again');
+  } finally { await t.done(); }
 });
 
 test('a retry that also fails is not retried again in the same period', async () => {
@@ -123,7 +124,7 @@ test('a retry that also fails is not retried again in the same period', async ()
     await s.tick();
     clock.advance(RETRY_MS + MIN);
     await s.tick();
-    let rows = runsOf(t.db, 'simplefin-sync');
+    let rows = await runsOf(t.db, 'simplefin-sync');
     assert.equal(rows.length, 2);
     assert.equal(rows[1].status, 'error');
     assert.match(rows[1].period_key, /\+retry$/);
@@ -131,11 +132,11 @@ test('a retry that also fails is not retried again in the same period', async ()
     await s.tick();
     clock.advance(RETRY_MS * 4);
     await s.tick();
-    rows = runsOf(t.db, 'simplefin-sync');
+    rows = await runsOf(t.db, 'simplefin-sync');
     assert.equal(rows.length, 2, 'the failed retry is never retried');
     assert.equal(calls, 2);
     assert.ok(rows.every((r) => !/\+retry\+retry/.test(r.period_key)));
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('a non-transient failure (a code bug) is never retried and needs a person', async () => {
@@ -149,14 +150,14 @@ test('a non-transient failure (a code bug) is never retried and needs a person',
     await s.tick();
     clock.advance(RETRY_MS * 4);
     await s.tick();
-    const rows = runsOf(t.db, 'simplefin-sync');
+    const rows = await runsOf(t.db, 'simplefin-sync');
     assert.equal(rows.length, 1, 'no retry');
     assert.equal(rows[0].error_class, 'TypeError');
     assert.equal(calls, 1);
     const svc = (await statusOf(t, s, clock)).jobs['simplefin-sync'];
     assert.equal(svc.state, 'needs_you');
     assert.equal(svc.control?.id, 'run_job');
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('SQLite busy (5) and locked (6) errors are recorded as store_locked and retried', async () => {
@@ -167,19 +168,20 @@ test('SQLite busy (5) and locked (6) errors are recorded as store_locked and ret
       let calls = 0;
       const handler = async () => {
         calls += 1;
-        if (calls === 1) throw Object.assign(new Error('synthetic store busy'), { code: 'ERR_SQLITE_ERROR', errcode });
+        // The storage port translates a raw SQLite busy or locked error before any caller sees it.
+        if (calls === 1) throw sqliteError(Object.assign(new Error('synthetic store busy'), { code: 'ERR_SQLITE_ERROR', errcode }));
         return {};
       };
       const s = schedulerFor(t, { handlers: { 'simplefin-sync': handler }, clock });
       await s.tick();
-      assert.equal(runsOf(t.db, 'simplefin-sync')[0].error_class, 'store_locked', `errcode ${errcode}`);
+      assert.equal((await runsOf(t.db, 'simplefin-sync'))[0].error_class, 'store_locked', `errcode ${errcode}`);
       assert.equal((await statusOf(t, s, clock)).jobs['simplefin-sync'].state, 'retrying');
       clock.advance(RETRY_MS + MIN);
       await s.tick();
-      const rows = runsOf(t.db, 'simplefin-sync');
+      const rows = await runsOf(t.db, 'simplefin-sync');
       assert.equal(rows.length, 2, `errcode ${errcode} retried`);
       assert.equal(rows[1].status, 'ok');
-    } finally { t.done(); }
+    } finally { await t.done(); }
   }
 });
 
@@ -195,7 +197,7 @@ test('a paused household claims nothing, reads paused for every job and never re
     };
     const s = schedulerFor(t, { handlers, clock, allowed: () => on });
     await s.tick();
-    assert.equal(t.db.prepare('SELECT count(*) AS n FROM job_runs').get().n, 0, 'nothing is claimed while paused');
+    assert.equal((await t.db.prepare('SELECT count(*) AS n FROM job_runs').get()).n, 0, 'nothing is claimed while paused');
     assert.equal(calls, 0);
     const out = await statusOf(t, s, clock, { ...ALL_ON, jobs: false });
     assert.deepEqual(Object.keys(out.jobs).sort(), ['plan', 'simplefin-sync']);
@@ -209,13 +211,13 @@ test('a paused household claims nothing, reads paused for every job and never re
     // A transient failure recorded while on, then paused: the due retry does not run.
     on = true;
     await s.tick();
-    assert.equal(runsOf(t.db, 'simplefin-sync').length, 1);
+    assert.equal((await runsOf(t.db, 'simplefin-sync')).length, 1);
     on = false;
     clock.advance(RETRY_MS + MIN);
     await s.tick();
-    assert.equal(runsOf(t.db, 'simplefin-sync').length, 1, 'no retry while paused');
+    assert.equal((await runsOf(t.db, 'simplefin-sync')).length, 1, 'no retry while paused');
     assert.equal((await statusOf(t, s, clock, { ...ALL_ON, jobs: false })).jobs['simplefin-sync'].state, 'paused');
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });
 
 test('a skipped run while SimpleFIN is paused reads paused and is never retried', async () => {
@@ -229,12 +231,12 @@ test('a skipped run while SimpleFIN is paused reads paused and is never retried'
     await s.tick();
     clock.advance(RETRY_MS * 4);
     await s.tick();
-    const rows = runsOf(t.db, 'simplefin-sync');
+    const rows = await runsOf(t.db, 'simplefin-sync');
     assert.equal(rows.length, 1, 'no +retry row for a skipped run');
     assert.equal(rows[0].status, 'skipped');
     assert.equal(calls, 1);
     const svc = (await statusOf(t, s, clock, { ...ALL_ON, simplefin: false })).jobs['simplefin-sync'];
     assert.equal(svc.state, 'paused');
     assert.deepEqual({ id: svc.control?.id, arg: svc.control?.arg }, { id: 'resume', arg: 'simplefin' });
-  } finally { t.done(); }
+  } finally { await t.done(); }
 });

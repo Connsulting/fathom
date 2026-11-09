@@ -5,6 +5,7 @@ import { tempInstance } from './helpers/server.mjs';
 import { createHouseholdStorage } from '../src/platform/db.mjs';
 import { createRuntimeRegistry, createHouseholdContext, openHouseholdDb } from '../src/platform/runtime.mjs';
 import { runPlanning } from '../src/jobs/planner.mjs';
+import { mapSeries } from '../src/shared/series.mjs';
 
 const quiet = { log() {} };
 const deferred = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
@@ -15,20 +16,24 @@ async function fixture(t, handler, count = 3) {
   const ids = [instance.householdId];
   for (let i = 1; i < count; i++) {
     const id = `hh_synthetic_jobs_${i}`;
-    instance.platform.prepare("INSERT INTO households (id, status, mode, created_at, updated_at) VALUES (?, 'active', 'real', ?, ?)").run(id, i, i);
-    createHouseholdStorage({ platform: instance.platform, dataDir: instance.dataDir, householdId: id, mode: 'real', secrets: instance.secrets, enabled: true });
+    await instance.platform.prepare("INSERT INTO households (id, status, mode, created_at, updated_at) VALUES (?, 'active', 'real', ?, ?)").run(id, i, i);
+    await createHouseholdStorage({ platform: instance.platform, dataDir: instance.dataDir, householdId: id, mode: 'real', secrets: instance.secrets, enabled: true });
     ids.push(id);
   }
   const config = { dataDir: instance.dataDir, engine: 'off', clock: '2026-11-05', emailTransport: 'dev' };
+  // Records each run's arrival at the shared dispatcher: storage is async, so a run reaches
+  // admission only after its scheduler's store reads, not when runNow is called.
+  const arrivals = [];
+  const recording = inner => ({ run(householdId, work) { arrivals.push(householdId); return inner.run(householdId, work); } });
   const makeRegistry = () => createRuntimeRegistry({
     platform: instance.platform, config, secrets: instance.secrets,
-    build: opts => createHouseholdContext({ ...opts, db: openHouseholdDb({ dataDir: opts.config.dataDir, householdId: opts.householdId, storageRoot: opts.relativeRoot }), handlers: {
+    build: async opts => await createHouseholdContext({ ...opts, dispatcher: recording(opts.dispatcher), db: await openHouseholdDb({ dataDir: opts.config.dataDir, householdId: opts.householdId, storageRoot: opts.relativeRoot }), handlers: {
       plan: handler, freshness: handler, 'simplefin-sync': handler,
     }, now: () => new Date('2026-11-05T12:00:00Z'), log: quiet }),
   });
   let registry = makeRegistry();
-  t.after(async () => { await registry.close(); instance.close(); rmSync(instance.dataDir, { recursive: true, force: true }); });
-  return { ...instance, ids, get registry() { return registry; }, contexts: () => ids.map(id => registry.get(id)),
+  t.after(async () => { await registry.close(); await instance.close(); rmSync(instance.dataDir, { recursive: true, force: true }); });
+  return { ...instance, ids, arrivals, get registry() { return registry; }, contexts: async () => await mapSeries(ids, async id => (await registry.get(id))),
     async restart() { await registry.close(); registry = makeRegistry(); } };
 }
 
@@ -50,12 +55,16 @@ test('one handler per household, two instance-wide, with round-robin admission',
     active--; perHousehold.set(id, perHousehold.get(id) - 1);
     return { note: { local: ctx.db === ctx.household.db } };
   });
-  const [a, b, c] = fx.contexts();
-  const runs = [a.scheduler.runNow('plan'), a.scheduler.runNow('freshness'), b.scheduler.runNow('plan'), c.scheduler.runNow('plan')];
-  await turn();
+  const [a, b, c] = await fx.contexts();
+  // Each run reaches the dispatcher before the next is requested, so admission sees them in call order.
+  const admitted = async call => { const n = fx.arrivals.length; const p = call(); p.catch(() => {}); while (fx.arrivals.length === n) await turn(); return p; };
+  const runs = [];
+  for (const call of [() => a.scheduler.runNow('plan'), () => a.scheduler.runNow('freshness'), () => b.scheduler.runNow('plan'), () => c.scheduler.runNow('plan')]) runs.push(await admitted(call));
+  while (started.length < 2) await turn();
+  for (let i = 0; i < 20; i++) await turn();
   assert.deepEqual(started, [a.householdId, b.householdId]);
   releases.shift()();
-  await turn();
+  while (started.length < 3) await turn();
   assert.equal(started[2], c.householdId, 'waiting household precedes a second turn');
   while (releases.length) { releases.shift()(); await turn(); }
   const results = await Promise.all(runs);
@@ -71,45 +80,45 @@ test('scheduled periods, failures and restart remain independent', { timeout: 15
     if (ctx.household.householdId === failId) throw Object.assign(new Error('private diagnostic'), { code: 'synthetic_failure' });
     return { note: { completed: true } };
   }, 2);
-  const [a, b] = fx.contexts(); failId = a.householdId;
-  await Promise.all([a.scheduler.tick(), b.scheduler.tick()]);
-  const ar = a.scheduler.runs({ limit: 20 }); const br = b.scheduler.runs({ limit: 20 });
+  const [a, b] = await fx.contexts(); failId = a.householdId;
+  await Promise.all([await a.scheduler.tick(), await b.scheduler.tick()]);
+  const ar = (await a.scheduler.runs({ limit: 20 })); const br = (await b.scheduler.runs({ limit: 20 }));
   assert.equal(ar.length, 3); assert.equal(br.length, 3);
   assert.ok(ar.every(r => r.status === 'error' && r.errorClass === 'synthetic_failure'));
   assert.ok(br.every(r => r.status === 'ok'));
   assert.equal(ar.find(r => r.jobId === 'plan').id, br.find(r => r.jobId === 'plan').id);
   assert.equal(ar.find(r => r.jobId === 'plan').periodKey, br.find(r => r.jobId === 'plan').periodKey);
   await fx.restart();
-  const [aa, bb] = fx.contexts();
-  await Promise.all([aa.scheduler.tick(), bb.scheduler.tick()]);
+  const [aa, bb] = await fx.contexts();
+  await Promise.all([await aa.scheduler.tick(), await bb.scheduler.tick()]);
   assert.equal(seen.length, 6, 'restart does not replay claimed periods');
   for (const reason of ['ingest', 'confirm', 'decide']) await bb.scheduler.trigger('plan', reason);
   bb.scheduler.soon('plan', 'confirm', { immediate: true });
   await turn();
-  assert.equal(aa.scheduler.runs({ limit: 20 }).length, 3);
-  assert.equal(bb.scheduler.runs({ limit: 20 }).length, 7);
+  assert.equal((await aa.scheduler.runs({ limit: 20 })).length, 3);
+  assert.equal((await bb.scheduler.runs({ limit: 20 })).length, 7);
 });
 
 test('queued work rechecks pause and generation before claiming, and valid work resumes', { timeout: 15000 }, async t => {
   const gates = [deferred(), deferred()]; let n = 0;
   const fx = await fixture(t, async () => { const index = n++; if (index < 2) await gates[index].promise; });
-  const [a, b, c] = fx.contexts();
+  const [a, b, c] = await fx.contexts();
   const first = a.scheduler.runNow('plan'); const second = b.scheduler.runNow('plan');
   const refused = assert.rejects(c.scheduler.runNow('plan'), e => e.code === 'paused');
   await turn();
-  fx.platform.prepare('UPDATE household_outbound SET jobs = 0 WHERE household_id = ?').run(c.householdId);
+  await fx.platform.prepare('UPDATE household_outbound SET jobs = 0 WHERE household_id = ?').run(c.householdId);
   gates.forEach(g => g.resolve());
   await Promise.all([first, second, refused]);
-  assert.equal(c.scheduler.runs().length, 0);
-  fx.platform.prepare('UPDATE household_outbound SET jobs = 1 WHERE household_id = ?').run(c.householdId);
+  assert.equal((await c.scheduler.runs()).length, 0);
+  await fx.platform.prepare('UPDATE household_outbound SET jobs = 1 WHERE household_id = ?').run(c.householdId);
   assert.equal((await c.scheduler.runNow('plan')).status, 'ok');
-  fx.platform.prepare('UPDATE households SET generation = generation + 1 WHERE id = ?').run(c.householdId);
+  await fx.platform.prepare('UPDATE households SET generation = generation + 1 WHERE id = ?').run(c.householdId);
   await assert.rejects(c.scheduler.runNow('freshness'), e => e.code === 'paused');
 });
 
 test('planner refuses integers that do not identify a running local plan claim', async t => {
   const fx = await fixture(t, async () => ({}), 2);
-  const [a, b] = fx.contexts();
+  const [a, b] = await fx.contexts();
   const run = await a.scheduler.runNow('plan');
   await assert.rejects(runPlanning(b.db, null, { now: '2026-11-05', runId: run.id }), /claimed|claim|runId/);
   await assert.rejects(runPlanning(a.db, null, { now: '2026-11-05', runId: run.id }), /claimed|claim|runId/);
@@ -122,9 +131,9 @@ test('manual HTTP, successful upload and Confirm dispatch only to the initiating
   const fx = await twoHouseholds({ engine: 'off' });
   try {
     await fx.B.client.postJson('/api/household/outbound', { jobs: true });
-    const a = fx.ctx(fx.A.id); const b = fx.ctx(fx.B.id);
+    const a = await fx.ctx(fx.A.id); const b = await fx.ctx(fx.B.id);
     await b.scheduler.tick();
-    const before = b.scheduler.runs({ limit: 200 });
+    const before = (await b.scheduler.runs({ limit: 200 }));
     assert.equal((await fx.A.client.postJson('/api/jobs/freshness/run', {})).status, 200);
     const uploaded = await uploadFiles(fx.baseUrl, fx.A.admin, [{ name: 'synthetic.csv', bytes: Buffer.from(aggregatorCsv([
       { date: '2026-11-01', amount: '18.25', description: 'Synthetic household purchase', number: '5550098765' },
@@ -132,17 +141,17 @@ test('manual HTTP, successful upload and Confirm dispatch only to the initiating
     assert.equal(uploaded.status, 200, uploaded.text);
     assert.equal(uploaded.json.files[0].status, 'imported');
     for (let i = 0; i < 30; i++) await turn();
-    assert.ok(a.scheduler.runs({ limit: 200 }).some(r => r.jobId === 'plan' && r.trigger === 'ingest'));
-    const item = ask(a.db, { kind: 'fact_check', subject: 'synthetic.scheduler', question: 'Use this synthetic fact?',
+    assert.ok((await a.scheduler.runs({ limit: 200 })).some(r => r.jobId === 'plan' && r.trigger === 'ingest'));
+    const item = await ask(a.db, { kind: 'fact_check', subject: 'synthetic.scheduler', question: 'Use this synthetic fact?',
       options: FACT_CHECK_OPTIONS, context: { key: 'synthetic.scheduler', value: true }, now: '2026-11-05T12:00:00Z' });
     const answer = await fx.A.client.postJson(`/api/confirm/${item.id}/answer`, { answer: 'yes' });
     assert.equal(answer.status, 200, answer.text);
     const deadline = Date.now() + 35000;
-    while (!a.scheduler.runs({ limit: 200 }).some(r => r.jobId === 'plan' && r.trigger === 'confirm') && Date.now() < deadline) {
+    while (!(await a.scheduler.runs({ limit: 200 })).some(r => r.jobId === 'plan' && r.trigger === 'confirm') && Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 50));
     }
-    assert.ok(a.scheduler.runs({ limit: 200 }).some(r => r.jobId === 'plan' && r.trigger === 'confirm'));
-    assert.deepEqual(b.scheduler.runs({ limit: 200 }), before);
+    assert.ok((await a.scheduler.runs({ limit: 200 })).some(r => r.jobId === 'plan' && r.trigger === 'confirm'));
+    assert.deepEqual((await b.scheduler.runs({ limit: 200 })), before);
   } finally { await fx.close(); }
 });
 
@@ -151,24 +160,24 @@ test('SimpleFIN sync queues local planning and freshness without holding its han
   const { connectSimplefin, fakeToken, createFakeSimplefin } = await import('../src/ingest/simplefin.mjs');
   const instance = await tempInstance({ mode: 'demo', init: seedDemo });
   const other = 'hh_synthetic_simplefin';
-  instance.platform.prepare("INSERT INTO households (id, status, mode, created_at, updated_at) VALUES (?, 'active', 'demo', 1, 1)").run(other);
-  createHouseholdStorage({ platform: instance.platform, dataDir: instance.dataDir, householdId: other, mode: 'demo', secrets: instance.secrets, enabled: true });
+  await instance.platform.prepare("INSERT INTO households (id, status, mode, created_at, updated_at) VALUES (?, 'active', 'demo', 1, 1)").run(other);
+  await createHouseholdStorage({ platform: instance.platform, dataDir: instance.dataDir, householdId: other, mode: 'demo', secrets: instance.secrets, enabled: true });
   const config = { dataDir: instance.dataDir, engine: 'off', clock: '2026-11-05', emailTransport: 'dev' };
   const registry = createRuntimeRegistry({ platform: instance.platform, config, secrets: instance.secrets });
   try {
-    const a = registry.get(instance.householdId); const b = registry.get(other);
+    const a = await registry.get(instance.householdId); const b = await registry.get(other);
     await connectSimplefin(a.db, fakeToken(), { household: a, now: '2026-11-05T12:00:00Z', fetch: createFakeSimplefin({ today: () => '2026-11-05' }) });
     const run = await a.scheduler.runNow('simplefin-sync');
     assert.equal(run.status, 'ok');
     assert.equal(run.note.changed, true);
     for (let i = 0; i < 30; i++) await turn();
-    const runs = a.scheduler.runs();
+    const runs = (await a.scheduler.runs());
     assert.ok(runs.some(r => r.jobId === 'plan' && r.trigger === 'ingest'));
     assert.ok(runs.some(r => r.jobId === 'freshness' && r.trigger === 'ingest'));
-    assert.equal(b.scheduler.runs().length, 0);
-    assert.equal(b.db.prepare('SELECT count(*) AS n FROM transactions').get().n, 0);
+    assert.equal((await b.scheduler.runs()).length, 0);
+    assert.equal((await b.db.prepare('SELECT count(*) AS n FROM transactions').get()).n, 0);
   } finally {
-    await registry.close(); instance.close(); rmSync(instance.dataDir, { recursive: true, force: true });
+    await registry.close(); await instance.close(); rmSync(instance.dataDir, { recursive: true, force: true });
   }
 });
 
@@ -176,30 +185,30 @@ test('resolver answers queue a separate local plan claim after releasing the hou
   const { ask, KIND_OPTIONS } = await import('../src/ingest/confirm.mjs');
   const instance = await tempInstance();
   const other = 'hh_synthetic_resolver';
-  instance.platform.prepare("INSERT INTO households (id, status, mode, created_at, updated_at) VALUES (?, 'active', 'real', 1, 1)").run(other);
-  createHouseholdStorage({ platform: instance.platform, dataDir: instance.dataDir, householdId: other, mode: 'real', secrets: instance.secrets, enabled: true });
+  await instance.platform.prepare("INSERT INTO households (id, status, mode, created_at, updated_at) VALUES (?, 'active', 'real', 1, 1)").run(other);
+  await createHouseholdStorage({ platform: instance.platform, dataDir: instance.dataDir, householdId: other, mode: 'real', secrets: instance.secrets, enabled: true });
   const registry = createRuntimeRegistry({ platform: instance.platform, config: {
     dataDir: instance.dataDir, engine: 'off', clock: '2026-11-05', emailTransport: 'dev',
   }, secrets: instance.secrets });
   try {
-    const a = registry.get(instance.householdId); const b = registry.get(other);
-    const seedQuestion = ctx => {
-      ctx.db.prepare('INSERT INTO accounts (id,name,inst,mask) VALUES (?,?,?,?)').run('synthetic-checking', 'Synthetic checking', 'Example Bank', '1234');
-      return ask(ctx.db, { kind: 'account_kind', subject: 'synthetic-checking', question: 'What kind of account is this?', options: KIND_OPTIONS, now: '2026-11-05T12:00:00Z' }).id;
+    const a = await registry.get(instance.householdId); const b = await registry.get(other);
+    const seedQuestion = async ctx => {
+      await ctx.db.prepare('INSERT INTO accounts (id,name,inst,mask) VALUES (?,?,?,?)').run('synthetic-checking', 'Synthetic checking', 'Example Bank', '1234');
+      return (await ask(ctx.db, { kind: 'account_kind', subject: 'synthetic-checking', question: 'What kind of account is this?', options: KIND_OPTIONS, now: '2026-11-05T12:00:00Z' })).id;
     };
-    const own = seedQuestion(a); const foreign = seedQuestion(b);
+    const own = await seedQuestion(a); const foreign = await seedQuestion(b);
     const resolved = await a.scheduler.runNow('confirm-guess');
     assert.equal(resolved.status, 'ok', resolved.errorClass);
-    assert.equal(a.db.prepare('SELECT status FROM confirm_items WHERE id = ?').get(own).status, 'answered');
+    assert.equal((await a.db.prepare('SELECT status FROM confirm_items WHERE id = ?').get(own)).status, 'answered');
     for (let i = 0; i < 30; i++) await turn();
-    const planned = a.scheduler.runs().find(r => r.jobId === 'plan');
+    const planned = (await a.scheduler.runs()).find(r => r.jobId === 'plan');
     assert.ok(planned, 'resolver queues a plan through its scheduler');
     assert.equal(planned.status, 'ok', planned.errorClass);
     assert.notEqual(planned.id, resolved.id);
     assert.equal(planned.trigger, 'resolve');
-    assert.equal(b.db.prepare('SELECT status FROM confirm_items WHERE id = ?').get(foreign).status, 'pending');
-    assert.equal(b.scheduler.runs().length, 0);
+    assert.equal((await b.db.prepare('SELECT status FROM confirm_items WHERE id = ?').get(foreign)).status, 'pending');
+    assert.equal((await b.scheduler.runs()).length, 0);
   } finally {
-    await registry.close(); instance.close(); rmSync(instance.dataDir, { recursive: true, force: true });
+    await registry.close(); await instance.close(); rmSync(instance.dataDir, { recursive: true, force: true });
   }
 });

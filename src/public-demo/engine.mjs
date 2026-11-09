@@ -41,13 +41,13 @@ export function createPublicDemoEngine({ db, config, control, visitorId }) {
     inner = createEngine({ mode: config.engine, credential, ledger: createSpendLedger(db), capUsd: Number.MAX_SAFE_INTEGER,
       modelOverride: limits.model, maxRounds: 2, streamDelayMs: config.fakeStreamMs,
       roundRunner: publicDemoRound,
-      admitRound(request) {
+      async admitRound(request) {
         const definitions = request.tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
         const input = Buffer.byteLength(JSON.stringify({ system: request.system, systemDynamic: request.systemDynamic,
           messages: request.messages, tools: definitions }), 'utf8') + 4096;
         const price = PRICING[limits.model].long || PRICING[limits.model];
         const usd = (input * price.input + request.maxTokens * price.output) / 1e6;
-        if (input > limits.maxInputTokens || !control.reserveRound(visitorId, input + request.maxTokens, usd)) throw new DemoLimitError();
+        if (input > limits.maxInputTokens || !await control.reserveRound(visitorId, input + request.maxTokens, usd)) throw new DemoLimitError();
       },
     });
   })());
@@ -67,9 +67,9 @@ export function createPublicDemoEngine({ db, config, control, visitorId }) {
 
 export function limitDemoAnswerer(answerer, control, visitorId, clientAddress) {
   const limit = fn => async request => {
-    if (!control.reserveTurn(visitorId, clientAddress())) return { paragraphs: [DEMO_LIMIT_MESSAGE], refs: [], notice: true };
+    if (!await control.reserveTurn(visitorId, clientAddress())) return { paragraphs: [DEMO_LIMIT_MESSAGE], refs: [], notice: true };
     const result = await fn(request);
     return result;
   };
-  return { answer: limit(request => answerer.answer(request)), whatIf: limit(request => answerer.whatIf(request)) };
+  return { answer: limit(request => answerer.answer(request)), whatIf: limit(async request => answerer.whatIf(request)) };
 }

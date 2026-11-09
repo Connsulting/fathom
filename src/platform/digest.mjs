@@ -27,16 +27,16 @@ export function rowsDigest(rows) {
 
 export const quoteIdent = name => `"${String(name).replace(/"/g, '""')}"`;
 
-export function tableRows(db, table, columns = null) {
+export async function tableRows(db, table, columns = null) {
   const cols = columns ? columns.map(quoteIdent).join(', ') : '*';
-  return db.prepare(`SELECT ${cols} FROM ${quoteIdent(table)}`).all();
+  return await db.prepare(`SELECT ${cols} FROM ${quoteIdent(table)}`).all();
 }
 
 // One digest over every user table of a database (names and rows).
-export function logicalDigest(db) {
+export async function logicalDigest(db) {
   const h = createHash('sha256');
-  for (const t of listTables(db)) {
-    const d = rowsDigest(tableRows(db, t));
+  for (const t of await listTables(db)) {
+    const d = rowsDigest(await tableRows(db, t));
     h.update(`${t}\u0000${d.count}\u0000${d.sha256}\n`);
   }
   return h.digest('hex');

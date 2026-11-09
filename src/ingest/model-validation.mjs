@@ -1,3 +1,4 @@
+import { rehearseWith } from '../store/db.mjs';
 import { createHash } from 'node:crypto';
 import { validateProposal } from './model-contract.mjs';
 import { parseInterpretation } from './model-parse.mjs';
@@ -20,10 +21,10 @@ const day = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(val
 const PERIOD = /^\d{4}-(?:0[1-9]|1[0-2])$/;
 const normalize = value => String(value ?? '').trim().toLowerCase();
 
-function accountFor(db, value) {
-  const id = db.prepare('SELECT * FROM accounts WHERE id = ?').get(String(value));
+async function accountFor(db, value) {
+  const id = await db.prepare('SELECT * FROM accounts WHERE id = ?').get(String(value));
   if (id) return id.archived_at === null ? id : null;
-  const matches = db.prepare('SELECT * FROM accounts WHERE archived_at IS NULL').all().filter(a => normalize(a.name) === normalize(value));
+  const matches = (await db.prepare('SELECT * FROM accounts WHERE archived_at IS NULL').all()).filter(a => normalize(a.name) === normalize(value));
   return matches.length === 1 ? matches[0] : null;
 }
 
@@ -54,13 +55,13 @@ export function importPlan(rows, { reinterpret = false } = {}) {
     parsed: { rows, warnings: [], period: { from: dates[0] ?? null, to: dates.at(-1) ?? null } } };
 }
 
-export function validateImport(ctx, proposal, source) {
+export async function validateImport(ctx, proposal, source) {
   const checked = validateProposal(proposal, source);
   const errors = [...checked.errors], rows = [], bindings = [], identities = [], actions = [], notes = [];
   const fail = reason => ({ valid: false, errors: [...new Set([...errors, reason])], rows, bindings, identities, counts: null, summary: null });
   if (!checked.valid) return fail('invalid_proposal');
   if (source.status !== 'indexed') return fail('needs_source_text');
-  if (ctx.db.prepare('SELECT removed_at FROM files WHERE id=?').get(source.fileId)?.removed_at) return fail('source_removed');
+  if ((await ctx.db.prepare('SELECT removed_at FROM files WHERE id=?').get(source.fileId))?.removed_at) return fail('source_removed');
   const parsed = parseInterpretation({ rows: proposal.rows, coverage: proposal.coverage, completeness: proposal.completeness, controls: proposal.controls ?? [] }, source);
   if (!parsed.valid) return fail('invalid_source_values');
   if (proposal.completeness !== 'complete') errors.push('incomplete_coverage');
@@ -93,7 +94,7 @@ export function validateImport(ctx, proposal, source) {
       fields: structuredClone(original.fields), derivedFrom, completeness: proposal.completeness };
     let account = null;
     if (Object.hasOwn(f, 'accountId')) {
-      account = accountFor(ctx.db, f.accountId);
+      account = await accountFor(ctx.db, f.accountId);
       if (!account) errors.push('account_unresolved');
       else {
         bindings.push(account.id);
@@ -115,7 +116,7 @@ export function validateImport(ctx, proposal, source) {
       name: f.name ?? null, price: f.price ?? null, costBasis: f.costBasis ?? null });
     else if (row.target === 'pnl') {
       if (!PERIOD.test(f.period) || !['cash', 'accrual', 'unknown'].includes(f.basis)) errors.push('pnl_context_unresolved');
-      const matches = [...new Set(ctx.db.prepare('SELECT alias,entity FROM entity_aliases').all().filter(r => normalize(r.alias).replace(/[^a-z0-9]/g, '') === normalize(f.entity).replace(/[^a-z0-9]/g, '')).map(r => r.entity))];
+      const matches = [...new Set((await ctx.db.prepare('SELECT alias,entity FROM entity_aliases').all()).filter(r => normalize(r.alias).replace(/[^a-z0-9]/g, '') === normalize(f.entity).replace(/[^a-z0-9]/g, '')).map(r => r.entity))];
       const entity = matches.length === 1 ? matches[0] : null;
       if (!entity) errors.push('entity_unresolved');
       else bindings.push(`entity:${entity}`);
@@ -127,21 +128,21 @@ export function validateImport(ctx, proposal, source) {
         amount, taxYear: Number(f.taxYear), sheetYear: Number(f.taxYear), taxYearBasis: String(f.taxYearBasis), date: f.paymentDate, datePrecision: row.datePrecision, paymentKind: row.kind };
       if (day(payment.date)) {
         const key = dedupeKey(payment), kind = value => value === 'paid' ? 'estimate' : value;
-        const stored = ctx.db.prepare('SELECT kind FROM tax_payments WHERE dedupe_key=?').get(key);
+        const stored = await ctx.db.prepare('SELECT kind FROM tax_payments WHERE dedupe_key=?').get(key);
         if ((stored && kind(stored.kind) !== row.kind) || rows.some(prior => prior.kind === 'tax_payment' && day(prior.date) && dedupeKey(prior) === key && kind(prior.paymentKind) !== row.kind)) errors.push('tax_payment_kind_conflict');
       }
       rows.push(payment);
     } else if (row.target === 'document') {
       if (!validateExtraction(row.docType, f)) errors.push('invalid_document');
       else {
-        const entities = ctx.db.prepare('SELECT entity AS name FROM pnl_lines UNION SELECT entity AS name FROM entity_aliases').all().map(r => r.name);
+        const entities = (await ctx.db.prepare('SELECT entity AS name FROM pnl_lines UNION SELECT entity AS name FROM entity_aliases').all()).map(r => r.name);
         const converted = toRows(row.docType, { ...f, confidence: 1 }, { fileId: source.fileId, households: { entities }, warnings: [] });
         const period = periodOf(row.docType, f);
         rows.push(...converted.map(r => ({ ...r, locator: { ...locator, document: row.docType, ...(r.locator?.field ? { field: r.locator.field } : {}) },
           ...(r.kind === 'document' ? { asOf: period.to } : {}) })));
       }
     } else if (row.target === 'account_metadata') {
-      if (!accountFor(ctx.db, f.accountId)) errors.push('account_unresolved');
+      if (!await accountFor(ctx.db, f.accountId)) errors.push('account_unresolved');
       else rows.push({ ...base, kind: 'account_metadata', accountId: f.accountId, account: { inst: f.institution, mask: f.mask, kind: f.kind, holder: f.holder, name: f.alias } });
     } else if (['fact', 'expected_transaction'].includes(row.target) && source.format === 'text' && source.bytes.length <= 4000) {
       const span = { fileId: source.fileId, sha256: source.sha256, byteStart: 0, byteEnd: source.bytes.length };
@@ -150,10 +151,10 @@ export function validateImport(ctx, proposal, source) {
         amount: f.amount ?? null, accountId: f.accountId ?? null, direction: row.direction, datePrecision: row.datePrecision, evidence };
       try {
         if (row.target === 'expected_transaction' && /^next /i.test(f.dueDate)) {
-          const derived = relativeDateEvidence({ ...ctx, sourceEvidence: { source, span, actorId: ctx.actorId, capturedAt: ctx.capturedAt ?? null } }, f.dueDate);
+          const derived = await relativeDateEvidence({ ...ctx, sourceEvidence: { source, span, actorId: ctx.actorId, capturedAt: ctx.capturedAt ?? null } }, f.dueDate);
           args = { ...args, dueDate: derived.date, relativeDate: f.dueDate };
         }
-        const prepared = prepareSourceActions(ctx, source, [{ tool: 'answer', operation: row.target === 'fact' ? 'fact' : 'expected_transaction', args, span }]);
+        const prepared = await prepareSourceActions(ctx, source, [{ tool: 'answer', operation: row.target === 'fact' ? 'fact' : 'expected_transaction', args, span }]);
         actions.push(...prepared.accepted); notes.push(...prepared.notes);
       } catch (error) { errors.push(error.code ?? 'invalid_action'); }
     } else errors.push('action_adapter_required');
@@ -193,13 +194,11 @@ export function validateImport(ctx, proposal, source) {
     return false;
   });
   let counts, questions;
-  ctx.db.exec('SAVEPOINT import_preview');
-  try {
-    counts = persistImport(ctx.db, source.fileId, { name: 'Reviewed import', bytes: source.bytes }, importPlan(structuredClone(persisted), { reinterpret: ctx.reinterpret }), { now: new Date(typeof ctx.now === 'function' ? ctx.now() : ctx.now ?? Date.now()).toISOString() }).result.counts;
-    if (actions.length) applySourceActions({ ...ctx, scopes: undefined }, source, actions, ctx.capturedAt ?? null, null);
-    questions = ctx.db.prepare('SELECT kind,subject,question,options,context,status FROM confirm_items WHERE file_id=? ORDER BY kind,subject').all(source.fileId).map(row => ({ ...row }));
-  } catch { errors.push('persistence_refused'); }
-  finally { ctx.db.exec('ROLLBACK TO import_preview'); ctx.db.exec('RELEASE import_preview'); }
+  await rehearseWith(ctx, async ctx => { try {
+    counts = (await persistImport(ctx.db, source.fileId, { name: 'Reviewed import', bytes: source.bytes }, importPlan(structuredClone(persisted), { reinterpret: ctx.reinterpret }), { now: new Date(typeof ctx.now === 'function' ? ctx.now() : ctx.now ?? Date.now()).toISOString() })).result.counts;
+    if (actions.length) await applySourceActions({ ...ctx, scopes: undefined }, source, actions, ctx.capturedAt ?? null, null);
+    questions = (await ctx.db.prepare('SELECT kind,subject,question,options,context,status FROM confirm_items WHERE file_id=? ORDER BY kind,subject').all(source.fileId)).map(row => ({ ...row }));
+  } catch { errors.push('persistence_refused'); } });
   if (errors.length) return fail('validation_failed');
   return { valid: true, errors: [], actions, notes, rows: persisted, bindings: [...new Set(bindings)].sort(), identities, questions, counts,
     summary: { rows: proposal.rows.length, amount: parsed.resolved.reduce((n, row) => n + toCents(row.fields.amount ?? 0), 0) / 100,

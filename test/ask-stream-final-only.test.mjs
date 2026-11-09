@@ -27,13 +27,13 @@ const INVENTED = 'Is 4,321 or 5,432 the right amount for this?';
 
 async function demoAnswerer(t) {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
-  seedDemo(s.db);
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  await seedDemo(s.db);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' });
-  const engine = createRuntimeEngine({ db: s.db, config });
+  const engine = await createRuntimeEngine({ db: s.db, config });
   // The temp store's directory stands in as the household root.
   const packs = createLivePacks(s.db, { dataDir: s.dataDir });
-  packs.refresh();
+  await packs.refresh();
   return { s, engine, packs, root: s.dataDir };
 }
 
@@ -97,12 +97,12 @@ test('ST2-AC1 a first draft the corrective round replaces never streams: only pr
 
 test('ST2-AC1 an engine restream (text, reset, text) reaches the listener as nothing', async t => {
   const { s, engine, packs, root } = await demoAnswerer(t);
-  const restream = { ...engine, mode: engine.mode, isOn: () => engine.isOn(), call: async req => {
+  const restream = { ...engine, mode: engine.mode, isOn: async () => await engine.isOn(), call: async req => {
     const { onEvent, ...rest } = req;
     onEvent?.({ type: 'text', text: 'Refused draft.' });
     onEvent?.({ type: 'reset' });
     onEvent?.({ type: 'text', text: 'Keep a reserve.' });
-    return engine.call({ ...rest, fake: [{ text: 'Keep a reserve.' }] });
+    return await engine.call({ ...rest, fake: [{ text: 'Keep a reserve.' }] });
   } };
   const seen = [];
   const reply = await createLiveAnswerer({ engine: restream, packs, root, services: { engine: restream, config: { dataDir: root } } })
@@ -112,7 +112,7 @@ test('ST2-AC1 an engine restream (text, reset, text) reaches the listener as not
   assert.deepEqual(reply.paragraphs, ['Keep a reserve.']);
 });
 
-test('ST2-AC1 over HTTP a regenerated answer streams start, progress and one final event, and no draft', T, () => withServer({ env: FAKE }, async s => {
+test('ST2-AC1 over HTTP a regenerated answer streams start, progress and one final event, and no draft', T, async () => withServer({ env: FAKE }, async s => {
   const r = await postJson(s.baseUrl, '/api/threads', { text: INVENTED }, { accept: 'text/event-stream' });
   assert.equal(r.status, 200);
   assert.match(r.headers['content-type'], /^text\/event-stream/);
@@ -150,7 +150,7 @@ test('ST2-AC2 a clean first draft streams progress only, all of it before the an
   assert.deepEqual(reply.paragraphs, ['Here is where things stand.']);
 });
 
-test('ST2-AC2 over HTTP a clean answer streams progress before the final event and no text', T, () => withServer({ env: FAKE }, async s => {
+test('ST2-AC2 over HTTP a clean answer streams progress before the final event and no text', T, async () => withServer({ env: FAKE }, async s => {
   const r = await postJson(s.baseUrl, '/api/threads', { text: 'Give me a quick read on where the household stands right now' }, { accept: 'text/event-stream' });
   assert.equal(r.status, 200);
   const evs = events(r.text);

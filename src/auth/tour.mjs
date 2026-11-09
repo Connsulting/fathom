@@ -5,13 +5,13 @@
 
 const userId = ctx => (typeof ctx.identity?.id === 'string' ? ctx.identity.id : null);
 
-export function tourPending(ctx) {
+export async function tourPending(ctx) {
   const id = userId(ctx);
   if (!id || !ctx.platform) return false;
-  return ctx.platform.prepare('SELECT tour_pending AS p FROM users WHERE id = ?').get(id)?.p === 1;
+  return (await ctx.platform.prepare('SELECT tour_pending AS p FROM users WHERE id = ?').get(id))?.p === 1;
 }
 
-export function setTourPending(ctx, pending) {
+export async function setTourPending(ctx, pending) {
   const id = userId(ctx);
-  if (id && ctx.platform) ctx.platform.prepare('UPDATE users SET tour_pending = ? WHERE id = ?').run(pending ? 1 : 0, id);
+  if (id && ctx.platform) await ctx.platform.prepare('UPDATE users SET tour_pending = ? WHERE id = ?').run(pending ? 1 : 0, id);
 }

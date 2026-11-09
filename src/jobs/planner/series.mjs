@@ -11,6 +11,7 @@ import { cents, parseJson } from '../../store/db.mjs';
 import { trendLabel } from '../../shared/account-label.mjs';
 import { accountNaming } from '../../accounts/naming.mjs';
 import { monthLabel } from './data.mjs';
+import { mapSeries } from '../../shared/series.mjs';
 
 export const SERIES_SRC = 'balances';
 export const MAX_POINTS = 12;
@@ -35,11 +36,11 @@ function monthsEnding(clock, limit) {
 }
 
 // { 'YYYY-MM': {date, v} } for one account: the reading each month's value comes from.
-export function monthlyReadings(db, accountId, clock) {
+export async function monthlyReadings(db, accountId, clock) {
   const byMonth = new Map();
-  const bal = db.prepare('SELECT date, amount FROM balances WHERE account_id = ? AND date <= ? ORDER BY date').all(accountId, clock);
+  const bal = await db.prepare('SELECT date, amount FROM balances WHERE account_id = ? AND date <= ? ORDER BY date').all(accountId, clock);
   for (const r of bal) byMonth.set(monthKey(r.date), { date: r.date, v: r.amount });
-  const pos = db.prepare('SELECT as_of, value, quantity, price FROM positions WHERE account_id = ? AND as_of <= ? ORDER BY as_of').all(accountId, clock);
+  const pos = await db.prepare('SELECT as_of, value, quantity, price FROM positions WHERE account_id = ? AND as_of <= ? ORDER BY as_of').all(accountId, clock);
   const byAsOf = new Map();
   for (const p of pos) {
     const v = Number.isFinite(p.value) ? p.value : Number.isFinite(p.quantity) && Number.isFinite(p.price) ? p.quantity * p.price : null;
@@ -53,19 +54,19 @@ export function monthlyReadings(db, accountId, clock) {
 }
 
 // { 'YYYY-MM': value } for one account.
-export function monthlyValues(db, accountId, clock) {
-  return new Map([...monthlyReadings(db, accountId, clock)].map(([k, r]) => [k, r.v]));
+export async function monthlyValues(db, accountId, clock) {
+  return new Map([...await monthlyReadings(db, accountId, clock)].map(([k, r]) => [k, r.v]));
 }
 
 // Imported names are plain text; the label is the account's name.
-export function trendLabels(db) {
-  return new Map([...accountNaming(db).byId].map(([id, a]) => [id, trendLabel(a)]));
+export async function trendLabels(db) {
+  return new Map([...(await accountNaming(db)).byId].map(([id, a]) => [id, trendLabel(a)]));
 }
 
-export function buildSeries(db, clock) {
-  const accounts = db.prepare('SELECT id FROM accounts WHERE archived_at IS NULL ORDER BY sort, id').all();
-  const labels = trendLabels(db);
-  const stored = accounts.map(a => ({ a, values: monthlyValues(db, a.id, clock) })).filter(x => x.values.size);
+export async function buildSeries(db, clock) {
+  const accounts = await db.prepare('SELECT id FROM accounts WHERE archived_at IS NULL ORDER BY sort, id').all();
+  const labels = await trendLabels(db);
+  const stored = (await mapSeries(accounts, async a => ({ a, values: await monthlyValues(db, a.id, clock) }))).filter(x => x.values.size);
   if (!stored.length) return {};
   // The window ends at the newest month any account has data for, so no month is shown that no
   // upload covers.

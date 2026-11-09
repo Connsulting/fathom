@@ -23,9 +23,9 @@ const KEY = 'ask:0123456789ab';
 
 async function store(t, { demo: withDemo = false } = {}) {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
-  if (withDemo) seedDemo(s.db);
-  else setSetting(s.db, 'clock', CLOCK);
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  if (withDemo) await seedDemo(s.db);
+  else await setSetting(s.db, 'clock', CLOCK);
   const config = { clock: CLOCK, dataDir: s.dataDir };
   const ctx = (body = {}, params = {}) => ({ db: s.db, config, body, params });
   return { ...s, config, ctx };
@@ -33,8 +33,8 @@ async function store(t, { demo: withDemo = false } = {}) {
 
 // Household checking, business checking, two Roth IRAs (one per person), a traditional IRA and an
 // IRA whose holder is not set. Every account has a balance dated 2026-10-31 and a current figure.
-function seedAccounts(db) {
-  db.prepare("INSERT INTO sources (id, label, as_of) VALUES ('bank', 'Synthetic bank export', ?)").run(CLOCK);
+async function seedAccounts(db) {
+  await db.prepare("INSERT INTO sources (id, label, as_of) VALUES ('bank', 'Synthetic bank export', ?)").run(CLOCK);
   const acct = db.prepare('INSERT INTO accounts (id, inst, name, owner, kind, fig_key, parser) VALUES (?, ?, ?, ?, ?, ?, ?)');
   const bal = db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)');
   const fig = db.prepare("INSERT INTO figures (key, v, src, kind, label, updated_at) VALUES (?, ?, 'bank', 'a', ?, ?)");
@@ -46,19 +46,19 @@ function seedAccounts(db) {
     ['r3', 'Traditional IRA', 'You', 'retirement', 40000],
     ['r4', 'Shared IRA', null, 'retirement', 9000],
   ]) {
-    acct.run(id, 'Example Institution', name, owner, kind, `bal.${id}`, 'test');
-    bal.run(id, '2026-10-31', amount);
-    fig.run(`bal.${id}`, amount, name, NOW);
+    await acct.run(id, 'Example Institution', name, owner, kind, `bal.${id}`, 'test');
+    await bal.run(id, '2026-10-31', amount);
+    await fig.run(`bal.${id}`, amount, name, NOW);
   }
 }
 
-const txn = (db, account, date, amount, description = 'Deposit') =>
-  Number(db.prepare('INSERT INTO transactions (account_id, date, amount, description) VALUES (?, ?, ?, ?)').run(account, date, amount, description).lastInsertRowid);
+const txn = async (db, account, date, amount, description = 'Deposit') =>
+  Number((await db.prepare('INSERT INTO transactions (account_id, date, amount, description) VALUES (?, ?, ?, ?) RETURNING id').get(account, date, amount, description)).id);
 
-const rejects = (fn, status, re) => assert.throws(fn, e => e instanceof HttpError && e.status === status && (!re || re.test(e.message)),
+const rejects = (fn, status, re) => assert.rejects(fn, e => e instanceof HttpError && e.status === status && (!re || re.test(e.message)),
   `expected ${status}${re ? ` matching ${re}` : ''}`);
-const defOf = (db, id) => JSON.parse(db.prepare('SELECT def FROM goals WHERE id = ?').get(id).def);
-const rowOf = (db, id) => db.prepare('SELECT * FROM goals WHERE id = ?').get(id);
+const defOf = async (db, id) => JSON.parse((await db.prepare('SELECT def FROM goals WHERE id = ?').get(id)).def);
+const rowOf = async (db, id) => await db.prepare('SELECT * FROM goals WHERE id = ?').get(id);
 const goalFig = (v, label, kind = 't') => ({ v, src: 'goal-target', kind, label });
 
 const RANGE = Object.freeze({ title: 'Household checking in a working range', kind: 'range', owner: 'joint', priority: 'medium',
@@ -73,9 +73,9 @@ const CONTRIB = Object.freeze({ title: 'Fill both IRAs', kind: 'contribution', o
 
 test('POST /api/goals creates a range, a floor and a contribution and the scenario carries their fields', async t => {
   const s = await store(t);
-  seedAccounts(s.db);
+  await seedAccounts(s.db);
 
-  const r = goalCreate(s.ctx({ ...RANGE }));
+  const r = await goalCreate(s.ctx({ ...RANGE }));
   const range = r.goal;
   assert.match(range.id, /^g[a-f0-9]{12}$/);
   assert.equal(range.origin, 'owner');
@@ -86,22 +86,22 @@ test('POST /api/goals creates a range, a floor and a contribution and the scenar
   assert.deepEqual(r.scenario.fig[`goal.${range.id}.low`], goalFig(4000, 'Range low end'));
   assert.deepEqual(r.scenario.fig[`goal.${range.id}.high`], goalFig(8000, 'Range high end'));
   assert.deepEqual(range.progress, { cur: 'bal.chk', target: `goal.${range.id}.low` }, 'range progress reads against the low end');
-  assert.ok(defOf(s.db, range.id).pace, 'a range captures a pace path from the tracked balance');
+  assert.ok((await defOf(s.db, range.id)).pace, 'a range captures a pace path from the tracked balance');
 
-  const f = goalCreate(s.ctx({ ...FLOOR }));
+  const f = await goalCreate(s.ctx({ ...FLOOR }));
   const floor = f.goal;
   assert.equal(floor.kind, 'floor');
   assert.equal(floor.owner, 'owner');
   assert.equal(floor.priority, 'high');
   assert.equal(floor.floor, 10000);
   assert.deepEqual(f.scenario.fig[`goal.${floor.id}.floor`], goalFig(10000, 'Floor'));
-  const floorDef = defOf(s.db, floor.id);
+  const floorDef = await defOf(s.db, floor.id);
   assert.equal(floorDef.pace, null, 'a floor has no pace path');
   for (const k of ['target', 'targetDate', 'targetLow', 'targetHigh', 'taxYear', 'split', 'entered', 'accounts', 'status']) {
     assert.equal(Object.hasOwn(floorDef, k), false, `the floor def has no ${k}`);
   }
 
-  const c = goalCreate(s.ctx({ ...CONTRIB }));
+  const c = await goalCreate(s.ctx({ ...CONTRIB }));
   const contrib = c.goal;
   for (const [k, v] of Object.entries({ kind: 'contribution', owner: 'joint', priority: 'low', status: 'open', target: 14000, taxYear: 2026,
     targetDate: '2027-04-15', accounts: ['r1', 'r2'], split: SPLIT, entered: ENTERED })) {
@@ -116,18 +116,18 @@ test('POST /api/goals creates a range, a floor and a contribution and the scenar
   assert.deepEqual(fig[`goal.${contrib.id}.entered.spouse`], goalFig(1500, 'Contributed so far, as you entered', 'a'));
   assert.equal(typeof contrib.accountsLabel, 'string');
   assert.equal(contrib.accountsLabel.split(', ').length, 2, 'both destination accounts are named');
-  const contribDef = defOf(s.db, contrib.id);
+  const contribDef = await defOf(s.db, contrib.id);
   assert.equal(contribDef.pace, null, 'a contribution has no captured path');
   assert.equal(Object.hasOwn(contribDef, 'track'), false);
   assert.equal(Object.hasOwn(contribDef, 'status'), false, 'status is never stored in the def');
 
   // A total entered amount is one figure.
-  const total = goalCreate(s.ctx({ ...CONTRIB, title: 'One IRA', split: null, entered: { asOf: '2026-11-01', total: 2500 } }));
+  const total = await goalCreate(s.ctx({ ...CONTRIB, title: 'One IRA', split: null, entered: { asOf: '2026-11-01', total: 2500 } }));
   assert.deepEqual(total.scenario.fig[`goal.${total.goal.id}.entered`], goalFig(2500, 'Contributed so far, as you entered', 'a'));
   assert.equal(total.scenario.fig[`goal.${total.goal.id}.split.owner`], undefined);
 
   // A plain balance goal still reads as before, with the new defaults.
-  const plain = goalCreate(s.ctx({ title: 'A year of cash', target: 30000, targetDate: '2027-12-31', track: { accounts: ['chk'] } })).goal;
+  const plain = (await goalCreate(s.ctx({ title: 'A year of cash', target: 30000, targetDate: '2027-12-31', track: { accounts: ['chk'] } }))).goal;
   assert.equal(plain.kind, 'balance');
   assert.equal(plain.owner, null);
   assert.equal(plain.priority, null);
@@ -137,62 +137,62 @@ test('POST /api/goals creates a range, a floor and a contribution and the scenar
 
 test('POST /api/goals/:id switches kind and drops the old kind\'s fields', async t => {
   const s = await store(t);
-  seedAccounts(s.db);
-  const g = goalCreate(s.ctx({ title: 'Checking cushion', target: 5000, targetDate: '2027-06-30', track: { accounts: ['chk'] } })).goal;
-  assert.ok(defOf(s.db, g.id).pace);
+  await seedAccounts(s.db);
+  const g = (await goalCreate(s.ctx({ title: 'Checking cushion', target: 5000, targetDate: '2027-06-30', track: { accounts: ['chk'] } }))).goal;
+  assert.ok((await defOf(s.db, g.id)).pace);
 
-  const asFloor = goalUpdate(s.ctx({ kind: 'floor', floor: 3000 }, { id: g.id })).goal;
+  const asFloor = (await goalUpdate(s.ctx({ kind: 'floor', floor: 3000 }, { id: g.id }))).goal;
   assert.equal(asFloor.kind, 'floor');
   assert.equal(asFloor.floor, 3000);
   assert.deepEqual(asFloor.track, { accounts: ['chk'] }, 'the tracked account carries over to the floor');
-  const floorDef = defOf(s.db, g.id);
+  const floorDef = await defOf(s.db, g.id);
   assert.equal(Object.hasOwn(floorDef, 'target'), false, 'no target left in the def');
   assert.equal(Object.hasOwn(floorDef, 'targetDate'), false, 'no target date left in the def');
   assert.equal(floorDef.pace, null);
   assert.equal(floorDef.title, 'Checking cushion', 'common fields are kept');
 
-  const back = goalUpdate(s.ctx({ kind: 'balance', target: 9000, targetDate: '2027-06-30' }, { id: g.id })).goal;
+  const back = (await goalUpdate(s.ctx({ kind: 'balance', target: 9000, targetDate: '2027-06-30' }, { id: g.id }))).goal;
   assert.equal(back.kind, 'balance');
-  const balanceDef = defOf(s.db, g.id);
+  const balanceDef = await defOf(s.db, g.id);
   assert.equal(Object.hasOwn(balanceDef, 'floor'), false);
   assert.ok(balanceDef.pace && balanceDef.pace.startValue === 6000, 'back to balance captures a pace path');
 
   // A range edit that leaves the ends alone keeps the path; moving the low end recaptures.
-  const r = goalCreate(s.ctx({ ...RANGE })).goal;
-  const path = defOf(s.db, r.id).pace;
-  goalUpdate(s.ctx({ title: 'Renamed range', targetHigh: 9000 }, { id: r.id }));
-  assert.deepEqual(defOf(s.db, r.id).pace, path);
-  goalUpdate(s.ctx({ title: 'A partial edit keeps the kind' }, { id: r.id }));
-  assert.equal(defOf(s.db, r.id).kind, 'range');
-  assert.equal(defOf(s.db, r.id).targetLow, 4000);
+  const r = (await goalCreate(s.ctx({ ...RANGE }))).goal;
+  const path = (await defOf(s.db, r.id)).pace;
+  await goalUpdate(s.ctx({ title: 'Renamed range', targetHigh: 9000 }, { id: r.id }));
+  assert.deepEqual((await defOf(s.db, r.id)).pace, path);
+  await goalUpdate(s.ctx({ title: 'A partial edit keeps the kind' }, { id: r.id }));
+  assert.equal((await defOf(s.db, r.id)).kind, 'range');
+  assert.equal((await defOf(s.db, r.id)).targetLow, 4000);
 });
 
 test('bad kind fields answer 400 with the validation message', async t => {
   const s = await store(t);
-  seedAccounts(s.db);
-  rejects(() => goalCreate(s.ctx({ ...RANGE, targetLow: 9000 })), 400, /^the low end must not be above the high end$/);
-  rejects(() => goalCreate(s.ctx({ ...RANGE, targetHigh: undefined })), 400, /^a range needs a low end and a high end$/);
-  rejects(() => goalCreate(s.ctx({ ...FLOOR, track: null })), 400, /^a floor needs something to track$/);
-  rejects(() => goalCreate(s.ctx({ ...FLOOR, floor: null })), 400, /^a floor needs an amount$/);
-  rejects(() => goalCreate(s.ctx({ ...FLOOR, targetDate: '2026-12-31' })), 400, /^targetDate does not apply to a floor goal$/);
-  rejects(() => goalCreate(s.ctx({ ...CONTRIB, taxYear: undefined })), 400, /^a contribution needs a tax year$/);
-  rejects(() => goalCreate(s.ctx({ ...CONTRIB, targetDate: '2026-01-01' })), 400, /^the deadline must be after January 1 of the tax year$/);
-  rejects(() => goalCreate(s.ctx({ ...CONTRIB, target: 15000 })), 400, /^the split must add up to the amount$/);
-  rejects(() => goalCreate(s.ctx({ ...CONTRIB, accounts: ['r1', 'nope'] })), 400, /account/);
-  rejects(() => goalCreate(s.ctx({ title: 'Plain', floor: 100 })), 400, /^floor does not apply to a balance goal$/);
-  rejects(() => goalCreate(s.ctx({ title: 'Plain', owner: 'you' })), 400, /^owner must be owner, spouse, joint or a dependent key such as kid$/);
-  rejects(() => goalCreate(s.ctx({ title: 'Plain', priority: 'urgent' })), 400, /priority/);
-  rejects(() => goalCreate(s.ctx({ title: 'Plain', kind: 'savings' })), 400, /^kind must be one of balance, range, floor, contribution$/);
-  rejects(() => goalCreate(s.ctx({ title: 'Plain', status: 'closed' })), 400, /status/);
-  assert.equal(s.db.prepare('SELECT count(*) n FROM goals').get().n, 0, 'nothing written');
+  await seedAccounts(s.db);
+  await rejects(async () => await goalCreate(s.ctx({ ...RANGE, targetLow: 9000 })), 400, /^the low end must not be above the high end$/);
+  await rejects(async () => await goalCreate(s.ctx({ ...RANGE, targetHigh: undefined })), 400, /^a range needs a low end and a high end$/);
+  await rejects(async () => await goalCreate(s.ctx({ ...FLOOR, track: null })), 400, /^a floor needs something to track$/);
+  await rejects(async () => await goalCreate(s.ctx({ ...FLOOR, floor: null })), 400, /^a floor needs an amount$/);
+  await rejects(async () => await goalCreate(s.ctx({ ...FLOOR, targetDate: '2026-12-31' })), 400, /^targetDate does not apply to a floor goal$/);
+  await rejects(async () => await goalCreate(s.ctx({ ...CONTRIB, taxYear: undefined })), 400, /^a contribution needs a tax year$/);
+  await rejects(async () => await goalCreate(s.ctx({ ...CONTRIB, targetDate: '2026-01-01' })), 400, /^the deadline must be after January 1 of the tax year$/);
+  await rejects(async () => await goalCreate(s.ctx({ ...CONTRIB, target: 15000 })), 400, /^the split must add up to the amount$/);
+  await rejects(async () => await goalCreate(s.ctx({ ...CONTRIB, accounts: ['r1', 'nope'] })), 400, /account/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'Plain', floor: 100 })), 400, /^floor does not apply to a balance goal$/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'Plain', owner: 'you' })), 400, /^owner must be owner, spouse, joint or a dependent key such as kid$/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'Plain', priority: 'urgent' })), 400, /priority/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'Plain', kind: 'savings' })), 400, /^kind must be one of balance, range, floor, contribution$/);
+  await rejects(async () => await goalCreate(s.ctx({ title: 'Plain', status: 'closed' })), 400, /status/);
+  assert.equal((await s.db.prepare('SELECT count(*) n FROM goals').get()).n, 0, 'nothing written');
 
-  const r = goalCreate(s.ctx({ ...RANGE })).goal;
-  rejects(() => goalUpdate(s.ctx({ targetHigh: 3000 }, { id: r.id })), 400, /^the low end must not be above the high end$/);
-  rejects(() => goalUpdate(s.ctx({ floor: 5 }, { id: r.id })), 400, /^floor does not apply to a range goal$/);
-  assert.equal(defOf(s.db, r.id).targetHigh, 8000, 'a refused edit changes nothing');
-  assert.equal(goalUpdate(s.ctx({ targetHigh: 9000 }, { id: r.id })).goal.targetHigh, 9000, 'a valid edit saves');
+  const r = (await goalCreate(s.ctx({ ...RANGE }))).goal;
+  await rejects(async () => await goalUpdate(s.ctx({ targetHigh: 3000 }, { id: r.id })), 400, /^the low end must not be above the high end$/);
+  await rejects(async () => await goalUpdate(s.ctx({ floor: 5 }, { id: r.id })), 400, /^floor does not apply to a range goal$/);
+  assert.equal((await defOf(s.db, r.id)).targetHigh, 8000, 'a refused edit changes nothing');
+  assert.equal((await goalUpdate(s.ctx({ targetHigh: 9000 }, { id: r.id }))).goal.targetHigh, 9000, 'a valid edit saves');
   // Liveness: the valid shapes of every kind save.
-  for (const body of [FLOOR, CONTRIB, { title: 'Owned balance', owner: 'kid', priority: 'high' }]) assert.equal(goalCreate(s.ctx({ ...body })).goal.status, 'open');
+  for (const body of [FLOOR, CONTRIB, { title: 'Owned balance', owner: 'kid', priority: 'high' }]) assert.equal((await goalCreate(s.ctx({ ...body }))).goal.status, 'open');
 });
 
 /* ---------- done and reopen ---------- */
@@ -200,19 +200,19 @@ test('bad kind fields answer 400 with the validation message', async t => {
 test('status done and open mark a goal done and reopen it', async t => {
   const s = await store(t, { demo: true });
   // Education: the demo's only education goal is kids, so the 529 rec has room to link this one.
-  const g = goalCreate(s.ctx({ title: 'A college fund', target: 200000, targetDate: '2034-08-31', track: { figure: 'plan529' } })).goal;
+  const g = (await goalCreate(s.ctx({ title: 'A college fund', target: 200000, targetDate: '2034-08-31', track: { figure: 'plan529' } }))).goal;
   const live = sc => sc.recs.some(r => r.serves.some(x => x.id === g.id));
   const cards = sc => homeModel({ goals: sc.goals, pace: sc.pace, recs: sc.recs, filter: 'both', suggestions: sc.suggestions, clock: sc.meta.clock }).cards.map(c => c.id);
-  const before = buildScenario(s.db, { clock: CLOCK });
+  const before = await buildScenario(s.db, { clock: CLOCK });
   assert.ok(live(before), 'the 529 rec serves the open goal');
   assert.ok(before.pace.goals.some(p => p.id === g.id));
   assert.ok(cards(before).includes(g.id));
 
-  const done = goalUpdate(s.ctx({ status: 'done' }, { id: g.id }));
+  const done = await goalUpdate(s.ctx({ status: 'done' }, { id: g.id }));
   assert.equal(done.goal.status, 'done');
   assert.ok(done.goal.doneAt, 'doneAt is the done time');
   assert.equal(done.goal.archived, true, 'a done goal archives itself');
-  const doneRow = rowOf(s.db, g.id);
+  const doneRow = await rowOf(s.db, g.id);
   assert.ok(doneRow.done_at, 'done_at is set');
   assert.ok(doneRow.archived_at, 'archived_at is set too');
   assert.equal(Object.hasOwn(JSON.parse(doneRow.def), 'status'), false, 'status is a column, not def text');
@@ -222,31 +222,31 @@ test('status done and open mark a goal done and reopen it', async t => {
   assert.ok(!live(done.scenario), 'no rec serves a done goal');
   assert.ok(!cards(done.scenario).includes(g.id), 'a done goal has no Home card');
   const stamp = doneRow.done_at;
-  goalUpdate(s.ctx({ status: 'done', title: 'Retire at sixty' }, { id: g.id }));
-  assert.equal(rowOf(s.db, g.id).done_at, stamp, 'marking done again keeps the first done time');
+  await goalUpdate(s.ctx({ status: 'done', title: 'Retire at sixty' }, { id: g.id }));
+  assert.equal((await rowOf(s.db, g.id)).done_at, stamp, 'marking done again keeps the first done time');
 
-  const open = goalUpdate(s.ctx({ status: 'open' }, { id: g.id }));
+  const open = await goalUpdate(s.ctx({ status: 'open' }, { id: g.id }));
   assert.equal(open.goal.status, 'open');
-  assert.equal(rowOf(s.db, g.id).done_at, null);
+  assert.equal((await rowOf(s.db, g.id)).done_at, null);
   assert.ok(open.scenario.pace.goals.some(p => p.id === g.id));
   assert.ok(live(open.scenario));
   assert.ok(cards(open.scenario).includes(g.id));
 
   // Archived through the body; then a done goal archived and restored through the archive route.
-  const archived = goalUpdate(s.ctx({ status: 'archived' }, { id: g.id }));
+  const archived = await goalUpdate(s.ctx({ status: 'archived' }, { id: g.id }));
   assert.equal(archived.goal.status, 'archived');
   assert.equal(archived.goal.archived, true);
-  assert.ok(rowOf(s.db, g.id).archived_at);
-  goalUpdate(s.ctx({ status: 'done' }, { id: g.id }));
-  assert.ok(rowOf(s.db, g.id).archived_at, 'done keeps it archived');
-  assert.equal(goalArchive(s.ctx({}, { id: g.id })).goal.status, 'done', 'a done goal that is archived reads done');
-  assert.equal(goalArchive(s.ctx({ archived: false }, { id: g.id })).goal.status, 'open', 'restoring it reopens it');
+  assert.ok((await rowOf(s.db, g.id)).archived_at);
+  await goalUpdate(s.ctx({ status: 'done' }, { id: g.id }));
+  assert.ok((await rowOf(s.db, g.id)).archived_at, 'done keeps it archived');
+  assert.equal((await goalArchive(s.ctx({}, { id: g.id }))).goal.status, 'done', 'a done goal that is archived reads done');
+  assert.equal((await goalArchive(s.ctx({ archived: false }, { id: g.id }))).goal.status, 'open', 'restoring it reopens it');
 
   // Seed goals stay non-editable, status included.
-  rejects(() => goalUpdate(s.ctx({ status: 'done' }, { id: 'reserve' })), 409, /demo/);
-  rejects(() => goalUpdate(s.ctx({ status: 'done' }, { id: 'ira-fill' })), 409, /demo/);
-  assert.equal(rowOf(s.db, 'reserve').done_at, null);
-  const seedDone = buildScenario(s.db, { clock: CLOCK }).goals.find(x => x.id === 'mortgage');
+  await rejects(async () => await goalUpdate(s.ctx({ status: 'done' }, { id: 'reserve' })), 409, /demo/);
+  await rejects(async () => await goalUpdate(s.ctx({ status: 'done' }, { id: 'ira-fill' })), 409, /demo/);
+  assert.equal((await rowOf(s.db, 'reserve')).done_at, null);
+  const seedDone = (await buildScenario(s.db, { clock: CLOCK })).goals.find(x => x.id === 'mortgage');
   assert.equal(seedDone.status, 'done', 'a finished seed goal reads done');
   assert.equal(seedDone.statusLabel, 'done');
 });
@@ -270,7 +270,7 @@ test('the goal tool schemas list every new field', () => {
 
 test('update_goal.create and update_goal.edit take the new fields and need owner evidence for every amount and date', async t => {
   const s = await store(t);
-  seedAccounts(s.db);
+  await seedAccounts(s.db);
   const said = toolCtx(s.db, 'Keep a floor of $3,000 in business checking, and it is high priority');
   await assert.rejects(callTool('update_goal', { operation: 'create',  ...FLOOR, floor: 3500 }, said), /stated|evidence/);
   await assert.rejects(callTool('update_goal', { operation: 'create',  ...FLOOR, floor: 3000, kind: 'florr' }, said));
@@ -306,7 +306,7 @@ test('update_goal.create and update_goal.edit take the new fields and need owner
   assert.equal(done.goal.status, 'done');
   assert.ok(done.receipt);
   assert.equal(done.receipt.after.status, 'done');
-  assert.ok(rowOf(s.db, floor.goal.id).done_at);
+  assert.ok((await rowOf(s.db, floor.goal.id)).done_at);
   // A stored value is its own evidence.
   const same = await callTool('update_goal', { operation: 'edit',  id: floor.goal.id, floor: 3000, title: 'Business floor kept' }, plain);
   assert.equal(same.goal.title, 'Business floor kept');
@@ -315,21 +315,21 @@ test('update_goal.create and update_goal.edit take the new fields and need owner
 
 test('undo of a create receipt after the goal is marked done is refused, and undo restores done_at', async t => {
   const s = await store(t);
-  seedAccounts(s.db);
+  await seedAccounts(s.db);
   const ctx = toolCtx(s.db, 'Add a goal for a family trip');
   const created = await callTool('update_goal', { operation: 'create',  title: 'A family trip' }, ctx);
   const id = created.goal.id;
   const done = await callTool('update_goal', { operation: 'edit',  id, status: 'done' }, ctx);
   await assert.rejects(undo(ctx, created.receipt.id), /changed since/);
-  assert.ok(rowOf(s.db, id), 'the goal remains');
-  assert.ok(rowOf(s.db, id).done_at, 'and stays done');
+  assert.ok(await rowOf(s.db, id), 'the goal remains');
+  assert.ok((await rowOf(s.db, id)).done_at, 'and stays done');
 
   // Undoing the status change restores done_at null; then the create can be undone.
   await undo(ctx, done.receipt.id);
-  assert.equal(rowOf(s.db, id).done_at, null);
-  assert.equal(buildScenario(s.db, { clock: CLOCK }).goals.find(g => g.id === id).status, 'open');
+  assert.equal((await rowOf(s.db, id)).done_at, null);
+  assert.equal((await buildScenario(s.db, { clock: CLOCK })).goals.find(g => g.id === id).status, 'open');
   await undo(ctx, created.receipt.id);
-  assert.equal(rowOf(s.db, id), undefined, 'the create undid once nothing changed');
+  assert.equal(await rowOf(s.db, id), undefined, 'the create undid once nothing changed');
 });
 
 test('an old-shape receipt without done_at still refuses undo once the goal is done, and undoes when it is not', async t => {
@@ -338,36 +338,36 @@ test('an old-shape receipt without done_at still refuses undo once the goal is d
   const oldShape = async title => {
     const r = await callTool('update_goal', { operation: 'create',  title }, ctx);
     // A receipt written before migration 026 has no done_at in its after-state.
-    s.db.prepare("UPDATE action_receipts SET after_state = json_remove(after_state, '$.done_at') WHERE id = ?").run(r.receipt.id);
-    assert.equal(Object.hasOwn(JSON.parse(s.db.prepare('SELECT after_state FROM action_receipts WHERE id = ?').get(r.receipt.id).after_state), 'done_at'), false);
+    await s.db.prepare("UPDATE action_receipts SET after_state = json_remove(after_state, '$.done_at') WHERE id = ?").run(r.receipt.id);
+    assert.equal(Object.hasOwn(JSON.parse((await s.db.prepare('SELECT after_state FROM action_receipts WHERE id = ?').get(r.receipt.id)).after_state), 'done_at'), false);
     return r;
   };
   const marked = await oldShape('Marked done later');
-  goalUpdate(s.ctx({ status: 'done' }, { id: marked.goal.id }));
+  await goalUpdate(s.ctx({ status: 'done' }, { id: marked.goal.id }));
   await assert.rejects(undo(ctx, marked.receipt.id), /changed since/);
-  assert.ok(rowOf(s.db, marked.goal.id), 'the goal remains');
+  assert.ok(await rowOf(s.db, marked.goal.id), 'the goal remains');
 
   const archived = await oldShape('Archived later');
-  goalArchive(s.ctx({}, { id: archived.goal.id }));
+  await goalArchive(s.ctx({}, { id: archived.goal.id }));
   await assert.rejects(undo(ctx, archived.receipt.id), /changed since/, 'archiving after a receipt also refuses undo');
 
   const untouched = await oldShape('Left alone');
   await undo(ctx, untouched.receipt.id);
-  assert.equal(rowOf(s.db, untouched.goal.id), undefined, 'an unchanged goal undoes from an old receipt');
+  assert.equal(await rowOf(s.db, untouched.goal.id), undefined, 'an unchanged goal undoes from an old receipt');
 });
 
 test('goals.list carries kind, whose goal with its label, priority, status and kind amounts', async t => {
   const s = await store(t);
-  seedAccounts(s.db);
-  s.db.prepare("INSERT INTO content (key, value, src, updated_at) VALUES ('names', ?, NULL, ?)").run(JSON.stringify({ me: 'Person One', spouse: 'Person Two' }), NOW);
-  const range = goalCreate(s.ctx({ ...RANGE })).goal;
-  const floor = goalCreate(s.ctx({ ...FLOOR })).goal;
-  const contrib = goalCreate(s.ctx({ ...CONTRIB })).goal;
-  const plain = goalCreate(s.ctx({ title: 'Nothing set' })).goal;
-  const done = goalCreate(s.ctx({ title: 'Finished goal', owner: 'spouse' })).goal;
-  goalUpdate(s.ctx({ status: 'done' }, { id: done.id }));
-  const gone = goalCreate(s.ctx({ title: 'Archived goal' })).goal;
-  goalArchive(s.ctx({}, { id: gone.id }));
+  await seedAccounts(s.db);
+  await s.db.prepare("INSERT INTO content (key, value, src, updated_at) VALUES ('names', ?, NULL, ?)").run(JSON.stringify({ me: 'Person One', spouse: 'Person Two' }), NOW);
+  const range = (await goalCreate(s.ctx({ ...RANGE }))).goal;
+  const floor = (await goalCreate(s.ctx({ ...FLOOR }))).goal;
+  const contrib = (await goalCreate(s.ctx({ ...CONTRIB }))).goal;
+  const plain = (await goalCreate(s.ctx({ title: 'Nothing set' }))).goal;
+  const done = (await goalCreate(s.ctx({ title: 'Finished goal', owner: 'spouse' }))).goal;
+  await goalUpdate(s.ctx({ status: 'done' }, { id: done.id }));
+  const gone = (await goalCreate(s.ctx({ title: 'Archived goal' }))).goal;
+  await goalArchive(s.ctx({}, { id: gone.id }));
 
   const list = await callTool('goals', { operation: 'list', }, { db: s.db, now: NOW });
   const by = id => list.find(g => g.id === id);
@@ -469,19 +469,19 @@ const acctIds = f => (f?.locator?.sources || []).filter(x => x.rows?.table === '
 
 test('goals.pace carries kind, owner, priority and each kind\'s result', async t => {
   const s = await store(t);
-  seedAccounts(s.db);
-  const q1 = txn(s.db, 'r1', '2026-02-10', 1000);
-  const q2 = txn(s.db, 'r1', '2026-10-20', 1500, 'Transfer from checking');
-  const q3 = txn(s.db, 'r2', '2026-10-25', 2000);
-  const interest = txn(s.db, 'r1', '2026-06-30', 500, 'Interest payment');
-  const prior = txn(s.db, 'r1', '2025-12-20', 900);
-  const future = txn(s.db, 'r1', '2026-11-20', 700);
-  const range = goalCreate(s.ctx({ ...RANGE })).goal;
-  const floor = goalCreate(s.ctx({ ...FLOOR })).goal;
-  const contrib = goalCreate(s.ctx({ ...CONTRIB, entered: null })).goal;
-  const plain = goalCreate(s.ctx({ title: 'Plain cushion', target: 30000, targetDate: '2027-12-31', track: { accounts: ['chk'] } })).goal;
-  const done = goalCreate(s.ctx({ ...FLOOR, title: 'Done floor' })).goal;
-  goalUpdate(s.ctx({ status: 'done' }, { id: done.id }));
+  await seedAccounts(s.db);
+  const q1 = await txn(s.db, 'r1', '2026-02-10', 1000);
+  const q2 = await txn(s.db, 'r1', '2026-10-20', 1500, 'Transfer from checking');
+  const q3 = await txn(s.db, 'r2', '2026-10-25', 2000);
+  const interest = await txn(s.db, 'r1', '2026-06-30', 500, 'Interest payment');
+  const prior = await txn(s.db, 'r1', '2025-12-20', 900);
+  const future = await txn(s.db, 'r1', '2026-11-20', 700);
+  const range = (await goalCreate(s.ctx({ ...RANGE }))).goal;
+  const floor = (await goalCreate(s.ctx({ ...FLOOR }))).goal;
+  const contrib = (await goalCreate(s.ctx({ ...CONTRIB, entered: null }))).goal;
+  const plain = (await goalCreate(s.ctx({ title: 'Plain cushion', target: 30000, targetDate: '2027-12-31', track: { accounts: ['chk'] } }))).goal;
+  const done = (await goalCreate(s.ctx({ ...FLOOR, title: 'Done floor' }))).goal;
+  await goalUpdate(s.ctx({ status: 'done' }, { id: done.id }));
 
   const pace = await pacePath(s.db);
   const p = id => pace.goals.find(x => x.id === id);
@@ -513,25 +513,25 @@ test('goals.pace carries kind, owner, priority and each kind\'s result', async t
   assert.deepEqual(pace.series.goals[contrib.id], { series: null, reason: 'kind_not_charted', dataEnd: null });
   assert.notEqual(pace.series.goals[range.id]?.reason, 'kind_not_charted', 'a range is charted on its low end');
   assert.notEqual(pace.series.goals[plain.id]?.reason, 'kind_not_charted');
-  assert.deepEqual(buildScenario(s.db, { clock: CLOCK }).pace.goals.map(x => x.id), pace.goals.map(x => x.id), 'the scenario and the tool share one builder');
+  assert.deepEqual((await buildScenario(s.db, { clock: CLOCK })).pace.goals.map(x => x.id), pace.goals.map(x => x.id), 'the scenario and the tool share one builder');
 });
 
 test('contribution coverage: every destination account needs a transaction in the tax year, else the entered amount', async t => {
   const s = await store(t);
-  seedAccounts(s.db);
-  txn(s.db, 'r1', '2026-03-15', 1000);
-  txn(s.db, 'r1', '2026-10-20', 500);
-  txn(s.db, 'r4', '2026-09-01', 400);
-  txn(s.db, 'r3', '2025-11-01', 3000, 'Rollover deposit');
-  const make = (title, accounts, extra = {}) => goalCreate(s.ctx({ title, kind: 'contribution', target: 6000, taxYear: 2026,
-    targetDate: '2027-04-15', accounts, ...extra })).goal.id;
+  await seedAccounts(s.db);
+  await txn(s.db, 'r1', '2026-03-15', 1000);
+  await txn(s.db, 'r1', '2026-10-20', 500);
+  await txn(s.db, 'r4', '2026-09-01', 400);
+  await txn(s.db, 'r3', '2025-11-01', 3000, 'Rollover deposit');
+  const make = async (title, accounts, extra = {}) => (await goalCreate(s.ctx({ title, kind: 'contribution', target: 6000, taxYear: 2026,
+    targetDate: '2027-04-15', accounts, ...extra }))).goal.id;
   const total = amount => ({ entered: { asOf: '2026-11-01', total: amount } });
-  const unknownHolder = make('Holder unknown', ['r1', 'r4'], { split: [{ person: 'owner', amount: 3000 }, { person: 'spouse', amount: 3000 }] });
-  const partialEntered = make('Partly covered with an entered amount', ['r1', 'r3'], total(1200));
-  const partial = make('Partly covered', ['r1', 'r3']);
-  const priorEntered = make('Prior year only with an entered amount', ['r3'], total(800));
-  const prior = make('Prior year only', ['r3']);
-  const none = make('No destination accounts');
+  const unknownHolder = await make('Holder unknown', ['r1', 'r4'], { split: [{ person: 'owner', amount: 3000 }, { person: 'spouse', amount: 3000 }] });
+  const partialEntered = await make('Partly covered with an entered amount', ['r1', 'r3'], total(1200));
+  const partial = await make('Partly covered', ['r1', 'r3']);
+  const priorEntered = await make('Prior year only with an entered amount', ['r3'], total(800));
+  const prior = await make('Prior year only', ['r3']);
+  const none = await make('No destination accounts');
 
   const pace = await pacePath(s.db);
   const p = id => pace.goals.find(x => x.id === id);

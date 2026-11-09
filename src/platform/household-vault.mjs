@@ -118,16 +118,11 @@ export async function provisionDataKey(platform, { householdId, platformKey, now
   check(isId(householdId) && Number.isSafeInteger(now));
   const key = randomBytes(KEY_BYTES);
   const wrapped = wrapDataKey(platformKey, { householdId, version: 1, key });
-  platform.exec('BEGIN IMMEDIATE');
-  try {
-    check(!platform.prepare('SELECT 1 AS x FROM household_data_keys WHERE household_id = ?').get(householdId), 'data_key_exists');
-    platform.prepare(`INSERT INTO household_data_keys (household_id, key_version, wrapped_key, status, created_at)
+  await platform.transaction(async platform => {
+    check(!await platform.prepare('SELECT 1 AS x FROM household_data_keys WHERE household_id = ?').get(householdId), 'data_key_exists');
+    await platform.prepare(`INSERT INTO household_data_keys (household_id, key_version, wrapped_key, status, created_at)
       VALUES (?, 1, ?, 'active', ?)`).run(householdId, wrapped, now);
-    platform.exec('COMMIT');
-  } catch (e) {
-    platform.exec('ROLLBACK');
-    throw e;
-  }
+  });
   const handle = dataKeyHandle({ householdId, version: 1, key });
   key.fill(0);
   return handle;
@@ -138,8 +133,8 @@ export async function unwrapDataKey(platform, { householdId, platformKey, versio
   checkPlatformKey(platformKey);
   check(isId(householdId) && (version == null || isVersion(version)));
   const row = version == null
-    ? platform.prepare("SELECT key_version, wrapped_key FROM household_data_keys WHERE household_id = ? AND status = 'active'").get(householdId)
-    : platform.prepare('SELECT key_version, wrapped_key FROM household_data_keys WHERE household_id = ? AND key_version = ?').get(householdId, version);
+    ? await platform.prepare("SELECT key_version, wrapped_key FROM household_data_keys WHERE household_id = ? AND status = 'active'").get(householdId)
+    : await platform.prepare('SELECT key_version, wrapped_key FROM household_data_keys WHERE household_id = ? AND key_version = ?').get(householdId, version);
   check(row, 'data_key_missing');
   const v = Number(row.key_version);
   const key = unwrapWrappedKey(platformKey, { householdId, version: v, wrapped: row.wrapped_key });

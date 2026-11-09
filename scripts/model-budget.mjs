@@ -20,27 +20,27 @@ import { carryAllHouseholds } from '../src/platform/model-carry.mjs';
 const fail = code => Object.assign(new Error(code), { code });
 const codeOf = e => (e && typeof e.code === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(e.code) ? e.code : 'model_budget_failed');
 
-function main(argv, env = process.env) {
+async function main(argv, env = process.env) {
   let apply;
   if (argv.length === 2 && argv[0] === '--instance-cap-usd') {
     const usd = parseUsd(argv[1]);
-    apply = (platform, now) => setInstanceCap(platform, usd, { now });
+    apply = async (platform, now) => await setInstanceCap(platform, usd, { now });
   } else if (argv.length === 4 && argv[0] === '--household' && argv[2] === '--allocation-usd' && argv[1] && !argv[1].startsWith('--')) {
     const usd = parseUsd(argv[3]);
-    apply = (platform, now) => setAllocation(platform, argv[1], usd, { now });
+    apply = async (platform, now) => await setAllocation(platform, argv[1], usd, { now });
   } else throw fail('usage');
-  const platform = openOperatorPlatform(env);
+  const platform = await openOperatorPlatform(env);
   try {
     const now = Date.now();
-    carryAllHouseholds(platform, { dataDir: resolve(env.FATHOM_DATA == null || env.FATHOM_DATA === '' ? 'data' : env.FATHOM_DATA), now });
-    return apply(platform, now).changed ? 'set' : 'unchanged';
+    await carryAllHouseholds(platform, { dataDir: resolve(env.FATHOM_DATA == null || env.FATHOM_DATA === '' ? 'data' : env.FATHOM_DATA), now });
+    return (await apply(platform, now)).changed ? "set" : "unchanged";
   } finally {
-    platform.close();
+    await platform.close();
   }
 }
 
 try {
-  console.log(`model-budget: ${main(process.argv.slice(2))}`);
+  console.log(`model-budget: ${await main(process.argv.slice(2))}`);
 } catch (e) {
   console.error(`model-budget: ${codeOf(e)}`);
   process.exitCode = 1;

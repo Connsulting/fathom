@@ -57,10 +57,10 @@ export async function createJev({ keyFile = process.env.FATHOM_TYPESAFE_KEY_FILE
     }
     for (let attempt=0; attempt<=retries; attempt++) {
       // Admission runs before every dispatch, retries included: a refusal code stops the call unsent.
-      const refused=admit();
+      const refused=await admit();
       if (refused!=null) throw fail(typeof refused==='string' && refused ? refused : 'jev_refused');
       const reservedCost=reserve*JEV_INPUT_USD, timestamp=now().toISOString();
-      const monthSpend=ledger?.monthSpendUsd(timestamp.slice(0,7)) ?? 0;
+      const monthSpend=await ledger?.monthSpendUsd(timestamp.slice(0,7)) ?? 0;
       if (tokens+reserve>maxTokens || costUsd+reservedCost>maxCostUsd || monthSpend+reservedCost>monthlyCapUsd) throw fail('jev_budget');
       tokens+=reserve; costUsd+=reservedCost;
       let data, response;
@@ -70,7 +70,7 @@ export async function createJev({ keyFile = process.env.FATHOM_TYPESAFE_KEY_FILE
           if (complete) {
             const result = await complete({ purpose: 'categorize', messages: [{ role: 'user', content: 'Choose only from the supplied options.' }],
               choices: qs, maxTokens: 4096, budget: { maxCostUsd: maxCostUsd - (costUsd - reservedCost), timeoutMs },
-              beforeDispatch: () => { const code = admit(); if (code != null) throw fail(code); } });
+              beforeDispatch: async () => { const code = await admit(); if (code != null) throw fail(code); } });
             model = result.model;
             return { model: JEV_MODEL, answers: Object.fromEntries(result.choices.map((a, i) => [keys[i], { ...a, type: 'choice' }])),
               usage: { input_tokens: result.accounting?.tokens?.input_tokens, output_tokens: result.accounting?.tokens?.output_tokens },
@@ -91,7 +91,7 @@ export async function createJev({ keyFile = process.env.FATHOM_TYPESAFE_KEY_FILE
           }
           throw error;
         }
-        ledger?.record({ts:timestamp,purpose:'categorize',costUsd:reservedCost,model:JEV_MODEL,tokens:{input:reserve,estimated:true}});
+        await ledger?.record({ts:timestamp,purpose:'categorize',costUsd:reservedCost,model:JEV_MODEL,tokens:{input:reserve,estimated:true}});
         if (attempt<retries && (!response || response.status===429 || response.status>=500)) {
           const retryAfter=response?.retryAfterMs??0;
           await sleep(Math.min(10_000,Math.max(250*2**attempt,retryAfter)));
@@ -103,7 +103,7 @@ export async function createJev({ keyFile = process.env.FATHOM_TYPESAFE_KEY_FILE
       const accounted=Number.isSafeInteger(input) && input>=0 && (complete || input<=reserve) && Number.isSafeInteger(output) && output>=0;
       const actual=accounted ? input : reserve;
       tokens+=actual-reserve; costUsd+=complete ? data.portCostUsd-reservedCost : (actual-reserve)*JEV_INPUT_USD;
-      if (!complete) ledger?.record({ts:timestamp,purpose:'categorize',costUsd:actual*JEV_INPUT_USD,model:JEV_MODEL,
+      if (!complete) await ledger?.record({ts:timestamp,purpose:'categorize',costUsd:actual*JEV_INPUT_USD,model:JEV_MODEL,
         tokens:{input:actual,...(accounted?{output}:{estimated:true})}});
       if (!accounted || data?.model!==JEV_MODEL || !data.answers || Object.keys(data.answers).length!==keys.length) throw fail('jev_bad_response');
       return qs.map((q,i)=>{

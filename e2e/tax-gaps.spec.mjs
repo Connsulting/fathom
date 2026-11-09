@@ -25,7 +25,7 @@ test.describe('tax precision gaps on a synthetic household', () => {
     await addPayroll(db, paystubDoc({ employerName: 'Cedar Labs', person: 'spouse', relation: 'outside', payDate: '2026-10-31', net: 1600, state: 'VA', confidence: 0.5 }));
     await addPayroll(db, paystubDoc({ employerName: 'Maple Works', person: 'spouse', relation: 'outside', payDate: '2026-10-31', gross: 4000, ytdGross: 40000 }));
     await planRun(db, { now: '2026-11-05', dataDir });
-    db.close();
+    await db.close();
     const socket = createServer();
     await new Promise(done => socket.listen(Number(process.env.TAX1_PORT || 0), 'localhost', done));
     const port = socket.address().port;
@@ -33,10 +33,10 @@ test.describe('tax precision gaps on a synthetic household', () => {
     origin = `http://localhost:${port}`;
     app = await startServer(loadConfig({ FATHOM_DATA: dataDir, FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_HOST: 'localhost', FATHOM_PORT: String(port), FATHOM_PUBLIC_URL: origin, FATHOM_CLOCK: '2026-11-05', ...secretEnv(secretsFor(dataDir)) }));
     const auth = createAuthStore(app.platform);
-    const { user, token } = auth.invite(auth.servedHousehold().id, 'owner@example.test', { role: 'admin' });
-    auth.consumeInvitation(token, user.id);
-    auth.markEnrolled(user.id);
-    session = auth.createSession(user.id);
+    const { user, token } = await auth.invite((await auth.servedHousehold()).id, 'owner@example.test', { role: 'admin' });
+    await auth.consumeInvitation(token, user.id);
+    await auth.markEnrolled(user.id);
+    session = await auth.createSession(user.id);
   });
   test.afterAll(async () => {
     if (app) await app.close();

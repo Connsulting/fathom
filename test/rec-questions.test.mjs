@@ -20,9 +20,9 @@ import { loadPlanningData } from '../src/jobs/planner/data.mjs';
 import { scratch, addFact, accountIdByMask, recRow, MASKS } from './helpers/real-store.mjs';
 
 const NOW = '2026-11-05';
-const planFresh = (db, clock) => loadPlanningData(db, clock).freshness;
+const planFresh = async (db, clock) => (await loadPlanningData(db, clock)).freshness;
 const S = scratch('fathom-rec-questions-');
-after(() => S.cleanup());
+after(async () => await S.cleanup());
 
 const acct = (extra = {}) => ({ id: 'plan-a', kind: '529', name: 'manual', mask: '3333', display_name: 'College fund', inst: '', ...extra });
 const FIELD = (q, name) => q.fields.find(f => f.path.at(-1) === name);
@@ -123,8 +123,8 @@ test('birth years are asked once as owner and spouse, and the answerer validates
   const replan = async () => {};
   await answerFacts(db, [{ key: 'household.birthYears', value: { owner: 1981, spouse: 1983, dependents: [2018, 2021] } }], { now: '2026-11-05T00:00:00.000Z', replan });
   await answerFacts(db, [{ key: 'household.birthYears', value: { spouse: 1985 } }], { now: '2026-11-05T00:00:00.000Z', replan });
-  assert.deepEqual(JSON.parse(db.prepare("SELECT value FROM facts WHERE key = 'household.birthYears'").get().value), { owner: 1981, spouse: 1985, dependents: [2018, 2021] }, 'a later answer keeps the years it does not name');
-  db.prepare("DELETE FROM facts WHERE key = 'household.birthYears'").run();
+  assert.deepEqual(JSON.parse((await db.prepare("SELECT value FROM facts WHERE key = 'household.birthYears'").get()).value), { owner: 1981, spouse: 1985, dependents: [2018, 2021] }, 'a later answer keeps the years it does not name');
+  await db.prepare("DELETE FROM facts WHERE key = 'household.birthYears'").run();
   await assert.rejects(answerFacts(db, [{ key: 'household.birthYears', value: { spouse: 1983 } }], { now: '2026-11-05T00:00:00.000Z', replan }), /answer type/i);
   for (const bad of [{ owner: 1850 }, { owner: 3000 }, { owner: 1981.5 }, { owner: 1981, typo: 1 }, { owner: 1981, dependents: [1] }]) {
     await assert.rejects(answerFacts(db, [{ key: 'household.birthYears', value: bad }], { now: '2026-11-05T00:00:00.000Z', replan }), /answer type/i);
@@ -152,13 +152,13 @@ test('va529 blocked by the Virginia projection carries the blocker the planner a
 test('a rec with a precision gap names its direct fix on the card and in the dialog', async () => {
   const db = await S.store();
   await planRun(db, { now: NOW });
-  assert.equal(recRow(db, 'va529').status, 'proposed');
-  addFact(db, 'tax.itemizedEstimate', 90000);
-  db.prepare("UPDATE transactions SET category = 'Uncategorized' WHERE lower(category) LIKE '%charit%' OR lower(category) LIKE '%donat%'").run();
+  assert.equal((await recRow(db, 'va529')).status, 'proposed');
+  await addFact(db, 'tax.itemizedEstimate', 90000);
+  await db.prepare("UPDATE transactions SET category = 'Uncategorized' WHERE lower(category) LIKE '%charit%' OR lower(category) LIKE '%donat%'").run();
   await planRun(db, { now: NOW });
-  const row = recRow(db, 'va529');
+  const row = await recRow(db, 'va529');
   assert.equal(row.status, 'proposed');
-  const rec = buildScenario(db, { clock: NOW }).recs.find(r => r.id === 'va529');
+  const rec = (await buildScenario(db, { clock: NOW })).recs.find(r => r.id === 'va529');
   assert.equal(rec.status, 'proposed');
   assert.ok(rec.gaps.some(g => g.code === 'va_itemized_missing'));
   recBlocker.bind(kit);
@@ -169,9 +169,9 @@ test('a rec with a precision gap names its direct fix on the card and in the dia
     assert.match(html, /Enter Virginia deductions/);
     assert.match(html, /data-tax-gap-fix/);
   }
-  addFact(db, 'tax.vaItemizedEstimate', 80000);
+  await addFact(db, 'tax.vaItemizedEstimate', 80000);
   await planRun(db, { now: NOW });
-  const after = buildScenario(db, { clock: NOW }).recs.find(r => r.id === 'va529');
+  const after = (await buildScenario(db, { clock: NOW })).recs.find(r => r.id === 'va529');
   assert.notEqual(after.status, 'waiting');
   assert.equal(after.blocker, undefined);
   assert.equal(recBlocker.html(after, 'plan'), '');
@@ -180,9 +180,9 @@ test('a rec with a precision gap names its direct fix on the card and in the dia
 test('answering the Virginia questions while the projection is blocked leaves a recorded answer, not an open form', async () => {
   const db = await S.store();
   await planRun(db, { now: NOW });
-  addFact(db, 'tax.itemizedEstimate', 90000);
+  await addFact(db, 'tax.itemizedEstimate', 90000);
   await planRun(db, { now: NOW });
-  const rec = buildScenario(db, { clock: NOW }).recs.find(r => r.id === 'va529');
+  const rec = (await buildScenario(db, { clock: NOW })).recs.find(r => r.id === 'va529');
   if (rec.question) assert.equal(rec.question.answered, true);
 });
 
@@ -219,45 +219,45 @@ test('missing data that is only uploads is titled as uploads', () => {
 test('a file source whose accounts SimpleFIN covers is not stale anywhere; a half covered one still is', async () => {
   const db = await S.store();
   const clock = '2027-06-01';
-  const before = ingestState(db, { clock });
+  const before = await ingestState(db, { clock });
   const cashStale = state => state.staleNotes.filter(n => ['cash', 'invest'].includes(n.domain));
   assert.ok(cashStale(before).length >= 4, 'file sources are stale by mid 2027');
-  assert.equal(coveredFileSources(db).size, 0, 'nothing is covered before a mapping');
+  assert.equal((await coveredFileSources(db)).size, 0, 'nothing is covered before a mapping');
 
   const sync = db.prepare("INSERT INTO balances (account_id, date, amount, parser) VALUES (?, '2027-05-30', 100, 'simplefin')");
-  assert.equal(connectedAccountIds(db).size, 0);
+  assert.equal((await connectedAccountIds(db)).size, 0);
   const connection = db.prepare("INSERT INTO simplefin_connection (id, access_blob, connected_at) VALUES (1, 'synthetic', ?)");
   const map = db.prepare("INSERT INTO simplefin_accounts (sf_key, account_id, status, name, created_at) VALUES (?, ?, 'mapped', 'Synthetic', ?)");
-  const connect = id => { map.run(`sf-${id}`, id, NOW); sync.run(id); };
+  const connect = async id => { await map.run(`sf-${id}`, id, NOW); await sync.run(id); };
 
   // One account of the two account aggregator export: that source is not covered.
-  const owned = db.prepare(`SELECT DISTINCT f.source_id AS source, r.account_id AS account FROM files f JOIN
+  const owned = await db.prepare(`SELECT DISTINCT f.source_id AS source, r.account_id AS account FROM files f JOIN
     (SELECT file_id, account_id FROM transactions UNION SELECT file_id, account_id FROM balances) r ON r.file_id = f.id WHERE f.source_id IS NOT NULL`).all();
   const bySource = new Map();
   for (const { source, account } of owned) bySource.set(source, [...(bySource.get(source) || []), account]);
   const multi = [...bySource].find(([, ids]) => ids.length > 1);
   assert.ok(multi, 'a synthetic file source holds more than one account');
-  connection.run(NOW);
-  connect(multi[1][0]);
-  assert.equal(coveredFileSources(db).has(multi[0]), false);
-  assert.equal(ingestState(db, { clock }).sources.find(x => x.id === multi[0]).state, 'stale', 'a half covered source is still stale');
+  await connection.run(NOW);
+  await connect(multi[1][0]);
+  assert.equal((await coveredFileSources(db)).has(multi[0]), false);
+  assert.equal((await ingestState(db, { clock })).sources.find(x => x.id === multi[0]).state, 'stale', 'a half covered source is still stale');
 
-  for (const id of db.prepare('SELECT id FROM accounts').all().map(a => a.id)) if (!connectedAccountIds(db).has(id)) connect(id);
-  const covered = coveredFileSources(db);
+  for (const id of (await db.prepare('SELECT id FROM accounts').all()).map(a => a.id)) if (!(await connectedAccountIds(db)).has(id)) await connect(id);
+  const covered = await coveredFileSources(db);
   assert.ok(covered.has(multi[0]));
-  const state = ingestState(db, { clock });
+  const state = await ingestState(db, { clock });
   for (const s of state.sources.filter(x => covered.has(x.id))) assert.equal(s.state, 'history', `${s.id} is history once SimpleFIN covers it`);
   // Planner freshness (missing-data) agrees: the household transaction log is current through the sync.
-  assert.equal(planFresh(db, clock).find(f => f.id === 'transactions').state, 'current');
+  assert.equal((await planFresh(db, clock)).find(f => f.id === 'transactions').state, 'current');
   // A disconnected bridge covers nothing, though its mappings stay.
-  db.prepare('DELETE FROM simplefin_connection').run();
-  assert.equal(coveredFileSources(db).size, 0);
-  assert.equal(ingestState(db, { clock }).sources.filter(x => x.state === 'covered').length, 0, 'no source state is called covered any more');
+  await db.prepare('DELETE FROM simplefin_connection').run();
+  assert.equal((await coveredFileSources(db)).size, 0);
+  assert.equal((await ingestState(db, { clock })).sources.filter(x => x.state === 'covered').length, 0, 'no source state is called covered any more');
   // One rule (coverage.mjs): the planner calls the transaction log stale only when an active
   // account is stale, the same accounts the Cash card counts.
-  const anyStale = Object.values(ingestState(db, { clock }).accounts).some(a => a.fresh === 'stale');
-  assert.equal(planFresh(db, clock).find(f => f.id === 'transactions').state, anyStale ? 'stale' : 'current');
-  connection.run(NOW);
+  const anyStale = Object.values((await ingestState(db, { clock })).accounts).some(a => a.fresh === 'stale');
+  assert.equal((await planFresh(db, clock)).find(f => f.id === 'transactions').state, anyStale ? 'stale' : 'current');
+  await connection.run(NOW);
   assert.deepEqual(state.sources.filter(x => x.state === 'stale' && ['bank_csv', 'card_csv', 'aggregator_csv', 'balances', 'brokerage_positions', 'statement'].includes(x.kind)), []);
   assert.deepEqual(cashStale(state), [], 'the Cash card and the invest note carry no stale file notes once SimpleFIN covers the accounts');
 });
@@ -285,9 +285,9 @@ test('missing data that is only questions keeps its title and count-free summary
 test('saved dependent birth years set the child count, and the planner reads one source for ages', async () => {
   const db = await S.store();
   await planRun(db, { now: NOW });
-  const before = JSON.stringify(db.prepare("SELECT key, v FROM figures WHERE key LIKE 'tax.fed.%' ORDER BY key").all());
-  addFact(db, 'household.birthYears', { owner: 1981, spouse: 1983, dependents: [2010, 2012, 2020] });
+  const before = JSON.stringify(await db.prepare("SELECT key, v FROM figures WHERE key LIKE 'tax.fed.%' ORDER BY key").all());
+  await addFact(db, 'household.birthYears', { owner: 1981, spouse: 1983, dependents: [2010, 2012, 2020] });
   await planRun(db, { now: NOW });
-  const after = JSON.stringify(db.prepare("SELECT key, v FROM figures WHERE key LIKE 'tax.fed.%' ORDER BY key").all());
+  const after = JSON.stringify(await db.prepare("SELECT key, v FROM figures WHERE key LIKE 'tax.fed.%' ORDER BY key").all());
   assert.notEqual(after, before, 'three children under 17 change the federal projection');
 });

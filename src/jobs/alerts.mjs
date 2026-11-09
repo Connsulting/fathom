@@ -19,6 +19,7 @@ import { esc } from '../shared/tokens.mjs';
 import { sendEmail } from '../email/send.mjs';
 import { C, FONT, darkDocument } from '../email/palette.mjs';
 import { appLink, STYLE, figureRegistry, narrativeParts, partsRenderer, footnoteText, footnoteHtml } from '../email/brief.mjs';
+import { filterSeries } from '../shared/series.mjs';
 
 export const THRESHOLDS = Object.freeze([14, 7, 1]);
 const ASCENDING = [...THRESHOLDS].sort((a, b) => a - b);
@@ -33,14 +34,14 @@ export const deadlineKey = ({ date, title, recId }) => (recId ? `rec:${recId}:${
 // Due alerts, soonest first: {key, threshold, date, daysLeft, kind: deadline|rec, recId, title,
 // titleParts, windowLabel, figures}. titleParts are {t} or {f: key}; figures are the entries those
 // parts cite (refs are assigned by renderAlerts).
-export function dueAlerts(db, { clock } = {}) {
-  const clk = resolveClock(db, clock);
+export async function dueAlerts(db, { clock } = {}) {
+  const clk = await resolveClock(db, clock);
   const end = addDays(clk, HORIZON);
-  const recs = new Map(db.prepare('SELECT id, def, status, window_close, window_label FROM recs ORDER BY sort, id').all()
+  const recs = new Map((await db.prepare('SELECT id, def, status, window_close, window_label FROM recs ORDER BY sort, id').all())
     .map((r) => [r.id, { id: r.id, def: parseJson(r.def, {}) || {}, status: r.status, close: r.window_close, label: r.window_label }]));
   const items = new Map();
 
-  for (const d of db.prepare('SELECT date, title, rec_id FROM deadlines WHERE date >= ? AND date <= ? ORDER BY date, id').all(clk, end)) {
+  for (const d of await db.prepare('SELECT date, title, rec_id FROM deadlines WHERE date >= ? AND date <= ? ORDER BY date, id').all(clk, end)) {
     const rec = d.rec_id ? recs.get(d.rec_id) : null;
     if (rec && SKIP.has(rec.status)) continue;
     const key = deadlineKey({ date: d.date, title: d.title, recId: d.rec_id });
@@ -55,10 +56,9 @@ export function dueAlerts(db, { clock } = {}) {
   }
 
   const sent = db.prepare('SELECT 1 AS x FROM deadline_alerts WHERE key = ? AND threshold = ?');
-  const due = [...items.values()]
+  const due = (await filterSeries([...items.values()]
     .map((a) => ({ ...a, daysLeft: daysBetween(clk, a.date) }))
-    .map((a) => ({ ...a, threshold: thresholdFor(a.daysLeft) }))
-    .filter((a) => a.threshold != null && !sent.get(a.key, a.threshold))
+    .map((a) => ({ ...a, threshold: thresholdFor(a.daysLeft) })), async (a) => a.threshold != null && !await sent.get(a.key, a.threshold)))
     .sort((a, b) => a.date.localeCompare(b.date) || a.key.localeCompare(b.key));
 
   let scope = null;
@@ -68,7 +68,7 @@ export function dueAlerts(db, { clock } = {}) {
       a.figures = [];
       continue;
     }
-    scope ??= { ...tokenScope(db), src: loadSources(db, clk) };
+    scope ??= { ...await tokenScope(db), src: await loadSources(db, clk) };
     const reg = figureRegistry(scope);
     a.titleParts = narrativeParts(a.title, scope, reg);
     a.figures = reg.list;
@@ -133,15 +133,17 @@ export function renderAlerts(alerts, { clock, publicUrl = null, householdId = nu
 
 // Sends one alert email when anything is due. Returns {alerts: count, send: email_sends row|null}.
 export async function runDeadlineAlerts(db, { clock, transport, publicUrl = null, now, jobRunId = null, householdId = null } = {}) {
-  const clk = resolveClock(db, clock);
-  const alerts = dueAlerts(db, { clock: clk });
+  const clk = await resolveClock(db, clock);
+  const alerts = await dueAlerts(db, { clock: clk });
   if (!alerts.length) return { alerts: 0, send: null };
   const mail = renderAlerts(alerts, { clock: clk, publicUrl, householdId });
   const at = now == null ? new Date().toISOString() : new Date(now).toISOString();
   const send = await sendEmail(db, { transport, kind: 'alert', ...mail, now: at, jobRunId });
   if (send.status === 'sent') {
-    const mark = db.prepare('INSERT OR IGNORE INTO deadline_alerts (key, threshold, deadline_date, sent_at, send_id) VALUES (?, ?, ?, ?, ?)');
-    tx(db, () => { for (const a of alerts) mark.run(a.key, a.threshold, a.date, at, send.id); });
+    await tx(db, async (db) => {
+      const mark = db.prepare('INSERT OR IGNORE INTO deadline_alerts (key, threshold, deadline_date, sent_at, send_id) VALUES (?, ?, ?, ?, ?)');
+      for (const a of alerts) await mark.run(a.key, a.threshold, a.date, at, send.id);
+    });
   }
   return { alerts: alerts.length, send };
 }

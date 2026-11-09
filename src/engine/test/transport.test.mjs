@@ -384,7 +384,7 @@ test('Messages outbound body scrubs nested metadata, history and schema descript
 test('MCP replies scrub success and error text while local evidence keeps original data', async () => {
   const { createRegistryServer } = await import('../tools.mjs');
   const result = { filename: `tax_${TAX_TEXT}.pdf`, amount: 123456789, date: '2032-03-05', evidence: { id: 'synthetic-evidence', excerpt: TAX_TEXT } };
-  const registry = createRegistryServer([{ name: 'synthetic', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: TAX_TEXT,
+  const registry = await createRegistryServer([{ name: 'synthetic', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: TAX_TEXT,
     inputSchema: { type: 'object', properties: { operation: { type: 'string' } }, required: ['operation'], additionalProperties: false },
     handler: async args => {
       if (args.operation === 'fail') { const error = new Error(TAX_TEXT); error.name = 'ToolError'; throw error; }
@@ -424,7 +424,7 @@ test('MCP advertised tool metadata is sanitized without changing local schemas',
   const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
   const { createRegistryServer } = await import('../tools.mjs');
   const inputSchema = { type: 'object', description: TAX_TEXT, properties: { amount: { type: 'number', minimum: 0 } }, additionalProperties: false };
-  const registry = createRegistryServer([{ name: 'synthetic', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: TAX_TEXT, inputSchema, handler: async () => ({ ok: true }) }], { purpose: 'chat' });
+  const registry = await createRegistryServer([{ name: 'synthetic', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: TAX_TEXT, inputSchema, handler: async () => ({ ok: true }) }], { purpose: 'chat' });
   const client = new Client({ name: 'synthetic', version: '1.0.0' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   try {

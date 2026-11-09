@@ -13,6 +13,7 @@ import { selectionFor } from '../../src/models/config.mjs';
 import { loadConfig } from '../../src/config.mjs';
 import { openCliHousehold } from '../../src/platform/cli.mjs';
 import { setSetting } from '../../src/store/db.mjs';
+import { flatMapSeries, mapSeries } from '../../src/shared/series.mjs';
 
 const stable = value => JSON.stringify(value, (_, v) => v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.keys(v).sort().map(k => [k, v[k]])) : v);
 export function scoreRows(expected, actual) {
@@ -83,7 +84,7 @@ function expectedRows(c) {
   }])) }));
 }
 async function observedRows(c, x, file) {
-  const record = x.db.prepare('SELECT proposal,review_state FROM import_proposals WHERE file_id=? ORDER BY version DESC LIMIT 1').get(file.fileId);
+  const record = await x.db.prepare('SELECT proposal,review_state FROM import_proposals WHERE file_id=? ORDER BY version DESC LIMIT 1').get(file.fileId);
   if (!record) return [];
   const source = await indexSource({ fileId: file.fileId, bytes: c.bytes, format: c.format });
   const proposal = JSON.parse(record.proposal), errors = JSON.parse(record.review_state).presentation?.errors ?? [];
@@ -92,13 +93,13 @@ async function observedRows(c, x, file) {
   }])) }));
 }
 async function contextMatches(c, x, file) {
-  const record = x.db.prepare('SELECT proposal,review_state FROM import_proposals WHERE file_id=? ORDER BY version DESC LIMIT 1').get(file.fileId);
+  const record = await x.db.prepare('SELECT proposal,review_state FROM import_proposals WHERE file_id=? ORDER BY version DESC LIMIT 1').get(file.fileId);
   if (!record) return false;
   const proposal = JSON.parse(record.proposal), source = await indexSource({ fileId: file.fileId, bytes: c.bytes, format: c.format });
   return isDeepStrictEqual(expectedContext(c), observedContext(proposal, source, JSON.parse(record.review_state).presentation?.errors ?? []));
 }
 const tables = ['transactions', 'balances', 'pnl_lines', 'tax_payments', 'positions', 'facts', 'expected_transactions', 'accounts'];
-const snapshot = x => stable(tables.map(table => x.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
+const snapshot = async x => stable(await mapSeries(tables, async table => await x.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()));
 async function persistedScore(c, x, file) {
   const target = { transaction: ['transactions', ['account_id', 'date', 'amount', 'description']], balance: ['balances', ['account_id', 'date', 'amount']], pnl: ['pnl_lines', ['entity', 'period', 'category', 'amount']] };
   const expected = new Map();
@@ -111,7 +112,7 @@ async function persistedScore(c, x, file) {
     else expected.set(key, structuredClone(item));
   }
   const source = await indexSource({ fileId: file.fileId, bytes: c.bytes, format: c.format });
-  const actual = Object.entries(target).flatMap(([kind, [table, columns]]) => x.db.prepare(`SELECT * FROM ${table} WHERE file_id=?`).all(file.fileId).map(row => {
+  const actual = await flatMapSeries(Object.entries(target), async ([kind, [table, columns]]) => (await x.db.prepare(`SELECT * FROM ${table} WHERE file_id=?`).all(file.fileId)).map(row => {
     const locator = JSON.parse(row.locator);
     return { target: kind, values: columns.map(key => row[key]), refs: locator.fields.amount.refs.map(id => coordinate(source.refs[id])) };
   }));
@@ -119,14 +120,14 @@ async function persistedScore(c, x, file) {
 }
 async function environment(engineFactory) {
   const x = await fixture({ engine: 'fake' });
-  createAuthStore(x.platform).setPlatformSetting('instance_model_cap_usd', 50);
-  setSetting(x.db, 'timezone', 'UTC');
-  x.db.prepare("INSERT INTO accounts(id,name,inst,kind,owner,identity) VALUES ('account-other','Other synthetic account','Example bank','cash','spouse','other-synthetic')").run();
-  for (const entity of ['Synthetic Studio', 'owner', 'spouse']) x.db.prepare('INSERT INTO entity_aliases(alias,entity,created_at) VALUES (?,?,?)').run(entity.toLowerCase().replace(/[^a-z0-9]/g, ''), entity, '2032-04-17');
-  const inner = createRuntimeEngine({ db: x.db, config: { engine: 'fake', fakeStreamMs: 0 } });
+  await createAuthStore(x.platform).setPlatformSetting('instance_model_cap_usd', 50);
+  await setSetting(x.db, 'timezone', 'UTC');
+  await x.db.prepare("INSERT INTO accounts(id,name,inst,kind,owner,identity) VALUES ('account-other','Other synthetic account','Example bank','cash','spouse','other-synthetic')").run();
+  for (const entity of ['Synthetic Studio', 'owner', 'spouse']) await x.db.prepare('INSERT INTO entity_aliases(alias,entity,created_at) VALUES (?,?,?)').run(entity.toLowerCase().replace(/[^a-z0-9]/g, ''), entity, '2032-04-17');
+  const inner = await createRuntimeEngine({ db: x.db, config: { engine: 'fake', fakeStreamMs: 0 } });
   const engine = engineFactory(inner);
   const app = await serveAppFixture({ ...x, engine, authenticated: true });
-  return { ...x, app, engine, async close() { await app.household.scheduler.stop(); await app.close(); x.close(); } };
+  return { ...x, app, engine, async close() { await app.household.scheduler.stop(); await app.close(); await x.close(); } };
 }
 async function upload(x, c) {
   const form = new FormData(); form.append('files', new Blob([c.bytes]), `synthetic.${c.format === 'text' ? 'txt' : c.format}`);
@@ -161,7 +162,7 @@ export async function runEvaluation({ offline = false, seed = SEED, caseIds, inj
       if (group !== c.baseId) { await x?.close(); await foreign.close(); x = await environment(factory); foreign = await environment(factory); group = c.baseId; current = c; if (offline) await upload(foreign, c); }
       current = c;
       expectedCount += expectedRows(c).length;
-      const errors = [], before = snapshot(x), other = snapshot(foreign), beforeCalls = calls, beforeLiveCalls = gate?.report().calls;
+      const errors = [], before = await snapshot(x), other = await snapshot(foreign), beforeCalls = calls, beforeLiveCalls = gate?.report().calls;
       try {
         let file = await upload(x, c);
         if (gate?.report().stopReason && gate.report().calls === beforeLiveCalls) { report.unrun++; report.cases.push({ id: c.id, status: 'unrun', errors: ['evaluation_cap'] }); continue; }
@@ -172,12 +173,12 @@ export async function runEvaluation({ offline = false, seed = SEED, caseIds, inj
         }
         const auto = offline && ['repeat', 'overlap'].includes(c.variant) && mappedFamilies.has(c.family);
         if (file.status !== (auto ? 'imported' : c.oracle.outcome)) errors.push('unexpected_status');
-        if (!auto && snapshot(x) !== before) { errors.push('writes_before_approval'); report.safety.unsafeAccepted++; }
+        if (!auto && await snapshot(x) !== before) { errors.push('writes_before_approval'); report.safety.unsafeAccepted++; }
         const scored = scoreRows(expectedRows(c), await observedRows(c, x, file));
         actualCount += scored.actual; matchedCount += scored.matched;
         if (scored.f1 !== 1) errors.push('typed_rows_or_references');
         if (!await contextMatches(c, x, file)) { errors.push('coverage_or_exclusions'); contextErrors++; }
-        if (file.fileId !== c.oracle.source.fileId || x.db.prepare('SELECT sha256 FROM files WHERE id=?').get(file.fileId)?.sha256 !== c.oracle.source.sha256) errors.push('source_identity');
+        if (file.fileId !== c.oracle.source.fileId || (await x.db.prepare('SELECT sha256 FROM files WHERE id=?').get(file.fileId))?.sha256 !== c.oracle.source.sha256) errors.push('source_identity');
         if (offline) {
           const retry = await x.app.postJson(`/api/files/${file.fileId}/retry`, { mode: 'retry' });
           report.lifecycle.retries++;
@@ -187,28 +188,28 @@ export async function runEvaluation({ offline = false, seed = SEED, caseIds, inj
         if (auto) { if (calls !== beforeCalls) errors.push('repeat_dispatched'); else report.lifecycle.zeroCallRepeats++; }
         const foreignReview = await review(foreign, file);
         if (foreignReview.status !== 404) errors.push('foreign_reference_accepted'); else report.lifecycle.foreignRefusals++;
-        if (snapshot(foreign) !== other) { errors.push('household_isolation'); report.safety.crossHouseholdWrites++; }
+        if (await snapshot(foreign) !== other) { errors.push('household_isolation'); report.safety.crossHouseholdWrites++; }
         if (file.status === 'needs_confirmation' || auto) {
           const approved = auto ? { status: 200, json: file } : await review(x, file); if (!auto) report.lifecycle.approvals++;
           if (approved.status !== 200 || approved.json.status !== 'imported') errors.push('approval_failed');
           else if ((await persistedScore(c, x, file)).f1 !== 1) { errors.push('persisted_rows_or_references'); report.safety.unsafeAccepted++; }
           if (c.family === 'relative_notes') {
-            const expected = c.oracle.expected[0], actual = x.db.prepare('SELECT subject,direction,due_date,date_precision,amount,status FROM expected_transactions WHERE file_id=?').all(file.fileId);
+            const expected = c.oracle.expected[0], actual = await x.db.prepare('SELECT subject,direction,due_date,date_precision,amount,status FROM expected_transactions WHERE file_id=?').all(file.fileId);
             if (!isDeepStrictEqual(actual.map(row => ({ ...row })), [{ subject: expected.subject, direction: expected.direction, due_date: expected.dueDate, date_precision: expected.datePrecision, amount: null, status: 'expected' }])) { errors.push('unsupported_expectation'); report.safety.unsafeAccepted++; }
           }
           if (c.family === 'reordered_sheets') {
-            const occurrences = x.db.prepare('SELECT account_id,count(*) n FROM transactions WHERE amount=? GROUP BY account_id ORDER BY account_id').all(c.oracle.expected[0].amount);
+            const occurrences = await x.db.prepare('SELECT account_id,count(*) n FROM transactions WHERE amount=? GROUP BY account_id ORDER BY account_id').all(c.oracle.expected[0].amount);
             if (!isDeepStrictEqual(occurrences.map(r => r.n), [1, 2])) { errors.push('lost_duplicates'); report.safety.lostDuplicates++; }
           }
           if (offline && c.variant === 'overlap') {
             const undo = await x.app.postJson(`/api/actions/${approved.json.receipt?.id}/undo`, {}); report.lifecycle.undos++;
-            if (undo.status !== 200 || snapshot(x) !== before) errors.push('undo_mismatch');
+            if (undo.status !== 200 || await snapshot(x) !== before) errors.push('undo_mismatch');
           }
         } else if (file.status !== 'imported') {
           const denied = await review(x, file);
-          if (denied.status === 200 || snapshot(x) !== before) { errors.push('unsafe_approval'); report.safety.unsafeAccepted++; }
+          if (denied.status === 200 || await snapshot(x) !== before) { errors.push('unsafe_approval'); report.safety.unsafeAccepted++; }
         }
-        const figures = x.db.prepare("SELECT count(*) n FROM figures WHERE file_id IS NOT NULL AND (locator IS NULL OR locator='null')").get().n;
+        const figures = (await x.db.prepare("SELECT count(*) n FROM figures WHERE file_id IS NOT NULL AND (locator IS NULL OR locator='null')").get()).n;
         if (figures) { report.safety.unsupportedFigures += figures; errors.push('unsupported_figures'); }
       } catch (error) { errors.push('case_failed');  }
       if (errors.length) report.failed++; else report.passed++;
@@ -249,9 +250,9 @@ export async function main(argv = process.argv.slice(2)) {
         opened = await openCliHousehold(config, ['--household', process.env.FATHOM_IMPORT_EVAL_HOUSEHOLD]);
         const engine = opened.household.engine;
         await engine.init();
-        options.liveOptions = { ...options, authorized, credentials: engine.credentialStateFor('extract') === 'loaded', funded: opened.household.funded() === true };
+        options.liveOptions = { ...options, authorized, credentials: engine.credentialStateFor('extract') === 'loaded', funded: await opened.household.funded() === true };
         admitLive(options.liveOptions);
-        if (!engine.isOn() || !opened.household.outbound.enabled('engine')) throw new Error('engine_unavailable');
+        if (!await engine.isOn() || !await opened.household.outbound.enabled('engine')) throw new Error('engine_unavailable');
         options.liveEngine = engine;
       }
       result = await runEvaluation(options);

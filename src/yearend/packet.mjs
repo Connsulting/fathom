@@ -40,35 +40,35 @@ const provText = (r, files) => {
 };
 
 // Every input the index needs, read from the store.
-export function packetData(db, { year, clock }) {
-  const scope = tokenScope(db);
-  const checklist = yearendChecklist(db, { year, clock, plain: (s) => resolveTokens(scope, s, false) });
-  const naming = accountNaming(db);
-  const files = new Map(db.prepare('SELECT id, name, uploaded_at, stored_path, mime, parser FROM files').all().map((f) => [f.id, f]));
-  const payments = heldPayments(db, db.prepare('SELECT * FROM tax_payments WHERE tax_year = ? ORDER BY date, id').all(year));
-  const pnl = db.prepare(`SELECT entity, category, round(sum(amount), 2) AS total, count(*) AS n, group_concat(DISTINCT file_id) AS file_ids
+export async function packetData(db, { year, clock }) {
+  const scope = await tokenScope(db);
+  const checklist = await yearendChecklist(db, { year, clock, plain: (s) => resolveTokens(scope, s, false) });
+  const naming = await accountNaming(db);
+  const files = new Map((await db.prepare('SELECT id, name, uploaded_at, stored_path, mime, parser FROM files').all()).map((f) => [f.id, f]));
+  const payments = await heldPayments(db, await db.prepare('SELECT * FROM tax_payments WHERE tax_year = ? ORDER BY date, id').all(year));
+  const pnl = await db.prepare(`SELECT entity, category, round(sum(amount), 2) AS total, count(*) AS n, group_concat(DISTINCT file_id) AS file_ids
                           FROM pnl_lines WHERE substr(period, 1, 4) = ? GROUP BY entity, category ORDER BY entity, category`).all(String(year));
-  const figures = db.prepare(`SELECT f.key, f.v, f.label, f.kind, f.file_id, f.parser, f.locator, s.label AS src_label, s.as_of
-                              FROM figures f LEFT JOIN sources s ON s.id = f.src WHERE f.kind = 'a' AND f.label != '' AND f.unavailable_reason IS NULL ORDER BY f.key`).all()
+  const figures = (await db.prepare(`SELECT f.key, f.v, f.label, f.kind, f.file_id, f.parser, f.locator, s.label AS src_label, s.as_of
+                              FROM figures f LEFT JOIN sources s ON s.id = f.src WHERE f.kind = 'a' AND f.label != '' AND f.unavailable_reason IS NULL ORDER BY f.key`).all())
     .map((f) => ({ ...f, label: resolveTokens(scope, relabelStoredFigure(naming, f).label, false) }));
-  const facts = db.prepare("SELECT key, value, src, file_id, parser, locator, confirmed FROM facts WHERE key IN ('household.filingStatus', 'household.state', 'household.dependents') ORDER BY key").all();
-  const recs = loadRecs(db, clock);
+  const facts = await db.prepare("SELECT key, value, src, file_id, parser, locator, confirmed FROM facts WHERE key IN ('household.filingStatus', 'household.state', 'household.dependents') ORDER BY key").all();
+  const recs = await loadRecs(db, clock);
   const recsById = new Map(recs.map((r) => [r.id, r]));
-  const decisionRows = db.prepare('SELECT * FROM decisions ORDER BY sort, id').all();
+  const decisionRows = await db.prepare('SELECT * FROM decisions ORDER BY sort, id').all();
   const decisions = yearendDecisions({
     year, recs: recs.map((r) => ({ ...r, title: resolveTokens(scope, r.title, false) })),
     decisions: deriveDecisions(decisionRows, recsById, clock, {}).map((d) => ({ ...d, title: resolveTokens(scope, d.title, false) })),
-    recRows: db.prepare('SELECT id, window_close FROM recs').all(), opensOn: new Map(decisionRows.map((r) => [r.id, r.opens_on])),
+    recRows: await db.prepare('SELECT id, window_close FROM recs').all(), opensOn: new Map(decisionRows.map((r) => [r.id, r.opens_on])),
   }).map((d) => ({ ...d, when: resolveTokens(scope, d.when, false) }));
-  return { ...checklist, files, payments, pnl, figures, facts, decisions, household: resolveTokens(scope, parseMeta(db).household || '', false) };
+  return { ...checklist, files, payments, pnl, figures, facts, decisions, household: resolveTokens(scope, (await parseMeta(db)).household || '', false) };
 }
 
 // Payments that must not be totaled yet, as the planner treats them: rows a pending
 // withholding_conflict names, and rows in an employer slot holding both W-2 and paystub rows
 // (unsummarized until the recipient is known, so they would double count). Each gets `held`.
-export function heldPayments(db, payments) {
+export async function heldPayments(db, payments) {
   const conflicted = new Set();
-  for (const r of db.prepare("SELECT context FROM confirm_items WHERE kind = 'withholding_conflict' AND status = 'pending'").all()) {
+  for (const r of await db.prepare("SELECT context FROM confirm_items WHERE kind = 'withholding_conflict' AND status = 'pending'").all()) {
     let c = {};
     try { c = JSON.parse(r.context || '{}') || {}; } catch { /* malformed context names no rows */ }
     for (const ref of [c.first, c.second]) if (ref && ref.id != null) conflicted.add(Number(ref.id));
@@ -87,8 +87,8 @@ export function heldPayments(db, payments) {
   });
 }
 
-function parseMeta(db) {
-  const r = db.prepare("SELECT value FROM content WHERE key = 'meta'").get();
+async function parseMeta(db) {
+  const r = await db.prepare("SELECT value FROM content WHERE key = 'meta'").get();
   try { return JSON.parse(r?.value || '{}') || {}; } catch { return {}; }
 }
 
@@ -155,12 +155,12 @@ export async function buildPacket(db, { year, clock, vault, now = new Date().toI
   const dir = await mkdtemp(join(workDir(vault), TEMP_PREFIX));
   const cleanup = () => rm(dir, { recursive: true, force: true });
   try {
-    const d = packetData(db, { year, clock: clock || resolveClock(db) });
-    const demo = getSetting(db, 'mode', null) === 'demo';
+    const d = await packetData(db, { year, clock: clock || await resolveClock(db) });
+    const demo = await getSetting(db, 'mode', null) === 'demo';
     const entries = [];
     const unreadable = [];
     const used = new Set();
-    const docRows = new Map(db.prepare('SELECT id, doc_type, tax_year, fields FROM documents WHERE tax_year = ?').all(year).map((r) => [r.id, { ...r, fields: JSON.parse(r.fields || '{}') }]));
+    const docRows = new Map((await db.prepare('SELECT id, doc_type, tax_year, fields FROM documents WHERE tax_year = ?').all(year)).map((r) => [r.id, { ...r, fields: JSON.parse(r.fields || '{}') }]));
     const take = async (f, label) => {
       if (f.pnl) return;
       const file = d.files.get(f.id);
@@ -192,7 +192,7 @@ export async function buildPacket(db, { year, clock, vault, now = new Date().toI
       missing: d.items.filter((i) => i.status === 'missing' || i.status === 'expected').length, skipped: d.items.filter((i) => i.status === 'skipped').length,
       unmatched: d.unmatched.length, files: entries.length, unreadable: unreadable.length, payments: d.payments.length, decisions: d.decisions.length,
     };
-    recordPacket(db, { year, counts, bytes: size, now });
+    await recordPacket(db, { year, counts, bytes: size, now });
     return { file, dir, size: (await stat(file)).size, filename: `tax-packet-${year}.zip`, counts, cleanup };
   } catch (e) {
     await cleanup();
@@ -203,12 +203,12 @@ export async function buildPacket(db, { year, clock, vault, now = new Date().toI
 // Streams a built packet to an HTTP response and removes the temp directory when the response
 // ends, fails or the client goes away.
 export function streamPacket(res, packet) {
-  return new Promise((resolve) => {
+  return new Promise(async (resolve) => {
     let done = false;
     let s = null;
-    const finish = () => { if (done) return; done = true; s?.destroy(); packet.cleanup().finally(resolve); };
+    const finish = async () => { if (done) return; done = true; s?.destroy(); packet.cleanup().finally(resolve); };
     // The client may have gone while the packet was being built: remove it without streaming.
-    if (res.destroyed || res.writableEnded || res.socket?.destroyed) { finish(); return; }
+    if (res.destroyed || res.writableEnded || res.socket?.destroyed) { await finish(); return; }
     res.writeHead(200, {
       'Content-Type': 'application/zip',
       'Content-Length': packet.size,
@@ -216,9 +216,9 @@ export function streamPacket(res, packet) {
       'Cache-Control': 'no-store',
     });
     s = createReadStream(packet.file);
-    s.on('error', () => { res.destroy(); finish(); });
+    s.on('error', async () => { res.destroy(); await finish(); });
     res.on('close', finish);
-    s.on('close', () => { if (res.writableEnded) finish(); });
+    s.on('close', async () => { if (res.writableEnded) await finish(); });
     s.pipe(res);
   });
 }

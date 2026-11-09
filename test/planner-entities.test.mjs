@@ -21,105 +21,105 @@ const other = ['Mortgage', 'Utilities', 'Insurance', 'Education', 'Subscriptions
 async function fixture(t, { manual = [] } = {}) {
   const s = scratch('named-summary-');
   const db = await createRealStore(s.dir());
-  t.after(() => { closeRealStore(db); s.cleanup(); });
+  t.after(async () => { await closeRealStore(db); await s.cleanup(); });
   for (const [key, value] of Object.entries({
     'household.names': { owner: 'Aster', spouse: 'Birch' },
     'household.filingStatus': 'mfj', 'household.state': 'VA',
     'household.birthYears': { owner: 1985, spouse: 1986 },
     'income.sCorp': true, 'business.entities': [{ name: 'Example Studio', type: 's_corp', owner: 'owner' }, ...manual],
-  })) addFact(db, key, value);
+  })) await addFact(db, key, value);
   const insert = db.prepare('INSERT INTO pnl_lines(entity,period,category,amount,locator) VALUES (?,?,?,?,?)');
   for (const [name, , count, spending, lines, months] of tabs) {
     const categories = ['Wages', 'Interest income', ...personal.slice(0, spending), ...other.slice(0, count - spending - 2)];
     for (let i = 0; i < lines; i++) {
       const category = categories[i % categories.length];
       const month = String(11 - months + i % months).padStart(2, '0');
-      insert.run(name, `2026-${month}`, category, i % categories.length < 2 ? 1000 : -30, JSON.stringify({ sheet: name }));
+      await insert.run(name, `2026-${month}`, category, i % categories.length < 2 ? 1000 : -30, JSON.stringify({ sheet: name }));
     }
   }
   for (const [category, amount] of [['Income', 9000], ['Officer salary', -2000]]) {
-    insert.run('Example Studio', '2026-10', category, amount, JSON.stringify({ sheet: 'Example Studio' }));
+    await insert.run('Example Studio', '2026-10', category, amount, JSON.stringify({ sheet: 'Example Studio' }));
   }
   return db;
 }
 
-function productionPattern(db) {
+async function productionPattern(db) {
   const insert = db.prepare('INSERT INTO pnl_lines(entity,period,category,amount,locator) VALUES (?,?,?,?,?)');
   for (const [name, person, count, spending, lines, months] of tabs) {
-    db.prepare('DELETE FROM pnl_lines WHERE entity=?').run(name);
+    await db.prepare('DELETE FROM pnl_lines WHERE entity=?').run(name);
     const rows = person === 'owner'
       ? [['Venmo credits', ['04', '05', '06', '07'], 1000], ['Zelle credits', ['10'], 1000]]
       : [['Wages', ['07', '08', '09', '10'], 1000], ['Glim', ['07', '08', '09'], 100]];
     const expenses = [...personal.slice(0, spending), ...other.slice(0, count - spending - 2)];
     const entries = rows.flatMap(([category, periods, amount]) => periods.map(month => [month, category, amount]));
     for (let i = 0; entries.length < lines; i++) entries.push([String(11 - months + i % months).padStart(2, '0'), expenses[i % expenses.length], -30]);
-    for (const [month, category, amount] of entries) insert.run(name, `2026-${month}`, category, amount, JSON.stringify({ sheet: name }));
+    for (const [month, category, amount] of entries) await insert.run(name, `2026-${month}`, category, amount, JSON.stringify({ sheet: name }));
   }
 }
 
 
-const classifySteps = db => buildScenario(db).recs.find(r => r.id === 'missing-data')?.tasks.filter(t => t.code?.startsWith('entity_unclassified:')) || [];
-const taxKeys = db => db.prepare("SELECT key FROM figures WHERE key LIKE 'tax.%' OR key LIKE 'sh.%' OR key='agi.est' ORDER BY key").all().map(r => r.key);
+const classifySteps = async db => (await buildScenario(db)).recs.find(r => r.id === 'missing-data')?.tasks.filter(t => t.code?.startsWith('entity_unclassified:')) || [];
+const taxKeys = async db => (await db.prepare("SELECT key FROM figures WHERE key LIKE 'tax.%' OR key LIKE 'sh.%' OR key='agi.est' ORDER BY key").all()).map(r => r.key);
 const entityCodes = info => [...info.blocked, ...(info.heldReasons || []), ...info.gaps.map(g => g.code), ...Object.values(info.wargameInvalid)].filter(c => c?.startsWith('entity_unclassified:'));
 const signature = entities => entities.map(e => [e.name, e.type, e.classified, !!e.payrollEmployer]);
 
 for (const [state, setup, expected] of [
-  ['classified', db => addFact(db, 'business.entities', [
-    ...getFacts(db)['business.entities'], ...tabs.map(([name, owner]) => ({ name, owner, type: 'personal' })),
+  ['classified', async db => await addFact(db, 'business.entities', [
+    ...(await getFacts(db))['business.entities'], ...tabs.map(([name, owner]) => ({ name, owner, type: 'personal' })),
   ]), 0],
-  ['inferred personal summary', db => productionPattern(db), 0],
+  ['inferred personal summary', async db => await productionPattern(db), 0],
   ['unclassified payroll employer', async db => {
-    addFact(db, 'income.sCorp', false);
+    await addFact(db, 'income.sCorp', false);
     await addPayroll(db, w2Doc({ person: 'spouse', relation: 'household', employerName: 'Pending Payroll',
       wages: 12000, medicareWages: 12000, socialSecurityWages: 12000, box12: [] }));
   }, 1],
-  ['unclassified non-payroll', db => {
-    db.prepare("INSERT INTO pnl_lines(entity,period,category,amount) VALUES ('Pending Studio','2026-10','Revenue',2500)").run();
+  ['unclassified non-payroll', async db => {
+    await db.prepare("INSERT INTO pnl_lines(entity,period,category,amount) VALUES ('Pending Studio','2026-10','Revenue',2500)").run();
   }, 1],
 ]) test(`SUM1c: planner and read-side entities agree for ${state}`, async t => {
   const db = await fixture(t);
   await setup(db);
   await planRun(db, { now: clock });
-  const data = loadPlanningData(db, clock), facts = getFacts(db);
-  const prepared = prepareRecFacts(db, data);
+  const data = await loadPlanningData(db, clock), facts = await getFacts(db);
+  const prepared = await prepareRecFacts(db, data);
   const entities = resolveEntities(data, facts);
   assert.deepEqual(signature(resolveEntities(data, prepared.values)), signature(entities));
   assert.equal(entities.filter(e => !e.classified).length, expected);
   if (state === 'unclassified payroll employer') assert.ok(entities.some(e => e.name === 'Pending Payroll' && e.payrollEmployer));
-  assert.equal(classifySteps(db).length, expected);
+  assert.equal((await classifySteps(db)).length, expected);
   const out = computeFigures(data, facts, { clock, entities: resolveEntities(data, facts), owner: facts });
   if (!expected) assert.deepEqual(entityCodes(out.info), []);
 });
 
 test('SUM1c: a populated plan drops old classification steps after personal inference', async t => {
   const db = await fixture(t);
-  productionPattern(db);
-  addFact(db, 'business.entityInference', Object.fromEntries(tabs.map(([name]) => [name, { undone: true }])));
+  await productionPattern(db);
+  await addFact(db, 'business.entityInference', Object.fromEntries(tabs.map(([name]) => [name, { undone: true }])));
   await planRun(db, { now: clock });
-  const before = { taxFigures: taxKeys(db).length, missingSteps: buildScenario(db).recs.find(r => r.id === 'missing-data').tasks.length };
-  const old = JSON.parse(db.prepare("SELECT def FROM recs WHERE id='missing-data'").get().def);
+  const before = { taxFigures: (await taxKeys(db)).length, missingSteps: (await buildScenario(db)).recs.find(r => r.id === 'missing-data').tasks.length };
+  const old = JSON.parse((await db.prepare("SELECT def FROM recs WHERE id='missing-data'").get()).def);
   const step = old.tasks.find(t => t.code?.startsWith('entity_unclassified:'));
   assert.ok(step);
   // Reproduce a persisted pre-dedupe recommendation with optional and required slug steps.
   old.tasks.push({ ...step, code: 'entity_unclassified:birch-summary', optional: false });
-  db.prepare("UPDATE recs SET def=? WHERE id='missing-data'").run(JSON.stringify(old));
-  addFact(db, 'business.entityInference', { [tabs[1][0]]: { undone: true } });
+  await db.prepare("UPDATE recs SET def=? WHERE id='missing-data'").run(JSON.stringify(old));
+  await addFact(db, 'business.entityInference', { [tabs[1][0]]: { undone: true } });
   await planRun(db, { now: clock });
-  assert.equal(classifySteps(db).length, 1, 'one remaining business cannot retain a second slug step');
-  addFact(db, 'business.entityInference', {});
+  assert.equal((await classifySteps(db)).length, 1, 'one remaining business cannot retain a second slug step');
+  await addFact(db, 'business.entityInference', {});
   await planRun(db, { now: clock });
-  const data = loadPlanningData(db, clock), facts = getFacts(db);
+  const data = await loadPlanningData(db, clock), facts = await getFacts(db);
   assert.deepEqual(resolveEntities(data, facts).map(e => e.name), ['Example Studio']);
   assert.equal(personalSummaryInput(data, facts, data.categoryInput).lines.length, 130);
   const computed = computeFigures(data, facts, { clock, entities: resolveEntities(data, facts), owner: facts });
   assert.deepEqual(entityCodes(computed.info), []);
-  assert.ok(taxKeys(db).length >= before.taxFigures);
-  assert.ok(taxKeys(db).includes('tax.fed.proj'));
-  const after = { taxFigures: taxKeys(db).length, missingSteps: buildScenario(db).recs.find(r => r.id === 'missing-data').tasks.length };
-  t.diagnostic(JSON.stringify({ before, after, classifySteps: classifySteps(db).length }));
-  assert.equal(classifySteps(db).length, 0);
+  assert.ok((await taxKeys(db)).length >= before.taxFigures);
+  assert.ok((await taxKeys(db)).includes('tax.fed.proj'));
+  const after = { taxFigures: (await taxKeys(db)).length, missingSteps: (await buildScenario(db)).recs.find(r => r.id === 'missing-data').tasks.length };
+  t.diagnostic(JSON.stringify({ before, after, classifySteps: (await classifySteps(db)).length }));
+  assert.equal((await classifySteps(db)).length, 0);
   await planRun(db, { now: clock });
-  assert.equal(classifySteps(db).length, 0);
+  assert.equal((await classifySteps(db)).length, 0);
 });
 
 test('SUM1c: optional gaps, held payroll and blocked business reasons produce one classify step', () => {

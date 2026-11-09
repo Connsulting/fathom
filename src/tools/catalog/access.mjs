@@ -33,9 +33,9 @@ function dateAt(birth,age) {
   if(!birth.precise)return `${Number(birth.born.slice(0,4))+Math.ceil(age)}-12-31`;
   return addMonths(birth.born,age*12);
 }
-function accountRecords(ctx,data) {
-  const scope=tokenScope(ctx.db);
-  return selectedAccounts(ctx.db).filter(a=>ownerOf(a.owner)!=='business'&&a.kind!=='business').map(a=>{
+async function accountRecords(ctx,data) {
+  const scope=await tokenScope(ctx.db);
+  return (await selectedAccounts(ctx.db)).filter(a=>ownerOf(a.owner)!=='business'&&a.kind!=='business').map(a=>{
     const plan=data.facts['accounts.planType']?.[a.id];
     const treatment=ACCOUNT_TREATMENT.byPlanType[plan]?.id ?? ACCOUNT_TREATMENT.byKind[a.kind]?.id ?? (a.kind==='savings'?'cash':'unknown');
     const label=a.parser==='demo-seed'?plainDeep(scope,accountLabel(a)):accountLabel(a);
@@ -49,14 +49,14 @@ function qualifying(r,birth,gaps) {
   return !!birth.born&&Number(r.separation.slice(0,4))>=Number(birth.born.slice(0,4))+ACCESS_RULES.ruleOf55.years;
 }
 
-function access(args,ctx) {
-  const data=readInput(ctx),records=accountRecords(ctx,data),people=[];
+async function access(args,ctx) {
+  const data=await readInput(ctx),records=await accountRecords(ctx,data),people=[];
   for(const person of args.people&&args.people!=='both'?[args.people]:['owner','spouse']) {
     const birth=birthOf(data.facts,person),gaps=[...birth.gaps];
     const rows=records.filter(r=>r.person===person);
     const unknown=records.filter(r=>!['owner','spouse'].includes(r.person)&&['retirement','ira','roth','hsa'].includes(r.a.kind));
     for(const r of unknown)gaps.push(gap(`${r.label} needs a known account owner before access dates can be assigned.`));
-    const facts=ctx.db.prepare('SELECT key,as_of FROM facts').all(),sources=facts.filter(f=>birth.keys.includes(f.key)||f.key.startsWith('accounts.'));
+    const facts=await ctx.db.prepare('SELECT key,as_of FROM facts').all(),sources=facts.filter(f=>birth.keys.includes(f.key)||f.key.startsWith('accounts.'));
     const asOf=latest(sources.map(f=>f.as_of));
     const prov={calc:'retirementAccess',sources:sources.map(f=>({table:'facts',ids:[f.key],count:1}))};
     const milestones=[];
@@ -88,20 +88,20 @@ function access(args,ctx) {
 
 async function bridge(args,ctx) {
   if(args.spending&&args.definition!==undefined)bad('bridge takes spending or definition, not both');
-  const data=readInput(ctx),person=args.person ?? 'owner',birth=birthOf(data.facts,person),gaps=[...birth.gaps];
+  const data=await readInput(ctx),person=args.person ?? 'owner',birth=birthOf(data.facts,person),gaps=[...birth.gaps];
   const stored=data.facts['household.retireAge']?.[person];
   let age,assumptions=[];
-  if(args.retireAge!==undefined){const a=checkAssumption(args.retireAge,{name:'retireAge',unit:'age',min:18,max:100},ctx);age=a.value;assumptions.push(a);}
+  if(args.retireAge!==undefined){const a=await checkAssumption(args.retireAge,{name:'retireAge',unit:'age',min:18,max:100},ctx);age=a.value;assumptions.push(a);}
   else if(stored!==undefined)age=stored;
   else {age=null;gaps.push(gap(`A retirement age for ${person} is missing; provide a retirement age assumption.`,'household.retireAge'));}
-  const rr=checkAssumption(args.realReturn ?? {value:0,source:'default'},{name:'realReturn',unit:'ratio',default:0,min:-0.05,max:0.1},ctx);assumptions.push(rr);
+  const rr=await checkAssumption(args.realReturn ?? {value:0,source:'default'},{name:'realReturn',unit:'ratio',default:0,min:-0.05,max:0.1},ctx);assumptions.push(rr);
   const spending=args.spending?await resolveRef(args.spending,ctx,'spending'):(await (await import('../index.mjs')).callTool('spending',{operation:'total',definition:args.definition ?? 'household_spending',annualize:true},ctx)).total;
   if(Array.isArray(spending)||spending.unit!=='usd_per_year')bad('spending needs a usd_per_year figure');
   gaps.push(...spending.gaps);
   const start=age===null?null:dateAt(birth,age),years=age===null?null:Math.max(0,ageAccess-age);
   const notes=['Taxable values are before the cost of selling; see retirement.after_tax.'];
   const sums={taxable:0,cash:0,rothContributions:0,ruleOf55:0},inputs={taxable:[],cash:[],rothContributions:[],ruleOf55:[]};
-  const records=accountRecords(ctx,data);
+  const records=await accountRecords(ctx,data);
   for(const r of records) {
     const shared=r.person==='joint'&&['cash','taxable'].includes(r.treatment);
     const belongs=r.person===person||shared;
@@ -109,7 +109,7 @@ async function bridge(args,ctx) {
       if(r.person===null&&['cash','taxable','pretax','roth','roth_ira','roth_401k','needs plan type'].includes(r.treatment))gaps.push(gap(`${r.label} needs a known account owner before bridge funds can be assigned.`));
       continue;
     }
-    const snapshot=accountHistory(ctx.db,r.a.id,data.clock).at(-1);
+    const snapshot=(await accountHistory(ctx.db,r.a.id,data.clock)).at(-1);
     const value=snapshot?.value?.v ?? null,asOf=snapshot?.date ?? null;
     const eligible=qualifying(r,birth,gaps);
     let key;
@@ -140,7 +140,7 @@ async function bridge(args,ctx) {
   const needed=n===null||spending.value===null?null:r===0?spending.value/12*n:spending.value/12*(-Math.expm1(-n*Math.log1p(r)))/r;
   const accessibleTotal=Object.values(sums).some(v=>v===null)?null:Object.values(sums).reduce((a,b)=>a+b,0);
   const relevant=new Set([...birth.keys,'household.retireAge','accounts.planType','accounts.separationDate','accounts.rothBasis']);
-  const allInputs=[spending,...Object.values(inputs).flat()],factRows=ctx.db.prepare('SELECT key,as_of FROM facts').all().filter(f=>relevant.has(f.key));
+  const allInputs=[spending,...Object.values(inputs).flat()],factRows=(await ctx.db.prepare('SELECT key,as_of FROM facts').all()).filter(f=>relevant.has(f.key));
   const asOf=latest([...allInputs.map(i=>i.asOf),...factRows.map(f=>f.as_of)]);
   const prov={calc:'retirementBridge',formula:'Present value of monthly spending until standard access age, compared with stored accessible assets at retirement',inputs:allInputs,assumptions,
     sources:factRows.map(f=>({table:'facts',ids:[f.key],count:1})),packRefs:[pack(ACCESS_RULES.penaltyFreeAge.packRef),pack(ACCESS_RULES.fiveYear.packRef)]};

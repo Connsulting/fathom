@@ -302,9 +302,9 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
       answer.beginRound();
       await serial(ledger, async () => {
         if (poisoned) throw reserving ? withCode(new ModelAccountingError(), 'accounting_unrecorded') : new ModelAccountingError();
-        if (allowed() !== true) { const error = new EngineOffError(); error.toolResults = allResults; throw error; }
-        if (mode === 'live' && funded() !== true) { const error = fundingUnavailable(); error.toolResults = allResults; throw error; }
-        const ts = new Date(now()).toISOString();
+        if (await allowed() !== true) { const error = new EngineOffError(); error.toolResults = allResults; throw error; }
+        if (mode === 'live' && await funded() !== true) { const error = fundingUnavailable(); error.toolResults = allResults; throw error; }
+        const ts = new Date(await now()).toISOString();
         // The call's own budget (budget.maxCostUsd across its rounds, budget.maxInputTokens per round)
         // refuses a round whose worst case no longer fits, in every mode; with reservations the
         // platform ledger below is the live authority and admits before beforeDispatch runs.
@@ -325,7 +325,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
         if (admitRound) await admitRound({ purpose, system, systemDynamic, messages: transcript, tools, maxTokens });
         const auth = mode === 'live' && port.credentialRequired ? explicitCredential(modelCredentials[purpose] ?? credential) : modelCredentials[purpose];
         const context = callContext ?? toolContext;
-        const registry = createRegistryServer(tools, { purpose, ctx: { ...context, now: context.now ?? ts,
+        const registry = await createRegistryServer(tools, { purpose, ctx: { ...context, now: context.now ?? ts,
           ...(purpose === 'chat' && typeof context.replan === 'function' ? { queueAfterTools: task => afterTools.push(task) } : {}) } });
         const unknownCost = estimateNow;
         let admission = null;
@@ -458,7 +458,7 @@ export function createEngine({ mode = process.env.FATHOM_ENGINE ?? 'off', ledger
     }
     const error = new RoundLimitError(); error.toolResults = allResults; throw error;
   };
-  const call = req => complete(req).catch(error => { if (!(error instanceof EngineOffError)) error.code ??= modelErrorCode(error); throw error; });
+  const call = async req => complete(req).catch(error => { if (!(error instanceof EngineOffError)) error.code ??= modelErrorCode(error); throw error; });
   return { call, complete: call, async extract({ document, schema, system = 'Extract documented rows without guessing.', maxTokens = 4096, fake } = {}) {
     if (mode === 'off') throw new EngineOffError();
     const responseSchema = { type: 'object', properties: { rows: { type: 'array', items: schema } }, required: ['rows'], additionalProperties: false };

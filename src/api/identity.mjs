@@ -2,17 +2,17 @@ import { HttpError, sendJson } from './http.mjs';
 import { safePath, safeHousehold } from '../../web/auth/return-path.js';
 import { checkAssertion } from './household-context.mjs';
 
-export const identityOf = (req, auth) => auth.identity(req);
+export const identityOf = async (req, auth) => await auth.identity(req);
 
 // After the body is read: the session must still hold, pass the route's access check, still carry
 // the asserted household context (a switch meanwhile is 409 stale) and still name the household
 // fixed before the body.
-export function revalidateRequest({ authenticate, checkAccess, assertion = null, household, runtimes }) {
-  const identity = authenticate();
+export async function revalidateRequest({ authenticate, checkAccess, assertion = null, household, runtimes }) {
+  const identity = await authenticate();
   if (!identity) throw new HttpError(401, 'unauthorized');
-  checkAccess?.(identity);
+  await checkAccess?.(identity);
   if (assertion) checkAssertion(assertion, identity);
-  if (household && (identity.householdId !== household.householdId || runtimes.get(household.householdId) !== household)) {
+  if (household && (identity.householdId !== household.householdId || (await runtimes.get(household.householdId)) !== household)) {
     throw new HttpError(403, 'household membership required');
   }
   return identity;

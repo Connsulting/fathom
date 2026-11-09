@@ -40,19 +40,19 @@ function options(list, allowed, name) {
   return allowed.filter((x) => list.includes(x));
 }
 
-function analyze({ db, from, to, include, exclude, clock }) {
+async function analyze({ db, from, to, include, exclude, clock }) {
   checkDb(db);
-  const c = clockOf(db, clock);
+  const c = await clockOf(db, clock);
   const inc = options(include, INCLUDE, 'include');
   const exc = options(exclude, EXCLUDE, 'exclude');
   checkMonth(from, 'from');
   checkMonth(to, 'to');
-  const base = classified(db, c);
-  const labels = accountLabels(db);
+  const base = await classified(db, c);
+  const labels = await accountLabels(db);
   const accounts = base.accounts.filter(spendingAccount);
   const spendingIds = new Set(accounts.map((a) => a.id));
-  const data = loadPlanningData(db, c);
-  const summaries = personalSummaryInput(data, getFacts(db), data.categoryInput);
+  const data = await loadPlanningData(db, c);
+  const summaries = personalSummaryInput(data, await getFacts(db), data.categoryInput);
   const rows = base.transactions.filter((t) => spendingIds.has(t.account_id));
 
   // Default range: the trailing twelve months ending at the latest month with a spending-account
@@ -97,15 +97,15 @@ function analyze({ db, from, to, include, exclude, clock }) {
   const lastMonth = new Map();
   for (const t of rows) lastMonth.set(t.account_id, t.date.slice(0, 7));
   const activeMonths = new Set([...inRange.map((t) => t.date.slice(0, 7)), ...supplemental.map(l => l.period)]);
-  return { from: start, to: end, months, include: inc, exclude: exc, counted, left, accounts, lastMonth, activeMonths, labels, files: fileNames(db) };
+  return { from: start, to: end, months, include: inc, exclude: exc, counted, left, accounts, lastMonth, activeMonths, labels, files: await fileNames(db) };
 }
 
 const all = (byMonth) => [...byMonth.values()].flat();
 const keyBase = (a) => `spend.${a.from}.${a.to}.${a.include.includes('tax') ? 'tax' : 'notax'}.${a.exclude.includes('housing') ? 'nohousing' : 'housing'}`;
 const sortCategories = (list) => list.sort((x, y) => (x.category === UNCATEGORIZED) - (y.category === UNCATEGORIZED) || y.value - x.value || x.category.localeCompare(y.category));
 
-export function householdSpending(opts = {}) {
-  const a = analyze(opts);
+export async function householdSpending(opts = {}) {
+  const a = await analyze(opts);
   const reg = figureRegistry({ kind: 'spend', labels: a.labels, files: a.files });
   const base = keyBase(a);
   const span = spanLabel(a.from, a.to);
@@ -208,8 +208,8 @@ export function householdSpending(opts = {}) {
   };
 }
 
-export function householdSpendingRows({ bucket, category, month, ...opts } = {}) {
-  const a = analyze(opts);
+export async function householdSpendingRows({ bucket, category, month, ...opts } = {}) {
+  const a = await analyze(opts);
   if (!BUCKETS.includes(bucket)) throw new PnlError('bad_option', 'bucket must be household or tax');
   if (typeof category !== 'string' || !category) throw new PnlError('bad_input', 'category is required');
   checkMonth(month, 'month');

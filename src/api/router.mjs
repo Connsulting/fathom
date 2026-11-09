@@ -253,18 +253,18 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
     for (const cancel of cancels ?? []) cancel();
   });
   // Route access beyond a session (see the header).
-  const checkAccess = (r, identity) => {
+  const checkAccess = async (r, identity) => {
     if (r.backupControl) {
       const member = identity?.memberships?.find(m => m.householdId === identity.householdId);
       if (member?.role !== 'admin') throw adminRequired();
     }
-    if (r.admin && !auth.servedAdmin(identity)) throw adminRequired();
-    if (financial(r) && !auth.servedMember(identity)) throw membershipRequired();
+    if (r.admin && !await auth.servedAdmin(identity)) throw adminRequired();
+    if (financial(r) && !await auth.servedMember(identity)) throw membershipRequired();
   };
-  function resolveHousehold(identity) {
-    if (gated) return runtimes.forIdentity(identity);
+  async function resolveHousehold(identity) {
+    if (gated) return await runtimes.forIdentity(identity);
     try {
-      return runtimes.demo();
+      return await runtimes.demo();
     } catch {
       throw new HttpError(503, 'household unavailable');
     }
@@ -280,7 +280,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
     let cancelStream = null;
     let streamEntry = null;
     try {
-      auth.sweep();
+      await auth.sweep();
       if (rawPath === '/mcp') {
         if (!mcpHandler) throw demoOff();
         await mcpHandler(req, res);
@@ -293,7 +293,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
       const candidate = compiled.find(r => (r.method === req.method || (req.method === 'HEAD' && r.method === 'GET')) && matchPath(r.parts, segments));
       route = candidate || null;
       const publicPage = read && ['/signin', '/enroll', '/auth/auth.js', '/auth/auth.css', '/auth/return-path.js', '/favicon.svg'].includes(path);
-      let identity = gated ? identityOf(req, auth) : null;
+      let identity = gated ? await identityOf(req, auth) : null;
       if (gated && !candidate?.public && !publicPage && !identity) {
         sendUnauthorized(req, res, isApi);
         return;
@@ -304,7 +304,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
         const { r, params } = findRoute(req.method, segments);
         route = r;
         if (config.publicDemo && demoRouteBehavior(r.method, r.path) === 'off') throw new HttpError(403, DEMO_OFF_MESSAGE);
-        if (gated && !r.public) checkAccess(r, identity);
+        if (gated && !r.public) await checkAccess(r, identity);
         const query = queryOf(url, q);
         // The household context assertion is checked before anything is read or written.
         let assertion = null;
@@ -316,7 +316,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
         // The household is fixed before the body is read and kept for the whole request.
         let household = null;
         if (financial(r)) {
-          household = resolveHousehold(identity);
+          household = await resolveHousehold(identity);
           if (!household) throw membershipRequired();
           cancelStream = r.stream ? () => res.destroy() : null;
           held = runtimes.acquire(household, cancelStream);
@@ -331,11 +331,11 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
           body = await readJsonBody(req);
         }
         if (gated && !r.public) {
-          identity = revalidateRequest({ authenticate: () => identityOf(req, auth), checkAccess: fresh => checkAccess(r, fresh), assertion, household, runtimes });
+          identity = await revalidateRequest({ authenticate: async () => await identityOf(req, auth), checkAccess: async fresh => await checkAccess(r, fresh), assertion, household, runtimes });
         }
         // A write to a seeded demo household drops its synthetic marker.
         const seeded = household && !gated && !config.publicDemo && r.method === 'POST' && path !== '/api/demo/reset' ? household.db : null;
-        const changesBefore = seeded ? seeded.prepare('SELECT total_changes() AS n').get().n : 0;
+        const changesBefore = seeded ? (await seeded.prepare('SELECT total_changes() AS n').get()).n : 0;
         const events = r.stream && wantsEventStream(req) ? createEventStream(req, res) : null;
         const sessionKey = gated && r.stream ? auth.sessionKey(req) : null;
         if (sessionKey) {
@@ -344,19 +344,19 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
           sessionStreams.get(sessionKey).add(streamEntry.cancel);
         }
         const caller = identity;
-        const principal = gated && household ? { check() {
-          const now = identityOf(req, auth);
+        const principal = gated && household ? { async check() {
+          const now = await identityOf(req, auth);
           return Boolean(now) && now.id === caller.id && now.householdId === caller.householdId
-            && now.contextVersion === caller.contextVersion && auth.servedMember(now);
+            && now.contextVersion === caller.contextVersion && await auth.servedMember(now);
         } } : null;
         const run = fn => (principal ? runWithPrincipal(principal, fn) : fn());
         // Nothing household-scoped leaves (a stream event or the final body) once the session no
         // longer holds this context: a member removed, a passkey revoked, a sign-out or a switch
         // meanwhile ends the stream or refuses the response, whichever path revoked the session.
-        const contextLost = () => (!principal || principal.check() ? null
-          : identityOf(req, auth) ? staleContext() : new HttpError(401, 'unauthorized'));
-        const onEvent = events ? event => {
-          const lost = contextLost();
+        const contextLost = async () => (!principal || await principal.check() ? null
+          : await identityOf(req, auth) ? staleContext() : new HttpError(401, 'unauthorized'));
+        const onEvent = events ? async event => {
+          const lost = await contextLost();
           if (lost) events.fail(lost);
           else events.send(event);
         } : null;
@@ -367,7 +367,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
             scheduler: household?.scheduler, transport: household?.transport, platform, config, identity, auth, backups,
             get keys() { if (config.publicDemo) throw demoOff(); return keys; },
             params, query, body, uploads, req, res,
-            assertResponseContext() { const lost = contextLost(); if (lost) throw lost; },
+            async assertResponseContext() { const lost = await contextLost(); if (lost) throw lost; },
             ...(onEvent ? { onEvent } : {}),
           }));
         } catch (err) {
@@ -377,11 +377,11 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
           events.fail(err);
           return;
         } finally {
-          if (seeded && seeded.prepare('SELECT total_changes() AS n').get().n !== changesBefore) {
-            seeded.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
+          if (seeded && (await seeded.prepare('SELECT total_changes() AS n').get()).n !== changesBefore) {
+            await seeded.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
           }
         }
-        const lost = contextLost();
+        const lost = await contextLost();
         if (lost) {
           if (!events) throw lost;
           events.fail(lost);
@@ -404,7 +404,7 @@ export function createHandler({ platform, config, runtimes, auth, keys, backups 
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         throw new HttpError(405, 'method not allowed', { Allow: 'GET, HEAD' });
       }
-      if (gated && path === '/admin/users' && !auth.servedAdmin(identity)) throw adminRequired();
+      if (gated && path === '/admin/users' && !await auth.servedAdmin(identity)) throw adminRequired();
       if (['/signin', '/enroll'].includes(path) || (gated && ['/account', '/admin/users'].includes(path))) {
         let page;
         try { page = await readFile(join(webDir, 'auth', 'index.html')); }

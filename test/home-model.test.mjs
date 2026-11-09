@@ -607,9 +607,9 @@ test('homeHeadline never says No goals with targets', () => {
 test('homeModel over the seeded demo store matches the server housekeeping count, goal links and suggestions', async () => {
   const t = await tempDb();
   try {
-    seedDemo(t.db);
-    const sc = buildScenario(t.db);
-    const recs = loadLinkedRecs(t.db, sc.live.clock);
+    await seedDemo(t.db);
+    const sc = await buildScenario(t.db);
+    const recs = await loadLinkedRecs(t.db, sc.live.clock);
     assert.ok(recs.length > 0, 'the demo seeds recs');
     for (const r of recs) {
       assert.ok(OWNERS.includes(r.owner), `${r.id} owner ${r.owner}`);
@@ -635,7 +635,7 @@ test('homeModel over the seeded demo store matches the server housekeeping count
     assert.equal(v.needs, m.due.length);
     assert.equal(v.title, m.due.length ? `${m.due.length} thing${m.due.length === 1 ? ' needs' : 's need'} you before Dec 31` : 'You are covered through Dec 31');
   } finally {
-    t.close();
+    await t.close();
     rmSync(t.dataDir, { recursive: true, force: true });
   }
 });

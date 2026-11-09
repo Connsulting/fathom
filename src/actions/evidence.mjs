@@ -8,10 +8,10 @@ import { statedAmounts } from '../shared/numeric-evidence.mjs';
 
 export { statedAmounts };
 
-export function ownerStatements(ctx) {
+export async function ownerStatements(ctx) {
   const out = ctx.ownerText ? [ctx.ownerText] : [];
   if (!ctx.conversationKey || !ctx.actorId) return out;
-  for (const row of ctx.db.prepare("SELECT text, provenance FROM messages WHERE conversation_key = ? AND role = 'me'").all(ctx.conversationKey)) {
+  for (const row of await ctx.db.prepare("SELECT text, provenance FROM messages WHERE conversation_key = ? AND role = 'me'").all(ctx.conversationKey)) {
     const input = parse(row.provenance, null)?.ownerInput;
     if (input?.actorId === ctx.actorId) {
       const entities = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&#123;': '{', '&#125;': '}' };
@@ -63,16 +63,16 @@ export function statedIn(value, quote, shape) {
   return stated(value, quote, shape);
 }
 
-function householdValues(db) {
+async function householdValues(db) {
   const values = [];
   const add = value => {
     if (value == null) return;
     values.push(value);
     if (typeof value === 'object') Object.values(value).forEach(add);
   };
-  db.prepare('SELECT value FROM facts').all().forEach(r => add(parse(r.value, null)));
-  values.push(...db.prepare('SELECT v FROM figures WHERE unavailable_reason IS NULL').all().map(r => r.v));
-  for (const row of db.prepare('SELECT def FROM goals').all()) {
+  (await db.prepare('SELECT value FROM facts').all()).forEach(r => add(parse(r.value, null)));
+  values.push(...(await db.prepare('SELECT v FROM figures WHERE unavailable_reason IS NULL').all()).map(r => r.v));
+  for (const row of await db.prepare('SELECT def FROM goals').all()) {
     const def = parse(row.def, {});
     for (const k of ['title', 'note', 'target', 'targetLow', 'targetHigh', 'floor', 'taxYear', 'targetDate', 'split', 'entered']) add(def[k]);
   }
@@ -101,9 +101,9 @@ export function requireImportReviewEvidence(ctx, evidence, { approve = false } =
   }
 }
 
-function confirmedProposal(ctx, value, shape) {
+async function confirmedProposal(ctx, value, shape) {
   if (!ctx.conversationKey || !ctx.actorId) return false;
-  const rows = ctx.db.prepare(`SELECT role, text, provenance FROM messages WHERE conversation_key = ? AND id <= ? ORDER BY id DESC LIMIT 2`)
+  const rows = await ctx.db.prepare(`SELECT role, text, provenance FROM messages WHERE conversation_key = ? AND id <= ? ORDER BY id DESC LIMIT 2`)
     .all(ctx.conversationKey, ctx.evidenceMessageId ?? Number.MAX_SAFE_INTEGER);
   let reply = ctx.ownerText;
   let previous = rows[0];
@@ -133,28 +133,28 @@ export function sourceStatement(ctx, span = ctx.sourceEvidence?.span) {
   } catch { throw new ToolError('bad_input', 'Invalid UTF-8 source span.'); }
 }
 
-function evidenceStatements(ctx) {
-  if (!ctx.sourceEvidence) return ownerStatements(ctx);
+async function evidenceStatements(ctx) {
+  if (!ctx.sourceEvidence) return await ownerStatements(ctx);
   const statements = [sourceStatement(ctx)];
   const correction = ctx.sourceEvidence.correction;
   if (correction?.actorId === ctx.actorId && typeof correction.evidence === 'string') statements.push(correction.evidence);
   return statements;
 }
 
-export function relativeDateEvidence(ctx, phrase) {
-  const words = evidenceStatements(ctx);
+export async function relativeDateEvidence(ctx, phrase) {
+  const words = await evidenceStatements(ctx);
   const match = /^next (Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday)$/i.exec(phrase ?? '');
   if (!match || !words.some(text => text.toLowerCase().includes(phrase.toLowerCase()))) throw new ToolError('bad_input', 'Use the stated relative date phrase as evidence.');
   let captured = ctx.sourceEvidence ? ctx.sourceEvidence.capturedAt : ctx.now ?? Date.now();
   const correction = ctx.sourceEvidence?.correction;
   if (correction?.actorId === ctx.actorId && !sourceStatement(ctx).toLowerCase().includes(phrase.toLowerCase()) && correction.evidence.toLowerCase().includes(phrase.toLowerCase())) captured = correction.capturedAt;
   if (!ctx.sourceEvidence && !ctx.ownerText && ctx.conversationKey) {
-    const row = ctx.db.prepare("SELECT ts, text, provenance FROM messages WHERE conversation_key=? AND role='me' ORDER BY id DESC").all(ctx.conversationKey)
+    const row = (await ctx.db.prepare("SELECT ts, text, provenance FROM messages WHERE conversation_key=? AND role='me' ORDER BY id DESC").all(ctx.conversationKey))
       .find(r => parse(r.provenance, null)?.ownerInput?.actorId === ctx.actorId && r.text.toLowerCase().includes(phrase.toLowerCase()));
     captured = row?.ts ?? null;
   }
   if (captured == null) throw new ToolError('needs_date_anchor', 'What date was this note written?');
-  const timezone = ownerTimezone(ctx.db);
+  const timezone = await ownerTimezone(ctx.db);
   let anchor;
   if (typeof captured === 'string' && isoDate(captured) === captured) anchor = captured;
   else {
@@ -171,10 +171,10 @@ export function relativeDateEvidence(ctx, phrase) {
     ...(ctx.sourceEvidence ? { span: ctx.sourceEvidence.span } : {}) };
 }
 
-export function requireEvidence(ctx, value, { evidence, stored = [], shape, argument = 'value', household = false, derivation } = {}) {
-  const statements = evidenceStatements(ctx);
+export async function requireEvidence(ctx, value, { evidence, stored = [], shape, argument = 'value', household = false, derivation } = {}) {
+  const statements = await evidenceStatements(ctx);
   if (derivation) {
-    const expected = relativeDateEvidence(ctx, derivation.phrase);
+    const expected = await relativeDateEvidence(ctx, derivation.phrase);
     if (derivation.kind === 'relative_date' && derivation.rule === expected.rule && derivation.anchor === expected.anchor &&
       derivation.timezone === expected.timezone && derivation.date === expected.date && value === expected.date) return;
     throw new ToolError('bad_input', 'Invalid derived date evidence.');
@@ -184,21 +184,21 @@ export function requireEvidence(ctx, value, { evidence, stored = [], shape, argu
   const same = v => JSON.stringify(v) === JSON.stringify(value);
   if (stored.some(same) || words.some(text => stated(value, text, shape, evidence))) return;
   const quantity = typeof value === 'number' || (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value));
-  if (household && quantity && (householdValues(ctx.db).some(v => same(v) || (typeof v === 'string' && goalTextStates(value, v, shape)))
-    || confirmedProposal(ctx, value, shape))) return;
+  if (household && quantity && ((await householdValues(ctx.db)).some(v => same(v) || (typeof v === 'string' && goalTextStates(value, v, shape)))
+    || await confirmedProposal(ctx, value, shape))) return;
   const reason = household ? 'Use a value you stated, a stored household value, or a value from a sourced earlier proposal you explicitly confirmed.'
     : 'Use a value you stated in this conversation or a stored value. Include the exact words as evidence.';
   throw new ToolError('bad_input', `${argument}: ${reason}`);
 }
 
-export function requireEntityEvidence(ctx, value, { evidence, shape }) {
-  requireEvidence(ctx, evidence, { evidence, argument: 'evidence' });
+export async function requireEntityEvidence(ctx, value, { evidence, shape }) {
+  await requireEvidence(ctx, evidence, { evidence, argument: 'evidence' });
   if (!Array.isArray(value)) throw new ToolError('bad_input', 'Business classifications must be a list.');
-  const facts = Object.fromEntries(ctx.db.prepare('SELECT key,value FROM facts').all().map(r => [r.key, parse(r.value, null)]));
+  const facts = Object.fromEntries((await ctx.db.prepare('SELECT key,value FROM facts').all()).map(r => [r.key, parse(r.value, null)]));
   const names = [
     ...(Array.isArray(facts['business.entities']) ? facts['business.entities'].map(e => e?.name) : []),
     ...Object.values(facts['accounts.businessEntity'] || {}),
-    ...ctx.db.prepare('SELECT fields FROM documents').all().map(r => parse(r.fields, {}).employerName),
+    ...(await ctx.db.prepare('SELECT fields FROM documents').all()).map(r => parse(r.fields, {}).employerName),
   ].filter(n => typeof n === 'string');
   const fields = shape.items.fields;
   for (const entry of value) {
@@ -209,9 +209,9 @@ export function requireEntityEvidence(ctx, value, { evidence, shape }) {
     for (const [key, field] of Object.entries(entry)) {
       let stored = [];
       if (key === 'name') stored = provisional ? [...names, entry.name] : names;
-      if (key === 'accountId') stored = ctx.db.prepare("SELECT id FROM accounts WHERE kind='business' AND archived_at IS NULL").all().map(a => a.id);
+      if (key === 'accountId') stored = (await ctx.db.prepare("SELECT id FROM accounts WHERE kind='business' AND archived_at IS NULL").all()).map(a => a.id);
       if (key === 'finalYear' && entry.status === 'final_year' && /\bthis year\b/i.test(evidence)) stored = [Number(String(ctx.now || ctx.clock || new Date().toISOString()).slice(0, 4))];
-      requireEvidence(ctx, field, { evidence, shape: fields[key], stored, argument: key });
+      await requireEvidence(ctx, field, { evidence, shape: fields[key], stored, argument: key });
     }
   }
 }

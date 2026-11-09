@@ -89,12 +89,12 @@ async function deleteAllGoals(request) {
 
 // Makes the demo store genuinely fresh: onboarding not done, on the sign-in step. The server reads
 // the setting on every scenario build; resetDemo reseeds it as done.
-function makeDemoFresh() {
-  const db = openDb(householdStoreFile(localDataDir()));
+async function makeDemoFresh() {
+  const db = await openDb(await householdStoreFile(localDataDir()));
   try {
-    setSetting(db, 'onboarding', { done: false, step: 0 });
+    await setSetting(db, 'onboarding', { done: false, step: 0 });
   } finally {
-    db.close();
+    await db.close();
   }
 }
 
@@ -347,7 +347,7 @@ test.describe('demo build', () => {
   });
 
   test('a fresh demo store is forced through onboarding and finishes on Home', { tag: ['@ob-ac5', '@mobile'] }, async ({ page, request, hasTouch }) => {
-    makeDemoFresh();
+    await makeDemoFresh();
     const goalsBefore = (await fetchScenario(request)).goals.map((g) => g.id).sort();
     const posts = recordGoalPosts(page);
 
@@ -387,21 +387,21 @@ let DB_FILE;
 let app;
 
 // A returning owner: one note file with facts (one of them asked), an entity, an account. No goals.
-function seedHousehold() {
-  const db = openDb(DB_FILE);
+async function seedHousehold() {
+  const db = await openDb(DB_FILE);
   const now = '2026-11-05T12:00:00.000Z';
   try {
-    db.prepare("INSERT INTO files (id, name, mime, size, uploaded_at, status) VALUES ('f-e2e-note', 'earlier-notes.md', 'text/markdown', 1, ?, 'imported')").run(now);
+    await db.prepare("INSERT INTO files (id, name, mime, size, uploaded_at, status) VALUES ('f-e2e-note', 'earlier-notes.md', 'text/markdown', 1, ?, 'imported')").run(now);
     const prov = { fileId: 'f-e2e-note', parser: 'extract-notes' };
-    upsertFact(db, { key: 'household.filingStatus', value: 'mfj', provenance: prov, now });
-    upsertFact(db, { key: 'household.state', value: 'VA', provenance: prov, now });
-    upsertFact(db, { key: 'household.dependents', value: 2, provenance: prov, now });
-    upsertFact(db, { key: 'income.sCorp', value: true, confirmed: true, src: 'you', now });
-    ask(db, { kind: 'fact_check', subject: 'src|household.dependents|2', question: 'An import says household.dependents is 2. Is that right?', options: FACT_CHECK_OPTIONS, context: { key: 'household.dependents', value: 2 }, fileId: 'f-e2e-note', now });
-    db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, file_id, parser) VALUES ('Northwind Advisory', '2026-01', 'Income', 100, 'f-e2e-note', 'pnl-workbook')").run();
-    db.prepare("INSERT INTO accounts (id, inst, name, owner, kind, mirror, parser) VALUES ('acct-e2e-ob', 'Synthetic Bank', 'Synthetic Checking', 'owner', 'checking', 'manual', 'e2e')").run();
+    await upsertFact(db, { key: 'household.filingStatus', value: 'mfj', provenance: prov, now });
+    await upsertFact(db, { key: 'household.state', value: 'VA', provenance: prov, now });
+    await upsertFact(db, { key: 'household.dependents', value: 2, provenance: prov, now });
+    await upsertFact(db, { key: 'income.sCorp', value: true, confirmed: true, src: 'you', now });
+    await ask(db, { kind: 'fact_check', subject: 'src|household.dependents|2', question: 'An import says household.dependents is 2. Is that right?', options: FACT_CHECK_OPTIONS, context: { key: 'household.dependents', value: 2 }, fileId: 'f-e2e-note', now });
+    await db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, file_id, parser) VALUES ('Northwind Advisory', '2026-01', 'Income', 100, 'f-e2e-note', 'pnl-workbook')").run();
+    await db.prepare("INSERT INTO accounts (id, inst, name, owner, kind, mirror, parser) VALUES ('acct-e2e-ob', 'Synthetic Bank', 'Synthetic Checking', 'owner', 'checking', 'manual', 'e2e')").run();
   } finally {
-    db.close();
+    await db.close();
   }
 }
 
@@ -437,7 +437,7 @@ test.describe('real store past first run', () => {
     app = await startEnrolledServer({ dataDir: DATA_DIR });
     DB_FILE = app.storeFile;
     BASE = app.url;
-    seedHousehold();
+    await seedHousehold();
   });
 
   test.afterAll(async () => {

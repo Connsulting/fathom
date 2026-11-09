@@ -31,7 +31,7 @@ test('SEC2: amounts keep their sign, magnitude and percent units', () => {
   assert.deepEqual(statedAmounts('Save 529 dollars for the 529 account'), [529]);
 });
 
-test('SEC2: evidence excerpts cannot turn identifiers, date parts or partial quantities into numbers', () => {
+test('SEC2: evidence excerpts cannot turn identifiers, date parts or partial quantities into numbers', async () => {
   for (const [ownerText, evidence, value] of [
     ['account ending in 4821', '4821', 4821],
     ['Due September 17, 2028', '2028', 2028],
@@ -40,8 +40,8 @@ test('SEC2: evidence excerpts cannot turn identifiers, date parts or partial qua
     ['The amount is $14,821', '4,821', 4821],
     ['The rate is 4821%', '4821', 4821],
     ['The amount is 4.821k', '4.821', 4.821],
-  ]) assert.throws(() => requireEvidence({ ownerText }, value, { evidence }), /stated|evidence/, ownerText);
-  assert.doesNotThrow(() => requireEvidence({ ownerText: 'account ending in 4821, target $4,821' }, 4821, { evidence: 'target $4,821' }));
+  ]) await assert.rejects(async () => await requireEvidence({ ownerText }, value, { evidence }), /stated|evidence/, ownerText);
+  await assert.doesNotReject(async () => await requireEvidence({ ownerText: 'account ending in 4821, target $4,821' }, 4821, { evidence: 'target $4,821' }));
 });
 
 test('SEC2: range separators preserve both bounds without reversing a loss', () => {
@@ -51,18 +51,18 @@ test('SEC2: range separators preserve both bounds without reversing a loss', () 
   assert.deepEqual(statedAmounts('-$4,000 to -$2,000'), [-4000, -2000]);
 });
 
-test('SEC2: map evidence retains key attribution and the shared numeric guard', () => {
+test('SEC2: map evidence retains key attribution and the shared numeric guard', async () => {
   const shape = { type: 'map', values: { type: 'number', unit: 'USD' } };
-  assert.doesNotThrow(() => requireEvidence({ ownerText: 'Rental income is $4,821.' }, { rental: 4821 }, { shape }));
-  assert.throws(() => requireEvidence({ ownerText: 'Rental account ending in 4821.' }, { rental: 4821 }, { shape }), /stated/);
-  assert.throws(() => requireEvidence({ ownerText: 'Income is $4,821.' }, { rental: 4821 }, { shape }), /stated/);
+  await assert.doesNotReject(async () => await requireEvidence({ ownerText: 'Rental income is $4,821.' }, { rental: 4821 }, { shape }));
+  await assert.rejects(async () => await requireEvidence({ ownerText: 'Rental account ending in 4821.' }, { rental: 4821 }, { shape }), /stated/);
+  await assert.rejects(async () => await requireEvidence({ ownerText: 'Income is $4,821.' }, { rental: 4821 }, { shape }), /stated/);
 });
 
-test('SEC2: a generic number phrase is evidence while labelled identifier numbers are excluded', () => {
+test('SEC2: a generic number phrase is evidence while labelled identifier numbers are excluded', async () => {
  assert.deepEqual(statedAmounts('Use the number 5000 for the target'),[5000]);
- assert.doesNotThrow(()=>requireEvidence({ownerText:'Use the number 5000 for the target'},5000));
+ await assert.doesNotReject(async ()=>await requireEvidence({ownerText:'Use the number 5000 for the target'},5000));
  for(const text of ['invoice number 12','account number 5000','routing number 5000','policy number 5000','reference number 5000','ID number 5000']) {
   assert.deepEqual(statedAmounts(text),[],text);
-  assert.throws(()=>requireEvidence({ownerText:text},Number(text.match(/\d+/)[0])),/stated/);
+  await assert.rejects(async ()=>await requireEvidence({ownerText:text},Number(text.match(/\d+/)[0])),/stated/);
  }
 });

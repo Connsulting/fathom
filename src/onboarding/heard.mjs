@@ -59,11 +59,11 @@ const EDIT_CONFIRM = { route: 'confirm', label: 'Review in Confirm' };
 // The account list lives on the Money overview (#/accounts lands there too).
 const EDIT_ACCOUNTS = { route: 'money', label: 'Edit in Accounts' };
 
-function fileNames(db, ids) {
+async function fileNames(db, ids) {
   const out = [];
   for (const id of ids) {
     if (id == null) continue;
-    const row = db.prepare('SELECT name FROM files WHERE id = ?').get(id);
+    const row = await db.prepare('SELECT name FROM files WHERE id = ?').get(id);
     if (row && row.name && !out.includes(row.name)) out.push(row.name);
   }
   return out;
@@ -72,12 +72,12 @@ function fileNames(db, ids) {
 const fromText = names => (names.length ? `From ${names.slice(0, 2).join(' and ')}${names.length > 2 ? ` and ${names.length - 2} more` : ''}` : '');
 
 // Where a stored fact came from, in words: its file, the planner, or the owner's own answer.
-function factProv(db, row) {
-  const names = fileNames(db, [row.file_id]);
+async function factProv(db, row) {
+  const names = await fileNames(db, [row.file_id]);
   let text = fromText(names);
   if (!text && row.parser === 'planner') text = 'Worked out by the planner';
   if (!text && row.src) {
-    const s = db.prepare('SELECT label FROM sources WHERE id = ?').get(row.src);
+    const s = await db.prepare('SELECT label FROM sources WHERE id = ?').get(row.src);
     text = s && s.label ? `From ${s.label}` : row.src === 'you' ? 'Entered by you' : '';
   }
   if (!text) text = 'Stored fact';
@@ -89,10 +89,10 @@ function factProv(db, row) {
 // edit is { route, step?, label }: the Confirm deck when a question about that item is open, the
 // Accounts page for accounts, else the Tell us step (onboarding step 3), where a corrected note
 // supersedes it.
-export function deriveHeard(db, { clock } = {}) {
-  const pending = pendingItems(db);
+export async function deriveHeard(db, { clock } = {}) {
+  const pending = await pendingItems(db);
   const askedKeys = new Set(pending.filter(i => i.kind === 'fact_check').map(i => i.context && i.context.key).filter(Boolean));
-  const factRows = new Map(db.prepare('SELECT key, value, src, as_of, confirmed, file_id, parser FROM facts').all().map(r => [r.key, r]));
+  const factRows = new Map((await db.prepare('SELECT key, value, src, as_of, confirmed, file_id, parser FROM facts').all()).map(r => [r.key, r]));
 
   const by = new Map(SECTIONS.map(([id, title]) => [id, { id, title, items: [] }]));
   for (const [key, section, label, text] of FACTS) {
@@ -101,7 +101,7 @@ export function deriveHeard(db, { clock } = {}) {
     const value = text(parse(row.value, undefined));
     if (value == null) continue;
     by.get(section).items.push({
-      id: `fact:${key}`, key, label, value, prov: factProv(db, row), confirmed: !!row.confirmed, asked: askedKeys.has(key),
+      id: `fact:${key}`, key, label, value, prov: await factProv(db, row), confirmed: !!row.confirmed, asked: askedKeys.has(key),
       edit: askedKeys.has(key) ? EDIT_CONFIRM : EDIT_NOTES,
     });
   }
@@ -114,18 +114,18 @@ export function deriveHeard(db, { clock } = {}) {
     if (!entities.has(n)) entities.set(n, new Set());
     entities.get(n).add(fileId);
   };
-  for (const r of db.prepare('SELECT entity, file_id FROM pnl_lines GROUP BY entity, file_id ORDER BY entity').all()) noteEntity(r.entity, r.file_id);
+  for (const r of await db.prepare('SELECT entity, file_id FROM pnl_lines GROUP BY entity, file_id ORDER BY entity').all()) noteEntity(r.entity, r.file_id);
   const aliasAsked = pending.some(i => i.kind === 'entity_alias');
   for (const [name, ids] of entities) {
     by.get('income').items.push({
-      id: `entity:${name}`, label: 'Entity', value: name, prov: fromText(fileNames(db, [...ids])) || 'Stored entity', confirmed: false, asked: aliasAsked,
+      id: `entity:${name}`, label: 'Entity', value: name, prov: fromText(await fileNames(db, [...ids])) || 'Stored entity', confirmed: false, asked: aliasAsked,
       edit: aliasAsked ? EDIT_CONFIRM : EDIT_ACCOUNTS,
     });
   }
 
   // Accounts by kind, with the files that created them.
   const kinds = new Map();
-  for (const a of db.prepare('SELECT kind, file_id FROM accounts ORDER BY sort, id').all()) {
+  for (const a of await db.prepare('SELECT kind, file_id FROM accounts ORDER BY sort, id').all()) {
     const k = a.kind || 'other';
     if (!kinds.has(k)) kinds.set(k, { count: 0, files: new Set() });
     const g = kinds.get(k);
@@ -135,14 +135,14 @@ export function deriveHeard(db, { clock } = {}) {
   const kindAsked = pending.some(i => i.kind === 'account_kind' || i.kind === 'account_owner');
   for (const [k, g] of kinds) {
     by.get('accounts').items.push({
-      id: `accounts:${k}`, label: ACCOUNT_KIND[k] || 'Other accounts', value: String(g.count), prov: fromText(fileNames(db, [...g.files])) || 'Stored accounts',
+      id: `accounts:${k}`, label: ACCOUNT_KIND[k] || 'Other accounts', value: String(g.count), prov: fromText(await fileNames(db, [...g.files])) || 'Stored accounts',
       confirmed: false, asked: kindAsked, edit: kindAsked ? EDIT_CONFIRM : EDIT_ACCOUNTS,
     });
   }
 
   const from = clock || new Date().toISOString().slice(0, 10);
   const to = new Date(Date.parse(from + 'T00:00:00Z') + 365 * 86400000).toISOString().slice(0, 10);
-  const deadlines = db.prepare('SELECT count(*) AS n FROM deadlines WHERE date >= ? AND date <= ?').get(from, to).n;
+  const deadlines = (await db.prepare('SELECT count(*) AS n FROM deadlines WHERE date >= ? AND date <= ?').get(from, to)).n;
 
   const sections = [...by.values()].filter(s => s.items.length);
   return { sections, deadlines, pending: pending.length, empty: sections.length === 0 };
@@ -152,10 +152,10 @@ export function deriveHeard(db, { clock } = {}) {
 // The facts are the stored rows that file wrote; goals are the goal documents it wrote; `asked`
 // counts the open Confirm questions it raised. With the engine off nothing is read from the note
 // (the file waits with status waiting_for_engine), and understood says so rather than listing nothing.
-export function understoodOf(db, file, { engineOn = true } = {}) {
+export async function understoodOf(db, file, { engineOn = true } = {}) {
   const fileId = file && file.fileId;
   const facts = [];
-  for (const r of db.prepare('SELECT key, value, confirmed FROM facts WHERE file_id = ? ORDER BY key').all(fileId)) {
+  for (const r of await db.prepare('SELECT key, value, confirmed FROM facts WHERE file_id = ? ORDER BY key').all(fileId)) {
     const f = FACT_BY_KEY.get(r.key);
     if (!f) continue;
     const value = f[3](parse(r.value, undefined));
@@ -163,12 +163,12 @@ export function understoodOf(db, file, { engineOn = true } = {}) {
     facts.push({ key: r.key, label: f[2], value, confirmed: !!r.confirmed });
   }
   const goals = [];
-  for (const r of db.prepare("SELECT fields FROM documents WHERE file_id = ? AND doc_type = 'goal' ORDER BY id").all(fileId)) {
+  for (const r of await db.prepare("SELECT fields FROM documents WHERE file_id = ? AND doc_type = 'goal' ORDER BY id").all(fileId)) {
     const g = parse(r.fields, {});
     const title = typeof g.title === 'string' ? g.title.trim() : '';
     if (title) goals.push({ title, when: typeof g.when === 'string' ? g.when.trim() : '' });
   }
-  const asked = db.prepare("SELECT count(*) AS n FROM confirm_items WHERE file_id = ? AND status = 'pending'").get(fileId).n;
+  const asked = (await db.prepare("SELECT count(*) AS n FROM confirm_items WHERE file_id = ? AND status = 'pending'").get(fileId)).n;
   const status = file && file.status ? file.status : 'unknown';
   return { fileId, status, engineOn: !!engineOn, waiting: ['waiting_for_engine', 'budget_exhausted', 'needs_confirmation', 'needs_clarification', 'needs_source_text'].includes(status), facts, goals, asked };
 }

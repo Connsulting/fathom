@@ -6,12 +6,13 @@ import { join } from 'node:path';
 import { twoHouseholds, enrollSession, writePrivate, sideHousehold } from './helpers/tenancy-runtime.mjs';
 import { createHouseholdTransport, createEnrollmentTransport } from '../src/email/transport.mjs';
 import { JOBS } from '../src/jobs/scheduler.mjs';
+import { mapSeries } from '../src/shared/series.mjs';
 
 const options = { timeout: 120000 };
 const messages = async root => {
   const dir = join(root, 'outbox');
   const files = await readdir(dir).catch(e => { if (e.code === 'ENOENT') return []; throw e; });
-  return Promise.all(files.sort().filter(f => f.endsWith('.json')).map(async f => JSON.parse(await readFile(join(dir, f), 'utf8'))));
+  return Promise.all(await mapSeries(files.sort().filter(f => f.endsWith('.json')), async f => JSON.parse(await readFile(join(dir, f), 'utf8'))));
 };
 async function subscribe(hh, rows) {
   const r = await hh.client.postJson('/api/email/subscriptions', { subscriptions: rows });
@@ -26,12 +27,12 @@ async function enable(hh) {
 test('manual and periodic mail, preview, history, subscriptions and outbox are household local', options, async () => {
   const fx = await twoHouseholds();
   try {
-    for (const hh of [fx.A, fx.B]) await fx.ctx(hh.id).scheduler.tick();
+    for (const hh of [fx.A, fx.B]) await (await fx.ctx(hh.id)).scheduler.tick();
     await enable(fx.A); await enable(fx.B);
     await subscribe(fx.A, [row(fx.A.admin.user.id)]);
     await subscribe(fx.B, [row(fx.B.admin.user.id)]);
     for (const [hh, marker] of [[fx.A, 'Alpha private milestone'], [fx.B, 'Bravo private milestone']]) {
-      fx.ctx(hh.id).db.prepare(`INSERT INTO recs (id, pack_id, status, waiting_on, updated_at, def) VALUES ('colliding-rec', 'cash', 'proposed', 'owner', '2026-11-01', ?)`)
+      await (await fx.ctx(hh.id)).db.prepare(`INSERT INTO recs (id, pack_id, status, waiting_on, updated_at, def) VALUES ('colliding-rec', 'cash', 'proposed', 'owner', '2026-11-01', ?)`)
         .run(JSON.stringify({ id: 'colliding-rec', title: marker, domain: 'data', summary: marker }));
       const preview = await hh.client.request({ path: '/api/email' });
       assert.equal(preview.status, 200, preview.text);
@@ -41,18 +42,18 @@ test('manual and periodic mail, preview, history, subscriptions and outbox are h
       const manual = await hh.client.postJson('/api/email/brief', {});
       assert.equal(manual.json.send.status, 'sent', manual.text);
       await hh.client.postJson('/api/household/outbound', { jobs: true });
-      const periodic = await fx.ctx(hh.id).scheduler.runNow('brief-email');
+      const periodic = await (await fx.ctx(hh.id)).scheduler.runNow('brief-email');
       assert.equal(periodic.status, 'ok', JSON.stringify(periodic));
       const mail = await messages(fx.rootOf(hh.id));
       assert.equal(mail.length, 2);
       assert.ok(mail.every(m => m.to.length === 1 && m.to[0] === hh.admin.user.email));
       assert.ok(mail.every(m => m.text.includes(marker) && m.text.includes(`household=${hh.id}`)));
-      fx.ctx(hh.id).db.prepare("UPDATE recs SET window_close = ? WHERE id = 'colliding-rec'").run(fx.ctx(hh.id).config.clock);
-      assert.equal((await fx.ctx(hh.id).scheduler.runNow('deadline-alerts')).status, 'ok');
+      await (await fx.ctx(hh.id)).db.prepare("UPDATE recs SET window_close = ? WHERE id = 'colliding-rec'").run((await fx.ctx(hh.id)).config.clock);
+      assert.equal((await (await fx.ctx(hh.id)).scheduler.runNow('deadline-alerts')).status, 'ok');
       const alerts = await messages(fx.rootOf(hh.id));
       assert.equal(alerts.length, 3);
       assert.ok(alerts[2].text.includes(marker) && alerts[2].text.includes(`household=${hh.id}`));
-      assert.equal((await fx.ctx(hh.id).scheduler.runNow('deadline-alerts')).status, 'ok');
+      assert.equal((await (await fx.ctx(hh.id)).scheduler.runNow('deadline-alerts')).status, 'ok');
       assert.equal((await messages(fx.rootOf(hh.id))).length, 3, 'local alert dedupe');
       const history = await hh.client.request({ path: '/api/email' });
       assert.equal(history.json.history.filter(r => r.status === 'sent').length, 3);
@@ -60,9 +61,9 @@ test('manual and periodic mail, preview, history, subscriptions and outbox are h
     assert.ok((await messages(fx.dataDir)).some(m => m.to.includes(fx.B.admin.user.email)), 'enrollment is platform-private');
     const dual = await enrollSession(fx.platform, fx.A.id, 'extra-member@example.test');
     await subscribe(fx.A, [row(fx.A.admin.user.id), row(dual.user.id)]);
-    fx.store.setRole(fx.A.id, dual.user.id, 'admin', { actorId: fx.A.admin.user.id });
+    await fx.store.setRole(fx.A.id, dual.user.id, 'admin', { actorId: fx.A.admin.user.id });
     assert.equal((await fx.A.client.request({ path: '/api/email/subscriptions' })).json.subscriptions.find(r => r.userId === dual.user.id).subscribed, true);
-    fx.store.setRole(fx.A.id, dual.user.id, 'member', { actorId: fx.A.admin.user.id });
+    await fx.store.setRole(fx.A.id, dual.user.id, 'member', { actorId: fx.A.admin.user.id });
     assert.equal((await fx.A.client.postJson('/api/email/test', {})).json.send.recipients, 2);
     const mail = (await messages(fx.rootOf(fx.A.id))).slice(3);
     assert.equal(mail.length, 2);
@@ -76,7 +77,7 @@ test('manual and periodic mail, preview, history, subscriptions and outbox are h
     const memberClient = (await import('./helpers/server.mjs')).sessionClient(fx.baseUrl, dual);
     assert.equal((await memberClient.postJson('/api/email/subscriptions', { subscriptions: [row(dual.user.id, false)] })).status, 403);
     await subscribe(fx.A, [row(fx.A.admin.user.id), row(dual.user.id, false)]);
-    fx.store.removeMember(fx.A.id, dual.user.id, { actorId: fx.A.admin.user.id });
+    await fx.store.removeMember(fx.A.id, dual.user.id, { actorId: fx.A.admin.user.id });
     assert.equal((await fx.A.client.postJson('/api/email/test', {})).json.send.recipients, 1);
     for (const path of [`/households/${fx.A.id}/outbox/`, `/outbox/`]) {
       const response = await fx.A.client.request({ path });
@@ -89,12 +90,12 @@ test('manual and periodic mail, preview, history, subscriptions and outbox are h
 test('original verified recipients and cadence survive migration, global routing stops after enrollment', options, async () => {
   const fx = await twoHouseholds();
   try {
-    await fx.ctx(fx.A.id).scheduler.tick();
+    await (await fx.ctx(fx.A.id)).scheduler.tick();
     await enable(fx.A);
     const first = await fx.A.client.postJson('/api/email/test', {});
     assert.equal(first.json.send.status, 'sent', first.text);
     assert.deepEqual((await messages(fx.rootOf(fx.A.id)))[0].to, ['both-member@example.test']);
-    fx.store.removeMember(fx.A.id, fx.dual.user.id, { actorId: fx.A.admin.user.id });
+    await fx.store.removeMember(fx.A.id, fx.dual.user.id, { actorId: fx.A.admin.user.id });
     const rejoined = await enrollSession(fx.platform, fx.A.id, 'both-member@example.test');
     assert.equal(rejoined.user.id, fx.dual.user.id, 'membership in the other household retains the global user');
     assert.equal((await fx.A.client.postJson('/api/email/test', {})).json.send.errorCode, 'recipient_unverified');
@@ -120,7 +121,7 @@ test('removal during credential loading is blocked at the real HTTP mail transpo
   });
   await new Promise(resolve => sink.listen(0, '127.0.0.1', resolve));
   try {
-    const hh = fx.ctx(fx.A.id); await hh.scheduler.tick(); await enable(fx.A);
+    const hh = await fx.ctx(fx.A.id); await hh.scheduler.tick(); await enable(fx.A);
     const member = await enrollSession(fx.platform, fx.A.id, 'recipient@example.test');
     await subscribe(fx.A, [row(member.user.id)]);
     const credential = writePrivate(join(fx.root, 'mail-key'), 'synthetic-mail-key');
@@ -131,7 +132,7 @@ test('removal during credential loading is blocked at the real HTTP mail transpo
       recipients: hh.emailRecipients,
       readFile: async file => {
         const contents = await readFile(file, 'utf8');
-        if (remove) fx.store.removeMember(fx.A.id, member.user.id, { actorId: fx.A.admin.user.id });
+        if (remove) await fx.store.removeMember(fx.A.id, member.user.id, { actorId: fx.A.admin.user.id });
         return contents;
       },
       // Resend wire shape: https://resend.com/docs/api-reference/emails/send-email
@@ -156,7 +157,7 @@ test('removal during credential loading is blocked at the real HTTP mail transpo
 test('unverified legacy recipients pause delivery with an admin-visible code, then explicit subscriptions recover', options, async () => {
   const fx = await twoHouseholds({ extra: { FATHOM_EMAIL_TO: 'outsider@example.test' } });
   try {
-    await fx.ctx(fx.A.id).scheduler.tick();
+    await (await fx.ctx(fx.A.id)).scheduler.tick();
     await enable(fx.A);
     const status = await fx.A.client.request({ path: '/api/household/outbound' });
     assert.equal(status.json.outbound.email.reason, 'recipient_unverified');
@@ -176,7 +177,7 @@ test('legacy import subscribes matching members, reports skipped recipients and 
   const fx = await twoHouseholds({ extra: { FATHOM_EMAIL_TO: 'alpha-admin@example.test,outsider@example.test' } });
   let reopened;
   try {
-    await fx.ctx(fx.A.id).scheduler.tick();
+    await (await fx.ctx(fx.A.id)).scheduler.tick();
     await enable(fx.A);
     const before = (await messages(fx.rootOf(fx.A.id))).length;
     const sent = await fx.A.client.postJson('/api/email/brief', {});

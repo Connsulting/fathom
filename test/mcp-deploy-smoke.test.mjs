@@ -41,11 +41,11 @@ test('mcp-key creates a read-only key and mcp-smoke passes against the server', 
     writeFileSync(keyFile, created.stdout, { mode: 0o600 });
 
     // MT-03: keys live in the platform, bound to the household named by --household.
-    await withPlatform(s.platformFile, (platform, auth) => {
-      const row = platform.prepare('SELECT household_id, scopes, user_id, revoked_at FROM api_keys WHERE name = ?').get('deploy-smoke');
+    await withPlatform(s.platformFile, async (platform, auth) => {
+      const row = await platform.prepare('SELECT household_id, scopes, user_id, revoked_at FROM api_keys WHERE name = ?').get('deploy-smoke');
       assert.equal(row.household_id, s.householdId);
       assert.deepEqual(JSON.parse(row.scopes), ['read']);
-      assert.equal(row.user_id, auth.findUser(OWNER).id);
+      assert.equal(row.user_id, (await auth.findUser(OWNER)).id);
       assert.equal(row.revoked_at, null);
     });
 
@@ -84,7 +84,7 @@ test('mcp-key refuses an unknown owner and a duplicate active name', async () =>
     assert.equal(unknown.stdout, '');
     assert.match(unknown.stderr, /unknown owner/);
 
-    await withPlatform(s.platformFile, (_, auth) => auth.invite(auth.servedHousehold().id, 'pending@example.test', { role: 'admin' }));
+    await withPlatform(s.platformFile, async (_, auth) => auth.invite((await auth.servedHousehold()).id, 'pending@example.test', { role: 'admin' }));
     const pending = await runCommand(process.execPath, ['scripts/mcp-key.mjs', 'create', '--name', 'pending-owner', '--owner', 'pending@example.test', '--household', s.householdId], {
       env: { FATHOM_DATA: s.dataDir },
     });

@@ -19,10 +19,10 @@ async function fixture(t) {
   const instance = await tempInstance();
   const config = loadConfig({ FATHOM_DEMO: '0', FATHOM_ENGINE: 'off', FATHOM_PUBLIC_URL: 'http://localhost:8080' });
   const app = await serveAppFixture({ ...instance, config: { ...config, dataDir: instance.dataDir }, secrets: instance.secrets });
-  t.after(async () => { await app.close(); await app.runtimes.close(); instance.close(); });
+  t.after(async () => { await app.close(); await app.runtimes.close(); await instance.close(); });
   const session = await createSessionFixture(instance.platform, { email: 'member@example.test', role: 'member' });
   const key = app.keys.create({ householdId: instance.householdId, userId: session.user.id, name: 'Synthetic agent', scopes: ['write:recs'] });
-  instance.db.prepare("INSERT INTO recs (id, def, status, tasks_done, sort, updated_at) VALUES (?, ?, 'proposed', '[]', 0, ?)").run('synthetic-rec', JSON.stringify({ id: 'synthetic-rec', title: 'Synthetic recommendation', domain: 'data' }), new Date().toISOString());
+  await instance.db.prepare("INSERT INTO recs (id, def, status, tasks_done, sort, updated_at) VALUES (?, ?, 'proposed', '[]', 0, ?)").run('synthetic-rec', JSON.stringify({ id: 'synthetic-rec', title: 'Synthetic recommendation', domain: 'data' }), new Date().toISOString());
   return { ...instance, app, session, key, store: createAuthStore(instance.platform) };
 }
 
@@ -57,27 +57,27 @@ function vaultFiles(f) {
   const dir = join(f.root, 'files');
   return existsSync(dir) ? readdirSync(dir).sort() : [];
 }
-const changes = f => f.db.prepare('SELECT total_changes() AS n').get().n;
-const jobs = f => f.db.prepare('SELECT * FROM job_runs ORDER BY rowid').all();
+const changes = async f => (await f.db.prepare('SELECT total_changes() AS n').get()).n;
+const jobs = async f => await f.db.prepare('SELECT * FROM job_runs ORDER BY rowid').all();
 function refuse(r, status) {
   assert.equal(r.status, status, r.text.slice(0, 300));
   assert.ok(Object.keys(r.json).every(k => ['error', 'code'].includes(k)), r.text);
   assert.equal(typeof r.json.error, 'string');
   assert.match(r.headers['cache-control'], /no-store/);
 }
-function mutate(f, reason) {
-  if (reason === 'revocation') f.app.keys.revoke(f.key.record.id, { householdId: f.householdId });
-  else if (reason === 'session revocation') f.store.revokeSession(f.session.token);
+async function mutate(f, reason) {
+  if (reason === 'revocation') await f.app.keys.revoke(f.key.record.id, { householdId: f.householdId });
+  else if (reason === 'session revocation') await f.store.revokeSession(f.session.token);
   else if (reason === 'membership removal') {
-    f.platform.prepare("UPDATE household_memberships SET status = 'removed' WHERE user_id = ? AND household_id = ?").run(f.session.user.id, f.householdId);
-  } else if (reason === 'suspension') f.platform.prepare("UPDATE households SET status = 'suspended' WHERE id = ?").run(f.householdId);
-  else if (reason === 'membership version') f.platform.prepare('UPDATE household_memberships SET version = version + 1 WHERE user_id = ? AND household_id = ?').run(f.session.user.id, f.householdId);
-  else if (reason === 'restore generation') f.platform.prepare('UPDATE households SET generation = generation + 1 WHERE id = ?').run(f.householdId);
+    await f.platform.prepare("UPDATE household_memberships SET status = 'removed' WHERE user_id = ? AND household_id = ?").run(f.session.user.id, f.householdId);
+  } else if (reason === 'suspension') await f.platform.prepare("UPDATE households SET status = 'suspended' WHERE id = ?").run(f.householdId);
+  else if (reason === 'membership version') await f.platform.prepare('UPDATE household_memberships SET version = version + 1 WHERE user_id = ? AND household_id = ?').run(f.session.user.id, f.householdId);
+  else if (reason === 'restore generation') await f.platform.prepare('UPDATE households SET generation = generation + 1 WHERE id = ?').run(f.householdId);
   else if (reason === 'household change') {
     const at = Date.now();
-    f.platform.prepare("INSERT INTO households (id, status, mode, created_at, updated_at) VALUES ('synthetic-other-household', 'active', 'real', ?, ?)").run(at, at);
-    f.platform.prepare("INSERT INTO household_memberships (user_id, household_id, role, status, created_at, updated_at) VALUES (?, 'synthetic-other-household', 'member', 'active', ?, ?)").run(f.session.user.id, at, at);
-    f.platform.prepare("UPDATE auth_sessions SET household_id = 'synthetic-other-household' WHERE user_id = ?").run(f.session.user.id);
+    await f.platform.prepare("INSERT INTO households (id, status, mode, created_at, updated_at) VALUES ('synthetic-other-household', 'active', 'real', ?, ?)").run(at, at);
+    await f.platform.prepare("INSERT INTO household_memberships (user_id, household_id, role, status, created_at, updated_at) VALUES (?, 'synthetic-other-household', 'member', 'active', ?, ?)").run(f.session.user.id, at, at);
+    await f.platform.prepare("UPDATE auth_sessions SET household_id = 'synthetic-other-household' WHERE user_id = ?").run(f.session.user.id);
   }
 }
 
@@ -86,17 +86,17 @@ for (const reason of ['revocation', 'membership removal', 'suspension', 'members
     test(`MCP refuses a delayed ${operation} after ${reason}`, { timeout: SERVER_TIMEOUT * 3 }, async t => {
       const f = await fixture(t);
       const pending = await withhold(t, f, 'mcp', payload);
-      const before = changes(f);
-      const used = f.platform.prepare('SELECT last_used_at FROM api_keys WHERE id = ?').get(f.key.record.id).last_used_at;
-      mutate(f, reason);
+      const before = await changes(f);
+      const used = (await f.platform.prepare('SELECT last_used_at FROM api_keys WHERE id = ?').get(f.key.record.id)).last_used_at;
+      await mutate(f, reason);
       const fresh = await request(f.app.baseUrl, { method: 'POST', path: '/mcp', headers: { authorization: `Bearer ${f.key.key}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: payload });
       refuse(fresh, 401);
       const result = await pending.finish();
       refuse(result, 401);
       assert.equal(result.headers['www-authenticate'], 'Bearer');
-      assert.equal(changes(f), before);
-      assert.equal(f.db.prepare('SELECT count(*) AS n FROM preferences').get().n, 0);
-      assert.equal(f.platform.prepare('SELECT last_used_at FROM api_keys WHERE id = ?').get(f.key.record.id).last_used_at, used);
+      assert.equal(await changes(f), before);
+      assert.equal((await f.db.prepare('SELECT count(*) AS n FROM preferences').get()).n, 0);
+      assert.equal((await f.platform.prepare('SELECT last_used_at FROM api_keys WHERE id = ?').get(f.key.record.id)).last_used_at, used);
     });
   }
 }
@@ -106,8 +106,8 @@ for (const kind of ['json', 'upload']) {
     test(`${kind} refuses a delayed body after ${reason} without side effects`, { timeout: SERVER_TIMEOUT * 3 }, async t => {
       const f = await fixture(t);
       const pending = await withhold(t, f, kind, kind === 'upload' ? UPLOAD : JSON.stringify({ text: TEXT }));
-      const before = { changes: changes(f), vault: vaultFiles(f), jobs: jobs(f) };
-      mutate(f, reason);
+      const before = { changes: await changes(f), vault: vaultFiles(f), jobs: await jobs(f) };
+      await mutate(f, reason);
       const fresh = await request(f.app.baseUrl, { path: '/api/scenario', headers: { cookie: f.session.cookie, ...contextHeaders(f.session) } });
       if (reason === 'household change') {
         const session = await request(f.app.baseUrl, { path: '/api/auth/session', headers: { cookie: f.session.cookie } });
@@ -119,10 +119,10 @@ for (const kind of ['json', 'upload']) {
       const status = reason === 'session revocation' ? 401 : reason === 'household change' ? 409 : 403;
       refuse(fresh, status);
       refuse(await pending.finish(), status);
-      assert.equal(changes(f), before.changes);
+      assert.equal(await changes(f), before.changes);
       assert.deepEqual(vaultFiles(f), before.vault);
-      assert.deepEqual(jobs(f), before.jobs);
-      for (const table of ['files', 'transactions', 'accounts', 'preferences']) assert.equal(f.db.prepare(`SELECT count(*) AS n FROM ${table}`).get().n, 0, table);
+      assert.deepEqual(await jobs(f), before.jobs);
+      for (const table of ['files', 'transactions', 'accounts', 'preferences']) assert.equal((await f.db.prepare(`SELECT count(*) AS n FROM ${table}`).get()).n, 0, table);
     });
   }
 }
@@ -135,13 +135,13 @@ for (const kind of ['mcp', 'json', 'upload']) {
     assert.equal(r.status, 200, r.text);
     if (kind === 'upload') {
       assert.equal(r.json.files[0].status, 'imported', r.text);
-      assert.equal(f.db.prepare('SELECT count(*) AS n FROM transactions').get().n, 1);
+      assert.equal((await f.db.prepare('SELECT count(*) AS n FROM transactions').get()).n, 1);
       assert.equal(vaultFiles(f).length, 1);
     } else {
       if (kind === 'mcp') {
         assert.ok(!r.json.result.isError, r.text);
-        assert.equal(f.db.prepare('SELECT status FROM recs').get().status, 'doing');
-      } else assert.equal(f.db.prepare('SELECT text FROM preferences').get().text, TEXT);
+        assert.equal((await f.db.prepare('SELECT status FROM recs').get()).status, 'doing');
+      } else assert.equal((await f.db.prepare('SELECT text FROM preferences').get()).text, TEXT);
     }
   });
 }

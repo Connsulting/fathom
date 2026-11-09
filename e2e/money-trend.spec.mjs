@@ -7,6 +7,7 @@
 
 import { test, expect, gotoRoute, expectPopoverSource } from './helpers.mjs';
 import { createLocalData, removeLocalData, startEnrolledServer } from './local-store.mjs';
+import { forEachSeries } from '../src/shared/series.mjs';
 
 const xLabels = (page) => page.locator('[data-trend] .tr-x').allTextContents();
 const readout = (page) => page.locator('[data-trend-read]');
@@ -193,20 +194,20 @@ test.describe('Money household trend, a stopped account', () => {
     DIR = createLocalData('money-trend');
     const db = await buildRealStore(DIR, { clock: CLOCK });
     try {
-      const ids = db.prepare('SELECT id FROM accounts ORDER BY sort, id LIMIT 3').all().map((r) => r.id);
+      const ids = (await db.prepare('SELECT id FROM accounts ORDER BY sort, id LIMIT 3').all()).map((r) => r.id);
       expect(ids.length).toBe(3);
-      db.prepare("UPDATE accounts SET kind = 'checking' WHERE id = ?").run(ids[0]);
-      db.prepare("UPDATE accounts SET kind = 'savings' WHERE id = ?").run(ids[1]);
-      db.prepare("UPDATE accounts SET kind = 'credit' WHERE id = ?").run(ids[2]);
-      db.exec('DELETE FROM balances; DELETE FROM positions');
+      await db.prepare("UPDATE accounts SET kind = 'checking' WHERE id = ?").run(ids[0]);
+      await db.prepare("UPDATE accounts SET kind = 'savings' WHERE id = ?").run(ids[1]);
+      await db.prepare("UPDATE accounts SET kind = 'credit' WHERE id = ?").run(ids[2]);
+      await db.applySchema('DELETE FROM balances; DELETE FROM positions');
       const put = db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)');
-      [['2026-06-30', 900], ['2026-07-31', 950], ['2026-08-31', 1000], ['2026-09-30', 1100], ['2026-10-31', 1200]].forEach(([d, v]) => put.run(ids[0], d, v));
+      await forEachSeries([['2026-06-30', 900], ['2026-07-31', 950], ['2026-08-31', 1000], ['2026-09-30', 1100], ['2026-10-31', 1200]], async ([d, v]) => await put.run(ids[0], d, v));
       // The savings account stopped in August; the card is current.
-      [['2026-06-30', 4000], ['2026-07-31', 4100], ['2026-08-31', 4200]].forEach(([d, v]) => put.run(ids[1], d, v));
-      [['2026-06-30', 300], ['2026-07-31', 250], ['2026-08-31', 200], ['2026-09-30', 150], ['2026-10-31', 100]].forEach(([d, v]) => put.run(ids[2], d, v));
+      await forEachSeries([['2026-06-30', 4000], ['2026-07-31', 4100], ['2026-08-31', 4200]], async ([d, v]) => await put.run(ids[1], d, v));
+      await forEachSeries([['2026-06-30', 300], ['2026-07-31', 250], ['2026-08-31', 200], ['2026-09-30', 150], ['2026-10-31', 100]], async ([d, v]) => await put.run(ids[2], d, v));
       expect((await planRun(db, { now: CLOCK, dataDir: DIR })).status).toBe('ok');
     } finally {
-      db.close();
+      await db.close();
     }
     app = await startEnrolledServer({ dataDir: DIR, clock: CLOCK });
     base = app.url;

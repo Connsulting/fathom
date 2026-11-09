@@ -14,6 +14,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { NOW, aggregatorFile, textFile } from '../helpers/ingest.mjs';
 import { setup, upload, approve } from '../helpers/model-cutover.mjs';
 import { recipe } from '../helpers/model-import.mjs';
@@ -38,7 +42,7 @@ const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const DAY = 86400000;
 view.bind({ esc });
 
-const fileRowOf = (db, id) => { const r = db.prepare('SELECT * FROM files WHERE id = ?').get(id); return r ? { ...r } : r; };
+const fileRowOf = async (db, id) => { const r = await db.prepare('SELECT * FROM files WHERE id = ?').get(id); return r ? { ...r } : r; };
 const EMPTY = Object.freeze({ pending: 0, items: [], decided: [], files: [], waiting: [], sources: [], accounts: {}, staleNotes: [], formats: [] });
 
 // The Files screen as design.js builds it, with the helper shapes design.js passes in and a stub API
@@ -150,7 +154,7 @@ async function leavePending(x, file) {
   const fileId = 'f-' + hash.slice(0, 24);
   const vault = await openVault(x.household);
   const storedPath = await storeFile({ vault, id: fileId, bytes, purpose: 'upload' });
-  x.db.prepare(`INSERT INTO files (id, name, mime, size, sha256, uploaded_at, stored_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`)
+  await x.db.prepare(`INSERT INTO files (id, name, mime, size, sha256, uploaded_at, stored_path, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')`)
     .run(fileId, file.name, file.mime ?? null, bytes.length, hash, NOW, storedPath);
   return fileId;
 }
@@ -169,14 +173,14 @@ async function fakeFor(csv) {
 async function replaceWithGood(x, made) {
   const { results: [good] } = await P.ingestFiles(x.db, [csvOf(`replacement ${made.fileId}`, '7.75')], x.opts);
   assert.equal(good.status, 'imported');
-  const removed = removeFile({ db: x.db, now: NOW, actorId: 'actor-synthetic' }, made.fileId);
+  const removed = await removeFile({ db: x.db, now: NOW, actorId: 'actor-synthetic' }, made.fileId);
   assert.equal(removed.id, made.fileId);
   return { leaves: true };
 }
 async function retried(x, made) {
   const out = await P.retryFile(x.db, made.fileId, x.opts);
   assert.equal(out.status, 'imported');
-  assert.equal(fileRowOf(x.db, made.fileId).status, 'imported');
+  assert.equal((await fileRowOf(x.db, made.fileId)).status, 'imported');
   return { leaves: true };
 }
 
@@ -210,7 +214,7 @@ const ROWS = [
     async recover(x, made) {
       const out = await P.resumeImports(x.db, bg(x));
       assert.deepEqual(out.resumed, [{ fileId: made.fileId, status: 'imported' }]);
-      assert.equal(fileRowOf(x.db, made.fileId).status, 'imported');
+      assert.equal((await fileRowOf(x.db, made.fileId)).status, 'imported');
       return { leaves: true };
     },
   },
@@ -227,7 +231,7 @@ const ROWS = [
       // Liveness of the automatic pass: a non-transient failure is not retried by itself.
       const auto = await P.resumeImports(x.db, bg(x));
       assert.deepEqual(auto.resumed, []);
-      assert.deepEqual([fileRowOf(x.db, made.fileId).status, fileRowOf(x.db, made.fileId).note], ['failed', 'Error']);
+      assert.deepEqual([(await fileRowOf(x.db, made.fileId)).status, (await fileRowOf(x.db, made.fileId)).note], ['failed', 'Error']);
       return retried(x, made);
     },
   },
@@ -272,7 +276,7 @@ const ROWS = [
       const file = csvOf('mapping');
       const r = await P.ingestFile(x.db, file, x.opts);
       assert.equal(r.status, 'imported');
-      x.db.prepare("UPDATE files SET status = 'needs_mapping', note = NULL WHERE id = ?").run(r.fileId);
+      await x.db.prepare("UPDATE files SET status = 'needs_mapping', note = NULL WHERE id = ?").run(r.fileId);
       return { file, fileId: r.fileId };
     },
     recover: retried,
@@ -283,7 +287,7 @@ const ROWS = [
     async make(x) {
       const file = SCAN();
       const r = await P.ingestFile(x.db, file, x.opts);
-      x.db.prepare("UPDATE files SET status = 'needs_extraction', note = 'pdf_unreadable' WHERE id = ?").run(r.fileId);
+      await x.db.prepare("UPDATE files SET status = 'needs_extraction', note = 'pdf_unreadable' WHERE id = ?").run(r.fileId);
       return { file, fileId: r.fileId };
     },
     recover: replaceWithGood,
@@ -295,7 +299,7 @@ const ROWS = [
       const file = csvOf('extraction');
       const r = await P.ingestFile(x.db, file, x.opts);
       assert.equal(r.status, 'imported');
-      x.db.prepare("UPDATE files SET status = 'needs_extraction', note = NULL WHERE id = ?").run(r.fileId);
+      await x.db.prepare("UPDATE files SET status = 'needs_extraction', note = NULL WHERE id = ?").run(r.fileId);
       return { file, fileId: r.fileId };
     },
     recover: retried,
@@ -303,14 +307,14 @@ const ROWS = [
   {
     name: 'waiting_for_engine', stored: 'waiting_for_engine', note: 'engine_unavailable', home: 'needs_you', label: 'Waiting for the engine', cause: CAUSE.waitingForEngine, control: 'engine', engineOn: false, dup: 'status',
     async make(x) {
-      setSetting(x.db, 'engine', { on: false });
+      await setSetting(x.db, 'engine', { on: false });
       const csv = MODEL_CSV('engine off');
       const r = await upload(x, csv);
       return { file: modelFile(csv), fileId: r.fileId, csv };
     },
     // The engine control turns the engine on; then Retry interprets the saved file and approval imports it.
     async recover(x, made) {
-      setSetting(x.db, 'engine', { on: true });
+      await setSetting(x.db, 'engine', { on: true });
       const staged = await P.retryFile(x.db, made.fileId, { ...x.opts, fake: await fakeFor(made.csv) });
       assert.equal(staged.status, 'needs_confirmation');
       assert.equal((await approve(x, staged)).status, 'imported');
@@ -320,14 +324,14 @@ const ROWS = [
   {
     name: 'budget_exhausted', stored: 'budget_exhausted', note: 'request_does_not_fit', home: 'needs_you', label: 'Interpretation budget reached', cause: CAUSE.fileLimit, control: 'upload', engineOn: true, dup: 'status',
     async make(x) {
-      setSetting(x.db, 'cap', { usd: 0 });
+      await setSetting(x.db, 'cap', { usd: 0 });
       const csv = MODEL_CSV('capped');
       const r = await upload(x, csv);
       return { file: modelFile(csv), fileId: r.fileId, csv };
     },
     // Once the budget allows, Retry interprets the saved file and approval imports it.
     async recover(x, made) {
-      x.db.prepare("DELETE FROM settings WHERE key = 'cap'").run();
+      await x.db.prepare("DELETE FROM settings WHERE key = 'cap'").run();
       const staged = await P.retryFile(x.db, made.fileId, { ...x.opts, fake: await fakeFor(made.csv) });
       assert.equal(staged.status, 'needs_confirmation');
       assert.equal((await approve(x, staged)).status, 'imported');
@@ -350,13 +354,13 @@ const ROWS = [
     },
     // The documented next state of an answer: the correction is saved and the file waits for the engine.
     async recover(x, made) {
-      const w = ingestState(x.db).waiting.find((f) => f.id === made.fileId);
+      const w = (await ingestState(x.db)).waiting.find((f) => f.id === made.fileId);
       const evidence = 'Column 5 is a synthetic credit amount.';
       const out = await reviewImport({ ...x.ctx, ownerText: evidence }, { proposalId: w.proposal.id, version: w.proposal.version, decision: 'correct', evidence });
       assert.ok(out.version > w.proposal.version);
-      const after = ingestState(x.db).waiting.find((f) => f.id === made.fileId);
+      const after = (await ingestState(x.db)).waiting.find((f) => f.id === made.fileId);
       assert.equal(Web.proposalStatus(after), 'waiting_for_engine');
-      const row = rowOf(harness(ingestState(x.db), { engineOn: true }).screens.addFiles('add'), made.fileId);
+      const row = rowOf(harness(await ingestState(x.db), { engineOn: true }).screens.addFiles('add'), made.fileId);
       assert.equal(causeOf(row), CAUSE.correction);
       return { leaves: false };
     },
@@ -407,13 +411,13 @@ for (const row of ROWS) {
       const where = row.name;
 
       // (a) Persisted: the files row.
-      const stored = fileRowOf(x.db, id);
+      const stored = await fileRowOf(x.db, id);
       assert.equal(stored.status, row.stored, where);
       assert.ok(noteOk(row.note, stored.note), `${where}: note ${stored.note}`);
       assert.ok(!String(stored.note ?? '').includes('Synthetic Private Payee'), 'no error message text is stored');
 
       // (b) Reload: a fresh ingestState lists the file in `waiting` exactly when it is unresolved.
-      const state = ingestState(x.db);
+      const state = await ingestState(x.db);
       const waiting = state.waiting.find((f) => f.id === id);
       if (isUnresolved(row)) {
         assert.ok(waiting, `${where}: listed after a reload`);
@@ -421,7 +425,7 @@ for (const row of ROWS) {
       } else assert.equal(waiting, undefined, `${where}: a resolved file is not waiting`);
 
       // (c) Home: the Imports service and the one attention line.
-      const services = serviceStatus({ db: x.db, now: new Date(NOW) });
+      const services = await serviceStatus({ db: x.db, now: new Date(NOW) });
       const imports = services.imports;
       assert.ok(imports, `${where}: an imports service`);
       assert.equal(imports.key, 'imports');
@@ -443,7 +447,7 @@ for (const row of ROWS) {
         assert.equal(imports.cause, '1 file resumes automatically.', where);
         assert.equal(services.attention, null, `${where}: retrying is not on Home until a day passes`);
         assert.equal(view.homeServiceHtml(services), '', where);
-        const later = serviceStatus({ db: x.db, now: new Date(Date.parse(NOW) + 2 * DAY) });
+        const later = await serviceStatus({ db: x.db, now: new Date(Date.parse(NOW) + 2 * DAY) });
         assert.equal(later.attention?.key, 'imports', where);
         assert.equal(text(view.homeServiceHtml(later)), 'Imports: 1 file resumes automatically.', where);
       } else {
@@ -476,18 +480,18 @@ for (const row of ROWS) {
       // (e) Recovery through the control's server path.
       if (row.recover) {
         const end = await row.recover(x, made);
-        const after = ingestState(x.db);
+        const after = await ingestState(x.db);
         const still = after.waiting.find((f) => f.id === id);
         if (end.leaves) {
           assert.equal(still, undefined, `${where}: leaves waiting after recovery`);
-          const svc = serviceStatus({ db: x.db, now: new Date(NOW) });
+          const svc = await serviceStatus({ db: x.db, now: new Date(NOW) });
           assert.equal(svc.imports.state, 'healthy', where);
           assert.equal(svc.imports.files, 0, where);
           assert.equal(svc.attention, null, where);
           assert.equal(rowOf(harness(after).screens.addFiles('add'), id), null, `${where}: gone from Files`);
         } else assert.ok(still, `${where}: the documented next state is still listed`);
       }
-    } finally { x.close(); }
+    } finally { await x.close(); }
   });
 
   test(`${row.name}: an identical re-upload`, async () => {
@@ -495,16 +499,16 @@ for (const row of ROWS) {
     try {
       const made = await row.make(x);
       const id = made.fileId;
-      const before = fileRowOf(x.db, id);
-      const files = x.db.prepare('SELECT count(*) n FROM files').get().n;
+      const before = await fileRowOf(x.db, id);
+      const files = (await x.db.prepare('SELECT count(*) n FROM files').get()).n;
       const again = await P.ingestFile(x.db, made.file, x.opts);
       assert.equal(again.fileId, id, row.name);
-      assert.equal(x.db.prepare('SELECT count(*) n FROM files').get().n, files, 'no second files row');
+      assert.equal((await x.db.prepare('SELECT count(*) n FROM files').get()).n, files, 'no second files row');
       if (row.dup === 'reroute') {
         assert.notEqual(again.status, 'duplicate', `${row.name}: never answered as a duplicate`);
         assert.equal(again.status, 'imported', row.name);
-        assert.equal(fileRowOf(x.db, id).status, 'imported', row.name);
-        assert.equal(ingestState(x.db).waiting.find((f) => f.id === id), undefined, row.name);
+        assert.equal((await fileRowOf(x.db, id)).status, 'imported', row.name);
+        assert.equal((await ingestState(x.db)).waiting.find((f) => f.id === id), undefined, row.name);
         assert.ok(!text(await uploadResultHtml(again)).includes('Already imported'), row.name);
       } else if (row.dup === 'duplicate') {
         assert.equal(again.status, 'duplicate', row.name);
@@ -513,47 +517,68 @@ for (const row of ROWS) {
       } else {
         assert.equal(again.status, before.status, `${row.name}: answers its own stored status`);
         assert.equal(again.duplicateOf, id, row.name);
-        assert.deepEqual(fileRowOf(x.db, id), before, `${row.name}: the stored row is unchanged`);
-        assert.ok(ingestState(x.db).waiting.some((f) => f.id === id), row.name);
+        assert.deepEqual(await fileRowOf(x.db, id), before, `${row.name}: the stored row is unchanged`);
+        assert.ok((await ingestState(x.db)).waiting.some((f) => f.id === id), row.name);
         assert.ok(!text(await uploadResultHtml(again)).includes('Already imported'), `${row.name}: not shown as already imported`);
       }
-    } finally { x.close(); }
+    } finally { await x.close(); }
   });
+}
+
+// A busy store at the storage boundary, from SQLite itself: a TEMP trigger on this connection writes
+// to an attached database whose write lock another connection holds, so every transaction insert
+// fails with SQLITE_BUSY after a short wait. Nothing in src/ is replaced. 
+async function busyFault(db) {
+  const dir = mkdtempSync(join(tmpdir(), 'fathom-busy-'));
+  const file = join(dir, 'lock.sqlite');
+  const holder = new DatabaseSync(file);
+  holder.exec('CREATE TABLE t (x)');
+  holder.exec('BEGIN IMMEDIATE');
+  await db.applySchema(`ATTACH DATABASE '${file}' AS busy_lock`);
+  await db.applySchema('PRAGMA busy_timeout = 20');
+  await db.applySchema('CREATE TEMP TRIGGER IF NOT EXISTS h1_store_fault BEFORE INSERT ON main.transactions BEGIN INSERT INTO busy_lock.t VALUES (1); END;');
+  return async () => {
+    await db.applySchema('DROP TRIGGER IF EXISTS temp.h1_store_fault');
+    holder.exec('ROLLBACK');
+    holder.close();
+    await db.applySchema('DETACH DATABASE busy_lock');
+    await db.applySchema('PRAGMA busy_timeout = 5000');
+    rmSync(dir, { recursive: true, force: true });
+  };
 }
 
 test('a busy or locked store is a transient failure: retried once, then left for the owner', async () => {
   const x = await setup();
+  let healOnce = null;
+  const heal = async () => { const h = healOnce; healOnce = null; if (h) await h(); };
   try {
-    // A store fault at the storage boundary: SQLite reports a lock with the message 'database is
-    // locked'. A TEMP trigger on this connection raises it on every transaction insert; nothing in
-    // src/ is replaced.
-    const fault = () => x.db.exec("CREATE TEMP TRIGGER IF NOT EXISTS h1_store_fault BEFORE INSERT ON main.transactions BEGIN SELECT RAISE(ABORT, 'database is locked'); END;");
-    const heal = () => x.db.exec('DROP TRIGGER IF EXISTS temp.h1_store_fault');
-    fault();
+    // A store fault at the storage boundary: SQLite reports SQLITE_BUSY. A TEMP trigger on this
+    // connection hits a held lock on every transaction insert; nothing in src/ is replaced.
+    healOnce = await busyFault(x.db);
     const r = await P.ingestFile(x.db, csvOf('locked'), x.opts);
     assert.equal(r.status, 'failed');
     assert.equal(r.reasonCode, 'retry:store_locked');
-    assert.equal(fileRowOf(x.db, r.fileId).note, 'retry:store_locked');
+    assert.equal((await fileRowOf(x.db, r.fileId)).note, 'retry:store_locked');
 
     // The one automatic retry fails the same way: the file stays failed with the bare class.
     const first = await P.resumeImports(x.db, bg(x));
     assert.deepEqual(first.resumed, [{ fileId: r.fileId, status: 'failed' }]);
-    assert.deepEqual([fileRowOf(x.db, r.fileId).status, fileRowOf(x.db, r.fileId).note], ['failed', 'store_locked']);
-    const svc = serviceStatus({ db: x.db, now: new Date(NOW) });
+    assert.deepEqual([(await fileRowOf(x.db, r.fileId)).status, (await fileRowOf(x.db, r.fileId)).note], ['failed', 'store_locked']);
+    const svc = await serviceStatus({ db: x.db, now: new Date(NOW) });
     assert.equal(svc.imports.state, 'needs_you');
-    const row = rowOf(harness(ingestState(x.db)).screens.addFiles('add'), r.fileId);
+    const row = rowOf(harness(await ingestState(x.db)).screens.addFiles('add'), r.fileId);
     assert.equal(causeOf(row), CAUSE.failed);
-    heal();
+    await heal();
 
     // No further automatic retry, while a pending file in the same pass is resumed (liveness).
     const pendingId = await leavePending(x, csvOf('pending beside locked', '3.25'));
     const second = await P.resumeImports(x.db, bg(x));
     assert.deepEqual(second.resumed, [{ fileId: pendingId, status: 'imported' }]);
-    assert.deepEqual([fileRowOf(x.db, r.fileId).status, fileRowOf(x.db, r.fileId).note], ['failed', 'store_locked']);
+    assert.deepEqual([(await fileRowOf(x.db, r.fileId)).status, (await fileRowOf(x.db, r.fileId)).note], ['failed', 'store_locked']);
 
     // The owner's Retry still imports it.
     assert.equal((await P.retryFile(x.db, r.fileId, x.opts)).status, 'imported');
-  } finally { x.close(); }
+  } finally { await heal(); await x.close(); }
 });
 
 test('resumeImports skips a file this household is already routing, then resumes it', async () => {
@@ -563,10 +588,10 @@ test('resumeImports skips a file this household is already routing, then resumes
     x.household.inFlight.add(id);
     try {
       assert.deepEqual((await P.resumeImports(x.db, bg(x))).resumed, []);
-      assert.equal(fileRowOf(x.db, id).status, 'pending');
+      assert.equal((await fileRowOf(x.db, id)).status, 'pending');
     } finally { x.household.inFlight.delete(id); }
     assert.deepEqual((await P.resumeImports(x.db, bg(x))).resumed, [{ fileId: id, status: 'imported' }]);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('a manual Retry of a failed file is accepted; an imported file is still refused', async () => {
@@ -575,7 +600,7 @@ test('a manual Retry of a failed file is accepted; an imported file is still ref
     const failed = await P.ingestFile(x.db, csvOf('manual'), { ...x.opts, parser: throwing(plainError()) });
     assert.equal((await P.retryFile(x.db, failed.fileId, x.opts)).status, 'imported');
     await assert.rejects(P.retryFile(x.db, failed.fileId, x.opts), (e) => e.status === 409 && e.code === 'not_waiting');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('the Imports service counts every unresolved file once and needs the owner over retrying', async () => {
@@ -583,18 +608,18 @@ test('the Imports service counts every unresolved file once and needs the owner 
   try {
     const pendingId = await leavePending(x, csvOf('count pending'));
     await P.ingestFile(x.db, csvOf('count transient', '4.50'), { ...x.opts, parser: throwing(lockedError()) });
-    let s = serviceStatus({ db: x.db, now: new Date(NOW) }).imports;
+    let s = (await serviceStatus({ db: x.db, now: new Date(NOW) })).imports;
     assert.deepEqual([s.state, s.files, s.cause], ['retrying', 2, '2 files resume automatically.']);
     await P.ingestFile(x.db, textFile('count-empty-synthetic.csv', '', 'text/csv'), x.opts);
     await P.ingestFile(x.db, { name: 'count-blob-synthetic.bin', bytes: new Uint8Array([9, 0, 9, 0, 255]) }, x.opts);
-    s = serviceStatus({ db: x.db, now: new Date(NOW) }).imports;
+    s = (await serviceStatus({ db: x.db, now: new Date(NOW) })).imports;
     assert.equal(s.state, 'needs_you');
     assert.equal(s.files, 4);
     assert.match(s.cause, /^\d+ files need you on Files\.$/);
     // A removed file is not counted.
-    removeFile({ db: x.db, now: NOW, actorId: 'actor-synthetic' }, pendingId);
-    assert.equal(serviceStatus({ db: x.db, now: new Date(NOW) }).imports.files, 3);
-  } finally { x.close(); }
+    await removeFile({ db: x.db, now: NOW, actorId: 'actor-synthetic' }, pendingId);
+    assert.equal((await serviceStatus({ db: x.db, now: new Date(NOW) })).imports.files, 3);
+  } finally { await x.close(); }
 });
 
 test('Replace uploads the new file and removes the replaced one only when the new file was read', async () => {
@@ -686,17 +711,17 @@ test('a transient model failure waits for the engine, shows that Fathom tries ag
     const r = await P.ingestFile(x.db, modelFile(csv), x.opts);
     assert.equal(r.status, 'waiting_for_engine');
     assert.equal(r.reasonCode, 'model_transient');
-    const stored = fileRowOf(x.db, r.fileId);
+    const stored = await fileRowOf(x.db, r.fileId);
     assert.deepEqual([stored.status, stored.note], ['waiting_for_engine', 'model_transient']);
     assert.ok(!String(stored.note).includes('Synthetic Private Payee'));
     assert.equal(eng.calls.length, 1);
 
     // Reload, Home and Files.
-    const state = ingestState(x.db);
+    const state = await ingestState(x.db);
     const w = state.waiting.find((f) => f.id === r.fileId);
     assert.equal(w?.status, 'waiting_for_engine');
     assert.equal(w?.reasonCode, 'model_transient');
-    const svc = serviceStatus({ db: x.db, now: new Date(NOW) });
+    const svc = await serviceStatus({ db: x.db, now: new Date(NOW) });
     assert.deepEqual([svc.imports.state, svc.imports.files, svc.imports.cause], ['retrying', 1, '1 file resumes automatically.']);
     assert.equal(svc.attention, null, 'retrying is not on Home until a day passes');
     for (const engineOn of [true, false]) {
@@ -709,12 +734,12 @@ test('a transient model failure waits for the engine, shows that Fathom tries ag
     // The one automatic retry interprets the saved file and stages it for review.
     const first = await P.resumeImports(x.db, { ...bg(x), fake: await fakeFor(csv) });
     assert.deepEqual(first.resumed, [{ fileId: r.fileId, status: 'needs_confirmation' }]);
-    assert.equal(fileRowOf(x.db, r.fileId).status, 'needs_confirmation');
+    assert.equal((await fileRowOf(x.db, r.fileId)).status, 'needs_confirmation');
     assert.equal(eng.calls.length, 2);
     // Nothing is left for a further pass.
     assert.deepEqual((await P.resumeImports(x.db, bg(x))).resumed, []);
     assert.equal(eng.calls.length, 2);
-  } finally { eng.restore(); x.close(); }
+  } finally { eng.restore(); await x.close(); }
 });
 
 test('a transient model failure that fails again on its automatic retry asks the owner and is not retried again', async () => {
@@ -723,13 +748,13 @@ test('a transient model failure that fails again on its automatic retry asks the
   try {
     const csv = MODEL_CSV('model transient twice');
     const r = await P.ingestFile(x.db, modelFile(csv), x.opts);
-    assert.deepEqual([fileRowOf(x.db, r.fileId).status, fileRowOf(x.db, r.fileId).note], ['waiting_for_engine', 'model_transient']);
+    assert.deepEqual([(await fileRowOf(x.db, r.fileId)).status, (await fileRowOf(x.db, r.fileId)).note], ['waiting_for_engine', 'model_transient']);
 
     const first = await P.resumeImports(x.db, { ...bg(x), fake: await fakeFor(csv) });
     assert.deepEqual(first.resumed, [{ fileId: r.fileId, status: 'needs_clarification' }]);
-    assert.deepEqual([fileRowOf(x.db, r.fileId).status, fileRowOf(x.db, r.fileId).note], ['needs_clarification', 'model_failed']);
+    assert.deepEqual([(await fileRowOf(x.db, r.fileId)).status, (await fileRowOf(x.db, r.fileId)).note], ['needs_clarification', 'model_failed']);
     assert.equal(eng.calls.length, 2);
-    const svc = serviceStatus({ db: x.db, now: new Date(NOW) });
+    const svc = await serviceStatus({ db: x.db, now: new Date(NOW) });
     assert.equal(svc.imports.state, 'needs_you');
     assert.equal(svc.imports.cause, '1 file needs you on Files.');
 
@@ -737,8 +762,8 @@ test('a transient model failure that fails again on its automatic retry asks the
     const second = await P.resumeImports(x.db, { ...bg(x), fake: await fakeFor(csv) });
     assert.deepEqual(second.resumed, []);
     assert.equal(eng.calls.length, 2);
-    assert.deepEqual([fileRowOf(x.db, r.fileId).status, fileRowOf(x.db, r.fileId).note], ['needs_clarification', 'model_failed']);
-  } finally { eng.restore(); x.close(); }
+    assert.deepEqual([(await fileRowOf(x.db, r.fileId)).status, (await fileRowOf(x.db, r.fileId)).note], ['needs_clarification', 'model_failed']);
+  } finally { eng.restore(); await x.close(); }
 });
 
 // The pinned budget rule (test/ingest/model-budget.test.mjs, unknown failed call): a failure with no
@@ -751,13 +776,13 @@ test('a transient model failure with unknown usage gets its automatic retry only
   try {
     const csv = MODEL_CSV('model transient unknown usage');
     const r = await P.ingestFile(x.db, modelFile(csv), x.opts);
-    assert.deepEqual([fileRowOf(x.db, r.fileId).status, fileRowOf(x.db, r.fileId).note], ['waiting_for_engine', 'model_transient']);
+    assert.deepEqual([(await fileRowOf(x.db, r.fileId)).status, (await fileRowOf(x.db, r.fileId)).note], ['waiting_for_engine', 'model_transient']);
     const first = await P.resumeImports(x.db, { ...bg(x), fake: await fakeFor(csv) });
     assert.deepEqual(first.resumed, [{ fileId: r.fileId, status: 'budget_exhausted' }]);
     assert.equal(eng.calls.length, 1, 'a retry that does not fit never dispatches');
     assert.deepEqual((await P.resumeImports(x.db, bg(x))).resumed, []);
-    assert.equal(serviceStatus({ db: x.db, now: new Date(NOW) }).imports.state, 'needs_you');
-  } finally { eng.restore(); x.close(); }
+    assert.equal((await serviceStatus({ db: x.db, now: new Date(NOW) })).imports.state, 'needs_you');
+  } finally { eng.restore(); await x.close(); }
 });
 
 test('a non-transient model failure asks the owner on the first attempt and is never retried automatically', async () => {
@@ -769,12 +794,12 @@ test('a non-transient model failure asks the owner on the first attempt and is n
     const r = await P.ingestFile(x.db, modelFile(csv), x.opts);
     assert.equal(r.status, 'needs_clarification');
     assert.equal(r.reasonCode, 'model_failed');
-    assert.deepEqual([fileRowOf(x.db, r.fileId).status, fileRowOf(x.db, r.fileId).note], ['needs_clarification', 'model_failed']);
+    assert.deepEqual([(await fileRowOf(x.db, r.fileId)).status, (await fileRowOf(x.db, r.fileId)).note], ['needs_clarification', 'model_failed']);
     assert.equal(eng.calls.length, 1);
-    assert.equal(serviceStatus({ db: x.db, now: new Date(NOW) }).imports.state, 'needs_you');
+    assert.equal((await serviceStatus({ db: x.db, now: new Date(NOW) })).imports.state, 'needs_you');
     assert.deepEqual((await P.resumeImports(x.db, { ...bg(x), fake: await fakeFor(csv) })).resumed, []);
     assert.equal(eng.calls.length, 1);
-  } finally { eng.restore(); x.close(); }
+  } finally { eng.restore(); await x.close(); }
 });
 
 // Review round 2: the model port reports a 429 as rate_limit and a 5xx or lost connection as
@@ -789,7 +814,7 @@ test('a rate limit or an unavailable provider is a transient model failure', asy
       assert.deepEqual([r.status, r.reasonCode], ['waiting_for_engine', 'model_transient'], providerCode);
       const first = await P.resumeImports(x.db, { ...bg(x), fake: await fakeFor(csv) });
       assert.deepEqual(first.resumed, [{ fileId: r.fileId, status: 'needs_confirmation' }], providerCode);
-    } finally { eng.restore(); x.close(); }
+    } finally { eng.restore(); await x.close(); }
   }
 });
 
@@ -805,10 +830,10 @@ test('an identical upload during an in-flight retry answers the unresolved statu
     const again = await P.ingestFile(x.db, file, x.opts);
     assert.equal(again.status, 'failed');
     assert.equal(again.duplicateOf, failed.fileId);
-    assert.equal(fileRowOf(x.db, failed.fileId).status, 'failed', 'not routed a second time');
+    assert.equal((await fileRowOf(x.db, failed.fileId)).status, 'failed', 'not routed a second time');
     x.opts.household.inFlight.delete(failed.fileId);
     assert.equal((await P.ingestFile(x.db, file, x.opts)).status, 'imported', 'liveness: once free it is routed again');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 // Review round 2: the Add files control of a file that needs readable text (or a smaller file)
@@ -845,14 +870,14 @@ test('the background pass leaves a failed note change proposal to the owner', as
   try {
     const file = csvOf('note actions');
     const failed = await P.ingestFile(x.db, file, { ...x.opts, parser: throwing(lockedError()) });
-    assert.equal(fileRowOf(x.db, failed.fileId).note, 'retry:store_locked');
-    x.db.prepare(`INSERT INTO import_proposals (id, version, file_id, source_sha256, status, proposal, interpreter_version, actor_id, created_at, updated_at, review_state)
+    assert.equal((await fileRowOf(x.db, failed.fileId)).note, 'retry:store_locked');
+    await x.db.prepare(`INSERT INTO import_proposals (id, version, file_id, source_sha256, status, proposal, interpreter_version, actor_id, created_at, updated_at, review_state)
       VALUES ('p-synthetic-note', 1, ?, ?, 'rejected', '{}', '1', 'owner-synthetic', ?, ?, ?)`)
-      .run(failed.fileId, x.db.prepare('SELECT sha256 FROM files WHERE id = ?').get(failed.fileId).sha256, NOW, NOW, JSON.stringify({ kind: 'actions' }));
+      .run(failed.fileId, (await x.db.prepare('SELECT sha256 FROM files WHERE id = ?').get(failed.fileId)).sha256, NOW, NOW, JSON.stringify({ kind: 'actions' }));
     assert.deepEqual((await P.resumeImports(x.db, bg(x))).resumed, []);
-    assert.deepEqual([fileRowOf(x.db, failed.fileId).status, fileRowOf(x.db, failed.fileId).note], ['failed', 'store_locked']);
-    assert.equal(serviceStatus({ db: x.db, now: new Date(NOW) }).imports.state, 'needs_you');
-  } finally { x.close(); }
+    assert.deepEqual([(await fileRowOf(x.db, failed.fileId)).status, (await fileRowOf(x.db, failed.fileId)).note], ['failed', 'store_locked']);
+    assert.equal((await serviceStatus({ db: x.db, now: new Date(NOW) })).imports.state, 'needs_you');
+  } finally { await x.close(); }
 });
 
 test('persistImport records warning rows per code, at most five, and warningText names them in plain words', async () => {
@@ -865,7 +890,7 @@ test('persistImport records warning rows per code, at most five, and warningText
     rows.push({ date: '2032-03-02', amount: '6.00', description: 'Synthetic unmasked row', number: '' });
     const r = await P.ingestFile(x.db, aggregatorFile('warnings-synthetic.csv', rows), x.opts);
     assert.equal(r.status, 'imported');
-    const counts = JSON.parse(fileRowOf(x.db, r.fileId).counts);
+    const counts = JSON.parse((await fileRowOf(x.db, r.fileId)).counts);
     assert.deepEqual(counts.warningCodes, { invalid_transaction: 7, missing_account_mask: 1 });
     assert.deepEqual(counts.warningRows.invalid_transaction, [3, 4, 5, 6, 7]);
     assert.deepEqual(counts.warningRows.missing_account_mask, [10]);
@@ -890,11 +915,11 @@ test('persistImport records warning rows per code, at most five, and warningText
 
     // A code without rows adds nothing to warningRows.
     const empty = await P.ingestFile(x.db, textFile('warn-empty-synthetic.csv', '', 'text/csv'), x.opts);
-    const emptyCounts = JSON.parse(fileRowOf(x.db, empty.fileId).counts);
+    const emptyCounts = JSON.parse((await fileRowOf(x.db, empty.fileId)).counts);
     assert.equal(emptyCounts.warningCodes.empty_file, 1);
     assert.equal(emptyCounts.warningRows?.empty_file, undefined);
     assert.equal(emptyCounts.warningMore?.empty_file, undefined);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 // warningText may return an array of sentences or one string of sentences; both read as lines.
@@ -938,11 +963,11 @@ test('a waiting row with warnings shows the plain lines under its cause', async 
   try {
     const rows = [{ date: '2032-03-01', amount: '5.00', description: 'Synthetic kept row', number: '5550005151' }, { date: 'bad', amount: '1.00', description: 'Synthetic bad row', number: '5550005151' }];
     const r = await P.ingestFile(x.db, aggregatorFile('waiting-warnings-synthetic.csv', rows), x.opts);
-    x.db.prepare("UPDATE files SET status = 'needs_mapping', note = NULL WHERE id = ?").run(r.fileId);
-    const row = rowOf(harness(ingestState(x.db)).screens.addFiles('add'), r.fileId);
+    await x.db.prepare("UPDATE files SET status = 'needs_mapping', note = NULL WHERE id = ?").run(r.fileId);
+    const row = rowOf(harness(await ingestState(x.db)).screens.addFiles('add'), r.fileId);
     assert.match(row, /data-warning/);
     assert.ok(text(row).includes('Row 3 had no readable date or amount and was skipped.') || text(row).includes('Row 3 had no readable date or amount and were skipped.'), text(row));
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('a low-confidence fact asks in plain words and never shows the raw key', async () => {
@@ -954,9 +979,9 @@ test('a low-confidence fact asks in plain words and never shows the raw key', as
       ['income.selfEmploymentNet', 1200, /says 1200 for "[^"]*self employment net[^"]*"\. Is that right\?$/i],
     ];
     for (const [key, value, expected] of cases) {
-      const r = recordFact(x.db, { key, value, confidence: 0.5, sourceId: 'ing:synthetic:all', fileId: null, parser: 'synthetic', locator: null, asOf: '2032-03-01', now: NOW });
+      const r = await recordFact(x.db, { key, value, confidence: 0.5, sourceId: 'ing:synthetic:all', fileId: null, parser: 'synthetic', locator: null, asOf: '2032-03-01', now: NOW });
       assert.equal(r.queued, true, key);
-      const item = x.db.prepare("SELECT question, subject, context FROM confirm_items WHERE kind = 'fact_check' AND subject = ?").get(`ing:synthetic:all|${key}|${JSON.stringify(value)}`);
+      const item = await x.db.prepare("SELECT question, subject, context FROM confirm_items WHERE kind = 'fact_check' AND subject = ?").get(`ing:synthetic:all|${key}|${JSON.stringify(value)}`);
       assert.ok(item, key);
       assert.ok(!item.question.includes(key), `${key}: no raw dotted key in "${item.question}"`);
       assert.match(item.question, /^The import says /, key);
@@ -965,9 +990,9 @@ test('a low-confidence fact asks in plain words and never shows the raw key', as
       assert.equal(context.key, key, 'the context keeps the key');
       assert.deepEqual(context.value, value, 'the context keeps the value');
     }
-    const dependents = x.db.prepare("SELECT question FROM confirm_items WHERE kind = 'fact_check' AND subject LIKE '%household.dependents%'").get().question;
+    const dependents = (await x.db.prepare("SELECT question FROM confirm_items WHERE kind = 'fact_check' AND subject LIKE '%household.dependents%'").get()).question;
     assert.match(dependents, /dependents/);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('healthLine leaves failed files to the Imports service line', () => {

@@ -6,6 +6,7 @@
 
 import { test, expect, expectPopoverSource } from './helpers.mjs';
 import { createLocalData, removeLocalData, startEnrolledServer } from './local-store.mjs';
+import { forEachSeries } from '../src/shared/series.mjs';
 
 let DIR;
 const CLOCK = '2026-11-05';
@@ -44,16 +45,16 @@ test.describe('real-mode polish', () => {
     const db = await buildRealStore(DIR, { clock: CLOCK });
     try {
       // Three months of balances for the two first accounts so trend lines have something to draw.
-      const ids = db.prepare('SELECT id FROM accounts ORDER BY sort, id LIMIT 2').all().map((r) => r.id);
-      db.exec('DELETE FROM balances');
+      const ids = (await db.prepare('SELECT id FROM accounts ORDER BY sort, id LIMIT 2').all()).map((r) => r.id);
+      await db.applySchema('DELETE FROM balances');
       const put = db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)');
-      ids.forEach((id, k) => {
-        [['2026-08-31', 1000], ['2026-09-30', 1250], ['2026-10-31', 1500]].forEach(([d, v]) => put.run(id, d, v * (k + 1)));
+      await forEachSeries(ids, async (id, k) => {
+        await forEachSeries([['2026-08-31', 1000], ['2026-09-30', 1250], ['2026-10-31', 1500]], async ([d, v]) => await put.run(id, d, v * (k + 1)));
       });
       const result = await planRun(db, { now: CLOCK, dataDir: DIR });
       expect(result.status).toBe('ok');
     } finally {
-      db.close();
+      await db.close();
     }
     app = await startEnrolledServer({ dataDir: DIR, clock: CLOCK });
     base = app.url;

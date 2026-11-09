@@ -38,7 +38,7 @@ const streamPost = (s, path, body, headers = {}) =>
 
 /* ---------- the stream protocol over HTTP ---------- */
 
-test('POST /api/threads streams start, progress and a final event equal to the JSON answer, and no text', T, () => withServer({ env: FAKE }, async s => {
+test('POST /api/threads streams start, progress and a final event equal to the JSON answer, and no text', T, async () => withServer({ env: FAKE }, async s => {
   const r = await streamPost(s, '/api/threads', { text: QUICK });
   assert.equal(r.status, 200);
   assert.match(r.headers['content-type'], /^text\/event-stream/);
@@ -67,12 +67,12 @@ test('POST /api/threads streams start, progress and a final event equal to the J
   // The stored turn is written once.
   const db = await openStore(s.dbFile);
   try {
-    const rows = db.prepare('SELECT role FROM messages WHERE conversation_key = ? ORDER BY id').all(final.thread.key);
+    const rows = await db.prepare('SELECT role FROM messages WHERE conversation_key = ? ORDER BY id').all(final.thread.key);
     assert.deepEqual(rows.map(x => x.role), ['me', 'fathom']);
-  } finally { db.close(); }
+  } finally { await db.close(); }
 }));
 
-test('POST /api/ask streams in an existing thread; JSON requests are unchanged', T, () => withServer({ env: FAKE }, async s => {
+test('POST /api/ask streams in an existing thread; JSON requests are unchanged', T, async () => withServer({ env: FAKE }, async s => {
   const first = await postJson(s.baseUrl, '/api/threads', { text: QUICK });
   assert.equal(first.status, 200);
   assert.match(first.headers['content-type'], /^application\/json/);
@@ -84,7 +84,7 @@ test('POST /api/ask streams in an existing thread; JSON requests are unchanged',
   assert.equal(evs.at(-1).data.scenario.live.conversations[key].length, 4);
 }));
 
-test('a validation error before the stream starts is an ordinary JSON error; no stream starts', T, () => withServer({ env: FAKE }, async s => {
+test('a validation error before the stream starts is an ordinary JSON error; no stream starts', T, async () => withServer({ env: FAKE }, async s => {
   const bad = await streamPost(s, '/api/ask', { key: 'ask:0123456789ab', text: '' });
   assert.equal(bad.status, 400);
   assert.match(bad.headers['content-type'], /^application\/json/);
@@ -92,7 +92,7 @@ test('a validation error before the stream starts is an ordinary JSON error; no 
   assert.equal(missing.status, 404);
 }));
 
-test('a client that disconnects mid-stream still gets its answer stored once', T, () => withServer({ env: { FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '40' } }, async s => {
+test('a client that disconnects mid-stream still gets its answer stored once', T, async () => withServer({ env: { FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '40' } }, async s => {
   const url = new URL(s.baseUrl);
   const payload = JSON.stringify({ text: QUICK });
   const key = await new Promise((resolve, reject) => {
@@ -113,7 +113,7 @@ test('a client that disconnects mid-stream still gets its answer stored once', T
   for (let i = 0; i < 50 && rows.length < 2; i++) {
     await new Promise(r => setTimeout(r, 100));
     const db = await openStore(s.dbFile);
-    try { rows = db.prepare('SELECT role, text FROM messages WHERE conversation_key = ? ORDER BY id').all(key); } finally { db.close(); }
+    try { rows = await db.prepare('SELECT role, text FROM messages WHERE conversation_key = ? ORDER BY id').all(key); } finally { await db.close(); }
   }
   assert.deepEqual(rows.map(x => x.role), ['me', 'fathom']);
   assert.match(rows[1].text, /fx-src/);
@@ -160,20 +160,20 @@ test('live SDK partial messages map to tool and text events', async () => {
 
 async function demoAnswerer(t) {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
-  seedDemo(s.db);
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  await seedDemo(s.db);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' });
-  const engine = createRuntimeEngine({ db: s.db, config });
+  const engine = await createRuntimeEngine({ db: s.db, config });
   // The temp store's directory stands in as the household root.
   const packs = createLivePacks(s.db, { dataDir: s.dataDir });
-  packs.refresh();
+  await packs.refresh();
   return { s, engine, packs, root: s.dataDir };
 }
 
 test('a regeneration streams its revision step and no text or reset events', async t => {
   const { s, engine, packs, root } = await demoAnswerer(t);
   let n = 0;
-  const wrapped = { ...engine, mode: engine.mode, isOn: () => engine.isOn(), call: req => engine.call({ ...req,
+  const wrapped = { ...engine, mode: engine.mode, isOn: async () => await engine.isOn(), call: async req => await engine.call({ ...req,
     fake: n++ === 0 ? [{ text: 'You owe $987,654 this year and $876,543 next year.' }] : [{ toolCalls: [{ name: 'household', args: { operation: 'summary', } }] }, { text: 'Nothing to add.' }] }) };
   const seen = [];
   const reply = await createLiveAnswerer({ engine: wrapped, packs, root, services: { engine: wrapped, config: { dataDir: root } } }).answer({ db: s.db, key: 'ask:0123456789ab', text: 'How much?', onEvent: e => seen.push(e) });
@@ -325,16 +325,16 @@ test('markdownBlocks renders paragraphs, lists and bold over escaped text only',
   assert.equal(wrapBlocks(['p1', '<ul><li>x</li></ul>']), '<p>p1</p><ul><li>x</li></ul>');
 });
 
-test('renderAnswer escapes model markup and keeps list numbers out of grounding', () => {
+test('renderAnswer escapes model markup and keeps list numbers out of grounding', async () => {
   const text = 'Do this:\n\n1. Pay <b>now</b>\n2. File **soon**\n\n- <img src=x onerror=alert()>';
-  const g = groundAnswer(text, { scenario: { fig: {} }, toolResults: [], data: [] });
+  const g = await groundAnswer(text, { scenario: { fig: {} }, toolResults: [], data: [] });
   assert.equal(g.ok, true, JSON.stringify(g.violations));
   const blocks = renderAnswer(text, g.violations, g.literals);
   assert.deepEqual(blocks, ['Do this:', '<ol><li>Pay &lt;b&gt;now&lt;/b&gt;</li><li>File <strong>soon</strong></li></ol>',
     '<ul><li>&lt;img src=x onerror=alert()&gt;</li></ul>']);
   assert.deepEqual(listMarkerSpans('1. a\n  2) b\nx 3. c'), [{ index: 0, length: 2 }, { index: 7, length: 2 }]);
   // A number inside a list item is still checked.
-  const bad = groundAnswer('1. Pay $987,654', { scenario: { fig: {} }, toolResults: [], data: [] });
+  const bad = await groundAnswer('1. Pay $987,654', { scenario: { fig: {} }, toolResults: [], data: [] });
   assert.deepEqual(bad.violations.map(v => v.text), ['$987,654']);
   assert.match(renderAnswer('1. Pay $987,654', bad.violations, bad.literals)[0],
     /^<ol><li>Pay <span class="fx-checking fx-unchecked" title="Not checked against your data">\$987,654<\/span>/);

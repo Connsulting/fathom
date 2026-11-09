@@ -14,24 +14,24 @@ test('confirmed Ask proposals keep household services and owner statements', asy
   const s = await tempInstance();
   let receiptId, confirmedContext;
   const transport = createEngine({ mode: 'fake' });
-  const engine = { mode: 'live', isOn: () => true, call(request) {
+  const engine = { mode: 'live', isOn: () => true, async call(request) {
     if (request.purpose === 'title') return Promise.resolve({ text: JSON.stringify({ title: 'Synthetic undo' }), toolResults: [] });
-    return transport.call({ ...request, fake: [
+    return await transport.call({ ...request, fake: [
       { toolCalls: [{ name: 'undo', args: { operation: 'undo', id: receiptId, propose: true } }] },
       { text: 'Undo your change? Confirm below.' },
     ] });
   } };
-  registerReceiptKind('c2_services_confirmation', { restore(ctx) {
+  registerReceiptKind('c2_services_confirmation', { async restore(ctx) {
     confirmedContext = ctx;
     assert.ok(ctx.services);
-    ctx.db.prepare("UPDATE settings SET value = '1' WHERE key = 'confirmation-setting'").run();
+    await ctx.db.prepare("UPDATE settings SET value = '1' WHERE key = 'confirmation-setting'").run();
   } });
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'off' });
   const app = await serveAppFixture({ db: s.db, platform: s.platform, config, secrets: s.secrets, engine, authenticated: true });
-  t.after(async () => { await app.close(); s.close(); rmSync(s.dataDir, { recursive: true, force: true }); });
-  s.db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)').run('confirmation-setting', '2', '2026-11-07');
-  receiptId = saveReceipt({ db: s.db, actorId: app.session.user.id }, { scope: 'write:decisions', kind: 'c2_services_confirmation',
-    id: 'confirmation-setting', label: 'Synthetic choice', before: '1', after: '2' }).id;
+  t.after(async () => { await app.close(); await s.close(); rmSync(s.dataDir, { recursive: true, force: true }); });
+  await s.db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)').run('confirmation-setting', '2', '2026-11-07');
+  receiptId = (await saveReceipt({ db: s.db, actorId: app.session.user.id }, { scope: 'write:decisions', kind: 'c2_services_confirmation',
+    id: 'confirmation-setting', label: 'Synthetic choice', before: '1', after: '2' })).id;
   const proposed = await app.postJson('/api/threads', { text: 'Undo my change.' });
   assert.equal(proposed.status, 200);
   assert.deepEqual(proposed.json.message.provenance.pendingAction.scopes, ['write:decisions']);
@@ -40,9 +40,9 @@ test('confirmed Ask proposals keep household services and owner statements', asy
   assert.equal(confirmedContext.services, app.household.services);
   assert.equal(confirmedContext.household, app.household);
   assert.equal(confirmedContext.dataDir, s.root);
-  assert.ok(confirmedContext.ownerStatements().includes('Undo my change.'));
-  assert.ok(confirmedContext.ownerStatements().includes('yes'));
-  assert.equal(s.db.prepare("SELECT value FROM settings WHERE key = 'confirmation-setting'").get().value, '1');
+  assert.ok((await confirmedContext.ownerStatements()).includes('Undo my change.'));
+  assert.ok((await confirmedContext.ownerStatements()).includes('yes'));
+  assert.equal((await s.db.prepare("SELECT value FROM settings WHERE key = 'confirmation-setting'").get()).value, '1');
 });
 
 test('answerers require household services', () => {
@@ -78,7 +78,7 @@ test('public demo builds its decorated answerer with its sandbox services', asyn
 
 test('Ask and MCP share the resolved household services and root, with actor-bound statements', async t => {
   const s = await tempInstance();
-  t.after(() => { s.close(); rmSync(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await s.close(); rmSync(s.dataDir, { recursive: true, force: true }); });
   const seen = [];
   const probe = getTool('transactions').operations.find(o => o.name === 'search');
   const original = probe.handler;
@@ -88,7 +88,7 @@ test('Ask and MCP share the resolved household services and root, with actor-bou
   };
   t.after(() => { probe.handler = original; });
   const fake = createEngine({ mode: 'fake' });
-  const engine = { mode: 'live', isOn: () => true, call: request => fake.call({ ...request, fake: [
+  const engine = { mode: 'live', isOn: () => true, call: async request => await fake.call({ ...request, fake: [
     { toolCalls: [{ name: 'transactions', args: { operation: 'search' } }] }, { text: 'Your request is recorded.' },
   ] }) };
   const scheduler = { runNow: () => ({ status: 'ok' }), stop() {} };
@@ -96,18 +96,18 @@ test('Ask and MCP share the resolved household services and root, with actor-bou
   const app = await serveAppFixture({ db: s.db, platform: s.platform, config, secrets: s.secrets, engine, scheduler });
   t.after(() => app.close());
   const creator = await createSessionFixture(s.platform, { email: 'services@example.test', role: 'member' });
-  const { key } = app.keys.create({ householdId: s.householdId, userId: creator.user.id, name: 'Synthetic services' });
+  const { key } = await app.keys.create({ householdId: s.householdId, userId: creator.user.id, name: 'Synthetic services' });
   const mcp = rpcResult(await callToolRpc(app.baseUrl, key, 'transactions', { operation: 'search' }));
   assert.ok(!mcp.isError, mcp.content[0].text);
   assert.equal(JSON.parse(mcp.content[0].text).statements, null, 'MCP uses its explicit evidence, never a conversation');
   const thread = 'ask:123456abcdef', other = 'ask:abcdef123456', now = '2026-11-07T12:00:00.000Z';
-  for (const id of [thread, other]) s.db.prepare('INSERT INTO conversations (key, created_at) VALUES (?, ?)').run(id, now);
-  const insert = (conversation, role, text, actor) => s.db.prepare('INSERT INTO messages (conversation_key, role, text, ts, provenance) VALUES (?, ?, ?, ?, ?)')
+  for (const id of [thread, other]) await s.db.prepare('INSERT INTO conversations (key, created_at) VALUES (?, ?)').run(id, now);
+  const insert = async (conversation, role, text, actor) => await s.db.prepare('INSERT INTO messages (conversation_key, role, text, ts, provenance) VALUES (?, ?, ?, ?, ?)')
     .run(conversation, role, text, now, JSON.stringify({ ownerInput: { actorId: actor } }));
-  insert(thread, 'me', 'Use 4 percent.', 'person-a');
-  insert(thread, 'me', 'Use 8 percent.', 'person-b');
-  insert(thread, 'fathom', 'Use 9 percent.', 'person-a');
-  insert(other, 'me', 'Use 7 percent.', 'person-a');
+  await insert(thread, 'me', 'Use 4 percent.', 'person-a');
+  await insert(thread, 'me', 'Use 8 percent.', 'person-b');
+  await insert(thread, 'fathom', 'Use 9 percent.', 'person-a');
+  await insert(other, 'me', 'Use 7 percent.', 'person-a');
   await app.household.answerer.answer({ db: s.db, key: thread, text: 'Keep that assumption.', actorId: 'person-a', ownerText: 'Keep that assumption.' });
   assert.equal(seen.length, 2);
   const [mcpCtx, askCtx] = seen;
@@ -120,9 +120,9 @@ test('Ask and MCP share the resolved household services and root, with actor-bou
   assert.equal(askCtx.dataDir, s.root); assert.equal(mcpCtx.dataDir, s.root);
   assert.equal(askCtx.household, app.household); assert.equal(mcpCtx.household, app.household);
   assert.equal(askCtx.services.vault, app.household.vault);
-  assert.deepEqual(askCtx.ownerStatements(), ['Keep that assumption.', 'Use 4 percent.']);
+  assert.deepEqual(await askCtx.ownerStatements(), ['Keep that assumption.', 'Use 4 percent.']);
   assert.ok(CAPABILITIES.includes('ownerStatements'));
-  const second = await tempInstance(); t.after(() => { second.close(); rmSync(second.dataDir, { recursive: true, force: true }); });
+  const second = await tempInstance(); t.after(async () => { await second.close(); rmSync(second.dataDir, { recursive: true, force: true }); });
   const otherHousehold = await second.household(null, { engine, scheduler });
   assert.notEqual(otherHousehold.services, app.household.services);
   assert.equal(otherHousehold.services.config.dataDir, second.root);

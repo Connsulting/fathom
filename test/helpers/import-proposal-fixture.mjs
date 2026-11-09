@@ -26,12 +26,12 @@ export async function importProposedRows(store, rows, { name = 'synthetic.xlsx',
   const coverage = source.regions.map(regionId => ({ regionId, refs: source.inventory[regionId].refs,
     disposition: marker && source.inventory[regionId].refs.includes('r' + leaves.length) ? 'explanatory_text' : 'imported_detail',
     ...(marker && source.inventory[regionId].refs.includes('r' + leaves.length) ? { reason: { refs: ['r' + leaves.length], transform: { op: 'identity' } } } : {}) }));
-  createAuthStore(store.platform).setPlatformSetting('instance_model_cap_usd', 50);
-  const engine = createRuntimeEngine({ db: store.db, config: { engine: 'fake' }, allowed: () => store.household.outbound.enabled('engine') });
+  await createAuthStore(store.platform).setPlatformSetting('instance_model_cap_usd', 50);
+  const engine = await createRuntimeEngine({ db: store.db, config: { engine: 'fake' }, allowed: async () => await store.household.outbound.enabled('engine') });
   const household = { ...store.household, engine };
   const ctx = { db: store.db, household, scheduler: { trigger() {} }, actorId: 'actor-synthetic', now, ownerText: 'yes', scopes: ['write:imports', 'write:facts', 'write:goals', 'write:steps', 'write:recs'] };
   await ingestFile(store.db, { name, bytes, mime: XLSX_MIME }, { ...ctx, household: { ...household, engine: { isOn: () => false } } });
-  const staged = stageImport(ctx, { source, reinterpret, proposal: { proposalId: randomUUID(), version: 1, fileId, sha256: source.sha256, interpreterVersion: 'synthetic', mappingId: null, mappingVersion: null, rows: targets, coverage, completeness: 'complete' } });
+  const staged = await stageImport(ctx, { source, reinterpret, proposal: { proposalId: randomUUID(), version: 1, fileId, sha256: source.sha256, interpreterVersion: 'synthetic', mappingId: null, mappingVersion: null, rows: targets, coverage, completeness: 'complete' } });
   if (!approve || staged.status !== 'needs_confirmation') return { fileId, ...staged };
   return { fileId, ...staged, ...await reviewImport(ctx, { proposalId: staged.proposalId, version: staged.version, decision: 'approve', evidence: 'yes' }) };
 }

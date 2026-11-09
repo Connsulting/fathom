@@ -20,7 +20,7 @@
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, rmSync, statfsSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { openScope } from '../storage/index.mjs';
 import { migrate, parseJson, DB_FILE } from '../store/db.mjs';
 import {
   PLATFORM_FILE, PLATFORM_MIGRATIONS_DIR, LOCK_FILE, JOURNAL_FILE, STORE_IDENTITY_DDL, codeError, newHouseholdId, newOperationId,
@@ -30,6 +30,7 @@ import { loadBackupKey } from './backup-key.mjs';
 import { rowsDigest, tableRows, logicalDigest } from './digest.mjs';
 import { createSourceSnapshot, openSourceExclusive, readSnapshotFile, partialName, sha256File, SNAPSHOT_EXT } from './snapshot.mjs';
 import { fsyncDir, fsyncFile, writeAll, writeFileAtomic } from './fsutil.mjs';
+import { mapSeries, someSeries } from '../shared/series.mjs';
 
 export const PHASES = Object.freeze(['preflight', 'snapshot-partial', 'snapshot-published', 'snapshot', 'source-schema', 'stage',
   'verify', 'publish', 'mark', 'cleanup', 'complete']);
@@ -58,8 +59,8 @@ const COLUMNS = Object.freeze({
 });
 
 const refuse = code => codeError(code);
-export const hasTable = (db, name) => !!db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
-const count = (db, sql) => db.prepare(sql).get().n;
+export const hasTable = async (db, name) => !!await db.prepare("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+const count = async (db, sql) => (await db.prepare(sql).get()).n;
 
 // --------------------------------------------------------------------------- journal and lock
 
@@ -110,17 +111,17 @@ export function removeLock(file, operationId) {
 
 // --------------------------------------------------------------------------- source checks
 
-export function storeMode(db) {
-  if (!hasTable(db, 'settings')) return 'real';
-  const row = db.prepare("SELECT value FROM settings WHERE key = 'mode'").get();
+export async function storeMode(db) {
+  if (!await hasTable(db, 'settings')) return 'real';
+  const row = await db.prepare("SELECT value FROM settings WHERE key = 'mode'").get();
   return parseJson(row && row.value, null) === 'demo' ? 'demo' : 'real';
 }
 
-function preflightSource(db, dataDir) {
-  if (hasTable(db, 'households') && count(db, 'SELECT count(*) AS n FROM households') > 1) throw refuse('ambiguous_household');
-  if (hasTable(db, 'users') && count(db, 'SELECT count(*) AS n FROM users WHERE household_id IS NOT 1') > 0) throw refuse('ambiguous_household');
+async function preflightSource(db, dataDir) {
+  if (await hasTable(db, 'households') && await count(db, 'SELECT count(*) AS n FROM households') > 1) throw refuse('ambiguous_household');
+  if (await hasTable(db, 'users') && await count(db, 'SELECT count(*) AS n FROM users WHERE household_id IS NOT 1') > 0) throw refuse('ambiguous_household');
   for (const t of LEGACY_AUTH_TABLES) {
-    if (hasTable(db, t) && db.prepare(`PRAGMA foreign_key_check("${t}")`).all().length) throw refuse('orphan_auth_rows');
+    if (await hasTable(db, t) && (await db.foreignKeyCheck(t)).length) throw refuse('orphan_auth_rows');
   }
   let bytes = 0;
   for (const f of [DB_FILE, `${DB_FILE}-wal`]) {
@@ -135,9 +136,9 @@ function preflightSource(db, dataDir) {
   if (free < bytes * 3 + 8 * 1024 * 1024) throw refuse('insufficient_space');
 }
 
-function readSource(db) {
+async function readSource(db) {
   const out = {};
-  for (const t of SOURCE_TABLES) out[t] = hasTable(db, t) ? db.prepare(`SELECT * FROM "${t}"`).all() : [];
+  for (const t of SOURCE_TABLES) out[t] = await hasTable(db, t) ? await db.prepare(`SELECT * FROM "${t}"`).all() : [];
   return out;
 }
 
@@ -180,75 +181,67 @@ function platformRows(src, { householdId: hh, operationId, startedAt }) {
 }
 
 const digestsOfRows = rows => Object.fromEntries(Object.keys(COLUMNS).map(t => [t, rowsDigest(rows[t])]));
-const digestsOfDb = db => Object.fromEntries(Object.entries(COLUMNS).map(([t, cols]) => [t, rowsDigest(tableRows(db, t, cols))]));
+const digestsOfDb = async db => Object.fromEntries(await mapSeries(Object.entries(COLUMNS), async ([t, cols]) => [t, rowsDigest(await tableRows(db, t, cols))]));
 const sameDigests = (a, b) => !!a && !!b && Object.keys(COLUMNS).every(t => a[t] && b[t] && a[t].count === b[t].count && a[t].sha256 === b[t].sha256);
 const countsOf = digests => Object.fromEntries(Object.entries(digests).map(([t, d]) => [t, d.count]));
 
 // --------------------------------------------------------------------------- staging
 
-function buildStaging(file, rows, journal) {
+async function buildStaging(file, rows, journal) {
   for (const f of [file, `${file}-journal`, `${file}-wal`, `${file}-shm`]) rmSync(f, { force: true });
-  const db = new DatabaseSync(file);
+  const db = await openScope({ path: file, journal: 'delete', busyTimeout: 0 });
   try {
-    db.exec('PRAGMA journal_mode = DELETE');
-    db.exec('PRAGMA foreign_keys = ON');
-    migrate(db, { dir: PLATFORM_MIGRATIONS_DIR });
-    db.exec('BEGIN');
-    try {
+    await migrate(db, { dir: PLATFORM_MIGRATIONS_DIR });
+    await db.transaction(async db => {
       for (const [table, cols] of Object.entries(COLUMNS)) {
         const insert = db.prepare(`INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`);
-        for (const row of rows[table]) insert.run(...cols.map(c => row[c]));
+        for (const row of rows[table]) await insert.run(...cols.map(c => row[c]));
       }
       const now = Date.now();
-      db.prepare(`INSERT INTO platform_operations (id, kind, phase, status, started_at, updated_at, detail)
+      await db.prepare(`INSERT INTO platform_operations (id, kind, phase, status, started_at, updated_at, detail)
         VALUES (?, ?, 'stage', 'running', ?, ?, ?)`)
         .run(journal.operationId, OPERATION_KIND, journal.startedAt, now, JSON.stringify({ counts: countsOf(digestsOfRows(rows)) }));
-      db.exec('COMMIT');
-    } catch (e) {
-      db.exec('ROLLBACK');
-      throw e;
-    }
+    });
   } finally {
-    db.close();
+    await db.close();
   }
 }
 
-function verifyFile(file, expected) {
-  const db = new DatabaseSync(file, { readOnly: true });
+async function verifyFile(file, expected) {
+  const db = await openScope({ path: file, readOnly: true, journal: null, busyTimeout: 0 });
   try {
-    const integrity = db.prepare('PRAGMA integrity_check').all();
-    if (integrity.length !== 1 || integrity[0].integrity_check !== 'ok') throw refuse('staging_invalid');
-    if (db.prepare('PRAGMA foreign_key_check').all().length) throw refuse('staging_invalid');
-    if (!sameDigests(digestsOfDb(db), expected)) throw refuse('staging_invalid');
+    const integrity = await db.integrityCheck();
+    if (integrity.length !== 1 || integrity[0] !== 'ok') throw refuse('staging_invalid');
+    if ((await db.foreignKeyCheck()).length) throw refuse('staging_invalid');
+    if (!sameDigests(await digestsOfDb(db), expected)) throw refuse('staging_invalid');
   } finally {
-    db.close();
+    await db.close();
   }
 }
 
 // The platform operation row (of `kind`, any when null) and served household of a published
 // platform.sqlite must be this journal's.
-function checkPublished(file, journal, kind = OPERATION_KIND) {
+async function checkPublished(file, journal, kind = OPERATION_KIND) {
   // A plain connection: after a server has run, the file is in WAL mode, which a read-only open
   // cannot always attach to.
-  const db = new DatabaseSync(file);
+  const db = await openScope({ path: file, journal: null, busyTimeout: 0 });
   try {
-    const op = db.prepare('SELECT id FROM platform_operations WHERE id = ? AND kind = coalesce(?, kind)').get(journal.operationId, kind);
-    const hh = db.prepare('SELECT id FROM households WHERE serves_store = 1').get();
+    const op = await db.prepare('SELECT id FROM platform_operations WHERE id = ? AND kind = coalesce(?, kind)').get(journal.operationId, kind);
+    const hh = await db.prepare('SELECT id FROM households WHERE serves_store = 1').get();
     if (!op || !hh || hh.id !== journal.householdId) throw refuse('store_identity_mismatch');
-    return digestsOfDb(db);
+    return await digestsOfDb(db);
   } finally {
-    db.close();
+    await db.close();
   }
 }
 
-export function markOperationDone(file, operationId) {
-  const db = new DatabaseSync(file);
+export async function markOperationDone(file, operationId) {
+  const db = await openScope({ path: file, journal: null });
   try {
-    db.exec('PRAGMA busy_timeout = 5000');
-    db.prepare(`UPDATE platform_operations SET status = 'done', phase = 'complete', updated_at = ?
+    await db.prepare(`UPDATE platform_operations SET status = 'done', phase = 'complete', updated_at = ?
       WHERE id = ? AND (status != 'done' OR phase != 'complete')`).run(Date.now(), operationId);
   } finally {
-    db.close();
+    await db.close();
   }
 }
 
@@ -290,14 +283,14 @@ function clearSnapshotLeftovers(dir, operationId) {
 // --------------------------------------------------------------------------- run
 
 // A completed migration: verify it still holds, mark the operation done and drop a leftover lock.
-function reconcile(ctx) {
+async function reconcile(ctx) {
   const { db, journal, platformFile, lockFile } = ctx;
   if (!existsSync(platformFile)) throw refuse('store_identity_mismatch');
-  checkPublished(platformFile, journal);
-  const identity = storeIdentity(db);
+  await checkPublished(platformFile, journal);
+  const identity = await storeIdentity(db);
   if (!identity || identity.householdId !== journal.householdId || identity.operationId !== journal.operationId) throw refuse('store_identity_mismatch');
-  if (hasTable(db, 'users')) throw refuse('store_identity_mismatch');
-  markOperationDone(platformFile, journal.operationId);
+  if (await hasTable(db, 'users')) throw refuse('store_identity_mismatch');
+  await markOperationDone(platformFile, journal.operationId);
   removeLock(lockFile, journal.operationId);
   return { status: 'complete', operationId: journal.operationId, householdId: journal.householdId };
 }
@@ -315,19 +308,19 @@ export async function migratePlatform({ dataDir, backupKeyFile, onPhase = async 
   if (lock && (!journal || lock.operationId !== journal.operationId)) throw refuse('stale_lock_mismatch');
   const key = loadBackupKey(backupKeyFile);
   if (!existsSync(storeFile)) throw refuse('not_real_store');
-  const db = openSourceExclusive(storeFile);
+  const db = await openSourceExclusive(storeFile);
   try {
-    if (storeMode(db) !== 'real') throw refuse('not_real_store');
+    if (await storeMode(db) !== 'real') throw refuse('not_real_store');
     const ctx = { db, dataDir, key, journal, journalFile, platformFile, lockFile };
-    if (journal?.phase === 'complete') return reconcile(ctx);
+    if (journal?.phase === 'complete') return await reconcile(ctx);
 
     // A store with store_identity and no account tables was created already bound to a household.
-    const identity = storeIdentity(db);
-    const bound = !!identity && !hasTable(db, 'users');
+    const identity = await storeIdentity(db);
+    const bound = !!identity && !await hasTable(db, 'users');
     let published = existsSync(platformFile);
     if (!journal) {
       if (bound && published) {
-        checkPublished(platformFile, { operationId: identity.operationId, householdId: identity.householdId }, null);
+        await checkPublished(platformFile, { operationId: identity.operationId, householdId: identity.householdId }, null);
         return { status: 'complete', operationId: identity.operationId, householdId: identity.householdId };
       }
       if (published || (identity && !bound)) throw refuse('store_identity_mismatch');
@@ -335,7 +328,7 @@ export async function migratePlatform({ dataDir, backupKeyFile, onPhase = async 
     }
 
     // ---- preflight
-    if (!published && !bound) preflightSource(db, dataDir);
+    if (!published && !bound) await preflightSource(db, dataDir);
     await onPhase('preflight');
     if (!journal) {
       journal = {
@@ -365,35 +358,35 @@ export async function migratePlatform({ dataDir, backupKeyFile, onPhase = async 
         if (sha !== s.sha256) throw refuse('snapshot_mismatch');
       }
       // The store changed while unlocked between runs: snapshot it again before staging.
-      if (!published && !bound && logicalDigest(db) !== journal.sourceDigest) await takeSnapshot(ctx, journal.snapshots.length, null);
+      if (!published && !bound && await logicalDigest(db) !== journal.sourceDigest) await takeSnapshot(ctx, journal.snapshots.length, null);
     }
     journal.phase = journal.phase === 'preflight' ? 'snapshot' : journal.phase;
     writeJournal(journalFile, journal);
     await onPhase('snapshot');
 
     // ---- source-schema
-    if (!bound && !hasTable(db, 'store_identity')) {
-      const { applied } = migrate(db, { through: LEGACY_SCHEMA });
+    if (!bound && !await hasTable(db, 'store_identity')) {
+      const { applied } = await migrate(db, { through: LEGACY_SCHEMA });
       if (applied.length) {
-        journal.sourceDigest = logicalDigest(db);
+        journal.sourceDigest = await logicalDigest(db);
         writeJournal(journalFile, journal);
       }
     }
     await onPhase('source-schema');
 
     // ---- stage, verify, publish
-    const accountsPresent = hasTable(db, 'users');
+    const accountsPresent = await hasTable(db, 'users');
     published = existsSync(platformFile);
     if (!published) {
       if (!accountsPresent && !journal.recovery) throw refuse('source_changed_after_publish');
-      const rows = platformRows(readSource(db), journal);
-      buildStaging(stagingFile, rows, journal);
+      const rows = platformRows(await readSource(db), journal);
+      await buildStaging(stagingFile, rows, journal);
       journal.phase = 'stage';
       writeJournal(journalFile, journal);
       await onPhase('stage');
 
       const expected = digestsOfRows(rows);
-      verifyFile(stagingFile, expected);
+      await verifyFile(stagingFile, expected);
       journal.digests = expected;
       journal.counts = countsOf(expected);
       journal.phase = 'verify';
@@ -409,9 +402,9 @@ export async function migratePlatform({ dataDir, backupKeyFile, onPhase = async 
     } else {
       // Never rebuilt once published: re-verify against the source rows that are still present.
       rmSync(stagingFile, { force: true });
-      const inPlatform = checkPublished(platformFile, journal);
+      const inPlatform = await checkPublished(platformFile, journal);
       if (accountsPresent) {
-        const fromSource = digestsOfRows(platformRows(readSource(db), journal));
+        const fromSource = digestsOfRows(platformRows(await readSource(db), journal));
         if (!sameDigests(fromSource, journal.digests) || !sameDigests(inPlatform, journal.digests)) throw refuse('source_changed_after_publish');
       }
       if (['preflight', 'snapshot', 'stage', 'verify'].includes(journal.phase)) {
@@ -424,32 +417,32 @@ export async function migratePlatform({ dataDir, backupKeyFile, onPhase = async 
     }
 
     // ---- mark
-    db.exec(STORE_IDENTITY_DDL);
-    const marked = storeIdentity(db);
+    await db.applySchema(STORE_IDENTITY_DDL);
+    const marked = await storeIdentity(db);
     if (marked) {
       if (marked.householdId !== journal.householdId || marked.operationId !== journal.operationId) throw refuse('store_identity_mismatch');
     } else {
-      db.prepare('INSERT INTO store_identity (id, household_id, platform_operation) VALUES (1, ?, ?)').run(journal.householdId, journal.operationId);
+      await db.prepare('INSERT INTO store_identity (id, household_id, platform_operation) VALUES (1, ?, ?)').run(journal.householdId, journal.operationId);
     }
     journal.phase = 'mark';
     writeJournal(journalFile, journal);
     await onPhase('mark');
 
     // ---- cleanup: 022 drops the account tables (and later migrations up to the tenancy cutover apply).
-    migrate(db, { through: PRE_TENANCY_SCHEMA });
-    if (LEGACY_AUTH_TABLES.some(t => hasTable(db, t))) throw refuse('store_identity_mismatch');
+    await migrate(db, { through: PRE_TENANCY_SCHEMA });
+    if (await someSeries(LEGACY_AUTH_TABLES, async t => await hasTable(db, t))) throw refuse('store_identity_mismatch');
     journal.phase = 'cleanup';
     writeJournal(journalFile, journal);
     await onPhase('cleanup');
 
     // ---- complete
-    markOperationDone(platformFile, journal.operationId);
+    await markOperationDone(platformFile, journal.operationId);
     journal.phase = 'complete';
     writeJournal(journalFile, journal);
     await onPhase('complete');
     removeLock(lockFile, journal.operationId);
     return { status: 'complete', operationId: journal.operationId, householdId: journal.householdId };
   } finally {
-    db.close();
+    await db.close();
   }
 }

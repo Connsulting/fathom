@@ -123,7 +123,7 @@ export const OWNER_FACTS = Object.freeze({
 
 export const platformFileOf = (dataDir) => join(dataDir, PLATFORM_FILE);
 // The original household's store file of the instance in dataDir (households/<id>/fathom.sqlite).
-export const storeFileOf = (dataDir) => servedStore(dataDir)?.file ?? null;
+export const storeFileOf = async (dataDir) => (await servedStore(dataDir))?.file ?? null;
 
 // Per-store ingest context: the household context and config ingest needs, and a file counter.
 const CTX = new WeakMap();
@@ -141,13 +141,13 @@ export async function createRealStore(dataDir, { clock = CLOCK } = {}) {
   // platform handle stays open for the household context ingest runs in and is closed with the
   // store by scratch().cleanup() or closeRealStore(db); callers that need accounts open
   // platformFileOf(dataDir).
-  const { db, platform, householdId } = createInstance(dataDir, {
+  const { db, platform, householdId } = await createInstance(dataDir, {
     mode: 'real',
     platformKey: keys.platformKey,
-    init: d => {
-      setSetting(d, 'mode', 'real');
-      setSetting(d, 'clock', clock);
-      setSetting(d, 'onboarding', { done: true, step: 6 });
+    init: async d => {
+      await setSetting(d, 'mode', 'real');
+      await setSetting(d, 'clock', clock);
+      await setSetting(d, 'onboarding', { done: true, step: 6 });
     },
   });
   const config = {
@@ -155,7 +155,7 @@ export async function createRealStore(dataDir, { clock = CLOCK } = {}) {
     engine: 'off', clock, demo: false, port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev',
   };
   const secrets = createInstanceSecrets({ config, mode: 'real' });
-  const household = createHouseholdContext({ householdId, mode: 'real', db, config, platform, secrets });
+  const household = await createHouseholdContext({ householdId, mode: 'real', db, config, platform, secrets });
   CTX.set(db, { config, household, platform, seq: 0, householdId, platformFile: platformFileOf(dataDir) });
   return db;
 }
@@ -164,64 +164,64 @@ export async function createRealStore(dataDir, { clock = CLOCK } = {}) {
 export const householdOf = (db) => ctxOf(db).household;
 
 // Close a store built here and the platform handle its household context holds.
-export function closeRealStore(db) {
+export async function closeRealStore(db) {
   const c = CTX.get(db);
-  try { db.close(); } catch { /* already closed */ }
-  if (c) { try { c.platform.close(); } catch { /* already closed */ } }
+  try { await db.close(); } catch { /* already closed */ }
+  if (c) { try { await c.platform.close(); } catch { /* already closed */ } }
 }
 
-export const stampOf = (db) => `${getSetting(db, 'clock', CLOCK)}T09:00:00.000Z`;
+export const stampOf = async (db) => `${await getSetting(db, 'clock', CLOCK)}T09:00:00.000Z`;
 
-export function accountIdByMask(db, mask) {
-  const row = db.prepare('SELECT id FROM accounts WHERE mask = ?').get(mask);
+export async function accountIdByMask(db, mask) {
+  const row = await db.prepare('SELECT id FROM accounts WHERE mask = ?').get(mask);
   return row ? row.id : null;
 }
 
-export function accountIds(db) {
-  return Object.fromEntries(db.prepare('SELECT id, mask FROM accounts WHERE mask IS NOT NULL').all().map(r => [r.mask, r.id]));
+export async function accountIds(db) {
+  return Object.fromEntries((await db.prepare('SELECT id, mask FROM accounts WHERE mask IS NOT NULL').all()).map(r => [r.mask, r.id]));
 }
 
 const engineOf = (mode, responses = []) => {
   const inner = createEngine({ mode, responses: responses.map(rows => ({ text: JSON.stringify({ rows }) })) });
-  return { mode, isOn: () => mode !== 'off', call: req => inner.call(req), extract: req => inner.extract(req) };
+  return { mode, isOn: () => mode !== 'off', call: async req => await inner.call(req), extract: async req => inner.extract(req) };
 };
 
 // Answer every pending item of `kind` that `filter(item)` accepts; `option` is an option id or a
 // function of the item returning one (null skips it). Returns the answered ids.
-export function answerPending(db, kind, option, filter = () => true) {
+export async function answerPending(db, kind, option, filter = () => true) {
   const done = [];
-  for (const item of pendingItems(db)) {
+  for (const item of await pendingItems(db)) {
     if (item.kind !== kind || !filter(item)) continue;
-    const id = typeof option === 'function' ? option(item) : option;
+    const id = typeof option === 'function' ? await option(item) : option;
     if (id == null) continue;
-    answer(db, item.id, id, { now: stampOf(db) });
+    await answer(db, item.id, id, { now: await stampOf(db) });
     done.push(item.id);
   }
   return done;
 }
 
 // Account answers from hints ('<inst>|<mask>' -> {kind, owner}), matched by mask.
-function answerAccounts(db, hints) {
+async function answerAccounts(db, hints) {
   const byMask = new Map(Object.entries(hints).map(([k, h]) => [k.split('|')[1], h]));
-  const hintOf = (accountId) => {
-    const row = db.prepare('SELECT mask FROM accounts WHERE id = ?').get(accountId);
+  const hintOf = async (accountId) => {
+    const row = await db.prepare('SELECT mask FROM accounts WHERE id = ?').get(accountId);
     return row && row.mask ? byMask.get(row.mask) ?? null : null;
   };
-  answerPending(db, 'account_kind', item => hintOf(item.subject)?.kind ?? null);
-  answerPending(db, 'account_owner', item => hintOf(item.subject)?.owner ?? null);
+  await answerPending(db, 'account_kind', async item => (await hintOf(item.subject))?.kind ?? null);
+  await answerPending(db, 'account_owner', async item => (await hintOf(item.subject))?.owner ?? null);
 }
 
 // Ingest one CSV or workbook file through the pipeline with the off engine. answers (optional):
 // {hints, taxYear: 'tax_year' | 'payment_year' | null}. Throws when ingest does not import it.
 export async function addFile(db, file, { answers = {} } = {}) {
   const c = ctxOf(db);
-  if (file.proposalRows) for (const row of file.proposalRows.filter(r => r.target === 'pnl')) db.prepare('INSERT OR IGNORE INTO entity_aliases(alias,entity,created_at) VALUES (?,?,?)').run(row.fields.entity.toLowerCase().replace(/[^a-z0-9]/g, ''), row.fields.entity, stampOf(db));
+  if (file.proposalRows) for (const row of file.proposalRows.filter(r => r.target === 'pnl')) await db.prepare('INSERT OR IGNORE INTO entity_aliases(alias,entity,created_at) VALUES (?,?,?)').run(row.fields.entity.toLowerCase().replace(/[^a-z0-9]/g, ''), row.fields.entity, await stampOf(db));
   const out = file.proposalRows
-    ? await importProposedRows({ db, ...c }, file.proposalRows, { name: file.name, now: stampOf(db) })
-    : await ingestFile(db, file, { actorId: 'actor-synthetic', engine: engineOf('off'), config: c.config, household: c.household, now: stampOf(db) });
+    ? await importProposedRows({ db, ...c }, file.proposalRows, { name: file.name, now: await stampOf(db) })
+    : await ingestFile(db, file, { actorId: 'actor-synthetic', engine: engineOf('off'), config: c.config, household: c.household, now: await stampOf(db) });
   if (out.status !== 'imported') throw new Error(`synthetic file ${file.name} was not imported (${out.status})`);
-  if (answers.hints) answerAccounts(db, answers.hints);
-  if (answers.taxYear) answerPending(db, 'tax_year', answers.taxYear);
+  if (answers.hints) await answerAccounts(db, answers.hints);
+  if (answers.taxYear) await answerPending(db, 'tax_year', answers.taxYear);
   return out;
 }
 
@@ -240,19 +240,19 @@ export async function addPayroll(db, entry) {
   const c = ctxOf(db);
   const { docType, fields } = entry;
   c.seq += 1;
-  const out = await importProposedRows({ db, ...c }, [{ target: 'document', docType, fields }], { name: `synthetic-${docType}-${c.seq}.xlsx`, marker: `Synthetic source ${c.seq}`, now: stampOf(db) });
+  const out = await importProposedRows({ db, ...c }, [{ target: 'document', docType, fields }], { name: `synthetic-${docType}-${c.seq}.xlsx`, marker: `Synthetic source ${c.seq}`, now: await stampOf(db) });
   if (out.status !== 'imported') throw new Error(`synthetic ${docType} was not imported (${out.status})`);
   const employer = fields.employerName;
   const key = employer !== undefined ? nameKey(employer) : null;
-  if (entry.relation && key) answerPending(db, 'employer_relation', entry.relation, i => i.subject === key);
-  if (entry.recipient && key) answerPending(db, 'employer_recipient', entry.recipient, i => i.subject === key);
-  if (entry.document) answerPending(db, 'document_recipient', entry.document, i => String(i.subject).endsWith(`:doc:${out.fileId}`));
+  if (entry.relation && key) await answerPending(db, 'employer_relation', entry.relation, i => i.subject === key);
+  if (entry.recipient && key) await answerPending(db, 'employer_recipient', entry.recipient, i => i.subject === key);
+  if (entry.document) await answerPending(db, 'document_recipient', entry.document, i => String(i.subject).endsWith(`:doc:${out.fileId}`));
   if (entry.conflict) {
-    const jurisdictionOf = (item) => {
-      const row = db.prepare('SELECT jurisdiction FROM tax_payments WHERE id = ?').get(item.context.second?.id);
+    const jurisdictionOf = async (item) => {
+      const row = await db.prepare('SELECT jurisdiction FROM tax_payments WHERE id = ?').get(item.context.second?.id);
       return row ? row.jurisdiction : null;
     };
-    answerPending(db, 'withholding_conflict', item => (typeof entry.conflict === 'string' ? entry.conflict : entry.conflict[jurisdictionOf(item)] ?? null),
+    await answerPending(db, 'withholding_conflict', async item => (typeof entry.conflict === 'string' ? entry.conflict : entry.conflict[await jurisdictionOf(item)] ?? null),
       item => item.fileId === out.fileId);
   }
   return out;
@@ -283,21 +283,21 @@ export const w2Doc = ({ person, relation, taxYear = TAX_YEAR, ...fields }) =>
 export const paystubDoc = ({ person, relation, ...fields }) =>
   ({ docType: 'paystub', fields: { federalWithholding: 0, ...fields }, ...(person ? { recipient: person } : {}), ...(relation ? { relation } : {}) });
 
-export function addFact(db, key, value, { src = 'you', confirmed = true, asOf = null } = {}) {
-  db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
+export async function addFact(db, key, value, { src = 'you', confirmed = true, asOf = null } = {}) {
+  await db.prepare(`INSERT INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
               VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, ?)
               ON CONFLICT(key) DO UPDATE SET value = excluded.value, src = excluded.src, as_of = excluded.as_of,
                 confirmed = excluded.confirmed, file_id = NULL, parser = NULL, locator = NULL, updated_at = excluded.updated_at`)
     .run(key, JSON.stringify(value), src, asOf, confirmed ? 1 : 0, new Date().toISOString());
 }
 
-export function removeFact(db, key) {
-  db.prepare('DELETE FROM facts WHERE key = ?').run(key);
+export async function removeFact(db, key) {
+  await db.prepare('DELETE FROM facts WHERE key = ?').run(key);
 }
 
 // The stored value of a fact, or undefined.
-export function factValue(db, key) {
-  const r = db.prepare('SELECT value FROM facts WHERE key = ?').get(key);
+export async function factValue(db, key) {
+  const r = await db.prepare('SELECT value FROM facts WHERE key = ?').get(key);
   return r ? parseStored(r.value, null) : undefined;
 }
 
@@ -441,10 +441,10 @@ export async function buildRealStore(dataDir, { clock = CLOCK, variant = {} } = 
   if (variant.priorReturn !== false) await addPayroll(db, priorReturn(typeof variant.priorReturn === 'object' ? variant.priorReturn : {}));
   for (const entry of variant.payroll || []) await addPayroll(db, entry);
 
-  const collegeId = accountIdByMask(db, MASKS.college);
+  const collegeId = await accountIdByMask(db, MASKS.college);
   const businessEntity = {};
   for (const [k, h] of Object.entries(hints)) {
-    const id = h && h.entity ? accountIdByMask(db, k.split('|')[1]) : null;
+    const id = h && h.entity ? await accountIdByMask(db, k.split('|')[1]) : null;
     if (id) businessEntity[id] = h.entity;
   }
   const listed = entities.filter(e => e.doc !== false).map(e => ({ name: e.name, type: e.type, owner: e.owner, ...(typeof e.sstb === 'boolean' ? { sstb: e.sstb } : {}) }));
@@ -458,7 +458,7 @@ export async function buildRealStore(dataDir, { clock = CLOCK, variant = {} } = 
   };
   for (const [key, value] of Object.entries(facts)) {
     if (value === undefined) continue;
-    addFact(db, key, value);
+    await addFact(db, key, value);
   }
   return db;
 }
@@ -480,56 +480,56 @@ export function scratch(prefix = 'fathom-planner-') {
     dir() { const d = mkdtempSync(join(tmpdir(), prefix)); dirs.push(d); return d; },
     track(db) { dbs.push(db); return db; },
     async store(opts) { const d = this.dir(); return this.track(await buildRealStore(d, opts)); },
-    cleanup() {
-      for (const db of dbs) closeRealStore(db);
+    async cleanup() {
+      for (const db of dbs) await closeRealStore(db);
       for (const d of dirs) rmSync(d, { recursive: true, force: true });
     },
   };
 }
 
-export function figureRow(db, key) {
-  const r = db.prepare('SELECT * FROM figures WHERE key = ?').get(key);
+export async function figureRow(db, key) {
+  const r = await db.prepare('SELECT * FROM figures WHERE key = ?').get(key);
   return r ? { ...r, locator: parseJson(r.locator, null) } : null;
 }
 
-export function plannerFigures(db) {
-  return db.prepare("SELECT * FROM figures WHERE parser = 'planner' ORDER BY key").all().map(r => ({ ...r, locator: parseJson(r.locator, null) }));
+export async function plannerFigures(db) {
+  return (await db.prepare("SELECT * FROM figures WHERE parser = 'planner' ORDER BY key").all()).map(r => ({ ...r, locator: parseJson(r.locator, null) }));
 }
 
-export function factRow(db, key) {
-  const r = db.prepare('SELECT * FROM facts WHERE key = ?').get(key);
+export async function factRow(db, key) {
+  const r = await db.prepare('SELECT * FROM facts WHERE key = ?').get(key);
   return r ? { ...r, value: parseJson(r.value, null), locator: parseJson(r.locator, null) } : null;
 }
 
-export function recRow(db, id) {
-  const r = db.prepare('SELECT * FROM recs WHERE id = ?').get(id);
+export async function recRow(db, id) {
+  const r = await db.prepare('SELECT * FROM recs WHERE id = ?').get(id);
   return r ? { ...r, def: parseJson(r.def, {}), tasks_done: parseJson(r.tasks_done, []) } : null;
 }
 
-export function plannerRec(db, id) {
-  const r = db.prepare('SELECT * FROM planner_recs WHERE rec_id = ?').get(id);
+export async function plannerRec(db, id) {
+  const r = await db.prepare('SELECT * FROM planner_recs WHERE rec_id = ?').get(id);
   return r ? { ...r } : null;
 }
 
 // Planner-owned recs not retired, sorted by id.
-export function activeRecIds(db) {
-  return db.prepare('SELECT rec_id FROM planner_recs WHERE retired_at IS NULL ORDER BY rec_id').all().map(r => r.rec_id);
+export async function activeRecIds(db) {
+  return (await db.prepare('SELECT rec_id FROM planner_recs WHERE retired_at IS NULL ORDER BY rec_id').all()).map(r => r.rec_id);
 }
 
-export function recEvents(db, id) {
-  return db.prepare('SELECT * FROM rec_events WHERE rec_id = ? ORDER BY id').all(id).map(r => ({ ...r }));
+export async function recEvents(db, id) {
+  return (await db.prepare('SELECT * FROM rec_events WHERE rec_id = ? ORDER BY id').all(id)).map(r => ({ ...r }));
 }
 
-export function contentValue(db, key) {
-  const r = db.prepare('SELECT value FROM content WHERE key = ?').get(key);
+export async function contentValue(db, key) {
+  const r = await db.prepare('SELECT value FROM content WHERE key = ?').get(key);
   return r ? parseJson(r.value, null) : undefined;
 }
 
 // Logical dump of the named tables: rows as sorted JSON strings, with `omit` columns removed.
-export function dumpTables(db, tables, { omit = [] } = {}) {
+export async function dumpTables(db, tables, { omit = [] } = {}) {
   const out = {};
   for (const t of tables) {
-    out[t] = db.prepare(`SELECT * FROM "${t}"`).all().map(r => {
+    out[t] = (await db.prepare(`SELECT * FROM "${t}"`).all()).map(r => {
       const row = { ...r };
       for (const c of omit) delete row[c];
       return JSON.stringify(row);

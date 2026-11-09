@@ -14,15 +14,15 @@ const read = { name: 'transactions', args: { operation: 'search', limit: 3 } };
 const source = { tool: read.name, args: read.args, path: 'rows' };
 const table = { operation: 'table', source, columns: ['date', 'amount'] };
 async function answer(t, scripts) {
-  const s = await tempDb(); seedDemo(s.db);
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
-  const runtime = createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' }) });
+  const s = await tempDb(); await seedDemo(s.db);
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  const runtime = await createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' }) });
   const results = [];
   const engine = { mode: 'fake', isOn: () => true, async call(request) {
     const result = await runtime.call({ ...request, fake: scripts.shift() }); results.push(result); return result;
   } };
   const reply = await createLiveAnswerer({ engine, root: s.dataDir, services: { engine, config: { dataDir: s.dataDir } } }).answer({ db: s.db, key: 'ask:0123456789ab', text: 'Show recent spending.' });
-  return { reply, results, scenario: buildScenario(s.db) };
+  return { reply, results, scenario: await buildScenario(s.db) };
 }
 
 test('real reads build and place a table, remove markers and retain dropped notes', async t => {
@@ -77,8 +77,8 @@ test('four blocks per answer, including engine tool rounds', async t => {
   assert.equal(reply.provenance.blockNotes[0].reason, 'too_many');
 });
 
-test('block markers do not count as figures and stream as placeholders', () => {
-  assert.equal(groundAnswer('Recent spending.\n\n{b:b1}', { scenario: { figures: {} } }).ok, true);
+test('block markers do not count as figures and stream as placeholders', async () => {
+  assert.equal((await groundAnswer('Recent spending.\n\n{b:b1}', { scenario: { figures: {} } })).ok, true);
   const html = streamHtml('Recent spending.\n\n{b:b1}');
   assert.match(html, /Chart being prepared/); assert.doesNotMatch(html, /\{b:|Checking this number/);
   assert.ok(getTool('show').operations.every(o => !o.referenceable));

@@ -26,7 +26,7 @@ before(async () => {
 
 async function withStore(fn) {
   const s = await realStore();
-  try { return await fn(s); } finally { s.close(); }
+  try { return await fn(s); } finally { await s.close(); }
 }
 
 // aggregator.csv (last data 2032-03-01) and positions.csv (as of 2032-03-05) in a real store.
@@ -34,8 +34,8 @@ async function seeded(s) {
   const off = await offEngine();
   await P.ingestFile(s.db, fixture('aggregator.csv', 'text/csv'), s.opts(off));
   await P.ingestFile(s.db, fixture('positions.csv', 'text/csv'), s.opts(off));
-  const cash = one(s.db, "SELECT * FROM accounts WHERE mask = '7766'");
-  const invest = one(s.db, "SELECT * FROM accounts WHERE mask = '5544'");
+  const cash = await one(s.db, "SELECT * FROM accounts WHERE mask = '7766'");
+  const invest = await one(s.db, "SELECT * FROM accounts WHERE mask = '5544'");
   return { cash, invest };
 }
 
@@ -84,24 +84,24 @@ describe('freshnessOf', () => {
 });
 
 describe('recordSource', () => {
-  test('keeps the latest as_of and always updates last_ingest_at', () => withStore(async (s) => {
+  test('keeps the latest as_of and always updates last_ingest_at', async () => withStore(async (s) => {
     const id = 'ing:test-source:all';
-    FR.recordSource(s.db, { id, label: 'Synthetic source', kind: 'bank_csv', asOf: '2032-03-01', now: '2032-03-02T00:00:00.000Z' });
-    let row = one(s.db, 'SELECT * FROM sources WHERE id = ?', id);
+    await FR.recordSource(s.db, { id, label: 'Synthetic source', kind: 'bank_csv', asOf: '2032-03-01', now: '2032-03-02T00:00:00.000Z' });
+    let row = await one(s.db, 'SELECT * FROM sources WHERE id = ?', id);
     assert.deepEqual([row.as_of, row.kind, row.label, row.last_ingest_at], ['2032-03-01', 'bank_csv', 'Synthetic source', '2032-03-02T00:00:00.000Z']);
-    FR.recordSource(s.db, { id, label: 'Synthetic source', kind: 'bank_csv', asOf: '2032-02-01', now: '2032-03-05T00:00:00.000Z' });
-    row = one(s.db, 'SELECT * FROM sources WHERE id = ?', id);
+    await FR.recordSource(s.db, { id, label: 'Synthetic source', kind: 'bank_csv', asOf: '2032-02-01', now: '2032-03-05T00:00:00.000Z' });
+    row = await one(s.db, 'SELECT * FROM sources WHERE id = ?', id);
     assert.equal(row.as_of, '2032-03-01', 'an older export does not move as_of back');
     assert.equal(row.last_ingest_at, '2032-03-05T00:00:00.000Z');
-    FR.recordSource(s.db, { id, label: 'Synthetic source', kind: 'bank_csv', asOf: '2032-04-01', now: '2032-04-02T00:00:00.000Z' });
-    assert.equal(one(s.db, 'SELECT as_of FROM sources WHERE id = ?', id).as_of, '2032-04-01');
+    await FR.recordSource(s.db, { id, label: 'Synthetic source', kind: 'bank_csv', asOf: '2032-04-01', now: '2032-04-02T00:00:00.000Z' });
+    assert.equal((await one(s.db, 'SELECT as_of FROM sources WHERE id = ?', id)).as_of, '2032-04-01');
   }));
 });
 
 describe('ingest state and scenario', () => {
-  test('ingestState lists ingest sources with cadence, state, how-to and per-account freshness', () => withStore(async (s) => {
+  test('ingestState lists ingest sources with cadence, state, how-to and per-account freshness', async () => withStore(async (s) => {
     const { cash, invest } = await seeded(s);
-    const st = FR.ingestState(s.db, { clock: '2032-03-10' });
+    const st = (await FR.ingestState(s.db, { clock: '2032-03-10' }));
     assert.equal(st.sources.length, 2);
     const agg = st.sources.find((x) => x.kind === 'aggregator_csv');
     const pos = st.sources.find((x) => x.kind === 'brokerage_positions');
@@ -120,16 +120,16 @@ describe('ingest state and scenario', () => {
     assert.deepEqual(st.accounts[cash.id], { asOf: '2032-03-01', fresh: 'fresh', sourceId: agg.id });
     assert.deepEqual(st.accounts[invest.id], { asOf: '2032-03-05', fresh: 'fresh', sourceId: pos.id });
     assert.deepEqual(st.staleNotes, []);
-    assert.equal(st.pending, C.pendingItems(s.db).length);
+    assert.equal(st.pending, (await C.pendingItems(s.db)).length);
     assert.equal(st.items.length, st.pending);
     assert.equal(st.pending, 3, 'two owner questions and one kind question');
     assert.equal(st.files.length, 2);
     assert.equal(st.formats.length, 7);
   }));
 
-  test('buildScenario at a fresh clock: live.ingest, account asOf/fresh/sourceId, no domain notes', () => withStore(async (s) => {
+  test('buildScenario at a fresh clock: live.ingest, account asOf/fresh/sourceId, no domain notes', async () => withStore(async (s) => {
     const { cash } = await seeded(s);
-    const sc = B.buildScenario(s.db, { clock: '2032-03-10' });
+    const sc = (await B.buildScenario(s.db, { clock: '2032-03-10' }));
     assert.ok(sc.live.ingest, 'live.ingest present');
     assert.ok(sc.live.ingest.sources.every((x) => x.state === 'fresh'));
     const a = sc.accounts.find((x) => x.id === cash.id);
@@ -140,9 +140,9 @@ describe('ingest state and scenario', () => {
     assert.deepEqual(sc.domains, [], 'a real store with no domains gains none while sources are fresh');
   }));
 
-  test('buildScenario at a stale clock: stale sources and accounts, cash and invest domains created with notes', () => withStore(async (s) => {
+  test('buildScenario at a stale clock: stale sources and accounts, cash and invest domains created with notes', async () => withStore(async (s) => {
     const { cash, invest } = await seeded(s);
-    const sc = B.buildScenario(s.db, { clock: '2032-06-30' });
+    const sc = (await B.buildScenario(s.db, { clock: '2032-06-30' }));
     const agg = sc.live.ingest.sources.find((x) => x.kind === 'aggregator_csv');
     assert.equal(agg.state, 'stale');
     assert.equal(agg.ageDays, 121);
@@ -166,8 +166,8 @@ describe('ingest state and scenario', () => {
     const { seedDemo } = await src('demo/seed.mjs');
     const store = await tempDb();
     try {
-      seedDemo(store.db);
-      const sc = B.buildScenario(store.db);
+      await seedDemo(store.db);
+      const sc = (await B.buildScenario(store.db));
       assert.ok(sc.accounts.length > 0);
       for (const a of sc.accounts) {
         assert.equal(a.asOf, '');
@@ -175,12 +175,12 @@ describe('ingest state and scenario', () => {
         assert.equal(a.sourceId, null);
       }
       assert.deepEqual(sc.live.ingest.sources, []);
-      const seededPending = store.db.prepare("SELECT count(*) AS n FROM confirm_items WHERE status = 'pending'").get().n;
+      const seededPending = (await store.db.prepare("SELECT count(*) AS n FROM confirm_items WHERE status = 'pending'").get()).n;
       assert.equal(sc.live.ingest.pending, seededPending);
       assert.ok(seededPending > 0, 'the demo seeds pending confirm items');
-      assert.deepEqual(sc.domains, B.loadContent(store.db).domains, 'demo domains unchanged');
+      assert.deepEqual(sc.domains, (await B.loadContent(store.db)).domains, 'demo domains unchanged');
     } finally {
-      store.close();
+      await store.close();
     }
   });
 });
@@ -196,12 +196,12 @@ describe('stale to fresh', () => {
   const engineFor = (periodEnd, bal) => fakeEngine([[{ docType: 'statement', confidence: 0.9 }], [statement(periodEnd, bal)]]);
   const STALE_NOTE = /Export a fresh copy\./;
 
-  test('a stale statement source becomes fresh after a newer statement import', () => withStore(async (s) => {
+  test('a stale statement source becomes fresh after a newer statement import', async () => withStore(async (s) => {
     const first = await seedHistoricalDocument(s,pdf('march'), (await engineFor('2032-03-31',1500.25)).responses);
     assert.equal(first.status, 'imported');
-    const acct = one(s.db, "SELECT * FROM accounts WHERE mask = '4321'");
+    const acct = await one(s.db, "SELECT * FROM accounts WHERE mask = '4321'");
 
-    let sc = B.buildScenario(s.db, { clock: '2032-06-30' });
+    let sc = (await B.buildScenario(s.db, { clock: '2032-06-30' }));
     let src = sc.live.ingest.sources.filter((x) => x.kind === 'statement');
     assert.equal(src.length, 1);
     assert.equal(src[0].asOf, '2032-03-31');
@@ -214,7 +214,7 @@ describe('stale to fresh', () => {
 
     const second = await seedHistoricalDocument(s,pdf('june'), (await engineFor('2032-06-15',1600.5)).responses);
     assert.equal(second.status, 'imported');
-    sc = B.buildScenario(s.db, { clock: '2032-06-30' });
+    sc = (await B.buildScenario(s.db, { clock: '2032-06-30' }));
     src = sc.live.ingest.sources.filter((x) => x.kind === 'statement');
     assert.equal(src.length, 1, 'one statement source for the account');
     assert.equal(src[0].asOf, '2032-06-15');
@@ -230,13 +230,13 @@ describe('stale to fresh', () => {
 // Review finding F4: freshness is per account. One multi-account export whose newest row is
 // fresh must still put a stale account in front of the owner.
 describe('stale account inside a fresh multi-account export', () => {
-  const seedCashDomain = (db) => db.prepare('INSERT INTO content (key, value, src, updated_at) VALUES (?, ?, ?, ?)')
+  const seedCashDomain = async (db) => await db.prepare('INSERT INTO content (key, value, src, updated_at) VALUES (?, ?, ?, ?)')
     .run('domains', JSON.stringify([{ id: 'cash', name: 'Cash and reserves', status: 'covered', watching: '', note: 'Base note.' }]), 'test', NOW);
   const accountA = { account: 'Synthetic reserve', number: '5550003333' };
   const accountB = { account: 'Synthetic daily', number: '5550004444' };
 
-  test('A (last row in January) is stale, B (June) is fresh, and the cash note names A', () => withStore(async (s) => {
-    seedCashDomain(s.db);
+  test('A (last row in January) is stale, B (June) is fresh, and the cash note names A', async () => withStore(async (s) => {
+    await seedCashDomain(s.db);
     const r = await P.ingestFile(s.db, aggregatorFile('household-export.csv', [
       { ...accountA, date: '2032-01-05', amount: '15.00', description: 'Synthetic reserve fee' },
       { ...accountA, date: '2032-01-20', amount: '25.00', description: 'Synthetic reserve transfer' },
@@ -244,7 +244,7 @@ describe('stale account inside a fresh multi-account export', () => {
       { ...accountB, date: '2032-06-10', amount: '45.00', description: 'Synthetic utility' },
     ]), s.opts(await offEngine()));
     assert.equal(r.status, 'imported');
-    const sc = B.buildScenario(s.db, { clock: '2032-06-30' });
+    const sc = (await B.buildScenario(s.db, { clock: '2032-06-30' }));
     const a = sc.accounts.find((x) => x.sourceName === accountA.account);
     const b = sc.accounts.find((x) => x.sourceName === accountB.account);
     assert.deepEqual([a.asOf, a.fresh], ['2032-01-20', 'stale']);
@@ -257,13 +257,13 @@ describe('stale account inside a fresh multi-account export', () => {
     assert.ok(!cash.note.includes(accountB.account), 'the fresh account is not called stale');
   }));
 
-  test('counter-case: when every account in the export is fresh, no note is added', () => withStore(async (s) => {
-    seedCashDomain(s.db);
+  test('counter-case: when every account in the export is fresh, no note is added', async () => withStore(async (s) => {
+    await seedCashDomain(s.db);
     await P.ingestFile(s.db, aggregatorFile('household-export-june.csv', [
       { ...accountA, date: '2032-06-05', amount: '15.00', description: 'Synthetic reserve fee' },
       { ...accountB, date: '2032-06-10', amount: '45.00', description: 'Synthetic utility' },
     ]), s.opts(await offEngine()));
-    const sc = B.buildScenario(s.db, { clock: '2032-06-30' });
+    const sc = (await B.buildScenario(s.db, { clock: '2032-06-30' }));
     assert.ok(sc.accounts.filter((x) => x.sourceId).every((x) => x.fresh === 'fresh'));
     const cash = sc.domains.find((d) => d.id === 'cash');
     assert.deepEqual([cash.status, cash.note], ['covered', 'Base note.']);
@@ -338,7 +338,7 @@ describe('how to export', () => {
 
 // Review finding F6: the files list is limited, so a waiting file must also be listed in `waiting`.
 describe('waiting files', () => {
-  test('an old needs_mapping file stays in waiting after 50+ newer files; retryFile still works', () => withStore(async (s) => {
+  test('an old needs_mapping file stays in waiting after 50+ newer files; retryFile still works', async () => withStore(async (s) => {
     const off = await offEngine();
     const odd = await P.ingestFile(s.db, { name: 'odd.csv', bytes: new TextEncoder().encode('Zeta,Omega,Sigma\nq,w,e\nr,t,y\n'), mime: 'text/csv' }, s.opts(off));
     assert.equal(odd.status, 'waiting_for_engine');
@@ -346,7 +346,7 @@ describe('waiting files', () => {
       const r = await P.ingestFile(s.db, aggregatorFile(`export-${i}.csv`, [{ date: '2032-02-20', amount: 1000+i, description: `Synthetic row ${i}`, number: '44441111' }]), s.opts(off));
       assert.equal(r.status, 'imported', `file ${i}`);
     }
-    const st = FR.ingestState(s.db, { clock: '2032-03-10' });
+    const st = (await FR.ingestState(s.db, { clock: '2032-03-10' }));
     assert.ok(!st.files.some((f) => f.id === odd.fileId), 'older than the files limit');
     assert.ok(Array.isArray(st.waiting), 'waiting array present');
     const w = st.waiting.find((f) => f.id === odd.fileId);
@@ -355,31 +355,31 @@ describe('waiting files', () => {
     assert.equal(w.name, 'odd.csv');
     assert.equal(w.status, 'waiting_for_engine');
     assert.ok(st.waiting.every((f) => f.status === 'waiting_for_engine'));
-    const sc = B.buildScenario(s.db, { clock: '2032-03-10' });
+    const sc = (await B.buildScenario(s.db, { clock: '2032-03-10' }));
     assert.ok(sc.live.ingest.waiting.some((f) => f.id === odd.fileId), 'scenario carries the waiting file');
     const again = await P.retryFile(s.db, odd.fileId, s.opts(off));
     assert.equal(again.status, 'waiting_for_engine');
-    assert.ok(FR.ingestState(s.db, { clock: '2032-03-10' }).waiting.some((f) => f.id === odd.fileId));
+    assert.ok((await FR.ingestState(s.db, { clock: '2032-03-10' })).waiting.some((f) => f.id === odd.fileId));
   }));
 });
 
 // Newest stored row wins over an older file source. refreshFreshness is the function a merge or
 // undo calls when it does not itself rebuild the scenario.
 describe('freshness after import, sync and merge', () => {
-  test('an import sets data through from the imported rows', () => withStore(async (s) => {
+  test('an import sets data through from the imported rows', async () => withStore(async (s) => {
     await seeded(s);
-    const fresh = FR.refreshFreshness(s.db, { clock: '2032-03-10' });
+    const fresh = (await FR.refreshFreshness(s.db, { clock: '2032-03-10' }));
     assert.equal(fresh.dataThrough, '2032-03-05');
-    const sc = B.buildScenario(s.db, { clock: '2032-03-10' });
+    const sc = (await B.buildScenario(s.db, { clock: '2032-03-10' }));
     assert.equal(sc.meta.dataThrough, 'Mar 5, 2032');
     assert.equal(sc.pace.rollup.dataThrough, '2032-03-05');
   }));
 
-  test('a newer balance on a file account stays fresh after the file source date is rolled back, and a sync moves data through', () => withStore(async (s) => {
+  test('a newer balance on a file account stays fresh after the file source date is rolled back, and a sync moves data through', async () => withStore(async (s) => {
     const { cash } = await seeded(s);
-    s.db.prepare('UPDATE sources SET as_of = ? WHERE id = ?').run('2032-01-05', cash.source_id);
-    s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(cash.id, '2032-06-01', 10);
-    const merged = FR.refreshFreshness(s.db, { clock: '2032-06-15' });
+    await s.db.prepare('UPDATE sources SET as_of = ? WHERE id = ?').run('2032-01-05', cash.source_id);
+    await s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(cash.id, '2032-06-01', 10);
+    const merged = (await FR.refreshFreshness(s.db, { clock: '2032-06-15' }));
     assert.equal(merged.accounts[cash.id].asOf, '2032-06-01');
     assert.equal(merged.accounts[cash.id].fresh, 'fresh');
     assert.equal(merged.dataThrough, '2032-06-01');
@@ -390,27 +390,27 @@ describe('freshness after import, sync and merge', () => {
     await SF.connectSimplefin(s.db, SF.fakeToken(), opt);
     const sync = await SF.syncSimplefin(s.db, opt);
     assert.equal(sync.status, 'ok');
-    const after = FR.refreshFreshness(s.db, { clock: day });
+    const after = (await FR.refreshFreshness(s.db, { clock: day }));
     assert.equal(after.dataThrough, day);
-    const connected = s.db.prepare("SELECT id FROM accounts WHERE mirror = 'connected'").all();
+    const connected = await s.db.prepare("SELECT id FROM accounts WHERE mirror = 'connected'").all();
     assert.ok(connected.length > 0);
     for (const a of connected) assert.equal(after.accounts[a.id].fresh, 'fresh', a.id);
-    const sc = B.buildScenario(s.db, { clock: day });
+    const sc = (await B.buildScenario(s.db, { clock: day }));
     assert.equal(sc.meta.dataThrough, 'Jun 20, 2032');
     assert.equal(sc.pace.rollup.dataThrough, day);
   }));
 
-  test('a later tax payment or P&L month moves Home and Money together', () => withStore(async (s) => {
+  test('a later tax payment or P&L month moves Home and Money together', async () => withStore(async (s) => {
     const { cash } = await seeded(s);
-    s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(cash.id, '2032-06-01', 10);
-    s.db.prepare(`INSERT INTO content (key, value, src, updated_at) VALUES ('meta', ?, 'test', ?)`)
+    await s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(cash.id, '2032-06-01', 10);
+    await s.db.prepare(`INSERT INTO content (key, value, src, updated_at) VALUES ('meta', ?, 'test', ?)`)
       .run(JSON.stringify({ product: 'Fathom', household: '', dataThrough: 'Jun 20, 2032' }), NOW);
-    s.db.prepare(`INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind) VALUES ('US', 2032, '2032-06-20', 100, 'estimated')`).run();
-    const tax = B.buildScenario(s.db, { clock: '2032-06-30' });
+    await s.db.prepare(`INSERT INTO tax_payments (jurisdiction, tax_year, date, amount, kind) VALUES ('US', 2032, '2032-06-20', 100, 'estimated')`).run();
+    const tax = (await B.buildScenario(s.db, { clock: '2032-06-30' }));
     assert.equal(tax.meta.dataThrough, 'Jun 20, 2032');
     assert.equal(tax.pace.rollup.dataThrough, '2032-06-20');
-    s.db.prepare(`INSERT INTO pnl_lines (entity, period, category, amount) VALUES ('Synthetic Co', '2032-06', 'revenue', 50)`).run();
-    const pnl = B.buildScenario(s.db, { clock: '2032-06-30' });
+    await s.db.prepare(`INSERT INTO pnl_lines (entity, period, category, amount) VALUES ('Synthetic Co', '2032-06', 'revenue', 50)`).run();
+    const pnl = (await B.buildScenario(s.db, { clock: '2032-06-30' }));
     assert.equal(pnl.meta.dataThrough, 'Jun 30, 2032');
     assert.equal(pnl.pace.rollup.dataThrough, '2032-06-30');
   }));

@@ -13,7 +13,7 @@ import * as recSteps from '../web/horizon/screens/rec-steps.js';
 import demoScenario from '../demo/scenario.mjs';
 
 const s = scratch('fathom-steps-');
-after(() => s.cleanup());
+after(async () => await s.cleanup());
 const LATE = '2026-12-28';
 const accounts = [{ id: 'stable-college', kind: '529', name: 'manual', mask: '3333', display_name: 'College fund' }];
 const context = extra => ({ clock: '2026-11-05', year: 2026, facts: {}, owner: {}, fig: {}, names: {}, model: {}, data: { accounts }, packs: [], packStatus: {}, warnings: [], freshness: [], info: { blocked: [], confirm: {} }, ...extra });
@@ -44,22 +44,22 @@ test('a verifiable step clears itself once its fact lands, with no checkbox stat
 test('an upload step completes itself when the file lands and stays listed as done', async () => {
   const db = await s.store();
   await planRun(db, { now: LATE });
-  let rec = missingOf(buildScenario(db, { clock: LATE }));
+  let rec = missingOf(await buildScenario(db, { clock: LATE }));
   assert.ok(rec, 'stale sources raise the missing-data rec');
   const balances = rec.tasks.find(t => t.code?.startsWith('balances:'));
   const code = balances?.code;
   assert.ok(balances && balances.kind === 'upload' && balances.auto && !balances.done, JSON.stringify(rec.tasks));
   const i = rec.tasks.indexOf(balances);
-  assert.throws(() => writeRec(db, 'missing-data', 'step', { index: i, checked: true }, { now: LATE }), /completes itself/);
+  await assert.rejects(async () => await writeRec(db, 'missing-data', 'step', { index: i, checked: true }, { now: LATE }), /completes itself/);
   // Updating another institution cannot clear this institution's upload step.
-  db.prepare('INSERT INTO balances(account_id,date,amount) SELECT id,?,100 FROM accounts WHERE inst IS NOT (SELECT inst FROM accounts WHERE id=?) LIMIT 1').run('2026-12-27', balances.accountIds[0]);
+  await db.prepare('INSERT INTO balances(account_id,date,amount) SELECT id,?,100 FROM accounts WHERE inst IS NOT (SELECT inst FROM accounts WHERE id=?) LIMIT 1').run('2026-12-27', balances.accountIds[0]);
   await planRun(db, { now: LATE });
-  rec = missingOf(buildScenario(db, { clock: LATE }));
+  rec = missingOf(await buildScenario(db, { clock: LATE }));
   assert.ok(rec, 'other sources are still stale');
   assert.equal(rec.tasks.find(t => t.code === code).done, false);
-  db.prepare("INSERT INTO balances (account_id, date, amount) SELECT id, '2026-12-27', 100 FROM accounts WHERE archived_at IS NULL ON CONFLICT(account_id, date) DO NOTHING").run();
+  await db.prepare("INSERT INTO balances (account_id, date, amount) SELECT id, '2026-12-27', 100 FROM accounts WHERE archived_at IS NULL ON CONFLICT(account_id, date) DO NOTHING").run();
   await planRun(db, { now: LATE });
-  rec = missingOf(buildScenario(db, { clock: LATE }));
+  rec = missingOf(await buildScenario(db, { clock: LATE }));
   const after = rec.tasks.find(t => t.code === code);
   assert.ok(after, 'the cleared step is still listed');
   assert.equal(after.done, true);
@@ -70,19 +70,19 @@ test('an upload step completes itself when the file lands and stays listed as do
 test('an unobservable step is one "I did this" with its time and actor, and Undo reverses it', async () => {
   const db = await s.store();
   await planRun(db);
-  const id = buildScenario(db).recs.find(r => r.tasks?.some(t => !isVerifiable(t)) && !r.question?.primary).id;
+  const id = (await buildScenario(db)).recs.find(r => r.tasks?.some(t => !isVerifiable(t)) && !r.question?.primary).id;
   const ctx = body => ({ db, config: { clock: '2026-11-05' }, params: { id }, body, identity: { id: 'member-a' } });
-  let rec = buildScenario(db).recs.find(r => r.id === id);
+  let rec = (await buildScenario(db)).recs.find(r => r.id === id);
   const i = rec.tasks.findIndex(t => t.kind === 'manual');
   assert.equal(rec.tasks[i].done, false);
-  rec = recAction(ctx({ action: 'task', arg: i })).scenario.recs.find(r => r.id === id);
+  rec = (await recAction(ctx({ action: 'task', arg: i }))).scenario.recs.find(r => r.id === id);
   assert.equal(rec.tasks[i].done, true);
   assert.equal(rec.tasks[i].doneBy, 'member-a', 'the signed-in member is recorded as the actor');
   assert.match(rec.tasks[i].doneAt, /^\d{4}-\d{2}-\d{2}T/);
-  rec = recAction(ctx({ action: 'task', arg: i })).scenario.recs.find(r => r.id === id);
+  rec = (await recAction(ctx({ action: 'task', arg: i }))).scenario.recs.find(r => r.id === id);
   assert.equal(rec.tasks[i].done, false);
   assert.equal(rec.tasks[i].doneAt, undefined);
-  const events = db.prepare("SELECT action, arg, actor FROM rec_events WHERE rec_id = ? AND action LIKE 'step_%' ORDER BY id").all(id);
+  const events = await db.prepare("SELECT action, arg, actor FROM rec_events WHERE rec_id = ? AND action LIKE 'step_%' ORDER BY id").all(id);
   assert.deepEqual(events.map(e => e.action), ['step_did', 'step_undo']);
   assert.deepEqual(events.map(e => e.actor), ['member-a', 'member-a']);
   assert.equal(events[0].arg, rec.tasks[i].t);
@@ -101,7 +101,7 @@ test('no rec renders a free checkbox: open steps carry a control, done ones say 
   recSteps.bind(kit);
   const db = await s.store();
   await planRun(db, { now: LATE });
-  const recs = [...buildScenario(db, { clock: LATE }).recs, ...demoScenario.recs.map(r => ({ ...r, tasks: deriveSteps(r.tasks || [], (r.tasks || []).map(t => !!t.done), {}) }))];
+  const recs = [...(await buildScenario(db, { clock: LATE })).recs, ...demoScenario.recs.map(r => ({ ...r, tasks: deriveSteps(r.tasks || [], (r.tasks || []).map(t => !!t.done), {}) }))];
   assert.ok(recs.some(r => r.id === 'missing-data'));
   for (const r of recs) {
     const html = recSteps.html(r);

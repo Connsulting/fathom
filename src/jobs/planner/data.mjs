@@ -20,6 +20,7 @@ import { resolveCategories } from '../../categories/resolve.mjs';
 import { staleAccountIds } from '../../../web/core/account-freshness.js';
 import { connectedThrough, sourceStates } from '../../ingest/coverage.mjs';
 import { OWNER_OPTIONS, normalizeName } from '../../ingest/confirm.mjs';
+import { mapSeries } from '../../shared/series.mjs';
 
 export const SUPPORTED_TAX_YEARS = Object.freeze([2026]);
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -89,54 +90,54 @@ export function ownerOf(value) {
 const CONFIRM_KINDS = ['employer_recipient', 'document_recipient', 'withholding_conflict', 'employer_relation', 'tax_year', 'fact_check', 'account_owner'];
 
 // An owner fact's value (any src but the planner's own), or undefined.
-function ownerFact(db, key) {
-  const row = db.prepare("SELECT value FROM facts WHERE key = ? AND (src IS NULL OR src != 'planner')").get(key);
+async function ownerFact(db, key) {
+  const row = await db.prepare("SELECT value FROM facts WHERE key = ? AND (src IS NULL OR src != 'planner')").get(key);
   return row ? parseJson(row.value, undefined) : undefined;
 }
 
-export function loadPlanningData(db, clock) {
+export async function loadPlanningData(db, clock) {
   const taxYear = planningYear(clock);
   const year = taxYear ?? yearOf(clock);
   const lastPeriod = yearOf(clock) === year ? clock.slice(0, 7) : `${year}-12`;
 
-  const pnl = db.prepare('SELECT * FROM pnl_lines WHERE period >= ? AND period <= ? ORDER BY id').all(`${year}-01`, lastPeriod).map(r => ({ ...r }));
-  const pnlHistory = db.prepare('SELECT * FROM pnl_lines WHERE period <= ? ORDER BY id').all(lastPeriod).map(r => ({ ...r }));
+  const pnl = (await db.prepare('SELECT * FROM pnl_lines WHERE period >= ? AND period <= ? ORDER BY id').all(`${year}-01`, lastPeriod)).map(r => ({ ...r }));
+  const pnlHistory = (await db.prepare('SELECT * FROM pnl_lines WHERE period <= ? ORDER BY id').all(lastPeriod)).map(r => ({ ...r }));
   // A business account's entity: the owner's accounts.businessEntity answer, else the household's
   // only business when there is exactly one.
-  const named = ownerFact(db, 'accounts.businessEntity');
+  const named = await ownerFact(db, 'accounts.businessEntity');
   const byAccount = named && typeof named === 'object' && !Array.isArray(named) ? named : {};
-  const listed = ownerFact(db, 'business.entities');
-  const ledgerFacts = { 'pnl.ledgers': ownerFact(db, 'pnl.ledgers'), 'business.entities': listed };
+  const listed = await ownerFact(db, 'business.entities');
+  const ledgerFacts = { 'pnl.ledgers': await ownerFact(db, 'pnl.ledgers'), 'business.entities': listed };
   const businessNames = [...new Map((Array.isArray(listed) ? listed.filter(e => e && (!e.inferred || e.nameSource === 'owner')).map(e => e.name) : [])
     .filter(n => typeof n === 'string' && normalizeName(n) && !['spending', 'inactive', 'income_history'].includes(ledgerKind(ledgerFacts, n, pnlHistory.filter(l => sameName(l.entity, n))))).map(n => [normalizeName(n), n.trim()])).values()];
-  const householdNames = parseJson(db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get()?.value, {}) || {};
-  const holders = new Map(db.prepare('SELECT account_id, holder FROM account_holders').all().map((r) => [r.account_id, r.holder]));
-  const naming = accountNaming(db);
-  const accountStates = sourceStates(db, clock).accounts;
-  const accounts = db.prepare('SELECT * FROM accounts WHERE archived_at IS NULL ORDER BY sort, id').all().map(a => {
+  const householdNames = parseJson((await db.prepare("SELECT value FROM facts WHERE key = 'household.names'").get())?.value, {}) || {};
+  const holders = new Map((await db.prepare('SELECT account_id, holder FROM account_holders').all()).map((r) => [r.account_id, r.holder]));
+  const naming = await accountNaming(db);
+  const accountStates = (await sourceStates(db, clock)).accounts;
+  const accounts = await mapSeries((await db.prepare('SELECT * FROM accounts WHERE archived_at IS NULL ORDER BY sort, id').all()), async a => {
     const kind = String(a.kind || '').toLowerCase();
     const stated = typeof byAccount[a.id] === 'string' && byAccount[a.id].trim() ? byAccount[a.id].trim() : null;
     return {
       id: a.id, inst: a.inst, mask: a.mask, name: a.name || '', display_name: a.display_name || null,
       holder: holders.get(a.id) || null, householdNames, ...naming.hint(a.id), owner: ownerOf(a.owner), kind,
       fileId: a.file_id, entity: stated ?? a.entity ?? (kind === 'business' && businessNames.length === 1 ? businessNames[0] : null),
-      latest: latestBalance(db, a.id, clock), fresh: accountStates.get(a.id)?.state ?? 'unknown',
+      latest: await latestBalance(db, a.id, clock), fresh: accountStates.get(a.id)?.state ?? 'unknown',
     };
   });
 
-  const taxPayments = db.prepare('SELECT * FROM tax_payments WHERE tax_year = ? ORDER BY id').all(year).map(r => ({ ...r }));
-  const taxPaymentsNext = db.prepare('SELECT * FROM tax_payments WHERE tax_year = ? ORDER BY id').all(year + 1).map(r => ({ ...r }));
-  const withholding = db.prepare("SELECT id, file_id, payer, recipient, jurisdiction, tax_year FROM tax_payments WHERE kind = 'withholding' ORDER BY id").all().map(r => ({ ...r }));
-  const confirm = db.prepare(`SELECT id, kind, subject, status, answer, context, file_id FROM confirm_items WHERE kind IN (${CONFIRM_KINDS.map(() => '?').join(', ')}) ORDER BY id`)
-    .all(...CONFIRM_KINDS).map(r => ({ id: r.id, kind: r.kind, subject: r.subject, status: r.status, answer: r.answer ?? null, context: parseJson(r.context, {}) || {}, fileId: r.file_id ?? null }));
-  const conflictArchive = db.prepare("SELECT id, file_id, superseded_by, row FROM superseded_rows WHERE table_name = 'tax_payments' AND reason = 'withholding_conflict' ORDER BY id")
-    .all().map(r => ({ id: r.id, fileId: r.file_id ?? null, supersededBy: r.superseded_by ?? null, row: parseJson(r.row, {}) || {} }));
-  const aliases = db.prepare('SELECT alias, entity FROM entity_aliases ORDER BY alias').all().map(r => ({ alias: r.alias, entity: r.entity }));
-  const documents = db.prepare('SELECT * FROM documents ORDER BY id').all().map(d => ({
+  const taxPayments = (await db.prepare('SELECT * FROM tax_payments WHERE tax_year = ? ORDER BY id').all(year)).map(r => ({ ...r }));
+  const taxPaymentsNext = (await db.prepare('SELECT * FROM tax_payments WHERE tax_year = ? ORDER BY id').all(year + 1)).map(r => ({ ...r }));
+  const withholding = (await db.prepare("SELECT id, file_id, payer, recipient, jurisdiction, tax_year FROM tax_payments WHERE kind = 'withholding' ORDER BY id").all()).map(r => ({ ...r }));
+  const confirm = (await db.prepare(`SELECT id, kind, subject, status, answer, context, file_id FROM confirm_items WHERE kind IN (${CONFIRM_KINDS.map(() => '?').join(', ')}) ORDER BY id`)
+    .all(...CONFIRM_KINDS)).map(r => ({ id: r.id, kind: r.kind, subject: r.subject, status: r.status, answer: r.answer ?? null, context: parseJson(r.context, {}) || {}, fileId: r.file_id ?? null }));
+  const conflictArchive = (await db.prepare("SELECT id, file_id, superseded_by, row FROM superseded_rows WHERE table_name = 'tax_payments' AND reason = 'withholding_conflict' ORDER BY id")
+    .all()).map(r => ({ id: r.id, fileId: r.file_id ?? null, supersededBy: r.superseded_by ?? null, row: parseJson(r.row, {}) || {} }));
+  const aliases = (await db.prepare('SELECT alias, entity FROM entity_aliases ORDER BY alias').all()).map(r => ({ alias: r.alias, entity: r.entity }));
+  const documents = (await db.prepare('SELECT * FROM documents ORDER BY id').all()).map(d => ({
     id: d.id, docType: String(d.doc_type || '').toLowerCase(), taxYear: d.tax_year, fields: parseJson(d.fields, {}) || {}, fileId: d.file_id,
   }));
-  const transactions = db.prepare('SELECT * FROM transactions WHERE date > ? AND date <= ? ORDER BY id').all(addDays(clock, -400), clock).map(r => ({ ...r }));
-  const categoryInput = loadCategoryInputs(db);
+  const transactions = (await db.prepare('SELECT * FROM transactions WHERE date > ? AND date <= ? ORDER BY id').all(addDays(clock, -400), clock)).map(r => ({ ...r }));
+  const categoryInput = await loadCategoryInputs(db);
   categoryInput.transactions = categoryInput.transactions.filter(t => t.date <= clock);
   const categories = resolveCategories(categoryInput);
   const businessActivity = accounts.filter(a => a.kind === 'business').map(account => ({ accountId: account.id,
@@ -145,20 +146,20 @@ export function loadPlanningData(db, clock) {
       return entry ? [{ ...t, section: entry.section, originalCategory: entry.category, category: entry.section === 'income' ? 'Income' : entry.category, period: t.date.slice(0, 7), sourceTable: 'transactions' }] : [];
     }),
   }));
-  const files = db.prepare('SELECT id, name, source_id, source_kind, uploaded_at, status FROM files WHERE removed_at IS NULL ORDER BY uploaded_at, id').all().map(r => ({ ...r }));
+  const files = (await db.prepare('SELECT id, name, source_id, source_kind, uploaded_at, status FROM files WHERE removed_at IS NULL ORDER BY uploaded_at, id').all()).map(r => ({ ...r }));
 
   return {
     clock, year, taxYear, accounts, pnl, pnlHistory, businessActivity, categoryInput, taxPayments, taxPaymentsNext, withholding, documents, transactions, files,
-    confirm, conflictArchive, aliases, freshness: freshness(db, clock, accounts, businessActivity),
+    confirm, conflictArchive, aliases, freshness: await freshness(db, clock, accounts, businessActivity),
   };
 }
 
-function latestBalance(db, accountId, clock) {
-  const b = db.prepare('SELECT id, date, amount, file_id FROM balances WHERE account_id = ? AND date <= ? ORDER BY date DESC, id DESC LIMIT 1').get(accountId, clock);
+async function latestBalance(db, accountId, clock) {
+  const b = await db.prepare('SELECT id, date, amount, file_id FROM balances WHERE account_id = ? AND date <= ? ORDER BY date DESC, id DESC LIMIT 1').get(accountId, clock);
   if (b) return { date: b.date, amount: cents(b.amount), source: 'balances', ids: [b.id], fileId: b.file_id };
-  const p = db.prepare('SELECT max(as_of) AS d FROM positions WHERE account_id = ? AND as_of <= ?').get(accountId, clock);
+  const p = await db.prepare('SELECT max(as_of) AS d FROM positions WHERE account_id = ? AND as_of <= ?').get(accountId, clock);
   if (!p || !p.d) return null;
-  const rows = db.prepare('SELECT id, value, file_id FROM positions WHERE account_id = ? AND as_of = ? ORDER BY id').all(accountId, p.d);
+  const rows = await db.prepare('SELECT id, value, file_id FROM positions WHERE account_id = ? AND as_of = ? ORDER BY id').all(accountId, p.d);
   return { date: p.d, amount: sum(rows.map(r => r.value ?? 0)), source: 'positions', ids: rows.map(r => r.id), fileId: rows[0] ? rows[0].file_id : null };
 }
 
@@ -176,20 +177,20 @@ export const SOURCE_LABELS = Object.freeze({
   tax_payments: 'Estimated tax payment log',
 });
 
-function freshness(db, clock, accounts, businessActivity) {
-  const one = sql => (db.prepare(sql).get(clock) || {}).d || null;
-  const bal = one('SELECT max(date) AS d FROM balances WHERE date <= ?');
-  const pos = one('SELECT max(as_of) AS d FROM positions WHERE as_of <= ?');
-  const period = [one('SELECT max(period) AS d FROM pnl_lines WHERE period <= substr(?, 1, 7)'), ...businessActivity.flatMap(a => a.rows.map(r => r.period))].filter(Boolean).sort().at(-1);
+async function freshness(db, clock, accounts, businessActivity) {
+  const one = async sql => (await db.prepare(sql).get(clock) || {}).d || null;
+  const bal = await one('SELECT max(date) AS d FROM balances WHERE date <= ?');
+  const pos = await one('SELECT max(as_of) AS d FROM positions WHERE as_of <= ?');
+  const period = [await one('SELECT max(period) AS d FROM pnl_lines WHERE period <= substr(?, 1, 7)'), ...businessActivity.flatMap(a => a.rows.map(r => r.period))].filter(Boolean).sort().at(-1);
   const latest = {
     balances: [bal, pos].filter(Boolean).sort().at(-1) || null,
     // SimpleFIN covering every account with transactions keeps the log current (ingest/coverage.mjs).
-    transactions: [one('SELECT max(date) AS d FROM transactions WHERE date <= ?'), connectedThrough(db, clock)].filter(Boolean).sort().at(-1) || null,
+    transactions: [await one('SELECT max(date) AS d FROM transactions WHERE date <= ?'), await connectedThrough(db, clock)].filter(Boolean).sort().at(-1) || null,
     pnl: period ? monthEnd(period) : null,
-    tax_payments: one('SELECT max(date) AS d FROM tax_payments WHERE date <= ?'),
+    tax_payments: await one('SELECT max(date) AS d FROM tax_payments WHERE date <= ?'),
   };
   const stale = staleAccountIds(accounts);
-  const tracked = sourceStates(db, clock).accounts.size > 0;
+  const tracked = (await sourceStates(db, clock)).accounts.size > 0;
   return Object.entries(latest).map(([id, date]) => {
     let state = 'current';
     if (tracked && ['balances', 'transactions'].includes(id)) state = stale.length ? 'stale' : 'current';

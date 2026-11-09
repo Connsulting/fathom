@@ -32,7 +32,7 @@ test.describe('a war game that could not be built shows its unlock', () => {
     try {
       expect((await planRun(db, { now: CLOCK, dataDir: DIR })).status).toBe('ok');
     } finally {
-      db.close();
+      await db.close();
     }
     app = await startEnrolledServer({ dataDir: DIR, clock: CLOCK });
     base = app.url;

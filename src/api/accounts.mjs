@@ -13,11 +13,12 @@ import { sourcesView } from '../ingest/freshness.mjs';
 import { accountNaming } from '../accounts/naming.mjs';
 import { accountOf as storedAccount, renameAccount, setAccountMask, restoreAccountMask, writeAccountAnswer, mergeAccountPair } from '../accounts/write.mjs';
 import { mergePlan } from '../ingest/account-merge.mjs';
+import { mapSeries } from '../shared/series.mjs';
 
-export function accountRename(ctx) {
-  const row = renameAccount(ctx.db, ctx.params?.id, ctx.body?.displayName);
-  const scenario = scenarioOf(ctx);
-  return { scenario, account: scenario.accounts.find(a => a.id === row.id) || null, label: accountNaming(ctx.db).label(row) };
+export async function accountRename(ctx) {
+  const row = await renameAccount(ctx.db, ctx.params?.id, ctx.body?.displayName);
+  const scenario = await scenarioOf(ctx);
+  return { scenario, account: scenario.accounts.find(a => a.id === row.id) || null, label: (await accountNaming(ctx.db)).label(row) };
 }
 
 // POST /api/accounts/:id/mask  {mask: "NNNN"} or {undo: before} -> {scenario, account, before}
@@ -37,44 +38,44 @@ export function accountRename(ctx) {
 // POST /api/files/:id/remove -> {scenario, receipt}
 // Undo is POST /api/actions/:receiptId/undo.
 
-const accountOf = (ctx, id = ctx.params?.id) => storedAccount(ctx.db, id);
+const accountOf = async (ctx, id = ctx.params?.id) => await storedAccount(ctx.db, id);
 
 const bodyOf = (ctx) => (ctx.body && typeof ctx.body === 'object' && !Array.isArray(ctx.body) ? ctx.body : {});
 const withAccount = (scenario, id) => ({ scenario, account: scenario.accounts.find((a) => a.id === id) || null });
 
-export function accountMask(ctx) {
-  const row = accountOf(ctx), body = bodyOf(ctx);
-  const before = Object.hasOwn(body, 'undo') ? (restoreAccountMask(ctx.db, row.id, body.undo), null) : setAccountMask(ctx.db, row.id, body.mask);
-  return { ...withAccount(scenarioOf(ctx), row.id), before };
+export async function accountMask(ctx) {
+  const row = await accountOf(ctx), body = bodyOf(ctx);
+  const before = Object.hasOwn(body, 'undo') ? (await restoreAccountMask(ctx.db, row.id, body.undo), null) : await setAccountMask(ctx.db, row.id, body.mask);
+  return { ...withAccount(await scenarioOf(ctx), row.id), before };
 }
 
 const nowIso = () => new Date().toISOString();
 
-function accountAnswer(ctx, field) {
-  const row = accountOf(ctx);
+async function accountAnswer(ctx, field) {
+  const row = await accountOf(ctx);
   let before;
-  const out = afterAnswer(ctx, () => {
-    const result = writeAccountAnswer(ctx.db, row.id, field, bodyOf(ctx), { now: nowIso() });
+  const out = await afterAnswer(ctx, async () => {
+    const result = await writeAccountAnswer(ctx.db, row.id, field, bodyOf(ctx), { now: nowIso() });
     before = result.before;
     return result;
   });
   return { ...withAccount(out.scenario, row.id), before };
 }
 
-export const accountOwner = (ctx) => accountAnswer(ctx, 'owner');
-export const accountKind = (ctx) => accountAnswer(ctx, 'kind');
+export const accountOwner = async (ctx) => await accountAnswer(ctx, 'owner');
+export const accountKind = async (ctx) => await accountAnswer(ctx, 'kind');
 
-const lastDataDate = (db, id) => db.prepare(`SELECT max(d) AS d FROM (SELECT max(date) AS d FROM transactions WHERE account_id = ?1
-  UNION ALL SELECT max(date) FROM balances WHERE account_id = ?1 UNION ALL SELECT max(as_of) FROM positions WHERE account_id = ?1)`).get(id).d || null;
+const lastDataDate = async (db, id) => (await db.prepare(`SELECT max(d) AS d FROM (SELECT max(date) AS d FROM transactions WHERE account_id = ?
+  UNION ALL SELECT max(date) FROM balances WHERE account_id = ? UNION ALL SELECT max(as_of) FROM positions WHERE account_id = ?)`).get(id, id, id)).d || null;
 
-export function accountMergeCandidates(ctx) {
-  const row = accountOf(ctx);
-  const naming = accountNaming(ctx.db);
+export async function accountMergeCandidates(ctx) {
+  const row = await accountOf(ctx);
+  const naming = await accountNaming(ctx.db);
   const label = (id) => accountLabel(naming.byId.get(id));
-  const items = ctx.db.prepare('SELECT * FROM accounts WHERE id != ? ORDER BY sort, id').all(row.id).map((a) => {
-    const { keepId, ownId, moves, refused } = mergePlan(ctx.db, row.id, a.id);
+  const items = await mapSeries((await ctx.db.prepare('SELECT * FROM accounts WHERE id != ? ORDER BY sort, id').all(row.id)), async (a) => {
+    const { keepId, ownId, moves, refused } = await mergePlan(ctx.db, row.id, a.id);
     return {
-      id: a.id, label: label(a.id), inst: a.inst, kind: a.kind, mask: a.mask, lastDataDate: lastDataDate(ctx.db, a.id), mirror: a.mirror,
+      id: a.id, label: label(a.id), inst: a.inst, kind: a.kind, mask: a.mask, lastDataDate: await lastDataDate(ctx.db, a.id), mirror: a.mirror,
       plan: { keepId, keepLabel: label(keepId), ownId, ownLabel: label(ownId), moves: moves || { transactions: 0, balances: 0, positions: 0, sources: 0 } },
       ...(refused ? { refused } : {}),
     };
@@ -87,37 +88,37 @@ const HTTP_STATUS = { not_found: 404, conflict: 409, bad_input: 400, forbidden: 
 function httpOf(e) {
   return e instanceof ToolError ? new HttpError(HTTP_STATUS[e.code] ?? 400, e.message) : e;
 }
-const actionCtx = (ctx) => ({ db: ctx.db, now: nowIso(), actorId: ctx.identity?.id || (getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null) });
+const actionCtx = async (ctx) => ({ db: ctx.db, now: nowIso(), actorId: ctx.identity?.id || (await getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null) });
 
-export function accountMerge(ctx) {
+export async function accountMerge(ctx) {
   let res = null;
   try {
-    const out = afterAnswer(ctx, () => (res = mergeAccounts(actionCtx(ctx), ctx.params?.id, bodyOf(ctx).withId)));
+    const out = await afterAnswer(ctx, async () => (res = await mergeAccounts(await actionCtx(ctx), ctx.params?.id, bodyOf(ctx).withId)));
     return { scenario: out.scenario, survivorId: res.survivorId, itemId: out.item.id, receipt: res.receipt };
   } catch (e) { throw httpOf(e); }
 }
 
 // After a source action: the plan reruns soon and freshness is recomputed; the reply carries the
 // rebuilt scenario.
-function afterSourceAction(ctx, fn) {
+async function afterSourceAction(ctx, fn) {
   let out;
-  try { out = fn(actionCtx(ctx)); } catch (e) { throw httpOf(e); }
-  schedulePlan(ctx);
+  try { out = await fn(await actionCtx(ctx)); } catch (e) { throw httpOf(e); }
+  await schedulePlan(ctx);
   triggerFreshness(ctx);
-  return { scenario: scenarioOf(ctx), receipt: out.receipt };
+  return { scenario: await scenarioOf(ctx), receipt: out.receipt };
 }
 
-export function accountArchive(ctx) {
+export async function accountArchive(ctx) {
   const body = bodyOf(ctx);
   const archived = Object.hasOwn(body, 'archived') ? body.archived : true;
   if (typeof archived !== 'boolean') throw new HttpError(400, 'archived must be true or false');
-  return afterSourceAction(ctx, (a) => archiveAccount(a, ctx.params?.id, archived));
+  return await afterSourceAction(ctx, async (a) => await archiveAccount(a, ctx.params?.id, archived));
 }
 
-export function fileRemove(ctx) {
-  return afterSourceAction(ctx, (a) => removeFile(a, ctx.params?.id));
+export async function fileRemove(ctx) {
+  return await afterSourceAction(ctx, async (a) => await removeFile(a, ctx.params?.id));
 }
 
-export function sourcesList(ctx) {
-  return { sources: sourcesView(ctx.db) };
+export async function sourcesList(ctx) {
+  return { sources: await sourcesView(ctx.db) };
 }

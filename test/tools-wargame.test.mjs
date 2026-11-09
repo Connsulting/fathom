@@ -21,11 +21,11 @@ const call = (ctx, name) => callTool('recommendations', { operation: 'wargame', 
 
 async function store(t, { planned = true } = {}) {
   const s = await tempDb();
-  t.after(() => s.close());
-  seedDemo(s.db);
+  t.after(async () => await s.close());
+  await seedDemo(s.db);
   const ctx = { db: s.db, dataDir: s.dataDir, clock: CLOCK };
   if (!planned) return ctx;
-  const data = loadPlanningData(s.db, CLOCK);
+  const data = await loadPlanningData(s.db, CLOCK);
   const entity = resolveEntities(data, {})[0];
   entity.sums = { income: SCORP.income * entity.months,
     net: (SCORP.income - Object.values(SCORP.expenses).reduce((a, b) => a + b, 0)) * entity.months,
@@ -56,9 +56,9 @@ async function store(t, { planned = true } = {}) {
   const put = s.db.prepare(`INSERT INTO figures (key, v, kind, label, src, locator, parser, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, 'planner', ?)`);
   for (const f of Object.values(out.figures)) {
-    put.run(f.key, f.v, f.kind, f.label, f.src, JSON.stringify(f.locator), CLOCK);
+    await put.run(f.key, f.v, f.kind, f.label, f.src, JSON.stringify(f.locator), CLOCK);
   }
-  s.db.prepare("UPDATE content SET value = ? WHERE key = 'wargame'").run(JSON.stringify(model));
+  await s.db.prepare("UPDATE content SET value = ? WHERE key = 'wargame'").run(JSON.stringify(model));
   return ctx;
 }
 
@@ -67,9 +67,9 @@ const deferralFields = { amount: 'amount', taxThisYear: 'tax2026', taxNextYear: 
 
 for (const name of ['salary', 'deferral']) test(`${name} returns the planner's stored figures, scenario state and resolvable refs`, async t => {
   const ctx = await store(t);
-  const scenario = buildScenario(ctx.db, { clock: CLOCK });
+  const scenario = await buildScenario(ctx.db, { clock: CLOCK });
   const list = name === 'salary' ? scenario.wargame.salary.points : scenario.wargame.deferral.options;
-  setSetting(ctx.db, 'wargame.picks', { [name]: list.length - 1 });
+  await setSetting(ctx.db, 'wargame.picks', { [name]: list.length - 1 });
   const result = await call(ctx, name);
   assert.equal(result.name, name);
   assert.equal(result.title, scenario.wargame[name].title);
@@ -77,7 +77,7 @@ for (const name of ['salary', 'deferral']) test(`${name} returns the planner's s
   assert.equal(result.status, scenario.wargame[name].status);
   const decision = scenario.decisions.find(d => d.wargame === name);
   assert.deepEqual(result.decision, decision ? { id: decision.id, status: decision.status,
-    ...(decision.line ? { decidedLine: plainDeep(tokenScope(ctx.db), decision.line) } : {}) } : null);
+    ...(decision.line ? { decidedLine: plainDeep(await tokenScope(ctx.db), decision.line) } : {}) } : null);
   assert.equal(result.picked, list.at(-1).id);
   assert.equal(result.asOf, CLOCK);
   const items = name === 'salary' ? result.salary.points : result.deferral.options;
@@ -85,7 +85,7 @@ for (const name of ['salary', 'deferral']) test(`${name} returns the planner's s
   for (const [index, item] of items.entries()) {
     assert.equal(item.id, list[index].id);
     for (const [field, suffix] of Object.entries(name === 'salary' ? salaryFields : deferralFields)) {
-      const row = ctx.db.prepare('SELECT * FROM figures WHERE key = ?').get(`wg.${name}.${item.id}.${suffix}`);
+      const row = await ctx.db.prepare('SELECT * FROM figures WHERE key = ?').get(`wg.${name}.${item.id}.${suffix}`);
       assert.ok(row, `${name}.${field} exists`);
       const f = item.figures[field];
       assert.equal(f.value, row.v);
@@ -96,15 +96,15 @@ for (const name of ['salary', 'deferral']) test(`${name} returns the planner's s
     }
   }
   if (name === 'deferral') assert.equal(result.deferral.monthlyInvoices.value,
-    ctx.db.prepare("SELECT v FROM figures WHERE key = 'wg.deferral.base.income'").get().v);
+    (await ctx.db.prepare("SELECT v FROM figures WHERE key = 'wg.deferral.base.income'").get()).v);
   assert.ok(getTool('recommendations').operations.find(o => o.name === 'wargame').referenceable);
   await assertRefsResolve(result, ctx);
 });
 
 test('missing stored fields are unavailable even when content has a numeric value', async t => {
   const ctx = await store(t);
-  const game = buildScenario(ctx.db, { clock: CLOCK }).wargame.salary;
-  ctx.db.prepare('DELETE FROM figures WHERE key = ?').run(`wg.salary.${game.points[0].id}.x`);
+  const game = (await buildScenario(ctx.db, { clock: CLOCK })).wargame.salary;
+  await ctx.db.prepare('DELETE FROM figures WHERE key = ?').run(`wg.salary.${game.points[0].id}.x`);
   const result = await call(ctx, 'salary');
   assert.equal(result.salary.points[0].figures.room.value, null);
   assert.match(result.salary.points[0].figures.room.gaps[0].message, /stored figure/i);
@@ -120,12 +120,12 @@ test('unplanned demo returns unavailable envelopes without manufacturing stored 
     assert.ok(envelopeEntries(result).every(({ figure }) => figure.value === null && figure.unavailable));
     await assertRefsResolve(result, ctx);
   }
-  assert.equal(ctx.db.prepare("SELECT count(*) AS n FROM figures WHERE key LIKE 'wg.%'").get().n, 0);
+  assert.equal((await ctx.db.prepare("SELECT count(*) AS n FROM figures WHERE key LIKE 'wg.%'").get()).n, 0);
 });
 
 test('no S corp returns not_built with the planner reason and no points', async t => {
   const s = await tempDb();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   const ctx = { db: s.db, dataDir: s.dataDir, clock: CLOCK };
   const result = await call(ctx, 'salary');
   assert.equal(result.status, 'not_built');
@@ -138,26 +138,26 @@ test('no S corp returns not_built with the planner reason and no points', async 
 test('stored not-built reason is preserved', async t => {
   const ctx = await store(t, { planned: false });
   const notBuilt = notBuiltReason('salary', 'business.salaryRange');
-  ctx.db.prepare("UPDATE content SET value = ? WHERE key = 'wargame'").run(JSON.stringify({ notBuilt: { salary: notBuilt } }));
+  await ctx.db.prepare("UPDATE content SET value = ? WHERE key = 'wargame'").run(JSON.stringify({ notBuilt: { salary: notBuilt } }));
   assert.deepEqual((await call(ctx, 'salary')).notBuilt, notBuilt);
 });
 
 test('unavailable games keep reference points; decided and upcoming statuses follow scenario', async t => {
   const ctx = await store(t);
-  const raw = JSON.parse(ctx.db.prepare("SELECT value FROM content WHERE key = 'wargame'").get().value);
+  const raw = JSON.parse((await ctx.db.prepare("SELECT value FROM content WHERE key = 'wargame'").get()).value);
   raw.deferral.unavailable = 'Inputs changed';
-  ctx.db.prepare("UPDATE content SET value = ? WHERE key = 'wargame'").run(JSON.stringify(raw));
-  ctx.db.prepare("UPDATE decisions SET unavailable_reason = 'Inputs changed' WHERE wargame = 'deferral'").run();
+  await ctx.db.prepare("UPDATE content SET value = ? WHERE key = 'wargame'").run(JSON.stringify(raw));
+  await ctx.db.prepare("UPDATE decisions SET unavailable_reason = 'Inputs changed' WHERE wargame = 'deferral'").run();
   const result = await call(ctx, 'deferral');
   assert.equal(result.status, 'unavailable');
   assert.ok(result.deferral.options.length > 1);
   assert.equal(result.action, undefined);
-  ctx.db.prepare("UPDATE decisions SET status = 'decided', decided_line = 'Saved choice' WHERE wargame = 'deferral'").run();
+  await ctx.db.prepare("UPDATE decisions SET status = 'decided', decided_line = 'Saved choice' WHERE wargame = 'deferral'").run();
   assert.equal((await call(ctx, 'deferral')).status, 'decided');
   assert.equal((await call(ctx, 'deferral')).decision.decidedLine, 'Saved choice');
   delete raw.deferral.unavailable;
-  ctx.db.prepare("UPDATE content SET value = ? WHERE key = 'wargame'").run(JSON.stringify(raw));
-  ctx.db.prepare("UPDATE decisions SET status = 'upcoming', decided_line = NULL, unavailable_reason = NULL, opens_on = '2027-01-01' WHERE wargame = 'deferral'").run();
+  await ctx.db.prepare("UPDATE content SET value = ? WHERE key = 'wargame'").run(JSON.stringify(raw));
+  await ctx.db.prepare("UPDATE decisions SET status = 'upcoming', decided_line = NULL, unavailable_reason = NULL, opens_on = '2027-01-01' WHERE wargame = 'deferral'").run();
   assert.equal((await call(ctx, 'deferral')).status, 'upcoming');
 });
 
@@ -172,19 +172,19 @@ test('wargame requires an allowed name and refuses extra arguments', async t => 
 
 test('deferral tax years stay in order when a stored field is missing', async t => {
   const ctx = await store(t);
-  const option = buildScenario(ctx.db, { clock: CLOCK }).wargame.deferral.options[0];
-  ctx.db.prepare('DELETE FROM figures WHERE key = ?').run(`wg.deferral.${option.id}.tax2026`);
+  const option = (await buildScenario(ctx.db, { clock: CLOCK })).wargame.deferral.options[0];
+  await ctx.db.prepare('DELETE FROM figures WHERE key = ?').run(`wg.deferral.${option.id}.tax2026`);
   const result = await call(ctx, 'deferral');
   assert.equal(result.deferral.options[0].figures.taxThisYear.value, null);
   assert.equal(result.deferral.options[0].figures.taxNextYear.value,
-    ctx.db.prepare('SELECT v FROM figures WHERE key = ?').get(`wg.deferral.${option.id}.tax2027`).v);
+    (await ctx.db.prepare('SELECT v FROM figures WHERE key = ?').get(`wg.deferral.${option.id}.tax2027`)).v);
   await assertRefsResolve(result, ctx);
 });
 
 test('stored unavailable figures keep the planner gap and date', async t => {
   const ctx = await store(t);
-  const id = buildScenario(ctx.db, { clock: CLOCK }).wargame.salary.points[0].id;
-  ctx.db.prepare('UPDATE figures SET unavailable_reason = ? WHERE key = ?')
+  const id = (await buildScenario(ctx.db, { clock: CLOCK })).wargame.salary.points[0].id;
+  await ctx.db.prepare('UPDATE figures SET unavailable_reason = ? WHERE key = ?')
     .run('Inputs changed since planning', `wg.salary.${id}.tax`);
   const f = (await call(ctx, 'salary')).salary.points[0].figures.tax;
   assert.equal(f.value, null);

@@ -26,6 +26,7 @@ import { recForKey, findQuestion } from '../src/api/questions.mjs';
 import { fakeAnswerScript } from '../src/api/fake-answers.mjs';
 import { wrapBlocks } from '../src/shared/answer-text.mjs';
 import { SERVER_TIMEOUT, withServer, request, postJson, openStore, tempDb, tempDir } from './helpers/server.mjs';
+import { mapSeries } from '../src/shared/series.mjs';
 
 const T = { timeout: SERVER_TIMEOUT };
 const FAKE = { FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' };
@@ -42,19 +43,17 @@ const BEFORE = Math.max(...listMigrations().map(m => m.id).filter(id => id < REC
 
 // A store just before the rec threads migration, built by applying every earlier migration the way db.mjs migrate does (own
 // transaction each, recorded in schema_migrations).
-function storeBeforeRecThreads(file) {
-  const db = openDb(file);
-  db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
+async function storeBeforeRecThreads(file) {
+  const db = await openDb(file);
+  await db.applySchema(`CREATE TABLE IF NOT EXISTS schema_migrations (
     id INTEGER PRIMARY KEY,
     name TEXT NOT NULL,
     applied_at TEXT NOT NULL
   )`);
   const record = db.prepare('INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)');
   for (const m of listMigrations().filter(x => x.id < REC_MIGRATION)) {
-    db.exec('BEGIN');
-    db.exec(readFileSync(m.file, 'utf8'));
-    record.run(m.id, m.name, AT);
-    db.exec('COMMIT');
+    await db.applySchema(readFileSync(m.file, 'utf8'));
+    await record.run(m.id, m.name, AT);
   }
   return db;
 }
@@ -66,96 +65,96 @@ const ALPHA_LAST = '2026-10-04T00:00:00.000Z';
 const GONE_MAX_TS = '2026-10-06T09:00:05.000Z';
 const KEPT = ['pack:syn-pack', 'ask:0a1b2c3d4e5f', 'ask:111111111111', 'ask:222222222222'];
 
-function seedBeforeRecThreads(db) {
-  db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)').run('mode', JSON.stringify('real'), AT);
+async function seedBeforeRecThreads(db) {
+  await db.prepare('INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)').run('mode', JSON.stringify('real'), AT);
   const rec = db.prepare("INSERT INTO recs (id, def, status, tasks_done, sort, updated_at) VALUES (?, ?, 'proposed', '[]', ?, ?)");
-  rec.run('syn-alpha', JSON.stringify({ id: 'syn-alpha', title: 'Synthetic alpha rec', summary: 'Synthetic alpha summary', domain: 'data' }), 0, AT);
-  rec.run('syn-beta', JSON.stringify({ id: 'syn-beta', title: 'Synthetic beta rec', summary: 'Synthetic beta summary as planned today', domain: 'data' }), 1, AT);
-  rec.run('syn-hollow', JSON.stringify({ id: 'syn-hollow', title: 'Synthetic hollow rec', summary: 'Synthetic hollow summary', domain: 'data' }), 2, AT);
+  await rec.run('syn-alpha', JSON.stringify({ id: 'syn-alpha', title: 'Synthetic alpha rec', summary: 'Synthetic alpha summary', domain: 'data' }), 0, AT);
+  await rec.run('syn-beta', JSON.stringify({ id: 'syn-beta', title: 'Synthetic beta rec', summary: 'Synthetic beta summary as planned today', domain: 'data' }), 1, AT);
+  await rec.run('syn-hollow', JSON.stringify({ id: 'syn-hollow', title: 'Synthetic hollow rec', summary: 'Synthetic hollow summary', domain: 'data' }), 2, AT);
 
   const conv = db.prepare('INSERT INTO conversations (key, created_at, title, title_source, archived_at, trashed_at, last_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
   const msg = db.prepare('INSERT INTO messages (conversation_key, role, text, refs, notice, ts, provenance) VALUES (?, ?, ?, ?, ?, ?, ?)');
 
   // A rec with an owner conversation: opening summary, two owner turns (one reply with provenance
   // and refs, one notice reply).
-  conv.run('syn-alpha', '2026-10-01T08:00:00.000Z', null, null, null, null, ALPHA_LAST);
-  msg.run('syn-alpha', 'fathom', '<p>Synthetic alpha opening summary</p>', '[]', 0, '2026-10-01T08:00:01.000Z', null);
-  msg.run('syn-alpha', 'me', 'Synthetic alpha question one', '[]', 0, '2026-10-02T09:00:00.000Z', null);
-  msg.run('syn-alpha', 'fathom', '<p>Synthetic alpha answer one with <span class="fx-src">a source</span></p>', '["syn-alpha","syn-beta"]', 0, '2026-10-02T09:00:04.000Z', PROV);
-  msg.run('syn-alpha', 'me', 'Synthetic alpha question two', '[]', 0, '2026-10-03T10:00:00.000Z', null);
-  msg.run('syn-alpha', 'fathom', '<p>Synthetic engine off notice</p>', '[]', 1, '2026-10-03T10:00:01.000Z', null);
+  await conv.run('syn-alpha', '2026-10-01T08:00:00.000Z', null, null, null, null, ALPHA_LAST);
+  await msg.run('syn-alpha', 'fathom', '<p>Synthetic alpha opening summary</p>', '[]', 0, '2026-10-01T08:00:01.000Z', null);
+  await msg.run('syn-alpha', 'me', 'Synthetic alpha question one', '[]', 0, '2026-10-02T09:00:00.000Z', null);
+  await msg.run('syn-alpha', 'fathom', '<p>Synthetic alpha answer one with <span class="fx-src">a source</span></p>', '["syn-alpha","syn-beta"]', 0, '2026-10-02T09:00:04.000Z', PROV);
+  await msg.run('syn-alpha', 'me', 'Synthetic alpha question two', '[]', 0, '2026-10-03T10:00:00.000Z', null);
+  await msg.run('syn-alpha', 'fathom', '<p>Synthetic engine off notice</p>', '[]', 1, '2026-10-03T10:00:01.000Z', null);
 
   // A rec with only the opening summary, which differs from that rec's current def summary.
-  conv.run('syn-beta', '2026-10-01T08:00:00.000Z', null, null, null, null, '2026-10-01T08:00:02.000Z');
-  msg.run('syn-beta', 'fathom', '<p>Synthetic beta summary from an older plan</p>', '[]', 0, '2026-10-01T08:00:02.000Z', null);
+  await conv.run('syn-beta', '2026-10-01T08:00:00.000Z', null, null, null, null, '2026-10-01T08:00:02.000Z');
+  await msg.run('syn-beta', 'fathom', '<p>Synthetic beta summary from an older plan</p>', '[]', 0, '2026-10-01T08:00:02.000Z', null);
 
   // A rec-keyed conversation whose rec is not in recs, with owner turns and no last_at.
-  conv.run('syn-gone', '2026-10-05T08:00:00.000Z', null, null, null, null, null);
-  msg.run('syn-gone', 'fathom', '<p>Synthetic gone opening summary</p>', '[]', 0, '2026-10-05T08:00:01.000Z', null);
-  msg.run('syn-gone', 'me', 'Synthetic gone question', '[]', 0, '2026-10-06T09:00:00.000Z', null);
-  msg.run('syn-gone', 'fathom', '<p>Synthetic gone answer</p>', '["syn-gone"]', 0, GONE_MAX_TS, null);
+  await conv.run('syn-gone', '2026-10-05T08:00:00.000Z', null, null, null, null, null);
+  await msg.run('syn-gone', 'fathom', '<p>Synthetic gone opening summary</p>', '[]', 0, '2026-10-05T08:00:01.000Z', null);
+  await msg.run('syn-gone', 'me', 'Synthetic gone question', '[]', 0, '2026-10-06T09:00:00.000Z', null);
+  await msg.run('syn-gone', 'fathom', '<p>Synthetic gone answer</p>', '["syn-gone"]', 0, GONE_MAX_TS, null);
 
   // An empty rec-keyed conversation row.
-  conv.run('syn-hollow', '2026-10-01T08:00:00.000Z', null, null, null, null, '2026-10-01T08:00:00.000Z');
+  await conv.run('syn-hollow', '2026-10-01T08:00:00.000Z', null, null, null, null, '2026-10-01T08:00:00.000Z');
 
   // A pack conversation, an Ask thread with a manual title, an archived and a trashed thread.
-  conv.run('pack:syn-pack', '2026-10-07T08:00:00.000Z', null, null, null, null, '2026-10-07T08:00:05.000Z');
-  msg.run('pack:syn-pack', 'me', 'Synthetic what if prompt', '[]', 0, '2026-10-07T08:00:00.000Z', null);
-  msg.run('pack:syn-pack', 'fathom', '<p>Synthetic what if answer</p>', '["syn-alpha"]', 0, '2026-10-07T08:00:05.000Z', PROV);
-  conv.run('ask:0a1b2c3d4e5f', '2026-10-08T08:00:00.000Z', 'Synthetic manual title', 'manual', null, null, '2026-10-08T08:00:05.000Z');
-  msg.run('ask:0a1b2c3d4e5f', 'me', 'Synthetic thread question', '[]', 0, '2026-10-08T08:00:00.000Z', null);
-  msg.run('ask:0a1b2c3d4e5f', 'fathom', '<p>Synthetic thread answer</p>', '[]', 0, '2026-10-08T08:00:05.000Z', PROV);
-  conv.run('ask:111111111111', '2026-09-01T08:00:00.000Z', 'Synthetic archived title', 'auto', '2026-09-02T08:00:00.000Z', null, '2026-09-01T08:00:05.000Z');
-  msg.run('ask:111111111111', 'me', 'Synthetic archived question', '[]', 0, '2026-09-01T08:00:00.000Z', null);
-  conv.run('ask:222222222222', '2026-09-03T08:00:00.000Z', null, 'auto', null, '2026-09-04T08:00:00.000Z', '2026-09-03T08:00:05.000Z');
-  msg.run('ask:222222222222', 'me', 'Synthetic trashed question', '[]', 0, '2026-09-03T08:00:00.000Z', null);
+  await conv.run('pack:syn-pack', '2026-10-07T08:00:00.000Z', null, null, null, null, '2026-10-07T08:00:05.000Z');
+  await msg.run('pack:syn-pack', 'me', 'Synthetic what if prompt', '[]', 0, '2026-10-07T08:00:00.000Z', null);
+  await msg.run('pack:syn-pack', 'fathom', '<p>Synthetic what if answer</p>', '["syn-alpha"]', 0, '2026-10-07T08:00:05.000Z', PROV);
+  await conv.run('ask:0a1b2c3d4e5f', '2026-10-08T08:00:00.000Z', 'Synthetic manual title', 'manual', null, null, '2026-10-08T08:00:05.000Z');
+  await msg.run('ask:0a1b2c3d4e5f', 'me', 'Synthetic thread question', '[]', 0, '2026-10-08T08:00:00.000Z', null);
+  await msg.run('ask:0a1b2c3d4e5f', 'fathom', '<p>Synthetic thread answer</p>', '[]', 0, '2026-10-08T08:00:05.000Z', PROV);
+  await conv.run('ask:111111111111', '2026-09-01T08:00:00.000Z', 'Synthetic archived title', 'auto', '2026-09-02T08:00:00.000Z', null, '2026-09-01T08:00:05.000Z');
+  await msg.run('ask:111111111111', 'me', 'Synthetic archived question', '[]', 0, '2026-09-01T08:00:00.000Z', null);
+  await conv.run('ask:222222222222', '2026-09-03T08:00:00.000Z', null, 'auto', null, '2026-09-04T08:00:00.000Z', '2026-09-03T08:00:05.000Z');
+  await msg.run('ask:222222222222', 'me', 'Synthetic trashed question', '[]', 0, '2026-09-03T08:00:00.000Z', null);
 }
 
 const OLD_CONV_COLS = 'key, created_at, title, title_source, archived_at, trashed_at, last_at';
-const convRow = (db, key) => { const r = db.prepare('SELECT * FROM conversations WHERE key = ?').get(key); return r ? { ...r } : null; };
-const messageRows = db => db.prepare('SELECT * FROM messages ORDER BY id').all().map(r => ({ ...r }));
+const convRow = async (db, key) => { const r = await db.prepare('SELECT * FROM conversations WHERE key = ?').get(key); return r ? { ...r } : null; };
+const messageRows = async db => (await db.prepare('SELECT * FROM messages ORDER BY id').all()).map(r => ({ ...r }));
 const withoutKey = ({ conversation_key: _k, ...rest }) => rest;
 
 async function migratedStore(t) {
   const dir = await tempDir('fathom-rec-threads-');
-  const db = storeBeforeRecThreads(join(dir, DB_FILE));
-  t.after(async () => { try { db.close(); } catch { /* closed */ } await rm(dir, { recursive: true, force: true }); });
-  assert.equal(schemaVersion(db), BEFORE);
-  seedBeforeRecThreads(db);
+  const db = await storeBeforeRecThreads(join(dir, DB_FILE));
+  t.after(async () => { try { await db.close(); } catch { /* closed */ } await rm(dir, { recursive: true, force: true }); });
+  assert.equal(await schemaVersion(db), BEFORE);
+  await seedBeforeRecThreads(db);
   const before = {
-    messages: messageRows(db),
-    kept: Object.fromEntries(KEPT.map(k => [k, { ...db.prepare(`SELECT ${OLD_CONV_COLS} FROM conversations WHERE key = ?`).get(k) }])),
-    created: Object.fromEntries(db.prepare('SELECT key, created_at FROM conversations').all().map(r => [r.key, r.created_at])),
+    messages: await messageRows(db),
+    kept: Object.fromEntries(await mapSeries(KEPT, async k => [k, { ...await db.prepare(`SELECT ${OLD_CONV_COLS} FROM conversations WHERE key = ?`).get(k) }])),
+    created: Object.fromEntries((await db.prepare('SELECT key, created_at FROM conversations').all()).map(r => [r.key, r.created_at])),
   };
   const pending = listMigrations().map(m => m.id).filter(id => id > BEFORE);
   assert.equal(pending[0], REC_MIGRATION, 'migration 016 is next');
-  assert.deepEqual(migrate(db), { applied: pending });
+  assert.deepEqual(await migrate(db), { applied: pending });
   return { db, before };
 }
 
 // The thread a rec-keyed conversation moved to, found by rec_id.
-function movedTo(db, recId) {
-  const rows = db.prepare('SELECT * FROM conversations WHERE rec_id = ?').all(recId).map(r => ({ ...r }));
+async function movedTo(db, recId) {
+  const rows = (await db.prepare('SELECT * FROM conversations WHERE rec_id = ?').all(recId)).map(r => ({ ...r }));
   assert.equal(rows.length, 1, `exactly one thread for ${recId}: ${JSON.stringify(rows)}`);
   return rows[0];
 }
 
 test('AC4 migration 016 adds rec_id and rec_detached_at and leaves no rec-keyed conversation', async t => {
   const { db } = await migratedStore(t);
-  const cols = db.prepare('PRAGMA table_info(conversations)').all().map(c => c.name);
+  const cols = (await db.columns('conversations')).map(c => c.name);
   assert.ok(cols.includes('rec_id'), 'conversations.rec_id');
   assert.ok(cols.includes('rec_detached_at'), 'conversations.rec_detached_at');
-  const keys = db.prepare('SELECT key FROM conversations ORDER BY key').all().map(r => r.key);
+  const keys = (await db.prepare('SELECT key FROM conversations ORDER BY key').all()).map(r => r.key);
   assert.deepEqual(keys.filter(k => !k.startsWith('ask:') && !k.startsWith('pack:')), [], `no rec-keyed conversation: ${keys}`);
   for (const k of ['syn-alpha', 'syn-beta', 'syn-gone', 'syn-hollow']) {
-    assert.equal(db.prepare('SELECT count(*) AS n FROM messages WHERE conversation_key = ?').get(k).n, 0, `no message left under ${k}`);
+    assert.equal((await db.prepare('SELECT count(*) AS n FROM messages WHERE conversation_key = ?').get(k)).n, 0, `no message left under ${k}`);
   }
   assert.ok(keys.every(k => k.startsWith('pack:') || THREAD_KEY.test(k)), JSON.stringify(keys));
 });
 
 test('AC4 a rec conversation with owner turns becomes an active thread with every message moved unchanged', async t => {
   const { db, before } = await migratedStore(t);
-  const alpha = movedTo(db, 'syn-alpha');
+  const alpha = await movedTo(db, 'syn-alpha');
   assert.match(alpha.key, THREAD_KEY);
   assert.equal(alpha.created_at, before.created['syn-alpha'], 'same created_at');
   assert.equal(alpha.last_at, ALPHA_LAST, 'the old last_at is kept');
@@ -165,13 +164,13 @@ test('AC4 a rec conversation with owner turns becomes an active thread with ever
   assert.equal(alpha.trashed_at, null);
   assert.equal(alpha.rec_detached_at, null);
   const oldMsgs = before.messages.filter(m => m.conversation_key === 'syn-alpha').map(withoutKey);
-  const newMsgs = db.prepare('SELECT * FROM messages WHERE conversation_key = ? ORDER BY id').all(alpha.key).map(r => withoutKey({ ...r }));
+  const newMsgs = (await db.prepare('SELECT * FROM messages WHERE conversation_key = ? ORDER BY id').all(alpha.key)).map(r => withoutKey({ ...r }));
   assert.equal(newMsgs.length, 5, 'opening summary and both turns');
   assert.deepEqual(newMsgs, oldMsgs, 'text, refs, notice, ts, provenance, role and id unchanged, in order');
   assert.equal(newMsgs[2].provenance, PROV);
   assert.equal(newMsgs[4].notice, 1);
 
-  const gone = movedTo(db, 'syn-gone');
+  const gone = await movedTo(db, 'syn-gone');
   assert.match(gone.key, THREAD_KEY);
   assert.equal(gone.created_at, before.created['syn-gone']);
   assert.equal(gone.last_at, GONE_MAX_TS, 'a NULL last_at becomes the newest message ts');
@@ -184,7 +183,7 @@ test('AC4 a rec conversation with owner turns becomes an active thread with ever
 
 test('AC4 a summary-only rec conversation becomes an archived, detached thread titled Opening summary', async t => {
   const { db, before } = await migratedStore(t);
-  const beta = movedTo(db, 'syn-beta');
+  const beta = await movedTo(db, 'syn-beta');
   assert.match(beta.key, THREAD_KEY);
   assert.equal(beta.created_at, before.created['syn-beta']);
   assert.match(String(beta.archived_at), ISO, 'archived');
@@ -193,16 +192,16 @@ test('AC4 a summary-only rec conversation becomes an archived, detached thread t
   assert.equal(beta.title, 'Opening summary');
   assert.equal(beta.title_source, 'auto');
   const oldMsgs = before.messages.filter(m => m.conversation_key === 'syn-beta').map(withoutKey);
-  const newMsgs = db.prepare('SELECT * FROM messages WHERE conversation_key = ? ORDER BY id').all(beta.key).map(r => withoutKey({ ...r }));
+  const newMsgs = (await db.prepare('SELECT * FROM messages WHERE conversation_key = ? ORDER BY id').all(beta.key)).map(r => withoutKey({ ...r }));
   assert.deepEqual(newMsgs, oldMsgs, 'the opening summary copy is kept byte for byte, not replaced by the current def summary');
 });
 
 test('AC4 an empty rec-keyed row is deleted; pack and Ask conversations are untouched', async t => {
   const { db, before } = await migratedStore(t);
-  assert.equal(convRow(db, 'syn-hollow'), null);
-  assert.equal(db.prepare("SELECT count(*) AS n FROM conversations WHERE rec_id = 'syn-hollow'").get().n, 0, 'no thread for an empty conversation');
+  assert.equal(await convRow(db, 'syn-hollow'), null);
+  assert.equal((await db.prepare("SELECT count(*) AS n FROM conversations WHERE rec_id = 'syn-hollow'").get()).n, 0, 'no thread for an empty conversation');
   for (const key of KEPT) {
-    const row = convRow(db, key);
+    const row = await convRow(db, key);
     assert.ok(row, `${key} kept`);
     const { rec_id: recId, rec_detached_at: detached, ...old } = row;
     assert.deepEqual(old, before.kept[key], `${key} unchanged`);
@@ -213,7 +212,7 @@ test('AC4 an empty rec-keyed row is deleted; pack and Ask conversations are unto
 
 test('AC4 every message row is byte-identical apart from its conversation key, and the count is unchanged', async t => {
   const { db, before } = await migratedStore(t);
-  const after = messageRows(db);
+  const after = await messageRows(db);
   assert.equal(after.length, before.messages.length, 'total message count unchanged');
   const byId = new Map(after.map(r => [r.id, r]));
   const moved = new Map();
@@ -234,11 +233,11 @@ test('AC4 every message row is byte-identical apart from its conversation key, a
 
 test('AC4 listThreads, getThread and buildScenario carry recId on the migrated store; a second migrate applies nothing', async t => {
   const { db } = await migratedStore(t);
-  const alpha = movedTo(db, 'syn-alpha');
-  const beta = movedTo(db, 'syn-beta');
-  const gone = movedTo(db, 'syn-gone');
+  const alpha = await movedTo(db, 'syn-alpha');
+  const beta = await movedTo(db, 'syn-beta');
+  const gone = await movedTo(db, 'syn-gone');
 
-  const lists = listThreads(db);
+  const lists = await listThreads(db);
   const find = (list, key) => list.find(x => x.key === key);
   assert.equal(find(lists.active, alpha.key).recId, 'syn-alpha');
   assert.equal(find(lists.active, alpha.key).recDetachedAt, null);
@@ -253,9 +252,9 @@ test('AC4 listThreads, getThread and buildScenario carry recId on the migrated s
   assert.ok(find(lists.archived, 'ask:111111111111'));
   assert.ok(find(lists.trash, 'ask:222222222222'));
   assert.equal(find(lists.active, alpha.key).turns, 2);
-  assert.equal(getThread(db, alpha.key.slice(4)).recId, 'syn-alpha');
+  assert.equal((await getThread(db, alpha.key.slice(4))).recId, 'syn-alpha');
 
-  const scenario = buildScenario(db, { clock: '2026-11-05' });
+  const scenario = await buildScenario(db, { clock: '2026-11-05' });
   const live = scenario.live.threads.find(x => x.key === alpha.key);
   assert.equal(live.recId, 'syn-alpha');
   assert.equal(live.recDetachedAt, null);
@@ -265,7 +264,7 @@ test('AC4 listThreads, getThread and buildScenario carry recId on the migrated s
   assert.equal(recForKey(scenario, alpha.key).id, 'syn-alpha', 'the moved thread resolves to its rec');
   assert.equal(recForKey(scenario, gone.key), null, 'a thread whose rec is gone has no rec context');
 
-  assert.deepEqual(migrate(db), { applied: [] }, 'a second migrate applies nothing');
+  assert.deepEqual(await migrate(db), { applied: [] }, 'a second migrate applies nothing');
 });
 
 // ---------------------------------------------------------------- recForKey
@@ -294,13 +293,13 @@ test('recForKey resolves a rec id and a rec thread to the rec, and anything else
 
 async function demoCtx(t) {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
-  seedDemo(s.db);
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  await seedDemo(s.db);
   const config = loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake', FATHOM_FAKE_STREAM_MS: '0' });
-  const engine = createRuntimeEngine({ db: s.db, config });
+  const engine = await createRuntimeEngine({ db: s.db, config });
   // The temp store's directory stands in as the household root.
   const packs = createLivePacks(s.db, { dataDir: s.dataDir });
-  packs.refresh();
+  await packs.refresh();
   const answerer = createLiveAnswerer({ engine, packs, root: s.dataDir, services: { engine, config: { dataDir: s.dataDir } } });
   const ctx = (body = {}, extra = {}) => ({ db: s.db, config, engine, packs, answerer, params: {}, body, ...extra });
   return { ...s, config, engine, packs, answerer, ctx };
@@ -309,8 +308,8 @@ async function demoCtx(t) {
 const httpError = status => e => e instanceof HttpError && e.status === status;
 const toolNames = m => (m.provenance && m.provenance.tools || []).map(x => x.name);
 const recTool = m => (m.provenance && m.provenance.tools || []).find(x => x.name === 'recommendations');
-const recRows = db => db.prepare('SELECT count(*) AS n FROM conversations WHERE rec_id IS NOT NULL').get().n;
-const allConvs = db => db.prepare('SELECT count(*) AS n FROM conversations').get().n;
+const recRows = async db => (await db.prepare('SELECT count(*) AS n FROM conversations WHERE rec_id IS NOT NULL').get()).n;
+const allConvs = async db => (await db.prepare('SELECT count(*) AS n FROM conversations').get()).n;
 
 test('POST /api/threads with recId and text asks in a new thread grounded in that rec', async t => {
   const s = await demoCtx(t);
@@ -324,8 +323,8 @@ test('POST /api/threads with recId and text asks in a new thread grounded in tha
   assert.deepEqual(recTool(r.message).args, { operation: 'detail', id: 'deferral' }, 'recommendations.detail reads the rec, not the thread key');
   assert.ok(r.message.refs.includes('deferral'), 'the reply refs the rec');
   assert.equal(r.scenario.live.threads.find(x => x.key === r.thread.key).recId, 'deferral');
-  assert.equal(getThread(s.db, r.thread.id).recId, 'deferral');
-  assert.equal(listThreads(s.db).active.find(x => x.id === r.thread.id).recId, 'deferral');
+  assert.equal((await getThread(s.db, r.thread.id)).recId, 'deferral');
+  assert.equal((await listThreads(s.db)).active.find(x => x.id === r.thread.id).recId, 'deferral');
   assert.deepEqual(r.scenario.live.conversations[r.thread.key].map(m => m.role), ['me', 'fathom']);
   assert.equal(recForKey(r.scenario, r.thread.key).id, 'deferral');
 });
@@ -350,54 +349,54 @@ test('POST /api/threads with recId and questionId answers that rec.qa question e
     assert.deepEqual(recTool(r.message).args, { operation: 'detail', id: 'deferral' });
   }
   // By rec.qa id or exact question too, the way findQuestion resolves it.
-  assert.equal(findQuestion(buildScenario(s.db), 'deferral', qa[0].q).q, qa[0].q);
+  assert.equal(findQuestion(await buildScenario(s.db), 'deferral', qa[0].q).q, qa[0].q);
 });
 
 test('POST /api/threads with recId refuses unknown and hidden recs, an empty body and an unknown question; a valid one succeeds', async t => {
   const s = await demoCtx(t);
-  const hidden = s.db.prepare("SELECT id FROM recs WHERE status = 'hidden' LIMIT 1").get();
+  const hidden = await s.db.prepare("SELECT id FROM recs WHERE status = 'hidden' LIMIT 1").get();
   assert.ok(hidden, 'the demo has a hidden rec');
-  const n = allConvs(s.db);
+  const n = await allConvs(s.db);
   await assert.rejects(threadCreate(s.ctx({ recId: 'no-such-rec', text: 'Synthetic question' })), httpError(404));
   await assert.rejects(threadCreate(s.ctx({ recId: hidden.id, text: 'Synthetic question' })), httpError(404));
   await assert.rejects(threadCreate(s.ctx({ recId: 'deferral' })), httpError(400));
   await assert.rejects(threadCreate(s.ctx({ recId: 'deferral', text: null, questionId: null })), httpError(400));
   await assert.rejects(threadCreate(s.ctx({ recId: 'deferral', questionId: 99 })), httpError(404));
   await assert.rejects(threadCreate(s.ctx({ recId: 'deferral', questionId: 'no-such-question' })), httpError(404));
-  assert.equal(allConvs(s.db), n, 'no refusal stores a conversation');
-  assert.equal(recRows(s.db), 0);
+  assert.equal(await allConvs(s.db), n, 'no refusal stores a conversation');
+  assert.equal(await recRows(s.db), 0);
 
   // Liveness: the same rec with a question succeeds.
   const okText = await threadCreate(s.ctx({ recId: 'deferral', text: 'Synthetic question' }));
   assert.equal(okText.thread.recId, 'deferral');
   const okQ = await threadCreate(s.ctx({ recId: 'deferral', questionId: 0 }));
   assert.equal(okQ.thread.recId, 'deferral');
-  assert.equal(recRows(s.db), 2);
+  assert.equal(await recRows(s.db), 2);
 });
 
 test('a failed answer to POST /api/threads with recId leaves no thread row behind', async t => {
   const s = await demoCtx(t);
-  const n = allConvs(s.db);
+  const n = await allConvs(s.db);
   const throwing = { answer: async () => { throw new Error('synthetic engine failure'); } };
   await assert.rejects(threadCreate(s.ctx({ recId: 'deferral', text: 'Synthetic question' }, { answerer: throwing })));
-  assert.equal(allConvs(s.db), n, 'nothing left after a throw');
+  assert.equal(await allConvs(s.db), n, 'nothing left after a throw');
   const empty = { answer: async () => null };
   await assert.rejects(threadCreate(s.ctx({ recId: 'deferral', text: 'Synthetic question' }, { answerer: empty })));
-  assert.equal(allConvs(s.db), n, 'nothing left after a null answer');
-  assert.equal(recRows(s.db), 0);
-  assert.equal(s.db.prepare("SELECT count(*) AS n FROM messages WHERE conversation_key LIKE 'ask:%'").get().n, 0);
+  assert.equal(await allConvs(s.db), n, 'nothing left after a null answer');
+  assert.equal(await recRows(s.db), 0);
+  assert.equal((await s.db.prepare("SELECT count(*) AS n FROM messages WHERE conversation_key LIKE 'ask:%'").get()).n, 0);
   // Liveness: with the real answerer the same request stores one thread.
   await threadCreate(s.ctx({ recId: 'deferral', text: 'Synthetic question' }));
-  assert.equal(recRows(s.db), 1);
+  assert.equal(await recRows(s.db), 1);
 });
 
 test('POST /api/ask refuses a bare rec id key and continues a rec thread with rec context', async t => {
   const s = await demoCtx(t);
-  const n = allConvs(s.db);
+  const n = await allConvs(s.db);
   await assert.rejects(ask(s.ctx({ key: 'deferral', text: 'Synthetic question' })), httpError(400));
   await assert.rejects(ask(s.ctx({ key: 'deferral', questionId: 0 })), httpError(400));
   await assert.rejects(ask(s.ctx({ key: 'no-such-rec', text: 'Synthetic question' })), httpError(400));
-  assert.equal(allConvs(s.db), n, 'refused asks store nothing');
+  assert.equal(await allConvs(s.db), n, 'refused asks store nothing');
 
   const first = await threadCreate(s.ctx({ recId: 'deferral', text: 'Synthetic first question' }));
   const next = await ask(s.ctx({ key: first.thread.key, text: 'Synthetic follow up question' }));
@@ -411,7 +410,7 @@ test('POST /api/ask refuses a bare rec id key and continues a rec thread with re
   assert.ok(conv[4].text.includes(qa[1].q), 'a rec.qa chip asked in the rec thread');
   const direct = await s.answerer.answer({ db: s.db, key: 'deferral', questionId: 1, clock: s.config.clock });
   assert.equal(chip.message.text, wrapBlocks(direct.paragraphs));
-  assert.equal(getThread(s.db, first.thread.id).turns, 3);
+  assert.equal((await getThread(s.db, first.thread.id)).turns, 3);
 });
 
 test('AC3 a rec thread created through POST /api/threads has a title after its first answer', async t => {
@@ -420,7 +419,7 @@ test('AC3 a rec thread created through POST /api/threads has a title after its f
   assert.equal(typeof r.thread.title, 'string');
   assert.ok(r.thread.title.length > 0);
   assert.equal(r.thread.titleSource, 'auto');
-  assert.equal(getThread(s.db, r.thread.id).title, r.thread.title);
+  assert.equal((await getThread(s.db, r.thread.id)).title, r.thread.title);
   const byChip = await threadCreate(s.ctx({ recId: 'deferral', questionId: 0 }));
   assert.equal(typeof byChip.thread.title, 'string', 'a chip question names the thread too');
   assert.equal(byChip.thread.titleSource, 'auto');
@@ -453,9 +452,9 @@ test('the fake engine scripts no goal proposal in a rec thread and still does in
 test('fakeAnswerScript reads the resolved rec in a rec thread and offers no goal there', async t => {
   const s = await demoCtx(t);
   const now = '2026-11-05T09:00:00.000Z';
-  s.db.prepare('INSERT INTO conversations (key, created_at, last_at, rec_id) VALUES (?, ?, ?, ?)').run('ask:aaaaaaaaaaaa', now, now, 'deferral');
-  s.db.prepare('INSERT INTO conversations (key, created_at, last_at) VALUES (?, ?, ?)').run('ask:bbbbbbbbbbbb', now, now);
-  const scenario = buildScenario(s.db);
+  await s.db.prepare('INSERT INTO conversations (key, created_at, last_at, rec_id) VALUES (?, ?, ?, ?)').run('ask:aaaaaaaaaaaa', now, now, 'deferral');
+  await s.db.prepare('INSERT INTO conversations (key, created_at, last_at) VALUES (?, ?, ?)').run('ask:bbbbbbbbbbbb', now, now);
+  const scenario = await buildScenario(s.db);
   const calls = (key, text, propose = true) => fakeAnswerScript({ scenario, key, text, propose })[0].toolCalls;
   const text = (key, t2) => fakeAnswerScript({ scenario, key, text: t2, propose: true })[1].text;
 
@@ -497,7 +496,7 @@ async function fails(resPromise, status) {
 const threadsOf = s => ok(request(s.baseUrl, { path: '/api/threads' }));
 const startOver = (s, id) => postJson(s.baseUrl, `/api/recs/${id}/start-over`, {});
 
-test('POST /api/threads with recId streams start with the thread key, then progress, then final', T, () => withServer({ env: FAKE }, async s => {
+test('POST /api/threads with recId streams start with the thread key, then progress, then final', T, async () => withServer({ env: FAKE }, async s => {
   const r = await postJson(s.baseUrl, '/api/threads', { recId: 'deferral', text: 'Give me a quick read on this one' }, { accept: 'text/event-stream' });
   assert.equal(r.status, 200);
   assert.match(r.headers['content-type'], /^text\/event-stream/);
@@ -517,13 +516,13 @@ test('POST /api/threads with recId streams start with the thread key, then progr
   assert.ok(final.message.refs.includes('deferral'));
   const db = await openStore(s.dbFile);
   try {
-    const row = db.prepare('SELECT rec_id FROM conversations WHERE key = ?').get(final.thread.key);
+    const row = await db.prepare('SELECT rec_id FROM conversations WHERE key = ?').get(final.thread.key);
     assert.equal(row.rec_id, 'deferral');
-    assert.deepEqual(db.prepare('SELECT role FROM messages WHERE conversation_key = ? ORDER BY id').all(final.thread.key).map(x => x.role), ['me', 'fathom']);
-  } finally { db.close(); }
+    assert.deepEqual((await db.prepare('SELECT role FROM messages WHERE conversation_key = ? ORDER BY id').all(final.thread.key)).map(x => x.role), ['me', 'fathom']);
+  } finally { await db.close(); }
 }));
 
-test('POST /api/threads and /api/ask refusals over HTTP, each next to a request that succeeds', T, () => withServer({ env: FAKE }, async s => {
+test('POST /api/threads and /api/ask refusals over HTTP, each next to a request that succeeds', T, async () => withServer({ env: FAKE }, async s => {
   await fails(postJson(s.baseUrl, '/api/threads', { recId: 'no-such-rec', text: 'Synthetic question' }), 404);
   await fails(postJson(s.baseUrl, '/api/threads', { recId: 'daf', text: 'Synthetic question' }), 404);
   await fails(postJson(s.baseUrl, '/api/threads', { recId: 'deferral' }), 400);
@@ -540,7 +539,7 @@ test('POST /api/threads and /api/ask refusals over HTTP, each next to a request 
   assert.equal(more.scenario.live.conversations[made.thread.key].length, 4);
 }));
 
-test('POST /api/recs/:id/start-over detaches every attached thread of that rec and keeps them in Ask', T, () => withServer({ env: FAKE }, async s => {
+test('POST /api/recs/:id/start-over detaches every attached thread of that rec and keeps them in Ask', T, async () => withServer({ env: FAKE }, async s => {
   const a = (await ok(postJson(s.baseUrl, '/api/threads', { recId: 'deferral', text: 'Synthetic question one' }))).thread;
   const b = (await ok(postJson(s.baseUrl, '/api/threads', { recId: 'deferral', questionId: 0 }))).thread;
   const other = (await ok(postJson(s.baseUrl, '/api/threads', { recId: 'dcfsa', text: 'Synthetic other rec question' }))).thread;

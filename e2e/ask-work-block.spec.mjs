@@ -13,12 +13,12 @@
 // fixed point, a pacer in the page hands the client the real event stream one event at a time and
 // can hold delivery between events; it never changes, drops or invents an event.
 
-import { DatabaseSync } from 'node:sqlite';
+import { openScope } from '../src/storage/index.mjs';
 import { test, expect, REMOTE, resetDemo, gotoRoute, recDialog, rec, plain, ASK_THREAD_URL, askInput } from './helpers.mjs';
 import { householdStoreFile, localDataDir } from './local-store.mjs';
 
 // The main demo server's household store (households/<id>/fathom.sqlite under E2E_DATA).
-const STORE = () => householdStoreFile(localDataDir());
+const STORE = async () => await householdStoreFile(localDataDir());
 
 const SHOW = 'Show your work: where does the household stand?';
 const QUICK = 'Give me a quick read on where the household stands right now';
@@ -79,7 +79,7 @@ async function installPacer(page) {
             if (done) {
               if (buf) ctl.enqueue(enc.encode(buf));
               buf = '';
-              ctl.close();
+              await ctl.close();
               return;
             }
             const { value, done: end } = await reader.read();
@@ -589,12 +589,11 @@ test('@mobile @wb-ac4 a message stored without work renders no block', async ({ 
   const stored = await lastAnswer(request, thread.id);
   expect(stored.provenance && stored.provenance.work, 'a new answer stores its work').toBeTruthy();
   // Strip the work from the stored row, as a message from before this change has none.
-  const db = new DatabaseSync(STORE());
+  const db = await openScope({ path: await STORE(), journal: null, busyTimeout: 5000 });
   try {
-    db.exec('PRAGMA busy_timeout = 5000');
-    db.prepare("UPDATE messages SET provenance = json_remove(provenance, '$.work') WHERE id = ?").run(Number(String(stored.id).replace(/^m/, '')));
+    await db.prepare("UPDATE messages SET provenance = json_remove(provenance, '$.work') WHERE id = ?").run(Number(String(stored.id).replace(/^m/, '')));
   } finally {
-    db.close();
+    await db.close();
   }
   const old = await lastAnswer(request, thread.id);
   expect(old.provenance.work).toBeUndefined();

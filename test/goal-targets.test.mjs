@@ -25,6 +25,7 @@ import { setSetting } from '../src/store/db.mjs';
 import { goalKind, spendingFigures, spendingInputs, TARGET_PARAMETERS } from '../src/calc/targets.mjs';
 import { accountLabel } from '../src/shared/account-label.mjs';
 import { buildSuggestions, SUGGEST_SETTING } from '../src/suggest/build.mjs';
+import { forEachSeries } from '../src/shared/series.mjs';
 
 const CLOCK = '2026-11-05';
 const ASK = 'What amount would make this real?';
@@ -34,57 +35,57 @@ const digitFree = s => !/\d/.test(String(s).replace(/401\s*\(\s*k\s*\)|401k|529/
 
 async function store(t, clock = CLOCK) {
   const s = await tempDb();
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
-  setSetting(s.db, 'clock', clock);
-  setSetting(s.db, 'mode', 'real');
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  await setSetting(s.db, 'clock', clock);
+  await setSetting(s.db, 'mode', 'real');
   return s.db;
 }
 
-const account = (db, id, kind, name) =>
-  db.prepare("INSERT INTO accounts (id, inst, name, kind) VALUES (?, 'Example Bank', ?, ?)").run(id, name, kind);
-const balance = (db, id, date, amount) =>
-  db.prepare("INSERT INTO balances (account_id, date, amount, parser, locator) VALUES (?, ?, ?, 'fixture', 'balance')").run(id, date, amount);
-const position = (db, id, date, symbol, value) =>
-  db.prepare("INSERT INTO positions (account_id, as_of, symbol, value, parser, locator) VALUES (?, ?, ?, ?, 'fixture', 'row')").run(id, date, symbol, value);
-const txn = (db, id, date, amount, description = 'Synthetic entry') =>
-  db.prepare("INSERT INTO transactions (account_id, date, amount, description, parser, locator) VALUES (?, ?, ?, ?, 'fixture', 'row')").run(id, date, amount, description);
+const account = async (db, id, kind, name) =>
+  await db.prepare("INSERT INTO accounts (id, inst, name, kind) VALUES (?, 'Example Bank', ?, ?)").run(id, name, kind);
+const balance = async (db, id, date, amount) =>
+  await db.prepare("INSERT INTO balances (account_id, date, amount, parser, locator) VALUES (?, ?, ?, 'fixture', 'balance')").run(id, date, amount);
+const position = async (db, id, date, symbol, value) =>
+  await db.prepare("INSERT INTO positions (account_id, as_of, symbol, value, parser, locator) VALUES (?, ?, ?, ?, 'fixture', 'row')").run(id, date, symbol, value);
+const txn = async (db, id, date, amount, description = 'Synthetic entry') =>
+  await db.prepare("INSERT INTO transactions (account_id, date, amount, description, parser, locator) VALUES (?, ?, ?, ?, 'fixture', 'row')").run(id, date, amount, description);
 
-function putGoal(db, id, { origin = 'owner', archived = false, ...fields } = {}) {
+async function putGoal(db, id, { origin = 'owner', archived = false, ...fields } = {}) {
   const def = { id, title: 'A goal', note: '', horizon: 'now', target: null, targetDate: null, track: null, ...fields };
-  db.prepare('INSERT INTO goals (id, def, sort, origin, created_at, updated_at, archived_at) VALUES (?, ?, 0, ?, ?, ?, ?)')
+  await db.prepare('INSERT INTO goals (id, def, sort, origin, created_at, updated_at, archived_at) VALUES (?, ?, 0, ?, ?, ?, ?)')
     .run(id, JSON.stringify(def), origin, CLOCK, CLOCK, archived ? CLOCK : null);
   return def;
 }
-function editGoal(db, id, patch) {
-  const def = { ...JSON.parse(db.prepare('SELECT def FROM goals WHERE id = ?').get(id).def), ...patch };
-  db.prepare('UPDATE goals SET def = ? WHERE id = ?').run(JSON.stringify(def), id);
+async function editGoal(db, id, patch) {
+  const def = { ...JSON.parse((await db.prepare('SELECT def FROM goals WHERE id = ?').get(id)).def), ...patch };
+  await db.prepare('UPDATE goals SET def = ? WHERE id = ?').run(JSON.stringify(def), id);
 }
 
-function household(db, {
+async function household(db, {
   months = [1, 2, 3, 4, 5, 6, 7, 8], skip = [], income = 4005, spend = 3005,
   cash = { chk: 2000, sav: 5000 }, brokerage = [150000, 150000], retirement = 200000,
 } = {}) {
-  account(db, 'chk', 'checking', 'Joint checking');
-  account(db, 'sav', 'savings', 'High yield savings');
-  account(db, 'wal', 'cash', 'Wallet cash');
-  account(db, 'biz', 'business', 'Business checking');
-  account(db, 'brk', 'taxable', 'Taxable brokerage');
-  account(db, 'ret', 'retirement', 'Rollover IRA');
-  account(db, 'rth', 'roth', 'Roth IRA');
-  account(db, 'hsa', 'hsa', 'Family HSA');
+  await account(db, 'chk', 'checking', 'Joint checking');
+  await account(db, 'sav', 'savings', 'High yield savings');
+  await account(db, 'wal', 'cash', 'Wallet cash');
+  await account(db, 'biz', 'business', 'Business checking');
+  await account(db, 'brk', 'taxable', 'Taxable brokerage');
+  await account(db, 'ret', 'retirement', 'Rollover IRA');
+  await account(db, 'rth', 'roth', 'Roth IRA');
+  await account(db, 'hsa', 'hsa', 'Family HSA');
   for (const m of months) {
     if (skip.includes(m)) continue;
-    txn(db, 'chk', `2026-${pad(m)}-10`, income, 'Paycheck');
-    txn(db, 'chk', `2026-${pad(m)}-15`, -spend, 'Rent');
+    await txn(db, 'chk', `2026-${pad(m)}-10`, income, 'Paycheck');
+    await txn(db, 'chk', `2026-${pad(m)}-15`, -spend, 'Rent');
   }
-  for (const [id, v] of Object.entries(cash)) balance(db, id, '2026-10-31', v);
-  balance(db, 'biz', '2026-10-31', 40000);
-  brokerage.forEach((v, i) => position(db, 'brk', '2026-10-31', `FUND${'AB'[i] || i}`, v));
-  if (retirement != null) balance(db, 'ret', '2026-10-31', retirement);
-  balance(db, 'hsa', '2026-10-31', 10000);
+  for (const [id, v] of Object.entries(cash)) await balance(db, id, '2026-10-31', v);
+  await balance(db, 'biz', '2026-10-31', 40000);
+  await forEachSeries(brokerage, async (v, i) => await position(db, 'brk', '2026-10-31', `FUND${'AB'[i] || i}`, v));
+  if (retirement != null) await balance(db, 'ret', '2026-10-31', retirement);
+  await balance(db, 'hsa', '2026-10-31', 10000);
 }
 
-const build = (db, clock = CLOCK) => buildSuggestions(db, { clock });
+const build = async (db, clock = CLOCK) => await buildSuggestions(db, { clock });
 const recOf = (r, id) => r.suggestions.find(s => s.goalId === id);
 const figOf = (r, rec, name) => r.figures[rec.figures[name]];
 
@@ -116,10 +117,10 @@ test('goalKind ignores scenario tokens in the title and note', () => {
 
 test('the spending window drops the partial first and last months: January to August gives Feb to Jul', async t => {
   const db = await store(t);
-  household(db);
-  putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
-  putGoal(db, 'free', { title: 'Work less, on our terms', horizon: '3-10y' });
-  const r = build(db);
+  await household(db);
+  await putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
+  await putGoal(db, 'free', { title: 'Work less, on our terms', horizon: '3-10y' });
+  const r = await build(db);
   assert.equal(r.clock, CLOCK);
   const rec = recOf(r, 'cushion');
   assert.equal(rec.state, 'suggested');
@@ -134,36 +135,36 @@ test('the spending window drops the partial first and last months: January to Au
 
 test('a matched transfer to another household account is not spending; an unmatched one is', async t => {
   const db = await store(t);
-  household(db);
-  putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
+  await household(db);
+  await putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
   // Checking to brokerage, same cents, three days apart: a transfer, left out of spending.
-  txn(db, 'chk', '2026-03-20', -500, 'Transfer out');
-  txn(db, 'brk', '2026-03-23', 500, 'Transfer in');
-  let r = build(db);
+  await txn(db, 'chk', '2026-03-20', -500, 'Transfer out');
+  await txn(db, 'brk', '2026-03-23', 500, 'Transfer in');
+  let r = await build(db);
   assert.equal(figOf(r, recOf(r, 'cushion'), 'monthlySpend').v, 3005);
   // The same inflow eight days later is outside the five-day rule: the outflow is spending.
-  db.prepare("UPDATE transactions SET date = '2026-03-28' WHERE account_id = 'brk'").run();
-  r = build(db);
+  await db.prepare("UPDATE transactions SET date = '2026-03-28' WHERE account_id = 'brk'").run();
+  r = await build(db);
   const spend = figOf(r, recOf(r, 'cushion'), 'monthlySpend').v;
   assert.ok(Math.abs(spend - 3088.33) < 0.01, `monthly spending ${spend} counts the unmatched outflow`);
 });
 
 test('a month with no transaction on a participating account splits the window; the latest run is kept', async t => {
   const db = await store(t);
-  household(db, { months: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], skip: [3] });
-  putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
-  const rec = recOf(build(db), 'cushion');
+  await household(db, { months: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10], skip: [3] });
+  await putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
+  const rec = recOf(await build(db), 'cushion');
   assert.equal(rec.state, 'suggested');
   assert.deepEqual(rec.window, { from: '2026-04', to: '2026-09', months: 6 });
 });
 
 test('a card that opens inside the window does not shorten it', async t => {
   const db = await store(t);
-  household(db);
-  account(db, 'crd', 'card', 'Rewards card');
-  for (const m of [6, 7, 8]) txn(db, 'crd', `2026-0${m}-15`, -100, 'Groceries');
-  putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
-  const r = build(db);
+  await household(db);
+  await account(db, 'crd', 'card', 'Rewards card');
+  for (const m of [6, 7, 8]) await txn(db, 'crd', `2026-0${m}-15`, -100, 'Groceries');
+  await putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
+  const r = await build(db);
   const rec = recOf(r, 'cushion');
   // Checking still sets Feb to Jul. The card's only complete month is July, so its 100 counts there.
   assert.equal(rec.state, 'suggested');
@@ -299,13 +300,13 @@ test('no_spending_history remains when fewer than three complete months survive'
 
 test('the spending note uses stored display names, not the kind word', async t => {
   const db = await store(t);
-  household(db, { months: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] });
-  db.prepare('UPDATE accounts SET name = ?, display_name = ? WHERE id = ?').run('chase_total_checking', 'Bills account', 'chk');
-  account(db, 'part', 'card', 'travel_rewards_card');
-  db.prepare('UPDATE accounts SET display_name = ? WHERE id = ?').run('Travel card', 'part');
-  txn(db, 'part', '2026-11-02', -50, 'One charge');
-  putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
-  const r = build(db);
+  await household(db, { months: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11] });
+  await db.prepare('UPDATE accounts SET name = ?, display_name = ? WHERE id = ?').run('chase_total_checking', 'Bills account', 'chk');
+  await account(db, 'part', 'card', 'travel_rewards_card');
+  await db.prepare('UPDATE accounts SET display_name = ? WHERE id = ?').run('Travel card', 'part');
+  await txn(db, 'part', '2026-11-02', -50, 'One charge');
+  await putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
+  const r = await build(db);
   const rec = recOf(r, 'cushion');
   const note = figOf(r, rec, 'monthlySpend').notes.join(' ');
   assert.ok(note.includes('Bills account'), note);
@@ -315,10 +316,10 @@ test('the spending note uses stored display names, not the kind word', async t =
 
 test('fewer than three complete months is a question, not a number', async t => {
   const db = await store(t);
-  household(db, { months: [1, 2, 3, 4] });
-  putGoal(db, 'cushion', { title: 'A cash cushion' });
-  putGoal(db, 'free', { title: 'work becomes optional because investments cover household spending', horizon: '3-10y' });
-  const r = build(db);
+  await household(db, { months: [1, 2, 3, 4] });
+  await putGoal(db, 'cushion', { title: 'A cash cushion' });
+  await putGoal(db, 'free', { title: 'work becomes optional because investments cover household spending', horizon: '3-10y' });
+  const r = await build(db);
   for (const id of ['cushion', 'free']) {
     const rec = recOf(r, id);
     assert.equal(rec.state, 'question', id);
@@ -331,9 +332,9 @@ test('fewer than three complete months is a question, not a number', async t => 
 
 test('cushion: six months of spending rounded up to the next hundred, tracking personal cash with a balance', async t => {
   const db = await store(t);
-  household(db);
-  putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
-  const r = build(db);
+  await household(db);
+  await putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
+  const r = await build(db);
   const rec = recOf(r, 'cushion');
   assert.equal(rec.kind, 'cushion');
   assert.equal(rec.state, 'suggested');
@@ -363,9 +364,9 @@ test('cushion: six months of spending rounded up to the next hundred, tracking p
 
 test('cushion already covered: the date is the end of the chosen horizon and covered is true', async t => {
   const db = await store(t);
-  household(db, { cash: { chk: 2000, sav: 20000 } });
-  putGoal(db, 'cushion', { title: 'A cash cushion', horizon: 'now' });
-  const r = build(db);
+  await household(db, { cash: { chk: 2000, sav: 20000 } });
+  await putGoal(db, 'cushion', { title: 'A cash cushion', horizon: 'now' });
+  const r = await build(db);
   const rec = recOf(r, 'cushion');
   assert.equal(rec.state, 'suggested');
   assert.equal(rec.covered, true);
@@ -379,9 +380,9 @@ test('cushion already covered: the date is the end of the chosen horizon and cov
 
 test('cushion with savings not positive: no projection, the date is the horizon end', async t => {
   const db = await store(t);
-  household(db, { income: 3005 });
-  putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
-  const r = build(db);
+  await household(db, { income: 3005 });
+  await putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
+  const r = await build(db);
   const rec = recOf(r, 'cushion');
   assert.equal(figOf(r, rec, 'monthlySavings').v, 0);
   assert.equal(rec.dateSource, 'horizon');
@@ -393,9 +394,9 @@ test('cushion with savings not positive: no projection, the date is the horizon 
 
 test('independence: annual spending over the withdrawal rate, rounded up to the next thousand, tracking investments', async t => {
   const db = await store(t);
-  household(db);
-  putGoal(db, 'free', { title: 'Work less, on our terms', horizon: '3-10y' });
-  const r = build(db);
+  await household(db);
+  await putGoal(db, 'free', { title: 'Work less, on our terms', horizon: '3-10y' });
+  const r = await build(db);
   const rec = recOf(r, 'free');
   assert.equal(rec.kind, 'independence');
   assert.equal(rec.state, 'suggested');
@@ -418,15 +419,15 @@ test('independence: annual spending over the withdrawal rate, rounded up to the 
 
 test('independence: a remembered withdrawal rate changes the target; the newest valid one wins', async t => {
   const db = await store(t);
-  household(db);
-  putGoal(db, 'free', { title: 'Work less, on our terms', horizon: '3-10y' });
+  await household(db);
+  await putGoal(db, 'free', { title: 'Work less, on our terms', horizon: '3-10y' });
   assert.equal(SUGGEST_SETTING, 'goals.suggestions');
-  const remember = (id, text, at) => db.prepare("INSERT INTO preferences (id, text, actor_id, created_at, updated_at) VALUES (?, ?, 'owner', ?, ?)").run(id, text, at, at);
-  remember('a', 'Plan on a 3% withdrawal rate', '2026-10-01T00:00:00.000Z');
-  remember('b', 'Use a withdrawal rate of 3.5%', '2026-10-02T00:00:00.000Z');
-  remember('c', 'Withdrawal rate 9%, which is out of range', '2026-10-03T00:00:00.000Z');
-  remember('d', 'Keep cash flexible', '2026-10-04T00:00:00.000Z');
-  const r = build(db);
+  const remember = async (id, text, at) => await db.prepare("INSERT INTO preferences (id, text, actor_id, created_at, updated_at) VALUES (?, ?, 'owner', ?, ?)").run(id, text, at, at);
+  await remember('a', 'Plan on a 3% withdrawal rate', '2026-10-01T00:00:00.000Z');
+  await remember('b', 'Use a withdrawal rate of 3.5%', '2026-10-02T00:00:00.000Z');
+  await remember('c', 'Withdrawal rate 9%, which is out of range', '2026-10-03T00:00:00.000Z');
+  await remember('d', 'Keep cash flexible', '2026-10-04T00:00:00.000Z');
+  const r = await build(db);
   const rec = recOf(r, 'free');
   assert.equal(rec.params.withdrawalRate, 0.035);
   assert.equal(figOf(r, rec, 'target').v, 1031000, '36,060 / 0.035 = 1,030,285.71, rounded up to 1,031,000');
@@ -436,9 +437,9 @@ test('independence: a remembered withdrawal rate changes the target; the newest 
 
 test('independence beyond fifty years of saving: the date is the end of the Long range horizon', async t => {
   const db = await store(t);
-  household(db, { income: 3006, brokerage: [500, 500], retirement: null });
-  putGoal(db, 'free', { title: 'Work less, on our terms', horizon: '3-10y' });
-  const r = build(db);
+  await household(db, { income: 3006, brokerage: [500, 500], retirement: null });
+  await putGoal(db, 'free', { title: 'Work less, on our terms', horizon: '3-10y' });
+  const r = await build(db);
   const rec = recOf(r, 'free');
   assert.equal(figOf(r, rec, 'monthlySavings').v, 1);
   assert.equal(figOf(r, rec, 'current').v, 1000);
@@ -450,11 +451,11 @@ test('independence beyond fifty years of saving: the date is the end of the Long
 
 test('a brokerage to checking transfer is not income, so it does not raise savings', async t => {
   const db = await store(t);
-  household(db);
-  putGoal(db, 'free', { title: 'Work less, on our terms', horizon: '3-10y' });
-  txn(db, 'brk', '2026-05-03', -2000, 'Withdrawal');
-  txn(db, 'chk', '2026-05-05', 2000, 'Transfer from brokerage');
-  const r = build(db);
+  await household(db);
+  await putGoal(db, 'free', { title: 'Work less, on our terms', horizon: '3-10y' });
+  await txn(db, 'brk', '2026-05-03', -2000, 'Withdrawal');
+  await txn(db, 'chk', '2026-05-05', 2000, 'Transfer from brokerage');
+  const r = await build(db);
   const rec = recOf(r, 'free');
   assert.equal(figOf(r, rec, 'monthlySavings').v, 1000);
   assert.equal(figOf(r, rec, 'monthlySpend').v, 3005);
@@ -462,18 +463,18 @@ test('a brokerage to checking transfer is not income, so it does not raise savin
 
 // ---------------------------------------------------------------- tax
 
-function room(db, key, v, computedOn, { unavailable = null, kind = 'm' } = {}) {
-  db.prepare("INSERT OR IGNORE INTO sources (id, label) VALUES ('calc:retirement', 'Retirement room calculators')").run();
-  db.prepare("INSERT INTO figures (key, v, src, kind, label, locator, updated_at, unavailable_reason) VALUES (?, ?, 'calc:retirement', ?, 'Room left this year', ?, ?, ?)")
+async function room(db, key, v, computedOn, { unavailable = null, kind = 'm' } = {}) {
+  await db.prepare("INSERT OR IGNORE INTO sources (id, label) VALUES ('calc:retirement', 'Retirement room calculators')").run();
+  await db.prepare("INSERT INTO figures (key, v, src, kind, label, locator, updated_at, unavailable_reason) VALUES (?, ?, 'calc:retirement', ?, 'Room left this year', ?, ?, ?)")
     .run(key, v, kind, JSON.stringify({ calc: 'room', inputs: {}, computedOn }), `${computedOn}T09:00:00.000Z`, unavailable);
 }
 
 test('tax: this year\'s room from stored planner figures, by Dec 31, tracking nothing', async t => {
   const db = await store(t);
-  room(db, 'room.solo401k.pretax', 20000, '2026-11-01');
-  room(db, 'room.hsa', 4000, '2026-11-01');
-  putGoal(db, 'tax', { title: 'Pay less tax, without stress' });
-  const r = build(db);
+  await room(db, 'room.solo401k.pretax', 20000, '2026-11-01');
+  await room(db, 'room.hsa', 4000, '2026-11-01');
+  await putGoal(db, 'tax', { title: 'Pay less tax, without stress' });
+  const r = await build(db);
   const rec = recOf(r, 'tax');
   assert.equal(rec.kind, 'tax');
   assert.equal(rec.state, 'suggested');
@@ -495,10 +496,10 @@ test('tax: this year\'s room from stored planner figures, by Dec 31, tracking no
 
 test('tax: a withheld room figure is ignored', async t => {
   const db = await store(t);
-  room(db, 'room.solo401k.pretax', 20000, '2026-11-01');
-  room(db, 'room.hsa', 4000, '2026-11-01', { unavailable: 'Waiting on payroll records' });
-  putGoal(db, 'tax', { title: 'Pay less tax, without stress' });
-  const r = build(db);
+  await room(db, 'room.solo401k.pretax', 20000, '2026-11-01');
+  await room(db, 'room.hsa', 4000, '2026-11-01', { unavailable: 'Waiting on payroll records' });
+  await putGoal(db, 'tax', { title: 'Pay less tax, without stress' });
+  const r = await build(db);
   const rec = recOf(r, 'tax');
   assert.equal(figOf(r, rec, 'target').v, 20000);
   assert.equal(rec.figures.rooms.length, 1);
@@ -506,10 +507,10 @@ test('tax: a withheld room figure is ignored', async t => {
 
 test('tax: room computed in January belongs to last year\'s planning year, so January asks', async t => {
   const db = await store(t, '2027-01-15');
-  room(db, 'room.solo401k.pretax', 20000, '2027-01-10');
-  room(db, 'room.hsa', 4000, '2027-01-10');
-  putGoal(db, 'tax', { title: 'Pay less tax, without stress' });
-  const rec = recOf(build(db, '2027-01-15'), 'tax');
+  await room(db, 'room.solo401k.pretax', 20000, '2027-01-10');
+  await room(db, 'room.hsa', 4000, '2027-01-10');
+  await putGoal(db, 'tax', { title: 'Pay less tax, without stress' });
+  const rec = recOf(await build(db, '2027-01-15'), 'tax');
   assert.equal(rec.state, 'question');
   assert.ok(rec.missing.includes('no_tax_room'), `missing ${rec.missing}`);
   assert.equal(rec.accept, null);
@@ -517,9 +518,9 @@ test('tax: room computed in January belongs to last year\'s planning year, so Ja
 
 test('tax: no room figures at all is a question', async t => {
   const db = await store(t);
-  household(db);
-  putGoal(db, 'tax', { title: 'Pay less tax, without stress' });
-  const rec = recOf(build(db), 'tax');
+  await household(db);
+  await putGoal(db, 'tax', { title: 'Pay less tax, without stress' });
+  const rec = recOf(await build(db), 'tax');
   assert.equal(rec.state, 'question');
   assert.ok(rec.missing.includes('no_tax_room'));
 });
@@ -528,14 +529,14 @@ test('tax: no room figures at all is a question', async t => {
 
 test('questions never carry a number', async t => {
   const db = await store(t);
-  putGoal(db, 'kids', { title: 'Kids and family' });
-  putGoal(db, 'both', { title: 'Retire early and cut taxes' });
-  putGoal(db, 'cushion', { title: 'A cash cushion' });
-  putGoal(db, 'free', { title: 'Work less, on our terms' });
+  await putGoal(db, 'kids', { title: 'Kids and family' });
+  await putGoal(db, 'both', { title: 'Retire early and cut taxes' });
+  await putGoal(db, 'cushion', { title: 'A cash cushion' });
+  await putGoal(db, 'free', { title: 'Work less, on our terms' });
   // Spending exists but no cash or investment account holds a stored value.
-  household(db, { cash: {}, brokerage: [], retirement: null });
-  db.prepare("DELETE FROM balances WHERE account_id IN ('biz', 'hsa')").run();
-  const r = build(db);
+  await household(db, { cash: {}, brokerage: [], retirement: null });
+  await db.prepare("DELETE FROM balances WHERE account_id IN ('biz', 'hsa')").run();
+  const r = await build(db);
   const expect = { kids: 'unsupported_goal', both: 'ambiguous_goal', cushion: 'no_cash_balance', free: 'no_investment_balance' };
   for (const [id, code] of Object.entries(expect)) {
     const rec = recOf(r, id);
@@ -553,8 +554,8 @@ test('questions never carry a number', async t => {
 
 test('a store with no accounts asks on every starter goal', async t => {
   const db = await store(t);
-  for (const [id, title] of [['c', 'A cash cushion'], ['w', 'Work less, on our terms'], ['p', 'Pay less tax, without stress']]) putGoal(db, id, { title });
-  const r = build(db);
+  for (const [id, title] of [['c', 'A cash cushion'], ['w', 'Work less, on our terms'], ['p', 'Pay less tax, without stress']]) await putGoal(db, id, { title });
+  const r = await build(db);
   assert.equal(r.suggestions.length, 3);
   for (const rec of r.suggestions) {
     assert.equal(rec.state, 'question', rec.goalId);
@@ -568,39 +569,39 @@ test('a store with no accounts asks on every starter goal', async t => {
 
 test('a declined suggestion stays declined when the goal text or an input changes', async t => {
   const db = await store(t);
-  household(db);
-  putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
-  setSetting(db, SUGGEST_SETTING, { cushion: { declined: true } });
-  let rec = recOf(build(db), 'cushion');
+  await household(db);
+  await putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
+  await setSetting(db, SUGGEST_SETTING, { cushion: { declined: true } });
+  let rec = recOf(await build(db), 'cushion');
   assert.equal(rec.state, 'declined');
   assert.equal(rec.accept.target, 18100, 'a declined record keeps the suggestion it hides');
   assert.ok(rec.figures.target);
 
-  editGoal(db, 'cushion', { title: 'Our cash cushion' });
-  assert.equal(recOf(build(db), 'cushion').state, 'declined', 'a new title does not revive it');
-  txn(db, 'chk', '2026-05-20', -120, 'Hardware store');
-  assert.equal(recOf(build(db), 'cushion').state, 'declined', 'new spending does not revive it');
+  await editGoal(db, 'cushion', { title: 'Our cash cushion' });
+  assert.equal(recOf(await build(db), 'cushion').state, 'declined', 'a new title does not revive it');
+  await txn(db, 'chk', '2026-05-20', -120, 'Hardware store');
+  assert.equal(recOf(await build(db), 'cushion').state, 'declined', 'new spending does not revive it');
 
   // Entries for goals that do not exist, and old dismissal entries, are ignored.
-  setSetting(db, SUGGEST_SETTING, { gone: { declined: true }, cushion: { dismissed: rec.fingerprint } });
-  assert.equal(recOf(build(db), 'cushion').state, 'suggested');
+  await setSetting(db, SUGGEST_SETTING, { gone: { declined: true }, cushion: { dismissed: rec.fingerprint } });
+  assert.equal(recOf(await build(db), 'cushion').state, 'suggested');
 });
 
 // ---------------------------------------------------------------- provenance and scope
 
 test('every suggested figure carries calculator provenance; only untargeted owner goals get a record', async t => {
   const db = await store(t);
-  household(db);
-  room(db, 'room.solo401k.pretax', 20000, '2026-11-01');
-  putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
-  putGoal(db, 'free', { title: 'Work less, on our terms', horizon: '3-10y' });
-  putGoal(db, 'tax', { title: 'Pay less tax, without stress' });
-  putGoal(db, 'seed', { title: 'A cash cushion', origin: 'seed' });
-  putGoal(db, 'set', { title: 'A cash cushion', target: 25000, targetDate: '2027-12-31', track: { accounts: ['chk'] } });
-  putGoal(db, 'zero', { title: 'A cash cushion', target: 0 });
-  putGoal(db, 'old', { title: 'A cash cushion', archived: true });
-  putGoal(db, 'done', { title: 'A cash cushion', status: 'done' });
-  const r = build(db);
+  await household(db);
+  await room(db, 'room.solo401k.pretax', 20000, '2026-11-01');
+  await putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
+  await putGoal(db, 'free', { title: 'Work less, on our terms', horizon: '3-10y' });
+  await putGoal(db, 'tax', { title: 'Pay less tax, without stress' });
+  await putGoal(db, 'seed', { title: 'A cash cushion', origin: 'seed' });
+  await putGoal(db, 'set', { title: 'A cash cushion', target: 25000, targetDate: '2027-12-31', track: { accounts: ['chk'] } });
+  await putGoal(db, 'zero', { title: 'A cash cushion', target: 0 });
+  await putGoal(db, 'old', { title: 'A cash cushion', archived: true });
+  await putGoal(db, 'done', { title: 'A cash cushion', status: 'done' });
+  const r = await build(db);
   assert.deepEqual(r.suggestions.map(s => s.goalId).sort(), ['cushion', 'free', 'tax']);
 
   const keys = Object.keys(r.figures);
@@ -643,22 +644,22 @@ test('every suggested figure carries calculator provenance; only untargeted owne
 
 // A checking account that belongs to the business: monthly outflows of 700 (January to August),
 // a stored balance of 9,000 and a 1,500 transfer into Joint checking on May 3 and 5.
-function businessChecking(db, id = 'bchk') {
-  account(db, id, 'checking', 'Studio operating');
-  for (const m of [1, 2, 3, 4, 5, 6, 7, 8]) txn(db, id, `2026-${pad(m)}-12`, -700, 'Vendor');
-  balance(db, id, '2026-10-31', 9000);
-  txn(db, id, '2026-05-03', -1500, 'Owner draw');
-  txn(db, 'chk', '2026-05-05', 1500, 'Draw from business');
+async function businessChecking(db, id = 'bchk') {
+  await account(db, id, 'checking', 'Studio operating');
+  for (const m of [1, 2, 3, 4, 5, 6, 7, 8]) await txn(db, id, `2026-${pad(m)}-12`, -700, 'Vendor');
+  await balance(db, id, '2026-10-31', 9000);
+  await txn(db, id, '2026-05-03', -1500, 'Owner draw');
+  await txn(db, 'chk', '2026-05-05', 1500, 'Draw from business');
 }
 
 for (const owner of ['business', 'Business']) {
   test(`a checking account owned by "${owner}" is not personal spending or cash; its transfer in is income`, async t => {
     const db = await store(t);
-    household(db);
-    putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
-    businessChecking(db);
-    db.prepare('UPDATE accounts SET owner = ? WHERE id = ?').run(owner, 'bchk');
-    const r = build(db);
+    await household(db);
+    await putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
+    await businessChecking(db);
+    await db.prepare('UPDATE accounts SET owner = ? WHERE id = ?').run(owner, 'bchk');
+    const r = await build(db);
     const rec = recOf(r, 'cushion');
     assert.equal(rec.state, 'suggested');
     assert.equal(figOf(r, rec, 'monthlySpend').v, 3005, 'business outflows are not personal spending');
@@ -672,12 +673,12 @@ for (const owner of ['business', 'Business']) {
 
 test('a checking account named in the accounts.businessEntity owner fact is not personal spending or cash', async t => {
   const db = await store(t);
-  household(db);
-  putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
-  businessChecking(db, 'echk');
-  db.prepare("INSERT INTO facts (key, value, src, confirmed, updated_at) VALUES ('accounts.businessEntity', ?, 'owner', 1, ?)")
+  await household(db);
+  await putGoal(db, 'cushion', { title: 'A cash cushion', horizon: '1-3y' });
+  await businessChecking(db, 'echk');
+  await db.prepare("INSERT INTO facts (key, value, src, confirmed, updated_at) VALUES ('accounts.businessEntity', ?, 'owner', 1, ?)")
     .run(JSON.stringify({ echk: 'Some LLC' }), CLOCK);
-  const r = build(db);
+  const r = await build(db);
   const rec = recOf(r, 'cushion');
   assert.equal(rec.state, 'suggested');
   assert.equal(figOf(r, rec, 'monthlySpend').v, 3005);

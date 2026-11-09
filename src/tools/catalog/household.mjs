@@ -16,15 +16,15 @@ export const operations = [
     params: {},
     required: [],
     scope: 'read',
-    handler(args, ctx) {
-      const clock = clockOf(ctx);
-      const recs = visible(loadLinkedRecs(ctx.db, clock));
+    async handler(args, ctx) {
+      const clock = await clockOf(ctx);
+      const recs = visible(await loadLinkedRecs(ctx.db, clock));
       const statusCounts = {};
       for (const r of recs) statusCounts[r.status] = (statusCounts[r.status] || 0) + 1;
       const facts = {};
-      for (const f of ctx.db.prepare('SELECT key, value FROM facts ORDER BY key').all()) facts[f.key] = parse(f.value, f.value);
-      const meta = loadContent(ctx.db).meta || {};
-      const mortgage = inferMortgage(ctx.db, clock, facts['obligations.mortgage']);
+      for (const f of await ctx.db.prepare('SELECT key, value FROM facts ORDER BY key').all()) facts[f.key] = parse(f.value, f.value);
+      const meta = (await loadContent(ctx.db)).meta || {};
+      const mortgage = await inferMortgage(ctx.db, clock, facts['obligations.mortgage']);
       if (mortgage.status === 'paid_off') facts['obligations.mortgage'] = mortgage.values;
       return {
         facts,
@@ -35,8 +35,8 @@ export const operations = [
         housekeepingCount: housekeepingCount(recs),
         dataThrough: meta.dataThrough || '',
         clock,
-        goals: goalsForModel(ctx.db),
-        curve: curveForModel(ctx.db),
+        goals: await goalsForModel(ctx.db),
+        curve: await curveForModel(ctx.db),
       };
     },
   },
@@ -46,8 +46,8 @@ export const operations = [
     params: { keys: { type: 'array', items: { type: 'string' }, maxItems: 500 } },
     required: [],
     scope: 'read',
-    handler(args, ctx) {
-      const rows = ctx.db.prepare('SELECT key, value, src, as_of, confirmed FROM facts ORDER BY key').all();
+    async handler(args, ctx) {
+      const rows = await ctx.db.prepare('SELECT key, value, src, as_of, confirmed FROM facts ORDER BY key').all();
       const want = args.keys ? new Set(args.keys) : null;
       return rows.filter(r => !want || want.has(r.key))
         .map(r => ({ key: r.key, value: parse(r.value, r.value), src: r.src, asOf: r.as_of, confirmed: !!r.confirmed }));
@@ -59,10 +59,10 @@ export const operations = [
     params: { from: { type: 'string', pattern: DATE }, to: { type: 'string', pattern: DATE } },
     required: [],
     scope: 'read',
-    handler(args, ctx) {
+    async handler(args, ctx) {
       const { clause, params } = where([['date >= ?', args.from], ['date <= ?', args.to]]);
-      const scope = tokenScope(ctx.db);
-      return ctx.db.prepare('SELECT * FROM deadlines' + clause + ' ORDER BY date, id').all(...params)
+      const scope = await tokenScope(ctx.db);
+      return (await ctx.db.prepare('SELECT * FROM deadlines' + clause + ' ORDER BY date, id').all(...params))
         .map(d => plainDeep(scope, { date: d.date, label: d.label, title: d.title, recId: d.rec_id, hard: !!d.hard }));
     },
   },

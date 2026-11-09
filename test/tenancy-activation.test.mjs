@@ -13,20 +13,20 @@ test('release migration 009 enables explicit provisioning on old and fresh platf
   const root = await tempDir('fathom-activation-');
   try {
     const file = join(root, 'old.sqlite');
-    const db = openDb(file);
-    migrate(db, { dir: PLATFORM_MIGRATIONS_DIR, through: 8 });
-    const before = db.prepare("SELECT sql FROM sqlite_master WHERE name IN ('users','passkeys') ORDER BY name").all();
-    db.prepare("INSERT INTO platform_settings(key,value,updated_at) VALUES ('multi_household_enabled','false',1)").run();
-    db.close();
-    const upgraded = openPlatform(file);
-    assert.equal(createAuthStore(upgraded).getPlatformSetting('multi_household_enabled', false), true);
-    assert.deepEqual(upgraded.prepare("SELECT sql FROM sqlite_master WHERE name IN ('users','passkeys') ORDER BY name").all(), before);
-    assert.equal(upgraded.prepare('SELECT count(*) n FROM households').get().n, 0, 'migration provisions nothing');
-    upgraded.close();
-    const fresh = createInstance(join(root, 'fresh'), { mode: 'real', init() {} });
-    assert.equal(createAuthStore(fresh.platform).getPlatformSetting('multi_household_enabled', false), true);
-    assert.equal(fresh.platform.prepare('SELECT count(*) n FROM households').get().n, 1);
-    fresh.db.close(); fresh.platform.close();
+    const db = await openDb(file);
+    await migrate(db, { dir: PLATFORM_MIGRATIONS_DIR, through: 8 });
+    const before = await db.prepare("SELECT sql FROM sqlite_master WHERE name IN ('users','passkeys') ORDER BY name").all();
+    await db.prepare("INSERT INTO platform_settings(key,value,updated_at) VALUES ('multi_household_enabled','false',1)").run();
+    await db.close();
+    const upgraded = await openPlatform(file);
+    assert.equal(await createAuthStore(upgraded).getPlatformSetting('multi_household_enabled', false), true);
+    assert.deepEqual(await upgraded.prepare("SELECT sql FROM sqlite_master WHERE name IN ('users','passkeys') ORDER BY name").all(), before);
+    assert.equal((await upgraded.prepare('SELECT count(*) n FROM households').get()).n, 0, 'migration provisions nothing');
+    await upgraded.close();
+    const fresh = await createInstance(join(root, 'fresh'), { mode: 'real', init() {} });
+    assert.equal(await createAuthStore(fresh.platform).getPlatformSetting('multi_household_enabled', false), true);
+    assert.equal((await fresh.platform.prepare('SELECT count(*) n FROM households').get()).n, 1);
+    await fresh.db.close(); await fresh.platform.close();
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -39,7 +39,7 @@ test('demo starts and resets with generated synthetic secrets and no mounted key
     const scenario = await request(server.baseUrl, { path: '/api/scenario' });
     assert.equal(scenario.status, 200);
     assert.equal((await postJson(server.baseUrl, '/api/demo/reset', {})).status, 200);
-    assert.equal(server.app.platform.prepare('SELECT count(*) n FROM households').get().n, 1);
+    assert.equal((await server.app.platform.prepare('SELECT count(*) n FROM households').get()).n, 1);
   } finally { await server?.close(); rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -55,6 +55,6 @@ test('real-session smoke provisions only by operator action and serves independe
       assert.equal((await own.member.client.post('/api/operator/households', {})).status, 403);
     }
     assert.equal((await f.operator.client.get('/api/scenario')).status, 403);
-    assert.equal(f.platform.prepare('SELECT count(*) n FROM households').get().n, 2);
+    assert.equal((await f.platform.prepare('SELECT count(*) n FROM households').get()).n, 2);
   } finally { await f.close(); }
 });

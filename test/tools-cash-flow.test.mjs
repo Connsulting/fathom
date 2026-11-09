@@ -6,12 +6,12 @@ import { assertRefsResolve } from './helpers/figures.mjs';
 
 test('cash flow keeps matched transfers out of inflow and outflow on both sides', async (t) => {
   const s = await spendingStore(t);
-  const out = s.tx('business', '2026-04-15', -77, 'Business', 'Owner distribution');
-  s.tx('checking', '2026-04-16', 77, 'Income', 'Distribution');
-  s.tx('checking', '2026-05-01', -33, null, 'Capital');
-  s.tx('business', '2026-05-02', 33, null, 'Capital');
-  s.tx('business', '2026-04-10', 137, 'Income', 'Client');
-  const rows = s.db.prepare('SELECT * FROM transactions').all();
+  const out = await s.tx('business', '2026-04-15', -77, 'Business', 'Owner distribution');
+  await s.tx('checking', '2026-04-16', 77, 'Income', 'Distribution');
+  await s.tx('checking', '2026-05-01', -33, null, 'Capital');
+  await s.tx('business', '2026-05-02', 33, null, 'Capital');
+  await s.tx('business', '2026-04-10', 137, 'Income', 'Client');
+  const rows = await s.db.prepare('SELECT * FROM transactions').all();
   assert.ok(
     matchTransfers(
       rows.filter((x) => x.amount < 0),
@@ -33,7 +33,7 @@ test('cash flow keeps matched transfers out of inflow and outflow on both sides'
 });
 
 test('cash flow attaches partial and missing-month gaps to monthly figures and totals', async t => {
-  const s=await spendingStore(t);s.tx('checking','2026-11-01',-7,'Shopping','Partial month');
+  const s=await spendingStore(t);await s.tx('checking','2026-11-01',-7,'Shopping','Partial month');
   const r=await s.call('cash_flow',{scope:'household'});
   assert.ok(r.gaps.some(g=>g.code==='incomplete_month'));
   assert.ok(r.months.find(m=>m.month==='2026-11').household.net.gaps.some(g=>g.code==='incomplete_month'));

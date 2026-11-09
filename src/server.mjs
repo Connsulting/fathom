@@ -48,9 +48,9 @@ const MODE_MISMATCH = {
 
 // Open (or create) the instance at config.dataDir following the instance mode rules. Returns
 // { platform, mode, secrets }; the caller closes the platform.
-export function openOrCreateInstance(config) {
+export async function openOrCreateInstance(config) {
   mkdirSync(config.dataDir, { recursive: true });
-  const opened = openInstance(config);
+  const opened = await openInstance(config);
   if (!opened) {
     const mode = config.demo === false ? 'real' : 'demo';
     if (mode === 'real') validatePublicUrl(config.publicUrl, { required: true });
@@ -64,8 +64,8 @@ export function openOrCreateInstance(config) {
       if (mode === 'demo') throw err;
     }
     try {
-      const made = createInstance(config.dataDir, { mode, init: mode === 'demo' ? seedDemo : () => {}, platformKey });
-      made.db.close();
+      const made = await createInstance(config.dataDir, { mode, init: mode === 'demo' ? seedDemo : () => {}, platformKey });
+      await made.db.close();
       return { platform: made.platform, mode, secrets };
     } finally {
       platformKey?.fill(0);
@@ -74,13 +74,13 @@ export function openOrCreateInstance(config) {
   const { platform, mode } = opened;
   try {
     // A public demo serves only a synthetic seeded demo; that refusal comes before any other.
-    if (config.publicDemo) assertPublicDemoInstance(config, platform, mode);
+    if (config.publicDemo) await assertPublicDemoInstance(config, platform, mode);
     if ((config.demo === true && mode !== 'demo') || (config.demo === false && mode === 'demo')) {
       throw new StartupError('instance_mode_mismatch', MODE_MISMATCH[mode]);
     }
     if (mode === 'real') validatePublicUrl(config.publicUrl, { required: true });
   } catch (e) {
-    platform.close();
+    await platform.close();
     throw e;
   }
   return { platform, mode, secrets: createInstanceSecrets({ config, mode }) };
@@ -104,11 +104,11 @@ const codeOf = err => [err && err.code, err && err.name].find(v => typeof v === 
 
 // Survivors of merges made before the carry-over existed get their institution and last 4 from
 // their SimpleFIN snapshot, in every served household. A failure never stops startup.
-function backfillMerged(runtimes) {
-  for (const id of runtimes.list()) {
+async function backfillMerged(runtimes) {
+  for (const id of await runtimes.list()) {
     try {
-      const household = runtimes.get(id);
-      if (household) backfillMergedIdentity(household.db);
+      const household = (await runtimes.get(id));
+      if (household) await backfillMergedIdentity(household.db);
     } catch (err) {
       console.error('fathom: merged account backfill failed', codeOf(err));
     }
@@ -117,10 +117,10 @@ function backfillMerged(runtimes) {
 
 // A public demo serves only synthetic sandboxes: the instance must be a demo whose household
 // store carries the seeder's marker.
-function assertPublicDemoInstance(config, platform, mode) {
-  const row = platform.prepare('SELECT storage_root FROM households WHERE serves_store = 1').get();
+async function assertPublicDemoInstance(config, platform, mode) {
+  const row = await platform.prepare('SELECT storage_root FROM households WHERE serves_store = 1').get();
   if (mode !== 'demo' || !row?.storage_root) throw new Error('public demo: refusing a store without the synthetic seeder marker');
-  assertSyntheticStore(join(config.dataDir, row.storage_root, DB_FILE));
+  await assertSyntheticStore(join(config.dataDir, row.storage_root, DB_FILE));
 }
 
 async function listen(server, config) {
@@ -138,17 +138,17 @@ const urlOf = (server, config) => `http://${config.host.includes(':') ? `[${conf
 async function startPublicDemo(config, platform) {
   let demo;
   try {
-    demo = createPublicDemoHandler(config, { platform });
+    demo = await createPublicDemoHandler(config, { platform });
   } catch (err) {
-    try { platform.close(); } catch { /* already closed */ }
+    try { await platform.close(); } catch { /* already closed */ }
     throw err;
   }
   const server = applyTimeouts(http.createServer(demo.handle));
   try {
     await listen(server, config);
   } catch (err) {
-    demo.close();
-    platform.close();
+    await demo.close();
+    await platform.close();
     throw err;
   }
   let closing = null;
@@ -156,7 +156,7 @@ async function startPublicDemo(config, platform) {
     server, platform, runtimes: null, url: urlOf(server, config),
     close() {
       closing ??= new Promise(done => {
-        server.close(() => { demo.close(); platform.close(); done(); });
+        server.close(async () => { await demo.close(); await platform.close(); done(); });
         server.closeAllConnections();
       });
       return closing;
@@ -167,25 +167,25 @@ async function startPublicDemo(config, platform) {
 // options.engineOptions ({ testTransport, fundingNow }) is programmatic only, for tests: the
 // `node src/server.mjs` entry passes none and no config or environment key sets it.
 export async function startServer(config = loadConfig(), { engineOptions = {} } = {}) {
-  const { platform, mode, secrets } = openOrCreateInstance(config);
+  const { platform, mode, secrets } = await openOrCreateInstance(config);
   if (config.publicDemo) return startPublicDemo(config, platform);
   let runtimes = null;
   let backups = null;
   const closeAll = async () => {
     try { await backups?.close(); } catch { /* close anyway */ }
     try { await runtimes?.close(); } catch { /* close anyway */ }
-    try { platform.close(); } catch { /* already closed */ }
+    try { await platform.close(); } catch { /* already closed */ }
   };
   let server;
   try {
     await recoverHouseholdOperations({ platform, config });
     const transport = createEnrollmentTransport(config, { outboxDir: join(config.dataDir, 'outbox') });
-    const auth = createAuthService({ platform, config, transport, secrets });
+    const auth = await createAuthService({ platform, config, transport, secrets });
     // Live mode: every household's pre-MT-05 spend is carried before any household is admitted.
-    if (config.engine === 'live') carryAllHouseholds(platform, { dataDir: config.dataDir, now: (engineOptions.fundingNow ?? Date.now)() });
+    if (config.engine === 'live') await carryAllHouseholds(platform, { dataDir: config.dataDir, now: (engineOptions.fundingNow ?? Date.now)() });
     runtimes = createRuntimeRegistry({ platform, config, secrets, engineOptions });
-    backups = createBackupRunner({ platform, config, runtimes });
-    backfillMerged(runtimes);
+    backups = await createBackupRunner({ platform, config, runtimes });
+    await backfillMerged(runtimes);
     const keys = createKeyService({ platform, secret: () => secrets.mcpSecret(), creatorActive: auth.creatorActive });
     const mcp = createMcpHandler({ keys, runtimes, config });
     server = http.createServer(createHandler({ platform, config, runtimes, auth, keys, mcp, backups }));
@@ -203,7 +203,7 @@ export async function startServer(config = loadConfig(), { engineOptions = {} } 
     }
     throw e;
   }
-  runtimes.startAll();
+  await runtimes.startAll();
   let closing = null;
   return {
     server,
@@ -238,4 +238,4 @@ async function main() {
   process.once('SIGINT', stop);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) main();
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) await main();

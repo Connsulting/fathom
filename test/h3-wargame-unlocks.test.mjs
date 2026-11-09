@@ -107,7 +107,7 @@ test('AC1: each advisor wait names the answer needed and opens Ask to record it'
 // ---------------------------------------------------------------- AC2
 
 const S = scratch('fathom-h3-');
-after(() => S.cleanup());
+after(async () => await S.cleanup());
 const NOW = '2026-11-05';
 const api = (db, params = {}, body = {}) => ({ db, config: { clock: NOW }, params, body });
 const ownPlan = (type, amount) => ({ person: 'owner', plan: 'own-corp-401k', type, amount });
@@ -133,45 +133,45 @@ function assertExcluded(game, id, what) {
 test('AC2: a salary point over its contribution limit is dropped alone and the comparison still shows', async () => {
   const db = await S.store({ variant: { facts: { 'retirement.contributions': [ownPlan('employer', 12000)] } } });
   await planRun(db, { now: NOW });
-  const before = contentValue(db, 'wargame').salary.points;
+  const before = (await contentValue(db, 'wargame')).salary.points;
   assert.ok(before.some(p => p.id === 's50'), 'precondition: s50 is offered when valid');
   // Review F1: a pick after s50 must follow its point when s50 is left out.
   const picked = before[before.findIndex(p => p.id === 's50') + 1].id;
-  wargamePick(api(db, { name: 'salary' }, { index: picked }));
+  await wargamePick(api(db, { name: 'salary' }, { index: picked }));
   // Review F4: a message still quoting a figure of the left-out point.
-  db.prepare("INSERT INTO conversations (key, created_at) VALUES ('h3-review', ?)").run(NOW);
-  db.prepare("INSERT INTO messages (conversation_key, role, text, ts) VALUES ('h3-review', 'fathom', 'Tax {f:wg.salary.s50.tax}.', ?)").run(NOW);
-  addFact(db, 'retirement.contributions', [ownPlan('employer', 14000)]);
+  await db.prepare("INSERT INTO conversations (key, created_at) VALUES ('h3-review', ?)").run(NOW);
+  await db.prepare("INSERT INTO messages (conversation_key, role, text, ts) VALUES ('h3-review', 'fathom', 'Tax {f:wg.salary.s50.tax}.', ?)").run(NOW);
+  await addFact(db, 'retirement.contributions', [ownPlan('employer', 14000)]);
   await planRun(db, { now: NOW });
-  const stored = contentValue(db, 'wargame').salary;
+  const stored = (await contentValue(db, 'wargame')).salary;
   assert.equal(stored.unavailable, undefined, 'the game stays a current choice');
   assert.ok(!stored.points.some(p => p.id === 's50'), 's50 is no longer a point');
   assert.ok(stored.points.length >= 2, 'the rest of the comparison still shows');
   assert.ok(stored.points.some(p => p.current), 'the current salary stays');
   assertExcluded(stored, 's50', 'salary');
-  const scenario = getScenario(api(db));
+  const scenario = await getScenario(api(db));
   assert.notEqual(scenario.wargame.salary.status, 'unavailable');
   assert.ok(scenario.fig['wg.salary.s50.salary'], 'the dropped point keeps its salary figure for its label');
   assert.equal(scenario.wargame.salary.points[scenario.live.picks.salary].id, picked, 'the stored pick follows its point');
   const quoted = scenario.fig['wg.salary.s50.tax'];
   assert.match(quoted.unavailable, /limit/i, 'a quoted figure of the left-out point says why');
   assert.equal(quoted.unavailableFix?.key, 'retirement.contributions', 'and carries its fix');
-  assert.throws(() => wargamePick(api(db, { name: 'salary' }, { index: 's50' })), e => e.status >= 400 && e.status < 500);
+  await assert.rejects(async () => await wargamePick(api(db, { name: 'salary' }, { index: 's50' })), e => e.status >= 400 && e.status < 500);
 });
 
 test('AC2: a deferral option over its contribution limit is dropped alone and the comparison still shows', async () => {
   const db = await S.store({ variant: { ...WREN_HOUSEHOLD, facts: { 'retirement.contributions': sepFact(20000) } } });
   await planRun(db, { now: NOW });
-  assert.deepEqual(contentValue(db, 'wargame').deferral.options.map(o => o.id), ['d0', 'd50', 'd100'], 'precondition');
-  addFact(db, 'retirement.contributions', sepFact(21000));
+  assert.deepEqual((await contentValue(db, 'wargame')).deferral.options.map(o => o.id), ['d0', 'd50', 'd100'], 'precondition');
+  await addFact(db, 'retirement.contributions', sepFact(21000));
   await planRun(db, { now: NOW });
-  const stored = contentValue(db, 'wargame').deferral;
+  const stored = (await contentValue(db, 'wargame')).deferral;
   assert.equal(stored.unavailable, undefined, 'the game stays a current choice');
   assert.deepEqual(stored.options.map(o => o.id), ['d0', 'd50']);
   assertExcluded(stored, 'd100', 'deferral');
   assert.equal(stored.excluded.find(e => e.id === 'd100').label, 'Move it all to January');
-  assert.throws(() => wargamePick(api(db, { name: 'deferral' }, { index: 'd100' })), e => e.status >= 400 && e.status < 500);
-  assert.ok(wargamePick(api(db, { name: 'deferral' }, { index: 'd50' })).scenario, 'a remaining option can still be picked');
+  await assert.rejects(async () => await wargamePick(api(db, { name: 'deferral' }, { index: 'd100' })), e => e.status >= 400 && e.status < 500);
+  assert.ok((await wargamePick(api(db, { name: 'deferral' }, { index: 'd50' }))).scenario, 'a remaining option can still be picked');
 });
 
 // The main tax run treats a refundable child tax credit it cannot model as a precision gap; a war
@@ -179,10 +179,10 @@ test('AC2: a deferral option over its contribution limit is dropped alone and th
 test('AC1: a child tax credit limited to income tax is an assumption, not a dead-end hold', async () => {
   const db = await S.store({ variant: { entities: [SOLE_PROP] } });
   await planRun(db, { now: NOW });
-  const wg = contentValue(db, 'wargame');
+  const wg = await contentValue(db, 'wargame');
   assert.equal(wg.notBuilt?.deferral, undefined, `deferral is built: ${JSON.stringify(wg.notBuilt)}`);
   assert.ok(wg.deferral.options.length >= 2);
-  const scenario = getScenario(api(db));
+  const scenario = await getScenario(api(db));
   assert.ok(scenario.fig[`wg.deferral.${wg.deferral.options[0].id}.tax2026`].notes.some(n => /child tax credit/i.test(n)), 'the comparison says what it leaves out');
 });
 
@@ -190,7 +190,7 @@ test('AC1: a child tax credit limited to income tax is an assumption, not a dead
 test('AC2: an over-limit middle of the range measures against the nearest allowed salary', async () => {
   const db = await S.store({ variant: { facts: { 'business.salaryRange': { min: 70000, max: 130000 }, 'retirement.contributions': [ownPlan('employer', 27000)] } } });
   await planRun(db, { now: NOW });
-  const wg = contentValue(db, 'wargame');
+  const wg = await contentValue(db, 'wargame');
   assert.ok(wg.salary, `the salary game is built: ${JSON.stringify(wg.notBuilt)} ${wg.salary?.unavailable}`);
   assert.equal(wg.salary.unavailable, undefined);
   assert.deepEqual(wg.salary.points.map(p => p.id), ['s115', 's130']);

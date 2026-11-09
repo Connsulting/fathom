@@ -54,16 +54,16 @@ export function createSpendLedger(db) {
   const insert = db.prepare(`INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens, round_id) VALUES (?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(round_id) WHERE round_id IS NOT NULL DO UPDATE SET cost_usd = excluded.cost_usd WHERE spend_ledger.cost_usd <> excluded.cost_usd`);
   return {
-    monthSpendUsd(yyyymm) {
-      return Number(Number(sum.get(monthOf(yyyymm)).s).toFixed(12));
+    async monthSpendUsd(yyyymm) {
+      return Number(Number((await sum.get(monthOf(yyyymm))).s).toFixed(12));
     },
-    legacySpendUsd(yyyymm) {
-      return Number(Number(legacy.get(monthOf(yyyymm)).s).toFixed(12));
+    async legacySpendUsd(yyyymm) {
+      return Number(Number((await legacy.get(monthOf(yyyymm))).s).toFixed(12));
     },
-    record({ ts, purpose, costUsd, model, tokens, roundId = null } = {}) {
+    async record({ ts, purpose, costUsd, model, tokens, roundId = null } = {}) {
       if (!Number.isFinite(costUsd) || costUsd < 0) throw new TypeError('Invalid ledger cost');
       const iso = new Date(ts).toISOString();
-      insert.run(iso, iso.slice(0, 7), String(purpose), costUsd, model == null ? null : String(model), JSON.stringify(tokens ?? {}),
+      await insert.run(iso, iso.slice(0, 7), String(purpose), costUsd, model == null ? null : String(model), JSON.stringify(tokens ?? {}),
         roundId == null ? null : String(roundId));
     },
   };
@@ -73,16 +73,16 @@ export function createSpendLedger(db) {
 const committedOf = row => (row.state === 'settled' ? row.cost_usd : Math.max(row.reserved_usd, row.cost_usd ?? 0));
 
 // A missing cap is the default; a malformed one is treated as zero so it never raises spending.
-function capOf(db) {
-  const cap = getSetting(db, 'cap', { usd: DEFAULT_CAP_USD });
+async function capOf(db) {
+  const cap = await getSetting(db, 'cap', { usd: DEFAULT_CAP_USD });
   const usd = cap && typeof cap === 'object' ? cap.usd : undefined;
   if (usd === undefined) return DEFAULT_CAP_USD;
   return Number.isFinite(usd) && usd >= 0 ? usd : 0;
 }
 
-const settingOn = (db) => getSetting(db, 'engine', { on: true })?.on !== false;
+const settingOn = async (db) => (await getSetting(db, 'engine', { on: true }))?.on !== false;
 
-export function createRuntimeEngine({ db, config = {}, now, allowed = () => true, funded = () => false, platform = null, householdId,
+export async function createRuntimeEngine({ db, config = {}, now, allowed = () => true, funded = () => false, platform = null, householdId,
   generation = 1, fundingNow = Date.now, testTransport = null, modelTransport } = {}) {
   if (!db) throw new TypeError('A store is required');
   if (typeof allowed !== 'function' || typeof funded !== 'function' || typeof fundingNow !== 'function') throw new TypeError('Invalid engine admission');
@@ -95,20 +95,20 @@ export function createRuntimeEngine({ db, config = {}, now, allowed = () => true
   // A zero carry is left to the first reserve, so it is never frozen ahead of the month's rows.
   if (platformLedger) {
     const at = fundingNow();
-    const legacySpendUsd = ledger.legacySpendUsd(fundingMonth(at));
-    if (legacySpendUsd > 0) ensureCarry(platform, { householdId, month: fundingMonth(at), legacySpendUsd, now: at });
+    const legacySpendUsd = await ledger.legacySpendUsd(fundingMonth(at));
+    if (legacySpendUsd > 0) await ensureCarry(platform, { householdId, month: fundingMonth(at), legacySpendUsd, now: at });
   }
   // Mirror this household's final platform rounds of the funding month into spend_ledger.
-  function syncMirror() {
-    for (const row of platformLedger.rounds(month())) {
-      ledger.record({ ts: row.reserved_at, purpose: row.purpose, costUsd: committedOf(row), model: row.model,
+  async function syncMirror() {
+    for (const row of await platformLedger.rounds(month())) {
+      await ledger.record({ ts: row.reserved_at, purpose: row.purpose, costUsd: committedOf(row), model: row.model,
         tokens: { input_tokens: row.input_tokens, output_tokens: row.output_tokens }, roundId: row.id });
     }
   }
   const reservations = platformLedger && {
-    reserve({ purpose, model, boundUsd }) {
-      syncMirror();
-      return platformLedger.reserve({ purpose, model, boundUsd, adminCapUsd: capOf(db), legacySpendUsd: ledger.legacySpendUsd(month()),
+    async reserve({ purpose, model, boundUsd }) {
+      await syncMirror();
+      return await platformLedger.reserve({ purpose, model, boundUsd, adminCapUsd: await capOf(db), legacySpendUsd: await ledger.legacySpendUsd(month()),
         principal: currentPrincipal() });
     },
     settle: (roundId, result) => platformLedger.settle(roundId, result),
@@ -149,8 +149,8 @@ export function createRuntimeEngine({ db, config = {}, now, allowed = () => true
 
   async function engine(purpose) {
     if (refused) throw new ModelAccountingError();
-    if (!settingOn(db) || allowed() !== true) throw new EngineOffError();
-    const cap = capOf(db);
+    if (!await settingOn(db) || await allowed() !== true) throw new EngineOffError();
+    const cap = await capOf(db);
     await init();
     if (failedCredentials.has(purpose)) throw Object.assign(new ModelCallError('engine credential unavailable'), {code:'authentication'});
     if (!inner || cap !== innerCap) {
@@ -181,20 +181,20 @@ export function createRuntimeEngine({ db, config = {}, now, allowed = () => true
     init,
     get credentialState() { return state.credentialState; },
     credentialStateFor: purpose => credentialStates[purpose] ?? 'none',
-    isOn: () => mode !== 'off' && !refused && settingOn(db) && allowed() === true
-      && (mode !== 'live' || (funded() === true && !platformLedger.held())),
-    status() {
-      const base = { mode, on: mode !== 'off' && settingOn(db), credentialState: state.credentialState, funded: mode !== 'live' || funded() === true };
+    isOn: async () => mode !== 'off' && !refused && await settingOn(db) && await allowed() === true
+      && (mode !== 'live' || (await funded() === true && !await platformLedger.held())),
+    async status() {
+      const base = { mode, on: mode !== 'off' && await settingOn(db), credentialState: state.credentialState, funded: mode !== 'live' || await funded() === true };
       if (platformLedger) {
-        syncMirror();
-        const s = platformLedger.status(month());
-        return { ...base, capUsd: Math.min(capOf(db), s.allocationUsd), spentUsd: s.committedUsd };
+        await syncMirror();
+        const s = await platformLedger.status(month());
+        return { ...base, capUsd: Math.min(await capOf(db), s.allocationUsd), spentUsd: s.committedUsd };
       }
-      const at = new Date(now ? now() : Date.now());
-      return { ...base, capUsd: capOf(db), spentUsd: ledger.monthSpendUsd(at.toISOString().slice(0, 7)) };
+      const at = new Date(now ? await now() : Date.now());
+      return { ...base, capUsd: await capOf(db), spentUsd: await ledger.monthSpendUsd(at.toISOString().slice(0, 7)) };
     },
-    complete: (req) => guarded((e) => e.call(req), req.purpose),
-    call: (req) => guarded((e) => e.call(req), req.purpose),
-    extract: (req) => guarded((e) => e.extract(req), 'extract'),
+    complete: async (req) => guarded((e) => e.call(req), req.purpose),
+    call: async (req) => guarded((e) => e.call(req), req.purpose),
+    extract: async (req) => guarded((e) => e.extract(req), 'extract'),
   };
 }

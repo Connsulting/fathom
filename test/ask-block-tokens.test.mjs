@@ -18,6 +18,7 @@ import { callTool } from '../src/tools/index.mjs';
 import { makeBlock } from '../src/tools/catalog/show.mjs';
 import { esc, money } from '../src/shared/tokens.mjs';
 import { useKit, messageBodyHtml, blockState, formatByUnit } from '../web/horizon/screens/ask-blocks.js';
+import { forEachSeries } from '../src/shared/series.mjs';
 
 const QUESTION = 'Should I move some December invoices into January? Compare the options.';
 const DEFERRAL = { name: 'recommendations', args: { operation: 'wargame', name: 'deferral' } };
@@ -32,18 +33,18 @@ const WARGAME_FIELDS = { salary: ['salary', 'payroll', 'dist', 'tax', 'x', 'y'],
 // The planner labels each deferral figure "<option label>: <what it is>" (src/jobs/planner/wargame.mjs).
 const DEFERRAL_LABELS = { amount: 'amount moved to January', net: 'net tax change', decCash: 'December business cash',
   need: 'December payroll need', gap: 'December need less cash', tax2026: 'this year tax change', tax2027: 'next year tax change' };
-function plantWargames(db) {
-  const { wargame } = buildScenario(db);
+async function plantWargames(db) {
+  const { wargame } = await buildScenario(db);
   const put = db.prepare(`INSERT OR REPLACE INTO figures (key, v, kind, label, parser, updated_at) VALUES (?, ?, 'm', ?, 'planner', '2026-11-05')`);
-  for (const name of ['salary', 'deferral']) (name === 'salary' ? wargame.salary.points : wargame.deferral.options).forEach((item, i) =>
-    WARGAME_FIELDS[name].forEach((field, j) => put.run(`wg.${name}.${item.id}.${field}`, 1000 * (i + 1) + 10 * j,
+  for (const name of ['salary', 'deferral']) await forEachSeries((name === 'salary' ? wargame.salary.points : wargame.deferral.options), async (item, i) =>
+    await forEachSeries(WARGAME_FIELDS[name], async (field, j) => await put.run(`wg.${name}.${item.id}.${field}`, 1000 * (i + 1) + 10 * j,
       name === 'deferral' ? `${item.label}: ${DEFERRAL_LABELS[field]}` : field)));
-  put.run('wg.deferral.base.income', 5000, 'income');
+  await put.run('wg.deferral.base.income', 5000, 'income');
 }
 
 async function store(t) {
-  const s = await tempDb(); seedDemo(s.db); plantWargames(s.db);
-  t.after(async () => { s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  const s = await tempDb(); await seedDemo(s.db); await plantWargames(s.db);
+  t.after(async () => { await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   return s;
 }
 
@@ -51,7 +52,7 @@ async function store(t) {
 // runs: the deferral war game read, then show compare with six fields.
 async function ask(t, text) {
   const s = await store(t);
-  const runtime = createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' }) });
+  const runtime = await createRuntimeEngine({ db: s.db, config: loadConfig({ FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' }) });
   const results = [];
   const engine = { mode: 'fake', isOn: () => true, async call(request) { const result = await runtime.call(request); results.push(result); return result; } };
   const reply = await createLiveAnswerer({ engine, root: s.dataDir, services: { engine, config: { dataDir: s.dataDir } } })

@@ -12,8 +12,8 @@ const samePayment = (row, t, j) => estimate(row) && jurisdiction(row.jurisdictio
   && cents(row.amount) === -cents(t.amount) && days(row.date, t.date) <= 3;
 const snapshot = t => ({ id: t.id, dedupe_key: t.dedupe_key, account_id: t.account_id, date: t.date, amount: t.amount,
   description: t.description, external_id: t.external_id, file_id: t.file_id, parser: t.parser, locator: t.locator });
-const current = (db, t) => {
-  const row = db.prepare('SELECT * FROM transactions WHERE id=?').get(t.id);
+const current = async (db, t) => {
+  const row = await db.prepare('SELECT * FROM transactions WHERE id=?').get(t.id);
   return row && Object.entries(t).every(([k, value]) => row[k] === value) ? row : null;
 };
 
@@ -49,21 +49,21 @@ function choices(c, t) {
   }))).concat({ id: 'not_estimate', label: 'Not an estimated tax payment' });
 }
 
-function logsFor(db, t, j) {
-  return db.prepare("SELECT * FROM tax_payments WHERE coalesce(parser,'')!=? AND round(amount*100)=? AND date BETWEEN date(?,'-3 days') AND date(?,'+3 days')")
-    .all(PARSER, -cents(t.amount), t.date, t.date).filter(r => samePayment(r, t, j));
+async function logsFor(db, t, j) {
+  return (await db.prepare("SELECT * FROM tax_payments WHERE coalesce(parser,'')!=? AND round(amount*100)=? AND date BETWEEN date(?,'-3 days') AND date(?,'+3 days')")
+    .all(PARSER, -cents(t.amount), t.date, t.date)).filter(r => samePayment(r, t, j));
 }
 
-export function applyTransactionPayment(db, item, optionId) {
+export async function applyTransactionPayment(db, item, optionId) {
   const { transaction: prior } = item.context;
-  const t = current(db, prior);
+  const t = await current(db, prior);
   if (!t) throw new ConfirmError('stale');
   if (optionId === 'not_estimate') return {};
   const [choice, year] = optionId.split(':');
   const j = choice === 'estimate' || choice === 'separate' || choice === 'logged' ? item.context.jurisdiction : choice;
   const taxYear = choice === 'logged' ? item.context.taxYear : year ? Number(year) : item.context.taxYear;
   if (!j || !Number.isInteger(taxYear)) throw new ConfirmError('bad_option');
-  const logs = logsFor(db, t, j);
+  const logs = await logsFor(db, t, j);
   if (choice === 'logged') {
     if (!logs.some(r => r.id === Number(year))) throw new ConfirmError('stale');
     return {};
@@ -72,40 +72,40 @@ export function applyTransactionPayment(db, item, optionId) {
   if (choice !== 'separate' && logs.length === 1) return {};
   const locator = { transaction: { id: t.id, dedupeKey: t.dedupe_key, accountId: t.account_id, fileId: t.file_id,
     parser: t.parser, locator: parseJson(t.locator, {}) }, confirmId: item.id, quarter: item.context.quarter };
-  db.prepare(`INSERT INTO tax_payments (jurisdiction,tax_year,date,amount,kind,file_id,parser,locator,dedupe_key,source_slot,payer,date_precision,tax_year_basis,recipient)
+  await db.prepare(`INSERT INTO tax_payments (jurisdiction,tax_year,date,amount,kind,file_id,parser,locator,dedupe_key,source_slot,payer,date_precision,tax_year_basis,recipient)
     VALUES (?,?,?,?,'estimate',?,?,?,?,?,?,'day',?,?)`).run(j, taxYear, t.date, -cents(t.amount) / 100, t.file_id, PARSER,
     JSON.stringify(locator), `transaction-payment:${t.dedupe_key}`, `transaction:${t.dedupe_key}`, item.context.payer ?? 'unknown',
     year ? 'confirmed_tax_year' : item.context.years?.length === 0 ? 'inferred_payment_date' : 'transaction', item.context.recipient ?? 'unknown');
   return {};
 }
 
-export function reconcileTransactionPayments(db, { now = new Date().toISOString() } = {}) {
-  return actionTx(db, () => {
-    const rows = db.prepare(`SELECT t.*, a.owner FROM transactions t JOIN accounts a ON a.id=t.account_id
+export async function reconcileTransactionPayments(db, { now = new Date().toISOString() } = {}) {
+  return await actionTx(db, async (db) => {
+    const rows = await db.prepare(`SELECT t.*, a.owner FROM transactions t JOIN accounts a ON a.id=t.account_id
       WHERE (t.parser='simplefin' OR a.mirror='connected') AND t.amount<0 ORDER BY t.date,t.id`).all();
-    const contexts = new Map(db.prepare("SELECT * FROM confirm_items WHERE kind='transaction_payment'").all().map(i => [i.subject, i]));
-    for (const payment of db.prepare('SELECT * FROM tax_payments WHERE parser=?').all(PARSER)) {
-      const loc = parseJson(payment.locator, {}), item = db.prepare('SELECT context,answer FROM confirm_items WHERE id=?').get(loc.confirmId);
-      const context = parseJson(item?.context, {}), t = context.transaction && current(db, context.transaction);
-      const log = t && logsFor(db, t, payment.jurisdiction)[0];
+    const contexts = new Map((await db.prepare("SELECT * FROM confirm_items WHERE kind='transaction_payment'").all()).map(i => [i.subject, i]));
+    for (const payment of await db.prepare('SELECT * FROM tax_payments WHERE parser=?').all(PARSER)) {
+      const loc = parseJson(payment.locator, {}), item = await db.prepare('SELECT context,answer FROM confirm_items WHERE id=?').get(loc.confirmId);
+      const context = parseJson(item?.context, {}), t = context.transaction && await current(db, context.transaction);
+      const log = t && (await logsFor(db, t, payment.jurisdiction))[0];
       if (t && (!log || item.answer === 'separate')) continue;
-      archive(db, 'tax_payments', { ...payment }, { by: log?.file_id ?? null, reason: log ? 'duplicate' : 'revised', now });
-      db.prepare('DELETE FROM tax_payments WHERE id=?').run(payment.id);
+      await archive(db, 'tax_payments', { ...payment }, { by: log?.file_id ?? null, reason: log ? 'duplicate' : 'revised', now });
+      await db.prepare('DELETE FROM tax_payments WHERE id=?').run(payment.id);
     }
     for (const row of contexts.values()) {
       if (row.status !== 'answered' || ['not_estimate', 'superseded'].includes(row.answer)) continue;
-      const context = parseJson(row.context, {}), t = context.transaction && current(db, context.transaction);
-      if (!t || db.prepare('SELECT 1 FROM tax_payments WHERE parser=? AND dedupe_key=?').get(PARSER, `transaction-payment:${t.dedupe_key}`)) continue;
+      const context = parseJson(row.context, {}), t = context.transaction && await current(db, context.transaction);
+      if (!t || await db.prepare('SELECT 1 FROM tax_payments WHERE parser=? AND dedupe_key=?').get(PARSER, `transaction-payment:${t.dedupe_key}`)) continue;
       const choice = row.answer.split(':')[0];
       const j = ['estimate', 'logged', 'separate'].includes(choice) ? context.jurisdiction : choice;
-      const undo = db.prepare('SELECT changes FROM confirm_undo WHERE item_id=?').get(row.id);
+      const undo = await db.prepare('SELECT changes FROM confirm_undo WHERE item_id=?').get(row.id);
       const retained = JSON.parse(undo.changes).filter(c => c.table !== 'tax_payments');
-      if (logsFor(db, t, j).length) {
-        db.prepare('UPDATE confirm_undo SET changes=? WHERE item_id=?').run(JSON.stringify(retained), row.id);
+      if ((await logsFor(db, t, j)).length) {
+        await db.prepare('UPDATE confirm_undo SET changes=? WHERE item_id=?').run(JSON.stringify(retained), row.id);
         continue;
       }
-      const { changes } = captureChanges(db, () => applyTransactionPayment(db, { ...row, context }, choice === 'logged' ? 'estimate' : row.answer));
-      db.prepare('UPDATE confirm_undo SET changes=? WHERE item_id=?')
+      const { changes } = await captureChanges(db, async (db) => await applyTransactionPayment(db, { ...row, context }, choice === 'logged' ? 'estimate' : row.answer));
+      await db.prepare('UPDATE confirm_undo SET changes=? WHERE item_id=?')
         .run(JSON.stringify([...retained, ...changes]), row.id);
     }
     for (const t of rows) {
@@ -115,12 +115,12 @@ export function reconcileTransactionPayments(db, { now = new Date().toISOString(
       const signature = createHash('sha256').update(JSON.stringify(transaction)).digest('hex').slice(0, 24);
       const subject = `${t.dedupe_key}:${signature}`;
       const existing = contexts.get(subject);
-      if (existing && (existing.status !== 'pending' || db.prepare('SELECT 1 FROM confirm_auto_declined WHERE item_id=?').get(existing.id))) continue;
+      if (existing && (existing.status !== 'pending' || await db.prepare('SELECT 1 FROM confirm_auto_declined WHERE item_id=?').get(existing.id))) continue;
       for (const prior of contexts.values()) {
         const old = parseJson(prior.context, {}).transaction;
-        if (prior.id !== existing?.id && old?.id === t.id && prior.status === 'pending') db.prepare("UPDATE confirm_items SET status='answered',answer='superseded',answered_at=? WHERE id=?").run(now, prior.id);
+        if (prior.id !== existing?.id && old?.id === t.id && prior.status === 'pending') await db.prepare("UPDATE confirm_items SET status='answered',answer='superseded',answered_at=? WHERE id=?").run(now, prior.id);
       }
-      const logs = c.jurisdiction ? logsFor(db, t, c.jurisdiction) : [];
+      const logs = c.jurisdiction ? await logsFor(db, t, c.jurisdiction) : [];
       const overlapping = logs.length === 1 && rows.filter(other => {
         const classification = classify(other);
         return classification?.jurisdiction && samePayment(logs[0], other, classification.jurisdiction);
@@ -131,27 +131,27 @@ export function reconcileTransactionPayments(db, { now = new Date().toISOString(
       const owner = /^(you|owner)$/i.test(t.owner ?? '') ? 'owner' : /^(your spouse|spouse)$/i.test(t.owner ?? '') ? 'spouse' : 'unknown';
       const amount = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(-t.amount);
       const context = { ...c, transaction, payer: owner, recipient: owner, amount: -t.amount, date: t.date };
-      if (existing) db.prepare('UPDATE confirm_items SET options=?,context=? WHERE id=?').run(JSON.stringify(options), JSON.stringify(context), existing.id);
-      const out = ask(db, { kind: 'transaction_payment', subject,
+      if (existing) await db.prepare('UPDATE confirm_items SET options=?,context=? WHERE id=?').run(JSON.stringify(options), JSON.stringify(context), existing.id);
+      const out = await ask(db, { kind: 'transaction_payment', subject,
         question: ambiguousLog ? `Is ${t.description}, ${amount} on ${t.date}, already in your estimated tax payment log?`
           : `Is ${t.description}, ${amount} on ${t.date}, an estimated tax payment?`, options,
         context, fileId: t.file_id, now });
-      if (c.sure && !ambiguousLog && (out.queued || existing)) recordAutoAnswer(db, existing?.id ?? out.id, 'estimate', { rule: 'transaction_payment', now,
+      if (c.sure && !ambiguousLog && (out.queued || existing)) await recordAutoAnswer(db, existing?.id ?? out.id, 'estimate', { rule: 'transaction_payment', now,
         evidence: { text: 'A posted connected-account transaction identifies an estimated tax payment. Federal and Virginia fourth installments are due in January for the prior tax year; an explicit tax year takes precedence.', refs: [{ table: 'transactions', id: t.id }] } });
     }
   });
 }
 
-export function observedPayments(db) {
+export async function observedPayments(db) {
   const out = [];
-  for (const item of db.prepare("SELECT * FROM confirm_items WHERE kind='transaction_payment' AND status='answered' AND answer NOT IN ('not_estimate','superseded')").all()) {
-    const c = parseJson(item.context, {}), t = c.transaction && current(db, c.transaction);
+  for (const item of await db.prepare("SELECT * FROM confirm_items WHERE kind='transaction_payment' AND status='answered' AND answer NOT IN ('not_estimate','superseded')").all()) {
+    const c = parseJson(item.context, {}), t = c.transaction && await current(db, c.transaction);
     if (!t) continue;
     const [choice, value] = item.answer.split(':');
     const j = ['estimate','logged','separate'].includes(choice) ? c.jurisdiction : choice;
     const taxYear = choice !== 'logged' && value ? Number(value) : c.taxYear;
-    const own = db.prepare('SELECT * FROM tax_payments WHERE parser=? AND dedupe_key=?').get(PARSER, `transaction-payment:${t.dedupe_key}`);
-    const logs = logsFor(db, t, j);
+    const own = await db.prepare('SELECT * FROM tax_payments WHERE parser=? AND dedupe_key=?').get(PARSER, `transaction-payment:${t.dedupe_key}`);
+    const logs = await logsFor(db, t, j);
     const payment = own ?? (choice === 'logged' ? logs.find(r => r.id === Number(value)) : null) ?? (logs.length === 1 ? logs[0] : null);
     if (!payment) continue;
     const month = Number(t.date.slice(5, 7));

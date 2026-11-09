@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
-import { DatabaseSync } from 'node:sqlite';
+import { openScope } from '../src/storage/index.mjs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { loadConfig } from '../src/config.mjs';
@@ -41,32 +41,32 @@ function visitor(s) {
   };
 }
 // The instance's base household store file (households/<id>/fathom.sqlite).
-function storeFile(dir) {
-  const platform = new DatabaseSync(join(dir, 'platform.sqlite'), { readOnly: true });
-  try { return join(dir, platform.prepare('SELECT storage_root FROM households WHERE serves_store = 1').get().storage_root, 'fathom.sqlite'); }
-  finally { platform.close(); }
+async function storeFile(dir) {
+  const platform = await openScope({ path: join(dir, 'platform.sqlite'), readOnly: true, journal: null, busyTimeout: 0 });
+  try { return join(dir, (await platform.prepare('SELECT storage_root FROM households WHERE serves_store = 1').get()).storage_root, 'fathom.sqlite'); }
+  finally { await platform.close(); }
 }
 // A setting of the base household store, read without writing it.
-function baseSetting(dir, key) {
-  const db = new DatabaseSync(storeFile(dir), { readOnly: true });
-  try { return getSetting(db, key, null); }
-  finally { db.close(); }
+async function baseSetting(dir, key) {
+  const db = await openScope({ path: await storeFile(dir), readOnly: true, journal: null, busyTimeout: 0 });
+  try { return await getSetting(db, key, null); }
+  finally { await db.close(); }
 }
 // Open (or create) the instance at c.dataDir as the server does; returns its base store and platform.
-function openBase(c) {
-  const { platform } = openOrCreateInstance(c);
+async function openBase(c) {
+  const { platform } = await openOrCreateInstance(c);
   try {
-    const row = platform.prepare('SELECT id, storage_root FROM households WHERE serves_store = 1').get();
-    return { db: openHouseholdDb({ dataDir: c.dataDir, householdId: row.id, storageRoot: row.storage_root }), platform };
+    const row = await platform.prepare('SELECT id, storage_root FROM households WHERE serves_store = 1').get();
+    return { db: await openHouseholdDb({ dataDir: c.dataDir, householdId: row.id, storageRoot: row.storage_root }), platform };
   } catch (err) {
-    platform.close();
+    await platform.close();
     throw err;
   }
 }
-function calls(s) {
-  const db = new DatabaseSync(join(s.dir, 'public-demo.sqlite'), { readOnly: true });
-  try { return db.prepare("SELECT coalesce(sum(calls), 0) AS n FROM usage WHERE subject = 'global'").get().n; }
-  finally { db.close(); }
+async function calls(s) {
+  const db = await openScope({ path: join(s.dir, 'public-demo.sqlite'), readOnly: true, journal: null, busyTimeout: 0 });
+  try { return (await db.prepare("SELECT coalesce(sum(calls), 0) AS n FROM usage WHERE subject = 'global'").get()).n; }
+  finally { await db.close(); }
 }
 
 const refused = ['FATHOM_DATA_KEY_FILE', 'FATHOM_BACKUP_KEY_FILE', 'FATHOM_PLATFORM_KEY_FILE', 'FATHOM_MCP_SECRET_FILE',
@@ -86,16 +86,16 @@ test('public demo rejects real mode, service transport, wrong path and missing o
   assert.equal(config(dir).publicDemo, true);
   assert.equal(loadConfig({}).publicDemo, false);
 });
-test('startup refuses unmarked demo and real stores without changing them', t => {
+test('startup refuses unmarked demo and real stores without changing them', async t => {
   for (const mode of ['demo', 'real']) {
     const dir = directory(t);
     const c = { ...loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: mode === 'demo' ? '1' : '0', FATHOM_PUBLIC_URL: ORIGIN }), port: 0 };
-    const opened = openBase(c);
-    if (mode === 'demo') opened.db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
-    opened.db.close(); opened.platform.close();
-    const before = readFileSync(storeFile(dir));
-    assert.throws(() => openOrCreateInstance(config(dir)), /public.demo/i);
-    assert.deepEqual(readFileSync(storeFile(dir)), before);
+    const opened = await openBase(c);
+    if (mode === 'demo') await opened.db.prepare("DELETE FROM settings WHERE key = 'synthetic_demo'").run();
+    await opened.db.close(); await opened.platform.close();
+    const before = readFileSync(await storeFile(dir));
+    await assert.rejects(async () => await openOrCreateInstance(config(dir)), /public.demo/i);
+    assert.deepEqual(readFileSync(await storeFile(dir)), before);
   }
 });
 test('valid public startup serves no-login bootstrap and blocks unsafe routes before effects', async t => {
@@ -119,7 +119,7 @@ test('valid public startup serves no-login bootstrap and blocks unsafe routes be
 });
 test('visitor writes, what-if, Ask and reset never touch another visitor or base store', async t => {
   const s = await app(t);
-  const before = readFileSync(storeFile(s.dir));
+  const before = readFileSync(await storeFile(s.dir));
   const a = visitor(s), b = visitor(s);
   const pending = (await a('/api/confirm')).body.items;
   const item = pending.find(i => i.options?.length);
@@ -136,20 +136,20 @@ test('visitor writes, what-if, Ask and reset never touch another visitor or base
   const pack = sc.packs.find(p => p.id === 'scorp') || sc.packs[0];
   assert.equal((await a(`/api/packs/${pack.id}/whatif`, {})).status, 200);
   assert.equal((await a('/api/demo/reset', {})).status, 200);
-  assert.deepEqual(readFileSync(storeFile(s.dir)), before);
-  assert.equal(baseSetting(s.dir, 'synthetic_demo'), 'synthetic-v1');
+  assert.deepEqual(readFileSync(await storeFile(s.dir)), before);
+  assert.equal(await baseSetting(s.dir, 'synthetic_demo'), 'synthetic-v1');
 });
 test('turn cap survives reset and returns a fixed notice without another model call', async t => {
   const s = await app(t, { FATHOM_PUBLIC_DEMO_TURNS_PER_DAY: '1' });
   const v = visitor(s);
   assert.equal((await v('/api/threads', { text: 'What should I focus on?' })).status, 200);
-  const before = calls(s);
+  const before = await calls(s);
   assert.ok(before > 0);
   await v('/api/demo/reset', {});
   const limited = await v('/api/threads', { text: 'What next?' });
   assert.equal(limited.status, 200);
   assert.match(limited.body.message.text, new RegExp(DEMO_LIMIT_MESSAGE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.equal(calls(s), before);
+  assert.equal(await calls(s), before);
 });
 test('IP limits ignore spoofed forwarded addresses and survive restarts', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-08T12:00:00Z') });
@@ -163,26 +163,26 @@ test('IP limits ignore spoofed forwarded addresses and survive restarts', async 
   t.after(() => restarted.close());
   assert.equal((await visitor(restarted)('/api/auth/session')).status, 429);
 });
-test('durable quotas reserve atomically and roll over at UTC midnight', t => {
+test('durable quotas reserve atomically and roll over at UTC midnight', async t => {
   const dir = directory(t);
   let time = Date.parse('2026-11-07T23:59:00Z');
   const c = config(dir, { FATHOM_PUBLIC_DEMO_TURNS_PER_DAY: '1', FATHOM_PUBLIC_DEMO_TOKENS_PER_DAY: '20',
     FATHOM_PUBLIC_DEMO_CALLS_PER_DAY: '2', FATHOM_PUBLIC_DEMO_USD_PER_DAY: '1' });
-  let ctl = createDemoControl(c, { now: () => time });
-  assert.equal(ctl.reserveTurn('a', 'ip'), true);
-  assert.equal(ctl.reserveTurn('a', 'ip'), false);
-  assert.equal(ctl.reserveRound('a', 10, 0.1), true);
-  assert.equal(ctl.reserveRound('a', 11, 0.1), false);
-  assert.equal(ctl.reserveRound('b', 10, 0.1), true);
-  assert.equal(ctl.reserveRound('c', 10, 0.1), false);
-  ctl.close();
-  ctl = createDemoControl(c, { now: () => time });
-  assert.equal(ctl.reserveTurn('a', 'ip'), false);
-  assert.equal(ctl.reserveRound('c', 1, 0.01), false);
+  let ctl = await createDemoControl(c, { now: () => time });
+  assert.equal(await ctl.reserveTurn('a', 'ip'), true);
+  assert.equal(await ctl.reserveTurn('a', 'ip'), false);
+  assert.equal(await ctl.reserveRound('a', 10, 0.1), true);
+  assert.equal(await ctl.reserveRound('a', 11, 0.1), false);
+  assert.equal(await ctl.reserveRound('b', 10, 0.1), true);
+  assert.equal(await ctl.reserveRound('c', 10, 0.1), false);
+  await ctl.close();
+  ctl = await createDemoControl(c, { now: () => time });
+  assert.equal(await ctl.reserveTurn('a', 'ip'), false);
+  assert.equal(await ctl.reserveRound('c', 1, 0.01), false);
   time += 120000;
-  assert.equal(ctl.reserveTurn('a', 'ip'), true);
-  assert.equal(ctl.reserveRound('a', 10, 0.1), true);
-  ctl.close();
+  assert.equal(await ctl.reserveTurn('a', 'ip'), true);
+  assert.equal(await ctl.reserveRound('a', 10, 0.1), true);
+  await ctl.close();
 });
 test('the API enforces token and global call caps before any fake model round', async t => {
   for (const settings of [{ FATHOM_PUBLIC_DEMO_TOKENS_PER_DAY: '1' }, { FATHOM_PUBLIC_DEMO_CALLS_PER_DAY: '1' }]) {
@@ -190,13 +190,13 @@ test('the API enforces token and global call caps before any fake model round', 
     const v = visitor(s);
     if (settings.FATHOM_PUBLIC_DEMO_CALLS_PER_DAY) {
       await v('/api/threads', { text: 'What should I focus on?' });
-      assert.equal(calls(s), 1);
+      assert.equal(await calls(s), 1);
     }
-    const before = calls(s);
+    const before = await calls(s);
     const result = await v('/api/threads', { text: 'What next?' });
     assert.equal(result.status, 200);
     assert.ok(result.body.message.text.includes(DEMO_LIMIT_MESSAGE));
-    assert.equal(calls(s), before);
+    assert.equal(await calls(s), before);
   }
 });
 test('static, health and blocked requests allocate no sandbox; trusted proxies get separate IP buckets', async t => {
@@ -215,11 +215,11 @@ test('public startup refuses a demo after an import attempt', async t => {
   const privateConfig = { ...loadConfig({ FATHOM_DATA: dir, FATHOM_DEMO: '1' }), port: 0 };
   const s = await startServer(privateConfig);
   try {
-    const household = s.runtimes.demo();
+    const household = await s.runtimes.demo();
     await ingestFile(household.db, { name: 'sample.csv', bytes: Buffer.from('Date,Description,Amount\n2026-11-01,Sample,10\n') }, { config: privateConfig, household });
-    assert.equal(getSetting(household.db, 'synthetic_demo', null), null);
+    assert.equal(await getSetting(household.db, 'synthetic_demo', null), null);
   } finally { await s.close(); }
-  assert.throws(() => openOrCreateInstance(config(dir)), /synthetic seeder marker/);
+  await assert.rejects(async () => await openOrCreateInstance(config(dir)), /synthetic seeder marker/);
 });
 test('a refused private-demo request preserves the marker and a successful write invalidates it', async t => {
   const dir = directory(t);
@@ -227,10 +227,10 @@ test('a refused private-demo request preserves the marker and a successful write
   t.after(() => s.close());
   const post = (path, body) => fetch(s.url + path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   assert.equal((await post('/api/jobs/plan/run', {})).status, 409);
-  const { db } = s.runtimes.demo();
-  assert.equal(getSetting(db, 'synthetic_demo'), 'synthetic-v1');
+  const { db } = await s.runtimes.demo();
+  assert.equal(await getSetting(db, 'synthetic_demo'), 'synthetic-v1');
   assert.equal((await post('/api/goals', { title: 'Private demo goal', horizon: 'now' })).status, 200);
-  assert.equal(getSetting(db, 'synthetic_demo', null), null);
+  assert.equal(await getSetting(db, 'synthetic_demo', null), null);
 });
 test('live demo boundary applies model/output caps and offers only local read tools', async t => {
   const dir = directory(t);
@@ -238,9 +238,9 @@ test('live demo boundary applies model/output caps and offers only local read to
   writeFileSync(credentialFile, 'synthetic', { mode: 0o600 });
   const c = config(dir, { FATHOM_ENGINE: 'live', FATHOM_CLAUDE_CREDENTIAL_FILE: credentialFile,
     FATHOM_PUBLIC_DEMO_MAX_TOKENS: '32', FATHOM_PUBLIC_DEMO_CALLS_PER_DAY: '2' });
-  const { db, platform } = openBase(c);
-  const control = createDemoControl(c);
-  t.after(() => { control.close(); db.close(); platform.close(); });
+  const { db, platform } = await openBase(c);
+  const control = await createDemoControl(c);
+  t.after(async () => { await control.close(); await db.close(); await platform.close(); });
   const requests = [];
   // Messages API response shape: https://platform.claude.com/docs/en/api/messages/create
   const original = globalThis.fetch;
@@ -256,7 +256,7 @@ test('live demo boundary applies model/output caps and offers only local read to
     { status: 200, headers: { 'content-type': 'application/json' } });
   };
   const engine = createPublicDemoEngine({ db, config: c, control, visitorId: 'sample' });
-  const tools = [{ name: 'read_sample', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: 'Read synthetic state', inputSchema: { type: 'object', properties: {} }, handler: (_, ctx) => ({ demo: getSetting(ctx.db, 'mode') }) },
+  const tools = [{ name: 'read_sample', kind: 'read', operations: [{ name: 'read', scope: 'read' }], description: 'Read synthetic state', inputSchema: { type: 'object', properties: {} }, handler: async (_, ctx) => ({ demo: await getSetting(ctx.db, 'mode') }) },
     { name: 'write_sample', kind: 'write', operations: [{ name: 'write', scope: 'write:recs' }], description: 'Write state', inputSchema: { type: 'object', properties: {} }, handler: () => assert.fail('write tool ran') }];
   const result = await engine.call({ purpose: 'chat', messages: [{ role: 'user', content: 'Explain sample data' }], tools, toolContext: { db }, maxTokens: 999 });
   assert.equal(result.text, 'Safe sample answer.');
@@ -283,7 +283,7 @@ test('route documentation assigns every server route a demo behavior', () => {
 test('P&L and spending reads use the visitor sandbox and refuse writes', async t => {
   const s = await app(t);
   const v = visitor(s);
-  const before = readFileSync(storeFile(s.dir));
+  const before = readFileSync(await storeFile(s.dir));
   const pnl = await v('/api/pnl');
   assert.equal(pnl.status, 200);
   assert.ok(pnl.body.entities.length > 0);
@@ -304,16 +304,16 @@ test('P&L and spending reads use the visitor sandbox and refuse writes', async t
     assert.equal(demoRouteBehavior('POST', path), 'off');
     assert.equal((await v(path, {})).status, 403);
   }
-  assert.deepEqual(readFileSync(storeFile(s.dir)), before);
+  assert.deepEqual(readFileSync(await storeFile(s.dir)), before);
 });
-test('per-IP turn quota applies across visitors and persisted control handles', t => {
+test('per-IP turn quota applies across visitors and persisted control handles', async t => {
   const c = config(directory(t), { FATHOM_PUBLIC_DEMO_TURNS_PER_IP_PER_DAY: '1' });
-  const first = createDemoControl(c), second = createDemoControl(c);
+  const first = await createDemoControl(c), second = await createDemoControl(c);
   try {
-    assert.equal(first.reserveTurn('one', 'same-ip'), true);
-    assert.equal(second.reserveTurn('two', 'same-ip'), false);
-    assert.equal(second.reserveTurn('two', 'other-ip'), true);
-  } finally { first.close(); second.close(); }
+    assert.equal(await first.reserveTurn('one', 'same-ip'), true);
+    assert.equal(await second.reserveTurn('two', 'same-ip'), false);
+    assert.equal(await second.reserveTurn('two', 'other-ip'), true);
+  } finally { await first.close(); await second.close(); }
 });
 test('an existing cookie reopens only its own sandbox after a server restart', async t => {
   const s = await app(t);
@@ -326,21 +326,21 @@ test('an existing cookie reopens only its own sandbox after a server restart', a
   assert.ok((await v('/api/scenario')).body.goals.some(g => g.title === 'Persistent visitor goal'));
   assert.ok(!(await visitor(reopened)('/api/scenario')).body.goals.some(g => g.title === 'Persistent visitor goal'));
 });
-test('global USD reservations, sandbox TTL/cap and per-IP creation cap are enforced', t => {
+test('global USD reservations, sandbox TTL/cap and per-IP creation cap are enforced', async t => {
   const dir = directory(t);
   let time = Date.parse('2026-11-07T00:00:00Z');
   const c = config(dir, { FATHOM_PUBLIC_DEMO_USD_PER_DAY: '0.1', FATHOM_PUBLIC_DEMO_SANDBOXES: '1',
     FATHOM_PUBLIC_DEMO_CREATIONS_PER_IP_PER_DAY: '1', FATHOM_PUBLIC_DEMO_TTL_SECONDS: '60' });
-  const ctl = createDemoControl(c, { now: () => time });
-  assert.equal(ctl.reserveRound('a', 1, 0.1), true);
-  assert.equal(ctl.reserveRound('b', 1, 0.001), false);
-  const first = ctl.sandbox(null, 'ip');
+  const ctl = await createDemoControl(c, { now: () => time });
+  assert.equal(await ctl.reserveRound('a', 1, 0.1), true);
+  assert.equal(await ctl.reserveRound('b', 1, 0.001), false);
+  const first = await ctl.sandbox(null, 'ip');
   assert.match(first.id, /^[a-f0-9]{64}$/);
-  assert.equal(ctl.sandbox(first.id, 'ip').id, first.id);
-  assert.throws(() => ctl.sandbox(null, 'ip2'), /busy/i);
+  assert.equal((await ctl.sandbox(first.id, 'ip')).id, first.id);
+  await assert.rejects(async () => await ctl.sandbox(null, 'ip2'), /busy/i);
   time += 61000;
-  ctl.cleanup();
-  assert.throws(() => ctl.sandbox(null, 'ip'), /creation limit/i);
-  assert.notEqual(ctl.sandbox(null, 'ip2').id, first.id);
-  ctl.close();
+  await ctl.cleanup();
+  await assert.rejects(async () => await ctl.sandbox(null, 'ip'), /creation limit/i);
+  assert.notEqual((await ctl.sandbox(null, 'ip2')).id, first.id);
+  await ctl.close();
 });

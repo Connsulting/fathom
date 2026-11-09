@@ -8,6 +8,7 @@ import { parseJson } from '../store/db.mjs';
 import { normalizeName } from '../ingest/confirm.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
 import { accountNaming } from '../accounts/naming.mjs';
+import { mapSeries } from '../shared/series.mjs';
 
 // Document types that are tax forms a preparer needs. Paystubs, statements, notes, plan summaries
 // and account metadata feed the ledger and are not packet documents.
@@ -35,8 +36,8 @@ const IRA = (a) => (a.kind === 'roth' || a.kind === 'retirement') && /\bira\b/i.
 // No dollar threshold is applied to HSA withdrawals or processor deposits: any activity vetoes inference.
 const INFERENCE_THRESHOLDS = Object.freeze({ interestCents: 1000, activity: 0 });
 
-function inferredSkips(db, { year, facts, accounts }) {
-  const rows = db.prepare('SELECT id, account_id, date, amount, description, category, file_id, locator FROM transactions WHERE date BETWEEN ? AND ? ORDER BY date, id')
+async function inferredSkips(db, { year, facts, accounts }) {
+  const rows = await db.prepare('SELECT id, account_id, date, amount, description, category, file_id, locator FROM transactions WHERE date BETWEEN ? AND ? ORDER BY date, id')
     .all(`${year}-01-01`, `${year}-12-31`);
   const evidence = (rs) => rs.slice(-1).map((r) => ({ table: 'transactions', id: r.id, date: r.date, account: r.account_id, label: r.description || r.category || 'Ledger transaction', fileId: r.file_id, locator: r.locator }));
   const out = new Map();
@@ -61,23 +62,23 @@ function inferredSkips(db, { year, facts, accounts }) {
     infer('1099-k', `No payment-processor deposits in stored ${year} history.`, rows);
   }
   if (facts['income.partnership'] === false) {
-    const row = db.prepare("SELECT key, updated_at, file_id, locator FROM facts WHERE key = 'income.partnership'").get();
+    const row = await db.prepare("SELECT key, updated_at, file_id, locator FROM facts WHERE key = 'income.partnership'").get();
     out.set('k1:partnership', { inferred: true, reason: 'No partnership entity in stored household facts.', evidence: [{ table: 'facts', id: row.key, date: row.updated_at, label: 'Partnership income: No', fileId: row.file_id, locator: row.locator }] });
   }
   return out;
 }
 
-function activeAccounts(db, year) {
+async function activeAccounts(db, year) {
   const from = `${year}-01-01`, to = `${year}-12-31`;
-  const has = (table, col) => new Set(db.prepare(`SELECT DISTINCT account_id AS id FROM ${table} WHERE ${col} BETWEEN ? AND ?`).all(from, to).map((r) => r.id));
-  const txn = has('transactions', 'date'), bal = has('balances', 'date'), pos = has('positions', 'as_of');
-  const deposits = new Set(db.prepare('SELECT DISTINCT account_id AS id FROM transactions WHERE date BETWEEN ? AND ? AND amount > 0').all(from, to).map((r) => r.id));
+  const has = async (table, col) => new Set((await db.prepare(`SELECT DISTINCT account_id AS id FROM ${table} WHERE ${col} BETWEEN ? AND ?`).all(from, to)).map((r) => r.id));
+  const txn = await has('transactions', 'date'), bal = await has('balances', 'date'), pos = await has('positions', 'as_of');
+  const deposits = new Set((await db.prepare('SELECT DISTINCT account_id AS id FROM transactions WHERE date BETWEEN ? AND ? AND amount > 0').all(from, to)).map((r) => r.id));
   return { active: (id) => txn.has(id) || bal.has(id) || pos.has(id), deposits: (id) => deposits.has(id) };
 }
 
-function yearDocuments(db, year) {
-  return db.prepare(`SELECT d.id, d.doc_type, d.tax_year, d.fields, d.file_id, f.name AS file_name, f.uploaded_at, f.stored_path, f.mime, f.parser AS file_parser
-                     FROM documents d LEFT JOIN files f ON f.id = d.file_id WHERE d.tax_year = ? ORDER BY d.id`).all(year)
+async function yearDocuments(db, year) {
+  return (await db.prepare(`SELECT d.id, d.doc_type, d.tax_year, d.fields, d.file_id, f.name AS file_name, f.uploaded_at, f.stored_path, f.mime, f.parser AS file_parser
+                     FROM documents d LEFT JOIN files f ON f.id = d.file_id WHERE d.tax_year = ? ORDER BY d.id`).all(year))
     .map((r) => ({ ...r, fields: parseJson(r.fields, {}) }));
 }
 
@@ -183,13 +184,13 @@ export function matchDocuments(items, docs) {
   return { matched, unmatched };
 }
 
-export function loadMarks(db, year) {
-  return new Map(db.prepare('SELECT item_key, reason, marked_at FROM yearend_marks WHERE tax_year = ?').all(year).map((r) => [r.item_key, r]));
+export async function loadMarks(db, year) {
+  return new Map((await db.prepare('SELECT item_key, reason, marked_at FROM yearend_marks WHERE tax_year = ?').all(year)).map((r) => [r.item_key, r]));
 }
 
 // An empty stored reason is the owner's durable "needed after all" override.
-export function setMark(db, { year, key, reason, now = new Date().toISOString() }) {
-  db.prepare(`INSERT INTO yearend_marks (tax_year, item_key, reason, marked_at) VALUES (?, ?, ?, ?)
+export async function setMark(db, { year, key, reason, now = new Date().toISOString() }) {
+  await db.prepare(`INSERT INTO yearend_marks (tax_year, item_key, reason, marked_at) VALUES (?, ?, ?, ?)
               ON CONFLICT(tax_year, item_key) DO UPDATE SET reason = excluded.reason, marked_at = excluded.marked_at`).run(year, key, reason ?? '', now);
   return reason == null ? { cleared: true } : { marked: true };
 }
@@ -197,8 +198,8 @@ export function setMark(db, { year, key, reason, now = new Date().toISOString() 
 const fileOut = (d) => ({ id: d.file_id, name: d.file_name || 'Unnamed file', date: String(d.uploaded_at || '').slice(0, 10), docId: d.id, form: d.doc_type, issuer: issuerOf(d.fields) });
 
 // P&L coverage per entity for the year: the latest month and the newest source file.
-function pnlCoverage(db, year) {
-  return db.prepare(`SELECT p.entity, max(p.period) AS through, count(DISTINCT p.period) AS months,
+async function pnlCoverage(db, year) {
+  return await db.prepare(`SELECT p.entity, max(p.period) AS through, count(DISTINCT p.period) AS months,
                        (SELECT p2.file_id FROM pnl_lines p2 WHERE p2.entity = p.entity AND substr(p2.period, 1, 4) = ? ORDER BY p2.period DESC, p2.id DESC LIMIT 1) AS file_id
                      FROM pnl_lines p WHERE substr(p.period, 1, 4) = ? GROUP BY p.entity ORDER BY p.entity`).all(String(year), String(year));
 }
@@ -207,30 +208,30 @@ function pnlCoverage(db, year) {
 // document, or for a P&L all twelve months stored), skipped (marked not needed), missing (past its
 // usual arrival date on the clock), else expected.
 // `plain` resolves demo tokens in seeded account text to plain text (imported text is left as is).
-export function yearendChecklist(db, { year, clock, plain = (s) => s }) {
-  const facts = getFacts(db);
+export async function yearendChecklist(db, { year, clock, plain = (s) => s }) {
+  const facts = await getFacts(db);
   const householdNames = facts['household.names'] && typeof facts['household.names'] === 'object' ? facts['household.names'] : {};
-  const holders = new Map(db.prepare('SELECT account_id, holder FROM account_holders').all().map((r) => [r.account_id, r.holder]));
-  const hints = accountNaming(db);
-  const accounts = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all()
+  const holders = new Map((await db.prepare('SELECT account_id, holder FROM account_holders').all()).map((r) => [r.account_id, r.holder]));
+  const hints = await accountNaming(db);
+  const accounts = (await db.prepare('SELECT * FROM accounts ORDER BY sort, id').all())
     .map((a) => (a.parser === 'demo-seed' ? { ...a, inst: plain(a.inst || ''), name: plain(a.name || ''), owner: plain(a.owner || '') } : a))
     .map((a) => {
       const hint = hints.hint(a.id);
       // The owner prefix of a demo account is a name token; the rest of the row is already plain.
       return { ...a, householdNames, holder: holders.get(a.id) || null, ...hint, ...(a.parser === 'demo-seed' ? { labelPrefix: plain(hint.labelPrefix ?? '') } : {}) };
     });
-  const { active, deposits } = activeAccounts(db, year);
-  const all = yearDocuments(db, year);
+  const { active, deposits } = await activeAccounts(db, year);
+  const all = await yearDocuments(db, year);
   const docs = all.filter((d) => RECEIVABLE.includes(d.doc_type) && d.file_id);
-  const mortgagePaid = !!db.prepare("SELECT 1 FROM transactions WHERE date BETWEEN ? AND ? AND (lower(description) LIKE '%mortgage%' OR category = 'mortgage') LIMIT 1")
+  const mortgagePaid = !!await db.prepare("SELECT 1 FROM transactions WHERE date BETWEEN ? AND ? AND (lower(description) LIKE '%mortgage%' OR category = 'mortgage') LIMIT 1")
     .get(`${year}-01-01`, `${year}-12-31`);
-  const pnl = pnlCoverage(db, year);
+  const pnl = await pnlCoverage(db, year);
   const items = expectedItems({ facts, accounts, year, active, deposits, employerNames: employers(all), mortgagePaid, pnlEntities: pnl.map((p) => p.entity) });
   const { matched, unmatched } = matchDocuments(items, docs);
-  const marks = loadMarks(db, year);
-  const inferred = inferredSkips(db, { year, facts, accounts });
-  const fileName = (id) => db.prepare('SELECT name, uploaded_at FROM files WHERE id = ?').get(id);
-  const out = items.map((i) => {
+  const marks = await loadMarks(db, year);
+  const inferred = await inferredSkips(db, { year, facts, accounts });
+  const fileName = async (id) => await db.prepare('SELECT name, uploaded_at FROM files WHERE id = ?').get(id);
+  const out = await mapSeries(items, async (i) => {
     const arrives = ARRIVES[i.arrives];
     const files = matched.get(i.key).map(fileOut);
     let status;
@@ -238,7 +239,7 @@ export function yearendChecklist(db, { year, clock, plain = (s) => s }) {
     if (i.form === 'pnl') {
       const p = pnl.find((x) => x.entity === i.entity);
       if (p && p.file_id) {
-        const f = fileName(p.file_id);
+        const f = await fileName(p.file_id);
         if (p.through === `${year}-12` && p.months === 12) files.push({ id: p.file_id, name: f?.name || 'Ledger', date: String(f?.uploaded_at || '').slice(0, 10), pnl: true });
         else note = `Stored through ${p.through}. ${arrives.note}`;
       }
@@ -281,22 +282,22 @@ export function yearendDecisions({ year, recs, decisions, recRows, opensOn = new
   return out;
 }
 
-export function loadPackets(db, year) {
-  return db.prepare('SELECT id, generated_at, counts, bytes FROM yearend_packets WHERE tax_year = ? ORDER BY id DESC LIMIT 10').all(year)
+export async function loadPackets(db, year) {
+  return (await db.prepare('SELECT id, generated_at, counts, bytes FROM yearend_packets WHERE tax_year = ? ORDER BY id DESC LIMIT 10').all(year))
     .map((r) => ({ id: r.id, at: r.generated_at, counts: parseJson(r.counts, {}), bytes: r.bytes }));
 }
 
-export function recordPacket(db, { year, counts, bytes, now = new Date().toISOString() }) {
-  return Number(db.prepare('INSERT INTO yearend_packets (tax_year, generated_at, counts, bytes) VALUES (?, ?, ?, ?)')
-    .run(year, now, JSON.stringify(counts), bytes).lastInsertRowid);
+export async function recordPacket(db, { year, counts, bytes, now = new Date().toISOString() }) {
+  return Number((await db.prepare('INSERT INTO yearend_packets (tax_year, generated_at, counts, bytes) VALUES (?, ?, ?, ?) RETURNING id')
+    .get(year, now, JSON.stringify(counts), bytes)).id);
 }
 
 // The scenario's yearend section.
-export function buildYearend(db, { clock, recs, decisions, plain }) {
+export async function buildYearend(db, { clock, recs, decisions, plain }) {
   const year = taxYearFor(clock);
-  const { items, unmatched } = yearendChecklist(db, { year, clock, plain });
-  const recRows = db.prepare('SELECT id, window_close FROM recs').all();
-  const opensOn = new Map(db.prepare('SELECT id, opens_on FROM decisions').all().map((r) => [r.id, r.opens_on]));
+  const { items, unmatched } = await yearendChecklist(db, { year, clock, plain });
+  const recRows = await db.prepare('SELECT id, window_close FROM recs').all();
+  const opensOn = new Map((await db.prepare('SELECT id, opens_on FROM decisions').all()).map((r) => [r.id, r.opens_on]));
   const decs = yearendDecisions({ year, recs, decisions, recRows, opensOn });
-  return { year, docs: items, unmatched, decisions: decs, packets: loadPackets(db, year) };
+  return { year, docs: items, unmatched, decisions: decs, packets: await loadPackets(db, year) };
 }

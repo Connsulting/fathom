@@ -29,12 +29,12 @@ const LEFT_LABEL = Object.fromEntries(LEFT_OUT);
 
 // ---------------------------------------------------------------- entities
 
-function loadBusiness(db, clock) {
+async function loadBusiness(db, clock) {
   const clockMonth = clock.slice(0, 7);
-  const base = classified(db, clock);
-  const labels = accountLabels(db);
-  const lines = db.prepare('SELECT * FROM pnl_lines WHERE period <= ? ORDER BY period, id').all(clockMonth);
-  const alias = new Map(db.prepare('SELECT alias, entity FROM entity_aliases').all().map((r) => [normalizeName(r.alias), r.entity]));
+  const base = await classified(db, clock);
+  const labels = await accountLabels(db);
+  const lines = await db.prepare('SELECT * FROM pnl_lines WHERE period <= ? ORDER BY period, id').all(clockMonth);
+  const alias = new Map((await db.prepare('SELECT alias, entity FROM entity_aliases').all()).map((r) => [normalizeName(r.alias), r.entity]));
   const canon = (name) => {
     const target = alias.get(normalizeName(name));
     return typeof target === 'string' && normalizeName(target)
@@ -48,15 +48,15 @@ function loadBusiness(db, clock) {
     const c = canon(n);
     if (!names.has(c.norm)) names.set(c.norm, c.label);
   };
-  const listed = ownerFact(db, 'business.entities');
+  const listed = await ownerFact(db, 'business.entities');
   if (Array.isArray(listed)) for (const e of listed) addName(e && e.name);
   for (const l of lines) addName(l.entity);
-  const statedFact = ownerFact(db, 'accounts.businessEntity');
+  const statedFact = await ownerFact(db, 'accounts.businessEntity');
   const stated = statedFact && typeof statedFact === 'object' && !Array.isArray(statedFact) ? statedFact : {};
   for (const v of Object.values(stated)) addName(v);
 
-  const ledgerFacts = { 'pnl.ledgers': ownerFact(db, 'pnl.ledgers'), 'business.entities': listed,
-    'household.names': ownerFact(db, 'household.names'), 'pnl.people': ownerFact(db, 'pnl.people') };
+  const ledgerFacts = { 'pnl.ledgers': await ownerFact(db, 'pnl.ledgers'), 'business.entities': listed,
+    'household.names': await ownerFact(db, 'household.names'), 'pnl.people': await ownerFact(db, 'pnl.people') };
   const businessNames = [...names.keys()].filter(n => !['spending', 'inactive', 'income_history'].includes(ledgerKind(ledgerFacts, names.get(n), lines.filter(l => canon(l.entity).norm === n))));
   const only = businessNames.length === 1 ? businessNames[0] : null;
   const owner = new Map();
@@ -109,7 +109,7 @@ function loadBusiness(db, clock) {
     const e = build(`account:${id}`, labels.get(id)?.label ?? id, 'account', [id], []);
     if (e) entities.push(e);
   }
-  return { entities, canon, resolved: base.resolved, labels, files: fileNames(db) };
+  return { entities, canon, resolved: base.resolved, labels, files: await fileNames(db) };
 }
 
 const publicEntity = (e) => ({
@@ -119,9 +119,9 @@ const publicEntity = (e) => ({
   transactions: e.txns.length ? { from: e.txns[0].date.slice(0, 7), to: e.txns.at(-1).date.slice(0, 7), rows: e.txns.length } : null,
 });
 
-export function pnlEntities({ db, clock } = {}) {
+export async function pnlEntities({ db, clock } = {}) {
   checkDb(db);
-  return loadBusiness(db, clockOf(db, clock)).entities.filter(e => e.kind !== 'inactive').map(publicEntity);
+  return (await loadBusiness(db, await clockOf(db, clock))).entities.filter(e => e.kind !== 'inactive').map(publicEntity);
 }
 
 function findEntity(model, entity) {
@@ -291,10 +291,10 @@ function compute(model, entity, from, to) {
   return { r, reg, base, a };
 }
 
-export function businessPnl({ db, entity, from, to, clock } = {}) {
+export async function businessPnl({ db, entity, from, to, clock } = {}) {
   checkDb(db);
-  const c = clockOf(db, clock);
-  const model = loadBusiness(db, c);
+  const c = await clockOf(db, clock);
+  const model = await loadBusiness(db, c);
   const e = findEntity(model, entity);
   const { r, reg, base, a } = compute(model, e, from, to);
   const span = spanLabel(r.from, r.to);
@@ -375,13 +375,13 @@ export function businessPnl({ db, entity, from, to, clock } = {}) {
   };
 }
 
-export function businessPnlRows({ db, entity, from, to, section, category, month, clock } = {}) {
+export async function businessPnlRows({ db, entity, from, to, section, category, month, clock } = {}) {
   checkDb(db);
-  const c = clockOf(db, clock);
+  const c = await clockOf(db, clock);
   if (!SECTIONS.includes(section)) throw new PnlError('bad_option', 'section must be income or expenses');
   if (typeof category !== 'string' || !category) throw new PnlError('bad_input', 'category is required');
   checkMonth(month, 'month');
-  const model = loadBusiness(db, c);
+  const model = await loadBusiness(db, c);
   const e = findEntity(model, entity);
   const { r, reg, base, a } = compute(model, e, from, to);
   if (month != null && !r.months.includes(month)) throw new PnlError('bad_range', 'month is outside the range');

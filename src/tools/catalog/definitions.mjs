@@ -10,8 +10,8 @@ export const operations = [
     params: { definitionId, name: { type: 'string', minLength: 1, maxLength: 60 }, def: { type: 'object' }, evidence: { type: 'string', minLength: 1 } }, required: ['definitionId', 'name', 'def', 'evidence'],
     preflight: args => validateDefinition(args), handler: saveArgs },
   { tool: 'update_preferences', name: 'delete_definition', scope, summary: 'Delete a saved selection and its linked preference.', route: 'Delete a saved spending definition', routes: [],
-    params: { definitionId }, required: ['definitionId'], handler: (args, ctx) => deleteDefinition(ctx, args.definitionId) },
+    params: { definitionId }, required: ['definitionId'], handler: async (args, ctx) => await deleteDefinition(ctx, args.definitionId) },
   { tool: 'update_preferences', name: 'forget', scope, summary: 'Forget a preference; its linked spending definition is deleted too.', route: 'Forget a household preference', routes: ['POST /api/preferences/:id/delete'],
-    params: { id: { type: 'string', minLength: 1 } }, required: ['id'], handler: (args, ctx) => writePreference(ctx, args, { remove: true }) },
+    params: { id: { type: 'string', minLength: 1 } }, required: ['id'], handler: async (args, ctx) => await writePreference(ctx, args, { remove: true }) },
 ];
-function saveArgs(args, ctx) { return saveDefinition(ctx, args); }
+async function saveArgs(args, ctx) { return await saveDefinition(ctx, args); }

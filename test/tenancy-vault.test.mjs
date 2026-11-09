@@ -53,8 +53,8 @@ async function refuses(fn, code, label) {
   });
 }
 
-function addHousehold(db, id) {
-  db.prepare(`INSERT INTO households (id, status, mode, display_name, serves_store, created_at, updated_at)
+async function addHousehold(db, id) {
+  await db.prepare(`INSERT INTO households (id, status, mode, display_name, serves_store, created_at, updated_at)
     VALUES (?, 'active', 'real', NULL, 0, ?, ?)`).run(id, NOW_MS, NOW_MS);
 }
 
@@ -80,16 +80,16 @@ before(async () => {
   HV = await src('src/platform/household-vault.mjs');
   BK = await src('src/platform/backup-key.mjs');
   base = await mkdtemp(join(tmpdir(), 'fathom-hv-platform-'));
-  platform = openPlatform(join(base, 'platform.sqlite'));
-  addHousehold(platform, A);
-  addHousehold(platform, B);
+  platform = await openPlatform(join(base, 'platform.sqlite'));
+  await addHousehold(platform, A);
+  await addHousehold(platform, B);
   platformKey = randomBytes(32);
   hA = await HV.provisionDataKey(platform, { householdId: A, platformKey, now: NOW_MS });
   hB = await HV.provisionDataKey(platform, { householdId: B, platformKey, now: NOW_MS });
 });
 
-after(() => {
-  try { platform?.close(); } catch { /* already closed */ }
+after(async () => {
+  try { await platform?.close(); } catch { /* already closed */ }
   if (base) rmSync(base, { recursive: true, force: true });
 });
 
@@ -278,18 +278,18 @@ test('wrapDataKey authenticates household id, version and platform key', async (
 
 test('provisioned keys: swapped wrapped rows, a wrong platform key, a second provision and a missing row are refused; one active key per household', async t => {
   const dir = await tempDir(t);
-  const p = openPlatform(join(dir, 'platform.sqlite'));
-  t.after(() => p.close());
+  const p = await openPlatform(join(dir, 'platform.sqlite'));
+  t.after(async () => await p.close());
   const C = 'hh-synthetic-c';
-  for (const id of [A, B, C]) addHousehold(p, id);
+  for (const id of [A, B, C]) await addHousehold(p, id);
   const pk = randomBytes(32);
   const ha = await HV.provisionDataKey(p, { householdId: A, platformKey: pk, now: NOW_MS });
   const hb = await HV.provisionDataKey(p, { householdId: B, platformKey: pk, now: NOW_MS });
   assert.deepEqual({ ...ha }, { householdId: A, version: 1 });
   assert.deepEqual({ ...hb }, { householdId: B, version: 1 });
 
-  const rowsOf = () => p.prepare('SELECT * FROM household_data_keys ORDER BY household_id, key_version').all().map(r => ({ ...r }));
-  const rows = rowsOf();
+  const rowsOf = async () => (await p.prepare('SELECT * FROM household_data_keys ORDER BY household_id, key_version').all()).map(r => ({ ...r }));
+  const rows = await rowsOf();
   assert.deepEqual(rows.map(r => [r.household_id, r.key_version, r.status, r.created_at]), [[A, 1, 'active', NOW_MS], [B, 1, 'active', NOW_MS]]);
   for (const r of rows) {
     const raw = HV.unwrapWrappedKey(pk, { householdId: r.household_id, version: 1, wrapped: Buffer.from(r.wrapped_key) });
@@ -311,30 +311,30 @@ test('provisioned keys: swapped wrapped rows, a wrong platform key, a second pro
 
   await refuses(() => HV.unwrapDataKey(p, { householdId: A, platformKey: randomBytes(32) }), 'data_key_invalid', 'wrong platform key');
   await refuses(() => HV.provisionDataKey(p, { householdId: A, platformKey: pk, now: NOW_MS }), 'data_key_exists', 'second provision');
-  assert.deepEqual(rowsOf(), rows, 'a refused provision writes nothing');
+  assert.deepEqual(await rowsOf(), rows, 'a refused provision writes nothing');
   await refuses(() => HV.unwrapDataKey(p, { householdId: C, platformKey: pk }), 'data_key_missing', 'household without a key');
   await refuses(() => HV.unwrapDataKey(p, { householdId: A, platformKey: pk, version: 2 }), 'data_key_missing', 'version without a row');
 
   // The unique active index allows one active row per household; a retired row is fine.
   const insert = p.prepare('INSERT INTO household_data_keys (household_id, key_version, wrapped_key, status, created_at) VALUES (?, ?, ?, ?, ?)');
-  assert.throws(() => insert.run(A, 2, randomBytes(64), 'active', NOW_MS), err => err.code === 'ERR_SQLITE_ERROR' && /UNIQUE/i.test(err.message));
-  assert.throws(() => insert.run(A, 1, randomBytes(64), 'retired', NOW_MS), err => err.code === 'ERR_SQLITE_ERROR', 'primary key (household_id, key_version)');
-  insert.run(A, 2, randomBytes(64), 'retired', NOW_MS);
+  await assert.rejects(async () => await insert.run(A, 2, randomBytes(64), 'active', NOW_MS), err => err.code === 'ERR_SQLITE_ERROR' && /UNIQUE/i.test(err.message));
+  await assert.rejects(async () => await insert.run(A, 1, randomBytes(64), 'retired', NOW_MS), err => err.code === 'ERR_SQLITE_ERROR', 'primary key (household_id, key_version)');
+  await insert.run(A, 2, randomBytes(64), 'retired', NOW_MS);
   const active = await HV.unwrapDataKey(p, { householdId: A, platformKey: pk });
   assert.equal(active.version, 1, 'the active version is chosen when none is named');
   await refuses(() => HV.unwrapDataKey(p, { householdId: A, platformKey: pk, version: 2 }), 'data_key_invalid', 'garbage retired row');
-  p.prepare('DELETE FROM household_data_keys WHERE household_id = ? AND key_version = 2').run(A);
+  await p.prepare('DELETE FROM household_data_keys WHERE household_id = ? AND key_version = 2').run(A);
 
   // Swap the wrapped keys of A and B: both refuse; swapping back restores both.
   const wa = Buffer.from(rows[0].wrapped_key);
   const wb = Buffer.from(rows[1].wrapped_key);
   const setWrapped = p.prepare('UPDATE household_data_keys SET wrapped_key = ? WHERE household_id = ? AND key_version = 1');
-  setWrapped.run(wb, A);
-  setWrapped.run(wa, B);
+  await setWrapped.run(wb, A);
+  await setWrapped.run(wa, B);
   await refuses(() => HV.unwrapDataKey(p, { householdId: A, platformKey: pk }), 'data_key_invalid', 'A with B\'s wrapped key');
   await refuses(() => HV.unwrapDataKey(p, { householdId: B, platformKey: pk }), 'data_key_invalid', 'B with A\'s wrapped key');
-  setWrapped.run(wa, A);
-  setWrapped.run(wb, B);
+  await setWrapped.run(wa, A);
+  await setWrapped.run(wb, B);
   assert.equal((await HV.unwrapDataKey(p, { householdId: B, platformKey: pk })).householdId, B, 'liveness after restoring');
 });
 
@@ -547,28 +547,28 @@ test('loadPlatformKey accepts private hex, raw and base64 key files and refuses 
 
 test('platform migration 002 gives every fresh platform an empty household_data_keys table', async t => {
   const dir = await tempDir(t);
-  const p = openPlatform(join(dir, 'platform.sqlite'));
-  t.after(() => p.close());
-  const cols = p.prepare('PRAGMA table_info(household_data_keys)').all().map(c => ({ ...c }));
+  const p = await openPlatform(join(dir, 'platform.sqlite'));
+  t.after(async () => await p.close());
+  const cols = (await p.columns('household_data_keys')).map(c => ({ ...c }));
   assert.deepEqual(cols.map(c => c.name), ['household_id', 'key_version', 'wrapped_key', 'status', 'created_at']);
   assert.deepEqual(cols.filter(c => c.pk > 0).sort((x, y) => x.pk - y.pk).map(c => c.name), ['household_id', 'key_version'], 'primary key (household_id, key_version)');
   assert.ok(cols.every(c => c.notnull === 1 || c.pk > 0), 'every column is NOT NULL');
-  const fks = p.prepare('PRAGMA foreign_key_list(household_data_keys)').all().map(f => [f.table, f.from, f.to]);
+  const fks = (await p.inspect('foreign_key_list', 'household_data_keys')).map(f => [f.table, f.from, f.to]);
   assert.deepEqual(fks, [['households', 'household_id', 'id']]);
-  const indexes = p.prepare('PRAGMA index_list(household_data_keys)').all().map(i => ({ ...i }));
+  const indexes = (await p.inspect('index_list', 'household_data_keys')).map(i => ({ ...i }));
   assert.ok(indexes.some(i => i.unique === 1 && i.partial === 1), 'a unique partial index (one active key per household)');
-  assert.ok(p.prepare('SELECT 1 AS x FROM schema_migrations WHERE id = 2').get(), 'migration 002 recorded');
-  assert.equal(p.prepare('SELECT count(*) AS n FROM household_data_keys').get().n, 0, 'empty after migration');
-  assert.throws(() => p.prepare('INSERT INTO household_data_keys (household_id, key_version, wrapped_key, status, created_at) VALUES (?, 1, ?, ?, ?)')
+  assert.ok(await p.prepare('SELECT 1 AS x FROM schema_migrations WHERE id = 2').get(), 'migration 002 recorded');
+  assert.equal((await p.prepare('SELECT count(*) AS n FROM household_data_keys').get()).n, 0, 'empty after migration');
+  await assert.rejects(async () => await p.prepare('INSERT INTO household_data_keys (household_id, key_version, wrapped_key, status, created_at) VALUES (?, 1, ?, ?, ?)')
     .run('hh-synthetic-unknown', randomBytes(64), 'active', NOW_MS), err => err.code === 'ERR_SQLITE_ERROR', 'household must exist');
 
   const instanceDir = await tempDir(t);
-  const inst = createInstance(instanceDir, { mode: 'demo' });
+  const inst = await createInstance(instanceDir, { mode: 'demo' });
   try {
-    assert.equal(inst.platform.prepare('SELECT count(*) AS n FROM household_data_keys').get().n, 0, 'createInstance platforms have the empty table');
+    assert.equal((await inst.platform.prepare('SELECT count(*) AS n FROM household_data_keys').get()).n, 0, 'createInstance platforms have the empty table');
   } finally {
-    inst.db.close();
-    inst.platform.close();
+    await inst.db.close();
+    await inst.platform.close();
   }
 });
 
@@ -606,10 +606,10 @@ test('the running server has no FTHM1 path: only the offline migration reaches t
 
   // An upload through the real ingest pipeline is stored FTHM2 under the household root.
   const s = await realStore();
-  t.after(() => s.close());
+  t.after(async () => await s.close());
   const { ingestFile } = await src('src/ingest/pipeline.mjs');
   const r = await ingestFile(s.db, aggregatorFile('synthetic-fthm2.csv', [{ date: '2032-02-01', amount: '12.00', description: 'Synthetic row' }]), s.opts(await offEngine()));
-  const row = s.db.prepare('SELECT stored_path, sha256 FROM files WHERE id = ?').get(r.fileId);
+  const row = await s.db.prepare('SELECT stored_path, sha256 FROM files WHERE id = ?').get(r.fileId);
   assert.equal(row.stored_path, `files/${r.fileId}.bin`);
   const blob = readFileSync(join(s.root, row.stored_path));
   assert.ok(blob.subarray(0, 5).equals(Buffer.from('FTHM2')), 'the pipeline stores FTHM2');

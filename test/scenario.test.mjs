@@ -17,21 +17,21 @@ const NOV_TO_JAN = 61; // 2026-11-05 to 2027-01-05
 
 async function seeded() {
   const t = await tempDb();
-  seedDemo(t.db);
+  await seedDemo(t.db);
   return t;
 }
 
 async function withSeeded(fn) {
   const t = await seeded();
-  try { return await fn(t.db); } finally { t.close(); }
+  try { return await fn(t.db); } finally { await t.close(); }
 }
 
 const decision = (sc, id) => sc.decisions.find(d => d.id === id);
-const setRecStatus = (db, id, status) => db.prepare('UPDATE recs SET status = ? WHERE id = ?').run(status, id);
+const setRecStatus = async (db, id, status) => await db.prepare('UPDATE recs SET status = ? WHERE id = ?').run(status, id);
 const novemberStatus = r => (r.statusByDemo && r.statusByDemo.november) || r.status;
 
-test('build returns every CONTRACT top-level key plus live', () => withSeeded(db => {
-  const sc = buildScenario(db);
+test('build returns every CONTRACT top-level key plus live', async () => withSeeded(async db => {
+  const sc = await buildScenario(db);
   for (const k of CONTRACT_KEYS) assert.ok(k in sc, `missing ${k}`);
   for (const k of ['mode', 'demo', 'engine', 'onboardStep', 'picks', 'conversations', 'packs', 'clock']) {
     assert.ok(k in sc.live, `missing live.${k}`);
@@ -49,8 +49,8 @@ test('build returns every CONTRACT top-level key plus live', () => withSeeded(db
   assert.deepEqual(sc.live.picks, { salary: Math.max(0, salaryDefault), deferral: 0 });
 }));
 
-test('recs carry live November status and no statusByDemo', () => withSeeded(db => {
-  const sc = buildScenario(db);
+test('recs carry live November status and no statusByDemo', async () => withSeeded(async db => {
+  const sc = await buildScenario(db);
   assert.ok(!JSON.stringify(sc).includes('statusByDemo'));
   for (const r of demo.recs) {
     const got = recOf(sc, r.id);
@@ -61,9 +61,9 @@ test('recs carry live November status and no statusByDemo', () => withSeeded(db 
   }
 }));
 
-test('window.days is computed from the clock', () => withSeeded(db => {
-  const nov = buildScenario(db);
-  const jan = buildScenario(db, { clock: '2027-01-05' });
+test('window.days is computed from the clock', async () => withSeeded(async db => {
+  const nov = await buildScenario(db);
+  const jan = await buildScenario(db, { clock: '2027-01-05' });
   for (const r of demo.recs.filter(x => x.status !== 'hidden')) {
     assert.equal(recOf(nov, r.id).window.days, r.window.days, `${r.id} in November`);
     assert.equal(recOf(nov, r.id).window.label, r.window.label);
@@ -73,24 +73,24 @@ test('window.days is computed from the clock', () => withSeeded(db => {
   assert.equal(jan.meta.clockLabel, 'Tue, Jan 5, 2027');
   assert.equal(jan.live.clock, '2027-01-05');
 
-  setSetting(db, 'clock', '2026-12-01');
-  const dec = buildScenario(db);
+  await setSetting(db, 'clock', '2026-12-01');
+  const dec = await buildScenario(db);
   assert.equal(recOf(dec, 'offcycle').window.days, 0, 'stored clock is used when no override');
   assert.equal(dec.meta.clock, '2026-12-01');
 }));
 
-test('the seed writes no rec-keyed conversation or opening summary message', () => withSeeded(db => {
-  const sc = buildScenario(db);
+test('the seed writes no rec-keyed conversation or opening summary message', async () => withSeeded(async db => {
+  const sc = await buildScenario(db);
   for (const r of demo.recs) assert.ok(!(r.id in sc.live.conversations), `${r.id} has no rec-keyed conversation`);
-  assert.equal(db.prepare("SELECT count(*) AS n FROM conversations WHERE key NOT LIKE 'pack:%'").get().n, 0, 'no conversation besides packs');
+  assert.equal((await db.prepare("SELECT count(*) AS n FROM conversations WHERE key NOT LIKE 'pack:%'").get()).n, 0, 'no conversation besides packs');
   assert.ok(!('ask' in sc.live.conversations), 'no bare ask conversation');
   assert.ok(!Object.keys(sc.live.conversations).some(k => k.startsWith('ask:')), 'the seed has no Ask threads');
   assert.deepEqual(sc.live.threads, []);
 }));
 
-test('Decide in November: salary decided, deferral open, later ones upcoming', () => withSeeded(db => {
+test('Decide in November: salary decided, deferral open, later ones upcoming', async () => withSeeded(async db => {
   assert.deepEqual(OPENS_ON, { salary27: '2027-01-01' });
-  const sc = buildScenario(db);
+  const sc = await buildScenario(db);
   const status = Object.fromEntries(sc.decisions.map(d => [d.id, d.status]));
   assert.deepEqual(status, {
     deferral: 'open', dcfsa: 'open', salary26: 'decided', salary27: 'upcoming', spouseentity: 'upcoming', backdoor: 'upcoming',
@@ -101,57 +101,57 @@ test('Decide in November: salary decided, deferral open, later ones upcoming', (
   assert.equal(sc.wargame.deferral.status, 'open');
 }));
 
-test('Decide in January: the 2027 salary decision opens on its calendar date', () => withSeeded(db => {
-  const jan = buildScenario(db, { clock: '2027-01-05' });
+test('Decide in January: the 2027 salary decision opens on its calendar date', async () => withSeeded(async db => {
+  const jan = await buildScenario(db, { clock: '2027-01-05' });
   assert.equal(decision(jan, 'salary27').status, 'open');
   assert.equal(decision(jan, 'salary26').status, 'decided');
   assert.equal(jan.wargame.salary.status, 'open');
   assert.equal(decision(jan, 'spouseentity').status, 'upcoming', 'dependency driven stays upcoming');
   assert.equal(decision(jan, 'backdoor').status, 'upcoming');
 
-  assert.equal(decision(buildScenario(db, { clock: '2027-01-01' }), 'salary27').status, 'open', 'on the date');
-  assert.equal(decision(buildScenario(db, { clock: '2026-12-31' }), 'salary27').status, 'upcoming', 'the day before');
-  const far = buildScenario(db, { clock: '2030-01-01' });
+  assert.equal(decision(await buildScenario(db, { clock: '2027-01-01' }), 'salary27').status, 'open', 'on the date');
+  assert.equal(decision(await buildScenario(db, { clock: '2026-12-31' }), 'salary27').status, 'upcoming', 'the day before');
+  const far = await buildScenario(db, { clock: '2030-01-01' });
   assert.equal(decision(far, 'spouseentity').status, 'upcoming');
   assert.equal(decision(far, 'backdoor').status, 'upcoming');
 }));
 
-test('a done or dismissed linked rec decides an open decision and its war game', () => withSeeded(db => {
-  setRecStatus(db, 'deferral', 'done');
-  let sc = buildScenario(db);
+test('a done or dismissed linked rec decides an open decision and its war game', async () => withSeeded(async db => {
+  await setRecStatus(db, 'deferral', 'done');
+  let sc = await buildScenario(db);
   assert.equal(decision(sc, 'deferral').status, 'decided');
   assert.equal(decision(sc, 'deferral').line, 'Marked done on your plan.');
   assert.equal(sc.wargame.deferral.status, 'decided');
   assert.equal(sc.wargame.deferral.decided, 'Marked done on your plan.');
 
-  setRecStatus(db, 'deferral', 'dismissed');
-  sc = buildScenario(db);
+  await setRecStatus(db, 'deferral', 'dismissed');
+  sc = await buildScenario(db);
   assert.equal(decision(sc, 'deferral').status, 'decided');
   assert.equal(decision(sc, 'deferral').line, 'Set aside on your plan.');
   assert.equal(sc.wargame.deferral.decided, 'Set aside on your plan.');
 
-  setRecStatus(db, 'deferral', 'doing');
-  sc = buildScenario(db);
+  await setRecStatus(db, 'deferral', 'doing');
+  sc = await buildScenario(db);
   assert.equal(decision(sc, 'deferral').status, 'open', 'an active rec leaves the decision open');
   assert.equal(sc.wargame.deferral.status, 'open');
 
-  setRecStatus(db, 'spouseentity', 'done');
-  assert.equal(decision(buildScenario(db), 'spouseentity').status, 'decided', 'applies to upcoming decisions too');
+  await setRecStatus(db, 'spouseentity', 'done');
+  assert.equal(decision(await buildScenario(db), 'spouseentity').status, 'decided', 'applies to upcoming decisions too');
 }));
 
-test('a stored decided decision keeps its stored line whatever its rec does', () => withSeeded(db => {
-  setRecStatus(db, 'compmemo', 'dismissed');
-  const sc = buildScenario(db);
+test('a stored decided decision keeps its stored line whatever its rec does', async () => withSeeded(async db => {
+  await setRecStatus(db, 'compmemo', 'dismissed');
+  const sc = await buildScenario(db);
   assert.equal(decision(sc, 'salary26').status, 'decided');
   assert.equal(decision(sc, 'salary26').line, demo.wargame.salary.decided);
 
-  db.prepare("UPDATE decisions SET status = 'decided' WHERE id = 'dcfsa'").run();
+  await db.prepare("UPDATE decisions SET status = 'decided' WHERE id = 'dcfsa'").run();
   const d = demo.decisions.find(x => x.id === 'dcfsa');
-  assert.equal(decision(buildScenario(db), 'dcfsa').line, `${d.when}. ${d.note}`, 'no war game: "<when>. <note>"');
+  assert.equal(decision(await buildScenario(db), 'dcfsa').line, `${d.when}. ${d.note}`, 'no war game: "<when>. <note>"');
 }));
 
-test('figures carry v, src, kind and label, and every src is a known source', () => withSeeded(db => {
-  const sc = buildScenario(db);
+test('figures carry v, src, kind and label, and every src is a known source', async () => withSeeded(async db => {
+  const sc = await buildScenario(db);
   for (const [key, f] of Object.entries(demo.fig)) {
     assert.deepEqual(
       { v: sc.fig[key].v, src: sc.fig[key].src, kind: sc.fig[key].kind, label: sc.fig[key].label },
@@ -165,8 +165,8 @@ test('figures carry v, src, kind and label, and every src is a known source', ()
   }
 }));
 
-test('war-game figures are derived at build time with model provenance', () => withSeeded(db => {
-  const sc = buildScenario(db);
+test('war-game figures are derived at build time with model provenance', async () => withSeeded(async db => {
+  const sc = await buildScenario(db);
   assert.equal(sc.src['wargame-model'].label, 'War-game model, from your plan');
   for (const p of demo.wargame.salary.points) {
     for (const axis of ['x', 'y']) {
@@ -189,8 +189,8 @@ test('war-game figures are derived at build time with model provenance', () => w
   }
 }));
 
-test('series points are figures with their kind', () => withSeeded(db => {
-  const sc = buildScenario(db);
+test('series points are figures with their kind', async () => withSeeded(async db => {
+  const sc = await buildScenario(db);
   for (const [key, s] of Object.entries(demo.series)) {
     s.points.forEach((p, i) => {
       const f = sc.fig[`series.${key}.${i}`];
@@ -202,10 +202,10 @@ test('series points are figures with their kind', () => withSeeded(db => {
   }
 }));
 
-test('engine budget comes from settings.cap and the spend ledger for the clock month', () => withSeeded(db => {
-  let sc = buildScenario(db);
+test('engine budget comes from settings.cap and the spend ledger for the clock month', async () => withSeeded(async db => {
+  let sc = await buildScenario(db);
   // spend_ledger.yyyymm holds the month as 'YYYY-MM', the same form as pnl_lines.period.
-  const month = db.prepare("SELECT coalesce(sum(cost_usd), 0) AS s FROM spend_ledger WHERE yyyymm = '2026-11'").get().s;
+  const month = (await db.prepare("SELECT coalesce(sum(cost_usd), 0) AS s FROM spend_ledger WHERE yyyymm = '2026-11'").get()).s;
   assert.equal(sc.engine.budget.used, demo.engine.budget.used, 'demo shows the mock numbers');
   assert.equal(sc.engine.budget.used, Math.round(month * 100) / 100, 'used is the ledger sum for the month');
   assert.equal(sc.engine.budget.monthly, 200);
@@ -213,10 +213,10 @@ test('engine budget comes from settings.cap and the spend ledger for the clock m
 
   const used = sc.engine.budget.used;
   const add = db.prepare("INSERT INTO spend_ledger (ts, yyyymm, purpose, cost_usd, model, tokens) VALUES (?, ?, 'chat', ?, 'test', '{}')");
-  add.run('2026-11-05T10:00:00Z', '2026-11', 1.25);
-  add.run('2026-10-05T10:00:00Z', '2026-10', 99);
-  setSetting(db, 'cap', { usd: 300 });
-  sc = buildScenario(db);
+  await add.run('2026-11-05T10:00:00Z', '2026-11', 1.25);
+  await add.run('2026-10-05T10:00:00Z', '2026-10', 99);
+  await setSetting(db, 'cap', { usd: 300 });
+  sc = await buildScenario(db);
   assert.equal(sc.engine.budget.used, Math.round((used + 1.25) * 100) / 100);
   assert.equal(sc.engine.budget.monthly, 300);
 
@@ -241,24 +241,24 @@ test('engine budget comes from settings.cap and the spend ledger for the clock m
 test('an empty store builds a valid empty scenario', async () => {
   const t = await tempDb();
   try {
-    const sc = buildScenario(t.db);
+    const sc = await buildScenario(t.db);
     for (const k of CONTRACT_KEYS) assert.ok(k in sc, `missing ${k}`);
     assert.deepEqual(sc.recs, []);
     assert.equal(sc.meta.product, 'Fathom');
     assert.equal(sc.live.demo, 'fresh', 'onboarding is not done on an empty store');
     assert.match(sc.live.clock, /^\d{4}-\d{2}-\d{2}$/);
   } finally {
-    t.close();
+    await t.close();
   }
 });
 
-test('ask threads keep token-bearing HTML as stored', () => withSeeded(db => {
+test('ask threads keep token-bearing HTML as stored', async () => withSeeded(async db => {
   const q = demo.ask.suggested[0];
   const key = 'ask:0123456789ab';
-  db.prepare('INSERT OR IGNORE INTO conversations (key, created_at, last_at) VALUES (?, ?, ?)').run(key, '2026-11-05T09:00:00Z', '2026-11-05T09:01:00Z');
-  db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES (?, 'fathom', ?, ?, 0, '2026-11-05T09:01:00Z')")
+  await db.prepare('INSERT OR IGNORE INTO conversations (key, created_at, last_at) VALUES (?, ?, ?)').run(key, '2026-11-05T09:00:00Z', '2026-11-05T09:01:00Z');
+  await db.prepare("INSERT INTO messages (conversation_key, role, text, refs, notice, ts) VALUES (?, 'fathom', ?, ?, 0, '2026-11-05T09:01:00Z')")
     .run(key, paragraphs(q.a), JSON.stringify(q.refs));
-  const conv = buildScenario(db).live.conversations[key];
+  const conv = (await buildScenario(db)).live.conversations[key];
   assert.equal(conv.length, 1);
   assert.equal(conv[0].role, 'fathom');
   assert.equal(conv[0].text, paragraphs(q.a));
@@ -268,18 +268,18 @@ test('ask threads keep token-bearing HTML as stored', () => withSeeded(db => {
 }));
 
 
-test('war-game starters lead only for open and upcoming games', () => withSeeded(db => {
+test('war-game starters lead only for open and upcoming games', async () => withSeeded(async db => {
   const ids = sc => sc.live.askStarters.map(s => s.id);
-  assert.deepEqual(ids(buildScenario(db)).slice(0, 1), ['wargame-deferral']);
-  db.prepare("UPDATE decisions SET status = 'open', decided_line = NULL WHERE id = 'salary26'").run();
-  assert.deepEqual(ids(buildScenario(db)).slice(0, 2), ['wargame-salary', 'wargame-deferral']);
-  db.prepare("UPDATE decisions SET status = 'upcoming', opens_on = '2027-01-01' WHERE id = 'salary26'").run();
-  assert.equal(ids(buildScenario(db))[0], 'wargame-salary');
-  const raw = JSON.parse(db.prepare("SELECT value FROM content WHERE key = 'wargame'").get().value);
+  assert.deepEqual(ids(await buildScenario(db)).slice(0, 1), ['wargame-deferral']);
+  await db.prepare("UPDATE decisions SET status = 'open', decided_line = NULL WHERE id = 'salary26'").run();
+  assert.deepEqual(ids(await buildScenario(db)).slice(0, 2), ['wargame-salary', 'wargame-deferral']);
+  await db.prepare("UPDATE decisions SET status = 'upcoming', opens_on = '2027-01-01' WHERE id = 'salary26'").run();
+  assert.equal(ids(await buildScenario(db))[0], 'wargame-salary');
+  const raw = JSON.parse((await db.prepare("SELECT value FROM content WHERE key = 'wargame'").get()).value);
   raw.salary.unavailable = 'Changed inputs';
-  db.prepare("UPDATE content SET value = ? WHERE key = 'wargame'").run(JSON.stringify(raw));
-  db.prepare("UPDATE decisions SET unavailable_reason = 'Changed inputs' WHERE wargame = 'salary'").run();
-  assert.ok(!ids(buildScenario(db)).includes('wargame-salary'));
-  db.prepare("UPDATE decisions SET status = 'decided' WHERE wargame = 'deferral'").run();
-  assert.ok(!ids(buildScenario(db)).includes('wargame-deferral'));
+  await db.prepare("UPDATE content SET value = ? WHERE key = 'wargame'").run(JSON.stringify(raw));
+  await db.prepare("UPDATE decisions SET unavailable_reason = 'Changed inputs' WHERE wargame = 'salary'").run();
+  assert.ok(!ids(await buildScenario(db)).includes('wargame-salary'));
+  await db.prepare("UPDATE decisions SET status = 'decided' WHERE wargame = 'deferral'").run();
+  assert.ok(!ids(await buildScenario(db)).includes('wargame-deferral'));
 }));

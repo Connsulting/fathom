@@ -10,9 +10,9 @@ async function openGap(page, request, info) {
   test.skip(!base || !dataDir, 'requires the local Your plans demo server');
   await resetDemo(request, base);
   await withLocalHousehold(new Date().toISOString(), async ({ db }) => {
-    db.prepare(`INSERT INTO files (id,name,mime,size,source_kind,uploaded_at,stored_path,status,note)
+    await db.prepare(`INSERT INTO files (id,name,mime,size,source_kind,uploaded_at,stored_path,status,note)
       VALUES (?,'broken-plan.txt','text/plain',1,'upload',?,'files/replacement-feedback-source.bin','parsed','')`).run(OLD, new Date().toISOString());
-    db.prepare("INSERT INTO documents (doc_type,fields,file_id) VALUES ('plan','{}',?)").run(OLD);
+    await db.prepare("INSERT INTO documents (doc_type,fields,file_id) VALUES ('plan','{}',?)").run(OLD);
   }, { dataDir });
   await page.goto(new URL('/#/packs', base).href);
   await setScope(page);
@@ -139,8 +139,8 @@ test('a second replacement removes the earlier saved copy before rebuilding', as
   await replace(page, gap, { name: 'later-plan.txt', mimeType: 'text/plain', buffer: Buffer.from(TEXT.replace('routine', 'preventive')) });
   await expect(page.locator('.h-pack-gap')).toHaveCount(0, { timeout: 30_000 });
   await withLocalHousehold(new Date().toISOString(), async ({ db }) => {
-    expect(db.prepare("SELECT removed_at FROM files WHERE name = 'replacement-plan.txt'").get().removed_at).toBeTruthy();
-    expect(db.prepare("SELECT removed_at FROM files WHERE name = 'later-plan.txt'").get().removed_at).toBeNull();
+    expect((await db.prepare("SELECT removed_at FROM files WHERE name = 'replacement-plan.txt'").get()).removed_at).toBeTruthy();
+    expect((await db.prepare("SELECT removed_at FROM files WHERE name = 'later-plan.txt'").get()).removed_at).toBeNull();
   }, { dataDir: info.config.metadata.ypDataDir });
 });
 
@@ -220,7 +220,7 @@ test('an earlier-copy cleanup failure retains both removals for the single retry
   await gap.getByRole('button', { name: 'Retry removal', exact: true }).click();
   await expect(page.locator('.h-pack-gap')).toHaveCount(0, { timeout: 30_000 });
   await withLocalHousehold(new Date().toISOString(), async ({ db }) => {
-    expect(db.prepare("SELECT removed_at FROM files WHERE name = 'replacement-plan.txt'").get().removed_at).toBeTruthy();
-    expect(db.prepare("SELECT removed_at FROM files WHERE name = 'later-plan.txt'").get().removed_at).toBeNull();
+    expect((await db.prepare("SELECT removed_at FROM files WHERE name = 'replacement-plan.txt'").get()).removed_at).toBeTruthy();
+    expect((await db.prepare("SELECT removed_at FROM files WHERE name = 'later-plan.txt'").get()).removed_at).toBeNull();
   }, { dataDir: info.config.metadata.ypDataDir });
 });

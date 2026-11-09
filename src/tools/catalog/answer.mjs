@@ -8,7 +8,7 @@ export const operations = [{
   params: { key: { type: 'string', minLength: 1 }, value: {}, evidence: { type: 'string', minLength: 1 }, conversationKey: { type: 'string' } },
   required: ['key', 'value', 'evidence'],
   async handler(args, ctx) {
-    const out = recordFact(args, ctx.channel === 'mcp' ? { ...ctx, conversationKey: args.conversationKey } : ctx);
+    const out = await recordFact(args, ctx.channel === 'mcp' ? { ...ctx, conversationKey: args.conversationKey } : ctx);
     return { ...out, planningPending: await replanAction(ctx, out.receipt) };
   },
 }, {
@@ -20,7 +20,7 @@ export const operations = [{
     amount: { anyOf: [{ type: 'number', minimum: 0 }, { type: 'null' }] }, accountId: { anyOf: [{ type: 'string' }, { type: 'null' }] },
     evidence: { type: 'string', minLength: 1 }, relativeDate: { type: 'string', maxLength: 30 }, conversationKey: { type: 'string' } },
   required: ['subject', 'direction', 'dueDate', 'datePrecision', 'amount', 'evidence'],
-  handler: (args, ctx) => expectedTransaction(args, ctx.channel === 'mcp' ? { ...ctx, conversationKey: args.conversationKey } : ctx),
+  handler: async (args, ctx) => await expectedTransaction(args, ctx.channel === 'mcp' ? { ...ctx, conversationKey: args.conversationKey } : ctx),
 }];
 export const rules = [
   'When a request needs a missing household fact, name it and offer answer.fact in chat using the owner\'s exact words. Read household.fact_shapes for accepted keys and shapes.',

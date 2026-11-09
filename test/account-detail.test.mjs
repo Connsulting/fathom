@@ -13,14 +13,14 @@ async function twoAccounts(s) {
   assert.equal(r1.status, 'imported');
   const r2 = await P.ingestFile(s.db, aggregatorFile('second.csv', [row({ account: 'Other 1111 1111', number: '9991111', inst: 'Harbor', description: 'Other account row', date: '2032-02-09' })]), s.opts(null));
   assert.equal(r2.status, 'imported');
-  const ids = s.db.prepare('SELECT id, inst FROM accounts ORDER BY inst').all();
+  const ids = await s.db.prepare('SELECT id, inst FROM accounts ORDER BY inst').all();
   return { chase: ids.find((x) => x.inst === 'Chase').id, harbor: ids.find((x) => x.inst === 'Harbor').id };
 }
 
 const ctx = (s, id, query = {}) => ({ db: s.db, config: s.config, params: { id }, query });
 
 async function status(fn) {
-  try { fn(); } catch (e) { return e.status ?? e.code ?? 'throw'; }
+  try { await fn(); } catch (e) { return e.status ?? e.code ?? 'throw'; }
   return 'ok';
 }
 
@@ -29,7 +29,7 @@ test('account detail names the account, its feeds and its freshness, scoped to t
   const { accountDetail } = await src('src/api/account-detail.mjs');
   try {
     const { chase } = await twoAccounts(s);
-    const d = accountDetail(ctx(s, chase));
+    const d = await accountDetail(ctx(s, chase));
     assert.equal(d.account.id, chase);
     assert.equal(typeof d.account.label, 'string');
     assert.equal(d.account.inst, 'Chase');
@@ -46,13 +46,13 @@ test('account detail names the account, its feeds and its freshness, scoped to t
     assert.equal(d.syncable, false);
     // The account's state is the one the health line counts.
     const { ingestState } = await src('src/ingest/freshness.mjs');
-    const live = ingestState(s.db, {});
+    const live = await ingestState(s.db, {});
     assert.equal(d.fresh, live.accounts[chase]?.fresh ?? 'unknown');
     assert.equal(d.asOf, live.accounts[chase]?.asOf ?? '');
-    const other = accountDetail(ctx(s, d.account.id === chase ? chase : chase));
+    const other = await accountDetail(ctx(s, d.account.id === chase ? chase : chase));
     assert.equal(other.feeds.every((f) => f.label !== 'Other'), true);
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -61,28 +61,28 @@ test('the balance date is the balance row, not the newest transaction', async ()
   const { accountDetail } = await src('src/api/account-detail.mjs');
   try {
     const { chase } = await twoAccounts(s);
-    assert.equal(accountDetail(ctx(s, chase)).balance.asOf, null);
-    s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(chase, '2032-01-15', 100);
-    const d = accountDetail(ctx(s, chase));
+    assert.equal((await accountDetail(ctx(s, chase))).balance.asOf, null);
+    await s.db.prepare('INSERT INTO balances (account_id, date, amount) VALUES (?, ?, ?)').run(chase, '2032-01-15', 100);
+    const d = await accountDetail(ctx(s, chase));
     assert.equal(d.balance.asOf, '2032-01-15');
     assert.equal(d.txn.to, '2032-02-07');
     // Positions newer than the balance row do not move the date: the balance row is what is shown.
-    s.db.prepare('INSERT INTO positions (account_id, as_of, symbol, value) VALUES (?, ?, ?, ?)').run(chase, '2032-02-05', 'XYZ', 50);
-    assert.equal(accountDetail(ctx(s, chase)).balance.asOf, '2032-01-15');
+    await s.db.prepare('INSERT INTO positions (account_id, as_of, symbol, value) VALUES (?, ?, ?, ?)').run(chase, '2032-02-05', 'XYZ', 50);
+    assert.equal((await accountDetail(ctx(s, chase))).balance.asOf, '2032-01-15');
     // With no balance row the positions date is used.
-    s.db.prepare('DELETE FROM balances WHERE account_id = ?').run(chase);
-    assert.equal(accountDetail(ctx(s, chase)).balance.asOf, '2032-02-05');
+    await s.db.prepare('DELETE FROM balances WHERE account_id = ?').run(chase);
+    assert.equal((await accountDetail(ctx(s, chase))).balance.asOf, '2032-02-05');
     // An empty holdings snapshot dated after the positions makes the balance 0 as of that date.
-    s.db.prepare(`INSERT INTO files (id, name, mime, size, uploaded_at, status, period_to) VALUES ('empty1', 'empty.csv', 'text/csv', 0, '2032-03-01', 'parsed', '2032-03-31')`).run();
-    s.db.prepare(`INSERT INTO figures (key, v, src, kind, label, file_id, locator, updated_at) VALUES (?, 0, NULL, 'a', 'x', 'empty1', ?, '2032-03-31')`)
+    await s.db.prepare(`INSERT INTO files (id, name, mime, size, uploaded_at, status, period_to) VALUES ('empty1', 'empty.csv', 'text/csv', 0, '2032-03-01', 'parsed', '2032-03-31')`).run();
+    await s.db.prepare(`INSERT INTO figures (key, v, src, kind, label, file_id, locator, updated_at) VALUES (?, 0, NULL, 'a', 'x', 'empty1', ?, '2032-03-31')`)
       .run(`acct.${chase}.balance`, JSON.stringify({ field: 'holdings' }));
-    s.db.prepare('UPDATE accounts SET fig_key = ? WHERE id = ?').run(`acct.${chase}.balance`, chase);
-    assert.equal(accountDetail(ctx(s, chase)).balance.asOf, '2032-03-31');
+    await s.db.prepare('UPDATE accounts SET fig_key = ? WHERE id = ?').run(`acct.${chase}.balance`, chase);
+    assert.equal((await accountDetail(ctx(s, chase))).balance.asOf, '2032-03-31');
     // Positions dated after that snapshot win again.
-    s.db.prepare('INSERT INTO positions (account_id, as_of, symbol, value) VALUES (?, ?, ?, ?)').run(chase, '2032-04-30', 'XYZ', 60);
-    assert.equal(accountDetail(ctx(s, chase)).balance.asOf, '2032-04-30');
+    await s.db.prepare('INSERT INTO positions (account_id, as_of, symbol, value) VALUES (?, ?, ?, ?)').run(chase, '2032-04-30', 'XYZ', 60);
+    assert.equal((await accountDetail(ctx(s, chase))).balance.asOf, '2032-04-30');
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -92,11 +92,11 @@ test('paging does not skip or repeat rows that share a date', async () => {
   try {
     const { chase } = await twoAccounts(s);
     const add = s.db.prepare('INSERT INTO transactions (account_id, date, amount, description) VALUES (?, ?, ?, ?)');
-    for (let i = 0; i < 5; i++) add.run(chase, '2032-02-07', 100 + i, `Tie ${i}`);
+    for (let i = 0; i < 5; i++) await add.run(chase, '2032-02-07', 100 + i, `Tie ${i}`);
     const seen = [];
     let cursor = null;
     for (let i = 0; i < 20; i++) {
-      const page = accountTransactions(ctx(s, chase, { limit: '2', ...(cursor ? { cursor } : {}) }));
+      const page = await accountTransactions(ctx(s, chase, { limit: '2', ...(cursor ? { cursor } : {}) }));
       seen.push(...page.items.map((t) => t.id));
       cursor = page.next;
       if (!cursor) break;
@@ -104,7 +104,7 @@ test('paging does not skip or repeat rows that share a date', async () => {
     assert.equal(seen.length, 12);
     assert.equal(new Set(seen).size, 12);
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -113,11 +113,11 @@ test('account detail rejects a missing or unknown account', async () => {
   const { accountDetail } = await src('src/api/account-detail.mjs');
   try {
     await twoAccounts(s);
-    assert.equal(await status(() => accountDetail(ctx(s, ''))), 400);
-    assert.equal(await status(() => accountDetail({ db: s.db, config: s.config, params: {}, query: {} })), 400);
-    assert.equal(await status(() => accountDetail(ctx(s, 'nope'))), 404);
+    assert.equal(await status(async () => await accountDetail(ctx(s, ''))), 400);
+    assert.equal(await status(async () => await accountDetail({ db: s.db, config: s.config, params: {}, query: {} })), 400);
+    assert.equal(await status(async () => await accountDetail(ctx(s, 'nope'))), 404);
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -126,17 +126,17 @@ test('a connected account lists SimpleFIN with its sync and balance dates and ca
   const { accountDetail } = await src('src/api/account-detail.mjs');
   try {
     const { chase } = await twoAccounts(s);
-    s.db.prepare(`INSERT INTO simplefin_connection (id, access_blob, connected_at, last_sync_at, status, accounts) VALUES (1, 'x', '2032-02-01T00:00:00.000Z', '2032-02-08T09:30:00.000Z', 'ok', 1)`).run();
-    s.db.prepare(`INSERT INTO simplefin_accounts (sf_key, account_id, status, name, backfilled, created_at) VALUES ('k1', ?, 'mapped', 'Synthetic', 1, '2032-02-01')`).run(chase);
-    s.db.prepare(`INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES ('k1', ?, '2032-02-08T09:30:00.000Z')`).run(JSON.stringify({ balance: 12, balanceDate: '2032-02-08' }));
-    const d = accountDetail(ctx(s, chase));
+    await s.db.prepare(`INSERT INTO simplefin_connection (id, access_blob, connected_at, last_sync_at, status, accounts) VALUES (1, 'x', '2032-02-01T00:00:00.000Z', '2032-02-08T09:30:00.000Z', 'ok', 1)`).run();
+    await s.db.prepare(`INSERT INTO simplefin_accounts (sf_key, account_id, status, name, backfilled, created_at) VALUES ('k1', ?, 'mapped', 'Synthetic', 1, '2032-02-01')`).run(chase);
+    await s.db.prepare(`INSERT INTO simplefin_snapshots (sf_key, snapshot, at) VALUES ('k1', ?, '2032-02-08T09:30:00.000Z')`).run(JSON.stringify({ balance: 12, balanceDate: '2032-02-08' }));
+    const d = await accountDetail(ctx(s, chase));
     const sf = d.feeds.find((f) => f.kind === 'simplefin');
     assert.ok(sf, 'SimpleFIN is a feed of this account');
     assert.equal(sf.lastSyncAt, '2032-02-08T09:30:00.000Z');
     assert.equal(sf.balanceDate, '2032-02-08');
     assert.equal(d.syncable, true);
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -149,7 +149,7 @@ test('transactions page newest first, once each, and only for the asked account'
     let cursor = null;
     let pages = 0;
     do {
-      const page = accountTransactions(ctx(s, chase, { limit: '3', ...(cursor ? { cursor } : {}) }));
+      const page = await accountTransactions(ctx(s, chase, { limit: '3', ...(cursor ? { cursor } : {}) }));
       assert.ok(page.items.length <= 3);
       seen.push(...page.items);
       cursor = page.next;
@@ -160,11 +160,11 @@ test('transactions page newest first, once each, and only for the asked account'
     assert.deepEqual(seen.map((t) => t.date), ['2032-02-07', '2032-02-06', '2032-02-05', '2032-02-04', '2032-02-03', '2032-02-02', '2032-02-01']);
     assert.equal(new Set(seen.map((t) => t.id)).size, 7);
     assert.equal(seen.some((t) => /Other account/.test(t.description)), false);
-    const h = accountTransactions(ctx(s, harbor));
+    const h = await accountTransactions(ctx(s, harbor));
     assert.equal(h.items.length, 1);
     assert.equal(h.next, null);
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -173,16 +173,16 @@ test('transactions filter by text and date range, and a percent sign is just a c
   const { accountTransactions } = await src('src/api/account-detail.mjs');
   try {
     const { chase } = await twoAccounts(s);
-    const coffee = accountTransactions(ctx(s, chase, { q: 'COFFEE' }));
+    const coffee = await accountTransactions(ctx(s, chase, { q: 'COFFEE' }));
     assert.equal(coffee.items.length, 1);
     assert.equal(coffee.total, 1);
-    assert.equal(accountTransactions(ctx(s, chase, { q: '%' })).items.length, 1);
-    assert.equal(accountTransactions(ctx(s, chase, { q: '_' })).items.length, 0);
-    const range = accountTransactions(ctx(s, chase, { from: '2032-02-03', to: '2032-02-05' }));
+    assert.equal((await accountTransactions(ctx(s, chase, { q: '%' }))).items.length, 1);
+    assert.equal((await accountTransactions(ctx(s, chase, { q: '_' }))).items.length, 0);
+    const range = await accountTransactions(ctx(s, chase, { from: '2032-02-03', to: '2032-02-05' }));
     assert.deepEqual(range.items.map((t) => t.date), ['2032-02-05', '2032-02-04', '2032-02-03']);
     assert.equal(range.total, 3);
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -191,7 +191,7 @@ test('every amount carries provenance: a figure and the source it came from', as
   const { accountTransactions } = await src('src/api/account-detail.mjs');
   try {
     const { chase } = await twoAccounts(s);
-    const page = accountTransactions(ctx(s, chase));
+    const page = await accountTransactions(ctx(s, chase));
     const t = page.items[0];
     assert.ok(t.fig && typeof t.fig === 'string');
     const f = page.figures[t.fig];
@@ -200,7 +200,7 @@ test('every amount carries provenance: a figure and the source it came from', as
     assert.ok(page.sources[f.src], 'the figure names a source');
     assert.match(page.sources[f.src].label, /first\.csv/);
   } finally {
-    s.close();
+    await s.close();
   }
 });
 
@@ -209,7 +209,7 @@ test('transactions refuse bad input', async () => {
   const { accountTransactions } = await src('src/api/account-detail.mjs');
   try {
     const { chase } = await twoAccounts(s);
-    const bad = (query) => status(() => accountTransactions(ctx(s, chase, query)));
+    const bad = async (query) => status(async () => await accountTransactions(ctx(s, chase, query)));
     assert.equal(await bad({ limit: '0' }), 400);
     assert.equal(await bad({ limit: '1000' }), 400);
     assert.equal(await bad({ limit: 'x' }), 400);
@@ -218,8 +218,8 @@ test('transactions refuse bad input', async () => {
     assert.equal(await bad({ from: '2032-03-01', to: '2032-02-01' }), 400);
     assert.equal(await bad({ cursor: 'garbage' }), 400);
     assert.equal(await bad({ q: 'x'.repeat(101) }), 400);
-    assert.equal(await status(() => accountTransactions(ctx(s, 'nope'))), 404);
+    assert.equal(await status(async () => await accountTransactions(ctx(s, 'nope'))), 404);
   } finally {
-    s.close();
+    await s.close();
   }
 });

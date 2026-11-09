@@ -1,10 +1,50 @@
 import { openConnection } from './sqlite/connection.mjs';
-import { createScope } from './kernel.mjs';
+import { createScope, currentHandle, registerScope, sameStore } from './kernel.mjs';
+
+export { currentHandle, sameStore };
 import { storageError } from './errors.mjs';
 
 function validPath(config) {
   return config && typeof config.path === 'string' && config.path.length > 0 && !config.path.includes('\0');
 }
+
+export { storageError } from './errors.mjs';
+
+// One scope over one store file, opened on demand (a household store, the platform database, the
+// public-demo control store or an offline tool's source). Resolves a scope that also has close().
+// Options: readOnly, journal ('wal' | 'delete' | null), busyTimeout, foreignKeys, queryOnly, exclusive.
+export async function openScope(config = {}) {
+  if (!validPath(config)) throw storageError();
+  const entry = createScope(await openConnection(config));
+  const scope = Object.freeze({ ...entry.scope, close: () => entry.close() });
+  registerScope(scope, entry.connection);
+  return scope;
+}
+
+// Run fn atomically on a handle: a scope opens a write transaction, a transaction handle a
+// savepoint. fn receives the handle to use for every statement inside.
+export async function atomically(handle, fn) {
+  return handle.transaction ? handle.transaction(fn) : handle.savepoint(fn);
+}
+
+const discard = Symbol('rehearse');
+
+// Run fn(handle) in a transaction or savepoint that is always rolled back; resolves fn's result.
+export async function rehearse(handle, fn) {
+  let result;
+  try {
+    await atomically(handle, async inner => {
+      result = await fn(inner);
+      throw discard;
+    });
+  } catch (error) {
+    if (error !== discard) throw error;
+  }
+  return result;
+}
+
+// Whether a handle is a transaction (or savepoint) handle rather than a scope.
+export const inTransaction = handle => !handle.transaction;
 
 export async function openStorage(config = {}) {
   if (!config || typeof config !== 'object') throw storageError();

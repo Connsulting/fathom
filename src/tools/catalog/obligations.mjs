@@ -9,6 +9,7 @@ import { bounded, uniqueGaps } from './balances.mjs';
 import { checkAssumption } from '../assumption-evidence.mjs';
 import { resolveRef } from '../refs.mjs';
 import { ToolError } from '../errors.mjs';
+import { flatMapSeries, mapSeries } from '../../shared/series.mjs';
 
 const bad = message => { throw new ToolError('bad_input',message); };
 const gap = (message,fact) => ({code:'missing_fact',message,...(fact?{fact}:{})});
@@ -19,20 +20,20 @@ const obligations = {type:'array',maxItems:3,items:choice(kinds)};
 const changes = {type:'array',maxItems:10,items:{type:'object',properties:{kind:choice(kinds),stage:choice(['school_age','after_care_end']),newMonthly:{type:'object'}},required:['kind','newMonthly']}};
 const pack = kind => { const r=OBLIGATION_RULES[kind].packRef; return {packId:r.pack,entryId:r.entry}; };
 const latest = dates => dates.filter(Boolean).sort().at(-1) ?? null;
-const factSources = (ctx,keys) => keys.flatMap(key=>ctx.db.prepare('SELECT key,as_of FROM facts WHERE key=?').all(key));
+const factSources = async (ctx,keys) => await flatMapSeries(keys, async key=>await ctx.db.prepare('SELECT key,as_of FROM facts WHERE key=?').all(key));
 const total = async (ctx,args) => (await import('../index.mjs')).callTool('spending',{operation:'total',...args},ctx);
 const figure = (value,unit,label,asOf,provenance,gaps) => envelope(value,{unit,label,asOf,kind:'p',provenance,gaps,...(value===null ? {unavailable:'missing_fact'} : {})});
 
 async function schedule(args,ctx) {
-  const {clock,facts,accounts}=readInput(ctx), horizon=addMonths(clock,(args.horizonYears ?? 30)*12);
+  const {clock,facts,accounts}=await readInput(ctx), horizon=addMonths(clock,(args.horizonYears ?? 30)*12);
   for(const change of args.changes ?? [])if(Object.keys(change).some(k=>!['kind','stage','newMonthly'].includes(k)))bad('Unknown change field');
-  const assumptions=(args.changes ?? []).map(c=>({...c,record:checkAssumption(c.newMonthly,{name:`${c.kind} ${c.stage ?? 'change'}`,unit:'usd_per_month',min:0},ctx)}));
+  const assumptions=await mapSeries((args.changes ?? []), async c=>({...c,record:await checkAssumption(c.newMonthly,{name:`${c.kind} ${c.stage ?? 'change'}`,unit:'usd_per_month',min:0},ctx)}));
   const seen=new Set();
   for (const a of assumptions) { const key=`${a.kind}:${a.stage ?? ''}`; if(seen.has(key))bad('Duplicate change assumption');seen.add(key); }
   const rows=[],inactive=[],unmatched=[];
   for (const kind of [...new Set(args.obligations ?? kinds)]) {
     const key=`obligations.${kind}`, missing=[], gaps=[], keys=[key];
-    const mortgage=kind==='mortgage'?inferMortgage(ctx.db,clock,facts[key]):null;
+    const mortgage=kind==='mortgage'?await inferMortgage(ctx.db,clock,facts[key]):null;
     if(mortgage && !mortgage.present) {
       const state={kind,status:mortgage.status,message:mortgage.message,provenance:{sources:mortgage.sources}};
       if(mortgage.status==='paid_off')inactive.push(state);else unmatched.push(state);
@@ -74,7 +75,7 @@ async function schedule(args,ctx) {
           assumption:stored?.[field]===undefined?override?.record:null,reason:kind==='plan529'?'Contributions stop at the default college age.':e.stage==='school_age'?'School begins at the pack entry age and cutoff.':'After-school care ends at the pack age.'};
       });
     }
-    const sources=factSources(ctx,keys),asOf=latest([observed.perMonth.asOf,...sources.map(s=>s.as_of)]);
+    const sources=await factSources(ctx,keys),asOf=latest([observed.perMonth.asOf,...sources.map(s=>s.as_of)]);
     const prov={calc:'obligationSchedule',formula:'Stored obligation amounts and dates, amortization or dependent age rules',inputs:[observed.perMonth],
       sources:[...sources.map(s=>({table:'facts',ids:[s.key],count:1})),...(mortgage?.sources ?? [])],assumptions:mortgage?.assumptions ?? [],packRefs:[pack(kind)]};
     const f=(value,unit,label,extra={})=>figure(value,unit,label,asOf,{...prov,...extra},gaps);
@@ -96,12 +97,12 @@ async function projection(args,ctx) {
   const base=args.base ? await resolveRef(args.base,ctx,'base') : (await total(ctx,baseArgs)).total;
   if(Array.isArray(base)||base.unit!=='usd_per_year'||(args.base&&args.base.path!=='total'))bad('base must be the annualized spending.total total figure');
   if((baseArgs.measure ?? 'spending')!=='spending')bad('base must measure spending');
-  const input=readInput(ctx),{clock}=input,years=args.years ?? 10;
+  const input=await readInput(ctx),{clock}=input,years=args.years ?? 10;
   const sched=await schedule({...args,horizonYears:years},ctx);
   const selected=await total(ctx,{...baseArgs,groupBy:'class',annualize:true,limit:200});
   const gaps=uniqueGaps([...base.gaps,...sched.gaps]);
-  const mortgage=inferMortgage(ctx.db,clock,input.facts['obligations.mortgage']);
-  const mortgageSelected=aggregate({...input,transactionIds:new Set(mortgage.payments.map(t=>t.id))},baseArgs,resolveDefinition(ctx.db,baseArgs.definition));
+  const mortgage=await inferMortgage(ctx.db,clock,input.facts['obligations.mortgage']);
+  const mortgageSelected=aggregate({...input,transactionIds:new Set(mortgage.payments.map(t=>t.id))},baseArgs,await resolveDefinition(ctx.db,baseArgs.definition));
   const states=sched.obligations.map(row=>({row,remaining:row.kind==='plan529'?0:row.kind==='mortgage'?mortgageSelected.perMonth.value:(selected.groups.find(g=>g.key==='childcare')?.figure.value ?? (base.value===null?null:0))/12}));
   const events=states.flatMap(state=>state.row.changes.filter(c=>c.date.value>clock).map(change=>({state,change}))).sort((a,b)=>a.change.date.value.localeCompare(b.change.date.value));
   const output=[];let annual=base.value;

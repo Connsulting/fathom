@@ -14,6 +14,7 @@ import { readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { src, tempDir, secretsFor, instanceSecretsOf, householdContext } from '../helpers/server.mjs';
 import { aggregatorFile, offEngine, one, count, NOW } from '../helpers/ingest.mjs';
+import { mapSeries } from '../../src/shared/series.mjs';
 
 let P;
 let C;
@@ -35,10 +36,10 @@ const NEW_TABLES = {
   simplefin_snapshots: ['sf_key', 'snapshot', 'at'],
 };
 
-const columnsOf = (db, table) => db.prepare(`PRAGMA table_info("${table}")`).all().map((c) => c.name);
+const columnsOf = async (db, table) => (await db.columns(table)).map((c) => c.name);
 // A row image exactly as main's undo.mjs triggers write it.
-const image = (db, table, rowid) => db.prepare(`SELECT json_object(${columnsOf(db, table).map((c) => `'${c}', t."${c}"`).join(', ')}) AS img
-  FROM "${table}" AS t WHERE t.rowid = ?`).get(rowid).img;
+const image = async (db, table, rowid) => (await db.prepare(`SELECT json_object(${(await columnsOf(db, table)).map((c) => `'${c}', t."${c}"`).join(', ')}) AS img
+  FROM "${table}" AS t WHERE t.rowid = ?`).get(rowid)).img;
 
 // The account aggregatorFile() rows land in by default (Example Bank, number ending 1111).
 const accountOf = (mask) => {
@@ -46,43 +47,22 @@ const accountOf = (mask) => {
   return { id: P.accountIdOf(identity), identity };
 };
 
-function applyThrough(db, target) {
-  const done = new Set(db.prepare('SELECT id FROM schema_migrations').all().map((row) => row.id));
-  const record = db.prepare('INSERT INTO schema_migrations (id, name, applied_at) VALUES (?, ?, ?)');
-  const applied = [];
-  for (const migration of DB.listMigrations().filter((m) => m.id <= target && !done.has(m.id))) {
-    const sql = readFileSync(migration.file, 'utf8');
-    const rebuild = /^-- REBUILDS_TABLE\b/m.test(sql);
-    if (rebuild) db.exec('PRAGMA foreign_keys = OFF');
-    db.exec('BEGIN');
-    try {
-      db.exec(sql);
-      assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
-      record.run(migration.id, migration.name, AT);
-      db.exec('COMMIT');
-      applied.push(migration.id);
-    } catch (err) {
-      db.exec('ROLLBACK');
-      throw err;
-    } finally {
-      if (rebuild) db.exec('PRAGMA foreign_keys = ON');
-    }
-  }
-  return applied;
+async function applyThrough(db, target) {
+  return (await DB.migrate(db, { through: target })).applied;
 }
 
 async function storeAt014() {
   const dataDir = await tempDir('fathom-confirm-migration-');
   const keys = secretsFor(dataDir);
   // A fresh real instance whose household store is replaced by one built only through 014.
-  const made = PL.createInstance(dataDir, { mode: 'real', platformKey: keys.platformKey });
-  made.db.close();
+  const made = await PL.createInstance(dataDir, { mode: 'real', platformKey: keys.platformKey });
+  await made.db.close();
   const file = join(made.root, 'fathom.sqlite');
   for (const f of [file, `${file}-wal`, `${file}-shm`]) rmSync(f, { force: true });
-  const db = DB.openDb(file);
-  db.exec('CREATE TABLE IF NOT EXISTS schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
-  applyThrough(db, 14);
-  DB.setSetting(db, 'mode', 'real');
+  const db = await DB.openDb(file);
+  await db.applySchema('CREATE TABLE IF NOT EXISTS schema_migrations (id INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
+  await applyThrough(db, 14);
+  await DB.setSetting(db, 'mode', 'real');
   const config = {
     dataDir, platformKeyFile: keys.platformKeyFile, mcpSecretFile: keys.mcpSecretFile,
     engine: 'off', clock: null, demo: false, port: 0, host: '127.0.0.1', claudeCredentialFile: null, emailTransport: 'dev',
@@ -97,9 +77,9 @@ async function storeAt014() {
       });
       return { engine, config, now: NOW, household };
     },
-    close() {
-      try { db.close(); } catch { /* already closed */ }
-      try { made.platform.close(); } catch { /* already closed */ }
+    async close() {
+      try { await db.close(); } catch { /* already closed */ }
+      try { await made.platform.close(); } catch { /* already closed */ }
       rmSync(dataDir, { recursive: true, force: true });
     },
   };
@@ -107,35 +87,35 @@ async function storeAt014() {
 
 // An imported file with two accounts: 1111 (owner answered "You" with main's undo log) and 2222
 // (kind still asked).
-function populate(db) {
-  db.prepare(`INSERT INTO files (id, name, mime, size, sha256, uploaded_at, stored_path, status, parser, source_kind, source_id, counts)
+async function populate(db) {
+  await db.prepare(`INSERT INTO files (id, name, mime, size, sha256, uploaded_at, stored_path, status, parser, source_kind, source_id, counts)
               VALUES (?, 'old-export.csv', 'text/csv', 10, ?, ?, NULL, 'imported', 'aggregator', 'aggregator_csv', 'ing:aggregator:all', '{}')`)
     .run(FILE_ID, 'b'.repeat(64), AT);
-  const addAccount = (mask, kind) => {
+  const addAccount = async (mask, kind) => {
     const { id, identity } = accountOf(mask);
-    db.prepare(`INSERT INTO accounts (id, inst, mask, name, owner, kind, mirror, file_id, parser, locator, identity, source_id)
+    await db.prepare(`INSERT INTO accounts (id, inst, mask, name, owner, kind, mirror, file_id, parser, locator, identity, source_id)
                 VALUES (?, 'Example Bank', ?, ?, NULL, ?, NULL, ?, 'aggregator', NULL, ?, 'ing:aggregator:all')`)
       .run(id, mask, `Synthetic account ${mask}`, kind, FILE_ID, identity);
     return id;
   };
-  const answered = addAccount('1111', 'cash');
-  const asked = addAccount('2222', null);
-  const addItem = (kind, subject, options) => Number(db.prepare(`INSERT INTO confirm_items (kind, subject, question, options, context, status, file_id, created_at)
-    VALUES (?, ?, ?, ?, '{}', 'pending', ?, ?)`).run(kind, subject, `Synthetic ${kind} question`, JSON.stringify(options), FILE_ID, AT).lastInsertRowid);
-  const ownerId = addItem('account_owner', answered, C.OWNER_OPTIONS);
-  const pendingId = addItem('account_kind', asked, C.KIND_OPTIONS);
+  const answered = await addAccount('1111', 'cash');
+  const asked = await addAccount('2222', null);
+  const addItem = async (kind, subject, options) => Number((await db.prepare(`INSERT INTO confirm_items (kind, subject, question, options, context, status, file_id, created_at)
+    VALUES (?, ?, ?, ?, '{}', 'pending', ?, ?) RETURNING id`).get(kind, subject, `Synthetic ${kind} question`, JSON.stringify(options), FILE_ID, AT)).id);
+  const ownerId = await addItem('account_owner', answered, C.OWNER_OPTIONS);
+  const pendingId = await addItem('account_kind', asked, C.KIND_OPTIONS);
 
   // The owner answer as main's recordAnswer stores it: applyAnswer's account update, then the item
   // update, captured as whole-row images, with the ingest epoch at answer time.
-  const acctRowid = db.prepare('SELECT rowid AS r FROM accounts WHERE id = ?').get(answered).r;
-  const before = [image(db, 'accounts', acctRowid), image(db, 'confirm_items', ownerId)];
-  db.prepare("UPDATE accounts SET owner = 'You' WHERE id = ?").run(answered);
-  db.prepare("UPDATE confirm_items SET status = 'answered', answer = 'owner', answered_at = ? WHERE id = ?").run(AT, ownerId);
+  const acctRowid = (await db.prepare('SELECT rowid AS r FROM accounts WHERE id = ?').get(answered)).r;
+  const before = [await image(db, 'accounts', acctRowid), await image(db, 'confirm_items', ownerId)];
+  await db.prepare("UPDATE accounts SET owner = 'You' WHERE id = ?").run(answered);
+  await db.prepare("UPDATE confirm_items SET status = 'answered', answer = 'owner', answered_at = ? WHERE id = ?").run(AT, ownerId);
   const changes = [
-    { table: 'accounts', op: 'update', rowid: acctRowid, before: before[0], after: image(db, 'accounts', acctRowid) },
-    { table: 'confirm_items', op: 'update', rowid: ownerId, before: before[1], after: image(db, 'confirm_items', ownerId) },
+    { table: 'accounts', op: 'update', rowid: acctRowid, before: before[0], after: await image(db, 'accounts', acctRowid) },
+    { table: 'confirm_items', op: 'update', rowid: ownerId, before: before[1], after: await image(db, 'confirm_items', ownerId) },
   ];
-  db.prepare(`INSERT INTO confirm_undo (item_id, ingest_epoch, changes, created_at, used_at)
+  await db.prepare(`INSERT INTO confirm_undo (item_id, ingest_epoch, changes, created_at, used_at)
               VALUES (?, coalesce((SELECT n FROM ingest_epoch WHERE id = 1), 0), ?, ?, NULL)`).run(ownerId, JSON.stringify(changes), AT);
   return { answered, asked, ownerId, pendingId };
 }
@@ -143,33 +123,33 @@ function populate(db) {
 async function withOldStore(fn) {
   const s = await storeAt014();
   try {
-    assert.equal(DB.schemaVersion(s.db), 14, 'precondition: the store is at 014');
-    const ids = populate(s.db);
+    assert.equal(await DB.schemaVersion(s.db), 14, 'precondition: the store is at 014');
+    const ids = await populate(s.db);
     return await fn(s, ids);
-  } finally { s.close(); }
+  } finally { await s.close(); }
 }
 
-const snapshot = (db) => Object.fromEntries(['accounts', 'confirm_items', 'confirm_undo', 'files'].map((t) =>
-  [t, db.prepare(`SELECT * FROM "${t}" ORDER BY rowid`).all().map((r) => JSON.stringify({ ...r }))]));
+const snapshot = async (db) => Object.fromEntries(await mapSeries(['accounts', 'confirm_items', 'confirm_undo', 'files'], async (t) =>
+  [t, (await db.prepare(`SELECT * FROM "${t}" ORDER BY rowid`).all()).map((r) => JSON.stringify({ ...r }))]));
 
-test('migrate applies the confirm-context migration, creates exactly its four tables and changes no stored row', () => withOldStore((s, ids) => {
-  const before = snapshot(s.db);
+test('migrate applies the confirm-context migration, creates exactly its four tables and changes no stored row', async () => withOldStore(async (s, ids) => {
+  const before = await snapshot(s.db);
 
   const mig = DB.listMigrations().find((m) => m.name === 'confirm-context');
   assert.ok(mig, 'a confirm-context migration exists');
   assert.ok(mig.id > 14);
-  applyThrough(s.db, mig.id - 1);
-  assert.deepEqual(snapshot(s.db), before, 'preceding migrations keep every stored row');
-  const tables = DB.listTables(s.db);
+  await applyThrough(s.db, mig.id - 1);
+  assert.deepEqual(await snapshot(s.db), before, 'preceding migrations keep every stored row');
+  const tables = await DB.listTables(s.db);
   for (const t of Object.keys(NEW_TABLES)) assert.ok(!tables.includes(t), `precondition: ${t} is new`);
-  assert.deepEqual(applyThrough(s.db, mig.id), [mig.id]);
-  const added = DB.listTables(s.db).filter((t) => !tables.includes(t)).sort();
+  assert.deepEqual(await applyThrough(s.db, mig.id), [mig.id]);
+  const added = (await DB.listTables(s.db)).filter((t) => !tables.includes(t)).sort();
   assert.deepEqual(added, Object.keys(NEW_TABLES).sort(), 'exactly the four tables');
-  for (const [t, cols] of Object.entries(NEW_TABLES)) assert.deepEqual(columnsOf(s.db, t), cols, `${t} columns`);
-  for (const t of tables) assert.ok(DB.listTables(s.db).includes(t), `${t} is kept`);
-  assert.deepEqual(snapshot(s.db), before, 'every stored row is unchanged');
-  assert.deepEqual(DB.migrate(s.db).applied, DB.listMigrations().filter((m) => m.id > mig.id).map((m) => m.id));
-  const later = snapshot(s.db);
+  for (const [t, cols] of Object.entries(NEW_TABLES)) assert.deepEqual(await columnsOf(s.db, t), cols, `${t} columns`);
+  for (const t of tables) assert.ok((await DB.listTables(s.db)).includes(t), `${t} is kept`);
+  assert.deepEqual(await snapshot(s.db), before, 'every stored row is unchanged');
+  assert.deepEqual((await DB.migrate(s.db)).applied, DB.listMigrations().filter((m) => m.id > mig.id).map((m) => m.id));
+  const later = await snapshot(s.db);
   later.accounts = later.accounts.map((s) => {
     const row = JSON.parse(s);
     if (row.display_name == null) delete row.display_name;
@@ -183,39 +163,39 @@ test('migrate applies the confirm-context migration, creates exactly its four ta
   });
   assert.deepEqual(later, before, 'later migrations keep every stored row');
 
-  const owner = C.getItem(s.db, ids.ownerId);
+  const owner = await C.getItem(s.db, ids.ownerId);
   assert.equal(owner.status, 'answered');
   assert.equal(owner.answer, 'owner');
-  assert.equal(one(s.db, 'SELECT owner FROM accounts WHERE id = ?', ids.answered).owner, 'You');
-  assert.equal(C.getItem(s.db, ids.pendingId).status, 'pending');
-  assert.equal(C.autoInfo(s.db, ids.ownerId), null, 'an answer from before the migration is the owner\'s own');
-  assert.deepEqual(DB.migrate(s.db), { applied: [] }, 'a second migrate applies nothing');
+  assert.equal((await one(s.db, 'SELECT owner FROM accounts WHERE id = ?', ids.answered)).owner, 'You');
+  assert.equal((await C.getItem(s.db, ids.pendingId)).status, 'pending');
+  assert.equal(await C.autoInfo(s.db, ids.ownerId), null, 'an answer from before the migration is the owner\'s own');
+  assert.deepEqual(await DB.migrate(s.db), { applied: [] }, 'a second migrate applies nothing');
 }));
 
-test('an answer recorded before the migration still reopens, and the pending question is answerable', () => withOldStore((s, ids) => {
-  DB.migrate(s.db);
-  assert.equal(C.finalReason(s.db, C.getItem(s.db, ids.ownerId)), null, 'no import since the answer, so it is not final');
-  const out = C.reopenItem(s.db, ids.ownerId, { now: NOW });
+test('an answer recorded before the migration still reopens, and the pending question is answerable', async () => withOldStore(async (s, ids) => {
+  await DB.migrate(s.db);
+  assert.equal(await C.finalReason(s.db, await C.getItem(s.db, ids.ownerId)), null, 'no import since the answer, so it is not final');
+  const out = await C.reopenItem(s.db, ids.ownerId, { now: NOW });
   assert.equal(out.item.status, 'pending');
-  assert.equal(one(s.db, 'SELECT owner FROM accounts WHERE id = ?', ids.answered).owner, null, 'the owner is restored to unset');
-  assert.equal(count(s.db, 'confirm_undo', 'item_id = ?', ids.ownerId), 0);
+  assert.equal((await one(s.db, 'SELECT owner FROM accounts WHERE id = ?', ids.answered)).owner, null, 'the owner is restored to unset');
+  assert.equal(await count(s.db, 'confirm_undo', 'item_id = ?', ids.ownerId), 0);
 
-  C.answerItem(s.db, ids.ownerId, 'spouse', { now: NOW });
-  assert.equal(one(s.db, 'SELECT owner FROM accounts WHERE id = ?', ids.answered).owner, 'Your spouse');
-  C.answerItem(s.db, ids.pendingId, 'checking', { now: NOW });
-  assert.equal(one(s.db, 'SELECT kind FROM accounts WHERE id = ?', ids.asked).kind, 'checking');
+  await C.answerItem(s.db, ids.ownerId, 'spouse', { now: NOW });
+  assert.equal((await one(s.db, 'SELECT owner FROM accounts WHERE id = ?', ids.answered)).owner, 'Your spouse');
+  await C.answerItem(s.db, ids.pendingId, 'checking', { now: NOW });
+  assert.equal((await one(s.db, 'SELECT kind FROM accounts WHERE id = ?', ids.asked)).kind, 'checking');
 }));
 
-test('re-importing the answered account after the migration asks nothing new for it', () => withOldStore(async (s, ids) => {
-  DB.migrate(s.db);
-  const questions = count(s.db, 'confirm_items');
+test('re-importing the answered account after the migration asks nothing new for it', async () => withOldStore(async (s, ids) => {
+  await DB.migrate(s.db);
+  const questions = await count(s.db, 'confirm_items');
   const { results } = await P.ingestFiles(s.db, [aggregatorFile('later-export.csv', [{ date: '2032-03-02', amount: '12.50', description: 'Synthetic later row' }])], await s.opts(await offEngine()));
   assert.equal(results[0].status, 'imported');
-  assert.equal(count(s.db, 'accounts'), 2, 'the row lands in the existing account');
-  assert.equal(count(s.db, 'transactions', 'account_id = ?', ids.answered), 1);
-  assert.equal(count(s.db, 'confirm_items'), questions, 'no new question');
-  const owner = C.getItem(s.db, ids.ownerId);
+  assert.equal(await count(s.db, 'accounts'), 2, 'the row lands in the existing account');
+  assert.equal(await count(s.db, 'transactions', 'account_id = ?', ids.answered), 1);
+  assert.equal(await count(s.db, 'confirm_items'), questions, 'no new question');
+  const owner = await C.getItem(s.db, ids.ownerId);
   assert.equal(owner.status, 'answered');
   assert.equal(owner.answer, 'owner');
-  assert.equal(one(s.db, 'SELECT owner FROM accounts WHERE id = ?', ids.answered).owner, 'You');
+  assert.equal((await one(s.db, 'SELECT owner FROM accounts WHERE id = ?', ids.answered)).owner, 'You');
 }));

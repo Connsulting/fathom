@@ -39,9 +39,9 @@ test('actual taxable positions without basis are unavailable and count missing p
   const s = await setup(t);
   s.account('broker','brokerage');
   const insert = s.db.prepare('INSERT INTO positions(account_id,as_of,symbol,value,cost_basis) VALUES (?,?,?,?,?)');
-  insert.run('broker','2026-10-31','SYN-A',10000,5000);
-  insert.run('broker','2026-10-31','SYN-B',20000,null);
-  insert.run('broker','2026-10-31','SYN-C',30000,null);
+  await insert.run('broker','2026-10-31','SYN-A',10000,5000);
+  await insert.run('broker','2026-10-31','SYN-B',20000,null);
+  await insert.run('broker','2026-10-31','SYN-C',30000,null);
   const out = await s.afterTax({accounts:['broker']});
   const row = out.rows[0];
   assert.equal(row.value.value,60000);
@@ -49,7 +49,7 @@ test('actual taxable positions without basis are unavailable and count missing p
   assert.ok(out.gaps.some(g => g.code === 'no_cost_basis' && g.count === 2));
   assert.equal(out.total.afterTax.value,null);
   await assertRefsResolve(out,s.ctx);
-  s.db.prepare('UPDATE positions SET cost_basis=0 WHERE cost_basis IS NULL').run();
+  await s.db.prepare('UPDATE positions SET cost_basis=0 WHERE cost_basis IS NULL').run();
   const complete = await s.afterTax({kinds:['brokerage']});
   assert.equal(complete.rows[0].taxOnWithdrawal.value,11000);
   assert.equal(complete.rows[0].afterTax.value,49000);
@@ -68,23 +68,23 @@ test('missing hypothetical basis stays unavailable and no loss tax credit is inv
 test('Roth qualification uses the later age and five-year dates, naming missing facts',async t => {
   const s = await setup(t);
   s.account('roth','roth','owner');
-  s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run('roth','2026-10-31',10000);
+  await s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run('roth','2026-10-31',10000);
   const missing = await s.afterTax({accounts:['roth']});
   assert.equal(missing.rows[0].afterTax.value,10000);
   assert.equal(missing.rows[0].qualifiedFrom.value,null);
   assert.ok(missing.rows[0].whenTaxed.includes('qualified'));
-  s.fact('household.ownerBirthDate','1970-01-01');
-  s.fact('accounts.rothFirstContributionYear',{roth:2026});
-  s.fact('accounts.planType',{roth:'roth_ira'});
+  await s.fact('household.ownerBirthDate','1970-01-01');
+  await s.fact('accounts.rothFirstContributionYear',{roth:2026});
+  await s.fact('accounts.planType',{roth:'roth_ira'});
   const known = await s.afterTax({accounts:['roth']});
   assert.equal(known.rows[0].treatment,'roth_ira');
   assert.equal(known.rows[0].qualifiedFrom.value,'2031-01-01');
   await assertRefsResolve(known,s.ctx);
-  s.fact('accounts.rothFirstContributionYear',{roth:2000});
-  s.fact('household.ownerBirthDate','1970-08-31');
+  await s.fact('accounts.rothFirstContributionYear',{roth:2000});
+  await s.fact('household.ownerBirthDate','1970-08-31');
   const monthEnd = await s.afterTax({accounts:['roth']});
   assert.equal(monthEnd.rows[0].qualifiedFrom.value,'2030-02-28');
-  s.fact('household.ownerBirthDate','1964-08-31');
+  await s.fact('household.ownerBirthDate','1964-08-31');
   const leap = await s.afterTax({accounts:['roth']});
   assert.equal(leap.rows[0].qualifiedFrom.value,'2024-02-29');
   await assertRefsResolve(leap,s.ctx);
@@ -93,16 +93,16 @@ test('Roth qualification uses the later age and five-year dates, naming missing 
 test('HSA presents both purposes, with age-dependent additional tax and missing-age gaps',async t => {
   const s = await setup(t);
   s.account('health','hsa','owner');
-  s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run('health','2026-10-31',10000);
+  await s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run('health','2026-10-31',10000);
   let out = await s.afterTax({accounts:['health']});
   assert.equal(out.rows[0].afterTaxMedical.value,10000);
   assert.equal(out.rows[0].afterTaxNonmedical.value,null);
   assert.equal(out.rows[0].afterTax.value,null);
-  s.fact('household.ownerBirthDate','1980-01-01');
+  await s.fact('household.ownerBirthDate','1980-01-01');
   out = await s.afterTax({accounts:['health']});
   assert.equal(out.rows[0].afterTaxNonmedical.value,5100);
   assert.ok(out.gaps.some(g => /purpose|choose/i.test(g.message)));
-  s.fact('household.ownerBirthDate','1960-01-01');
+  await s.fact('household.ownerBirthDate','1960-01-01');
   out = await s.afterTax({accounts:['health']});
   assert.equal(out.rows[0].afterTaxNonmedical.value,7100);
   await assertRefsResolve(out,s.ctx);
@@ -111,11 +111,11 @@ test('HSA presents both purposes, with age-dependent additional tax and missing-
 test('generic retirement needs plan type; rates resolve calculate refs without defaults',async t => {
   const s = await setup(t);
   s.account('pension','retirement','owner');
-  s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run('pension','2026-10-31',10000);
+  await s.db.prepare('INSERT INTO balances(account_id,date,amount) VALUES (?,?,?)').run('pension','2026-10-31',10000);
   const unknown = await s.afterTax({accounts:['pension']});
   assert.equal(unknown.rows[0].afterTax.value,null);
   assert.ok(unknown.gaps.some(g=>g.code==='missing_fact' && g.fact==='accounts.planType'));
-  s.fact('accounts.planType',{pension:'401k'});
+  await s.fact('accounts.planType',{pension:'401k'});
   const computed = await callTool('calculate',{operation:'add',operands:[{assumption:{...rate(0.1),name:'base',unit:'ratio'}},{assumption:{...rate(0.14),name:'extra',unit:'ratio'}}],label:'Ordinary rate'},s.ctx);
   const out = await s.afterTax({accounts:['pension'],ordinaryRate:{ref:computed.figure.ref}});
   assert.equal(out.rows[0].afterTax.value,round(10000 * (1 - 0.24 - 0.05)));

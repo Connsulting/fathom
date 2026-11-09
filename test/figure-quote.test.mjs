@@ -17,7 +17,7 @@ let t;
 let ctx;
 before(async () => {
   t = await tempDb();
-  seedDemo(t.db);
+  await seedDemo(t.db);
   ctx = { db: t.db, dataDir: t.dataDir, now: new Date('2026-11-05T15:00:00Z') };
 });
 after(() => t && t.close());
@@ -106,12 +106,12 @@ test('goals.pace envelopes quote their own value over the demo store', async () 
 
 // A reply that writes each figure exactly as its quote grounds through groundAnswer, which this
 // ticket does not change: the quote string or the value is the evidence.
-test('groundAnswer grounds each quote form written verbatim', () => {
+test('groundAnswer grounds each quote form written verbatim', async () => {
   for (const [value, unit, , direction] of FORMS) {
     const e = fig(value, unit);
     const verb = direction === 'out' ? 'You spent' : 'The figure is';
     const reply = `${verb} ${e.quote}.`;
-    const grounded = groundAnswer(reply, { scenario: { fig: {} }, toolResults: [{ name: 'calculate', args: { operation: 'add', label: 'Synthetic figure' }, result: { figure: e } }] });
+    const grounded = await groundAnswer(reply, { scenario: { fig: {} }, toolResults: [{ name: 'calculate', args: { operation: 'add', label: 'Synthetic figure' }, result: { figure: e } }] });
     assert.deepEqual(grounded.violations, [], `${reply} grounds`);
     assert.equal(grounded.ok, true, reply);
   }
@@ -122,7 +122,7 @@ test('groundAnswer grounds a stored figure quoted as its token from household.fi
   assert.equal(figures.length, 2);
   const scenario = { fig: Object.fromEntries(figures.map(f => [f.key, { v: f.v }])) };
   const reply = `Business cash is ${figures[0].quote} and personal cash is ${figures[1].quote}.`;
-  const grounded = groundAnswer(reply, { scenario, toolResults: [{ name: 'household', args: { operation: 'figures', keys: ['biz_cash', 'personal_cash'] }, result: figures }] });
+  const grounded = await groundAnswer(reply, { scenario, toolResults: [{ name: 'household', args: { operation: 'figures', keys: ['biz_cash', 'personal_cash'] }, result: figures }] });
   assert.equal(grounded.ok, true, JSON.stringify(grounded.violations));
   assert.deepEqual([...grounded.figureKeys].sort(), ['biz_cash', 'personal_cash']);
 });

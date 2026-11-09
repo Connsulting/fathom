@@ -1,3 +1,4 @@
+import { currentHandle } from '../storage/index.mjs';
 // Household runtimes: one immutable context per household generation, holding that household's
 // financial store, root, vault, packs, engine, answerer, scheduler and transport. Nothing financial
 // is process-global: the server, the MCP endpoint and the CLIs resolve a context through the
@@ -91,30 +92,30 @@ export function checkHouseholdRoot(dataDir, storageRoot) {
   return path;
 }
 
-export function openHouseholdDb({ dataDir, householdId, storageRoot }) {
+export async function openHouseholdDb({ dataDir, householdId, storageRoot }) {
   const root = checkHouseholdRoot(dataDir, storageRoot);
   const file = join(root, DB_FILE);
   if (!existsSync(file)) throw codeError('household_store_missing');
-  const db = openDb(file);
+  const db = await openDb(file);
   try {
-    if (storeIdentity(db)?.householdId !== householdId) throw codeError('household_store_mismatch');
-    migrate(db);
-    if (storeIdentity(db)?.householdId !== householdId) throw codeError('household_store_mismatch');
+    if ((await storeIdentity(db))?.householdId !== householdId) throw codeError('household_store_mismatch');
+    await migrate(db);
+    if ((await storeIdentity(db))?.householdId !== householdId) throw codeError('household_store_mismatch');
     return db;
   } catch (e) {
-    try { db.close(); } catch { /* already closed */ }
+    try { await db.close(); } catch { /* already closed */ }
     throw e;
   }
 }
 
 // Whether the instance funds live model calls at all (node scripts/model-budget.mjs sets the cap).
-export const instanceFunded = platform => instanceCapUsd(platform) > 0;
+export const instanceFunded = async platform => await instanceCapUsd(platform) > 0;
 
 // Whether the store holds any object sealed under a data key (so a new key must never replace a lost one).
-function holdsVaultObjects(db) {
-  return Boolean(db.prepare('SELECT 1 AS x FROM files WHERE stored_path IS NOT NULL LIMIT 1').get()
-    || db.prepare('SELECT 1 AS x FROM advisor_packets LIMIT 1').get()
-    || db.prepare('SELECT 1 AS x FROM simplefin_connection LIMIT 1').get());
+async function holdsVaultObjects(db) {
+  return Boolean(await db.prepare('SELECT 1 AS x FROM files WHERE stored_path IS NOT NULL LIMIT 1').get()
+    || await db.prepare('SELECT 1 AS x FROM advisor_packets LIMIT 1').get()
+    || await db.prepare('SELECT 1 AS x FROM simplefin_connection LIMIT 1').get());
 }
 
 // A data key refusal as the VaultError the financial callers map to 409. A data key that does not
@@ -140,7 +141,7 @@ function createVaultAccessor({ platform, secrets, db, config, householdId, relat
       try {
         handle = await unwrapDataKey(platform, { householdId, platformKey });
       } catch (err) {
-        if (err?.code !== 'data_key_missing' || holdsVaultObjects(db)) throw err;
+        if (err?.code !== 'data_key_missing' || await holdsVaultObjects(db)) throw err;
         try {
           handle = await provisionDataKey(platform, { householdId, platformKey });
         } catch (again) {
@@ -155,7 +156,7 @@ function createVaultAccessor({ platform, secrets, db, config, householdId, relat
       platformKey.fill(0);
     }
   }
-  return function vault() {
+  return async function vault() {
     cached ??= resolve().catch(err => {
       cached = null;
       throw err;
@@ -165,15 +166,15 @@ function createVaultAccessor({ platform, secrets, db, config, householdId, relat
 }
 
 // Pack load failures never stop a household from being served.
-function refreshPacks(packs) {
+async function refreshPacks(packs) {
   try {
-    packs.refresh();
+    await packs.refresh();
   } catch (err) {
     console.error('fathom: pack state refresh failed', codeOf(err));
   }
 }
 
-export function createHouseholdContext({
+export async function createHouseholdContext({
   householdId, generation = 1, mode, db, relativeRoot = householdRootRel(householdId), config, platform, secrets,
   transport = null, transportOptions = {}, engine = null, packs = null, answerer = null, answererFactory = createLiveAnswerer, scheduler = null, handlers = null, now = null, dispatcher = createJobDispatcher(),
   engineOptions = {},
@@ -182,10 +183,10 @@ export function createHouseholdContext({
   if (mode !== 'real' && mode !== 'demo') throw new TypeError('createHouseholdContext mode must be real or demo');
   const root = join(config.dataDir, relativeRoot);
   const outbound = outboundGuard(platform, householdId);
-  const current = () => platform.prepare('SELECT status, generation FROM households WHERE id = ?').get(householdId);
-  const jobsAllowed = () => {
-    const row = current();
-    return row?.status === 'active' && Number(row.generation) === generation && outbound.enabled('jobs');
+  const current = async () => await platform.prepare('SELECT status, generation FROM households WHERE id = ?').get(householdId);
+  const jobsAllowed = async () => {
+    const row = await current();
+    return row?.status === 'active' && Number(row.generation) === generation && await outbound.enabled('jobs');
   };
   const vault = createVaultAccessor({ platform, secrets, db, config, householdId, relativeRoot });
   const emailRecipients = createRecipientPolicy({ platform, householdId, generation, mode, config, readFile: transportOptions.readFile });
@@ -199,9 +200,9 @@ export function createHouseholdContext({
   let householdEngine = engine;
   if (!householdEngine) {
     const { testTransport = null, fundingNow = Date.now } = engineOptions ?? {};
-    householdEngine = createRuntimeEngine({
-      db, config, now: now ?? (() => new Date(clockNow(db, config.clock))),
-      allowed: () => outbound.enabled('engine'), funded: () => instanceFunded(platform),
+    householdEngine = await createRuntimeEngine({
+      db, config, now: now ?? (async () => new Date(await clockNow(db, config.clock))),
+      allowed: async () => await outbound.enabled('engine'), funded: async () => await instanceFunded(platform),
       platform, householdId, generation, fundingNow, testTransport,
     });
     householdEngine.init().then(() => {
@@ -224,12 +225,12 @@ export function createHouseholdContext({
   context = Object.freeze({
     householdId, generation, mode, db, root, config, inFlight: new Set(), vault, packs: livePacks, engine: householdEngine,
     answerer: householdAnswerer, scheduler: householdScheduler, transport: householdTransport, emailRecipients, outbound, services,
-    funded: () => instanceFunded(platform),
-    isCurrent: () => { const row = platform.prepare('SELECT status, generation FROM households WHERE id = ?').get(householdId); return row?.status === 'active' && Number(row.generation) === generation; },
+    funded: async () => await instanceFunded(platform),
+    isCurrent: async () => { const row = await currentHandle(platform).prepare('SELECT status, generation FROM households WHERE id = ?').get(householdId); return row?.status === 'active' && Number(row.generation) === generation; },
     close() {
       closing ??= (async () => {
         try { await householdScheduler?.stop(); } catch { /* stop never rejects; close anyway */ }
-        try { db.close(); } catch { /* already closed */ }
+        try { await db.close(); } catch { /* already closed */ }
       })();
       return closing;
     },
@@ -238,12 +239,12 @@ export function createHouseholdContext({
 }
 
 // The production builder: open the household's store, then its context (store closed on failure).
-export function buildHouseholdContext({ householdId, generation, mode, relativeRoot, platform, config, secrets, transportOptions, dispatcher, engineOptions }) {
-  const db = openHouseholdDb({ dataDir: config.dataDir, householdId, storageRoot: relativeRoot });
+export async function buildHouseholdContext({ householdId, generation, mode, relativeRoot, platform, config, secrets, transportOptions, dispatcher, engineOptions }) {
+  const db = await openHouseholdDb({ dataDir: config.dataDir, householdId, storageRoot: relativeRoot });
   try {
-    return createHouseholdContext({ householdId, generation, mode, db, relativeRoot, config, platform, secrets, transportOptions, dispatcher, engineOptions });
+    return await createHouseholdContext({ householdId, generation, mode, db, relativeRoot, config, platform, secrets, transportOptions, dispatcher, engineOptions });
   } catch (e) {
-    try { db.close(); } catch { /* already closed */ }
+    try { await db.close(); } catch { /* already closed */ }
     throw e;
   }
 }
@@ -258,6 +259,7 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
   const drains = new Map();
   const streams = new Map();
   const stale = new Set(); // contexts replaced by a newer generation, closed once released
+  const building = new Map(); // householdId and generation -> context being built
   let started = false;
   let closed = false;
 
@@ -271,8 +273,8 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
     context.close().catch(() => {});
   }
 
-  function startHousehold(context) {
-    if (context.packs) refreshPacks(context.packs);
+  async function startHousehold(context) {
+    if (context.packs) await refreshPacks(context.packs);
     try {
       const out = context.scheduler?.start();
       if (out && typeof out.then === 'function') out.then(null, err => console.error('fathom: scheduler start failed', codeOf(err)));
@@ -281,41 +283,53 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
     }
   }
 
-  function get(householdId) {
+  async function get(householdId) {
     if (closed || typeof householdId !== 'string') return null;
-    const row = rowOf.get(householdId);
+    const row = await rowOf.get(householdId);
     if (!row || row.status !== 'active' || row.storage_root == null) return null;
     const generation = Number(row.generation);
     const entry = entries.get(householdId);
     if (entry && entry.generation === generation) return entry.context;
-    if (entry) {
-      entries.delete(householdId);
-      retire(entry.context);
+    // One build per household generation at a time: concurrent requests share it.
+    const key = `${householdId}\0${generation}`;
+    if (!building.has(key)) {
+      building.set(key, (async () => {
+        const current = entries.get(householdId);
+        if (current) {
+          entries.delete(householdId);
+          retire(current.context);
+        }
+        let context;
+        try {
+          context = await build({ householdId, generation, mode: row.mode, relativeRoot: row.storage_root, platform, config, secrets, transportOptions, dispatcher, engineOptions });
+        } catch (err) {
+          console.error('fathom: household runtime unavailable', codeOf(err));
+          return null;
+        }
+        if (closed) {
+          await context.close().catch(() => {});
+          return null;
+        }
+        entries.set(householdId, { context, generation });
+        if (started) await startHousehold(context);
+        return context;
+      })().finally(() => building.delete(key)));
     }
-    let context;
-    try {
-      context = build({ householdId, generation, mode: row.mode, relativeRoot: row.storage_root, platform, config, secrets, transportOptions, dispatcher, engineOptions });
-    } catch (err) {
-      console.error('fathom: household runtime unavailable', codeOf(err));
-      return null;
-    }
-    entries.set(householdId, { context, generation });
-    if (started) startHousehold(context);
-    return context;
+    return building.get(key);
   }
 
   return {
     get,
-    demo() {
-      const served = platform.prepare('SELECT id, mode FROM households WHERE serves_store = 1').get();
+    async demo() {
+      const served = await platform.prepare('SELECT id, mode FROM households WHERE serves_store = 1').get();
       if (!served || served.mode !== 'demo') throw codeError('not_demo');
-      const context = get(served.id);
+      const context = await get(served.id);
       if (!context) throw codeError('household_unavailable');
       return context;
     },
-    forIdentity(identity) {
+    async forIdentity(identity) {
       if (!identity || typeof identity.householdId !== 'string' || !identity.role) return null;
-      return get(identity.householdId);
+      return await get(identity.householdId);
     },
     acquire(context, cancelStream = null) {
       refs.set(context, (refs.get(context) ?? 0) + 1);
@@ -348,14 +362,14 @@ export function createRuntimeRegistry({ platform, config, secrets, transportOpti
       entries.delete(householdId);
       await context.close();
     },
-    list() {
-      return servable.all().map(r => r.id);
+    async list() {
+      return (await servable.all()).map(r => r.id);
     },
-    startAll() {
+    async startAll() {
       if (started) return;
-      for (const id of servable.all().map(r => r.id)) {
-        const context = get(id);
-        if (context) startHousehold(context);
+      for (const id of (await servable.all()).map(r => r.id)) {
+        const context = await get(id);
+        if (context) await startHousehold(context);
       }
       started = true;
     },

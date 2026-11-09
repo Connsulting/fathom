@@ -15,6 +15,7 @@ import { sourceStates } from './coverage.mjs';
 import { accountLabel } from '../shared/account-label.mjs';
 import { UNRESOLVED } from './file-status.mjs';
 import { transactionDisplayName, plainEvidence } from '../categories/display.mjs';
+import { mapSeries } from '../shared/series.mjs';
 
 const MONTHLY = Object.freeze({ label: 'monthly', staleAfterDays: 45 });
 
@@ -87,22 +88,22 @@ export function freshnessOf({ kind, asOf } = {}, clock) {
 }
 
 // Upserts an ingest source, keeping the latest ISO as_of and stamping last_ingest_at.
-export function recordSource(db, { id, label, kind, asOf, now } = {}) {
+export async function recordSource(db, { id, label, kind, asOf, now } = {}) {
   if (typeof id !== 'string' || id === '') throw new TypeError('A source id is required');
   const stamp = now || new Date().toISOString();
-  const existing = db.prepare('SELECT as_of FROM sources WHERE id = ?').get(id);
+  const existing = await db.prepare('SELECT as_of FROM sources WHERE id = ?').get(id);
   const incoming = isoDay(asOf);
   const stored = existing ? isoDay(existing.as_of) : null;
   const latest = incoming && (!stored || incoming > stored) ? incoming : (stored ?? (existing ? existing.as_of : null));
-  db.prepare(`INSERT INTO sources (id, label, as_of, kind, last_ingest_at, note) VALUES (?, ?, ?, ?, ?, '')
+  await db.prepare(`INSERT INTO sources (id, label, as_of, kind, last_ingest_at, note) VALUES (?, ?, ?, ?, ?, '')
               ON CONFLICT(id) DO UPDATE SET label = excluded.label, as_of = excluded.as_of, kind = excluded.kind,
                 last_ingest_at = excluded.last_ingest_at`)
     .run(id, String(label ?? id), latest, kind ?? null, stamp);
   return { id, asOf: latest };
 }
 
-export function listImportedFiles(db) {
-  const result = { files: db.prepare('SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files WHERE removed_at IS NULL ORDER BY uploaded_at DESC, rowid DESC').all().map(row => fileWithProposal(db,row)) };
+export async function listImportedFiles(db) {
+  const result = { files: await mapSeries((await db.prepare('SELECT id, name, status, source_kind, parser, counts, uploaded_at FROM files WHERE removed_at IS NULL ORDER BY uploaded_at DESC, rowid DESC').all()), async row => await fileWithProposal(db,row)) };
   while (Buffer.byteLength(JSON.stringify(result)) > 256 * 1024 && result.files.length) {
     result.files.splice(Math.floor(result.files.length / 2));
     result.truncated = true;
@@ -113,11 +114,11 @@ export function listImportedFiles(db) {
 const words = key => String(key).replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/_/g, ' ').toLowerCase();
 const shown = v => (Array.isArray(v) ? v.map(shown).join(', ') : v && typeof v === 'object'
   ? Object.entries(v).map(([k, x]) => `${words(k)} ${shown(x)}`).join(', ') : String(v));
-const defOf = (db, table, id) => parseJson(db.prepare(`SELECT def FROM ${table} WHERE id=?`).get(id)?.def, {}) ?? {};
+const defOf = async (db, table, id) => parseJson((await db.prepare(`SELECT def FROM ${table} WHERE id=?`).get(id))?.def, {}) ?? {};
 
 // One note action as the owner approves it: stored proposal values and the current target rows.
 // An expected payment stays structured (the presented row and its resolved relative date).
-function noteAction(db, action, presented) {
+async function noteAction(db, action, presented) {
   const args = action?.args ?? {};
   if (action?.tool === 'answer' && action.operation === 'expected_transaction') {
     const e = presented?.expectedTransaction ?? args, rel = e.dateEvidence ?? null;
@@ -125,7 +126,7 @@ function noteAction(db, action, presented) {
       amount: Number.isFinite(e.amount) ? e.amount : null, phrase: rel?.phrase ?? null, timezone: rel?.phrase ? rel.timezone ?? null : null };
   }
   if (action?.tool === 'act_on_recommendation') {
-    const rec = defOf(db, 'recs', args.id), title = rec.title ?? args.id;
+    const rec = await defOf(db, 'recs', args.id), title = rec.title ?? args.id;
     if (action.operation === 'step') {
       const task = rec.tasks?.[args.index];
       return { text: `${(typeof task === 'string' ? task : task?.t) ?? `${title} step ${args.index + 1}`} ${args.checked ? 'marked done' : 'reopened'}` };
@@ -134,7 +135,7 @@ function noteAction(db, action, presented) {
   }
   if (action?.tool === 'answer') return { text: `${String(presented?.label ?? words(args.key)).replace('{person}', 'each person')}: ${shown(args.value)}` };
   if (action?.tool === 'update_goal') {
-    const { id, ...fields } = args, title = action.operation === 'edit' ? defOf(db, 'goals', id).title ?? 'Goal' : args.title ?? 'Goal';
+    const { id, ...fields } = args, title = action.operation === 'edit' ? (await defOf(db, 'goals', id)).title ?? 'Goal' : args.title ?? 'Goal';
     const changes = Object.keys(fields).map(k => (['title', 'target', 'targetDate'].includes(k) ? `${words(k)} ${shown(fields[k])}` : words(k)));
     return { text: `${action.operation === 'edit' ? `${title} goal` : `new goal ${title}`}: ${changes.join(', ')}` };
   }
@@ -142,13 +143,13 @@ function noteAction(db, action, presented) {
 }
 
 // A files row as the API returns it; `reasonCode` is the stored reason for a waiting status.
-function fileWithProposal(db, row) {
+async function fileWithProposal(db, row) {
   const file = { ...fileOf(row), ...(row.note !== undefined ? { reasonCode: row.note ?? null } : {}) };
-  const proposal = db.prepare('SELECT id,version,status,reason_code,review_state,proposal FROM import_proposals WHERE file_id=? ORDER BY version DESC,rowid DESC LIMIT 1').get(row.id);
+  const proposal = await db.prepare('SELECT id,version,status,reason_code,review_state,proposal FROM import_proposals WHERE file_id=? ORDER BY version DESC,rowid DESC LIMIT 1').get(row.id);
   if (!proposal) return file;
   const review = parseJson(proposal.review_state, {}) ?? {};
   const presentation = review.presentation ?? {};
-  const batch = db.prepare('SELECT receipt_id FROM import_batches WHERE proposal_id=? AND proposal_version=?').get(proposal.id,proposal.version);
+  const batch = await db.prepare('SELECT receipt_id FROM import_batches WHERE proposal_id=? AND proposal_version=?').get(proposal.id,proposal.version);
   const kind = review.kind === 'actions' ? 'actions' : 'import';
   const list = (value, max) => (Array.isArray(value) ? value.slice(0, max) : []);
   // Each header column of the approved structure with the layout field reading it (null when unused).
@@ -156,7 +157,7 @@ function fileWithProposal(db, row) {
   const columns = kind === 'import' ? list(review.structural?.headers, 50).flatMap((h, i) => list(h?.columns, 50).map(c => ({ ordinal: c.ordinal, label: String(c.label ?? ''),
     field: Object.entries(tables[i]?.fields ?? {}).find(([, s]) => Array.isArray(s?.columns) && s.columns.includes(c.ordinal))?.[0] ?? null }))).slice(0, 50) : [];
   const presented = list(presentation.actions, 20);
-  const actions = kind === 'actions' ? list(parseJson(proposal.proposal, {})?.actions, 20).map((a, i) => noteAction(db, a, presented[i])) : [];
+  const actions = kind === 'actions' ? await mapSeries(list(parseJson(proposal.proposal, {})?.actions, 20), async (a, i) => await noteAction(db, a, presented[i])) : [];
   return { ...file, proposal: { id: proposal.id, version: proposal.version, status: proposal.status, reasonCode: proposal.reason_code,
     summary: presentation.summary ?? null, counts: presentation.counts ?? null, receiptId: batch?.receipt_id ?? null,
     kind, delta: list(presentation.delta, 20), errors: list(presentation.errors, 10),
@@ -177,9 +178,9 @@ export function fileOf(row) {
   };
 }
 
-function clockOf(db, clock) {
+async function clockOf(db, clock) {
   if (clock) return clock;
-  const stored = getSetting(db, 'clock', null);
+  const stored = await getSetting(db, 'clock', null);
   return typeof stored === 'string' && dayMs(stored) != null ? stored : today();
 }
 
@@ -209,15 +210,15 @@ const evidenceFor = (kind, text) => (kind === 'transaction_category' ? plainEvid
 // guess as {option, label, reason, evidence, source, model?, ts?}, reason being the evidence text;
 // model and ts for an engine guess), rank and group. Sorted by rank, then (account questions) the
 // larger absolute latest balance, then id.
-function pendingWithGuesses(db) {
-  const extra = new Map(db.prepare(`SELECT ci.id, f.name AS file_name, g.model, g.ts
+async function pendingWithGuesses(db) {
+  const extra = new Map((await db.prepare(`SELECT ci.id, f.name AS file_name, g.model, g.ts
                                     FROM confirm_items ci LEFT JOIN files f ON f.id = ci.file_id
                                     LEFT JOIN confirm_guesses g ON g.item_id = ci.id
-                                    WHERE ci.status = 'pending'`).all().map((r) => [r.id, r]));
-  const items = pendingItems(db).filter(item => item.kind !== 'resolver_fact').map((item) => {
+                                    WHERE ci.status = 'pending'`).all()).map((r) => [r.id, r]));
+  const items = await mapSeries((await pendingItems(db)).filter(item => item.kind !== 'resolver_fact'), async (item) => {
     const r = extra.get(item.id);
-    const detail = cardDetail(db, item);
-    const g = bestGuess(db, item, detail);
+    const detail = await cardDetail(db, item);
+    const g = await bestGuess(db, item, detail);
     const evidence = g ? evidenceFor(item.kind, g.evidence) : '';
     const guess = g ? {
       option: g.option, label: g.label, reason: evidence, evidence, source: g.source,
@@ -238,10 +239,10 @@ function pendingWithGuesses(db) {
 
 // Answers Fathom recorded itself, newest first: {id, kind, question, answer, answerLabel, rule,
 // evidence (the evidence text), final (finalReason or null), txn (category answers only)}.
-function decidedItems(db) {
-  return db.prepare(`SELECT ci.id, ci.kind, ci.question, ci.options, ci.context, ci.status, ci.answer, a.rule, a.evidence
+async function decidedItems(db) {
+  return await mapSeries((await db.prepare(`SELECT ci.id, ci.kind, ci.question, ci.options, ci.context, ci.status, ci.answer, a.rule, a.evidence
                      FROM confirm_auto a JOIN confirm_items ci ON ci.id = a.item_id
-                     WHERE ci.status = 'answered' ORDER BY a.created_at DESC, ci.id DESC`).all().map((r) => {
+                     WHERE ci.status = 'answered' ORDER BY a.created_at DESC, ci.id DESC`).all()), async (r) => {
     const option = parseJson(r.options, []).find((o) => o.id === r.answer);
     const evidence = parseJson(r.evidence, null);
     return {
@@ -252,7 +253,7 @@ function decidedItems(db) {
       answerLabel: option ? option.label : r.answer,
       rule: r.rule,
       evidence: evidenceFor(r.kind, typeof evidence?.text === 'string' ? evidence.text : ''),
-      final: finalReason(db, { id: r.id, kind: r.kind, status: r.status, answer: r.answer }),
+      final: await finalReason(db, { id: r.id, kind: r.kind, status: r.status, answer: r.answer }),
       ...(r.kind === 'transaction_category' ? { txn: txnOf(r.kind, parseJson(r.context, {})) } : {}),
     };
   });
@@ -262,31 +263,31 @@ function decidedItems(db) {
 // label: transactions, balances, positions, tax payments, and the month-end of the newest P&L
 // period. An account's own as-of is still the max of that account's rows, so a connected sync
 // dated yesterday is fresh even when its file source as_of is older.
-export function householdDataThrough(db, clock) {
-  const at = isoDay(clockOf(db, clock));
+export async function householdDataThrough(db, clock) {
+  const at = isoDay(await clockOf(db, clock));
   if (!at) return null;
-  const row = db.prepare(`SELECT max(d) AS d FROM (
+  const row = await db.prepare(`SELECT max(d) AS d FROM (
       SELECT max(date) AS d FROM transactions WHERE date <= ?
       UNION ALL SELECT max(date) FROM balances WHERE date <= ?
       UNION ALL SELECT max(as_of) FROM positions WHERE as_of <= ?
       UNION ALL SELECT max(date) FROM tax_payments WHERE date <= ?
     )`).get(at, at, at, at);
-  const period = db.prepare('SELECT max(period) AS d FROM pnl_lines WHERE period <= substr(?, 1, 7)').get(at);
+  const period = await db.prepare('SELECT max(period) AS d FROM pnl_lines WHERE period <= substr(?, 1, 7)').get(at);
   const dates = [isoDay(row && row.d), monthEnd(period && period.d)].filter(Boolean);
   return dates.sort().at(-1) ?? null;
 }
 
 // On-read freshness for every path that changes data (sync, import, confirm, merge, undo).
 // Callers that do not rebuild the scenario still get the same snapshot the pages read.
-export function refreshFreshness(db, { clock } = {}) {
-  const state = ingestState(db, { clock });
-  return { ...state, dataThrough: householdDataThrough(db, clock) };
+export async function refreshFreshness(db, { clock } = {}) {
+  const state = await ingestState(db, { clock });
+  return { ...state, dataThrough: await householdDataThrough(db, clock) };
 }
 
 // One account's { asOf, fresh, sourceId } as ingestState reports it, without building the rest.
 // fresh follows the shared rule (coverage.mjs sourceStates): 'archived' for an archived account.
-export function accountFreshness(db, accountId, { clock } = {}) {
-  const hit = sourceStates(db, clockOf(db, clock)).accounts.get(accountId);
+export async function accountFreshness(db, accountId, { clock } = {}) {
+  const hit = (await sourceStates(db, await clockOf(db, clock))).accounts.get(accountId);
   if (!hit) return { asOf: '', fresh: 'unknown', sourceId: null };
   return { asOf: hit.asOf, fresh: hit.state, sourceId: hit.sourceId };
 }
@@ -297,25 +298,25 @@ const rankOfState = (state) => STATE_RANK[state] ?? 3;
 
 // Each ingest source by its real origin (see sourceList), with its state from the shared rule.
 // `states` is sourceStates(db, at). A source whose files were all removed is left out.
-function sourceList(db, at, states) {
-  const naming = accountNaming(db);
+async function sourceList(db, at, states) {
+  const naming = await accountNaming(db);
   const labelOf = (id) => accountLabel(naming.byId.get(id) ?? { id });
   const liveFiles = db.prepare(`SELECT id, name, stored_path, period_from, period_to FROM files
                                 WHERE source_id = ? AND removed_at IS NULL ORDER BY uploaded_at DESC, rowid DESC`);
   const anyFile = db.prepare('SELECT 1 FROM files WHERE source_id = ? LIMIT 1');
-  const rowRange = new Map(db.prepare(`SELECT f.source_id AS source, min(r.d) AS a, max(r.d) AS b FROM files f JOIN (
+  const rowRange = new Map((await db.prepare(`SELECT f.source_id AS source, min(r.d) AS a, max(r.d) AS b FROM files f JOIN (
       SELECT file_id, date AS d FROM transactions UNION ALL SELECT file_id, date FROM balances UNION ALL SELECT file_id, as_of FROM positions
-    ) r ON r.file_id = f.id WHERE f.source_id IS NOT NULL AND f.removed_at IS NULL GROUP BY f.source_id`).all().map((r) => [r.source, r]));
+    ) r ON r.file_id = f.id WHERE f.source_id IS NOT NULL AND f.removed_at IS NULL GROUP BY f.source_id`).all()).map((r) => [r.source, r]));
   const ownSources = db.prepare('SELECT id FROM accounts WHERE source_id = ?');
-  const rows = db.prepare("SELECT id, label, as_of, kind, last_ingest_at FROM sources WHERE substr(id, 1, 4) = 'ing:' ORDER BY id").all();
+  const rows = await db.prepare("SELECT id, label, as_of, kind, last_ingest_at FROM sources WHERE substr(id, 1, 4) = 'ing:' ORDER BY id").all();
   const out = [];
   for (const row of rows) {
-    const files = liveFiles.all(row.id);
-    if (!files.length && anyFile.get(row.id)) continue;
+    const files = await liveFiles.all(row.id);
+    if (!files.length && await anyFile.get(row.id)) continue;
     const st = states.sources.get(row.id);
     const simplefin = row.kind === 'simplefin';
     const ids = new Set(st ? st.fed.keys() : []);
-    if (simplefin) for (const a of ownSources.all(row.id)) ids.add(a.id);
+    if (simplefin) for (const a of await ownSources.all(row.id)) ids.add(a.id);
     const accounts = [...ids].map((id) => {
       const a = states.accounts.get(id);
       const archived = a ? a.archived : !!naming.byId.get(id)?.archived_at;
@@ -360,27 +361,27 @@ function sourceList(db, at, states) {
 
 // The Sources view the API and the accounts.sources tool return: each source's id, real name,
 // parser label, kind, state, range, last data date, cadence, accounts and live files.
-export function sourcesView(db, { clock } = {}) {
-  const at = clockOf(db, clock);
-  return sourceList(db, at, sourceStates(db, at)).map(({ lastIngestAt, howTo, ...rest }) => rest);
+export async function sourcesView(db, { clock } = {}) {
+  const at = await clockOf(db, clock);
+  return (await sourceList(db, at, await sourceStates(db, at))).map(({ lastIngestAt, howTo, ...rest }) => rest);
 }
 
-export function ingestState(db, { clock } = {}) {
-  const at = clockOf(db, clock);
-  queueCategoryChecks(db,{clock:at});
-  const items = pendingWithGuesses(db);
+export async function ingestState(db, { clock } = {}) {
+  const at = await clockOf(db, clock);
+  await queueCategoryChecks(db,{clock:at});
+  const items = await pendingWithGuesses(db);
   // Uploaded files always have stored bytes; the demo seed's provenance row does not.
-  const files = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at, note FROM files
+  const files = await mapSeries((await db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at, note FROM files
                             WHERE stored_path IS NOT NULL AND removed_at IS NULL ORDER BY uploaded_at DESC, rowid DESC LIMIT ?`)
-    .all(FILES_LIMIT).map(row => fileWithProposal(db,row));
+    .all(FILES_LIMIT)), async row => await fileWithProposal(db,row));
   // Every unresolved file stays listed after a reload, with its stored reason.
-  const waiting = db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at, note FROM files
+  const waiting = await mapSeries((await db.prepare(`SELECT id, name, status, source_kind, parser, counts, uploaded_at, note FROM files
                               WHERE stored_path IS NOT NULL AND removed_at IS NULL AND status IN (${UNRESOLVED.map(() => '?').join(', ')})
-                              ORDER BY uploaded_at DESC, rowid DESC`).all(...UNRESOLVED).map(row => fileWithProposal(db,row));
+                              ORDER BY uploaded_at DESC, rowid DESC`).all(...UNRESOLVED)), async row => await fileWithProposal(db,row));
 
-  const states = sourceStates(db, at);
-  const sources = sourceList(db, at, states);
-  const naming = accountNaming(db);
+  const states = await sourceStates(db, at);
+  const sources = await sourceList(db, at, states);
+  const naming = await accountNaming(db);
 
   const accounts = {};
   const accountNotes = [];
@@ -401,7 +402,7 @@ export function ingestState(db, { clock } = {}) {
     ...accountNotes,
   ];
 
-  return { pending: items.length, items, decided: decidedItems(db), files, waiting, sources, accounts, staleNotes, formats: listHowTo() };
+  return { pending: items.length, items, decided: await decidedItems(db), files, waiting, sources, accounts, staleNotes, formats: listHowTo() };
 }
 
 // Returns a new domains array: each stale note is appended (escaped) to its domain's note, a

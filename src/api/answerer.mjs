@@ -428,7 +428,7 @@ const KIND_NAMES = { f: 'figure', fk: 'figure', l: 'law', p: 'percent', n: 'name
 // label, and one the context data states is a literal with that datum's label; any other date is a
 // violation with { date: true } (neutralized, never counted toward a regeneration). Literals are in
 // text order.
-export function groundAnswer(text, { scenario, toolResults = [], data = [], dataLabels = [], accountLabels } = {}) {
+export async function groundAnswer(text, { scenario, toolResults = [], data = [], dataLabels = [], accountLabels } = {}) {
   const prose = String(text ?? '');
   const violations = [];
   const figureKeys = new Set();
@@ -451,10 +451,10 @@ export function groundAnswer(text, { scenario, toolResults = [], data = [], data
   for (const m of listMarkerSpans(masked)) {
     unlisted = unlisted.slice(0, m.index) + '•' + ' '.repeat(m.length - 1) + unlisted.slice(m.index + m.length);
   }
-  return groundMasked(unlisted, { scenario, toolResults, data, dataLabels, accountLabels, violations, figureKeys });
+  return await groundMasked(unlisted, { scenario, toolResults, data, dataLabels, accountLabels, violations, figureKeys });
 }
 
-function groundMasked(masked, { scenario, toolResults, data, dataLabels, accountLabels, violations, figureKeys }) {
+async function groundMasked(masked, { scenario, toolResults, data, dataLabels, accountLabels, violations, figureKeys }) {
   const check = (text, options = {}) => checkGrounding(text, { ...options, allowCounts: true });
   const raws = Array.isArray(toolResults) ? toolResults : [];
   const results = raws.map(groundingResult);
@@ -492,7 +492,7 @@ function groundMasked(masked, { scenario, toolResults, data, dataLabels, account
     };
     for (const span of spans) {
       for (let i = 0; i < sources.length; i++) {
-        misses[i] ??= new Set(sources[i].check().violations.map(v => v.index));
+        misses[i] ??= new Set((await sources[i].check()).violations.map(v => v.index));
         if (!misses[i].has(span.index)) { literals.push({ text: span.text, index: span.index, source: sourceOf(i, span) }); break; }
       }
     }
@@ -668,24 +668,24 @@ function noticeFor(error, engine) {
 }
 
 // The manifest packs effectively active now (base status plus overrides), with their rows.
-function activeManifestPacks(db, packs) {
+async function activeManifestPacks(db, packs) {
   const out = [];
   if (!packs) return out;
-  for (const row of db.prepare('SELECT id, def, active, exploring FROM packs_state ORDER BY sort, id').all()) {
+  for (const row of await db.prepare('SELECT id, def, active, exploring FROM packs_state ORDER BY sort, id').all()) {
     const def = parseJson(row.def, null);
     if (!def) continue;
-    const pack = packs.backing(row.id, def);
+    const pack = await packs.backing(row.id, def);
     const status = packStatus(def.status, { active: row.active == null ? null : !!row.active, exploring: !!row.exploring });
     if (status === 'active' && pack && !out.some(x => x.pack.id === pack.id)) out.push({ rowId: row.id, pack });
   }
   return out;
 }
 
-function packConversationContext(db, packs, rowId) {
-  const row = db.prepare('SELECT def FROM packs_state WHERE id = ?').get(rowId);
+async function packConversationContext(db, packs, rowId) {
+  const row = await db.prepare('SELECT def FROM packs_state WHERE id = ?').get(rowId);
   const raw = row ? parseJson(row.def, {}) : {};
-  const def = packs ? packs.view(rowId, raw) : raw;
-  const pack = packs ? packs.backing(rowId, raw) : null;
+  const def = packs ? await packs.view(rowId, raw) : raw;
+  const pack = packs ? await packs.backing(rowId, raw) : null;
   const context = { pack: {
     id: rowId, name: def.name, status: def.status, why: def.why, covers: def.covers,
     curator: def.curator, version: def.version, taxYear: def.taxYear, reviewed: def.reviewed,
@@ -723,7 +723,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
 
   // One grounded model answer with at most one corrective call through the same engine.
   async function run({ db, scenario, now, question, context, history, baseRefs, references = [], fakeArgs, actions = false, onEvent, actionContext = null }) {
-    if (!engine.isOn()) return offNotice(engine);
+    if (!await engine.isOn()) return offNotice(engine);
     const t0 = performance.now();
     const stream = streamer(onEvent);
     const work = workList();
@@ -732,11 +732,11 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
     const summary = await read('household', { operation: 'summary' }, toolCtx(db, now));
     const sourceReads = [{ name: 'household', args: { operation: 'summary' }, result: summary },
       ...(context?.recommendation ? [{ name: 'recommendations', args: { operation: 'detail', id: context.recommendation.id }, result: context.recommendation }] : [])];
-    const active = activeManifestPacks(db, packs);
+    const active = await activeManifestPacks(db, packs);
     const packIds = active.map(a => a.pack.id).sort();
     const packContextText = packContext(active.map(({ pack }) => ({ pack, status: 'active' })));
     const prompt = buildChatPrompt({ packContextText, summary, context, history, question, today: scenario.meta && scenario.meta.clock });
-    prompt.systemDynamic += '\n<household_preferences>\n' + JSON.stringify(listPreferences(db)) + '\n</household_preferences>';
+    prompt.systemDynamic += '\n<household_preferences>\n' + JSON.stringify(await listPreferences(db)) + '\n</household_preferences>';
     const writes = !!actionContext?.actorId;
     const available = writes ? proposalTools(REGISTRY.filter(t => !t.mcpOnly)) : REGISTRY.filter(t => !t.mcpOnly && t.kind === 'read');
     const offered = available.map(tool => tool.kind !== 'read' ? tool : { ...tool, async handler(args, ctx) {
@@ -754,7 +754,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
     const turnResults = [];
     const blocks = [];
     const toolContext = { turnResults: () => turnResults, onBlock: block => blocks.push(block), ...actionContext, ...toolCtx(db, now), channel: 'ask', ...(writes ? { onProposal } : {}) };
-    toolContext.ownerStatements = () => ownerStatements(toolContext);
+    toolContext.ownerStatements = async () => await ownerStatements(toolContext);
     const request = { purpose: 'chat', system: prompt.system, systemDynamic: prompt.systemDynamic, messages: prompt.messages,
       tools: offered, toolContext, maxTokens: MAX_TOKENS, ...(fake ? { fake } : {}),
       ...(stream.engineEvent ? { onEvent: stream.engineEvent } : {}) };
@@ -776,7 +776,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
       } catch { accountLabels = new Map(); }
       return accountLabels;
     };
-    const ground = async (res, toolResults) => groundAnswer(textOf(res),
+    const ground = async (res, toolResults) => await groundAnswer(textOf(res),
       { scenario, toolResults, data, dataLabels, accountLabels: await labelsFor(toolResults) });
     const moreDetail = /\b(?:(?:more|greater) detail|in detail|detailed (?:answer|explanation|breakdown)|(?:explain|walk me through) (?:it |this )?(?:fully|thoroughly|step by step))\b/i.test(question);
     const disciplineOf = (res, toolResults, grounding) => checkAnswerForDelivery(textOf(res),
@@ -878,8 +878,8 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
   return {
     async answer({ db, key, questionId, text, clock, refs, onEvent, actorId, ownerText, turnId, replan, queuePlan, scopes, staleNote } = {}) {
       if (typeof key !== 'string' || !key) throw new TypeError('answer needs a conversation key');
-      const scenario = buildScenario(db, { clock, packs });
-      const now = clockNow(db, clock);
+      const scenario = await buildScenario(db, { clock, packs });
+      const now = await clockNow(db, clock);
       const hasQ = questionId !== undefined && questionId !== null;
       let question;
       let baseRefs = [];
@@ -899,9 +899,9 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
         context = { recommendation: await read('recommendations', { operation: 'detail', id: rec.id }, toolCtx(db, now)) };
         baseRefs = [...baseRefs, rec.id];
       } else if (key.startsWith('pack:')) {
-        context = packConversationContext(db, packs, key.slice(5)).context;
+        context = (await packConversationContext(db, packs, key.slice(5))).context;
       }
-      const references = resolveRefs(db, scenario, refs);
+      const references = await resolveRefs(db, scenario, refs);
       if (references.length) context = { ...(context || {}), references };
       // A note from Fathom (a refused or out-of-date proposal) goes to the model with the question
       // and leads the reply; the stored owner message stays the owner's own words.
@@ -916,8 +916,8 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
     },
 
     async whatIf({ db, packId, clock, onEvent } = {}) {
-      const scenario = buildScenario(db, { clock, packs });
-      const { def, context } = packConversationContext(db, packs, packId);
+      const scenario = await buildScenario(db, { clock, packs });
+      const { def, context } = await packConversationContext(db, packs, packId);
       const prompt = def.whatIf && def.whatIf.prompt ? def.whatIf.prompt : '';
       const key = 'pack:' + packId;
       // The prompt opens the conversation; drop an earlier copy of it (a prior notice round).
@@ -926,7 +926,7 @@ export function createLiveAnswerer({ engine, packs, root, services, onRead } = {
       const baseRefs = (def.whatIf && Array.isArray(def.whatIf.unlocks) ? def.whatIf.unlocks : []).map(u => u && u.recId);
       // A manifest prompt is literal text; an illustrative demo prompt may carry scenario tokens.
       const question = typeof def.manifest === 'string' ? prompt : plain(scenario, prompt);
-      return run({ db, scenario, now: clockNow(db, clock), question, context, history, baseRefs, onEvent, fakeArgs: { key, whatIfPack: def } });
+      return run({ db, scenario, now: await clockNow(db, clock), question, context, history, baseRefs, onEvent, fakeArgs: { key, whatIfPack: def } });
     },
   };
 }

@@ -4,6 +4,7 @@ import { updateFixture } from './helpers/model-updates.mjs';
 import { callTool, getTool } from '../src/tools/index.mjs';
 import { openDb, migrate, listTables, setSetting } from '../src/store/db.mjs';
 import { proposalBasis } from '../src/actions/proposals.mjs';
+import { mapSeries } from '../src/shared/series.mjs';
 
 const args = { operation: 'expected_transaction', subject: 'payroll provider', direction: 'inflow', amount: null,
   dueDate: '2032-03-09', datePrecision: 'day', relativeDate: 'next Tuesday', evidence: 'The payroll provider pays next Tuesday' };
@@ -12,31 +13,31 @@ test('one shared expected action records provenance and Undo without affecting a
   const x = await updateFixture();
   try {
     const ctx = { ...x.ctx, now: '2032-03-02T14:00:00Z', ownerText: args.evidence };
-    const before = proposalBasis(x.db, 'answer', ['write:imports'], args);
+    const before = await proposalBasis(x.db, 'answer', ['write:imports'], args);
     const out = await callTool('answer', args, ctx);
     assert.equal(getTool('answer').operations.find(o => o.name === args.operation).scope, 'write:imports');
     assert.equal(out.expectedTransaction.amount, null);
     assert.equal(out.expectedTransaction.dateEvidence.rule, 'next_weekday');
-    assert.notEqual(proposalBasis(x.db, 'answer', ['write:imports'], args), before);
-    for (const table of ['transactions', 'balances', 'pnl_lines', 'tax_payments']) assert.equal(x.db.prepare(`SELECT count(*) n FROM ${table}`).get().n, 0);
+    assert.notEqual(await proposalBasis(x.db, 'answer', ['write:imports'], args), before);
+    for (const table of ['transactions', 'balances', 'pnl_lines', 'tax_payments']) assert.equal((await x.db.prepare(`SELECT count(*) n FROM ${table}`).get()).n, 0);
     await callTool('undo', { operation: 'undo', id: out.receipt.id }, ctx);
-    assert.equal(x.db.prepare('SELECT count(*) n FROM expected_transactions').get().n, 0);
-  } finally { x.close(); }
+    assert.equal((await x.db.prepare('SELECT count(*) n FROM expected_transactions').get()).n, 0);
+  } finally { await x.close(); }
 });
 
 test('relative dates use household local midnight, strict next weekday and DST', async () => {
   const x = await updateFixture();
   try {
-    setSetting(x.db, 'timezone', 'America/Los_Angeles');
+    await setSetting(x.db, 'timezone', 'America/Los_Angeles');
     for (const [now, dueDate] of [['2032-03-03T00:30:00Z', '2032-03-09'], ['2032-03-09T08:30:00Z', '2032-03-16'], ['2032-03-14T10:30:00Z', '2032-03-16']]) {
       const out = await callTool('answer', { ...args, dueDate }, { ...x.ctx, now, ownerText: args.evidence });
       assert.equal(out.expectedTransaction.dueDate, dueDate);
       assert.equal(out.expectedTransaction.dateEvidence.timezone, 'America/Los_Angeles');
     }
-    setSetting(x.db, 'timezone', 'invalid');
+    await setSetting(x.db, 'timezone', 'invalid');
     const out = await callTool('answer', args, { ...x.ctx, now: '2032-03-02T14:00:00Z', ownerText: args.evidence });
     assert.equal(out.expectedTransaction.dateEvidence.timezone, 'America/New_York');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('expected action refuses fabricated figures, arbitrary dates, foreign accounts and statuses', async () => {
@@ -49,7 +50,7 @@ test('expected action refuses fabricated figures, arbitrary dates, foreign accou
     await assert.rejects(callTool('answer', args, { ...ctx, scopes: ['read'] }), /Permission/);
     await assert.rejects(callTool('answer', args, { ...ctx, ownerText: 'Unrelated words' }), /evidence|stated/);
     await callTool('answer', args, ctx);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('observed expectations refuse Undo and cannot delete an observed posting', async () => {
@@ -57,26 +58,26 @@ test('observed expectations refuse Undo and cannot delete an observed posting', 
   try {
     const ctx = { ...x.ctx, now: '2032-03-02T14:00:00Z', ownerText: args.evidence };
     const out = await callTool('answer', args, ctx);
-    x.db.prepare("UPDATE expected_transactions SET status='observed' WHERE id=?").run(out.expectedTransaction.id);
+    await x.db.prepare("UPDATE expected_transactions SET status='observed' WHERE id=?").run(out.expectedTransaction.id);
     await assert.rejects(callTool('undo', { operation: 'undo', id: out.receipt.id }, ctx), /changed/);
-    assert.equal(x.db.prepare('SELECT status FROM expected_transactions').get().status, 'observed');
-  } finally { x.close(); }
+    assert.equal((await x.db.prepare('SELECT status FROM expected_transactions').get()).status, 'observed');
+  } finally { await x.close(); }
 });
 
-test('additive expected-payment migration preserves populated financial state and is restart-safe', () => {
-  const db = openDb(':memory:');
+test('additive expected-payment migration preserves populated financial state and is restart-safe', async () => {
+  const db = await openDb(':memory:');
   try {
-    migrate(db, { through: 34 });
-    db.prepare("INSERT INTO accounts (id,name,kind) VALUES ('synthetic','Synthetic account','checking')").run();
-    db.prepare("INSERT INTO transactions (account_id,date,amount,description,dedupe_key) VALUES ('synthetic','2032-03-02',-12.34,'Synthetic posting','synthetic-posting')").run();
-    const tables = listTables(db).filter(t => t !== 'schema_migrations');
-    const snapshot = () => tables.map(t => [t, db.prepare(`SELECT rowid,* FROM ${t}`).all()]);
-    const before = snapshot();
-    assert.deepEqual(migrate(db).applied, [35]);
-    assert.deepEqual(snapshot(), before);
-    assert.deepEqual(migrate(db).applied, []);
-    assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(), []);
-  } finally { db.close(); }
+    await migrate(db, { through: 34 });
+    await db.prepare("INSERT INTO accounts (id,name,kind) VALUES ('synthetic','Synthetic account','checking')").run();
+    await db.prepare("INSERT INTO transactions (account_id,date,amount,description,dedupe_key) VALUES ('synthetic','2032-03-02',-12.34,'Synthetic posting','synthetic-posting')").run();
+    const tables = (await listTables(db)).filter(t => t !== 'schema_migrations');
+    const snapshot = async () => await mapSeries(tables, async t => [t, await db.prepare(`SELECT rowid,* FROM ${t}`).all()]);
+    const before = await snapshot();
+    assert.deepEqual((await migrate(db)).applied, [35]);
+    assert.deepEqual(await snapshot(), before);
+    assert.deepEqual((await migrate(db)).applied, []);
+    assert.deepEqual(await db.foreignKeyCheck(), []);
+  } finally { await db.close(); }
 });
 
 test('the shared answer schema preserves each operation while expected-payment evidence stays bounded', async () => {
@@ -86,6 +87,6 @@ test('the shared answer schema preserves each operation while expected-payment e
     const ctx = { ...x.ctx, now: '2032-03-02T14:00:00Z', ownerText: evidence };
     await assert.rejects(callTool('answer', { ...args, evidence }, ctx), /4000/);
     await callTool('answer', { ...args, evidence: evidence.slice(0, 4000) }, { ...ctx, ownerText: evidence.slice(0, 4000) });
-    assert.equal(x.db.prepare('SELECT count(*) n FROM expected_transactions').get().n, 1);
-  } finally { x.close(); }
+    assert.equal((await x.db.prepare('SELECT count(*) n FROM expected_transactions').get()).n, 1);
+  } finally { await x.close(); }
 });

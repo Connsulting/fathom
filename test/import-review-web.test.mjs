@@ -217,7 +217,7 @@ test('waiting rows carry the review fields, with each column bound to its layout
   try {
     const r = await upload(x, 'Account,Date,Amount USD,Description\naccount-synthetic,2032-03-02,-12.25,Synthetic purchase\naccount-synthetic,2032-03-03,2.25,Synthetic refund\nTotal,,-10.00,Control total\n');
     assert.equal(r.status, 'needs_confirmation');
-    const file = ingestState(x.db).waiting.find((f) => f.id === r.fileId);
+    const file = (await ingestState(x.db)).waiting.find((f) => f.id === r.fileId);
     const p = file.proposal;
     assert.equal(p.kind, 'import');
     assert.equal(p.status, 'needs_confirmation');
@@ -234,7 +234,7 @@ test('waiting rows carry the review fields, with each column bound to its layout
     assert.ok(summary.startsWith('2 transactions'), summary);
     assert.ok(summary.includes('-$10 in total.'), summary);
     assert.ok(summary.endsWith('Totals match the sheet.'), summary);
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });
 
 test('a stale proposal redraws with its current summary and a plain status line', async () => {
@@ -255,21 +255,21 @@ test('note actions state each change from the stored proposal and the expected p
   const { ingestState } = await import('../src/ingest/freshness.mjs');
   const x = await updateFixture();
   try {
-    stageUpdate(x.ctx, { source: x.source, actions: [x.step, x.expected], capturedAt: '2032-03-02T14:00:00Z' });
-    const file = ingestState(x.db).waiting.find((f) => f.id === x.source.fileId);
+    await stageUpdate(x.ctx, { source: x.source, actions: [x.step, x.expected], capturedAt: '2032-03-02T14:00:00Z' });
+    const file = (await ingestState(x.db)).waiting.find((f) => f.id === x.source.fileId);
     assert.equal(file.proposal.kind, 'actions');
     assert.deepEqual(file.proposal.actions, [{ text: 'Payroll true-up marked done' }, { kind: 'expected', subject: 'payroll provider', direction: 'inflow',
       dueDate: '2032-03-09', datePrecision: 'day', amount: null, phrase: 'next Tuesday', timezone: 'America/New_York' }]);
     assert.equal(proposalSummary(file), 'From your note: Payroll true-up marked done; expected incoming payment from payroll provider on Mar 9, 2032 (from "next Tuesday", America/New_York), amount unknown.');
-  } finally { x.close(); }
+  } finally { await x.close(); }
   const y = await updateFixture();
   try {
-    stageUpdate(y.ctx, { source: y.source, actions: [{ ...y.step, args: { ...y.step.args, checked: false } }, y.expected] });
-    const file = ingestState(y.db).waiting.find((f) => f.id === y.source.fileId);
+    await stageUpdate(y.ctx, { source: y.source, actions: [{ ...y.step, args: { ...y.step.args, checked: false } }, y.expected] });
+    const file = (await ingestState(y.db)).waiting.find((f) => f.id === y.source.fileId);
     assert.equal(file.proposal.status, 'needs_clarification');
     assert.equal(file.proposal.actions[0].text, 'Payroll true-up reopened');
     assert.equal(file.proposal.actions[1].phrase, null, 'an unresolved relative date is not shown as resolved');
-  } finally { y.close(); }
+  } finally { await y.close(); }
 });
 
 test('a waiting file carries its stored reason as reasonCode', async () => {
@@ -279,11 +279,11 @@ test('a waiting file carries its stored reason as reasonCode', async () => {
   try {
     const { ingestFile } = await import('../src/ingest/pipeline.mjs');
     const { setSetting } = await import('../src/store/db.mjs');
-    setSetting(x.db, 'engine', { on: false });
+    await setSetting(x.db, 'engine', { on: false });
     const r = await ingestFile(x.db, { name: 'unknown.csv', bytes: Buffer.from('One,Two\na,b\n') }, x.opts);
-    x.db.prepare("UPDATE files SET status='budget_exhausted', note='file_limit' WHERE id=?").run(r.fileId);
-    const file = ingestState(x.db).waiting.find((f) => f.id === r.fileId);
+    await x.db.prepare("UPDATE files SET status='budget_exhausted', note='file_limit' WHERE id=?").run(r.fileId);
+    const file = (await ingestState(x.db)).waiting.find((f) => f.id === r.fileId);
     assert.equal(file.reasonCode, 'file_limit');
     assert.equal(proposalControl(proposalStatus(file), { engineOn: true, reasonCode: proposalReason(file) }), 'upload');
-  } finally { x.close(); }
+  } finally { await x.close(); }
 });

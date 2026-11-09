@@ -7,7 +7,7 @@ import { browser, register, signIn } from '../test/helpers/tenancy.mjs';
 import { createAuthenticator } from '../test/helpers/webauthn.mjs';
 import { createAuthStore } from '../src/auth/store.mjs';
 
-export const headersOf = person => ({ cookie: `__Host-fathom-session=${person.client.session()}`,
+export const headersOf = async person => ({ cookie: `__Host-fathom-session=${await person.client.session()}`,
   'x-fathom-household': person.identity.householdId, 'x-fathom-context-version': String(person.identity.contextVersion) });
 
 export function ok(r) {
@@ -55,10 +55,10 @@ export async function isolationFixture({ engine = 'fake', extra = {}, engineOpti
       ok(await hh.admin.client.post('/api/admin/users/invite', { email, role }));
       return enroll(mailedToken(before, email));
     };
-    const A = { id: app.platform.prepare('SELECT id FROM households WHERE serves_store = 1').get().id, canary: 'ALPHAFINCH' };
+    const A = { id: (await app.platform.prepare('SELECT id FROM households WHERE serves_store = 1').get()).id, canary: 'ALPHAFINCH' };
     // The first invitation is the OS operator bootstrap. All sessions are verified by HTTP WebAuthn.
-    A.admin = await enroll(store.invite(A.id, 'alpha-admin@example.test', { role: 'admin' }).token);
-    store.grantOperator(A.admin.identity.id);
+    A.admin = await enroll((await store.invite(A.id, 'alpha-admin@example.test', { role: 'admin' })).token);
+    await store.grantOperator(A.admin.identity.id);
     A.admin.identity = ok(await A.admin.client.get('/api/auth/session')).identity;
     const before = mail();
     const made = ok(await A.admin.client.post('/api/operator/households', {
@@ -73,15 +73,15 @@ export async function isolationFixture({ engine = 'fake', extra = {}, engineOpti
     ok(await B.admin.client.post('/api/admin/users/invite', { email: 'dual-member@example.test', role: 'member' }));
     dual.identity = ok(await dual.client.post('/api/auth/invitations/accept', { token: mailedToken(prior, 'dual-member@example.test') })).identity;
     const operator = await invite(A, 'operator@example.test');
-    store.grantOperator(operator.identity.id);
-    store.removeMember(A.id, operator.identity.id, { actorId: A.admin.identity.id });
+    await store.grantOperator(operator.identity.id);
+    await store.removeMember(A.id, operator.identity.id, { actorId: A.admin.identity.id });
     const signed = await signIn(baseUrl, operator.device, operator.credentialId);
     operator.client = signed.client;
     operator.identity = ok(signed.verify).identity;
     for (const hh of [A, B]) {
       Object.defineProperties(hh, {
-        ctx: { get: () => app.runtimes.get(hh.id) },
-        db: { get: () => hh.ctx.db },
+        // The household's current runtime context (resolved per call: a reload replaces it).
+        ctx: { value: async () => await app.runtimes.get(hh.id) },
         platform: { value: app.platform },
       });
     }

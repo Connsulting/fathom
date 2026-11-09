@@ -25,24 +25,24 @@ import {
 
 const NOW = '2026-11-05';
 const S = scratch();
-after(() => S.cleanup());
+after(async () => await S.cleanup());
 
-const plan = (db, { engine = null, now = NOW } = {}) => planRun(db, { engine, now });
+const plan = async (db, { engine = null, now = NOW } = {}) => planRun(db, { engine, now });
 const r2 = n => Math.round((n + Number.EPSILON) * 100) / 100;
 const near = (actual, expected, what) =>
   assert.ok(typeof actual === 'number' && Math.abs(actual - expected) <= 0.011, `${what}: expected ${expected}, got ${actual}`);
-function fig(db, key) {
-  const row = figureRow(db, key);
+async function fig(db, key) {
+  const row = await figureRow(db, key);
   assert.ok(row, `figure ${key} exists`);
   return row;
 }
 // Ask goes through main's live answerer on the fake engine, as the server wires it: per household,
 // with that household's root.
-const answererFor = db => {
-  const engine = createRuntimeEngine({ db, config: { engine: 'fake' } });
+const answererFor = async db => {
+  const engine = await createRuntimeEngine({ db, config: { engine: 'fake' } });
   return createLiveAnswerer({ engine, root: householdOf(db).root, services: { ...householdOf(db).services, engine } });
 };
-const ctxOf = (db, params = {}, body = {}) => ({ db, config: { clock: NOW }, answerer: answererFor(db), params, body });
+const ctxOf = async (db, params = {}, body = {}) => ({ db, config: { clock: NOW }, answerer: await answererFor(db), params, body });
 
 // ---------------------------------------------------------------- expected values (hand check)
 
@@ -121,18 +121,18 @@ before(async () => {
   base = await S.store();
   await plan(base);
   ids = {
-    checking: accountIdByMask(base, MASKS.checking),
-    business: accountIdByMask(base, MASKS.business),
-    college: accountIdByMask(base, MASKS.college),
+    checking: await accountIdByMask(base, MASKS.checking),
+    business: await accountIdByMask(base, MASKS.business),
+    college: await accountIdByMask(base, MASKS.college),
   };
 });
 
 // ================================================================ AC2: facts and packs
 
 describe('derived facts and pack state', () => {
-  test('AC2: derives the boolean facts from the data with planner provenance', () => {
+  test('AC2: derives the boolean facts from the data with planner provenance', async () => {
     for (const key of ['income.sCorp', 'income.selfEmployed', 'accounts.has529', 'benefits.hsa', 'giving.charitable', 'retirement.ira', 'retirement.backdoorRothCandidate']) {
-      const f = factRow(base, key);
+      const f = await factRow(base, key);
       assert.ok(f, `fact ${key} derived`);
       assert.equal(f.value, true, key);
       assert.equal(f.src, 'planner', `${key} src`);
@@ -143,34 +143,34 @@ describe('derived facts and pack state', () => {
       if (Array.isArray(f.locator.rows)) assert.ok(f.locator.rows.length <= 20, `${key} keeps at most 20 evidence rows`);
     }
     for (const key of ['income.sCorp', 'accounts.has529', 'benefits.hsa', 'giving.charitable', 'retirement.ira']) {
-      const f = factRow(base, key);
+      const f = await factRow(base, key);
       assert.ok(f.locator.count >= 1, `${key} counts its evidence`);
       assert.ok(f.locator.rows.every(r => typeof r.table === 'string' && r.id != null), `${key} evidence rows name table and id`);
     }
   });
 
-  test('AC2: income.agiEstimate equals figure agi.est and the giving estimate is the trailing sum', () => {
-    const f = factRow(base, 'income.agiEstimate');
+  test('AC2: income.agiEstimate equals figure agi.est and the giving estimate is the trailing sum', async () => {
+    const f = await factRow(base, 'income.agiEstimate');
     assert.ok(f, 'income.agiEstimate derived');
     assert.equal(f.src, 'planner');
-    assert.equal(f.value, fig(base, 'agi.est').v);
-    const g = factRow(base, 'giving.annualEstimate');
+    assert.equal(f.value, (await fig(base, 'agi.est')).v);
+    const g = await factRow(base, 'giving.annualEstimate');
     assert.ok(g, 'giving.annualEstimate derived');
     near(g.value, M * SYNTH.charityMonthly, 'giving.annualEstimate');
   });
 
-  test('AC2: facts without evidence are not derived (w2, partnership, solo 401k)', () => {
-    for (const key of ['income.w2', 'income.partnership', 'retirement.solo401k']) assert.equal(factRow(base, key), null, `${key} not derived`);
+  test('AC2: facts without evidence are not derived (w2, partnership, solo 401k)', async () => {
+    for (const key of ['income.w2', 'income.partnership', 'retirement.solo401k']) assert.equal(await factRow(base, key), null, `${key} not derived`);
   });
 
   test('AC2: income.w2 is never derived from the household S corp, only from an outside employer', async () => {
     const db = await S.store();
     await addPayroll(db, w2Doc({ employerName: SCORP.name, person: 'owner', wages: 60000, medicareWages: 60000 }));
     await plan(db);
-    assert.equal(factRow(db, 'income.w2'), null, 'a W-2 from the own S corp does not make income.w2');
+    assert.equal(await factRow(db, 'income.w2'), null, 'a W-2 from the own S corp does not make income.w2');
     await addPayroll(db, w2Doc({ employerName: 'Example Employer Inc', person: 'spouse', relation: 'outside', wages: 80000, medicareWages: 80000 }));
     await plan(db);
-    const f = factRow(db, 'income.w2');
+    const f = await factRow(db, 'income.w2');
     assert.ok(f, 'an outside employer W-2 derives income.w2');
     assert.equal(f.value, true);
     assert.equal(f.src, 'planner');
@@ -178,29 +178,29 @@ describe('derived facts and pack state', () => {
 
   test('AC2: a confirmed owner fact and an unconfirmed owner fact both survive a run', async () => {
     const db = await S.store();
-    addFact(db, 'accounts.has529', false, { src: 'you', confirmed: true });
-    addFact(db, 'benefits.hsa', false, { src: 'you', confirmed: false });
+    await addFact(db, 'accounts.has529', false, { src: 'you', confirmed: true });
+    await addFact(db, 'benefits.hsa', false, { src: 'you', confirmed: false });
     await plan(db);
-    const a = factRow(db, 'accounts.has529');
+    const a = await factRow(db, 'accounts.has529');
     assert.deepEqual([a.value, a.src, a.confirmed], [false, 'you', 1]);
-    const h = factRow(db, 'benefits.hsa');
+    const h = await factRow(db, 'benefits.hsa');
     assert.deepEqual([h.value, h.src, h.confirmed], [false, 'you', 0]);
     // liveness: the planner still derives keys it owns on the same store
-    assert.equal(factRow(db, 'income.sCorp').src, 'planner');
+    assert.equal((await factRow(db, 'income.sCorp')).src, 'planner');
   });
 
   test('AC2: a planner fact whose evidence disappears is deleted', async () => {
     const db = await S.store();
     await plan(db);
-    assert.ok(factRow(db, 'giving.charitable'), 'derived first');
-    db.prepare("DELETE FROM transactions WHERE category = 'Charitable'").run();
+    assert.ok(await factRow(db, 'giving.charitable'), 'derived first');
+    await db.prepare("DELETE FROM transactions WHERE category = 'Charitable'").run();
     await plan(db);
-    assert.equal(factRow(db, 'giving.charitable'), null, 'deleted once its evidence is gone');
-    assert.ok(factRow(db, 'income.sCorp'), 'other planner facts stay');
+    assert.equal(await factRow(db, 'giving.charitable'), null, 'deleted once its evidence is gone');
+    assert.ok(await factRow(db, 'income.sCorp'), 'other planner facts stay');
   });
 
-  test('AC2: packs_state is refreshed: the six matching packs are active and every loaded pack has a row', () => {
-    const rows = base.prepare('SELECT * FROM packs_state ORDER BY sort').all();
+  test('AC2: packs_state is refreshed: the six matching packs are active and every loaded pack has a row', async () => {
+    const rows = await base.prepare('SELECT * FROM packs_state ORDER BY sort').all();
     const byId = Object.fromEntries(rows.map(r => [r.id, { ...r, def: parseJson(r.def, {}) }]));
     for (const id of ['s-corp-owner', 'self-employed-partnership', 'virginia-resident', 'advanced-retirement', 'charitable-giving', 'kids-dependents']) {
       assert.ok(byId[id], `pack ${id} has a row`);
@@ -213,97 +213,97 @@ describe('derived facts and pack state', () => {
   test('AC2: the owner pack override is kept across a run', async () => {
     const db = await S.store();
     await plan(db);
-    db.prepare("UPDATE packs_state SET active = 0, exploring = 1 WHERE id = 'charitable-giving'").run();
+    await db.prepare("UPDATE packs_state SET active = 0, exploring = 1 WHERE id = 'charitable-giving'").run();
     await plan(db);
-    const row = db.prepare("SELECT * FROM packs_state WHERE id = 'charitable-giving'").get();
+    const row = await db.prepare("SELECT * FROM packs_state WHERE id = 'charitable-giving'").get();
     assert.equal(row.active, 0);
     assert.equal(row.exploring, 1);
     assert.equal(parseJson(row.def).status, 'active', 'base status still from facts');
   });
 
-  test('AC2: pack defs link the current planner recs (R12)', () => {
-    const def = parseJson(base.prepare("SELECT def FROM packs_state WHERE id = 's-corp-owner'").get().def);
+  test('AC2: pack defs link the current planner recs (R12)', async () => {
+    const def = parseJson((await base.prepare("SELECT def FROM packs_state WHERE id = 's-corp-owner'").get()).def);
     assert.ok(def.recIds.includes('scorp-salary'), 'recIds lists scorp-salary');
     assert.deepEqual(def.recIds, [...def.recIds].sort(), 'recIds sorted');
-    for (const r of base.prepare('SELECT def FROM packs_state').all().map(x => parseJson(x.def))) {
-      for (const rid of r.recIds) assert.ok(recRow(base, rid), `pack ${r.id} links existing rec ${rid}`);
+    for (const r of (await base.prepare('SELECT def FROM packs_state').all()).map(x => parseJson(x.def))) {
+      for (const rid of r.recIds) assert.ok(await recRow(base, rid), `pack ${r.id} links existing rec ${rid}`);
     }
   });
 
   test('AC2: toggling a planner-linked pack off then on through the API handler works (R12)', async () => {
     const db = await S.store();
     await plan(db);
-    const off = packToggle(ctxOf(db, { id: 's-corp-owner' }));
+    const off = await packToggle(await ctxOf(db, { id: 's-corp-owner' }));
     assert.equal(off.status, 'available');
-    const on = packToggle(ctxOf(db, { id: 's-corp-owner' }));
+    const on = await packToggle(await ctxOf(db, { id: 's-corp-owner' }));
     assert.equal(on.status, 'active');
-    assert.notEqual(recRow(db, 'scorp-salary').status, 'hidden');
+    assert.notEqual((await recRow(db, 'scorp-salary')).status, 'hidden');
   });
 
   test('AC2: an unclassified P&L entity keeps actuals and yields a partial tax estimate (R1)', async () => {
     const db = await S.store({ variant: { entities: [SCORP, { ...SOLE_PROP, doc: false }] } });
     await plan(db);
-    assert.equal(factRow(db, 'income.selfEmployed'), null, 'no classification, no selfEmployed fact');
-    assert.equal(factRow(db, 'income.sCorp').value, true, 'the classified S corp still counts');
-    near(fig(db, `pnl.${SOLE_PROP.slug}.net`).v, BB_NET_YTD, 'actual P&L figure still written');
-    assert.equal(fig(db, `pnl.${SOLE_PROP.slug}.net`).kind, 'a');
-    assert.ok(fig(db, 'agi.est').locator.gaps.some(g => g.code.startsWith('entity_unclassified:')));
-    assert.ok(activeRecIds(db).includes('missing-data'), 'missing-data asks how it is taxed');
+    assert.equal(await factRow(db, 'income.selfEmployed'), null, 'no classification, no selfEmployed fact');
+    assert.equal((await factRow(db, 'income.sCorp')).value, true, 'the classified S corp still counts');
+    near((await fig(db, `pnl.${SOLE_PROP.slug}.net`)).v, BB_NET_YTD, 'actual P&L figure still written');
+    assert.equal((await fig(db, `pnl.${SOLE_PROP.slug}.net`)).kind, 'a');
+    assert.ok((await fig(db, 'agi.est')).locator.gaps.some(g => g.code.startsWith('entity_unclassified:')));
+    assert.ok((await activeRecIds(db)).includes('missing-data'), 'missing-data asks how it is taxed');
   });
 });
 
 // ================================================================ AC3: figures
 
 describe('figures', () => {
-  test('AC3: balance and cash figures match the mirrored accounts', () => {
-    const chk = fig(base, `bal.${ids.checking}`);
-    const biz = fig(base, `bal.${ids.business}`);
+  test('AC3: balance and cash figures match the mirrored accounts', async () => {
+    const chk = await fig(base, `bal.${ids.checking}`);
+    const biz = await fig(base, `bal.${ids.business}`);
     near(chk.v, SYNTH.checkingEnd, 'checking balance');
     near(biz.v, SYNTH.businessEnd, 'business balance');
     assert.equal(chk.kind, 'a');
     assert.equal(chk.src, `acct:${ids.checking}`);
     assert.equal(biz.src, `acct:${ids.business}`);
-    near(fig(base, 'cash.total').v, SYNTH.checkingEnd + SYNTH.businessEnd, 'cash.total');
-    near(fig(base, 'cash.business').v, SYNTH.businessEnd, 'cash.business');
-    near(fig(base, 'cash.personal').v, SYNTH.checkingEnd, 'cash.personal');
-    assert.equal(fig(base, 'cash.total').kind, 'a');
+    near((await fig(base, 'cash.total')).v, SYNTH.checkingEnd + SYNTH.businessEnd, 'cash.total');
+    near((await fig(base, 'cash.business')).v, SYNTH.businessEnd, 'cash.business');
+    near((await fig(base, 'cash.personal')).v, SYNTH.checkingEnd, 'cash.personal');
+    assert.equal((await fig(base, 'cash.total')).kind, 'a');
   });
 
-  test('MG11: monthly outflow and runway count personal card spending (AC3)', () => {
+  test('MG11: monthly outflow and runway count personal card spending (AC3)', async () => {
     // Checking 3,000 + 1,500 a month plus the card's 250 charity outflow, none of them a matched
     // transfer: 4,750 a month; runway round(25,000 / 4,750, one decimal) = 5.3.
     const monthly = SYNTH.mortgage + SYNTH.groceries + SYNTH.charityMonthly;
-    const out = fig(base, 'cash.monthlyOut');
+    const out = await fig(base, 'cash.monthlyOut');
     near(out.v, monthly, 'cash.monthlyOut');
     assert.equal(out.kind, 'e');
-    const runway = fig(base, 'cash.runwayMonths');
+    const runway = await fig(base, 'cash.runwayMonths');
     assert.equal(runway.kind, 'e');
     assert.equal(runway.v, Math.round(SYNTH.checkingEnd / monthly * 10) / 10);
     assert.equal(runway.v, 5.3);
   });
 
-  test('AC3: P&L actuals and projections per entity', () => {
+  test('AC3: P&L actuals and projections per entity', async () => {
     const n = `pnl.${SCORP.slug}`;
-    near(fig(base, `${n}.net`).v, NW_NET_YTD, 'northwind net');
-    near(fig(base, `${n}.income`).v, M * SCORP.income, 'northwind income');
-    near(fig(base, `${n}.salary`).v, NW_SALARY_YTD, 'northwind salary');
-    near(fig(base, `${n}.payrollTax`).v, NW_PAYROLL_YTD, 'northwind payroll tax');
-    for (const k of ['net', 'income', 'salary', 'payrollTax']) assert.equal(fig(base, `${n}.${k}`).kind, 'a', k);
-    near(fig(base, `${n}.netProj`).v, K, 'netProj');
-    near(fig(base, `${n}.salaryProj`).v, W, 'salaryProj');
-    assert.equal(fig(base, `${n}.netProj`).kind, 'p');
-    assert.equal(fig(base, `${n}.netProj`).src, 'plan-projection');
-    near(fig(base, 'scorp.profitProj').v, r2(K + W + proj(NW_PAYROLL_YTD)), 'scorp.profitProj');
-    assert.equal(fig(base, 'scorp.profitProj').kind, 'p');
-    const inc = fig(base, `inc.ytd.${SOLE_PROP.slug}`);
+    near((await fig(base, `${n}.net`)).v, NW_NET_YTD, 'northwind net');
+    near((await fig(base, `${n}.income`)).v, M * SCORP.income, 'northwind income');
+    near((await fig(base, `${n}.salary`)).v, NW_SALARY_YTD, 'northwind salary');
+    near((await fig(base, `${n}.payrollTax`)).v, NW_PAYROLL_YTD, 'northwind payroll tax');
+    for (const k of ['net', 'income', 'salary', 'payrollTax']) assert.equal((await fig(base, `${n}.${k}`)).kind, 'a', k);
+    near((await fig(base, `${n}.netProj`)).v, K, 'netProj');
+    near((await fig(base, `${n}.salaryProj`)).v, W, 'salaryProj');
+    assert.equal((await fig(base, `${n}.netProj`)).kind, 'p');
+    assert.equal((await fig(base, `${n}.netProj`)).src, 'plan-projection');
+    near((await fig(base, 'scorp.profitProj')).v, r2(K + W + proj(NW_PAYROLL_YTD)), 'scorp.profitProj');
+    assert.equal((await fig(base, 'scorp.profitProj')).kind, 'p');
+    const inc = await fig(base, `inc.ytd.${SOLE_PROP.slug}`);
     near(inc.v, M * SOLE_PROP.income, 'inc.ytd bluebird');
     assert.equal(inc.kind, 'a');
-    assert.equal(figureRow(base, `pnl.${SOLE_PROP.slug}.salary`), null, 'salary figures are for the S corp only');
+    assert.equal(await figureRow(base, `pnl.${SOLE_PROP.slug}.salary`), null, 'salary figures are for the S corp only');
   });
 
-  test('AC3: tax.fed.paid is 18000 and tax.va.paid is 6000, actuals from the payment log', () => {
-    const f = fig(base, 'tax.fed.paid');
-    const v = fig(base, 'tax.va.paid');
+  test('AC3: tax.fed.paid is 18000 and tax.va.paid is 6000, actuals from the payment log', async () => {
+    const f = await fig(base, 'tax.fed.paid');
+    const v = await fig(base, 'tax.va.paid');
     assert.equal(f.v, 18000);
     assert.equal(v.v, 6000);
     assert.equal(f.kind, 'a');
@@ -311,79 +311,79 @@ describe('figures', () => {
     assert.equal(f.src, 'tax-payments');
   });
 
-  test('AC3: household tax figures match the calculators (agi.est, taxable, qbi, se, fed and VA projections)', () => {
+  test('AC3: household tax figures match the calculators (agi.est, taxable, qbi, se, fed and VA projections)', async () => {
     const h = household();
-    const agi = fig(base, 'agi.est');
+    const agi = await fig(base, 'agi.est');
     near(agi.v, h.agi, 'agi.est');
     assert.equal(agi.kind, 'e');
     assert.equal(agi.src, 'calc:tax');
-    near(fig(base, 'tax.fed.qbi').v, h.qbi, 'tax.fed.qbi');
-    near(fig(base, 'tax.fed.taxable').v, h.taxable, 'tax.fed.taxable');
-    near(fig(base, 'tax.fed.se').v, h.se.total, 'tax.fed.se');
-    near(fig(base, 'tax.fed.proj').v, h.fedTotal, 'tax.fed.proj');
-    near(fig(base, 'tax.va.proj').v, h.va, 'tax.va.proj');
-    for (const k of ['tax.fed.qbi', 'tax.fed.taxable', 'tax.fed.se', 'tax.fed.proj', 'tax.va.proj']) assert.equal(fig(base, k).kind, 'm', k);
+    near((await fig(base, 'tax.fed.qbi')).v, h.qbi, 'tax.fed.qbi');
+    near((await fig(base, 'tax.fed.taxable')).v, h.taxable, 'tax.fed.taxable');
+    near((await fig(base, 'tax.fed.se')).v, h.se.total, 'tax.fed.se');
+    near((await fig(base, 'tax.fed.proj')).v, h.fedTotal, 'tax.fed.proj');
+    near((await fig(base, 'tax.va.proj')).v, h.va, 'tax.va.proj');
+    for (const k of ['tax.fed.qbi', 'tax.fed.taxable', 'tax.fed.se', 'tax.fed.proj', 'tax.va.proj']) assert.equal((await fig(base, k)).kind, 'm', k);
   });
 
-  test('AC3: safe-harbor targets and remaining amounts from the prior-year return', () => {
+  test('AC3: safe-harbor targets and remaining amounts from the prior-year return', async () => {
     const h = household();
-    near(fig(base, 'sh.fed.required').v, h.shFed.requiredAnnualPayment, 'sh.fed.required');
-    near(fig(base, 'sh.fed.remaining').v, h.shFed.remaining, 'sh.fed.remaining');
-    near(fig(base, 'sh.va.required').v, h.vaRequired, 'sh.va.required');
-    near(fig(base, 'sh.va.remaining').v, h.vaRemaining, 'sh.va.remaining');
-    for (const k of ['sh.fed.required', 'sh.fed.remaining', 'sh.va.required', 'sh.va.remaining']) assert.equal(fig(base, k).kind, 'm', `${k} is a model output with a prior year`);
+    near((await fig(base, 'sh.fed.required')).v, h.shFed.requiredAnnualPayment, 'sh.fed.required');
+    near((await fig(base, 'sh.fed.remaining')).v, h.shFed.remaining, 'sh.fed.remaining');
+    near((await fig(base, 'sh.va.required')).v, h.vaRequired, 'sh.va.required');
+    near((await fig(base, 'sh.va.remaining')).v, h.vaRemaining, 'sh.va.remaining');
+    for (const k of ['sh.fed.required', 'sh.fed.remaining', 'sh.va.required', 'sh.va.remaining']) assert.equal((await fig(base, k)).kind, 'm', `${k} is a model output with a prior year`);
   });
 
-  test('AC3: retirement room figures match the calculators; IRA room is 7500 per person', () => {
+  test('AC3: retirement room figures match the calculators; IRA room is 7500 per person', async () => {
     const solo = solo401kRoom({ compensation: W, kind: 'w2', age: 45, allPlanDeferrals: 0, thisPlanDeferrals: 0, thisPlanCatchUp: 0, employerContributions: 0, ...OPTS }).value;
-    near(fig(base, 'room.solo401k').v, solo.total, 'room.solo401k');
-    near(fig(base, 'room.solo401k.employee').v, solo.employee, 'room.solo401k.employee (regular deferral room only)');
-    near(fig(base, 'room.solo401k.employer').v, solo.employer, 'room.solo401k.employer');
+    near((await fig(base, 'room.solo401k')).v, solo.total, 'room.solo401k');
+    near((await fig(base, 'room.solo401k.employee')).v, solo.employee, 'room.solo401k.employee (regular deferral room only)');
+    near((await fig(base, 'room.solo401k.employer')).v, solo.employer, 'room.solo401k.employer');
     const sep = sepRoom({ kind: 'self-employed', netProfit: SP, filingStatus: 'mfj', employerContributions: 0, ...OPTS }).value;
-    near(fig(base, 'room.sep').v, sep, 'room.sep');
-    assert.equal(fig(base, 'room.ira.owner').v, 7500);
-    assert.equal(fig(base, 'room.ira.spouse').v, 7500);
-    assert.equal(fig(base, 'room.ira.household').v, 15000);
-    assert.equal(figureRow(base, 'room.ira'), null, 'room.ira is replaced by per-person keys');
+    near((await fig(base, 'room.sep')).v, sep, 'room.sep');
+    assert.equal((await fig(base, 'room.ira.owner')).v, 7500);
+    assert.equal((await fig(base, 'room.ira.spouse')).v, 7500);
+    assert.equal((await fig(base, 'room.ira.household')).v, 15000);
+    assert.equal(await figureRow(base, 'room.ira'), null, 'room.ira is replaced by per-person keys');
     const hsa = hsaLimit({ coverage: 'family', age: 45, eligibilityConfirmed: true, employerContributions: 0, personalContributions: HSA_PERSONAL }).value;
-    near(fig(base, 'room.hsa').v, hsa.remaining, 'room.hsa');
-    near(fig(base, 'hsa.contrib.ytd').v, HSA_PERSONAL, 'hsa.contrib.ytd');
-    assert.equal(fig(base, 'hsa.contrib.ytd').kind, 'a');
+    near((await fig(base, 'room.hsa')).v, hsa.remaining, 'room.hsa');
+    near((await fig(base, 'hsa.contrib.ytd')).v, HSA_PERSONAL, 'hsa.contrib.ytd');
+    assert.equal((await fig(base, 'hsa.contrib.ytd')).kind, 'a');
     for (const k of ['room.solo401k', 'room.sep', 'room.ira.owner', 'room.ira.household', 'room.hsa']) {
-      assert.equal(fig(base, k).kind, 'm', k);
-      assert.equal(fig(base, k).src, 'calc:retirement', `${k} src`);
+      assert.equal((await fig(base, k)).kind, 'm', k);
+      assert.equal((await fig(base, k)).src, 'calc:retirement', `${k} src`);
     }
   });
 
-  test('AC3: Virginia529 deduction left is 3000 and its tax saving is two Virginia tax runs apart', () => {
-    const left = fig(base, 'va529.deductionLeft');
+  test('AC3: Virginia529 deduction left is 3000 and its tax saving is two Virginia tax runs apart', async () => {
+    const left = await fig(base, 'va529.deductionLeft');
     assert.equal(left.v, 3000);
     assert.equal(left.kind, 'm');
-    assert.equal(figureRow(base, 'va529.room'), null, 'va529.room renamed to va529.deductionLeft');
-    near(fig(base, 'va529.contrib.ytd').v, SYNTH.collegeMarch, 'va529.contrib.ytd');
-    assert.equal(fig(base, 'va529.contrib.ytd').kind, 'a');
-    near(fig(base, 'va529.taxSaved').v, household().vaTaxSaved, 'va529.taxSaved');
-    assert.equal(fig(base, 'va529.taxSaved').kind, 'm');
+    assert.equal(await figureRow(base, 'va529.room'), null, 'va529.room renamed to va529.deductionLeft');
+    near((await fig(base, 'va529.contrib.ytd')).v, SYNTH.collegeMarch, 'va529.contrib.ytd');
+    assert.equal((await fig(base, 'va529.contrib.ytd')).kind, 'a');
+    near((await fig(base, 'va529.taxSaved')).v, household().vaTaxSaved, 'va529.taxSaved');
+    assert.equal((await fig(base, 'va529.taxSaved')).kind, 'm');
   });
 
-  test('AC3: giving figures and the pre-tax IRA balance by person', () => {
+  test('AC3: giving figures and the pre-tax IRA balance by person', async () => {
     const trailing = M * SYNTH.charityMonthly;
-    near(fig(base, 'giving.trailing').v, trailing, 'giving.trailing');
-    assert.equal(fig(base, 'giving.trailing').kind, 'a');
-    near(fig(base, 'giving.ytd').v, trailing, 'giving.ytd');
-    near(fig(base, 'giving.twoYear').v, 2 * trailing, 'giving.twoYear');
-    assert.equal(fig(base, 'giving.twoYear').kind, 'm');
-    near(fig(base, 'ira.pretax.owner').v, SYNTH.iraValue, 'ira.pretax.owner');
-    assert.equal(fig(base, 'ira.pretax.owner').kind, 'a');
-    assert.equal(figureRow(base, 'ira.pretax'), null, 'ira.pretax replaced by per-person keys');
-    const spouse = figureRow(base, 'ira.pretax.spouse');
+    near((await fig(base, 'giving.trailing')).v, trailing, 'giving.trailing');
+    assert.equal((await fig(base, 'giving.trailing')).kind, 'a');
+    near((await fig(base, 'giving.ytd')).v, trailing, 'giving.ytd');
+    near((await fig(base, 'giving.twoYear')).v, 2 * trailing, 'giving.twoYear');
+    assert.equal((await fig(base, 'giving.twoYear')).kind, 'm');
+    near((await fig(base, 'ira.pretax.owner')).v, SYNTH.iraValue, 'ira.pretax.owner');
+    assert.equal((await fig(base, 'ira.pretax.owner')).kind, 'a');
+    assert.equal(await figureRow(base, 'ira.pretax'), null, 'ira.pretax replaced by per-person keys');
+    const spouse = await figureRow(base, 'ira.pretax.spouse');
     if (spouse) assert.equal(spouse.v, 0, 'the spouse has no pre-tax IRA balance');
   });
 
-  test('AC3: every planner figure has a sources row, a kind, and a label without amounts', () => {
-    const figs = plannerFigures(base);
+  test('AC3: every planner figure has a sources row, a kind, and a label without amounts', async () => {
+    const figs = await plannerFigures(base);
     assert.ok(figs.length >= 40, `planner wrote its figures (${figs.length})`);
-    const sources = new Set(base.prepare('SELECT id FROM sources').all().map(r => r.id));
+    const sources = new Set((await base.prepare('SELECT id FROM sources').all()).map(r => r.id));
     for (const f of figs) {
       assert.ok(sources.has(f.src), `figure ${f.key} src ${f.src} is a sources row`);
       assert.ok(['a', 'p', 'e', 'm'].includes(f.kind), `${f.key} kind`);
@@ -395,8 +395,8 @@ describe('figures', () => {
     }
   });
 
-  test('AC3: locators: m figures carry calc and steps, a figures carry rows, every figure records computedOn', () => {
-    for (const f of plannerFigures(base)) {
+  test('AC3: locators: m figures carry calc and steps, a figures carry rows, every figure records computedOn', async () => {
+    for (const f of await plannerFigures(base)) {
       assert.ok(f.locator && typeof f.locator === 'object', `${f.key} locator is JSON`);
       assert.equal(f.locator.computedOn, NOW, `${f.key} computedOn`);
       if (f.kind === 'm') {
@@ -412,16 +412,16 @@ describe('figures', () => {
     }
   });
 
-  test('AC3: planner sources carry plain labels and as-of dates', () => {
-    const src = id => base.prepare('SELECT * FROM sources WHERE id = ?').get(id);
-    const chk = src(`acct:${ids.checking}`);
+  test('AC3: planner sources carry plain labels and as-of dates', async () => {
+    const src = async id => await base.prepare('SELECT * FROM sources WHERE id = ?').get(id);
+    const chk = await src(`acct:${ids.checking}`);
     assert.equal(chk.label, HINTS[`${INST.bank}|${MASKS.checking}`].name);
     assert.equal(chk.as_of, 'Oct 31, 2026');
-    assert.equal(src('pnl').label, 'Business profit and loss');
-    assert.equal(src('pnl').as_of, 'through Oct 2026');
-    assert.equal(src('tax-payments').label, 'Estimated tax payment log');
-    assert.equal(src('calc:tax').label, 'Tax calculators, 2026 parameters');
-    assert.equal(src('wargame-model').label, 'War-game model: salary, tax and cash calculators');
+    assert.equal((await src('pnl')).label, 'Business profit and loss');
+    assert.equal((await src('pnl')).as_of, 'through Oct 2026');
+    assert.equal((await src('tax-payments')).label, 'Estimated tax payment log');
+    assert.equal((await src('calc:tax')).label, 'Tax calculators, 2026 parameters');
+    assert.equal((await src('wargame-model')).label, 'War-game model: salary, tax and cash calculators');
   });
 
   // Plan R6-1 item 2.7: ingest's paystub carries this period's deferral only (R6-0), never a
@@ -435,11 +435,11 @@ describe('figures', () => {
       },
     });
     await plan(db);
-    for (const k of ['room.solo401k', 'room.solo401k.employee', 'room.solo401k.employer']) assert.equal(figureRow(db, k), null, `${k} is not published`);
-    assert.ok(activeRecIds(db).includes('missing-data'), 'missing-data lists the reason');
+    for (const k of ['room.solo401k', 'room.solo401k.employee', 'room.solo401k.employer']) assert.equal(await figureRow(db, k), null, `${k} is not published`);
+    assert.ok((await activeRecIds(db)).includes('missing-data'), 'missing-data lists the reason');
     const reason = reasonText({ info: { payrollBlocks: [{ code: 'paystub_deferrals_unknown', employer: SCORP.name }] }, entities: [] }, 'paystub_deferrals_unknown');
     assert.notEqual(reason, reasonText({ info: {}, entities: [] }, 'not_a_reason_code'), 'paystub_deferrals_unknown has its own reason text');
-    assert.ok(JSON.stringify(recRow(db, 'missing-data').def).includes(reason), `missing-data shows: ${reason}`);
+    assert.ok(JSON.stringify((await recRow(db, 'missing-data')).def).includes(reason), `missing-data shows: ${reason}`);
   });
 
   // Liveness: a year-end W-2 from the S corp whose box 12 D carries the year's deferrals supplies
@@ -457,10 +457,10 @@ describe('figures', () => {
     });
     await plan(db);
     const solo = solo401kRoom({ compensation: W, kind: 'w2', age: 45, allPlanDeferrals: deferrals, thisPlanDeferrals: deferrals, thisPlanCatchUp: 0, employerContributions: 5000, ...OPTS }).value;
-    near(fig(db, 'room.solo401k.employee').v, solo.employee, 'employee room after deferrals');
-    near(fig(db, 'room.solo401k.employer').v, solo.employer, 'employer room after contributions');
-    assert.ok(fig(db, 'room.solo401k.employee').v < 24500, 'partially funded');
-    assert.ok(activeRecIds(db).includes('year-end-retirement'), 'room left, so the rec stays');
+    near((await fig(db, 'room.solo401k.employee')).v, solo.employee, 'employee room after deferrals');
+    near((await fig(db, 'room.solo401k.employer')).v, solo.employer, 'employer room after contributions');
+    assert.ok((await fig(db, 'room.solo401k.employee')).v < 24500, 'partially funded');
+    assert.ok((await activeRecIds(db)).includes('year-end-retirement'), 'room left, so the rec stays');
   });
 
   test('AC3: spouse SE tax uses only the spouse wages when the owner earns above the wage base (R2)', async () => {
@@ -470,7 +470,7 @@ describe('figures', () => {
     const spouse = selfEmploymentTax({ netProfit: SP, filingStatus: 'mfj', w2SocialSecurityWages: 0, w2MedicareWages: 0, spouseMedicareWages: ownerMedicare }).value;
     const wrong = selfEmploymentTax({ netProfit: SP, filingStatus: 'mfj', w2SocialSecurityWages: ownerMedicare, w2MedicareWages: ownerMedicare }).value;
     assert.notEqual(spouse.total, wrong.total, 'the variant discriminates');
-    near(fig(db, 'tax.fed.se').v, spouse.total, 'tax.fed.se is the spouse SE tax on the spouse wages only');
+    near((await fig(db, 'tax.fed.se')).v, spouse.total, 'tax.fed.se is the spouse SE tax on the spouse wages only');
   });
 
   test('AC3: Additional Medicare across two sole props is charged on combined SE earnings above the threshold (S2)', async () => {
@@ -489,16 +489,16 @@ describe('figures', () => {
     const b = selfEmploymentTax({ netProfit: net, filingStatus: 'mfj', w2SocialSecurityWages: 0, w2MedicareWages: 0, spouseMedicareWages: a.taxableEarnings }).value;
     const combinedAdditional = r2(0.009 * Math.max(0, a.taxableEarnings + b.taxableEarnings - 250000));
     near(r2(a.additionalMedicare + b.additionalMedicare), combinedAdditional, 'calculator oracle');
-    near(fig(db, 'tax.fed.se').v, r2(a.total + b.total), 'tax.fed.se sums both people with filing-unit Additional Medicare');
+    near((await fig(db, 'tax.fed.se')).v, r2(a.total + b.total), 'tax.fed.se sums both people with filing-unit Additional Medicare');
   });
 
   test('AC3: after the last supported filing date there is no tax year: no tax figures, warning unsupported_tax_year', async () => {
     const db = await S.store();
     const result = await plan(db, { now: '2027-05-01' });
     assert.ok(result.warnings.includes('unsupported_tax_year'));
-    for (const key of ['agi.est', 'tax.fed.proj', 'tax.va.proj', 'sh.fed.required', 'room.solo401k']) assert.equal(figureRow(db, key), null, `${key} skipped`);
+    for (const key of ['agi.est', 'tax.fed.proj', 'tax.va.proj', 'sh.fed.required', 'room.solo401k']) assert.equal(await figureRow(db, key), null, `${key} skipped`);
     // liveness: data figures are still written
-    assert.ok(figureRow(db, `bal.${accountIdByMask(db, MASKS.checking)}`));
+    assert.ok(await figureRow(db, `bal.${await accountIdByMask(db, MASKS.checking)}`));
   });
 });
 
@@ -550,31 +550,31 @@ function assertRecShape(rec, scenario, packIds) {
 }
 
 // Status-changing event = from_status != to_status; most recent = highest id (T6).
-function lastStatusEvent(db, id) {
-  return recEvents(db, id).filter(e => e.from_status !== e.to_status).at(-1);
+async function lastStatusEvent(db, id) {
+  return (await recEvents(db, id)).filter(e => e.from_status !== e.to_status).at(-1);
 }
 
 describe('recs', () => {
-  test('AC4: the synthetic household includes missing-data for its account with old data', () => {
-    assert.deepEqual(activeRecIds(base), EXPECTED_ACTIVE);
-    assert.equal(recRow(base, 'dependent-care-fsa'), null);
-    assert.ok(recRow(base, 'missing-data').def.tasks.some(t => t.code?.startsWith('balances:')));
+  test('AC4: the synthetic household includes missing-data for its account with old data', async () => {
+    assert.deepEqual(await activeRecIds(base), EXPECTED_ACTIVE);
+    assert.equal(await recRow(base, 'dependent-care-fsa'), null);
+    assert.ok((await recRow(base, 'missing-data')).def.tasks.some(t => t.code?.startsWith('balances:')));
     for (const id of EXPECTED_ACTIVE) {
-      const r = recRow(base, id);
+      const r = await recRow(base, id);
       assert.equal(r.status, 'proposed', `${id} starts proposed`);
       assert.equal(r.parser, 'planner');
       assert.equal(r.file_id, null);
       assert.deepEqual(parseJson(r.locator), { trigger: id });
       assert.deepEqual(r.tasks_done, r.def.tasks.map(() => false), `${id} tasks start not done`);
-      assert.equal(plannerRec(base, id).trigger_id, id);
-      assert.ok(['model', 'template'].includes(plannerRec(base, id).prose_src));
+      assert.equal((await plannerRec(base, id)).trigger_id, id);
+      assert.ok(['model', 'template'].includes((await plannerRec(base, id)).prose_src));
     }
   });
 
-  test('AC4: windows are relative to the fixed clock (close date, days, label)', () => {
-    const scenario = buildScenario(base, { clock: NOW });
+  test('AC4: windows are relative to the fixed clock (close date, days, label)', async () => {
+    const scenario = await buildScenario(base, { clock: NOW });
     for (const [id, [close, days, label]] of Object.entries(WINDOWS)) {
-      const row = recRow(base, id);
+      const row = await recRow(base, id);
       assert.equal(row.window_close, close, `${id} window_close`);
       assert.equal(row.window_label, label, `${id} window_label`);
       const rec = scenario.recs.find(r => r.id === id);
@@ -582,8 +582,8 @@ describe('recs', () => {
     }
   });
 
-  test('AC4: each rec has the CONTRACT shape with existing figures and loaded packs', () => {
-    const scenario = buildScenario(base, { clock: NOW });
+  test('AC4: each rec has the CONTRACT shape with existing figures and loaded packs', async () => {
+    const scenario = await buildScenario(base, { clock: NOW });
     const packIds = new Set(scenario.packs.map(p => p.id));
     for (const id of EXPECTED_ACTIVE) assertRecShape(scenario.recs.find(r => r.id === id), scenario, packIds);
     for (const id of ['fed-q4-estimate', 'va-q4-estimate', 'year-end-retirement', 'hsa-room', 'va529', 'charitable-bunching']) {
@@ -592,8 +592,8 @@ describe('recs', () => {
     }
   });
 
-  test('AC4: domain, trigger class, trigger text and war-game scenario follow the catalog', () => {
-    const scenario = buildScenario(base, { clock: NOW });
+  test('AC4: domain, trigger class, trigger text and war-game scenario follow the catalog', async () => {
+    const scenario = await buildScenario(base, { clock: NOW });
     for (const [id, [domain, trigger]] of Object.entries(DOMAIN_TRIGGER)) {
       const rec = scenario.recs.find(r => r.id === id);
       assert.equal(rec.domain, domain, `${id} domain`);
@@ -607,8 +607,8 @@ describe('recs', () => {
     assert.equal(scenario.recs.find(r => r.id === 'fed-q4-estimate').scenario, undefined);
   });
 
-  test('AC4: recs are sorted by window close with open-ended ones last', () => {
-    const rows = base.prepare('SELECT id, window_close FROM recs ORDER BY sort').all();
+  test('AC4: recs are sorted by window close with open-ended ones last', async () => {
+    const rows = await base.prepare('SELECT id, window_close FROM recs ORDER BY sort').all();
     const closes = rows.map(r => r.window_close);
     const firstNull = closes.indexOf(null);
     if (firstNull >= 0) assert.ok(closes.slice(firstNull).every(c => c === null), 'nulls last');
@@ -616,64 +616,64 @@ describe('recs', () => {
     assert.deepEqual(dated, [...dated].sort(), 'non-decreasing close dates');
   });
 
-  test('AC4: a new rec gets no rec-keyed conversation or opening summary message', () => {
+  test('AC4: a new rec gets no rec-keyed conversation or opening summary message', async () => {
     for (const id of EXPECTED_ACTIVE) {
-      assert.equal(base.prepare('SELECT count(*) AS n FROM conversations WHERE key = ?').get(id).n, 0, `${id} has no conversation`);
-      assert.equal(base.prepare('SELECT count(*) AS n FROM messages WHERE conversation_key = ?').get(id).n, 0, `${id} has no message`);
+      assert.equal((await base.prepare('SELECT count(*) AS n FROM conversations WHERE key = ?').get(id)).n, 0, `${id} has no conversation`);
+      assert.equal((await base.prepare('SELECT count(*) AS n FROM messages WHERE conversation_key = ?').get(id)).n, 0, `${id} has no message`);
     }
   });
 
   test('AC4: owner status, task flags and conversation survive a rerun', async () => {
     const db = await S.store();
     await plan(db);
-    recAction(ctxOf(db, { id: 'va529' }, { action: 'start' }));
-    recAction(ctxOf(db, { id: 'va529' }, { action: 'task', arg: 0 }));
-    const { thread } = await threadCreate(ctxOf(db, {}, { recId: 'va529', text: 'Synthetic follow-up question for the planner test.' }));
+    await recAction(await ctxOf(db, { id: 'va529' }, { action: 'start' }));
+    await recAction(await ctxOf(db, { id: 'va529' }, { action: 'task', arg: 0 }));
+    const { thread } = await threadCreate(await ctxOf(db, {}, { recId: 'va529', text: 'Synthetic follow-up question for the planner test.' }));
     assert.equal(thread.recId, 'va529');
-    const before = db.prepare('SELECT id, role, text FROM messages WHERE conversation_key = ? ORDER BY id').all(thread.key).map(r => ({ ...r }));
+    const before = (await db.prepare('SELECT id, role, text FROM messages WHERE conversation_key = ? ORDER BY id').all(thread.key)).map(r => ({ ...r }));
     assert.ok(before.length >= 2);
-    const convBefore = { ...db.prepare('SELECT * FROM conversations WHERE key = ?').get(thread.key) };
+    const convBefore = { ...await db.prepare('SELECT * FROM conversations WHERE key = ?').get(thread.key) };
     await plan(db);
-    const row = recRow(db, 'va529');
+    const row = await recRow(db, 'va529');
     assert.equal(row.status, 'doing');
     assert.equal(row.tasks_done[0], true, 'task flag kept');
-    const after = db.prepare('SELECT id, role, text FROM messages WHERE conversation_key = ? ORDER BY id').all(thread.key).map(r => ({ ...r }));
+    const after = (await db.prepare('SELECT id, role, text FROM messages WHERE conversation_key = ? ORDER BY id').all(thread.key)).map(r => ({ ...r }));
     assert.deepEqual(after, before, 'the rec thread is untouched');
-    assert.deepEqual({ ...db.prepare('SELECT * FROM conversations WHERE key = ?').get(thread.key) }, convBefore, 'its row too');
-    assert.equal(db.prepare("SELECT count(*) AS n FROM conversations WHERE key = 'va529'").get().n, 0, 'no rec-keyed conversation');
+    assert.deepEqual({ ...await db.prepare('SELECT * FROM conversations WHERE key = ?').get(thread.key) }, convBefore, 'its row too');
+    assert.equal((await db.prepare("SELECT count(*) AS n FROM conversations WHERE key = 'va529'").get()).n, 0, 'no rec-keyed conversation');
   });
 
   test('AC4: a rec whose condition no longer holds is retired to dismissed with a planner event and kept', async () => {
     const db = await S.store();
     await plan(db);
-    addFact(db, 'accounts.has529', false, { src: 'you', confirmed: true });
+    await addFact(db, 'accounts.has529', false, { src: 'you', confirmed: true });
     const result = await plan(db);
-    const row = recRow(db, 'va529');
+    const row = await recRow(db, 'va529');
     assert.ok(row, 'rec row still exists');
     assert.equal(row.status, 'dismissed');
-    const pr = plannerRec(db, 'va529');
+    const pr = await plannerRec(db, 'va529');
     assert.ok(pr.retired_at, 'retired_at set');
     assert.equal(pr.retired_reason, 'The condition behind it no longer holds in your data.');
-    const ev = recEvents(db, 'va529').at(-1);
+    const ev = (await recEvents(db, 'va529')).at(-1);
     assert.deepEqual([ev.action, ev.actor, ev.from_status, ev.to_status], ['retire', 'planner', 'proposed', 'dismissed']);
     assert.equal(ev.arg, pr.retired_reason);
     assert.equal(result.counts.byTrigger.va529, 'retired');
-    assert.ok(!activeRecIds(db).includes('va529'));
+    assert.ok(!(await activeRecIds(db)).includes('va529'));
   });
 
   test('AC4: restoring the condition revives a planner-retired rec to proposed', async () => {
     const db = await S.store();
     await plan(db);
-    addFact(db, 'accounts.has529', false, { src: 'you', confirmed: true });
+    await addFact(db, 'accounts.has529', false, { src: 'you', confirmed: true });
     await plan(db);
-    removeFact(db, 'accounts.has529');
+    await removeFact(db, 'accounts.has529');
     await plan(db);
-    const row = recRow(db, 'va529');
+    const row = await recRow(db, 'va529');
     assert.equal(row.status, 'proposed');
-    const pr = plannerRec(db, 'va529');
+    const pr = await plannerRec(db, 'va529');
     assert.equal(pr.retired_at, null);
     assert.equal(pr.retired_reason, null);
-    const ev = recEvents(db, 'va529').at(-1);
+    const ev = (await recEvents(db, 'va529')).at(-1);
     assert.deepEqual([ev.action, ev.actor, ev.from_status, ev.to_status], ['revive', 'planner', 'dismissed', 'proposed']);
   });
 
@@ -681,16 +681,16 @@ describe('recs', () => {
     test(`AC4: an owner-${status} rec stays ${status} when its trigger disappears and reappears (R13, S10)`, async () => {
       const db = await S.store();
       await plan(db);
-      recAction(ctxOf(db, { id: 'va529' }, { action }));
-      addFact(db, 'accounts.has529', false, { src: 'you', confirmed: true });
+      await recAction(await ctxOf(db, { id: 'va529' }, { action }));
+      await addFact(db, 'accounts.has529', false, { src: 'you', confirmed: true });
       await plan(db);
-      assert.equal(recRow(db, 'va529').status, status, 'retirement leaves the owner status');
-      assert.ok(plannerRec(db, 'va529').retired_at);
-      removeFact(db, 'accounts.has529');
+      assert.equal((await recRow(db, 'va529')).status, status, 'retirement leaves the owner status');
+      assert.ok((await plannerRec(db, 'va529')).retired_at);
+      await removeFact(db, 'accounts.has529');
       await plan(db);
-      assert.equal(recRow(db, 'va529').status, status, 'revival leaves the owner status');
-      assert.equal(plannerRec(db, 'va529').retired_at, null, 'retired_at cleared');
-      assert.equal(lastStatusEvent(db, 'va529').actor, 'ui', 'the owner had the last word');
+      assert.equal((await recRow(db, 'va529')).status, status, 'revival leaves the owner status');
+      assert.equal((await plannerRec(db, 'va529')).retired_at, null, 'retired_at cleared');
+      assert.equal((await lastStatusEvent(db, 'va529')).actor, 'ui', 'the owner had the last word');
     });
   }
 
@@ -698,23 +698,23 @@ describe('recs', () => {
     const db = await S.store();
     await plan(db);
     await plan(db, { now: '2027-01-10' });
-    const active = activeRecIds(db);
+    const active = await activeRecIds(db);
     for (const id of ['fed-q4-estimate', 'va-q4-estimate', 'hsa-room', 'backdoor-roth']) assert.ok(active.includes(id), `${id} still active`);
-    assert.equal(recRow(db, 'fed-q4-estimate').window_close, '2027-01-15');
-    assert.equal(recRow(db, 'fed-q4-estimate').status, 'proposed');
+    assert.equal((await recRow(db, 'fed-q4-estimate')).window_close, '2027-01-15');
+    assert.equal((await recRow(db, 'fed-q4-estimate')).status, 'proposed');
     for (const id of ['va529', 'charitable-bunching']) {
-      const pr = plannerRec(db, id);
+      const pr = await plannerRec(db, id);
       assert.ok(pr.retired_at, `${id} retired`);
       assert.equal(pr.retired_reason, 'Its window closed on Dec 31.');
-      assert.equal(recRow(db, id).status, 'dismissed');
-      const ev = recEvents(db, id).at(-1);
+      assert.equal((await recRow(db, id)).status, 'dismissed');
+      const ev = (await recEvents(db, id)).at(-1);
       assert.deepEqual([ev.action, ev.actor], ['retire', 'planner']);
     }
     for (const id of ['year-end-retirement', 'solo401k-setup', 'scorp-salary', 'invoice-deferral']) {
-      assert.ok(plannerRec(db, id).retired_at, `${id} retired after its window`);
-      assert.match(plannerRec(db, id).retired_reason, /^Its window closed on /);
+      assert.ok((await plannerRec(db, id)).retired_at, `${id} retired after its window`);
+      assert.match((await plannerRec(db, id)).retired_reason, /^Its window closed on /);
     }
-    const bd = recRow(db, 'backdoor-roth');
+    const bd = await recRow(db, 'backdoor-roth');
     assert.equal(bd.window_close, '2027-04-15');
     assert.equal(bd.window_label, 'IRA contribution deadline');
     assert.equal(bd.status, 'proposed');
@@ -722,73 +722,73 @@ describe('recs', () => {
 
   test('AC4: missing-data fires when the data goes stale (clock 2027-01-10, no new data)', async () => {
     const db = await S.store();
-    db.prepare("INSERT INTO balances (account_id, date, amount) SELECT id, ?, 100 FROM accounts WHERE archived_at IS NULL ON CONFLICT(account_id, date) DO NOTHING").run(NOW);
+    await db.prepare("INSERT INTO balances (account_id, date, amount) SELECT id, ?, 100 FROM accounts WHERE archived_at IS NULL ON CONFLICT(account_id, date) DO NOTHING").run(NOW);
     await plan(db);
-    assert.ok(!activeRecIds(db).includes('missing-data'), 'every account has current data');
+    assert.ok(!(await activeRecIds(db)).includes('missing-data'), 'every account has current data');
     await plan(db, { now: '2027-01-10' });
-    assert.ok(activeRecIds(db).includes('missing-data'));
-    assert.equal(recRow(db, 'missing-data').def.domain, 'data');
+    assert.ok((await activeRecIds(db)).includes('missing-data'));
+    assert.equal((await recRow(db, 'missing-data')).def.domain, 'data');
   });
 
   test('AC4: an empty real store produces a rough estimate excluding unrecorded income', async () => {
     const db = S.track(await createRealStore(S.dir(), { clock: NOW }));
     const result = await plan(db);
     assert.equal(result.status, 'ok');
-    assert.ok(activeRecIds(db).includes('missing-data'));
-    assert.equal(fig(db, 'tax.fed.proj').v, 0);
-    assert.equal(fig(db, 'tax.fed.proj').locator.rough, true);
-    const scenario = buildScenario(db, { clock: NOW });
+    assert.ok((await activeRecIds(db)).includes('missing-data'));
+    assert.equal((await fig(db, 'tax.fed.proj')).v, 0);
+    assert.equal((await fig(db, 'tax.fed.proj')).locator.rough, true);
+    const scenario = await buildScenario(db, { clock: NOW });
     assert.ok(scenario.recs.some(r => r.id === 'missing-data'));
   });
 
   test('AC4: a missing confirmation turns the HSA rec into confirm form with no room figure (R6)', async () => {
     const db = await S.store({ variant: { facts: { 'benefits.hsaEligible': undefined } } });
     await plan(db);
-    assert.ok(activeRecIds(db).includes('hsa-room'), 'still fires');
-    assert.equal(figureRow(db, 'room.hsa'), null, 'no room figure without confirmed eligibility');
-    const def = recRow(db, 'hsa-room').def;
+    assert.ok((await activeRecIds(db)).includes('hsa-room'), 'still fires');
+    assert.equal(await figureRow(db, 'room.hsa'), null, 'no room figure without confirmed eligibility');
+    const def = (await recRow(db, 'hsa-room')).def;
     assert.match(def.title, /HSA eligible/);
     assert.ok(def.question.fields.some(f => f.key === 'benefits.hsaEligible'));
-    for (const m of def.mine) assert.equal(fig(db, m.fig).kind, 'a', `confirm-form mine ${m.fig} is an actual`);
+    for (const m of def.mine) assert.equal((await fig(db, m.fig)).kind, 'a', `confirm-form mine ${m.fig} is an actual`);
     // liveness: with the confirmation the base store sizes the room
-    assert.doesNotMatch(recRow(base, 'hsa-room').def.title, /^Confirm\b/);
+    assert.doesNotMatch((await recRow(base, 'hsa-room')).def.title, /^Confirm\b/);
   });
 
   test('AC4: without the Virginia529 account answers the va529 rec is in confirm form (S8)', async () => {
     const db = await S.store({ variant: { facts: { 'accounts.va529': undefined } } });
-    db.prepare("UPDATE accounts SET inst = '' WHERE kind = '529'").run(); // no institution: the plan is asked
+    await db.prepare("UPDATE accounts SET inst = '' WHERE kind = '529'").run(); // no institution: the plan is asked
     await plan(db);
-    assert.ok(activeRecIds(db).includes('va529'));
-    assert.ok(recRow(db, 'va529').def.question.fields.some(f => f.key === 'accounts.va529'));
-    assert.equal(figureRow(db, 'va529.deductionLeft'), null);
+    assert.ok((await activeRecIds(db)).includes('va529'));
+    assert.ok((await recRow(db, 'va529')).def.question.fields.some(f => f.key === 'accounts.va529'));
+    assert.equal(await figureRow(db, 'va529.deductionLeft'), null);
   });
 
   test('AC4: a 529 account whose owner is 70 or older is excluded, leaving no va529 rec (T5)', async () => {
     const db = await S.store();
-    const college = accountIdByMask(db, MASKS.college);
-    db.prepare("UPDATE accounts SET owner = 'owner' WHERE id = ?").run(college);
-    addFact(db, 'household.birthYears', { owner: 1950, spouse: 1983 }); // the account owner is seventy or older
-    addFact(db, 'accounts.va529', { [college]: { virginiaPlan: true, carryforward: 0 } });
+    const college = await accountIdByMask(db, MASKS.college);
+    await db.prepare("UPDATE accounts SET owner = 'owner' WHERE id = ?").run(college);
+    await addFact(db, 'household.birthYears', { owner: 1950, spouse: 1983 }); // the account owner is seventy or older
+    await addFact(db, 'accounts.va529', { [college]: { virginiaPlan: true, carryforward: 0 } });
     await plan(db);
-    assert.ok(!activeRecIds(db).includes('va529'));
-    const left = figureRow(db, 'va529.deductionLeft');
+    assert.ok(!(await activeRecIds(db)).includes('va529'));
+    const left = await figureRow(db, 'va529.deductionLeft');
     if (left) assert.equal(left.v, 0);
   });
 
   test('AC4: a Virginia deduction gap stays actionable and clears when the answer arrives', async () => {
     const db = await S.store();
     await plan(db);
-    addFact(db, 'tax.itemizedEstimate', 40000);
-    db.prepare("UPDATE transactions SET category = 'Uncategorized' WHERE lower(category) LIKE '%charit%' OR lower(category) LIKE '%donat%'").run();
+    await addFact(db, 'tax.itemizedEstimate', 40000);
+    await db.prepare("UPDATE transactions SET category = 'Uncategorized' WHERE lower(category) LIKE '%charit%' OR lower(category) LIKE '%donat%'").run();
     await plan(db, { now: '2026-11-20' });
-    const rec = recRow(db, 'va-q4-estimate');
+    const rec = await recRow(db, 'va-q4-estimate');
     assert.equal(rec.status, 'proposed');
     assert.ok(rec.def.gaps.some(g => g.code === 'va_itemized_missing'));
-    assert.equal(fig(db, 'tax.va.proj').locator.computedOn, '2026-11-20');
-    addFact(db, 'tax.vaItemizedEstimate', 20000);
+    assert.equal((await fig(db, 'tax.va.proj')).locator.computedOn, '2026-11-20');
+    await addFact(db, 'tax.vaItemizedEstimate', 20000);
     await plan(db, { now: '2026-11-20' });
-    assert.equal(recRow(db, 'va-q4-estimate').status, 'proposed');
-    assert.ok(!recRow(db, 'va-q4-estimate').def.gaps?.some(g => g.code === 'va_itemized_missing'));
+    assert.equal((await recRow(db, 'va-q4-estimate')).status, 'proposed');
+    assert.ok(!(await recRow(db, 'va-q4-estimate')).def.gaps?.some(g => g.code === 'va_itemized_missing'));
   });
 
   test('AC4: fully funded retirement leaves no room, so year-end-retirement does not fire (R5)', async () => {
@@ -801,109 +801,109 @@ describe('recs', () => {
       },
     });
     await plan(db);
-    assert.equal(fig(db, 'room.solo401k.employee').v, 0);
-    const sep = figureRow(db, 'room.sep');
+    assert.equal((await fig(db, 'room.solo401k.employee')).v, 0);
+    const sep = await figureRow(db, 'room.sep');
     if (sep) assert.equal(sep.v, 0);
-    assert.ok(!activeRecIds(db).includes('year-end-retirement'));
-    assert.equal(recRow(db, 'year-end-retirement'), null);
+    assert.ok(!(await activeRecIds(db)).includes('year-end-retirement'));
+    assert.equal(await recRow(db, 'year-end-retirement'), null);
   });
 
   test('AC4: a rec id held by a non-planner rec is skipped with warning rec_id_taken', async () => {
     const db = await S.store();
     const def = { id: 'va529', title: 'Owner note', summary: 'Kept by the owner.', tasks: [] };
-    db.prepare(`INSERT INTO recs (id, def, status, tasks_done, sort, updated_at) VALUES ('va529', ?, 'doing', '[]', 0, ?)`)
+    await db.prepare(`INSERT INTO recs (id, def, status, tasks_done, sort, updated_at) VALUES ('va529', ?, 'doing', '[]', 0, ?)`)
       .run(JSON.stringify(def), new Date().toISOString());
     const result = await plan(db);
     assert.ok(result.warnings.includes('rec_id_taken'));
-    assert.equal(plannerRec(db, 'va529'), null);
-    const row = recRow(db, 'va529');
+    assert.equal(await plannerRec(db, 'va529'), null);
+    const row = await recRow(db, 'va529');
     assert.deepEqual([row.status, row.def.title], ['doing', 'Owner note']);
-    assert.ok(activeRecIds(db).includes('va-q4-estimate'), 'the other recs still land');
+    assert.ok((await activeRecIds(db)).includes('va-q4-estimate'), 'the other recs still land');
   });
 
   test('AC4: backdoor Roth asks whose IRA it is when an IRA owner is unknown (S9)', async () => {
     const db = await S.store({ variant: { hints: { [`|${MASKS.ira}`]: { name: 'Rollover IRA', kind: 'retirement', owner: null } } } });
     await plan(db);
-    assert.ok(activeRecIds(db).includes('backdoor-roth'));
-    assert.ok(recRow(db, 'backdoor-roth').def.tasks.some(t => /whose IRA/i.test(t.t)), 'a task asks whose IRA it is');
+    assert.ok((await activeRecIds(db)).includes('backdoor-roth'));
+    assert.ok((await recRow(db, 'backdoor-roth')).def.tasks.some(t => /whose IRA/i.test(t.t)), 'a task asks whose IRA it is');
     // liveness: with the owner known the base store does not ask
-    assert.ok(!recRow(base, 'backdoor-roth').def.tasks.some(t => /whose IRA/i.test(t.t)));
+    assert.ok(!(await recRow(base, 'backdoor-roth')).def.tasks.some(t => /whose IRA/i.test(t.t)));
   });
 });
 
 
 test('PN1: a confirmed spending ledger clears the tax block without business figures', async () => {
   const db = await S.store();
-  db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES ('Asters', '2026-10', 'Groceries', -120, ?)")
+  await db.prepare("INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES ('Asters', '2026-10', 'Groceries', -120, ?)")
     .run(JSON.stringify({ sheet: "Aster's Expenses", cells: ['D2'] }));
   await plan(db);
-  assert.ok(figureRow(db, 'agi.est'), 'a personal ledger is inferred before asking');
+  assert.ok(await figureRow(db, 'agi.est'), 'a personal ledger is inferred before asking');
 
-  addFact(db, 'pnl.ledgers', { "Aster's": { kind: 'spending' } });
+  await addFact(db, 'pnl.ledgers', { "Aster's": { kind: 'spending' } });
   await plan(db);
-  assert.ok(figureRow(db, 'agi.est'), 'tax projection resumes');
-  assert.equal(figureRow(db, 'pnl.asters.net'), null, 'no business tax figures for spending');
-  assert.ok(!JSON.stringify(recRow(db, 'missing-data')?.def).includes('how Aster'));
+  assert.ok(await figureRow(db, 'agi.est'), 'tax projection resumes');
+  assert.equal(await figureRow(db, 'pnl.asters.net'), null, 'no business tax figures for spending');
+  assert.ok(!JSON.stringify((await recRow(db, 'missing-data'))?.def).includes('how Aster'));
 });
 
 test('INF1: personal-category inference includes refunds and saves classifications without a confirmation form', async () => {
   const db = await S.store();
   for (const [entity, sheet] of [['Asters', "Aster's Expenses"], ['Birchs', "Birch's Expenses"]]) {
     for (const category of ['Medical', 'Shopping', 'Groceries', 'HSA', 'Dining', 'Software']) {
-      db.prepare('INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES (?, ?, ?, ?, ?)')
+      await db.prepare('INSERT INTO pnl_lines (entity, period, category, amount, locator) VALUES (?, ?, ?, ?, ?)')
         .run(entity, '2026-10', category, category === 'Medical' ? 25 : -100, JSON.stringify({ sheet, cells: ['D2'] }));
     }
   }
   await plan(db);
-  assert.equal(factRow(db, 'pnl.ledgers'), null);
+  assert.equal(await factRow(db, 'pnl.ledgers'), null);
 
-  assert.ok(figureRow(db, 'agi.est'));
-  const inferred = factRow(db, 'business.entities').value.filter(e => e.inferred);
+  assert.ok(await figureRow(db, 'agi.est'));
+  const inferred = (await factRow(db, 'business.entities')).value.filter(e => e.inferred);
   assert.deepEqual(inferred.map(e => [e.name, e.type]), [['Asters', 'personal'], ['Birchs', 'personal']]);
-  assert.equal(db.prepare("SELECT count(*) n FROM confirm_items WHERE context LIKE '%pnl.ledgers%' AND status='pending'").get().n, 0);
+  assert.equal((await db.prepare("SELECT count(*) n FROM confirm_items WHERE context LIKE '%pnl.ledgers%' AND status='pending'").get()).n, 0);
   await plan(db);
-  assert.deepEqual(factRow(db, 'business.entities').value.filter(e => e.inferred), inferred);
+  assert.deepEqual((await factRow(db, 'business.entities')).value.filter(e => e.inferred), inferred);
 });
 
 test('PN1: income rows, mostly business categories and an explicit business answer suppress the spending guess', async () => {
   for (const [categories, marked] of [[['Income', 'Medical', 'Groceries'], false], [['Software', 'Contractors', 'Groceries'], false], [['Medical', 'Groceries'], true]]) {
     const db = await S.store();
-    for (const category of categories) db.prepare("INSERT INTO pnl_lines (entity, period, category, amount) VALUES ('Cedar', '2026-10', ?, ?)")
+    for (const category of categories) await db.prepare("INSERT INTO pnl_lines (entity, period, category, amount) VALUES ('Cedar', '2026-10', ?, ?)")
       .run(category, category === 'Income' ? 0 : -100);
-    if (marked) addFact(db, 'pnl.ledgers', { Cedar: { kind: 'business' } });
+    if (marked) await addFact(db, 'pnl.ledgers', { Cedar: { kind: 'business' } });
     await plan(db);
-    assert.equal(fig(db, 'agi.est').locator.partial, true);
-    assert.match(JSON.stringify(recRow(db, 'missing-data').def), /Cedar/);
+    assert.equal((await fig(db, 'agi.est')).locator.partial, true);
+    assert.match(JSON.stringify((await recRow(db, 'missing-data')).def), /Cedar/);
 
-    assert.ok(!db.prepare("SELECT context FROM confirm_items WHERE status = 'pending'").all().some(x => JSON.parse(x.context).key === 'pnl.ledgers'));
+    assert.ok(!(await db.prepare("SELECT context FROM confirm_items WHERE status = 'pending'").all()).some(x => JSON.parse(x.context).key === 'pnl.ledgers'));
   }
 });
 
 test('INF1: undoing a spending classification keeps it unknown on later planning runs', async () => {
   const db = await S.store();
-  db.prepare("INSERT INTO pnl_lines (entity, period, category, amount) VALUES ('Cedar', '2026-10', 'Groceries', -100)").run();
+  await db.prepare("INSERT INTO pnl_lines (entity, period, category, amount) VALUES ('Cedar', '2026-10', 'Groceries', -100)").run();
   await plan(db);
-  await answerFacts(db, [{ key: 'business.entityInference', value: { Cedar: { undone: true } } }], { replan: () => plan(db) });
-  assert.ok(!factRow(db, 'business.entities').value.some(e => e.name === 'Cedar'));
-  assert.equal(fig(db, 'agi.est').locator.partial, true);
-  assert.match(JSON.stringify(recRow(db, 'missing-data').def), /Cedar.*(?:S corp|taxed)/);
+  await answerFacts(db, [{ key: 'business.entityInference', value: { Cedar: { undone: true } } }], { replan: async () => await plan(db) });
+  assert.ok(!(await factRow(db, 'business.entities')).value.some(e => e.name === 'Cedar'));
+  assert.equal((await fig(db, 'agi.est')).locator.partial, true);
+  assert.match(JSON.stringify((await recRow(db, 'missing-data')).def), /Cedar.*(?:S corp|taxed)/);
   await plan(db);
-  assert.ok(!factRow(db, 'business.entities').value.some(e => e.name === 'Cedar'));
+  assert.ok(!(await factRow(db, 'business.entities')).value.some(e => e.name === 'Cedar'));
 
 });
 
 test('PN1: ledger answers validate and merge entries, and override an inferred classification', async () => {
   const db = await S.store();
-  db.prepare("INSERT INTO pnl_lines (entity, period, category, amount) VALUES ('Cedar', '2026-10', 'Groceries', -100)").run();
+  await db.prepare("INSERT INTO pnl_lines (entity, period, category, amount) VALUES ('Cedar', '2026-10', 'Groceries', -100)").run();
   await plan(db);
   for (const value of [{ Cedar: { kind: 'unknown' } }, { Cedar: { kind: 'spending', extra: true } }, []]) {
     await assert.rejects(answerFacts(db, [{ key: 'pnl.ledgers', value }], { replan: async () => {} }), FactAnswerError);
   }
   await answerFacts(db, [{ key: 'pnl.ledgers', value: { Cedar: { kind: 'business' } } }], { replan: async () => {} });
   await plan(db);
-  assert.match(JSON.stringify(recRow(db, 'missing-data').def), /Cedar.*(?:S corp|taxed)/);
+  assert.match(JSON.stringify((await recRow(db, 'missing-data')).def), /Cedar.*(?:S corp|taxed)/);
   await answerFacts(db, [{ key: 'pnl.ledgers', value: { Elm: { kind: 'spending' } } }], { replan: async () => {} });
-  assert.deepEqual(factRow(db, 'pnl.ledgers').value, { Cedar: { kind: 'business' }, Elm: { kind: 'spending' } });
+  assert.deepEqual((await factRow(db, 'pnl.ledgers')).value, { Cedar: { kind: 'business' }, Elm: { kind: 'spending' } });
   await answerFacts(db, [{ key: 'pnl.ledgers', value: { CEDAR: { kind: 'spending' } } }], { replan: async () => {} });
-  assert.deepEqual(factRow(db, 'pnl.ledgers').value, { CEDAR: { kind: 'spending' }, Elm: { kind: 'spending' } });
+  assert.deepEqual((await factRow(db, 'pnl.ledgers')).value, { CEDAR: { kind: 'spending' }, Elm: { kind: 'spending' } });
 });

@@ -1,3 +1,4 @@
+import { currentHandle } from '../storage/index.mjs';
 // App-issued API keys for the MCP server. A key is `fathom_` plus 43 base64url characters, shown
 // once at creation. The platform's api_keys table holds only HMAC-SHA256(key) under the instance
 // MCP secret (FATHOM_MCP_SECRET_FILE, read by src/platform/secrets.mjs), so a copied database alone
@@ -94,15 +95,22 @@ export function createKeyService({ platform, secret, creatorActive, now = () => 
   if (!platform) throw new TypeError('createKeyService needs the platform database');
   if (typeof secret !== 'function') throw new TypeError('createKeyService needs the secret');
   if (typeof creatorActive !== 'function') throw new TypeError('createKeyService needs creatorActive');
-  const byId = platform.prepare('SELECT * FROM api_keys WHERE id = ? AND household_id = ?');
-  const all = platform.prepare('SELECT * FROM api_keys ORDER BY created_at, id');
-  const ofHousehold = platform.prepare('SELECT * FROM api_keys WHERE household_id = ? ORDER BY created_at, id');
-  const owned = platform.prepare('SELECT * FROM api_keys WHERE household_id = ? AND user_id = ? ORDER BY created_at, id');
-  const insert = platform.prepare('INSERT INTO api_keys (id, household_id, name, key_hash, scopes, created_at, user_id, household_generation, membership_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
-  const householdState = platform.prepare('SELECT status, mode, generation FROM households WHERE id = ?');
-  const membership = platform.prepare('SELECT status, version FROM household_memberships WHERE user_id = ? AND household_id = ?');
-  const revokeStmt = platform.prepare('UPDATE api_keys SET revoked_at = ? WHERE id = ? AND household_id = ? AND revoked_at IS NULL');
-  const touchStmt = platform.prepare('UPDATE api_keys SET last_used_at = ? WHERE id = ?');
+  // Statements run on the caller's open platform transaction when there is one (budget reservation
+  // verifies the principal inside its transaction).
+  const follow = text => ({
+    get: (...a) => currentHandle(platform).prepare(text).get(...a),
+    all: (...a) => currentHandle(platform).prepare(text).all(...a),
+    run: (...a) => currentHandle(platform).prepare(text).run(...a),
+  });
+  const byId = follow('SELECT * FROM api_keys WHERE id = ? AND household_id = ?');
+  const all = follow('SELECT * FROM api_keys ORDER BY created_at, id');
+  const ofHousehold = follow('SELECT * FROM api_keys WHERE household_id = ? ORDER BY created_at, id');
+  const owned = follow('SELECT * FROM api_keys WHERE household_id = ? AND user_id = ? ORDER BY created_at, id');
+  const insert = follow('INSERT INTO api_keys (id, household_id, name, key_hash, scopes, created_at, user_id, household_generation, membership_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+  const householdState = follow('SELECT status, mode, generation FROM households WHERE id = ?');
+  const membership = follow('SELECT status, version FROM household_memberships WHERE user_id = ? AND household_id = ?');
+  const revokeStmt = follow('UPDATE api_keys SET revoked_at = ? WHERE id = ? AND household_id = ? AND revoked_at IS NULL');
+  const touchStmt = follow('UPDATE api_keys SET last_used_at = ? WHERE id = ?');
 
   function hmacSecret() {
     try {
@@ -118,65 +126,65 @@ export function createKeyService({ platform, secret, creatorActive, now = () => 
 
   return {
     // Returns { key, record }; the key is not kept anywhere after this call.
-    create({ householdId, name, scopes, userId = null } = {}) {
+    async create({ householdId, name, scopes, userId = null } = {}) {
       const hh = household(householdId);
       const clean = cleanName(name);
       const scopeList = normalizeScopes(scopes);
-      const state = householdState.get(hh);
-      const member = userId === null ? null : membership.get(userId, hh);
-      if (state?.status !== 'active' || (userId === null ? state.mode !== 'demo' : member?.status !== 'active' || !creatorActive(userId, hh))) {
+      const state = await householdState.get(hh);
+      const member = userId === null ? null : await membership.get(userId, hh);
+      if (state?.status !== 'active' || (userId === null ? state.mode !== 'demo' : member?.status !== 'active' || !await creatorActive(userId, hh))) {
         throw new KeyError('forbidden', 'active household membership required');
       }
       const serverSecret = hmacSecret();
       const key = KEY_PREFIX + randomBytes(32).toString('base64url');
       const id = 'key_' + randomBytes(6).toString('hex');
-      insert.run(id, hh, clean, hashKey(key, serverSecret), JSON.stringify(scopeList), now().toISOString(), userId, state.generation, member?.version ?? null);
-      return { key, record: toRecord(byId.get(id, hh)) };
+      await insert.run(id, hh, clean, hashKey(key, serverSecret), JSON.stringify(scopeList), now().toISOString(), userId, state.generation, member?.version ?? null);
+      return { key, record: toRecord(await byId.get(id, hh)) };
     },
 
-    list({ householdId, userId } = {}) {
+    async list({ householdId, userId } = {}) {
       const hh = household(householdId);
       hmacSecret();
-      return (userId === undefined ? ofHousehold.all(hh) : owned.all(hh, userId)).map(toRecord);
+      return (userId === undefined ? await ofHousehold.all(hh) : await owned.all(hh, userId)).map(toRecord);
     },
 
-    revoke(id, { householdId, userId } = {}) {
+    async revoke(id, { householdId, userId } = {}) {
       const hh = household(householdId);
       hmacSecret();
-      const row = typeof id === 'string' ? byId.get(id, hh) : null;
+      const row = typeof id === 'string' ? await byId.get(id, hh) : null;
       if (!row) throw new KeyError('not_found', 'no such key');
       if (userId !== undefined && row.user_id !== userId) throw new KeyError('forbidden', 'cannot manage another user key');
-      revokeStmt.run(now().toISOString(), id, hh);
-      return toRecord(byId.get(id, hh));
+      await revokeStmt.run(now().toISOString(), id, hh);
+      return toRecord(await byId.get(id, hh));
     },
 
     // The live record for a presented key, or null. Every stored hash is compared in constant
     // time, with no early exit, so timing does not reveal which row matched. Throws
     // KeyError('unavailable') when the secret is missing.
-    verify(presented) {
+    async verify(presented) {
       const serverSecret = hmacSecret();
       if (typeof presented !== 'string' || presented.length !== KEY_LENGTH || !presented.startsWith(KEY_PREFIX)) return null;
       const want = Buffer.from(hashKey(presented, serverSecret), 'hex');
       let match = null;
-      for (const row of all.all()) {
+      for (const row of await all.all()) {
         const have = Buffer.from(String(row.key_hash), 'hex');
         const same = have.length === want.length && crypto.timingSafeEqual(have, want);
         if (same && match === null) match = row;
       }
       if (!match || match.revoked_at !== null) return null;
-      const state = householdState.get(match.household_id);
+      const state = await householdState.get(match.household_id);
       if (state?.status !== 'active' || state.generation !== match.household_generation) return null;
       if (match.user_id === null) {
         if (state.mode !== 'demo') return null;
       } else {
-        const member = membership.get(match.user_id, match.household_id);
-        if (member?.status !== 'active' || member.version !== match.membership_version || !creatorActive(match.user_id, match.household_id)) return null;
+        const member = await membership.get(match.user_id, match.household_id);
+        if (member?.status !== 'active' || member.version !== match.membership_version || !await creatorActive(match.user_id, match.household_id)) return null;
       }
       return { ...toRecord(match), userId: match.user_id };
     },
 
-    touch(id) {
-      touchStmt.run(now().toISOString(), id);
+    async touch(id) {
+      await touchStmt.run(now().toISOString(), id);
     },
   };
 }

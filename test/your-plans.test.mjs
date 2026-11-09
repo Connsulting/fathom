@@ -54,8 +54,8 @@ function scratch(t, prefix = 'fathom-yp-') {
 // households/<id>/fathom.sqlite under a data dir in the OS temp dir) with the store clock set.
 // Returns { db, household, dataDir }; builds write under household.root.
 async function store(t, { mode = 'real', init = () => {} } = {}) {
-  const inst = await tempInstance({ mode, init: db => { init(db); setSetting(db, 'clock', CLOCK); } });
-  t.after(() => { inst.close(); rmSync(inst.dataDir, { recursive: true, force: true }); });
+  const inst = await tempInstance({ mode, init: async db => { init(db); await setSetting(db, 'clock', CLOCK); } });
+  t.after(async () => { await inst.close(); rmSync(inst.dataDir, { recursive: true, force: true }); });
   return { db: inst.db, household: await inst.household(), dataDir: inst.dataDir };
 }
 
@@ -63,7 +63,7 @@ async function store(t, { mode = 'real', init = () => {} } = {}) {
 // the vault opens or the engine is called.
 const rootedAt = (household, root) => ({ ...household, root });
 
-const engineFor = (db, household, env = {}) => createRuntimeEngine({ db, config: loadConfig({ FATHOM_DATA: household.config.dataDir, FATHOM_ENGINE: 'fake', ...env }) });
+const engineFor = async (db, household, env = {}) => await createRuntimeEngine({ db, config: loadConfig({ FATHOM_DATA: household.config.dataDir, FATHOM_ENGINE: 'fake', ...env }) });
 
 // Store a plan file the way ingest stores uploads (encrypted at rest by the household vault, at
 // files/<id>.bin under its root) and register it as a files row plus a documents row. `bytes`
@@ -72,10 +72,10 @@ const engineFor = (db, household, env = {}) => createRuntimeEngine({ db, config:
 async function addPlanFile(db, household, { id = FILE_ID, name = FILE_NAME, text = PLAN_TEXT, bytes, docType = 'plan', storedPath, mime = 'text/markdown' } = {}) {
   const data = bytes ? Buffer.from(bytes) : Buffer.from(text, 'utf8');
   const rel = storedPath ?? await storeFile({ vault: await household.vault(), id, bytes: data, purpose: 'upload' });
-  db.prepare(`INSERT INTO files (id, name, mime, size, sha256, source_kind, uploaded_at, stored_path, status, note)
+  await db.prepare(`INSERT INTO files (id, name, mime, size, sha256, source_kind, uploaded_at, stored_path, status, note)
               VALUES (?, ?, ?, ?, NULL, 'other', '2026-11-01T09:00:00Z', ?, 'parsed', '')`).run(id, name, mime, data.length, rel);
   if (docType) {
-    db.prepare("INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES (?, 2026, '{}', ?, 'synthetic', 'file')")
+    await db.prepare("INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES (?, 2026, '{}', ?, 'synthetic', 'file')")
       .run(docType, id);
   }
 }
@@ -97,7 +97,7 @@ test('fakeExtractRows splits a document on headings and page markers', () => {
 test('a synthetic plan document builds a valid, always-active pack citing its file and page', async t => {
   const { db, household } = await store(t);
   await addPlanFile(db, household);
-  const result = await buildYourPlans({ db, engine: engineFor(db, household), household, clock: CLOCK });
+  const result = await buildYourPlans({ db, engine: await engineFor(db, household), household, clock: CLOCK });
   assert.equal(result.written, true);
   assert.equal(result.dir, yourPlansDir(household.root));
   assert.equal(result.entries, 2);
@@ -131,18 +131,18 @@ test('a synthetic plan document builds a valid, always-active pack citing its fi
   assert.ok(health.body.includes('Tax year: 2026'));
   assert.ok(health.body.includes(`Reviewed: ${CLOCK}`));
 
-  const built = getSetting(db, 'yourPlans', null);
+  const built = await getSetting(db, 'yourPlans', null);
   assert.equal(built.entries, 2);
   assert.equal(built.dropped, 0, 'B5: settings.yourPlans records the dropped count');
   assert.deepEqual(built.sources, [FILE_NAME]);
   assert.equal(typeof built.builtAt, 'string');
-  assert.equal(getSetting(db, 'packs.generation', 0), 1);
-  const extract = db.prepare("SELECT count(*) AS n FROM spend_ledger WHERE purpose = 'extract'").get().n;
+  assert.equal(await getSetting(db, 'packs.generation', 0), 1);
+  const extract = (await db.prepare("SELECT count(*) AS n FROM spend_ledger WHERE purpose = 'extract'").get()).n;
   assert.ok(extract >= 1, 'extraction spend is recorded');
 
-  const again = await buildYourPlans({ db, engine: engineFor(db, household), household, clock: CLOCK });
+  const again = await buildYourPlans({ db, engine: await engineFor(db, household), household, clock: CLOCK });
   assert.equal(again.entries, 2);
-  assert.equal(getSetting(db, 'packs.generation', 0), 2, 'each build bumps the generation');
+  assert.equal(await getSetting(db, 'packs.generation', 0), 2, 'each build bumps the generation');
   assert.equal(readdirSync(result.dir).filter(f => f.endsWith('.md')).length, 2, 'the rebuild replaces, not appends');
 });
 
@@ -154,11 +154,11 @@ test('extra file ids, a text-only document row, unknown ids and escaping paths a
   // A real file just outside the household root, which the escaping stored path names.
   writeFileSync(join(dirname(household.root), 'outside.md'), '# Outside entry\n\nSYNTHETIC-OUTSIDE-TEXT must never be read.\n');
   await addPlanFile(db, household, { id: 'file-escaping', name: 'escaping.md', storedPath: '../outside.md' });
-  const doc = db.prepare("INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES ('benefits', 2026, ?, NULL, 'synthetic', 'note')")
-    .run(JSON.stringify({ text: '# Wellness stipend\n\nThe synthetic benefits note describes a wellness stipend.\n' }));
-  const docName = `document-${Number(doc.lastInsertRowid)}`;
+  const doc = await db.prepare("INSERT INTO documents (doc_type, tax_year, fields, file_id, parser, locator) VALUES ('benefits', 2026, ?, NULL, 'synthetic', 'note') RETURNING id")
+    .get(JSON.stringify({ text: '# Wellness stipend\n\nThe synthetic benefits note describes a wellness stipend.\n' }));
+  const docName = `document-${Number(doc.id)}`;
 
-  const result = await buildYourPlans({ db, engine: engineFor(db, household), household, clock: CLOCK,
+  const result = await buildYourPlans({ db, engine: await engineFor(db, household), household, clock: CLOCK,
     fileIds: ['file-synthetic-notes', 'no-such-file'] });
   assert.equal(result.written, true);
   const names = result.sources.map(x => x.name);
@@ -176,18 +176,18 @@ test('extra file ids, a text-only document row, unknown ids and escaping paths a
 test('zero extracted rows write nothing', async t => {
   const { db, household } = await store(t);
   await addPlanFile(db, household, { text: '' });
-  const result = await buildYourPlans({ db, engine: engineFor(db, household), household, clock: CLOCK });
+  const result = await buildYourPlans({ db, engine: await engineFor(db, household), household, clock: CLOCK });
   assert.equal(result.written, false);
   assert.equal(result.entries, 0);
   assert.equal(existsSync(yourPlansDir(household.root)), false);
-  assert.equal(getSetting(db, 'yourPlans', null), null);
-  assert.equal(getSetting(db, 'packs.generation', 0), 0);
+  assert.equal(await getSetting(db, 'yourPlans', null), null);
+  assert.equal(await getSetting(db, 'packs.generation', 0), 0);
 });
 
 test('a target inside the repository is refused: root, nested dirs and symlinks into it', async t => {
   const { db, household } = await store(t);
   await addPlanFile(db, household);
-  const engine = engineFor(db, household);
+  const engine = await engineFor(db, household);
   const nested = join(ROOT, `.yp-guard-${process.pid}`, 'deeper');
   const link = join(scratch(t), 'link-to-repo');
   symlinkSync(ROOT, link);
@@ -203,7 +203,7 @@ test('a target inside the repository is refused: root, nested dirs and symlinks 
     assert.equal(existsSync(join(ROOT, 'test', 'fixtures', 'packs')), false);
     assert.equal(existsSync(join(ROOT, 'test', 'packs')), false);
     assert.equal(existsSync(repoPlans), repoPlansExisted);
-    assert.equal(getSetting(db, 'packs.generation', 0), 0);
+    assert.equal(await getSetting(db, 'packs.generation', 0), 0);
   } finally {
     rmSync(join(ROOT, `.yp-guard-${process.pid}`), { recursive: true, force: true });
     if (!repoPlansExisted) rmSync(repoPlans, { recursive: true, force: true });
@@ -234,7 +234,7 @@ test('a model title with markup or token syntax is neutralized in the manifest c
   // so the section quotes the same markup. The number check runs on the neutralized title and body,
   // where the brace syntax is no longer a token.
   await addPlanFile(db, household, { text: `# ${heading}\n\nThe synthetic plan section quotes <img src=x onerror=alert(1)> for the owner.\n` });
-  const result = await buildYourPlans({ db, engine: engineFor(db, household), household, clock: CLOCK });
+  const result = await buildYourPlans({ db, engine: await engineFor(db, household), household, clock: CLOCK });
   assert.equal(result.written, true);
   const manifest = JSON.parse(readFileSync(join(result.dir, 'manifest.json'), 'utf8'));
   const titles = [...manifest.covers, ...manifest.entries.map(e => e.title)];
@@ -255,7 +255,7 @@ test('a data dir inside the repository whose your-plans dir links outside is ref
   const repoData = join(ROOT, `.yp-link-guard-${process.pid}`);
   const outside = scratch(t, 'fathom-yp-outside-');
   const { db, household } = await store(t);
-  const { engine, counter } = countingEngine(engineFor(db, household));
+  const { engine, counter } = countingEngine(await engineFor(db, household));
   try {
     mkdirSync(join(repoData, 'packs'), { recursive: true });
     await addPlanFile(db, household);
@@ -268,8 +268,8 @@ test('a data dir inside the repository whose your-plans dir links outside is ref
     assert.deepEqual(listTree(repoData), before, 'nothing written inside the repository');
     assert.ok(lstatSync(link).isSymbolicLink(), 'the symlink is untouched');
     assert.equal(readlinkSync(link), outside);
-    assert.equal(getSetting(db, 'packs.generation', 0), 0);
-    assert.equal(db.prepare("SELECT count(*) AS n FROM spend_ledger WHERE purpose = 'extract'").get().n, 0);
+    assert.equal(await getSetting(db, 'packs.generation', 0), 0);
+    assert.equal((await db.prepare("SELECT count(*) AS n FROM spend_ledger WHERE purpose = 'extract'").get()).n, 0);
   } finally {
     rmSync(repoData, { recursive: true, force: true });
   }
@@ -277,7 +277,7 @@ test('a data dir inside the repository whose your-plans dir links outside is ref
 
   const liveness = await store(t);
   await addPlanFile(liveness.db, liveness.household);
-  const ok = countingEngine(engineFor(liveness.db, liveness.household));
+  const ok = countingEngine(await engineFor(liveness.db, liveness.household));
   const built = await buildYourPlans({ db: liveness.db, engine: ok.engine, household: liveness.household, clock: CLOCK });
   assert.equal(built.written, true, 'a household root outside the repository still builds');
   assert.ok(ok.counter.extracts >= 1);
@@ -329,7 +329,7 @@ test('fakeExtractRows emits an excerpt equal to the section text it read', () =>
 test('B5: a row inventing an amount or a title number absent from its excerpt is dropped and counted', async t => {
   const { db, household } = await store(t);
   await addPlanFile(db, household, { text: TWO_SECTIONS });
-  const engine = extractScripted(engineFor(db, household), [[
+  const engine = extractScripted(await engineFor(db, household), [[
     row('Dental plan', DENTAL, DENTAL),
     row('Vision plan', 'The synthetic vision plan pays $4,250 toward frames and lenses.', VISION),
     row('Tier 3 vision', VISION, VISION),
@@ -347,13 +347,13 @@ test('B5: a row inventing an amount or a title number absent from its excerpt is
   for (const w of result.warnings) {
     assert.ok(!w.includes('synthetic vision') && !w.includes('4,250') && !w.includes('Tier 3'), `no document text in: ${w}`);
   }
-  assert.equal(getSetting(db, 'yourPlans', null).dropped, 2);
+  assert.equal((await getSetting(db, 'yourPlans', null)).dropped, 2);
 });
 
 test('B5: a row whose excerpt is not in the document, or is empty, is dropped; whitespace differences still match', async t => {
   const { db, household } = await store(t);
   await addPlanFile(db, household, { text: TWO_SECTIONS });
-  const engine = extractScripted(engineFor(db, household), [[
+  const engine = extractScripted(await engineFor(db, household), [[
     row('Acupuncture', 'The synthetic plan covers acupuncture.', 'The synthetic plan covers acupuncture.'),
     row('Blank excerpt', DENTAL, '   '),
     row('Dental plan', DENTAL, '  The synthetic dental plan   covers routine\ncleanings and exams.  '),
@@ -371,7 +371,7 @@ test('B5: a row is kept only when its page matches the Page markers before its e
   const paged = `Page 1\n\n# Dental plan\n\n${DENTAL}\n\nPage 2\n\n# Vision plan\n\n${VISION}\n`;
   await addPlanFile(db, household, { text: paged });
   await addPlanFile(db, household, { id: 'file-unpaged', name: 'synthetic-unpaged.md', text: TWO_SECTIONS });
-  const engine = extractScripted(engineFor(db, household), [
+  const engine = extractScripted(await engineFor(db, household), [
     // The paged document comes first: sources follow the documents rows in insertion order.
     [row('Dental plan', DENTAL, DENTAL, 1), row('Vision plan', VISION, VISION, 2),
       row('Dental again', DENTAL, DENTAL, 2), row('Vision again', VISION, VISION, 1)],
@@ -394,7 +394,7 @@ test('B5: a row is kept only when its page matches the Page markers before its e
 // against their extracted text and pages, image-only PDFs are skipped before any model call.
 
 // A demo-seeded household (for the answerer) whose data dir is outside the repository.
-const demoPlanStore = t => store(t, { mode: 'demo', init: seedDemo });
+const demoPlanStore = async t => store(t, { mode: 'demo', init: seedDemo });
 
 // The runtime with every chat call answered by `text` (first answer and corrective retry).
 function sayingEngine(runtime, text) {
@@ -409,15 +409,15 @@ function sayingEngine(runtime, text) {
 
 async function answerAfterBuild(db, household, text) {
   const packs = createLivePacks(db, { dataDir: household.root });
-  packs.refresh();
-  const engine = sayingEngine(engineFor(db, household), text);
+  await packs.refresh();
+  const engine = sayingEngine(await engineFor(db, household), text);
   return createLiveAnswerer({ engine, packs, root: household.root, services: { ...household.services, engine: engine, config: { dataDir: household.root } } }).answer({ db, key: 'ask:0123456789ab', text: 'What do our plan documents say' });
 }
 
 test('B5: a document with no numbers and a row inventing an amount gives no entry with it, and an answer stating it is ungrounded', async t => {
   const { db, household } = await demoPlanStore(t);
   await addPlanFile(db, household, { text: TWO_SECTIONS });
-  const engine = extractScripted(engineFor(db, household), [[
+  const engine = extractScripted(await engineFor(db, household), [[
     row('Dental plan', DENTAL, DENTAL),
     row('Vision plan', 'The synthetic vision plan pays $4,250 toward frames and lenses.', VISION),
   ]]);
@@ -437,7 +437,7 @@ test('B5: a row inventing a year-shaped amount, a year-shaped title number or a 
   assert.ok(!/\d/.test(TWO_SECTIONS), 'the first source has no numbers at all');
   await addPlanFile(db, household, { text: TWO_SECTIONS });
   await addPlanFile(db, household, { id: 'file-enrollment', name: 'synthetic-enrollment.md', text: `# Enrollment window\n\n${ENROLLMENT}\n` });
-  const engine = extractScripted(engineFor(db, household), [
+  const engine = extractScripted(await engineFor(db, household), [
     [
       row('Dental plan', DENTAL, DENTAL),
       row('Vision benefit', 'The benefit is 2099 dollars.', VISION),
@@ -458,13 +458,13 @@ test('B5: a row inventing a year-shaped amount, a year-shaped title number or a 
   for (const invented of ['2099', '2087', '2031-04-15', 'April 15']) assert.ok(!bodies.includes(invented), `no entry carries ${invented}`);
   const warning = result.warnings.find(w => DROP_WARNING.test(w));
   assert.ok(warning && /\b4\b/.test(warning), JSON.stringify(result.warnings));
-  assert.equal(getSetting(db, 'yourPlans', null).dropped, 4);
+  assert.equal((await getSetting(db, 'yourPlans', null)).dropped, 4);
 });
 
 test('B5: after a build drops a row inventing a year-shaped amount, an answer stating it is ungrounded', async t => {
   const { db, household } = await demoPlanStore(t);
   await addPlanFile(db, household, { text: TWO_SECTIONS });
-  const engine = extractScripted(engineFor(db, household), [[
+  const engine = extractScripted(await engineFor(db, household), [[
     row('Dental plan', DENTAL, DENTAL),
     row('Vision benefit', 'The synthetic vision benefit is 2099 dollars.', VISION),
   ]]);
@@ -484,7 +484,7 @@ test('B5: a number-word row whose body changes the unit from its excerpt is drop
   const { db, household } = await store(t);
   await addPlanFile(db, household, { id: 'file-usd', name: 'synthetic-usd.md', text: `# Benefit\n\n${BENEFIT_USD}\n` });
   await addPlanFile(db, household, { id: 'file-pct', name: 'synthetic-pct.md', text: `# Benefit\n\n${BENEFIT_PCT}\n` });
-  const engine = extractScripted(engineFor(db, household), [
+  const engine = extractScripted(await engineFor(db, household), [
     [row('Benefit', BENEFIT_PCT, BENEFIT_USD), row('Benefit kept', BENEFIT_USD, BENEFIT_USD)],
     [row('Benefit', BENEFIT_USD, BENEFIT_PCT), row('Benefit kept', BENEFIT_PCT, BENEFIT_PCT)],
   ]);
@@ -495,13 +495,13 @@ test('B5: a number-word row whose body changes the unit from its excerpt is drop
   assert.deepEqual(loadPacks([result.dir])[0].entries.map(e => e.title), ['Benefit kept', 'Benefit kept']);
   const bodies = builtBodies(result.dir);
   assert.ok(bodies.includes(BENEFIT_USD) && bodies.includes(BENEFIT_PCT), 'the matching-unit rows are kept');
-  assert.equal(getSetting(db, 'yourPlans', null).dropped, 2);
+  assert.equal((await getSetting(db, 'yourPlans', null)).dropped, 2);
 });
 
 test('B5: after a build drops a number-word row with a changed unit, an answer stating it is ungrounded', async t => {
   const { db, household } = await demoPlanStore(t);
   await addPlanFile(db, household, { text: `# Dental plan\n\n${DENTAL}\n\n# Benefit\n\n${BENEFIT_USD}\n` });
-  const engine = extractScripted(engineFor(db, household), [[
+  const engine = extractScripted(await engineFor(db, household), [[
     row('Dental plan', DENTAL, DENTAL),
     row('Benefit', BENEFIT_PCT, BENEFIT_USD),
   ]]);
@@ -520,7 +520,7 @@ test('B3: a document file name with digits never grounds that number in an answe
   const text = `# Vision benefit\n\n${VISION}\n`;
   assert.ok(!text.includes('4821'), 'the document text has no 4821');
   await addPlanFile(db, household, { id: 'file-plan-digits', name, text });
-  const result = await buildYourPlans({ db, engine: engineFor(db, household), household, clock: CLOCK });
+  const result = await buildYourPlans({ db, engine: await engineFor(db, household), household, clock: CLOCK });
   assert.equal(result.written, true);
   assert.ok(builtBodies(result.dir).includes(`Source: ${name}, page 1`), 'the entry still cites the file');
   const reply = await answerAfterBuild(db, household, 'Your plan document number is 4821.');
@@ -531,7 +531,7 @@ test('B3: a document file name with digits never grounds that number in an answe
 test('R5 F1: a document saying "8.7 million" builds an entry; "$8.70" is ungrounded and "$8.7 million" grounds', async t => {
   const { db, household } = await demoPlanStore(t);
   await addPlanFile(db, household, { text: '# Synthetic cap\n\nThe cap is 8.7 million.\n' });
-  const result = await buildYourPlans({ db, engine: engineFor(db, household), household, clock: CLOCK });
+  const result = await buildYourPlans({ db, engine: await engineFor(db, household), household, clock: CLOCK });
   assert.equal(result.written, true);
   assert.equal(result.entries, 1, JSON.stringify(result.warnings));
   assert.ok(builtBodies(result.dir).includes('8.7 million'), 'the entry carries the excerpt');
@@ -553,16 +553,16 @@ async function ok(resPromise) {
 // The server's instance is a demo instance, so the plan is sealed by its demo household's vault
 // (the demo platform key under platform-secrets/), opened here as a CLI opens a household.
 async function registerPlan(s) {
-  const platform = openPlatform(join(s.dataDir, 'platform.sqlite'));
-  const db = openDb(s.dbFile);
+  const platform = await openPlatform(join(s.dataDir, 'platform.sqlite'));
+  const db = await openDb(s.dbFile);
   const { secrets } = await instanceSecretsOf(s.dataDir, 'demo');
   const household = await householdContext({ db, platform, householdId: s.householdId, mode: 'demo', config: { dataDir: s.dataDir }, secrets });
-  try { await addPlanFile(db, household); } finally { await household.close(); platform.close(); }
+  try { await addPlanFile(db, household); } finally { await household.close(); await platform.close(); }
 }
 
 const yourPlansPack = scenario => scenario.packs.find(p => p.id === 'your-plans');
 
-test('POST /api/your-plans/build builds the pack, which is live for entries and the next ask', T2, () => withServer({ env: { FATHOM_ENGINE: 'fake' } }, async s => {
+test('POST /api/your-plans/build builds the pack, which is live for entries and the next ask', T2, async () => withServer({ env: { FATHOM_ENGINE: 'fake' } }, async s => {
   await registerPlan(s);
   const before = await getScenario(s.baseUrl);
   assert.ok(before.live.yourPlans.sources.some(x => x.fileId === FILE_ID && x.name === FILE_NAME && x.docType === 'plan'));
@@ -590,7 +590,7 @@ test('POST /api/your-plans/build builds the pack, which is live for entries and 
   assert.ok(reply.message.provenance.packIds.includes('your-plans'), 'the next prompt carries the new pack');
 }));
 
-test('POST /api/your-plans/build validates its body and refuses while the engine is off or over the cap', T2, () => withServer({ env: { FATHOM_ENGINE: 'fake' } }, async s => {
+test('POST /api/your-plans/build validates its body and refuses while the engine is off or over the cap', T2, async () => withServer({ env: { FATHOM_ENGINE: 'fake' } }, async s => {
   await registerPlan(s);
   for (const body of [{ fileIds: 'x' }, { fileIds: [1] }, { fileIds: Array.from({ length: 51 }, (_, i) => `f${i}`) }]) {
     const r = await postJson(s.baseUrl, '/api/your-plans/build', body);
@@ -610,7 +610,7 @@ test('POST /api/your-plans/build validates its body and refuses while the engine
   assert.equal(fine.result.written, true, '50 ids is within the limit');
 }));
 
-test('npm run build:your-plans against a running server is picked up on its next request', T2, () => withServer({ env: { FATHOM_ENGINE: 'fake' } }, async s => {
+test('npm run build:your-plans against a running server is picked up on its next request', T2, async () => withServer({ env: { FATHOM_ENGINE: 'fake' } }, async s => {
   await registerPlan(s);
   assert.equal(yourPlansPack(await getScenario(s.baseUrl)), undefined);
   const cli = await runCommand('npm', ['run', 'build:your-plans', '--', '--household', s.householdId], { env: { FATHOM_DATA: s.dataDir, FATHOM_ENGINE: 'fake' } });

@@ -49,8 +49,8 @@ test('sourced-number table grades answers over real demo tool results', async ()
       `$${Math.trunc(expense)}`, 'one transaction',
     ]) assert.equal(gradeFigures(text, [health, pace]).ok, true, text);
     const ratio = expense / target;
-    store.db.prepare("INSERT INTO sources (id, label, kind) VALUES ('calc:fixture', 'Demo calculation', 'demo')").run();
-    store.db.prepare(`INSERT INTO figures (key, v, src, kind, label, locator, updated_at)
+    await store.db.prepare("INSERT INTO sources (id, label, kind) VALUES ('calc:fixture', 'Demo calculation', 'demo')").run();
+    await store.db.prepare(`INSERT INTO figures (key, v, src, kind, label, locator, updated_at)
       VALUES (?, ?, 'calc:fixture', 'e', 'Demo ratio', ?, ?)`)
       .run('eval_ratio', ratio, JSON.stringify({ unit: 'ratio' }), new Date().toISOString());
     const ratioCall = await call('household', { operation: 'figures', keys: ['eval_ratio'] });
@@ -62,7 +62,7 @@ test('sourced-number table grades answers over real demo tool results', async ()
     assert.equal(gradeFigures(rounded, [health]).rounded.length, 1);
     assert.equal(gradeFigures(`${Math.round(target / 1e6 * 10) / 10}m`, [pace]).rounded.length, 1);
     assert.equal(gradeFigures('seventeen dollars', [health]).spelledOut.length, 1);
-    const context = store.db.prepare('SELECT v FROM figures WHERE v > 0 LIMIT 1').get().v;
+    const context = (await store.db.prepare('SELECT v FROM figures WHERE v > 0 LIMIT 1').get()).v;
     assert.equal(gradeFigures(`$${context}`, [], { contextNumbers: [context] }).contextOnly.length, 1);
   } finally { await store.close(); }
 });

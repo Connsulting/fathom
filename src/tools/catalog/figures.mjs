@@ -16,8 +16,8 @@ function nowOf(ctx) {
 }
 
 // "Today": ctx.clock (FATHOM_CLOCK) when given, else the store clock when set, else ctx.now's UTC date.
-export function clockOf(ctx) {
-  return resolveClock(ctx.db, ctx.clock || getSetting(ctx.db, 'clock', null) || todayUtc(nowOf(ctx)));
+export async function clockOf(ctx) {
+  return await resolveClock(ctx.db, ctx.clock || await getSetting(ctx.db, 'clock', null) || todayUtc(nowOf(ctx)));
 }
 
 // ' WHERE a AND b' and its params from [sql, value] pairs, skipping undefined values.
@@ -36,8 +36,8 @@ export function plainDeep(scope, v) {
 
 const visible = recs => recs.filter(r => r.status !== 'hidden');
 
-function recRow(db, id) {
-  const row = db.prepare('SELECT * FROM recs WHERE id = ?').get(id);
+async function recRow(db, id) {
+  const row = await db.prepare('SELECT * FROM recs WHERE id = ?').get(id);
   if (!row || row.status === 'hidden') throw new ToolError('not_found', `no recommendation ${id}`);
   return row;
 }
@@ -52,8 +52,8 @@ export function recOut(scope, rec) {
 }
 
 // One visible rec, linked, for the model.
-export function recOutById(db, clock, id) {
-  return recOut(tokenScope(db), loadLinkedRec(db, clock, recRow(db, id)));
+export async function recOutById(db, clock, id) {
+  return recOut(await tokenScope(db), await loadLinkedRec(db, clock, await recRow(db, id)));
 }
 
 // Goals as the model sees them: every goal not archived (done goals say so in status), owner text
@@ -62,12 +62,12 @@ export function recOutById(db, clock, id) {
 // contribution is always 'you') and the tracked current value when stored data gives one. status is
 // canonical (open or done); a seed goal's display text is statusLabel. No number here is computed by
 // the model; progress is goals.pace's.
-export function goalsForModel(db) {
-  const scope = tokenScope(db);
-  const fig = loadFigures(db);
-  const accounts = withLabelHints(db, db.prepare('SELECT * FROM accounts WHERE archived_at IS NULL').all());
+export async function goalsForModel(db) {
+  const scope = await tokenScope(db);
+  const fig = await loadFigures(db);
+  const accounts = await withLabelHints(db, await db.prepare('SELECT * FROM accounts WHERE archived_at IS NULL').all());
   // A done goal archives itself; the model still sees it, as done.
-  return loadGoals(db, { fig, accounts }).filter(g => !g.archived || g.status === 'done').map(g => {
+  return (await loadGoals(db, { fig, accounts })).filter(g => !g.archived || g.status === 'done').map(g => {
     const owner = g.origin === 'owner';
     const source = owner ? 'you' : 'plan';
     const text = v => (owner ? String(v ?? '') : resolveTokens(scope, String(v ?? ''), false));
@@ -106,9 +106,9 @@ export function goalsForModel(db) {
 }
 
 // Curve positions as words: which end the owner leans to, or no lean.
-export function curveForModel(db) {
-  const scope = tokenScope(db);
-  return loadCurve(db, loadContent(db)).map(c => {
+export async function curveForModel(db) {
+  const scope = await tokenScope(db);
+  return (await loadCurve(db, await loadContent(db))).map(c => {
     const left = resolveTokens(scope, String(c.left ?? ''), false);
     const right = resolveTokens(scope, String(c.right ?? ''), false);
     const lean = c.value < 0.45 ? left : c.value > 0.55 ? right : 'no lean';
@@ -135,11 +135,11 @@ export const operations = [
     params: {"keys":{"type":"array","items":{"type":"string"},"maxItems":500}},
     required: [],
     scope: 'read', referenceable: true,
-    handler(args, ctx) {
+    async handler(args, ctx) {
       const want = args.keys ? new Set(args.keys) : null;
-      const naming = accountNaming(ctx.db);
-      return ctx.db.prepare(`SELECT f.key, f.v, f.kind, f.label, f.src, f.locator, f.unavailable_reason, s.label AS src_label, s.as_of AS src_as_of
-                             FROM figures f LEFT JOIN sources s ON s.id = f.src ORDER BY f.rowid`).all()
+      const naming = await accountNaming(ctx.db);
+      return (await ctx.db.prepare(`SELECT f.key, f.v, f.kind, f.label, f.src, f.locator, f.unavailable_reason, s.label AS src_label, s.as_of AS src_as_of
+                             FROM figures f LEFT JOIN sources s ON s.id = f.src ORDER BY f.rowid`).all())
         .filter(f => !want || want.has(f.key))
         .map(f => {
           const named = relabelStoredFigure(naming, f);

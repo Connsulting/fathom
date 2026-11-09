@@ -17,32 +17,32 @@ import { setSetting } from '../src/store/db.mjs';
 const CLOCK = '2026-11-05';
 const pad = n => String(n).padStart(2, '0');
 
-function household(db) {
+async function household(db) {
   const account = db.prepare("INSERT INTO accounts (id, inst, name, kind) VALUES (?, 'Example Bank', ?, ?)");
-  account.run('chk', 'Joint checking', 'checking');
-  account.run('sav', 'High yield savings', 'savings');
-  account.run('brk', 'Taxable brokerage', 'taxable');
-  account.run('ret', 'Rollover IRA', 'retirement');
+  await account.run('chk', 'Joint checking', 'checking');
+  await account.run('sav', 'High yield savings', 'savings');
+  await account.run('brk', 'Taxable brokerage', 'taxable');
+  await account.run('ret', 'Rollover IRA', 'retirement');
   const txn = db.prepare("INSERT INTO transactions (account_id, date, amount, description, parser, locator) VALUES ('chk', ?, ?, ?, 'fixture', 'row')");
   for (let m = 1; m <= 8; m++) {
-    txn.run(`2026-${pad(m)}-10`, 4005, 'Paycheck');
-    txn.run(`2026-${pad(m)}-15`, -3005, 'Rent');
+    await txn.run(`2026-${pad(m)}-10`, 4005, 'Paycheck');
+    await txn.run(`2026-${pad(m)}-15`, -3005, 'Rent');
   }
   const balance = db.prepare("INSERT INTO balances (account_id, date, amount, parser, locator) VALUES (?, '2026-10-31', ?, 'fixture', 'balance')");
-  balance.run('chk', 2000);
-  balance.run('sav', 5000);
-  balance.run('ret', 200000);
-  db.prepare("INSERT INTO positions (account_id, as_of, symbol, value, parser, locator) VALUES ('brk', '2026-10-31', 'FUNDA', 300000, 'fixture', 'row')").run();
+  await balance.run('chk', 2000);
+  await balance.run('sav', 5000);
+  await balance.run('ret', 200000);
+  await db.prepare("INSERT INTO positions (account_id, as_of, symbol, value, parser, locator) VALUES ('brk', '2026-10-31', 'FUNDA', 300000, 'fixture', 'row')").run();
 }
 
 async function serve(t) {
   const s = await tempDb();
-  setSetting(s.db, 'clock', CLOCK);
-  setSetting(s.db, 'mode', 'real');
-  setSetting(s.db, 'onboarding', { done: true, step: 6 });
-  household(s.db);
+  await setSetting(s.db, 'clock', CLOCK);
+  await setSetting(s.db, 'mode', 'real');
+  await setSetting(s.db, 'onboarding', { done: true, step: 6 });
+  await household(s.db);
   const srv = await serveAppFixture({ authenticated: true, db: s.db, config: { clock: CLOCK, dataDir: s.dataDir }, answerer: null });
-  t.after(async () => { await srv.close(); s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await srv.close(); await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   return { ...srv, db: s.db };
 }
 
@@ -66,7 +66,7 @@ async function goals(srv) {
   const free = await create(srv, { title: 'Work less, on our terms', horizon: '3-10y' });
   const kids = await create(srv, { title: 'Kids and family' });
   const boat = await create(srv, { title: 'A cash cushion for the boat', target: 10000, targetDate: '2028-01-01', track: { accounts: ['sav'] } });
-  srv.db.prepare("INSERT INTO goals (id, def, sort, origin, created_at, updated_at) VALUES ('seedgoal', ?, 99, 'seed', ?, ?)")
+  await srv.db.prepare("INSERT INTO goals (id, def, sort, origin, created_at, updated_at) VALUES ('seedgoal', ?, 99, 'seed', ?, ?)")
     .run(JSON.stringify({ id: 'seedgoal', title: 'A cash reserve', prose: 'Seed prose.' }), CLOCK, CLOCK);
   return { cushion, free, kids, boat, seed: 'seedgoal' };
 }

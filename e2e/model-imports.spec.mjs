@@ -35,9 +35,9 @@ test.afterEach(async ({ request }) => { await resetDemo(request); });
 // real pipeline with a fake-mode engine whose single response is the layout's interpretation.
 async function seed({ csv = firstCsv, name = 'synthetic-first.csv' } = {}) {
   return withLocalHousehold(NOW, async (s) => {
-    const account = s.db.prepare('SELECT id FROM accounts WHERE archived_at IS NULL ORDER BY rowid LIMIT 1').get().id;
-    const previous = getSetting(s.db, 'engine', null);
-    setSetting(s.db, 'engine', { on: true });
+    const account = (await s.db.prepare('SELECT id FROM accounts WHERE archived_at IS NULL ORDER BY rowid LIMIT 1').get()).id;
+    const previous = await getSetting(s.db, 'engine', null);
+    await setSetting(s.db, 'engine', { on: true });
     try {
       const bytes = Buffer.from(csv(account));
       const fileId = 'f-' + createHash('sha256').update(bytes).digest('hex').slice(0, 24);
@@ -45,13 +45,13 @@ async function seed({ csv = firstCsv, name = 'synthetic-first.csv' } = {}) {
       const proposal = applyLayout(await indexSource({ fileId, bytes, name, format: 'csv' }), layout);
       const script = { text: JSON.stringify({ rows: proposal.rows, coverage: proposal.coverage, completeness: proposal.completeness, controls: proposal.controls, layout }),
         costUsd: 0.001, tokens: { input_tokens: 20, output_tokens: 40 } };
-      const engine = createRuntimeEngine({ db: s.db, config: { engine: 'fake' }, allowed: () => true });
+      const engine = await createRuntimeEngine({ db: s.db, config: { engine: 'fake' }, allowed: () => true });
       const out = await ingestFile(s.db, { name, bytes, mime: 'text/csv' },
         { ...s.opts(null), household: { ...s.household, engine, funded: () => true }, actorId: 'demo', fake: [script] });
       return { account, fileId, proposalId: out.proposalId, version: out.version, status: out.status };
     } finally {
-      if (previous == null) s.db.prepare("DELETE FROM settings WHERE key = 'engine'").run();
-      else setSetting(s.db, 'engine', previous);
+      if (previous == null) await s.db.prepare("DELETE FROM settings WHERE key = 'engine'").run();
+      else await setSetting(s.db, 'engine', previous);
     }
   });
 }
@@ -106,7 +106,7 @@ test('first approval imports, a repeat of the layout imports with the engine pau
   expect(repeat.receipt?.id).toBeTruthy();
   await expect(row(page, repeat.fileId)).toHaveCount(0);
   await expect(page.getByText('Ready for review', { exact: true })).toHaveCount(0);
-  const calls = await withLocalHousehold(NOW, (s) => s.db.prepare('SELECT count(*) n FROM import_model_spend WHERE file_id=?').get(repeat.fileId).n);
+  const calls = await withLocalHousehold(NOW, async (s) => (await s.db.prepare('SELECT count(*) n FROM import_model_spend WHERE file_id=?').get(repeat.fileId)).n);
   expect(calls).toBe(0);
 
   const undo = page.locator(`.h-ing-add [data-review-undo="${repeat.receipt.id}"]`);

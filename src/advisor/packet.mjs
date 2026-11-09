@@ -193,13 +193,13 @@ ${notes ? `<ol class="notes">${notes}</ol>` : '<p class="mute">No figures in thi
 
 // Where the `law` and pct` content rows came from: a sources row or an imported file with the
 // row's src id, or the planner, which writes them from the tax calculator's parameters.
-export function contentSources(db) {
+export async function contentSources(db) {
   const out = {};
   for (const key of ['law', 'pct']) {
-    const row = db.prepare('SELECT src, updated_at FROM content WHERE key = ?').get(key);
+    const row = await db.prepare('SELECT src, updated_at FROM content WHERE key = ?').get(key);
     if (!row || !row.src) continue;
-    const s = db.prepare('SELECT label, as_of FROM sources WHERE id = ?').get(row.src);
-    const f = s ? null : db.prepare('SELECT name FROM files WHERE id = ?').get(row.src);
+    const s = await db.prepare('SELECT label, as_of FROM sources WHERE id = ?').get(row.src);
+    const f = s ? null : await db.prepare('SELECT name FROM files WHERE id = ?').get(row.src);
     const asOf = dayLabel(s?.as_of || row.updated_at);
     if (s) out[key] = { label: s.label, asOf };
     else if (f) out[key] = { label: `Imported file: ${f.name}`, asOf };
@@ -217,23 +217,23 @@ export async function storePacket(db, { vault, html, clock, recIds, now }) {
   const id = `advpkt-${randomBytes(8).toString('hex')}`;
   const bytes = Buffer.from(html, 'utf8');
   const storedPath = await storeFile({ vault, id, bytes, purpose: 'advisor-packet' });
-  db.prepare('INSERT INTO advisor_packets (id, created_at, clock, rec_ids, stored_path, bytes, sha256) VALUES (?, ?, ?, ?, ?, ?, ?)')
+  await db.prepare('INSERT INTO advisor_packets (id, created_at, clock, rec_ids, stored_path, bytes, sha256) VALUES (?, ?, ?, ?, ?, ?, ?)')
     .run(id, now, clock, JSON.stringify(recIds), storedPath, bytes.length, createHash('sha256').update(bytes).digest('hex'));
   return id;
 }
 
 export async function buildAndStorePacket(db, { vault, clock, now, scenario } = {}) {
-  const s = scenario ?? buildScenario(db, { clock });
+  const s = scenario ?? await buildScenario(db, { clock });
   const recIds = s.advisor.pending;
   if (!recIds.length) throw new AdvisorError(409, 'nothing is waiting on review');
-  const html = buildPacketHtml(s, { generatedOn: s.meta.clock, sources: contentSources(db) });
+  const html = buildPacketHtml(s, { generatedOn: s.meta.clock, sources: await contentSources(db) });
   const packetId = await storePacket(db, { vault: typeof vault === 'function' ? await vault() : vault,
     html, clock: s.meta.clock, recIds, now });
   return { packetId, recIds };
 }
 
 export async function readPacket(db, { vault, id }) {
-  const row = isPacketId(id) ? db.prepare('SELECT * FROM advisor_packets WHERE id = ?').get(id) : null;
+  const row = isPacketId(id) ? await db.prepare('SELECT * FROM advisor_packets WHERE id = ?').get(id) : null;
   if (!row) return null;
   const bytes = await readStoredFile({ vault, id: row.id, storedPath: row.stored_path, purpose: 'advisor-packet' });
   return { row, bytes };

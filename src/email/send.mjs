@@ -11,8 +11,8 @@ const rowOut = (r) => ({
   transport: r.transport, recipients: r.recipients, messageId: r.message_id, jobRunId: r.job_run_id,
 });
 
-function record(db, row) {
-  const r = db.prepare(`INSERT INTO email_sends (ts, kind, subject, status, error_code, transport, recipients, message_id, job_run_id)
+async function record(db, row) {
+  const r = await db.prepare(`INSERT INTO email_sends (ts, kind, subject, status, error_code, transport, recipients, message_id, job_run_id)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`)
     .get(row.ts, row.kind, row.subject, row.status, row.errorCode, row.transport, row.recipients, row.messageId, row.jobRunId);
   return rowOut(r);
@@ -25,17 +25,17 @@ export async function sendEmail(db, { transport, kind, subject, text, html, to, 
   try {
     const r = await transport.send({ to, subject, text, html });
     const recipients = Number.isInteger(r && r.recipients) ? r.recipients : to == null ? 0 : [to].flat().length;
-    return record(db, { ...base, status: 'sent', errorCode: null, recipients, messageId: r && r.id != null ? String(r.id) : null });
+    return await record(db, { ...base, status: 'sent', errorCode: null, recipients, messageId: r && r.id != null ? String(r.id) : null });
   } catch (err) {
     const errorCode = err instanceof EmailError ? err.code : 'other';
-    const row = record(db, { ...base, status: 'failed', errorCode, recipients: 0, messageId: null });
+    const row = await record(db, { ...base, status: 'failed', errorCode, recipients: 0, messageId: null });
     if (err instanceof EmailError) return row;
     throw err;
   }
 }
 
 // Send history, newest first.
-export function listSends(db, { limit = 50 } = {}) {
+export async function listSends(db, { limit = 50 } = {}) {
   const n = Math.max(1, Math.min(500, Number.isInteger(limit) ? limit : 50));
-  return db.prepare('SELECT * FROM email_sends ORDER BY ts DESC, id DESC LIMIT ?').all(n).map(rowOut);
+  return (await db.prepare('SELECT * FROM email_sends ORDER BY ts DESC, id DESC LIMIT ?').all(n)).map(rowOut);
 }

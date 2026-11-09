@@ -1,3 +1,4 @@
+import { sameStore } from '../../storage/index.mjs';
 import { randomUUID } from 'node:crypto';
 import { ingestFiles, retryFile, triggerPlan, triggerFreshness, triggerGuesses } from '../../ingest/pipeline.mjs';
 import { pendingItems } from '../../ingest/confirm.mjs';
@@ -24,14 +25,14 @@ function content(args) {
   if (!bytes.length || bytes.length > BODY_LIMIT) refusal('File content must be nonempty and fit within the request limit.');
   return bytes;
 }
-function preflight(name, args, ctx) {
-  requireActor(ctx);
+async function preflight(name, args, ctx) {
+  await requireActor(ctx);
   if (!ctx.services || !apiContext(ctx).household) refusal('Household services are unavailable.');
-  if (apiContext(ctx).household.db !== ctx.db) refusal('Household services do not own this store.');
+  if (!sameStore(apiContext(ctx).household.db, ctx.db)) refusal('Household services do not own this store.');
   if (name === 'import_file') content(args);
-  if (name === 'retry_import' && !ctx.db.prepare('SELECT id FROM files WHERE id=?').get(args.fileId)) throw new ToolError('not_found', 'No such file.');
-  if (name === 'review_import' && !ctx.db.prepare('SELECT id FROM import_proposals WHERE id=?').get(args.proposalId)) throw new ToolError('not_found', 'No such proposal.');
-  if (name === 'run_job' && args.job === 'plan' && getSetting(ctx.db, 'mode', null) === 'demo') refusal('planning runs on real stores only');
+  if (name === 'retry_import' && !await ctx.db.prepare('SELECT id FROM files WHERE id=?').get(args.fileId)) throw new ToolError('not_found', 'No such file.');
+  if (name === 'review_import' && !await ctx.db.prepare('SELECT id FROM import_proposals WHERE id=?').get(args.proposalId)) throw new ToolError('not_found', 'No such proposal.');
+  if (name === 'run_job' && args.job === 'plan' && await getSetting(ctx.db, 'mode', null) === 'demo') refusal('planning runs on real stores only');
   if (ctx.channel === 'ask' && needsQueue(name, args) && typeof ctx.queueAfterTools !== 'function') refusal('This refresh needs the Ask round-end queue.');
 }
 const needsQueue = (name, args) => name === 'review_import' ? args.decision === 'correct' : name !== 'run_job' || ['plan', 'confirm-guess'].includes(args.job);
@@ -46,12 +47,12 @@ async function execute(name, args, ctx) {
         ? (await ingestFiles(ctx.db, [{ name: args.name, mime: args.mime, bytes: content(args) }], opts)).results[0]
         : await retryFile(ctx.db, args.fileId, opts);
       if (file.status === 'imported') { triggerPlan(api); triggerFreshness(api); triggerGuesses(api); }
-      return { file: fileOut(file), ...(name === 'import_file' ? { pending: pendingItems(ctx.db).length } : {}) };
+      return { file: fileOut(file), ...(name === 'import_file' ? { pending: (await pendingItems(ctx.db)).length } : {}) };
     }
     if (name === 'build_your_plans') {
-      if (!api.engine?.isOn()) refusal('The engine is off, so Your plans cannot be built. Switch it on first.');
+      if (!await api.engine?.isOn()) refusal('The engine is off, so Your plans cannot be built. Switch it on first.');
       const result = await buildYourPlans({ db: ctx.db, engine: api.engine, household: api.household, fileIds: args.fileIds ?? [], clock: api.config?.clock });
-      if (result.written) refreshLivePacks(ctx.db, { dataDir: api.household.root });
+      if (result.written) await refreshLivePacks(ctx.db, { dataDir: api.household.root });
       const { written, entries, sources, warnings, dropped } = result;
       return { status: 'built', written, entries, sources, warnings, dropped };
     }
@@ -64,28 +65,28 @@ async function execute(name, args, ctx) {
     throw e;
   }
 }
-function updateReceipt(ctx, id, outcome) {
+async function updateReceipt(ctx, id, outcome) {
   const value = JSON.stringify(outcome);
-  ctx.db.prepare('UPDATE action_receipts SET after_state=?, after_value=?, planning_pending=0 WHERE id=?').run(value, value, id);
-  return receiptOut(ctx.db.prepare('SELECT * FROM action_receipts WHERE id=?').get(id));
+  await ctx.db.prepare('UPDATE action_receipts SET after_state=?, after_value=?, planning_pending=0 WHERE id=?').run(value, value, id);
+  return receiptOut(await ctx.db.prepare('SELECT * FROM action_receipts WHERE id=?').get(id));
 }
 async function refresh(name, args, ctx) {
-  preflight(name, args, ctx);
+  await preflight(name, args, ctx);
   const { reviewImport, IMPORT_READING_MESSAGE } = await import('../../ingest/model-review.mjs');
   if (name === 'review_import') return reviewImport({ ...ctx, ...apiContext(ctx), actorId: ctx.actorId,
     ownerText: ctx.channel === 'mcp' ? args.evidence : ctx.ownerText }, args);
   const queued = ctx.channel === 'ask' && needsQueue(name, args);
   const initial = { status: queued ? 'queued' : 'running', operation: name };
-  const receipt = saveReceipt(ctx, { scope: name === 'run_job' ? 'write:jobs' : 'write:imports', kind: 'refresh', id: randomUUID(),
+  const receipt = await saveReceipt(ctx, { scope: name === 'run_job' ? 'write:jobs' : 'write:imports', kind: 'refresh', id: randomUUID(),
     label: 'Data refresh', before: null, after: initial });
   const run = async () => {
     try {
       const result = await execute(name, args, ctx);
       const outcome = { ...result, status: result.status ?? result.file?.status ?? result.run?.status ?? 'finished' };
-      const audit = updateReceipt(ctx, receipt.id, outcome);
+      const audit = await updateReceipt(ctx, receipt.id, outcome);
       return { ...result, receipt: result.file?.receipt ?? audit, ...(result.file?.receipt ? {} : { undo }) };
     } catch (e) {
-      updateReceipt(ctx, receipt.id, { status: 'failed', operation: name, error: 'The refresh could not finish. Check the import or job status.' });
+      await updateReceipt(ctx, receipt.id, { status: 'failed', operation: name, error: 'The refresh could not finish. Check the import or job status.' });
       if (!queued) throw e;
       return null;
     }
@@ -95,11 +96,11 @@ async function refresh(name, args, ctx) {
     ctx.onReceipt?.(result.receipt);
     return result;
   }
-  ctx.db.prepare('UPDATE action_receipts SET planning_pending=1 WHERE id=?').run(receipt.id);
+  await ctx.db.prepare('UPDATE action_receipts SET planning_pending=1 WHERE id=?').run(receipt.id);
   receipt.planningPending = true;
   ctx.queueAfterTools(run);
   ctx.onReceipt?.(receipt);
-  const nameOut = name === 'import_file' ? args.name : name === 'retry_import' ? ctx.db.prepare('SELECT name FROM files WHERE id=?').get(args.fileId).name : null;
+  const nameOut = name === 'import_file' ? args.name : name === 'retry_import' ? (await ctx.db.prepare('SELECT name FROM files WHERE id=?').get(args.fileId)).name : null;
   return { status: 'queued', ...(nameOut ? { name: nameOut, message: IMPORT_READING_MESSAGE } : {}), ...(name === 'run_job' ? { run: { id: receipt.id, status: 'queued' } } : {}), receipt, undo };
 }
 const string = { type: 'string', minLength: 1 };
@@ -115,5 +116,5 @@ const definitions = [
 ];
 export const operations = definitions.map(([name, scope, summary, route, routes, params, required]) => ({
   tool: 'refresh', name, scope, summary, route, routes, params, required,
-  preflight: (args, ctx) => preflight(name, args, ctx), handler: (args, ctx) => refresh(name, args, ctx),
+  preflight: async (args, ctx) => await preflight(name, args, ctx), handler: async (args, ctx) => refresh(name, args, ctx),
 }));

@@ -4,6 +4,12 @@ import { bindings } from './values.mjs';
 
 const contexts = new AsyncLocalStorage();
 
+// Metadata operations available on scopes and transaction handles alike, and lifecycle operations
+// only a scope (outside any transaction) can run.
+const METADATA = ['tables', 'hasTable', 'columns', 'foreignKeyCheck', 'inspect'];
+const LIFECYCLE = ['integrityCheck', 'checkpoint', 'sizeBytes', 'applySchema', 'migrate', 'backupTo'];
+const operations = (names, submit, connection) => Object.fromEntries(names.map(name => [name, async (...args) => submit(() => connection[name](...args))]));
+
 class Queue {
   tail = Promise.resolve();
 
@@ -12,6 +18,26 @@ class Queue {
     this.tail = result.catch(() => {});
     return result;
   }
+}
+
+const connections = new WeakMap();
+
+// The handle statements on scope (or on a transaction handle) should use in the current async
+// context: the innermost open transaction or savepoint handle on that connection, else the handle itself.
+// Whether a and b (scopes or transaction handles) run on the same physical connection.
+export function sameStore(a, b) {
+  const connection = connections.get(a);
+  return connection !== undefined && connection === connections.get(b);
+}
+
+export function currentHandle(scope) {
+  const connection = connections.get(scope);
+  if (!connection) throw storageError();
+  return contexts.getStore()?.get(connection) ?? scope;
+}
+
+export function registerScope(scope, connection) {
+  connections.set(scope, connection);
 }
 
 export function createScope(connection) {
@@ -38,6 +64,22 @@ export function createScope(connection) {
     };
     const handle = Object.freeze({
       prepare: text => descriptor(handle, submit, text),
+      ...operations(METADATA, submit, connection),
+      // Run callback with every row change it makes recorded; resolves {result, changes}.
+      async capture(callback) {
+        return submit(async () => {
+          if (typeof callback !== 'function') throw storageError();
+          await connection.captureBegin();
+          let result;
+          try {
+            result = await callbackHandle(callback);
+          } catch (error) {
+            await connection.captureDrop();
+            throw error;
+          }
+          return { result, changes: await connection.captureEnd() };
+        });
+      },
       async savepoint(callback) {
         return submit(async () => {
           if (typeof callback !== 'function') throw storageError();
@@ -55,6 +97,7 @@ export function createScope(connection) {
         });
       },
     });
+    connections.set(handle, connection);
     const context = new Map(contexts.getStore());
     context.set(connection, handle);
     try { return await contexts.run(context, () => callback(handle)); }
@@ -67,6 +110,7 @@ export function createScope(connection) {
   }
   const scope = Object.freeze({
     prepare: text => descriptor(scope, submit, text),
+    ...operations([...METADATA, ...LIFECYCLE], submit, connection),
     async transaction(callback) {
       return submit(async () => {
         if (typeof callback !== 'function') throw storageError();
@@ -82,8 +126,10 @@ export function createScope(connection) {
       });
     },
   });
+  connections.set(scope, connection);
   return {
     scope,
+    connection,
     assertOutsideTransaction() { invalidParent(scope); },
     async close() {
       invalidParent(scope);

@@ -12,13 +12,13 @@ const factState = row => (row ? Object.fromEntries(FACT_FIELDS.map(k => [k, row[
 
 // The undoable receipt for one fact a recommendation answer wrote (the Ask, MCP and UI paths share
 // it). receiptCtx carries db, now and actorId. -> receipt or null when nothing changed.
-export function saveAnswerReceipt(receiptCtx, before, after) {
-  return saveReceipt(receiptCtx, { scope: 'write:facts', kind: 'fact', id: after.key, label: 'Recommendation answer',
+export async function saveAnswerReceipt(receiptCtx, before, after) {
+  return await saveReceipt(receiptCtx, { scope: 'write:facts', kind: 'fact', id: after.key, label: 'Recommendation answer',
     before: factState(before), after: factState(after), from: parseJson(before?.value, null), to: parseJson(after.value, null) });
 }
 
 export async function saveRecAnswers(ctx, { recId, answers }, options = {}) {
-  const row = ctx.db.prepare('SELECT * FROM recs WHERE id = ?').get(recId);
+  const row = await ctx.db.prepare('SELECT * FROM recs WHERE id = ?').get(recId);
   if (!row || row.status === 'hidden') throw new HttpError(404, 'no such recommendation');
   const def = parseJson(row.def, {});
   const question = def.question;
@@ -33,11 +33,11 @@ export async function saveRecAnswers(ctx, { recId, answers }, options = {}) {
   if (!undoDefault && !undo && (!Array.isArray(answers) || answers.length !== question.keys.length
     || answers.some(a => !question.keys.includes(a?.key)))) throw new HttpError(400, 'answer each question on this recommendation');
   if (!options.replan && !ctx.scheduler) throw new HttpError(503, 'planning unavailable');
-  const now = options.now ?? clockNow(ctx.db, ctx.config?.clock);
+  const now = options.now ?? await clockNow(ctx.db, ctx.config?.clock);
   // The UI path writes the same fact receipts Ask and MCP write, so an answer can be undone. The
   // actor is resolved as Undo resolves it; with no actor there is nothing to undo as.
-  const actorId = options.onWrite ? null : ctx.identity?.id || (getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null);
-  const onWrite = options.onWrite ?? (actorId ? (before, after) => saveAnswerReceipt({ db: ctx.db, now, actorId }, before, after) : undefined);
+  const actorId = options.onWrite ? null : ctx.identity?.id || (await getSetting(ctx.db, 'mode', null) === 'demo' ? 'demo' : null);
+  const onWrite = options.onWrite ?? (actorId ? async (before, after) => await saveAnswerReceipt({ db: ctx.db, now, actorId }, before, after) : undefined);
   try {
     await answerFacts(ctx.db, answers, {
       ...options, now, recId: row.id, onWrite,
@@ -50,7 +50,7 @@ export async function saveRecAnswers(ctx, { recId, answers }, options = {}) {
     if (err instanceof FactAnswerError) throw new HttpError(400, err.message);
     throw err;
   }
-  return { scenario: scenarioOf(ctx) };
+  return { scenario: await scenarioOf(ctx) };
 }
 
 export async function recAnswers(ctx) {

@@ -19,32 +19,32 @@ const CLOCK = '2026-11-05';
 const NOW = '2026-11-05T12:00:00.000Z';
 const pad = n => String(n).padStart(2, '0');
 
-function household(db) {
+async function household(db) {
   const account = db.prepare("INSERT INTO accounts (id, inst, name, kind) VALUES (?, 'Example Bank', ?, ?)");
-  account.run('chk', 'Joint checking', 'checking');
-  account.run('sav', 'High yield savings', 'savings');
-  account.run('brk', 'Taxable brokerage', 'taxable');
-  account.run('ret', 'Rollover IRA', 'retirement');
+  await account.run('chk', 'Joint checking', 'checking');
+  await account.run('sav', 'High yield savings', 'savings');
+  await account.run('brk', 'Taxable brokerage', 'taxable');
+  await account.run('ret', 'Rollover IRA', 'retirement');
   const txn = db.prepare("INSERT INTO transactions (account_id, date, amount, description, parser, locator) VALUES ('chk', ?, ?, ?, 'fixture', 'row')");
   for (let m = 1; m <= 8; m++) {
-    txn.run(`2026-${pad(m)}-10`, 4005, 'Paycheck');
-    txn.run(`2026-${pad(m)}-15`, -3005, 'Rent');
+    await txn.run(`2026-${pad(m)}-10`, 4005, 'Paycheck');
+    await txn.run(`2026-${pad(m)}-15`, -3005, 'Rent');
   }
   const balance = db.prepare("INSERT INTO balances (account_id, date, amount, parser, locator) VALUES (?, '2026-10-31', ?, 'fixture', 'balance')");
-  balance.run('chk', 2000);
-  balance.run('sav', 5000);
-  balance.run('ret', 200000);
-  db.prepare("INSERT INTO positions (account_id, as_of, symbol, value, parser, locator) VALUES ('brk', '2026-10-31', 'FUNDA', 300000, 'fixture', 'row')").run();
+  await balance.run('chk', 2000);
+  await balance.run('sav', 5000);
+  await balance.run('ret', 200000);
+  await db.prepare("INSERT INTO positions (account_id, as_of, symbol, value, parser, locator) VALUES ('brk', '2026-10-31', 'FUNDA', 300000, 'fixture', 'row')").run();
 }
 
 async function serve(t, { data = true } = {}) {
   const s = await tempDb();
-  setSetting(s.db, 'clock', CLOCK);
-  setSetting(s.db, 'mode', 'real');
-  setSetting(s.db, 'onboarding', { done: true, step: 6 });
-  if (data) household(s.db);
+  await setSetting(s.db, 'clock', CLOCK);
+  await setSetting(s.db, 'mode', 'real');
+  await setSetting(s.db, 'onboarding', { done: true, step: 6 });
+  if (data) await household(s.db);
   const srv = await serveAppFixture({ authenticated: true, db: s.db, config: { clock: CLOCK, dataDir: s.dataDir }, answerer: null });
-  t.after(async () => { await srv.close(); s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
+  t.after(async () => { await srv.close(); await s.close(); await rm(s.dataDir, { recursive: true, force: true }); });
   return { ...srv, db: s.db };
 }
 
@@ -63,7 +63,7 @@ const undo = (srv, id) => srv.postJson(`/api/goals/${encodeURIComponent(id)}/sug
 const scenarioOf = async srv => ok(srv.request({ path: '/api/scenario' }));
 const goalOf = (sc, id) => sc.goals.find(g => g.id === id);
 const recOf = (sc, id) => sc.suggestions.find(s => s.goalId === id);
-const remember = (db, text) => db.prepare("INSERT INTO preferences (id, text, actor_id, created_at, updated_at) VALUES (?, ?, 'owner', ?, ?)")
+const remember = async (db, text) => await db.prepare("INSERT INTO preferences (id, text, actor_id, created_at, updated_at) VALUES (?, ?, 'owner', ?, ?)")
   .run('p' + Math.random().toString(16).slice(2), text, NOW, NOW);
 
 test('a new goal gets the calculator target at once, marked as set by Fathom, with calc:targets provenance', async t => {
@@ -100,11 +100,11 @@ test('a declined suggestion is never adopted again, even when the goal or its in
   const srv = await serve(t);
   const { goal } = await create(srv, { title: 'A cash cushion', horizon: '1-3y' });
   await ok(undo(srv, goal.id));
-  assert.deepEqual(adoptSuggestions(srv.db, { now: NOW, clock: CLOCK }), [], 'the planner pass adopts nothing');
+  assert.deepEqual(await adoptSuggestions(srv.db, { now: NOW, clock: CLOCK }), [], 'the planner pass adopts nothing');
   const edited = await ok(srv.postJson(`/api/goals/${goal.id}`, { title: 'A bigger cash cushion', horizon: 'now' }));
   assert.equal(edited.goal.target ?? null, null, 'an edit does not bring it back');
-  srv.db.prepare("INSERT INTO transactions (account_id, date, amount, description, parser, locator) VALUES ('chk', '2026-09-15', -5000, 'Roof', 'fixture', 'row')").run();
-  assert.deepEqual(adoptSuggestions(srv.db, { now: NOW, clock: CLOCK }), []);
+  await srv.db.prepare("INSERT INTO transactions (account_id, date, amount, description, parser, locator) VALUES ('chk', '2026-09-15', -5000, 'Roof', 'fixture', 'row')").run();
+  assert.deepEqual(await adoptSuggestions(srv.db, { now: NOW, clock: CLOCK }), []);
   const sc = await scenarioOf(srv);
   assert.equal(goalOf(sc, goal.id).target ?? null, null);
   assert.equal(recOf(sc, goal.id).state, 'declined');
@@ -115,13 +115,13 @@ test('the planner pass adopts a goal once its data arrives; an owner target is n
   const { goal } = await create(srv, { title: 'A cash cushion', horizon: '1-3y' });
   assert.equal(goal.target ?? null, null, 'no data, no target');
   const typed = (await create(srv, { title: 'An emergency fund', target: 5000 })).goal;
-  household(srv.db);
-  assert.deepEqual(adoptSuggestions(srv.db, { now: NOW, clock: CLOCK }), [goal.id]);
+  await household(srv.db);
+  assert.deepEqual(await adoptSuggestions(srv.db, { now: NOW, clock: CLOCK }), [goal.id]);
   const sc = await scenarioOf(srv);
   assert.equal(goalOf(sc, goal.id).target, 18100);
   assert.equal(goalOf(sc, typed.id).target, 5000);
   assert.equal(sc.fig[`goal.${typed.id}.target`].src, 'goal-target', 'a typed target stays the owner\'s');
-  assert.deepEqual(adoptSuggestions(srv.db, { now: NOW, clock: CLOCK }), [], 'a second pass changes nothing');
+  assert.deepEqual(await adoptSuggestions(srv.db, { now: NOW, clock: CLOCK }), [], 'a second pass changes nothing');
 });
 
 test('an owner edit of the target takes it over: no Undo, owner provenance', async t => {
@@ -139,8 +139,8 @@ test('the withdrawal rate comes from a remembered preference, default 4%; a Fath
   const srv = await serve(t);
   const { goal } = await create(srv, { title: 'Work less, on our terms', horizon: '3-10y' });
   assert.equal(goal.target, 902000, '4% by default');
-  remember(srv.db, 'Use a 3% withdrawal rate for retirement math');
-  assert.deepEqual(adoptSuggestions(srv.db, { now: NOW, clock: CLOCK }), [goal.id]);
+  await remember(srv.db, 'Use a 3% withdrawal rate for retirement math');
+  assert.deepEqual(await adoptSuggestions(srv.db, { now: NOW, clock: CLOCK }), [goal.id]);
   const sc = await scenarioOf(srv);
   assert.equal(goalOf(sc, goal.id).target, 1202000);
   assert.ok(goalOf(sc, goal.id).adopted, 'still set by Fathom');
@@ -201,9 +201,9 @@ test('a new date on a Fathom-set target keeps the target Fathom\'s and the date 
   assert.ok(g.adopted, 'still set by Fathom');
   assert.equal(g.targetDate, '2028-01-31');
   assert.equal(scenario.fig[`goal.${goal.id}.target`].src, 'calc:targets');
-  remember(srv.db, 'Use a 3% withdrawal rate');
-  srv.db.prepare("INSERT INTO transactions (account_id, date, amount, description, parser, locator) VALUES ('chk', '2026-07-20', -600, 'Repair', 'fixture', 'row')").run();
-  adoptSuggestions(srv.db, { now: NOW, clock: CLOCK });
+  await remember(srv.db, 'Use a 3% withdrawal rate');
+  await srv.db.prepare("INSERT INTO transactions (account_id, date, amount, description, parser, locator) VALUES ('chk', '2026-07-20', -600, 'Repair', 'fixture', 'row')").run();
+  await adoptSuggestions(srv.db, { now: NOW, clock: CLOCK });
   const later = goalOf(await scenarioOf(srv), goal.id);
   assert.notEqual(later.target, 18100, 'the target follows the calculator');
   assert.equal(later.targetDate, '2028-01-31', 'a later pass keeps the owner date');
@@ -229,8 +229,8 @@ test('a goal created done is archived too', async t => {
 
 test('a remembered preference that names one end of a tradeoff moves that axis', async t => {
   const srv = await serve(t);
-  remember(srv.db, 'We would rather keep cash flexible');
-  remember(srv.db, 'Optimize everything you can');
+  await remember(srv.db, 'We would rather keep cash flexible');
+  await remember(srv.db, 'Optimize everything you can');
   const sc = await scenarioOf(srv);
   const at = id => sc.curve.find(c => c.id === id).value;
   assert.equal(at('tax_cash'), 1);
@@ -240,8 +240,8 @@ test('a remembered preference that names one end of a tradeoff moves that axis',
 
 test('a negated tradeoff end is not read as a choice of that end', async t => {
   const srv = await serve(t);
-  remember(srv.db, 'I do not want to optimize everything');
-  remember(srv.db, 'Max retirement room over lifestyle now');
+  await remember(srv.db, 'I do not want to optimize everything');
+  await remember(srv.db, 'Max retirement room over lifestyle now');
   const sc = await scenarioOf(srv);
   const at = id => sc.curve.find(c => c.id === id).value;
   assert.equal(at('effort'), 1, 'the default stays: the negated end is skipped');

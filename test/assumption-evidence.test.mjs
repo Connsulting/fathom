@@ -16,7 +16,7 @@ const Q28 = 'What is $15 million in retirement accounts worth after tax compared
 let t;
 before(async () => {
   t = await tempDb();
-  seedDemo(t.db);
+  await seedDemo(t.db);
 });
 after(() => t && t.close());
 
@@ -63,91 +63,91 @@ test('ages and years take a whole or half number', () => {
   assert.equal(assumptionStated(10.25, 'years', ['over 10.25 years']), false, 'only whole or half years');
 });
 
-test('in Ask an owner assumption must be stated in the owner\'s messages', () => {
+test('in Ask an owner assumption must be stated in the owner\'s messages', async () => {
   const spec = { name: 'withdrawalRate', unit: 'ratio' };
-  const accepted = checkAssumption(owner(0.04, '4 percent withdrawal rate'), spec, ask([Q02]));
+  const accepted = await checkAssumption(owner(0.04, '4 percent withdrawal rate'), spec, ask([Q02]));
   assert.deepEqual(accepted, { name: 'withdrawalRate', value: 0.04, unit: 'ratio', source: 'owner', stated: '4%', evidence: '4 percent withdrawal rate' });
-  assert.throws(() => checkAssumption(owner(0.05, '4 percent withdrawal rate'), spec, ask([Q02])), e => e.code === 'bad_input' && /withdrawalRate/.test(e.message));
-  assert.throws(() => checkAssumption(owner(0.04, '4 percent withdrawal rate'), spec, ask(['What about 5 percent?'])),
+  await assert.rejects(async () => await checkAssumption(owner(0.05, '4 percent withdrawal rate'), spec, ask([Q02])), e => e.code === 'bad_input' && /withdrawalRate/.test(e.message));
+  await assert.rejects(async () => await checkAssumption(owner(0.04, '4 percent withdrawal rate'), spec, ask(['What about 5 percent?'])),
     e => e.code === 'bad_input', 'evidence the owner never wrote is refused');
-  assert.equal(checkAssumption(owner(0.035, '3.5 percent'), spec, ask([Q26])).value, 0.035);
-  assert.equal(checkAssumption(owner(1000, '$1,000 more a month'), { name: 'extraMonthlySavings', unit: 'usd_per_month' }, ask([Q27])).stated, '$1,000 a month');
-  assert.equal(checkAssumption(owner(15000000, '$15 million in a brokerage account'), { name: 'value', unit: 'usd' }, ask([Q28])).value, 15000000);
+  assert.equal((await checkAssumption(owner(0.035, '3.5 percent'), spec, ask([Q26]))).value, 0.035);
+  assert.equal((await checkAssumption(owner(1000, '$1,000 more a month'), { name: 'extraMonthlySavings', unit: 'usd_per_month' }, ask([Q27]))).stated, '$1,000 a month');
+  assert.equal((await checkAssumption(owner(15000000, '$15 million in a brokerage account'), { name: 'value', unit: 'usd' }, ask([Q28]))).value, 15000000);
 });
 
-test('without ctx.ownerStatements an Ask context refuses owner assumptions', () => {
+test('without ctx.ownerStatements an Ask context refuses owner assumptions', async () => {
   const ctx = { db: t.db, now: new Date('2026-11-05T15:00:00Z') };
-  assert.throws(() => checkAssumption(owner(0.04, '4 percent'), { name: 'withdrawalRate', unit: 'ratio' }, ctx),
+  await assert.rejects(async () => await checkAssumption(owner(0.04, '4 percent'), { name: 'withdrawalRate', unit: 'ratio' }, ctx),
     e => e.code === 'bad_input' && /owner/.test(e.message));
 });
 
-test('over MCP the owner value is checked against its evidence alone and kept verbatim', () => {
+test('over MCP the owner value is checked against its evidence alone and kept verbatim', async () => {
   const ctx = { db: t.db, channel: 'mcp' };
-  const kept = checkAssumption(owner(0.04, 'the owner said 4 percent'), { name: 'withdrawalRate', unit: 'ratio' }, ctx);
+  const kept = await checkAssumption(owner(0.04, 'the owner said 4 percent'), { name: 'withdrawalRate', unit: 'ratio' }, ctx);
   assert.equal(kept.evidence, 'the owner said 4 percent');
-  assert.throws(() => checkAssumption(owner(0.05, 'the owner said 4 percent'), { name: 'withdrawalRate', unit: 'ratio' }, ctx), e => e.code === 'bad_input');
+  await assert.rejects(async () => await checkAssumption(owner(0.05, 'the owner said 4 percent'), { name: 'withdrawalRate', unit: 'ratio' }, ctx), e => e.code === 'bad_input');
 });
 
-test('owner without evidence, fact mismatches and non-default defaults are refused', () => {
+test('owner without evidence, fact mismatches and non-default defaults are refused', async () => {
   const ctx = ask([Q02]);
   const spec = { name: 'withdrawalRate', unit: 'ratio', default: 0.04 };
-  assert.throws(() => checkAssumption({ value: 0.04, source: 'owner' }, spec, ctx), e => e.code === 'bad_input' && /evidence/.test(e.message));
-  assert.deepEqual(checkAssumption({ value: 0.04, source: 'default' }, spec, ctx), { name: 'withdrawalRate', value: 0.04, unit: 'ratio', source: 'default', stated: '4%' });
-  assert.throws(() => checkAssumption({ value: 0.05, source: 'default' }, spec, ctx), e => e.code === 'bad_input' && /default/.test(e.message));
-  assert.throws(() => checkAssumption({ value: 0.04, source: 'default' }, { name: 'rate', unit: 'ratio' }, ctx), e => e.code === 'bad_input' && /default/.test(e.message));
+  await assert.rejects(async () => await checkAssumption({ value: 0.04, source: 'owner' }, spec, ctx), e => e.code === 'bad_input' && /evidence/.test(e.message));
+  assert.deepEqual(await checkAssumption({ value: 0.04, source: 'default' }, spec, ctx), { name: 'withdrawalRate', value: 0.04, unit: 'ratio', source: 'default', stated: '4%' });
+  await assert.rejects(async () => await checkAssumption({ value: 0.05, source: 'default' }, spec, ctx), e => e.code === 'bad_input' && /default/.test(e.message));
+  await assert.rejects(async () => await checkAssumption({ value: 0.04, source: 'default' }, { name: 'rate', unit: 'ratio' }, ctx), e => e.code === 'bad_input' && /default/.test(e.message));
 
-  const agi = JSON.parse(t.db.prepare("SELECT value FROM facts WHERE key = 'income.agiEstimate'").get().value);
+  const agi = JSON.parse((await t.db.prepare("SELECT value FROM facts WHERE key = 'income.agiEstimate'").get()).value);
   const income = { name: 'income', unit: 'usd' };
-  assert.equal(checkAssumption({ value: agi, source: 'fact', factKey: 'income.agiEstimate' }, income, ctx).value, agi);
-  assert.throws(() => checkAssumption({ value: agi + 1, source: 'fact', factKey: 'income.agiEstimate' }, income, ctx), e => e.code === 'bad_input' && /income\.agiEstimate/.test(e.message));
-  assert.throws(() => checkAssumption({ value: agi, source: 'fact' }, income, ctx), e => e.code === 'bad_input' && /factKey/.test(e.message));
-  assert.throws(() => checkAssumption({ value: agi, source: 'fact', factKey: 'income.noSuchFact' }, income, ctx), e => e.code === 'bad_input');
+  assert.equal((await checkAssumption({ value: agi, source: 'fact', factKey: 'income.agiEstimate' }, income, ctx)).value, agi);
+  await assert.rejects(async () => await checkAssumption({ value: agi + 1, source: 'fact', factKey: 'income.agiEstimate' }, income, ctx), e => e.code === 'bad_input' && /income\.agiEstimate/.test(e.message));
+  await assert.rejects(async () => await checkAssumption({ value: agi, source: 'fact' }, income, ctx), e => e.code === 'bad_input' && /factKey/.test(e.message));
+  await assert.rejects(async () => await checkAssumption({ value: agi, source: 'fact', factKey: 'income.noSuchFact' }, income, ctx), e => e.code === 'bad_input');
 });
 
-test('a preference assumption needs an existing preference that states the value', () => {
-  t.db.prepare("INSERT INTO preferences (id, text, actor_id, created_at, updated_at) VALUES ('pref_rate', 'Plan with a 3.5 percent withdrawal rate', 'user_test', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')").run();
+test('a preference assumption needs an existing preference that states the value', async () => {
+  await t.db.prepare("INSERT INTO preferences (id, text, actor_id, created_at, updated_at) VALUES ('pref_rate', 'Plan with a 3.5 percent withdrawal rate', 'user_test', '2026-11-01T00:00:00Z', '2026-11-01T00:00:00Z')").run();
   const ctx = ask([]);
   const spec = { name: 'withdrawalRate', unit: 'ratio' };
-  assert.equal(checkAssumption({ value: 0.035, source: 'preference', preferenceId: 'pref_rate' }, spec, ctx).preferenceId, 'pref_rate');
-  assert.throws(() => checkAssumption({ value: 0.04, source: 'preference', preferenceId: 'pref_rate' }, spec, ctx), e => e.code === 'bad_input');
-  assert.throws(() => checkAssumption({ value: 0.035, source: 'preference', preferenceId: 'pref_missing' }, spec, ctx), e => e.code === 'bad_input' && /preference/.test(e.message));
-  assert.throws(() => checkAssumption({ value: 0.035, source: 'preference' }, spec, ctx), e => e.code === 'bad_input' && /preferenceId/.test(e.message));
+  assert.equal((await checkAssumption({ value: 0.035, source: 'preference', preferenceId: 'pref_rate' }, spec, ctx)).preferenceId, 'pref_rate');
+  await assert.rejects(async () => await checkAssumption({ value: 0.04, source: 'preference', preferenceId: 'pref_rate' }, spec, ctx), e => e.code === 'bad_input');
+  await assert.rejects(async () => await checkAssumption({ value: 0.035, source: 'preference', preferenceId: 'pref_missing' }, spec, ctx), e => e.code === 'bad_input' && /preference/.test(e.message));
+  await assert.rejects(async () => await checkAssumption({ value: 0.035, source: 'preference' }, spec, ctx), e => e.code === 'bad_input' && /preferenceId/.test(e.message));
 });
 
-test('assumption shapes are validated: value finite, known source, bounds and note length', () => {
+test('assumption shapes are validated: value finite, known source, bounds and note length', async () => {
   const ctx = ask([Q02]);
   const spec = { name: 'withdrawalRate', unit: 'ratio', min: 0.02, max: 0.06 };
-  assert.throws(() => checkAssumption({ value: '0.04', source: 'owner', evidence: '4 percent' }, spec, ctx), e => e.code === 'bad_input');
-  assert.throws(() => checkAssumption({ value: 0.04, source: 'guess' }, spec, ctx), e => e.code === 'bad_input' && /source/.test(e.message));
-  assert.throws(() => checkAssumption({ value: 0.04, source: 'owner', evidence: '4 percent', extra: 1 }, spec, ctx), e => e.code === 'bad_input');
-  assert.throws(() => checkAssumption({ value: 0.04, source: 'owner', evidence: '4 percent', note: 'x'.repeat(201) }, spec, ctx), e => e.code === 'bad_input');
-  assert.throws(() => checkAssumption(owner(0.01, '1 percent'), spec, ask(['1 percent'])), e => e.code === 'bad_input' && /0\.02/.test(e.message));
-  assert.equal(checkAssumption({ value: 0.04, source: 'owner', evidence: '4 percent', note: 'their rule of thumb' }, spec, ctx).note, 'their rule of thumb');
+  await assert.rejects(async () => await checkAssumption({ value: '0.04', source: 'owner', evidence: '4 percent' }, spec, ctx), e => e.code === 'bad_input');
+  await assert.rejects(async () => await checkAssumption({ value: 0.04, source: 'guess' }, spec, ctx), e => e.code === 'bad_input' && /source/.test(e.message));
+  await assert.rejects(async () => await checkAssumption({ value: 0.04, source: 'owner', evidence: '4 percent', extra: 1 }, spec, ctx), e => e.code === 'bad_input');
+  await assert.rejects(async () => await checkAssumption({ value: 0.04, source: 'owner', evidence: '4 percent', note: 'x'.repeat(201) }, spec, ctx), e => e.code === 'bad_input');
+  await assert.rejects(async () => await checkAssumption(owner(0.01, '1 percent'), spec, ask(['1 percent'])), e => e.code === 'bad_input' && /0\.02/.test(e.message));
+  assert.equal((await checkAssumption({ value: 0.04, source: 'owner', evidence: '4 percent', note: 'their rule of thumb' }, spec, ctx)).note, 'their rule of thumb');
 });
 
 // Review round 1 regressions.
-test('owner evidence never splits a number out of the owner\'s words', () => {
+test('owner evidence never splits a number out of the owner\'s words', async () => {
   const spec = { name: 'withdrawalRate', unit: 'ratio' };
-  assert.throws(() => checkAssumption(owner(0.04, '4 percent'), spec, ask(['Use 14 percent'])), e => e.code === 'bad_input');
-  assert.equal(checkAssumption(owner(0.14, '14 percent'), spec, ask(['Use 14 percent'])).value, 0.14);
-  assert.throws(() => checkAssumption(owner(0.04, '0.04'), spec, ask(['A rate of 10.04 is fine'])), e => e.code === 'bad_input');
-  assert.throws(() => checkAssumption(owner(1000, '1,000'), { name: 'amount', unit: 'usd' }, ask(['Spend $21,000 a year'])), e => e.code === 'bad_input');
-  assert.equal(checkAssumption(owner(0.04, '4 percent withdrawal rate'), spec, ask([Q02])).value, 0.04, 'an excerpt on word boundaries still counts');
+  await assert.rejects(async () => await checkAssumption(owner(0.04, '4 percent'), spec, ask(['Use 14 percent'])), e => e.code === 'bad_input');
+  assert.equal((await checkAssumption(owner(0.14, '14 percent'), spec, ask(['Use 14 percent']))).value, 0.14);
+  await assert.rejects(async () => await checkAssumption(owner(0.04, '0.04'), spec, ask(['A rate of 10.04 is fine'])), e => e.code === 'bad_input');
+  await assert.rejects(async () => await checkAssumption(owner(1000, '1,000'), { name: 'amount', unit: 'usd' }, ask(['Spend $21,000 a year'])), e => e.code === 'bad_input');
+  assert.equal((await checkAssumption(owner(0.04, '4 percent withdrawal rate'), spec, ask([Q02]))).value, 0.04, 'an excerpt on word boundaries still counts');
 });
 
-test('a fact assumption needs a stored number, never a coerced boolean or list', () => {
+test('a fact assumption needs a stored number, never a coerced boolean or list', async () => {
   const fact = t.db.prepare(`INSERT OR REPLACE INTO facts (key, value, src, as_of, confirmed, file_id, parser, locator, updated_at)
                              VALUES (?, ?, 'you', '2026-11-01', 1, NULL, NULL, NULL, '2026-11-01T09:00:00Z')`);
-  fact.run('test.flag', 'true');
-  fact.run('test.list', '[2]');
-  fact.run('test.text', '"12"');
+  await fact.run('test.flag', 'true');
+  await fact.run('test.list', '[2]');
+  await fact.run('test.text', '"12"');
   const ctx = ask([]);
-  assert.throws(() => checkAssumption({ value: 1, source: 'fact', factKey: 'test.flag' }, { name: 'n', unit: 'usd' }, ctx), e => e.code === 'bad_input' && /test\.flag/.test(e.message));
-  assert.throws(() => checkAssumption({ value: 2, source: 'fact', factKey: 'test.list' }, { name: 'n', unit: 'usd' }, ctx), e => e.code === 'bad_input');
-  assert.throws(() => checkAssumption({ value: 12, source: 'fact', factKey: 'test.text' }, { name: 'n', unit: 'usd' }, ctx), e => e.code === 'bad_input');
+  await assert.rejects(async () => await checkAssumption({ value: 1, source: 'fact', factKey: 'test.flag' }, { name: 'n', unit: 'usd' }, ctx), e => e.code === 'bad_input' && /test\.flag/.test(e.message));
+  await assert.rejects(async () => await checkAssumption({ value: 2, source: 'fact', factKey: 'test.list' }, { name: 'n', unit: 'usd' }, ctx), e => e.code === 'bad_input');
+  await assert.rejects(async () => await checkAssumption({ value: 12, source: 'fact', factKey: 'test.text' }, { name: 'n', unit: 'usd' }, ctx), e => e.code === 'bad_input');
 });
 
-test('money evidence keeps its sign', () => {
+test('money evidence keeps its sign', async () => {
   assert.equal(assumptionStated(-1000, 'usd', ['-$1,000']), true);
   assert.equal(assumptionStated(1000, 'usd', ['-$1,000']), false);
   assert.equal(assumptionStated(-1000, 'usd', ['minus $1,000']), true);
@@ -155,7 +155,7 @@ test('money evidence keeps its sign', () => {
   assert.equal(assumptionStated(1000, 'usd', ['$1,000-2,000']), true, 'a range dash is not a sign');
   assert.equal(assumptionStated(-2000, 'usd', ['$1,000-2,000']), false);
   const mcp = { db: t.db, channel: 'mcp' };
-  const kept = checkAssumption(owner(-1000, 'a -$1,000 adjustment'), { name: 'adjustment', unit: 'usd' }, mcp);
+  const kept = await checkAssumption(owner(-1000, 'a -$1,000 adjustment'), { name: 'adjustment', unit: 'usd' }, mcp);
   assert.equal(kept.stated, '-$1,000');
-  assert.throws(() => checkAssumption(owner(1000, 'a -$1,000 adjustment'), { name: 'adjustment', unit: 'usd' }, mcp), e => e.code === 'bad_input');
+  await assert.rejects(async () => await checkAssumption(owner(1000, 'a -$1,000 adjustment'), { name: 'adjustment', unit: 'usd' }, mcp), e => e.code === 'bad_input');
 });

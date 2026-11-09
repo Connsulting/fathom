@@ -20,10 +20,10 @@ let directory, instance;
 try {
   const modelPorts = loadModelConfig(env);
   directory = await mkdtemp(join(tmpdir(), 'fathom-model-smoke-'));
-  instance = createInstance(directory, { mode: 'demo' });
-  instance.platform.prepare('INSERT INTO platform_settings (key,value,updated_at) VALUES (?,?,?)').run(FUNDING_SETTING, JSON.stringify(1), Date.now());
-  setAllocation(instance.platform, instance.householdId, 1);
-  const engine = createRuntimeEngine({ db: instance.db, platform: instance.platform, householdId: instance.householdId, generation: 1,
+  instance = await createInstance(directory, { mode: 'demo' });
+  await instance.platform.prepare('INSERT INTO platform_settings (key,value,updated_at) VALUES (?,?,?)').run(FUNDING_SETTING, JSON.stringify(1), Date.now());
+  await setAllocation(instance.platform, instance.householdId, 1);
+  const engine = await createRuntimeEngine({ db: instance.db, platform: instance.platform, householdId: instance.householdId, generation: 1,
     config: { engine: 'live', modelPorts }, allowed: () => true, funded: () => true });
   for (const [label, purpose] of Object.entries(purposes)) {
     let input = 0, output = 0, pass = false;
@@ -47,6 +47,6 @@ try {
   for (const label of Object.keys(purposes)) console.log(`${label} fail input_tokens=0 output_tokens=0`);
   process.exitCode = 1;
 } finally {
-  instance?.db.close(); instance?.platform.close();
+  await instance?.db.close(); await instance?.platform.close();
   if (directory) await rm(directory, { recursive: true, force: true });
 }

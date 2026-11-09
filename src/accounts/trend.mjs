@@ -13,6 +13,7 @@
 import { cents } from '../store/db.mjs';
 import { sourceStates } from '../ingest/coverage.mjs';
 import { monthlyReadings, trendLabels } from '../jobs/planner/series.mjs';
+import { mapSeries } from '../shared/series.mjs';
 
 export const TREND_SRC = 'trend';
 export const MAX_MONTHS = 120;
@@ -69,14 +70,14 @@ function carriedNote(carried) {
   return `includes ${plural(carried.length, 'account', 'accounts')} ${when}`;
 }
 
-export function buildTrend(db, clock) {
-  const labels = trendLabels(db);
-  const rows = db.prepare('SELECT id, kind, archived_at FROM accounts ORDER BY sort, id').all();
-  const stored = rows.map(a => {
-    const readings = monthlyReadings(db, a.id, clock);
+export async function buildTrend(db, clock) {
+  const labels = await trendLabels(db);
+  const rows = await db.prepare('SELECT id, kind, archived_at FROM accounts ORDER BY sort, id').all();
+  const stored = (await mapSeries(rows, async a => {
+    const readings = await monthlyReadings(db, a.id, clock);
     const months = [...readings.keys()].sort();
     return { id: a.id, label: labels.get(a.id), group: groupOfKind(a.kind), readings, months, last: readings.get(months.at(-1))?.date, archived: !!a.archived_at };
-  }).filter(x => x.months.length);
+  })).filter(x => x.months.length);
   // An account counts from its first balance on and adds nothing before it.
   const counted = stored;
   if (!counted.length) return null;
@@ -89,7 +90,7 @@ export function buildTrend(db, clock) {
 
   // Freshness decides whether an account at the end is still current, not only whether it has a
   // row in the final month.
-  const states = sourceStates(db, clock).accounts;
+  const states = (await sourceStates(db, clock)).accounts;
   const freshOf = new Map(counted.map(x => [x.id, states.get(x.id)?.state ?? 'unknown']));
   const carriedAt = (x, m) => (m === endMonth ? x.months.at(-1) < endMonth || freshOf.get(x.id) === 'stale' : m > x.months.at(-1));
   // The reading an account contributes at month m: its newest one on or before it.

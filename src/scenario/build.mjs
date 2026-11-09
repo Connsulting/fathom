@@ -33,6 +33,7 @@ import { gapsFor, TRIGGER_INPUTS } from '../shared/rec-inputs.mjs';
 import { advisorWait } from '../shared/advisor-waits.mjs';
 import { ADVISOR_KEYS } from '../facts/derive.mjs';
 import { observedPayments } from '../ingest/transaction-payments.mjs';
+import { filterSeries, mapSeries } from '../shared/series.mjs';
 
 const DAY = 86400000;
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -129,35 +130,35 @@ export function tsLabel(ts) {
 }
 
 // "Today": the override, else settings.clock, else the current UTC date.
-export function resolveClock(db, override) {
-  const c = override || getSetting(db, 'clock', null) || todayUtc();
+export async function resolveClock(db, override) {
+  const c = override || await getSetting(db, 'clock', null) || todayUtc();
   if (!isIsoDate(c)) throw new Error(`clock must be an ISO date (YYYY-MM-DD), got ${c}`);
   return c;
 }
 
 // The current time on the scenario clock: the clock's date at the current UTC time of day.
-export function clockNow(db, override) {
-  return `${resolveClock(db, override)}T${new Date().toISOString().slice(11)}`;
+export async function clockNow(db, override) {
+  return `${await resolveClock(db, override)}T${new Date().toISOString().slice(11)}`;
 }
 
 // ---------------------------------------------------------------- small readers
 
 const arr = v => (Array.isArray(v) ? v : []);
 
-export function loadContent(db) {
+export async function loadContent(db) {
   const out = {};
-  for (const r of db.prepare('SELECT key, value FROM content').all()) out[r.key] = parse(r.value, null);
+  for (const r of await db.prepare('SELECT key, value FROM content').all()) out[r.key] = parse(r.value, null);
   return out;
 }
 
 const section = (content, key) => (content[key] != null ? content[key] : structuredClone(EMPTY[key]));
 
-export function loadSources(db, clock) {
+export async function loadSources(db, clock) {
   const src = {};
   for (const [id, s] of Object.entries(BUILTIN_SOURCES)) {
     src[id] = { label: s.label, asOf: id === 'spend-ledger' && clock ? clockLabel(clock) : '' };
   }
-  for (const r of db.prepare('SELECT id, label, as_of FROM sources ORDER BY rowid').all()) {
+  for (const r of await db.prepare('SELECT id, label, as_of FROM sources ORDER BY rowid').all()) {
     src[r.id] = { label: r.label, asOf: r.as_of || '' };
   }
   return src;
@@ -166,9 +167,9 @@ export function loadSources(db, clock) {
 // Stored figures. A figure carries `notes` (readable assumptions from its locator, at most five,
 // MGN1) when it has any, and `unavailable` (the reason, R2-9) when the planner kept it only for
 // reference.
-export function loadFigures(db) {
+export async function loadFigures(db) {
   const fig = {};
-  for (const r of db.prepare('SELECT key, v, src, kind, label, locator, unavailable_reason FROM figures ORDER BY rowid').all()) {
+  for (const r of await db.prepare('SELECT key, v, src, kind, label, locator, unavailable_reason FROM figures ORDER BY rowid').all()) {
     const f = { v: r.v, src: r.src, kind: r.kind, label: r.label };
     const loc = parse(r.locator, null);
     const notes = loc && Array.isArray(loc.notes) ? loc.notes.filter(n => typeof n === 'string' && n.trim()) : [];
@@ -192,22 +193,22 @@ export function loadFigures(db) {
 }
 
 // Names, law, pct and stored figures: enough to resolve tokens outside a full build.
-export function tokenScope(db) {
-  const c = loadContent(db);
-  return { names: c.names || {}, law: c.law || {}, pct: c.pct || {}, fig: loadFigures(db) };
+export async function tokenScope(db) {
+  const c = await loadContent(db);
+  return { names: c.names || {}, law: c.law || {}, pct: c.pct || {}, fig: await loadFigures(db) };
 }
 
 // What derives each rec's step state: the facts and accounts an answer step checks, the
 // missing-data codes the last plan run left open, and the latest "I did this" or Undo per step.
-export function stepEnvOf(db) {
+export async function stepEnvOf(db) {
   const marks = new Map();
-  for (const e of db.prepare("SELECT rec_id, action, arg, ts, actor FROM rec_events WHERE action IN ('step_did', 'step_undo') ORDER BY id").all()) {
+  for (const e of await db.prepare("SELECT rec_id, action, arg, ts, actor FROM rec_events WHERE action IN ('step_did', 'step_undo') ORDER BY id").all()) {
     if (!marks.has(e.rec_id)) marks.set(e.rec_id, new Map());
     marks.get(e.rec_id).set(e.arg, { action: e.action, ts: e.ts, actor: e.actor });
   }
-  const open = parse(db.prepare("SELECT value FROM content WHERE key = 'rec.openData'").get()?.value, null);
-  const confirm = db.prepare("SELECT id, kind, context, status FROM confirm_items WHERE status = 'pending' ORDER BY id").all().map(item => ({ ...item, context: parse(item.context, {}) }));
-  return { facts: getFacts(db), accounts: db.prepare('SELECT * FROM accounts').all(), confirm, open: Array.isArray(open) ? open : null, marks, payments: observedPayments(db) };
+  const open = parse((await db.prepare("SELECT value FROM content WHERE key = 'rec.openData'").get())?.value, null);
+  const confirm = (await db.prepare("SELECT id, kind, context, status FROM confirm_items WHERE status = 'pending' ORDER BY id").all()).map(item => ({ ...item, context: parse(item.context, {}) }));
+  return { facts: await getFacts(db), accounts: await db.prepare('SELECT * FROM accounts').all(), confirm, open: Array.isArray(open) ? open : null, marks, payments: await observedPayments(db) };
 }
 
 export function recFromRow(row, clock, env = {}) {
@@ -237,21 +238,21 @@ export function recFromRow(row, clock, env = {}) {
 
 // Every rec with live status (hidden ones included; callers filter).
 // Each rec's `advisor` field comes from the advisor tables (src/advisor), never from its def.
-export function loadRecs(db, clock) {
-  const facts = getFacts(db);
-  const mortgage = inferMortgage(db, clock, facts['obligations.mortgage']);
+export async function loadRecs(db, clock) {
+  const facts = await getFacts(db);
+  const mortgage = await inferMortgage(db, clock, facts['obligations.mortgage']);
   if (mortgage.present) facts['obligations.mortgage'] = mortgage.values;
-  const accounts = withLabelHints(db, db.prepare('SELECT * FROM accounts').all());
-  const env = stepEnvOf(db);
+  const accounts = await withLabelHints(db, await db.prepare('SELECT * FROM accounts').all());
+  const env = await stepEnvOf(db);
   env.facts = facts;
-  const recs = db.prepare('SELECT * FROM recs ORDER BY sort, id').all().map(r => recFromRow(r, clock, env));
-  if (getSetting(db, 'mode', null) === 'demo') {
+  const recs = (await db.prepare('SELECT * FROM recs ORDER BY sort, id').all()).map(r => recFromRow(r, clock, env));
+  if (await getSetting(db, 'mode', null) === 'demo') {
     const window = expectedChildWindow(facts);
     const rec = recs.find(r => r.id === 'babyprep');
     if (rec && window) rec.window = { ...window, days: daysBetween(clock, window.close) };
   }
   // A rec waiting on the planner names its blocker (stored with the last run, gone once it is unblocked).
-  const blockers = parse(db.prepare("SELECT value FROM content WHERE key = 'rec.blockers'").get()?.value, null) || {};
+  const blockers = parse((await db.prepare("SELECT value FROM content WHERE key = 'rec.blockers'").get())?.value, null) || {};
   for (const r of recs) if (r.status === 'waiting' && Object.hasOwn(blockers, r.id)) r.blocker = blockers[r.id];
   // A rec done by its answer carries the live receipts of its latest answer: its Undo (RQ2).
   const lastStatus = db.prepare('SELECT action, to_status FROM rec_events WHERE rec_id = ? AND from_status IS NOT to_status ORDER BY id DESC LIMIT 1');
@@ -259,10 +260,10 @@ export function loadRecs(db, clock) {
   const live = db.prepare('SELECT id FROM action_receipts WHERE id = ? AND undone_at IS NULL');
   for (const r of recs) {
     if (r.status !== 'done') continue;
-    const last = lastStatus.get(r.id);
+    const last = await lastStatus.get(r.id);
     if (!last || last.to_status !== 'done' || !['answer', 'answered'].includes(last.action)) continue;
-    const ids = parse(lastAnswer.get(r.id)?.arg, null);
-    const receipts = Array.isArray(ids) ? ids.filter(id => typeof id === 'string' && live.get(id)) : [];
+    const ids = parse((await lastAnswer.get(r.id))?.arg, null);
+    const receipts = Array.isArray(ids) ? await filterSeries(ids, async id => typeof id === 'string' && await live.get(id)) : [];
     if (receipts.length) r.answerReceipts = receipts;
   }
   // H3: a rec waiting on the advisor names each answer it needs and the control that records it.
@@ -279,7 +280,7 @@ export function loadRecs(db, clock) {
       r.summary = r.question.summary;
     }
   }
-  return withAdvisor(db, recs);
+  return await withAdvisor(db, recs);
 }
 
 // Goal links, resolved at read time against the current goals (stored goal kinds -> open goal
@@ -298,18 +299,18 @@ const CLOSED = new Set(['hidden', 'done', 'dismissed']);
 export const housekeepingCount = recs => recs.filter(r => r.housekeeping === true && !CLOSED.has(r.status)).length;
 
 // loadRecs with goal links, for readers outside a full build (the tools).
-export function loadLinkedRecs(db, clock) {
-  return linkWithStoredGoals(db, loadRecs(db, clock));
+export async function loadLinkedRecs(db, clock) {
+  return await linkWithStoredGoals(db, await loadRecs(db, clock));
 }
 
 // One stored rec row, with its advisor field and goal links.
-export function loadLinkedRec(db, clock, row) {
-  return linkWithStoredGoals(db, withAdvisor(db, [recFromRow(row, clock, stepEnvOf(db))]))[0];
+export async function loadLinkedRec(db, clock, row) {
+  return (await linkWithStoredGoals(db, await withAdvisor(db, [recFromRow(row, clock, await stepEnvOf(db))])))[0];
 }
 
-function linkWithStoredGoals(db, recs) {
-  const accounts = withLabelHints(db, db.prepare('SELECT * FROM accounts ORDER BY sort, id').all());
-  return linkRecs(recs, loadGoals(db, { fig: loadFigures(db), accounts }), accounts);
+async function linkWithStoredGoals(db, recs) {
+  const accounts = await withLabelHints(db, await db.prepare('SELECT * FROM accounts ORDER BY sort, id').all());
+  return linkRecs(recs, await loadGoals(db, { fig: await loadFigures(db), accounts }), accounts);
 }
 
 export function messageOut(row) {
@@ -326,13 +327,13 @@ export function messageOut(row) {
 
 // Every conversation's messages by key: Ask threads ('ask:<id>', rec threads included) and
 // 'pack:<id>'. No conversation is keyed by a rec id (migration 016 moved them into threads).
-export function loadConversations(db) {
+export async function loadConversations(db) {
   const out = {};
-  for (const c of db.prepare('SELECT key FROM conversations ORDER BY created_at, key').all()) out[c.key] = out[c.key] || [];
-  for (const m of db.prepare('SELECT * FROM messages ORDER BY id').all()) {
+  for (const c of await db.prepare('SELECT key FROM conversations ORDER BY created_at, key').all()) out[c.key] = out[c.key] || [];
+  for (const m of await db.prepare('SELECT * FROM messages ORDER BY id').all()) {
     (out[m.conversation_key] || (out[m.conversation_key] = [])).push(messageOut(m));
   }
-  for (const [key, messages] of Object.entries(out)) withDescriptions(db, receiptMessages(db, key, messages));
+  for (const [key, messages] of Object.entries(out)) await withDescriptions(db, await receiptMessages(db, key, messages));
   return out;
 }
 
@@ -364,9 +365,9 @@ export const THREAD_SELECT = `SELECT c.key, c.created_at, c.title, c.title_sourc
   FROM conversations c`;
 
 // Every Ask thread (archived and trashed included), newest lastAt first.
-export function loadThreads(db) {
-  return db.prepare(`${THREAD_SELECT} WHERE substr(c.key, 1, 4) = 'ask:' ORDER BY coalesce(c.last_at, c.created_at) DESC, c.rowid DESC`)
-    .all().filter(r => THREAD_KEY.test(r.key)).map(threadOut);
+export async function loadThreads(db) {
+  return (await db.prepare(`${THREAD_SELECT} WHERE substr(c.key, 1, 4) = 'ask:' ORDER BY coalesce(c.last_at, c.created_at) DESC, c.rowid DESC`)
+    .all()).filter(r => THREAD_KEY.test(r.key)).map(threadOut);
 }
 
 // The fixed Ask starter questions, in their pinned order. No figures, no tokens.
@@ -381,15 +382,15 @@ export const ASK_STARTERS = Object.freeze([
 
 // The starters whose condition holds: attention (a visible rec proposed or doing), taxes
 // (any tax payment), scorp (fact income.sCorp is true or any P&L line), yearend (always).
-export function loadAskStarters(db, recs, wargame = {}) {
-  const exists = table => !!db.prepare(`SELECT EXISTS (SELECT 1 FROM ${table}) AS x`).get().x;
-  const sCorp = parse(db.prepare("SELECT value FROM facts WHERE key = 'income.sCorp'").get()?.value, null) === true;
+export async function loadAskStarters(db, recs, wargame = {}) {
+  const exists = async table => !!(await db.prepare(`SELECT EXISTS (SELECT 1 FROM ${table}) AS x`).get()).x;
+  const sCorp = parse((await db.prepare("SELECT value FROM facts WHERE key = 'income.sCorp'").get())?.value, null) === true;
   const holds = {
     'wargame-salary': ['open', 'upcoming'].includes(wargame.salary?.status),
     'wargame-deferral': ['open', 'upcoming'].includes(wargame.deferral?.status),
     attention: recs.some(r => ['proposed', 'doing'].includes(r.status)),
-    taxes: exists('tax_payments'),
-    scorp: sCorp || exists('pnl_lines'),
+    taxes: await exists('tax_payments'),
+    scorp: sCorp || await exists('pnl_lines'),
     yearend: true,
   };
   return ASK_STARTERS.filter(st => holds[st.id]).map(st => ({ id: st.id, q: st.q }));
@@ -408,10 +409,10 @@ export function defaultPicks(wargame) {
 }
 
 // livePacks (optional, src/packs/live.mjs) adds each manifest-backed row's manifest fields.
-export function loadPacks(db, livePacks = null) {
-  return db.prepare('SELECT * FROM packs_state ORDER BY sort, id').all().map(r => ({
+export async function loadPacks(db, livePacks = null) {
+  return await mapSeries((await db.prepare('SELECT * FROM packs_state ORDER BY sort, id').all()), async r => ({
     id: r.id,
-    def: livePacks ? livePacks.view(r.id, parse(r.def, {})) : parse(r.def, {}),
+    def: livePacks ? await livePacks.view(r.id, parse(r.def, {})) : parse(r.def, {}),
     live: {
       active: r.active == null ? null : !!r.active,
       exploring: !!r.exploring,
@@ -424,23 +425,23 @@ export function loadPacks(db, livePacks = null) {
 
 // The latest spend rows for the Engine screen: no tokens, no prompt fields.
 export const LEDGER_ROWS = 8;
-export function loadLedger(db) {
-  return db.prepare('SELECT id, ts, purpose, model, cost_usd FROM spend_ledger ORDER BY id DESC LIMIT ?').all(LEDGER_ROWS)
+export async function loadLedger(db) {
+  return (await db.prepare('SELECT id, ts, purpose, model, cost_usd FROM spend_ledger ORDER BY id DESC LIMIT ?').all(LEDGER_ROWS))
     .map(r => ({ id: r.id, ts: tsLabel(r.ts), purpose: r.purpose, model: r.model, cost: cents(r.cost_usd) }));
 }
 
 // Your plans inputs: plan and benefits documents, the files a build can read (text or PDF), and
 // the last build (settings.yourPlans) or null.
 const READABLE = "(mime LIKE 'text/%' OR mime = 'application/pdf' OR lower(name) LIKE '%.md' OR lower(name) LIKE '%.txt' OR lower(name) LIKE '%.pdf')";
-export function loadYourPlans(db) {
-  const excludedDocuments = getSetting(db, 'yourPlans.excludedDocuments', []);
-  const sources = db.prepare(`SELECT d.id, d.doc_type, d.fields, d.file_id, f.name, f.removed_at FROM documents d LEFT JOIN files f ON f.id = d.file_id
-                              WHERE d.doc_type IN ('plan', 'benefits') ORDER BY d.id`).all()
+export async function loadYourPlans(db) {
+  const excludedDocuments = await getSetting(db, 'yourPlans.excludedDocuments', []);
+  const sources = (await db.prepare(`SELECT d.id, d.doc_type, d.fields, d.file_id, f.name, f.removed_at FROM documents d LEFT JOIN files f ON f.id = d.file_id
+                              WHERE d.doc_type IN ('plan', 'benefits') ORDER BY d.id`).all())
     .filter(r => !excludedDocuments.includes(r.id) && (r.file_id ? r.name != null && !r.removed_at : typeof parse(r.fields, {})?.text === 'string'))
     .map(r => ({ fileId: r.file_id || null, name: r.file_id ? r.name : `document-${r.id}`, docType: r.doc_type }));
-  const files = db.prepare(`SELECT id, name FROM files WHERE ${READABLE} AND removed_at IS NULL ORDER BY uploaded_at, id`).all()
+  const files = (await db.prepare(`SELECT id, name FROM files WHERE ${READABLE} AND removed_at IS NULL ORDER BY uploaded_at, id`).all())
     .map(r => ({ id: r.id, name: r.name }));
-  return { sources, files, built: getSetting(db, 'yourPlans', null), coverage: planCoverage(db) };
+  return { sources, files, built: await getSetting(db, 'yourPlans', null), coverage: await planCoverage(db) };
 }
 
 // ---------------------------------------------------------------- Decide
@@ -571,8 +572,8 @@ function plainEventTitle(e) {
 // contribution's shares) and .entered and .entered.<person> (contributed so far, as entered, kind
 // 'a'). A range's progress reads against its low end.
 const currentFig = f => !!f && typeof f.v === 'number' && !f.unavailable;
-export function loadGoals(db, { fig = {}, accounts = [] } = {}) {
-  const rows = db.prepare('SELECT * FROM goals ORDER BY sort, created_at, id').all();
+export async function loadGoals(db, { fig = {}, accounts = [] } = {}) {
+  const rows = await db.prepare('SELECT * FROM goals ORDER BY sort, created_at, id').all();
   return rows.map(r => {
     const def = parse(r.def, {});
     const origin = r.origin === 'owner' ? 'owner' : 'seed';
@@ -652,10 +653,10 @@ export function loadGoals(db, { fig = {}, accounts = [] } = {}) {
 // The tradeoff curve: the content axes (the demo) or the default axes (a real store), each with
 // its position from settings 'curve.positions' (onboarding's priorities), unless a remembered
 // preference names one end of the axis: the owner changes the curve by telling Ask.
-export function loadCurve(db, content) {
-  const positions = getSetting(db, 'curve.positions', null) || {};
+export async function loadCurve(db, content) {
+  const positions = await getSetting(db, 'curve.positions', null) || {};
   const axes = Array.isArray(content.curve) && content.curve.length ? content.curve : CURVE_AXES;
-  const told = rememberedCurve(db, axes);
+  const told = await rememberedCurve(db, axes);
   return axes.map(a => ({ ...a, value: Object.hasOwn(told, a.id) ? told[a.id] : curvePosition(positions, a) }));
 }
 
@@ -668,8 +669,8 @@ const names = (t, label) => {
   const i = label ? t.indexOf(label) : -1;
   return i >= 0 && !NEGATED.test(t.slice(Math.max(0, i - 40), i));
 };
-export function rememberedCurve(db, axes) {
-  const texts = db.prepare('SELECT text FROM preferences ORDER BY updated_at DESC, created_at DESC, rowid DESC').all().map(r => String(r.text).toLowerCase());
+export async function rememberedCurve(db, axes) {
+  const texts = (await db.prepare('SELECT text FROM preferences ORDER BY updated_at DESC, created_at DESC, rowid DESC').all()).map(r => String(r.text).toLowerCase());
   const out = {};
   for (const a of axes) {
     const [l, r] = [a.left, a.right].map(x => String(x ?? '').trim().toLowerCase());
@@ -698,9 +699,9 @@ function onboardingWithPriorities(onboarding, curve, positions) {
 
 // ---------------------------------------------------------------- build
 
-export function buildScenario(db, { clock, engineMode = null, packs: livePacks = null, modelConfig = {} } = {}) {
-  const clk = resolveClock(db, clock);
-  const content = loadContent(db);
+export async function buildScenario(db, { clock, engineMode = null, packs: livePacks = null, modelConfig = {} } = {}) {
+  const clk = await resolveClock(db, clock);
+  const content = await loadContent(db);
   const metaC = section(content, 'meta');
   const names = section(content, 'names');
   const law = section(content, 'law');
@@ -708,46 +709,46 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
   const series = section(content, 'series');
   const wargameC = section(content, 'wargame');
 
-  const src = loadSources(db, clk);
-  const fig = loadFigures(db);
-  const naming = applyNaming(db, { series, src, fig });
+  const src = await loadSources(db, clk);
+  const fig = await loadFigures(db);
+  const naming = await applyNaming(db, { series, src, fig });
 
-  const recs = loadRecs(db, clk);
+  const recs = await loadRecs(db, clk);
   const recsById = new Map(recs.map(r => [r.id, r]));
 
-  const decisionRows = db.prepare('SELECT * FROM decisions ORDER BY sort, id').all();
+  const decisionRows = await db.prepare('SELECT * FROM decisions ORDER BY sort, id').all();
   const decisions = deriveDecisions(decisionRows, recsById, clk, wargameC);
   const wargame = deriveWargame(wargameC, decisions, decisionRows);
 
   const month = clk.slice(0, 7);
-  const used = cents(db.prepare('SELECT coalesce(sum(cost_usd), 0) AS s FROM spend_ledger WHERE yyyymm = ?').get(month).s);
-  const cap = getSetting(db, 'cap', { usd: DEFAULT_CAP_USD });
+  const used = cents((await db.prepare('SELECT coalesce(sum(cost_usd), 0) AS s FROM spend_ledger WHERE yyyymm = ?').get(month)).s);
+  const cap = await getSetting(db, 'cap', { usd: DEFAULT_CAP_USD });
   const monthly = cap && typeof cap.usd === 'number' ? cap.usd : DEFAULT_CAP_USD;
-  const jobs = db.prepare('SELECT * FROM jobs ORDER BY sort, id').all().map(j => ({
+  const jobs = (await db.prepare('SELECT * FROM jobs ORDER BY sort, id').all()).map(j => ({
     id: j.id, name: j.name, cadence: j.cadence || '', last: j.last_label || '', next: j.next_label || '', does: j.does || '', cost: j.cost,
   }));
   const models = MODEL_PURPOSES.map(purpose => ({ purpose, model: selectionFor(modelConfig, purpose).model }));
-  const engine = { mode: engineMode, budget: { monthly, used }, chat: section(content, 'engine.chat'), models, jobs, ledger: loadLedger(db) };
+  const engine = { mode: engineMode, budget: { monthly, used }, chat: section(content, 'engine.chat'), models, jobs, ledger: await loadLedger(db) };
 
   deriveFigures(fig, { wargame, series, engine }, { names, law, pct, fig });
 
-  livePacks?.loaded();
-  const packs = loadPacks(db, livePacks);
-  const onboarding = getSetting(db, 'onboarding', { done: false, step: 0 }) || { done: false, step: 0 };
-  const mode = getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real';
+  await livePacks?.loaded();
+  const packs = await loadPacks(db, livePacks);
+  const onboarding = await getSetting(db, 'onboarding', { done: false, step: 0 }) || { done: false, step: 0 };
+  const mode = await getSetting(db, 'mode', null) === 'demo' ? 'demo' : 'real';
   // A real store that already holds data (an imported file or an account) is a returning owner:
   // it builds as november so the owner lands in the app, not first-run onboarding.
-  const hasData = !!db.prepare('SELECT EXISTS (SELECT 1 FROM files) OR EXISTS (SELECT 1 FROM accounts) AS x').get().x;
-  const picks = { ...defaultPicks(wargame), ...(getSetting(db, 'wargame.picks', null) || {}) };
-  const engineOn = getSetting(db, 'engine', { on: true });
-  const ingest = ingestState(db, { clock: clk });
-  const dataThrough = householdDataThrough(db, clk);
+  const hasData = !!(await db.prepare('SELECT EXISTS (SELECT 1 FROM files) OR EXISTS (SELECT 1 FROM accounts) AS x').get()).x;
+  const picks = { ...defaultPicks(wargame), ...(await getSetting(db, 'wargame.picks', null) || {}) };
+  const engineOn = await getSetting(db, 'engine', { on: true });
+  const ingest = await ingestState(db, { clock: clk });
+  const dataThrough = await householdDataThrough(db, clk);
   const ingestAccounts = ingest.accounts || {};
-  const accountRows = db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
+  const accountRows = await db.prepare('SELECT * FROM accounts ORDER BY sort, id').all();
   const householdNames = naming.householdNames;
   // Goal labels read the naming rows, so an uncertain connected mask is not shown as an account number.
-  const goals = loadGoals(db, { fig, accounts: accountRows.map(a => naming.byId.get(a.id) ?? a) });
-  const pace = buildPace(db, { clock: clk });
+  const goals = await loadGoals(db, { fig, accounts: accountRows.map(a => naming.byId.get(a.id) ?? a) });
+  const pace = await buildPace(db, { clock: clk });
   // The rollup date is the newest stored row when that is later than the oldest goal input.
   // Home reads this field; Money reads meta.dataThrough. Both follow the same ISO day.
   if (dataThrough && pace.rollup && (!pace.rollup.dataThrough || dataThrough > pace.rollup.dataThrough)) {
@@ -755,16 +756,16 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
   }
   Object.assign(fig, indexPaceFigures(pace));
   src['calc:pace'] = { label: 'Goal pace calculator', asOf: clk };
-  const suggested = buildSuggestions(db, { clock: clk, goals });
+  const suggested = await buildSuggestions(db, { clock: clk, goals });
   Object.assign(fig, suggested.figures);
   src['calc:targets'] = { label: 'Suggested target calculator', asOf: clk };
-  const household = buildTrend(db, clk);
+  const household = await buildTrend(db, clk);
   if (household) {
     Object.assign(fig, household.figures);
     src[TREND_SRC] = household.source;
   }
-  const curve = loadCurve(db, content);
-  const positions = getSetting(db, 'curve.positions', null) || {};
+  const curve = await loadCurve(db, content);
+  const positions = await getSetting(db, 'curve.positions', null) || {};
   linkRecs(recs, goals, accountRows);
 
   return {
@@ -785,8 +786,8 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
     verdict: section(content, 'verdict'),
     domains: applyFreshness(section(content, 'domains'), ingest),
     // A store written before titles were plain language may still hold "<fact key> changed".
-    events: db.prepare('SELECT date, kind, title, body FROM events ORDER BY sort, id').all().map(e => ({ ...e, title: plainEventTitle(e) })),
-    deadlines: db.prepare('SELECT date, label, title, rec_id, hard FROM deadlines ORDER BY date, id').all().map(d => {
+    events: (await db.prepare('SELECT date, kind, title, body FROM events ORDER BY sort, id').all()).map(e => ({ ...e, title: plainEventTitle(e) })),
+    deadlines: (await db.prepare('SELECT date, label, title, rec_id, hard FROM deadlines ORDER BY date, id').all()).map(d => {
       const out = { date: d.date, label: d.label, title: d.title };
       if (d.rec_id) out.recId = d.rec_id;
       out.hard = !!d.hard;
@@ -796,7 +797,7 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
     goals,
     pace,
     suggestions: suggested.suggestions,
-    preferences: listMemories(db),
+    preferences: await listMemories(db),
     curve,
     wargame,
     decisions,
@@ -815,8 +816,8 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
         imported: a.parser !== 'demo-seed',
       };
     }),
-    advisor: advisorSection(db, section(content, 'advisor'), recs),
-    yearend: buildYearend(db, { clock: clk, recs, decisions, plain: s => resolveTokens({ names, law, pct, fig }, s, false) }),
+    advisor: await advisorSection(db, section(content, 'advisor'), recs),
+    yearend: await buildYearend(db, { clock: clk, recs, decisions, plain: s => resolveTokens({ names, law, pct, fig }, s, false) }),
     connect: section(content, 'connect'),
     engine,
     onboarding: onboardingWithPriorities(section(content, 'onboarding'), curve, positions),
@@ -828,15 +829,15 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
       engine: !(engineOn && engineOn.on === false),
       onboardStep: Number.isInteger(onboarding.step) ? onboarding.step : 0,
       picks,
-      conversations: loadConversations(db),
-      threads: loadThreads(db),
-      askStarters: loadAskStarters(db, recs, wargame),
+      conversations: await loadConversations(db),
+      threads: await loadThreads(db),
+      askStarters: await loadAskStarters(db, recs, wargame),
       packs: Object.fromEntries(packs.map(p => [p.def.id, { active: p.live.active, exploring: p.live.exploring, whatIfDone: p.live.whatIfDone }])),
-      yourPlans: loadYourPlans(db),
+      yourPlans: await loadYourPlans(db),
       clock: clk,
       ingest,
-      simplefin: loadSimplefin(db, mode),
-      heard: deriveHeard(db, { clock: clk }),
+      simplefin: await loadSimplefin(db, mode),
+      heard: await deriveHeard(db, { clock: clk }),
       housekeeping: housekeepingCount(recs),
     },
   };
@@ -844,9 +845,9 @@ export function buildScenario(db, { clock, engineMode = null, packs: livePacks =
 
 // The SimpleFIN connection as the UI may see it: never the access URL (src/ingest/simplefin.mjs
 // owns the connection; this reads its status columns only).
-export function loadSimplefin(db, mode) {
-  const row = db.prepare('SELECT connected_at, last_sync_at, status, error_code, messages, accounts FROM simplefin_connection WHERE id = 1').get();
-  const pendingMatches = db.prepare("SELECT count(*) AS n FROM simplefin_accounts WHERE status = 'pending_match'").get().n;
+export async function loadSimplefin(db, mode) {
+  const row = await db.prepare('SELECT connected_at, last_sync_at, status, error_code, messages, accounts FROM simplefin_connection WHERE id = 1').get();
+  const pendingMatches = (await db.prepare("SELECT count(*) AS n FROM simplefin_accounts WHERE status = 'pending_match'").get()).n;
   // The demo store talks to a synthetic fake bridge; its setup token is synthetic and reusable.
   const demoToken = mode === 'demo' ? Buffer.from('https://bridge.simplefin.org/simplefin/claim/demo-fathom', 'utf8').toString('base64') : null;
   const base = { demo: mode === 'demo', demoToken, pendingMatches };

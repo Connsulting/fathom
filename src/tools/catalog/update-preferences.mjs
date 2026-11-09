@@ -8,9 +8,9 @@ export const operations = [{
   params: { id: { type: 'string', minLength: 1 }, text: { type: 'string', minLength: 1, maxLength: 300 }, evidence: { type: 'string', minLength: 1 }, conversationKey: { type: 'string' } },
   required: ['text', 'evidence'],
   // A remembered withdrawal rate moves the targets Fathom set (src/suggest/build.mjs).
-  handler: (args, ctx) => {
-    const out = writePreference(ctx.channel === 'mcp' ? { ...ctx, conversationKey: args.conversationKey } : ctx, args, { fromAsk: true });
-    adoptSuggestions(ctx.db, { now: new Date(ctx.now ?? Date.now()).toISOString(), clock: ctx.config?.clock });
+  handler: async (args, ctx) => {
+    const out = await writePreference(ctx.channel === 'mcp' ? { ...ctx, conversationKey: args.conversationKey } : ctx, args, { fromAsk: true });
+    await adoptSuggestions(ctx.db, { now: new Date(ctx.now ?? Date.now()).toISOString(), clock: ctx.config?.clock });
     return out;
   },
 }];

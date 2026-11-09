@@ -1,3 +1,4 @@
+import { sameStore } from '../storage/index.mjs';
 import { DEFAULT_TIMEZONE, ownerTimezone } from '../shared/timezone.mjs';
 import { createJev } from '../categories/jev.mjs';
 import { selectionFor } from '../models/config.mjs';
@@ -52,7 +53,7 @@ import { guessCategories } from '../categories/guess.mjs';
 //    `interrupted`) and logged `fathom: job <id> interrupted`; rule 2 then retries it. A running
 //    row under another holder's live lease is left alone: the lease take fails and nothing runs.
 // 14. schedule() is read-only: [{ id, nextAt, retryMs }] for handled jobs, no store writes. SQLite
-//    busy and locked errors (errcode 5 or 6) are recorded as error_class `store_locked`.
+//    storage_busy errors are recorded as error_class `store_locked`.
 // 15. Import resume: once a tick holds the lease and household() owns this db, it starts one
 //    resumeImports pass (src/ingest/pipeline.mjs) unless one is running, as actor `fathom`. The
 //    tick does not await it; it is tracked in the active set, so stop() and idle() wait for it.
@@ -73,6 +74,7 @@ import { syncSimplefin, createFakeSimplefin } from '../ingest/simplefin.mjs';
 import { withoutPrincipal } from '../platform/model-budget.mjs';
 import { isTransient } from './transient.mjs';
 import { BACKGROUND_ACTOR } from '../ingest/file-status.mjs';
+import { forEachSeries, mapSeries } from '../shared/series.mjs';
 
 export { isTransient };
 
@@ -239,13 +241,13 @@ function countsNote(note) {
 }
 
 function errorClassOf(e) {
-  if (e && Number.isInteger(e.errcode) && ((e.errcode & 0xff) === 5 || (e.errcode & 0xff) === 6)) return 'store_locked';
+  if (e?.code === 'storage_busy') return 'store_locked';
   if (e && typeof e.code === 'string' && IDENT.test(e.code)) return e.code;
   const name = e && e.constructor && e.constructor.name;
   return typeof name === 'string' && IDENT.test(name) ? name : 'Error';
 }
 
-const isUniqueViolation = (e) => e && (e.errcode === 2067 || e.errcode === 1555 || /UNIQUE constraint failed/.test(String(e.message)));
+const isUniqueViolation = (e) => e?.code === 'constraint_unique';
 
 // ---------------------------------------------------------------- scheduler
 
@@ -297,12 +299,12 @@ export function createScheduler({
   };
 
   const at = () => new Date(now());
-  const tz = () => ownerTimezone(db);
+  const tz = async () => await ownerTimezone(db);
   const partsAt = (t, zone) => (fixed ? clockParts(fixed) : localParts(t, zone));
   // The date handlers treat as today: the fixed clock, the stored clock, else the local date.
-  function clockFor(t, zone) {
+  async function clockFor(t, zone) {
     if (fixed) return fixed;
-    const stored = getSetting(db, 'clock', null);
+    const stored = await getSetting(db, 'clock', null);
     if (isIsoDate(stored)) return stored;
     const p = localParts(t, zone);
     return `${p.year}-${String(p.month).padStart(2, '0')}-${String(p.day).padStart(2, '0')}`;
@@ -317,14 +319,14 @@ export function createScheduler({
     log.info?.(`fathom: job ${jobId} locked`, { householdId: id });
   }
 
-  function lease(t) {
+  async function lease(t) {
     const iso = t.toISOString();
-    return !!q.take.get(holder, new Date(t.getTime() + leaseMs).toISOString(), iso);
+    return !!await q.take.get(holder, new Date(t.getTime() + leaseMs).toISOString(), iso);
   }
 
   // Extends the lease only while this holder holds it; taking a lease is lease()'s job.
-  function renew() {
-    try { q.renew.run(new Date(at().getTime() + leaseMs).toISOString(), holder); } catch { /* store closed */ }
+  async function renew() {
+    try { await q.renew.run(new Date(at().getTime() + leaseMs).toISOString(), holder); } catch { /* store closed */ }
   }
 
   function stopRenewing() {
@@ -332,29 +334,29 @@ export function createScheduler({
     renewer = null;
   }
 
-  function ensureJobs(t = at()) {
-    const zone = tz();
-    JOBS.forEach((j, i) => {
-      q.ensure.run(j.id, j.name, j.cadence, j.does, null, null, JOB_SORT + i);
-      q.define.run(j.name, j.cadence, j.does, j.id, j.name, j.cadence, j.does);
-      const last = q.last.get(j.id);
+  async function ensureJobs(t = at()) {
+    const zone = await tz();
+    await forEachSeries(JOBS, async (j, i) => {
+      await q.ensure.run(j.id, j.name, j.cadence, j.does, null, null, JOB_SORT + i);
+      await q.define.run(j.name, j.cadence, j.does, j.id, j.name, j.cadence, j.does);
+      const last = await q.last.get(j.id);
       const next = byId.has(j.id) ? timeLabel(nextRunAt(j.schedule, t, zone, fixed), zone) : null;
-      q.labels.run(next, last ? timeLabel(last.started_at, zone) : null, j.id);
+      await q.labels.run(next, last ? timeLabel(last.started_at, zone) : null, j.id);
     });
   }
 
   function execute(job, opts) {
     const captured = household();
     running.add(job.id);
-    const p = dispatcher.run(captured?.householdId ?? holder, () => {
+    const p = dispatcher.run(captured?.householdId ?? holder, async () => {
       if (stopping) throw new SchedulerError('locked');
-      if (allowed() !== true) throw new SchedulerError('paused');
-      if (!lease(at())) { lockRefused(job.id); throw new SchedulerError('locked'); }
+      if (await allowed() !== true) throw new SchedulerError('paused');
+      if (!await lease(at())) { lockRefused(job.id); throw new SchedulerError('locked'); }
       executing++;
       return executeOnce(job, { ...opts, household: captured }).finally(() => {
         if (--executing === 0) stopRenewing();
       });
-    }).finally(() => {
+    }).finally(async () => {
       running.delete(job.id);
       const again = pending.get(job.id);
       pending.delete(job.id);
@@ -367,10 +369,10 @@ export function createScheduler({
 
   // Claims (jobId, key) and runs the handler. Returns the finished run, or null when already claimed.
   async function executeOnce(job, { key, trigger, t, zone, household: captured }) {
-    if (allowed() !== true) throw new SchedulerError('paused');
+    if (await allowed() !== true) throw new SchedulerError('paused');
     let id;
     try {
-      id = q.claim.get(job.id, t.toISOString(), key, trigger).id;
+      id = (await q.claim.get(job.id, t.toISOString(), key, trigger)).id;
     } catch (e) {
       if (isUniqueViolation(e)) return null;
       throw e;
@@ -386,7 +388,7 @@ export function createScheduler({
     let cost = null;
     let note = null;
     try {
-      const ctx = { db, config, engine, transport, household: captured, now: t.toISOString(), clock: clockFor(t, zone), periodKey: key, trigger, jobRunId: id, triggerJob: (jobId, reason = 'ingest') => triggerJob(jobId, reason) };
+      const ctx = { db, config, engine, transport, household: captured, now: t.toISOString(), clock: await clockFor(t, zone), periodKey: key, trigger, jobRunId: id, triggerJob: (jobId, reason = 'ingest') => triggerJob(jobId, reason) };
       // A job is system-initiated even when a request triggered it: no request principal.
       const out = (await withoutPrincipal(() => handlers[job.id](ctx))) || {};
       if (out.status === 'skipped') status = 'skipped';
@@ -398,33 +400,33 @@ export function createScheduler({
       if (Number.isFinite(e && e.costUsd) && e.costUsd >= 0) cost = e.costUsd;
     }
     try {
-      q.finish.run(status, at().toISOString(), Math.max(0, Math.round(performance.now() - started)), errorClass, cost, note, id);
+      await q.finish.run(status, at().toISOString(), Math.max(0, Math.round(performance.now() - started)), errorClass, cost, note, id);
     } finally { inFlight.delete(id); }
     log.log(`fathom: job ${job.id} ${status}${errorClass ? ` ${errorClass}` : ''}`);
-    try { ensureJobs(); } catch { /* labels refresh on the next tick */ }
-    const result = runOut(q.run.get(id));
+    try { await ensureJobs(); } catch { /* labels refresh on the next tick */ }
+    const result = runOut(await q.run.get(id));
     return result;
   }
 
   async function tickOnce() {
     if (stopping) return;
     const t = at();
-    if (allowed() !== true) return;
-    ensureJobs(t);
-    if (!lease(t)) {
+    if (await allowed() !== true) return;
+    await ensureJobs(t);
+    if (!await lease(t)) {
       for (const job of handled) if (!running.has(job.id)) lockRefused(job.id);
       return;
     }
-    recoverInterrupted(t);
+    await recoverInterrupted(t);
     resumeImports(t);
-    const zone = tz();
+    const zone = await tz();
     for (const job of handled) {
       if (stopping) break;
       if (running.has(job.id)) continue;
       try {
         const key = periodKey(job.schedule, partsAt(t, zone));
         const run = await execute(job, { key, trigger: 'scheduled', t, zone });
-        if (run === null && retryDue(job, key, t)) await execute(job, { key: `${key}+retry`, trigger: 'retry', t, zone });
+        if (run === null && await retryDue(job, key, t)) await execute(job, { key: `${key}+retry`, trigger: 'retry', t, zone });
       } catch (e) {
         if (e instanceof SchedulerError && e.code === 'paused') break;
         if (e instanceof SchedulerError && e.code === 'locked') continue;
@@ -434,17 +436,17 @@ export function createScheduler({
   }
 
   // Rule 13: called only while this tick holds the lease.
-  function recoverInterrupted(t) {
-    for (const r of q.stale.all()) {
+  async function recoverInterrupted(t) {
+    for (const r of await q.stale.all()) {
       if (inFlight.has(r.id)) continue;
-      if (q.interrupt.run(t.toISOString(), r.id).changes) log.log(`fathom: job ${r.job_id} interrupted`);
+      if ((await q.interrupt.run(t.toISOString(), r.id)).changes) log.log(`fathom: job ${r.job_id} interrupted`);
     }
   }
 
   // Rule 15: called only while this tick holds the lease. Not awaited: a model call must not delay jobs.
   function resumeImports(t) {
     const h = household();
-    if (resuming || stopping || !h || h.db !== db || !(h.inFlight instanceof Set)) return;
+    if (resuming || stopping || !h || !sameStore(h.db, db) || !(h.inFlight instanceof Set)) return;
     const p = withoutPrincipal(async () => {
       const { resumeImports: resume } = await import('../ingest/pipeline.mjs');
       await resume(h.db, { household: h, db: h.db, config, engine: h.engine, scheduler: h.scheduler, actorId: BACKGROUND_ACTOR, now: t.toISOString() });
@@ -455,15 +457,15 @@ export function createScheduler({
 
   // Rule 2: the period's claimed run failed transiently or was interrupted, has no retry yet and
   // finished at least retryMs ago.
-  function retryDue(job, key, t) {
-    const row = q.period.get(job.id, key);
+  async function retryDue(job, key, t) {
+    const row = await q.period.get(job.id, key);
     if (!row || !(row.status === 'interrupted' || (row.status === 'error' && isTransient(row.error_class)))) return false;
-    if (q.period.get(job.id, `${key}+retry`)) return false;
+    if (await q.period.get(job.id, `${key}+retry`)) return false;
     const done = Date.parse(row.finished_at ?? '');
     return Number.isFinite(done) && done + retryMs <= t.getTime();
   }
 
-  function tick() {
+  async function tick() {
     ticking ??= tickOnce().finally(() => { ticking = null; });
     return ticking;
   }
@@ -474,11 +476,11 @@ export function createScheduler({
     if (!job) throw new SchedulerError('unknown_job');
     if (running.has(jobId)) throw new SchedulerError('running');
     const t = at();
-    if (allowed() !== true) throw new SchedulerError('paused');
+    if (await allowed() !== true) throw new SchedulerError('paused');
     if (stopping) throw new SchedulerError('locked');
-    if (!lease(t)) { lockRefused(jobId); throw new SchedulerError('locked'); }
-    ensureJobs(t);
-    const zone = tz();
+    if (!await lease(t)) { lockRefused(jobId); throw new SchedulerError('locked'); }
+    await ensureJobs(t);
+    const zone = await tz();
     const base = `${reason}:${t.toISOString()}`;
     for (let n = 1; n <= 100; n++) {
       const run = await execute(job, { key: n === 1 ? base : `${base}+${n}`, trigger: reason, t, zone });
@@ -504,14 +506,14 @@ export function createScheduler({
   }
 
   // Rule 9. Returns whether a trigger was scheduled (or fired).
-  function soon(jobId, reason, { immediate = false } = {}) {
+  async function soon(jobId, reason, { immediate = false } = {}) {
     if (!byId.has(jobId) || !TRIGGERS.has(reason) || stopping) return false;
     clearSoon(jobId);
-    const fire = () => {
+    const fire = async () => {
       soonTimers.delete(jobId);
       trigger(jobId, reason).catch(() => {});
     };
-    if (immediate) fire();
+    if (immediate) await fire();
     else {
       const h = setTimeout(fire, debounceMs);
       h.unref?.();
@@ -523,14 +525,14 @@ export function createScheduler({
   return {
     holder,
     tick,
-    runNow: (jobId) => runOff(jobId, 'manual'),
+    runNow: async (jobId) => runOff(jobId, 'manual'),
     trigger,
     soon,
     start() {
       if (timer) return;
-      first = setTimeout(() => { first = null; tick().catch(() => {}); }, 0);
+      first = setTimeout(async () => { first = null; tick().catch(() => {}); }, 0);
       first.unref?.();
-      timer = setInterval(() => { tick().catch(() => {}); }, tickMs);
+      timer = setInterval(async () => { tick().catch(() => {}); }, tickMs);
       timer.unref?.();
     },
     // Resolves once active runs settle (or drainMs passes) and the lease is released. Never rejects.
@@ -549,28 +551,28 @@ export function createScheduler({
         new Promise((r) => { drain = setTimeout(r, drainMs); drain.unref?.(); }),
       ]);
       clearTimeout(drain);
-      try { q.release.run(holder); } catch { /* store already closed */ }
+      try { await q.release.run(holder); } catch { /* store already closed */ }
     },
     idle() { return Promise.allSettled([...active]); },
     // Rule 14: read-only.
-    schedule() {
+    async schedule() {
       const t = at();
-      const zone = tz();
+      const zone = await tz();
       return handled.map((j) => ({ id: j.id, nextAt: nextRunAt(j.schedule, t, zone, fixed).toISOString(), retryMs }));
     },
-    jobs() {
+    async jobs() {
       const t = at();
-      const zone = tz();
+      const zone = await tz();
       // A paused household's store is never written, not even job labels.
-      if (allowed() === true) { try { ensureJobs(t); } catch { /* listing does not depend on the rows */ } }
-      return handled.map((j) => {
+      if (await allowed() === true) { try { await ensureJobs(t); } catch { /* listing does not depend on the rows */ } }
+      return await mapSeries(handled, async (j) => {
         const nextAt = nextRunAt(j.schedule, t, zone, fixed);
-        return { id: j.id, name: j.name, cadence: j.cadence, does: j.does, lastRun: runOut(q.last.get(j.id)), next: timeLabel(nextAt, zone), nextAt: nextAt.toISOString() };
+        return { id: j.id, name: j.name, cadence: j.cadence, does: j.does, lastRun: runOut(await q.last.get(j.id)), next: timeLabel(nextAt, zone), nextAt: nextAt.toISOString() };
       });
     },
-    runs({ limit = 20 } = {}) {
+    async runs({ limit = 20 } = {}) {
       const n = Math.max(1, Math.min(200, Number.isInteger(limit) ? limit : 20));
-      return q.runs.all(n).map(runOut);
+      return (await q.runs.all(n)).map(runOut);
     },
   };
 }
@@ -592,8 +594,8 @@ export function createScheduler({
 export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}) {
   return {
     async 'simplefin-sync'(ctx) {
-      if (!ctx.household || !ctx.household.outbound.enabled('simplefin')) return { status: 'skipped', note: { paused: true } };
-      const demo = getSetting(ctx.db, 'mode', null) === 'demo';
+      if (!ctx.household || !await ctx.household.outbound.enabled('simplefin')) return { status: 'skipped', note: { paused: true } };
+      const demo = await getSetting(ctx.db, 'mode', null) === 'demo';
       const out = await syncSimplefin(ctx.db, {
         household: ctx.household, config: ctx.config, hosts: ctx.config?.simplefinHosts, now: ctx.now, clock: ctx.clock, engine: ctx.engine,
         fetch: demo ? createFakeSimplefin({ today: () => ctx.clock }) : (simplefinFetch ?? globalThis.fetch),
@@ -605,11 +607,11 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
       return { costUsd: 0, note: { ...out.counts, changed: out.changed } };
     },
     async plan(ctx) {
-      if (getSetting(ctx.db, 'mode', null) === 'demo') return { status: 'skipped' };
+      if (await getSetting(ctx.db, 'mode', null) === 'demo') return { status: 'skipped' };
       const planning = await runPlanning(ctx.db, ctx.trigger === 'resolve' ? null : (ctx.engine || null), {
         now: ctx.clock, packDirs: defaultPackDirs(ctx.household.root), runId: ctx.jobRunId, household: ctx.household,
       });
-      ctx.db.prepare('UPDATE action_receipts SET planning_pending = 0 WHERE planning_pending = 1').run();
+      await ctx.db.prepare('UPDATE action_receipts SET planning_pending = 0 WHERE planning_pending = 1').run();
       const warned = [...new Set(Array.isArray(planning.warnings) ? planning.warnings : [])].filter((c) => typeof c === 'string' && IDENT.test(c));
       for (const c of warned) console.warn(`fathom: plan warning ${c}`);
       const note = warned.length ? { ...planning.counts, warned: Object.fromEntries(warned.map((c) => [c, true])) } : planning.counts;
@@ -631,23 +633,23 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
     async 'trash-purge'(ctx) {
       // Same basis as trash timestamps (clockNow): config clock, else the stored clock, else the
       // UTC date, never the owner-local date, so a far east zone cannot purge a day early.
-      const stored = getSetting(ctx.db, 'clock', null);
+      const stored = await getSetting(ctx.db, 'clock', null);
       const date = (ctx.config && ctx.config.clock) || (isIsoDate(stored) ? stored : ctx.now.slice(0, 10));
-      const purged = purgeTrash(ctx.db, `${date}T${ctx.now.slice(11)}`);
+      const purged = await purgeTrash(ctx.db, `${date}T${ctx.now.slice(11)}`);
       return { costUsd: 0, note: { purged } };
     },
     async freshness(ctx) {
-      const s = refreshFreshness(ctx.db, { clock: ctx.clock });
+      const s = await refreshFreshness(ctx.db, { clock: ctx.clock });
       return {
         costUsd: 0,
         note: { sources: s.sources.length, stale: s.sources.filter((x) => x.state === 'stale').length, pending: s.pending, waiting: s.waiting.length },
       };
     },
     async 'confirm-guess'(ctx) {
-      if (getSetting(ctx.db, 'mode', null) === 'demo') return { status: 'skipped' };
+      if (await getSetting(ctx.db, 'mode', null) === 'demo') return { status: 'skipped' };
       const packDirs = defaultPackDirs(ctx.household?.root);
-      const allowed = () => ctx.household?.outbound?.enabled('engine') === true;
-      const funded = () => ctx.household?.funded?.() === true;
+      const allowed = async () => await ctx.household?.outbound?.enabled('engine') === true;
+      const funded = async () => await ctx.household?.funded?.() === true;
       const out = await resolvePending(ctx.db, ctx.engine, {
         now: ctx.now, packDirs, allowed, funded,
         async readNotes() {
@@ -655,7 +657,7 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
           return vault ? readOwnerNotes(ctx.db, vault) : [];
         },
         async categorize({ maxCostUsd, admit }) {
-          const cap = getSetting(ctx.db, 'cap', { usd: 200 })?.usd;
+          const cap = (await getSetting(ctx.db, 'cap', { usd: 200 }))?.usd;
           const selection = selectionFor(ctx.config?.modelPorts, 'categorize');
           await ctx.engine?.init?.();
           const enabled = ctx.config?.engine === 'live' && ctx.engine?.credentialStateFor?.('categorize') !== 'failed'
@@ -680,7 +682,7 @@ export function defaultHandlers({ publicUrl = null, simplefinFetch = null } = {}
 export const SCHEDULER_STATUS = { unknown_job: 404, running: 409, locked: 409, paused: 409, demo_store: 409, unavailable: 503 };
 export const SCHEDULER_MESSAGE = { unknown_job: 'no such job', running: 'that job is already running', locked: 'another scheduler holds the job lock', paused: 'outbound jobs are paused', demo_store: 'planning runs on real stores only', unavailable: 'scheduler unavailable' };
 export async function runManualJob(db, scheduler, id) {
-  if (id === 'plan' && getSetting(db, 'mode', null) === 'demo') throw new SchedulerError('demo_store');
+  if (id === 'plan' && await getSetting(db, 'mode', null) === 'demo') throw new SchedulerError('demo_store');
   if (!scheduler) throw new SchedulerError('unavailable');
   return await scheduler.runNow(id) ?? null;
 }

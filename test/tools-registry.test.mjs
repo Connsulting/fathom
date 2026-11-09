@@ -34,7 +34,7 @@ const oldNames = [
   ...['fact','goal','preference','recommendation','step'].map(k => ['undo',k,'action']),
 ].map(parts => parts.join('_'));
 
-test('only the declared operation tools register, with no old aliases', () => {
+test('only the declared operation tools register, with no old aliases', async () => {
   assert.deepEqual(tools.map(t => t.name), Object.keys(expected).sort());
   for (const tool of tools) {
     assert.deepEqual(new Set(tool.operations.map(o => o.name)), new Set(expected[tool.name]));
@@ -46,7 +46,7 @@ test('only the declared operation tools register, with no old aliases', () => {
     if (tool.kind === 'read' && tool.name !== 'calculate' && !tool.askOnly) assert.deepEqual(tool.operations[0].required, []);
   }
   for (const name of oldNames) assert.equal(getTool(name), null);
-  assert.doesNotThrow(() => createRegistryServer(tools, { purpose: 'chat' }));
+  await assert.doesNotReject(async () => await createRegistryServer(tools, { purpose: 'chat' }));
 });
 
 test('loader rejects duplicate operations, conflicting schemas and invalid scope kinds', () => {
@@ -70,7 +70,7 @@ test('write results preserve explicit unavailable Undo and default a missing Und
 });
 
 test('operation-local validation names the operation through direct and Ask boundaries', async () => {
-  const server = createRegistryServer(tools, { purpose: 'chat' });
+  const server = await createRegistryServer(tools, { purpose: 'chat' });
   for (const args of [{ operation: 'missing' }, { operation: 'summary', keys: [] }, { operation: 'summary', constructor: {} }]) {
     await assert.rejects(callTool('household', args, {}), e => e.code === 'bad_input' && e.message.includes(`household.${args.operation}`));
     const result = await server.invoke('household', args);
@@ -84,15 +84,15 @@ test('operation-local validation names the operation through direct and Ask boun
   assert.equal((await server.invoke('household', { operation: 'fact_shapes' })).isError, undefined);
 });
 
-test('scope filtering narrows operation enums and hides all writes from read-only keys', () => {
+test('scope filtering narrows operation enums and hides all writes from read-only keys', async () => {
   const read = toolsForScopes(['read']);
   assert.ok(read.every(t => t.kind === 'read'));
   const mixed = toolsForScopes(['read', 'write:recs']);
   const rec = mixed.find(t => t.name === 'act_on_recommendation');
   assert.deepEqual(rec.inputSchema.properties.operation.enum, ['owner', 'start_over', 'status']);
   assert.ok(mixed.some(t => t.name === 'undo'));
-  assert.ok(createRegistryServer(tools, { purpose: 'chat' }).names.includes('undo'));
-  assert.ok(!createRegistryServer(tools, { purpose: 'plan' }).names.includes('undo'));
+  assert.ok((await createRegistryServer(tools, { purpose: 'chat' })).names.includes('undo'));
+  assert.ok(!(await createRegistryServer(tools, { purpose: 'plan' })).names.includes('undo'));
 });
 
 test('catalog and instructions stay within the context budget', t => {

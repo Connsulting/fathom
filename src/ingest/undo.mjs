@@ -17,66 +17,30 @@ export const UNTRACKED = Object.freeze(['confirm_undo', 'confirm_guesses', 'inge
 // and kind are written by different imports and answers).
 export const FIELD_LEVEL = Object.freeze(['accounts']);
 
-let captureSequence = 0;
 const ident = (name) => `"${String(name).replaceAll('"', '""')}"`;
 const literal = (text) => `'${String(text).replaceAll("'", "''")}'`;
 
-const tablesOf = (db) => db.prepare("SELECT name FROM main.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\' ORDER BY name")
-  .all().map((r) => r.name).filter((name) => !UNTRACKED.includes(name));
-const columnsOf = (db, table) => db.prepare(`PRAGMA main.table_info(${ident(table)})`).all().map((c) => c.name);
-// The row image: the same expression in the triggers and in revert's checks, so equal rows give
-// equal text.
+const tablesOf = async (db) => (await db.tables()).filter((name) => !UNTRACKED.includes(name));
+const columnsOf = async (db, table) => (await db.columns(table)).map((c) => c.name);
+// The row image: the same expression as the capture triggers', so equal rows give equal text.
 const image = (alias, columns) => `json_object(${columns.map((c) => `${literal(c)}, ${alias}.${ident(c)}`).join(', ')})`;
-const trigger = (log, i, op) => ident(`${log}_${i}_${op}`);
 
-function dropLog(db, count, log) {
-  for (let i = 0; i < count; i++) for (const op of ['insert', 'update', 'delete']) db.exec(`DROP TRIGGER IF EXISTS temp.${trigger(log, i, op)}`);
-  db.exec(`DROP TABLE IF EXISTS temp.${log}`);
-}
-
-// Run fn() and return {result, changes}. The triggers and the temp log are dropped before
-// returning, also when fn throws (the caller's rollback would undo them too).
-export function captureChanges(db, fn) {
-  const tables = tablesOf(db);
-  const log = `fathom_change_log_${++captureSequence}`;
-  db.exec(`CREATE TEMP TABLE ${log} (seq INTEGER PRIMARY KEY, tbl TEXT NOT NULL, op TEXT NOT NULL, rowid_was INTEGER, rowid_now INTEGER, before TEXT, after TEXT)`);
-  try {
-    tables.forEach((table, i) => {
-      const cols = columnsOf(db, table);
-      const into = `INSERT INTO temp.${log} (tbl, op, rowid_was, rowid_now, before, after) VALUES (${literal(table)}`;
-      db.exec(`CREATE TEMP TRIGGER ${trigger(log, i, 'insert')} AFTER INSERT ON main.${ident(table)} BEGIN
-        ${into}, 'insert', NULL, NEW.rowid, NULL, ${image('NEW', cols)}); END`);
-      db.exec(`CREATE TEMP TRIGGER ${trigger(log, i, 'update')} AFTER UPDATE ON main.${ident(table)} BEGIN
-        ${into}, 'update', OLD.rowid, NEW.rowid, ${image('OLD', cols)}, ${image('NEW', cols)}); END`);
-      db.exec(`CREATE TEMP TRIGGER ${trigger(log, i, 'delete')} AFTER DELETE ON main.${ident(table)} BEGIN
-        ${into}, 'delete', OLD.rowid, NULL, ${image('OLD', cols)}, NULL); END`);
-    });
-    const result = fn();
-    const changes = db.prepare(`SELECT tbl, op, rowid_was, rowid_now, before, after FROM temp.${log} ORDER BY seq`).all().map((r) => ({
-      table: r.tbl,
-      op: r.op,
-      rowid: r.op === 'delete' ? r.rowid_was : r.rowid_now,
-      // An update that moved a row to another rowid cannot be checked by rowid; revert refuses it.
-      ...(r.op === 'update' && r.rowid_was !== r.rowid_now ? { movedFrom: r.rowid_was } : {}),
-      before: r.before,
-      after: r.after,
-    }));
-    return { result, changes };
-  } finally {
-    dropLog(db, tables.length, log);
-  }
+// Run fn(handle) on transaction handle db and return {result, changes}; the capture is removed
+// before returning, also when fn throws.
+export async function captureChanges(db, fn) {
+  return await db.capture(fn);
 }
 
 const changedSince = () => new ConfirmError('final', 'changed_since');
 
 // Undo a captured log. Throws ConfirmError('final', 'changed_since') when any touched row no
 // longer matches what the log left behind, or its table or columns changed since.
-export function revertChanges(db, changes) {
-  const known = new Set(tablesOf(db));
+export async function revertChanges(db, changes) {
+  const known = new Set(await tablesOf(db));
   const shape = new Map();
-  const shapeOf = (table) => {
+  const shapeOf = async (table) => {
     if (!shape.has(table)) {
-      const cols = columnsOf(db, table);
+      const cols = await columnsOf(db, table);
       shape.set(table, {
         cols,
         current: db.prepare(`SELECT ${image('t', cols)} AS img FROM main.${ident(table)} AS t WHERE t.rowid = ?`),
@@ -92,23 +56,23 @@ export function revertChanges(db, changes) {
 
   for (const c of [...changes].reverse()) {
     if (!known.has(c.table) || c.movedFrom !== undefined) throw changedSince();
-    const { cols, current } = shapeOf(c.table);
-    const now = current.get(c.rowid)?.img;
+    const { cols, current } = await shapeOf(c.table);
+    const now = (await current.get(c.rowid))?.img;
     if (c.op === 'delete') {
       if (now !== undefined || !sameColumns(cols, c.before)) throw changedSince();
-      db.prepare(`INSERT INTO main.${ident(c.table)} (rowid, ${cols.map(ident).join(', ')}) VALUES (?, ${values(cols)})`)
+      await db.prepare(`INSERT INTO main.${ident(c.table)} (rowid, ${cols.map(ident).join(', ')}) VALUES (?, ${values(cols)})`)
         .run(c.rowid, ...cols.map(() => c.before));
       continue;
     }
     if (c.op === 'update' && FIELD_LEVEL.includes(c.table)) {
-      revertColumns(db, c, cols, now);
+      await revertColumns(db, c, cols, now);
       continue;
     }
     if (now !== c.after) throw changedSince();
     if (c.op === 'insert') {
-      db.prepare(`DELETE FROM main.${ident(c.table)} WHERE rowid = ?`).run(c.rowid);
+      await db.prepare(`DELETE FROM main.${ident(c.table)} WHERE rowid = ?`).run(c.rowid);
     } else {
-      db.prepare(`UPDATE main.${ident(c.table)} SET ${cols.map((col) => `${ident(col)} = json_extract(?, ${literal(`$."${col}"`)})`).join(', ')} WHERE rowid = ?`)
+      await db.prepare(`UPDATE main.${ident(c.table)} SET ${cols.map((col) => `${ident(col)} = json_extract(?, ${literal(`$."${col}"`)})`).join(', ')} WHERE rowid = ?`)
         .run(...cols.map(() => c.before), c.rowid);
     }
   }
@@ -116,7 +80,7 @@ export function revertChanges(db, changes) {
 
 // A FIELD_LEVEL update: the row must still exist with its key, and every column the update changed
 // must hold its after value; those columns get their before values back.
-function revertColumns(db, c, cols, now) {
+async function revertColumns(db, c, cols, now) {
   if (now === undefined) throw changedSince();
   const before = JSON.parse(c.before);
   const after = JSON.parse(c.after);
@@ -126,7 +90,7 @@ function revertColumns(db, c, cols, now) {
   if ('id' in after && !same(current.id, after.id)) throw changedSince();
   if (changed.some((k) => !cols.includes(k) || !(k in before) || !same(current[k], after[k]))) throw changedSince();
   if (!changed.length) return;
-  db.prepare(`UPDATE main.${ident(c.table)} SET ${changed.map((col) => `${ident(col)} = json_extract(?, ${literal(`$."${col}"`)})`).join(', ')} WHERE rowid = ?`)
+  await db.prepare(`UPDATE main.${ident(c.table)} SET ${changed.map((col) => `${ident(col)} = json_extract(?, ${literal(`$."${col}"`)})`).join(', ')} WHERE rowid = ?`)
     .run(...changed.map(() => c.before), c.rowid);
 }
 

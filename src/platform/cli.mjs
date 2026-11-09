@@ -26,30 +26,30 @@ export function householdArg(argv) {
 
 export async function openCliHousehold(config, argv) {
   const { householdId, rest } = householdArg(argv);
-  const opened = openInstance(config);
+  const opened = await openInstance(config);
   if (!opened) throw codeError('household_unavailable');
   const { platform, mode } = opened;
   let household;
   try {
-    const row = platform.prepare('SELECT status, mode, storage_root, generation FROM households WHERE id = ?').get(householdId);
+    const row = await platform.prepare('SELECT status, mode, storage_root, generation FROM households WHERE id = ?').get(householdId);
     if (!row || row.status !== 'active' || row.storage_root == null) throw codeError('household_unavailable');
     // A live CLI may be the first process to open the instance after the upgrade: every
     // household's pre-MT-05 spend is carried before this household can be admitted.
-    if (config.engine === 'live') carryAllHouseholds(platform, { dataDir: config.dataDir });
-    household = buildHouseholdContext({
+    if (config.engine === 'live') await carryAllHouseholds(platform, { dataDir: config.dataDir });
+    household = await buildHouseholdContext({
       householdId, generation: Number(row.generation), mode: row.mode, relativeRoot: row.storage_root, platform, config,
       secrets: createInstanceSecrets({ config, mode }),
     });
   } catch (e) {
-    try { platform.close(); } catch { /* already closed */ }
+    try { await platform.close(); } catch { /* already closed */ }
     throw e;
   }
   let closing = null;
   return {
     household, platform, mode, argv: rest,
-    close() {
-      closing ??= household.close().finally(() => {
-        try { platform.close(); } catch { /* already closed */ }
+    async close() {
+      closing ??= household.close().finally(async () => {
+        try { await platform.close(); } catch { /* already closed */ }
       });
       return closing;
     },

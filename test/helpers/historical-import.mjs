@@ -6,25 +6,26 @@ import { toRows, periodOf, labelOf, sourceKindOf, resolveTokens } from '../../sr
 import { redactForExtraction } from '../../src/ingest/redact.mjs';
 import { openVault, storeFile } from '../../src/ingest/vault.mjs';
 import { NOW } from './ingest.mjs';
+import { filterSeries } from '../../src/shared/series.mjs';
 
 export async function seedHistoricalRows(store, file, rows, { parser = 'historical', period = { from: null, to: null }, sourceKind = 'other', capabilities = {} } = {}) {
   const hash = createHash('sha256').update(file.bytes).digest('hex'), fileId = 'f-' + hash.slice(0, 24), db = store.db;
-  if (db.prepare('SELECT 1 FROM files WHERE id=?').get(fileId)) return { fileId, status: 'duplicate', counts: { rows: {} } };
+  if (await db.prepare('SELECT 1 FROM files WHERE id=?').get(fileId)) return { fileId, status: 'duplicate', counts: { rows: {} } };
   const stored = await storeFile({ vault: await openVault(store.household), id: fileId, bytes: file.bytes, purpose: 'upload' });
-  db.prepare('INSERT INTO files(id,name,mime,size,sha256,uploaded_at,stored_path,status) VALUES (?,?,?,?,?,?,?,?)')
+  await db.prepare('INSERT INTO files(id,name,mime,size,sha256,uploaded_at,stored_path,status) VALUES (?,?,?,?,?,?,?,?)')
     .run(fileId, file.name, file.mime ?? null, file.bytes.length, hash, NOW, stored, 'imported');
   const groups = new Map();
-  rows = rows.filter(row => {
+  rows = await filterSeries(rows, async row => {
     if (row.kind !== 'pnl_line') return true;
-    const entity = db.prepare('SELECT entity FROM entity_aliases WHERE alias=?').get(row.entity.toLowerCase().replace(/[^a-z0-9]/g,''))?.entity;
+    const entity = (await db.prepare('SELECT entity FROM entity_aliases WHERE alias=?').get(row.entity.toLowerCase().replace(/[^a-z0-9]/g,'')))?.entity;
     if (entity) row.entity = entity;
     const key = JSON.stringify([row.entity,row.period,row.category]);
     if (!groups.has(key)) { groups.set(key,row); return true; }
     const prior = groups.get(key); prior.amount += row.amount; prior.locator.cells.push(...row.locator.cells); return false;
   });
-  const result = tx(db, () => persistImport(db, fileId, file, { status: 'imported', parser, label: labelOf(parser.replace('extract-', '')), sourceKind, capabilities,
+  const result = await tx(db, async (db) => await persistImport(db, fileId, file, { status: 'imported', parser, label: labelOf(parser.replace('extract-', '')), sourceKind, capabilities,
     parsed: { rows, warnings: [], period } }, { now: NOW }));
-  if (result.factsChanged) refreshPackState(db, { dataDir: store.household.root, now: NOW });
+  if (result.factsChanged) await refreshPackState(db, { dataDir: store.household.root, now: NOW });
   return result.result;
 }
 export async function seedHistoricalDocument(store, file, responses) {
@@ -32,7 +33,7 @@ export async function seedHistoricalDocument(store, file, responses) {
   const docType = classified ?? 'notes', raw = responses[classified ? 1 : 0]?.[0];
   const fields = resolveTokens(raw, redactForExtraction(Buffer.from(file.bytes).toString()).refs);
   const fileId = 'f-' + createHash('sha256').update(file.bytes).digest('hex').slice(0,24);
-  const entities = store.db.prepare('SELECT DISTINCT entity FROM pnl_lines').all().map(r => r.entity);
+  const entities = (await store.db.prepare('SELECT DISTINCT entity FROM pnl_lines').all()).map(r => r.entity);
   const rows = toRows(docType, fields, { fileId, households: { entities }, warnings: [] });
   if (docType === 'notes') {
     rows.forEach(row => row.parser = 'extract-notes');

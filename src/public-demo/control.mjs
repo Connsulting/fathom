@@ -1,4 +1,4 @@
-import { DatabaseSync } from 'node:sqlite';
+import { currentHandle, openScope } from '../storage/index.mjs';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
@@ -34,10 +34,12 @@ const ALLOWED = new Set([
 export const demoRouteBehavior = (method, path) => ALLOWED.has(`${method === 'HEAD' ? 'GET' : method} ${path}`) ? 'sandbox' : 'off';
 const hash = value => createHash('sha256').update(value).digest('hex');
 
-export function createDemoControl(config, { now = Date.now } = {}) {
+export async function createDemoControl(config, { now = Date.now } = {}) {
   mkdirSync(config.dataDir, { recursive: true });
-  const db = new DatabaseSync(join(config.dataDir, 'public-demo.sqlite'));
-  db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
+  const scope = await openScope({ path: join(config.dataDir, 'public-demo.sqlite') });
+  // Statements follow an open atomic() transaction in the current async context.
+  const db = { prepare: text => currentHandle(scope).prepare(text) };
+  await scope.applySchema(`
     CREATE TABLE IF NOT EXISTS sandboxes (id TEXT PRIMARY KEY, expires INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS usage (day TEXT NOT NULL, subject TEXT NOT NULL,
       turns INTEGER NOT NULL DEFAULT 0, tokens INTEGER NOT NULL DEFAULT 0,
@@ -47,68 +49,64 @@ export function createDemoControl(config, { now = Date.now } = {}) {
       PRIMARY KEY(minute, ip));`);
   const limits = config.publicDemoLimits;
   const day = () => new Date(now()).toISOString().slice(0, 10);
-  const atomic = fn => {
-    db.exec('BEGIN IMMEDIATE');
-    try { const result = fn(); db.exec('COMMIT'); return result; }
-    catch (err) { db.exec('ROLLBACK'); throw err; }
+  const atomic = async fn => await scope.transaction(async (scope) => await fn());
+  const usage = async subject => {
+    await db.prepare('INSERT OR IGNORE INTO usage(day, subject) VALUES (?, ?)').run(day(), subject);
+    return await db.prepare('SELECT * FROM usage WHERE day = ? AND subject = ?').get(day(), subject);
   };
-  const usage = subject => {
-    db.prepare('INSERT OR IGNORE INTO usage(day, subject) VALUES (?, ?)').run(day(), subject);
-    return db.prepare('SELECT * FROM usage WHERE day = ? AND subject = ?').get(day(), subject);
-  };
-  const increment = (subject, column, amount = 1) => {
-    db.prepare(`UPDATE usage SET ${column} = ${column} + ? WHERE day = ? AND subject = ?`).run(amount, day(), subject);
+  const increment = async (subject, column, amount = 1) => {
+    await db.prepare(`UPDATE usage SET ${column} = ${column} + ? WHERE day = ? AND subject = ?`).run(amount, day(), subject);
   };
   return {
-    rate(ip) {
-      return atomic(() => {
+    async rate(ip) {
+      return await atomic(async () => {
         const minute = Math.floor(now() / 60000), key = hash(ip);
-        const row = db.prepare('SELECT requests FROM rates WHERE minute = ? AND ip = ?').get(minute, key);
+        const row = await db.prepare('SELECT requests FROM rates WHERE minute = ? AND ip = ?').get(minute, key);
         if (row?.requests >= limits.requests) return false;
-        db.prepare(`INSERT INTO rates VALUES (?, ?, 1) ON CONFLICT(minute, ip) DO UPDATE SET requests = requests + 1`).run(minute, key);
+        await db.prepare(`INSERT INTO rates VALUES (?, ?, 1) ON CONFLICT(minute, ip) DO UPDATE SET requests = requests + 1`).run(minute, key);
         return true;
       });
     },
-    reserveTurn(id, ip) {
-      return atomic(() => {
+    async reserveTurn(id, ip) {
+      return await atomic(async () => {
         const visitor = `visitor:${id}`, address = `ip:${hash(ip)}`;
-        if (usage(visitor).turns >= limits.turns || usage(address).turns >= limits.ipTurns) return false;
-        increment(visitor, 'turns'); increment(address, 'turns');
+        if ((await usage(visitor)).turns >= limits.turns || (await usage(address)).turns >= limits.ipTurns) return false;
+        await increment(visitor, 'turns'); await increment(address, 'turns');
         return true;
       });
     },
-    reserveRound(id, tokens, usd) {
+    async reserveRound(id, tokens, usd) {
       if (!Number.isSafeInteger(tokens) || tokens < 1 || !Number.isFinite(usd) || usd < 0) throw new TypeError('Invalid demo reservation');
-      return atomic(() => {
+      return await atomic(async () => {
         const visitor = `visitor:${id}`;
-        const v = usage(visitor), global = usage('global');
+        const v = await usage(visitor), global = await usage('global');
         if (v.tokens + tokens > limits.tokens || global.calls >= limits.calls || global.usd + usd > limits.usd + 1e-12) return false;
-        increment(visitor, 'tokens', tokens); increment('global', 'calls'); increment('global', 'usd', usd);
+        await increment(visitor, 'tokens', tokens); await increment('global', 'calls'); await increment('global', 'usd', usd);
         return true;
       });
     },
-    sandbox(cookie, ip) {
-      return atomic(() => {
+    async sandbox(cookie, ip) {
+      return await atomic(async () => {
         if (typeof cookie === 'string' && /^[a-f0-9]{64}$/.test(cookie)) {
-          const row = db.prepare('SELECT * FROM sandboxes WHERE id = ? AND expires > ?').get(cookie, now());
+          const row = await db.prepare('SELECT * FROM sandboxes WHERE id = ? AND expires > ?').get(cookie, now());
           if (row) return row;
         }
-        if (db.prepare('SELECT count(*) AS n FROM sandboxes').get().n >= limits.sandboxes) throw new HttpError(503, 'The demo is busy. Please try again later.');
+        if ((await db.prepare('SELECT count(*) AS n FROM sandboxes').get()).n >= limits.sandboxes) throw new HttpError(503, 'The demo is busy. Please try again later.');
         const address = `ip:${hash(ip)}`;
-        if (usage(address).creations >= limits.creations) throw new HttpError(429, 'Demo sandbox creation limit reached. Please try again tomorrow.');
+        if ((await usage(address)).creations >= limits.creations) throw new HttpError(429, 'Demo sandbox creation limit reached. Please try again tomorrow.');
         const id = randomBytes(32).toString('hex'), expires = now() + limits.ttl * 1000;
-        db.prepare('INSERT INTO sandboxes VALUES (?, ?)').run(id, expires);
-        increment(address, 'creations');
+        await db.prepare('INSERT INTO sandboxes VALUES (?, ?)').run(id, expires);
+        await increment(address, 'creations');
         return { id, expires };
       });
     },
-    cleanup(remove = () => true) {
-      for (const row of db.prepare('SELECT id FROM sandboxes WHERE expires <= ?').all(now())) {
-        if (remove(row.id) !== false) db.prepare('DELETE FROM sandboxes WHERE id = ?').run(row.id);
+    async cleanup(remove = () => true) {
+      for (const row of await db.prepare('SELECT id FROM sandboxes WHERE expires <= ?').all(now())) {
+        if (await remove(row.id) !== false) await db.prepare('DELETE FROM sandboxes WHERE id = ?').run(row.id);
       }
-      db.prepare('DELETE FROM rates WHERE minute < ?').run(Math.floor(now() / 60000));
-      db.prepare('DELETE FROM usage WHERE day < ?').run(day());
+      await db.prepare('DELETE FROM rates WHERE minute < ?').run(Math.floor(now() / 60000));
+      await db.prepare('DELETE FROM usage WHERE day < ?').run(day());
     },
-    close: () => db.close(),
+    close: async () => await scope.close(),
   };
 }

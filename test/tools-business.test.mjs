@@ -8,17 +8,17 @@ import { assertRefsResolve } from './helpers/figures.mjs';
 
 test('business uses API calculators for totals prior periods and row drilldowns', async (t) => {
   const s = await spendingStore(t);
-  s.fact('business.entities', [{ name: 'Example Studio' }]);
-  s.fact('accounts.businessEntity', { business: 'Example Studio' });
+  await s.fact('business.entities', [{ name: 'Example Studio' }]);
+  await s.fact('accounts.businessEntity', { business: 'Example Studio' });
   for (const date of ['2025-03-01', '2026-03-01', '2026-04-01', '2026-05-01']) {
-    s.tx('business', date, 1000, 'Income', 'Client');
-    s.tx('business', date, -100, 'Business', 'Supplies');
+    await s.tx('business', date, 1000, 'Income', 'Client');
+    await s.tx('business', date, -100, 'Business', 'Supplies');
   }
-  const entities = pnlEntities({ db: s.db, clock: s.ctx.clock });
+  const entities = await pnlEntities({ db: s.db, clock: s.ctx.clock });
   const args = { operation: 'pnl', ...custom, compareToPriorYear: true };
   const r = await callTool('business', args, s.ctx);
   assert.equal(r.entities.length, entities.length);
-  const p = businessPnl({ db: s.db, entity: entities[0].key, ...custom, clock: s.ctx.clock }),
+  const p = await businessPnl({ db: s.db, entity: entities[0].key, ...custom, clock: s.ctx.clock }),
     f = (k) => p.figures[k]?.v ?? 0;
   const e = r.entities[0];
   assert.equal(e.revenue.value, f(p.income.total));
@@ -31,7 +31,7 @@ test('business uses API calculators for totals prior periods and row drilldowns'
   const query = { entity: entities[0].key, ...custom, section: 'expenses', category: 'Business' };
   assert.deepEqual(
     await callTool('business', { operation: 'rows', ...query }, s.ctx),
-    getPnlRows({ db: s.db, query, config: { clock: s.ctx.clock } }),
+    await getPnlRows({ db: s.db, query, config: { clock: s.ctx.clock } }),
   );
   await assertRefsResolve(r, s.ctx);
   for (const groupBy of ['none', 'category', 'month'])
@@ -40,8 +40,8 @@ test('business uses API calculators for totals prior periods and row drilldowns'
 
 test('business accepts the shared maximum period and rejects an oversized one', async (t) => {
   const s = await spendingStore(t);
-  s.fact('business.entities', [{ name: 'Example Studio' }]);
-  s.tx('business', '2026-05-01', 100, 'Income', 'Client');
+  await s.fact('business.entities', [{ name: 'Example Studio' }]);
+  await s.tx('business', '2026-05-01', 100, 'Income', 'Client');
   const r = await callTool('business', { operation: 'pnl', from: '2016-06', to: '2026-05' }, s.ctx);
   assert.equal(r.entities[0].revenue.window.months, 120);
   await assert.rejects(
@@ -52,14 +52,14 @@ test('business accepts the shared maximum period and rejects an oversized one', 
 
 test('large business rows remain identical to the API and keep the full sum', async (t) => {
   const s = await spendingStore(t);
-  s.fact('business.entities', [{ name: 'Example Studio' }]);
+  await s.fact('business.entities', [{ name: 'Example Studio' }]);
   for (let i = 0; i < 550; i++)
-    s.tx('business', '2026-04-01', -1, 'Business', 'Synthetic merchant ' + 'x'.repeat(1000));
+    await s.tx('business', '2026-04-01', -1, 'Business', 'Synthetic merchant ' + 'x'.repeat(1000));
   const query = { entity: 'Example Studio', ...custom, section: 'expenses', category: 'Business' };
   const r = await callTool('business', { operation: 'rows', ...query }, s.ctx);
   assert.equal(r.total, 550);
   assert.equal(r.figures[r.sum].v, 550);
   assert.ok(r.truncated);
   assert.ok(Buffer.byteLength(JSON.stringify(r)) <= 256 * 1024);
-  assert.deepEqual(r, getPnlRows({ db: s.db, query, config: { clock: s.ctx.clock } }));
+  assert.deepEqual(r, await getPnlRows({ db: s.db, query, config: { clock: s.ctx.clock } }));
 });

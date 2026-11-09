@@ -12,7 +12,7 @@
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+import { openScope } from '../storage/index.mjs';
 import { DB_FILE } from '../store/db.mjs';
 import { codeError, storeIdentity } from './db.mjs';
 import { checkHouseholdRoot } from './runtime.mjs';
@@ -21,36 +21,34 @@ import { ensureCarry, fundingMonth } from './model-budget.mjs';
 const unavailable = () => codeError('household_store_unavailable');
 
 // The month's pre-MT-05 spend in a household store, opened read-only.
-function legacySpendUsd(dataDir, householdId, storageRoot, month) {
+async function legacySpendUsd(dataDir, householdId, storageRoot, month) {
   const file = join(checkHouseholdRoot(dataDir, storageRoot), DB_FILE);
   if (!existsSync(file)) throw unavailable();
-  const db = new DatabaseSync(file, { readOnly: true });
+  const db = await openScope({ path: file, readOnly: true, journal: null, queryOnly: true });
   try {
-    db.exec('PRAGMA busy_timeout = 5000');
-    db.exec('PRAGMA query_only = ON');
-    if (storeIdentity(db)?.householdId !== householdId) throw unavailable();
+    if ((await storeIdentity(db))?.householdId !== householdId) throw unavailable();
     // A store not yet migrated to round_id holds only pre-MT-05 rows.
-    const mirrored = db.prepare('PRAGMA table_info(spend_ledger)').all().some(c => c.name === 'round_id');
-    const s = Number(db.prepare(`SELECT coalesce(sum(cost_usd), 0) AS s FROM spend_ledger WHERE yyyymm = ?${mirrored ? ' AND round_id IS NULL' : ''}`)
-      .get(month).s);
+    const mirrored = (await db.columns('spend_ledger')).some(c => c.name === 'round_id');
+    const s = Number((await db.prepare(`SELECT coalesce(sum(cost_usd), 0) AS s FROM spend_ledger WHERE yyyymm = ?${mirrored ? ' AND round_id IS NULL' : ''}`)
+      .get(month)).s);
     if (!Number.isFinite(s) || s < 0) throw unavailable();
     return s;
   } finally {
-    db.close();
+    await db.close();
   }
 }
 
-export function carryAllHouseholds(platform, { dataDir, now = Date.now() } = {}) {
+export async function carryAllHouseholds(platform, { dataDir, now = Date.now() } = {}) {
   if (!platform || typeof dataDir !== 'string' || !dataDir || !Number.isFinite(now)) throw new TypeError('Invalid carry');
   const month = fundingMonth(now);
-  const rows = platform.prepare("SELECT id, storage_root FROM households WHERE status != 'deleted' AND storage_root IS NOT NULL ORDER BY created_at, id").all();
+  const rows = await platform.prepare("SELECT id, storage_root FROM households WHERE status != 'deleted' AND storage_root IS NOT NULL ORDER BY created_at, id").all();
   for (const { id, storage_root: storageRoot } of rows) {
     let legacy;
     try {
-      legacy = legacySpendUsd(dataDir, id, storageRoot, month);
+      legacy = await legacySpendUsd(dataDir, id, storageRoot, month);
     } catch {
       throw unavailable();
     }
-    if (legacy > 0) ensureCarry(platform, { householdId: id, month, legacySpendUsd: legacy, now });
+    if (legacy > 0) await ensureCarry(platform, { householdId: id, month, legacySpendUsd: legacy, now });
   }
 }

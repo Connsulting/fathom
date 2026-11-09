@@ -210,13 +210,13 @@ describe('protocol', () => {
   test('the write tool with a read key is a permission error and writes nothing', async () => {
     const recs = JSON.parse(rpcResult(await callToolRpc(s.baseUrl, readKey.key, 'recommendations', { operation: 'list' })).content[0].text);
     const target = recs.find(r => r.status !== 'dismissed') || recs[0];
-    const before = await withStore(s.dbFile, db => db.prepare("SELECT count(*) AS n FROM rec_events WHERE actor = 'tool'").get().n);
+    const before = await withStore(s.dbFile, async db => (await db.prepare("SELECT count(*) AS n FROM rec_events WHERE actor = 'tool'").get()).n);
     const result = rpcResult(await callToolRpc(s.baseUrl, readKey.key, 'act_on_recommendation', { operation: 'status',  id: target.id, status: 'dismissed' }));
     assert.equal(result.isError, true);
     assert.equal(result.content[0].text, PERMISSION_TEXT);
-    const after = await withStore(s.dbFile, db => ({
-      n: db.prepare("SELECT count(*) AS n FROM rec_events WHERE actor = 'tool'").get().n,
-      status: db.prepare('SELECT status FROM recs WHERE id = ?').get(target.id).status,
+    const after = await withStore(s.dbFile, async db => ({
+      n: (await db.prepare("SELECT count(*) AS n FROM rec_events WHERE actor = 'tool'").get()).n,
+      status: (await db.prepare('SELECT status FROM recs WHERE id = ?').get(target.id)).status,
     }));
     assert.equal(after.n, before);
     assert.equal(after.status, target.status);

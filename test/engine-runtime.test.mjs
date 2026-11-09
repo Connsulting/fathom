@@ -53,7 +53,7 @@ async function started(rt) {
 async function withFixture(fn) {
   const { createInstance } = await src('src/platform/db.mjs');
   const dataDir = await tempDir('fathom-cred-data-');
-  const made = createInstance(dataDir, { mode: 'demo' });
+  const made = await createInstance(dataDir, { mode: 'demo' });
   const dir = await tempDir('fathom-cred-');
   const credFile = join(dir, 'credential');
   const reads = countReads(credFile);
@@ -61,17 +61,17 @@ async function withFixture(fn) {
     return await fn({ db: made.db, platform: made.platform, householdId: made.householdId, credFile, reads });
   } finally {
     reads.restore();
-    made.db.close();
-    made.platform.close();
+    await made.db.close();
+    await made.platform.close();
     rmSync(dataDir, { recursive: true, force: true });
     rmSync(dir, { recursive: true, force: true });
   }
 }
 
-test('live mode reads a missing credential once at start; a file created later is never read and live calls fail', () => withFixture(async ({ db, platform, householdId, credFile, reads }) => {
+test('live mode reads a missing credential once at start; a file created later is never read and live calls fail', async () => withFixture(async ({ db, platform, householdId, credFile, reads }) => {
   const { createRuntimeEngine } = await src('src/engine/runtime.mjs');
   const { ModelCallError } = await src('src/engine/index.mjs');
-  const rt = createRuntimeEngine({ db, config: { engine: 'live', claudeCredentialFile: credFile }, platform, householdId, generation: 1 });
+  const rt = await createRuntimeEngine({ db, config: { engine: 'live', claudeCredentialFile: credFile }, platform, householdId, generation: 1 });
   assert.ok(typeof rt.init === 'function' || (rt.ready && typeof rt.ready.then === 'function'), 'the runtime exposes init() or a ready promise');
   await started(rt);
   assert.equal(reads.n, 1, 'the credential file is read once, at start');
@@ -86,11 +86,11 @@ test('live mode reads a missing credential once at start; a file created later i
   assert.equal(reads.n, 1, 'never read again, even after the file appears');
 }));
 
-test('fake and off modes never touch the credential file', () => withFixture(async ({ db, credFile, reads }) => {
+test('fake and off modes never touch the credential file', async () => withFixture(async ({ db, credFile, reads }) => {
   const { createRuntimeEngine } = await src('src/engine/runtime.mjs');
   reads.write('synthetic-placeholder');
   for (const mode of ['fake', 'off']) {
-    const rt = createRuntimeEngine({ db, config: { engine: mode, claudeCredentialFile: credFile } });
+    const rt = await createRuntimeEngine({ db, config: { engine: mode, claudeCredentialFile: credFile } });
     await started(rt);
     await assert.rejects(rt.extract(EXTRACT));
     await assert.rejects(rt.call(CALL));
@@ -102,11 +102,11 @@ test('a live runtime engine without a platform ledger is refused (no unreserved 
   const { createRuntimeEngine } = await src('src/engine/runtime.mjs');
   const store = await tempDb();
   try {
-    assert.throws(() => createRuntimeEngine({ db: store.db, config: { engine: 'live' } }), TypeError);
+    await assert.rejects(async () => await createRuntimeEngine({ db: store.db, config: { engine: 'live' } }), TypeError);
     // Liveness: fake mode needs no platform.
-    assert.doesNotThrow(() => createRuntimeEngine({ db: store.db, config: { engine: 'fake' } }));
+    await assert.doesNotReject(async () => await createRuntimeEngine({ db: store.db, config: { engine: 'fake' } }));
   } finally {
-    store.close();
+    await store.close();
     rmSync(store.dataDir, { recursive: true, force: true });
   }
 });

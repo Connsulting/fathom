@@ -1,3 +1,4 @@
+import { currentHandle } from '../storage/index.mjs';
 // Live packs over main's pack state (src/packs/state.mjs): the loaded manifests, the manifest
 // backing each packs_state row, and the manifest fields the Packs screen and the answerer read.
 //
@@ -55,14 +56,14 @@ export function loadLivePacks(dataDir) {
   return { packs: packs.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)), dirs, warnings };
 }
 
-export function refreshLivePacks(db, { dataDir, now } = {}) {
+export async function refreshLivePacks(db, { dataDir, now } = {}) {
   const { packs, dirs, warnings } = loadLivePacks(dataDir);
-  saveLoadFailure(db, warnings.length > 0 || (!!getSetting(db, 'yourPlans', null) && !packs.some(p => p.id === 'your-plans')));
+  await saveLoadFailure(db, warnings.length > 0 || (!!await getSetting(db, 'yourPlans', null) && !packs.some(p => p.id === 'your-plans')));
   const stamp = now || new Date().toISOString();
-  tx(db, () => {
-    refreshPackState(db, { packDirs: dirs, now: stamp });
-    if (getSetting(db, 'mode', null) !== 'demo') return;
-    const rows = db.prepare('SELECT id, def FROM packs_state').all();
+  await tx(db, async (db) => {
+    await refreshPackState(db, { packDirs: dirs, now: stamp });
+    if (await getSetting(db, 'mode', null) !== 'demo') return;
+    const rows = await db.prepare('SELECT id, def FROM packs_state').all();
     const backed = new Set(rows.map(r => manifestIdOf(r.id, parseJson(r.def, null))));
     const repoRoot = resolve(REPO_PACKS_DIR);
     const repositoryPack = pack => {
@@ -77,8 +78,8 @@ export function refreshLivePacks(db, { dataDir, now } = {}) {
       && (!repositoryPack(p) || alwaysActive(p)));
     const insert = db.prepare(`INSERT INTO packs_state (id, def, active, exploring, what_if_asked, what_if_done, unhid, sort, updated_at)
                                VALUES (?, ?, NULL, 0, 0, 0, '[]', (SELECT coalesce(max(sort) + 1, 0) FROM packs_state), ?)`);
-    for (const { pack, status, why } of activePacks(missing, getFacts(db))) {
-      insert.run(pack.id, JSON.stringify({
+    for (const { pack, status, why } of activePacks(missing, await getFacts(db))) {
+      await insert.run(pack.id, JSON.stringify({
         id: pack.id, name: pack.name, status, why: escapeUserText(why), covers: [...pack.covers], entries: pack.entries.length,
         curator: pack.curator, updated: pack.reviewed, recIds: [], whatIf: { prompt: pack.whatIf.prompt, a: [], unlocks: [] },
       }), stamp);
@@ -96,8 +97,8 @@ export function createLivePacks(db, { dataDir } = {}) {
   let packs = [];
   let seen = null;
 
-  const fingerprint = () => {
-    const generation = getSetting(db, 'packs.generation', 0);
+  const fingerprint = async () => {
+    const generation = await getSetting(currentHandle(db), 'packs.generation', 0);
     let plans = 'none';
     try {
       const st = statSync(dir);
@@ -110,29 +111,29 @@ export function createLivePacks(db, { dataDir } = {}) {
     return JSON.stringify([generation, plans]);
   };
 
-  function loaded() {
-    const now = fingerprint();
+  async function loaded() {
+    const now = await fingerprint();
     if (now !== seen) {
       const result = loadLivePacks(dataDir);
       for (const w of result.warnings) console.warn(`fathom: ${w}`);
       packs = result.packs;
-      saveLoadFailure(db, result.warnings.length > 0 || (!!getSetting(db, 'yourPlans', null) && !packs.some(p => p.id === 'your-plans')));
-      seen = fingerprint();
+      await saveLoadFailure(db, result.warnings.length > 0 || (!!await getSetting(db, 'yourPlans', null) && !packs.some(p => p.id === 'your-plans')));
+      seen = await fingerprint();
     }
-    return coveredPacks(db, packs);
+    return await coveredPacks(db, packs);
   }
 
-  function backing(rowId, def) {
+  async function backing(rowId, def) {
     const id = manifestIdOf(rowId, def);
-    return loaded().find(p => p.id === id) || null;
+    return (await loaded()).find(p => p.id === id) || null;
   }
 
-  function view(rowId, def) {
-    const pack = backing(rowId, def);
-    const coverage = rowId === 'your-plans' || manifestIdOf(rowId, def) === 'your-plans' ? planCoverage(db) : [];
+  async function view(rowId, def) {
+    const pack = await backing(rowId, def);
+    const coverage = rowId === 'your-plans' || manifestIdOf(rowId, def) === 'your-plans' ? await planCoverage(db) : [];
     if (!pack) return coverage.length ? { ...def, coverage, entries: 0, entryList: [] } : def;
     const whatIf = def.whatIf && typeof def.whatIf === 'object' ? def.whatIf : {};
-    const [{ why }] = activePacks([pack], getFacts(db));
+    const [{ why }] = activePacks([pack], await getFacts(db));
     return {
       ...def,
       ...(coverage.length ? { coverage } : {}),
@@ -149,17 +150,17 @@ export function createLivePacks(db, { dataDir } = {}) {
     };
   }
 
-  function entry(rowId, entryId) {
-    const row = db.prepare('SELECT def FROM packs_state WHERE id = ?').get(rowId);
-    const pack = row ? backing(rowId, parseJson(row.def, null)) : null;
+  async function entry(rowId, entryId) {
+    const row = await db.prepare('SELECT def FROM packs_state WHERE id = ?').get(rowId);
+    const pack = row ? await backing(rowId, parseJson(row.def, null)) : null;
     const found = pack ? getEntry([pack], pack.id, entryId) : null;
     return found ? { id: found.id, title: found.title, body: found.body, cites: cites(found) } : null;
   }
 
-  function refresh() {
-    const result = refreshLivePacks(db, { dataDir });
+  async function refresh() {
+    const result = await refreshLivePacks(db, { dataDir });
     packs = result.packs;
-    seen = fingerprint();
+    seen = await fingerprint();
     return result;
   }
 

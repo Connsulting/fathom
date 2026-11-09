@@ -108,8 +108,8 @@ export function deriveRecFacts(data, facts = {}, { entities = [] } = {}) {
   return out;
 }
 
-export function prepareRecFacts(db, data) {
-  const stored = Object.fromEntries(db.prepare('SELECT * FROM facts').all().map(r => [r.key, { ...r, value: parseJson(r.value, null) }]));
+export async function prepareRecFacts(db, data) {
+  const stored = Object.fromEntries((await db.prepare('SELECT * FROM facts').all()).map(r => [r.key, { ...r, value: parseJson(r.value, null) }]));
   const values = Object.fromEntries(Object.entries(stored).map(([k, r]) => [k, r.value]));
   const automatic = r => r && !r.confirmed && r.parser === 'derive' && String(r.src).startsWith('derived:');
   // Remove our old values before rederiving so removed documents cannot sustain a fact.
@@ -118,7 +118,7 @@ export function prepareRecFacts(db, data) {
   }
   const entityInference = inferEntities(data, values);
   if (entityInference.value.length) values['business.entities'] = entityInference.value;
-  const mortgage = inferMortgage(db, data.clock, values['obligations.mortgage']);
+  const mortgage = await inferMortgage(db, data.clock, values['obligations.mortgage']);
   if (mortgage.present) values['obligations.mortgage'] = mortgage.values;
   const entities = resolveEntities(data, values);
   const candidates = deriveRecFacts(data, values, { entities });
@@ -194,51 +194,51 @@ export function prepareRecFacts(db, data) {
     key: 'business.entities', path: [entity.name], value: entity.type, undoKey: 'business.entityInference',
     evidence: `${entity.name}: inferred ${entity.type === 'personal' ? 'personal spending and income summary' : entity.type === 'income_history' ? 'past client income history' : entity.type === 'inactive' ? 'inactive past business' : entity.type === null ? 'household business with tax type pending' : 'S corp'} from stored ${entity.inferenceKind === 'household_payroll' ? 'household employer and payroll evidence' : 'ledger activity'}.${entity.type === 'personal' ? entity.owner ? ` Attributed to ${entity.owner === 'spouse' ? 'your spouse' : 'you'}.` : ' Tell Fathom who this summary belongs to.' : ''}${(entity.evidence?.otherIncome || []).map(a => ` ${a.stated}.`).join('')} Not right? Tell Fathom which one is the S corp or correct this summary's person.`,
   });
-  return { values, assumptions, writes, deletes, mortgage, write() {
+  return { values, assumptions, writes, deletes, mortgage, async write(db) {
     let changed = 0;
     if (entityInference.changed) {
       const src = `inferred:entities:${data.clock}`;
-      db.prepare('INSERT OR IGNORE INTO sources (id,label,as_of,kind,note) VALUES (?,?,?,?,?)')
+      await db.prepare('INSERT OR IGNORE INTO sources (id,label,as_of,kind,note) VALUES (?,?,?,?,?)')
         .run(src, 'Entity classifications inferred from ledger line counts and kinds', data.clock, 'derived', '');
-      if (upsertFact(db, { key: 'business.entities', value: entityInference.value, src, asOf: data.clock,
-        confirmed: !!stored['business.entities']?.confirmed, provenance: { parser: 'entity-inference', locator: { rule: 'entity_classification', rows: entityInference.rows } } }).changed) changed++;
+      if ((await upsertFact(db, { key: 'business.entities', value: entityInference.value, src, asOf: data.clock,
+        confirmed: !!stored['business.entities']?.confirmed, provenance: { parser: 'entity-inference', locator: { rule: 'entity_classification', rows: entityInference.rows } } })).changed) changed++;
     }
-    for (const key of deletes) changed += db.prepare("DELETE FROM facts WHERE key = ? AND src LIKE 'derived:%' AND confirmed = 0").run(key).changes;
-    if (writes.length) db.prepare('INSERT OR IGNORE INTO sources (id, label, as_of, kind, note) VALUES (?, ?, ?, ?, ?)')
+    for (const key of deletes) changed += (await db.prepare("DELETE FROM facts WHERE key = ? AND src LIKE 'derived:%' AND confirmed = 0").run(key)).changes;
+    if (writes.length) await db.prepare('INSERT OR IGNORE INTO sources (id, label, as_of, kind, note) VALUES (?, ?, ?, ?, ?)')
       .run(`derived:${data.clock}`, 'Derived from stored data and stated assumptions', data.clock, 'derived', '');
-    for (const w of writes) if (upsertFact(db, { ...w, confirmed: false }).changed) changed++;
+    for (const w of writes) if ((await upsertFact(db, { ...w, confirmed: false })).changed) changed++;
     return changed;
   } };
 }
 
-export function undoDefault(db, key, value) {
+export async function undoDefault(db, key, value) {
   if (key === 'business.entityInference') {
-    const row = db.prepare("SELECT value FROM facts WHERE key='business.entities'").get();
+    const row = await db.prepare("SELECT value FROM facts WHERE key='business.entities'").get();
     const prior = parseJson(row?.value, []);
     if (Array.isArray(prior)) {
       const names = new Set(Object.entries(value).filter(([, flag]) => flag.undone).map(([name]) => name.trim().toLowerCase()));
-      db.prepare("UPDATE facts SET value=? WHERE key='business.entities'").run(JSON.stringify(prior.flatMap(e => !e?.inferred || !names.has(e.name.trim().toLowerCase()) ? [e]
+      await db.prepare("UPDATE facts SET value=? WHERE key='business.entities'").run(JSON.stringify(prior.flatMap(e => !e?.inferred || !names.has(e.name.trim().toLowerCase()) ? [e]
         : e.nameSource === 'owner' ? [ownerEntityIdentity(e)] : [])));
     }
     return;
   }
   if (key === 'accounts.planTypeInference' || key === 'retirement.otherPlanDeferralsDefault') {
     const target = DEFAULT_UNDO[key];
-    const row = db.prepare('SELECT * FROM facts WHERE key = ?').get(target);
+    const row = await db.prepare('SELECT * FROM facts WHERE key = ?').get(target);
     if (!row || row.confirmed || row.parser !== 'derive') return;
     const prior = parseJson(row.value, {});
     for (const [id, flag] of Object.entries(value)) if (flag?.undone) delete prior[id];
-    if (Object.keys(prior).length) db.prepare('UPDATE facts SET value = ? WHERE key = ?').run(JSON.stringify(prior), target);
-    else db.prepare('DELETE FROM facts WHERE key = ?').run(target);
+    if (Object.keys(prior).length) await db.prepare('UPDATE facts SET value = ? WHERE key = ?').run(JSON.stringify(prior), target);
+    else await db.prepare('DELETE FROM facts WHERE key = ?').run(target);
     return;
   }
   const target = DEFAULT_UNDO[key];
   if (!target || (target !== 'accounts.va529' && value !== true)) return;
   if (target === 'accounts.va529') {
-    const row = db.prepare('SELECT * FROM facts WHERE key = ?').get(target);
+    const row = await db.prepare('SELECT * FROM facts WHERE key = ?').get(target);
     if (!row || row.confirmed || !String(row.src).startsWith('derived:')) return;
     const prior = parseJson(row.value, {});
     for (const id of Object.keys(value)) if (value[id]?.undone === true && prior[id]) delete prior[id].carryforward;
-    db.prepare('UPDATE facts SET value = ? WHERE key = ?').run(JSON.stringify(prior), target);
-  } else db.prepare("DELETE FROM facts WHERE key = ? AND src LIKE 'derived:%' AND confirmed = 0").run(target);
+    await db.prepare('UPDATE facts SET value = ? WHERE key = ?').run(JSON.stringify(prior), target);
+  } else await db.prepare("DELETE FROM facts WHERE key = ? AND src LIKE 'derived:%' AND confirmed = 0").run(target);
 }

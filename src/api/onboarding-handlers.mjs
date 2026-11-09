@@ -20,7 +20,7 @@ export async function saveNotes(ctx) {
   if (bytes.length > NOTE_MAX_BYTES) throw new HttpError(413, `the note is over ${NOTE_MAX_BYTES} bytes; split it or attach it as a file`);
 
   await householdVault(ctx);
-  const opts = ingestOpts(ctx);
+  const opts = await ingestOpts(ctx);
   opts.capturedAt = opts.now;
   let file;
   try {
@@ -36,6 +36,6 @@ export async function saveNotes(ctx) {
     triggerPlan(ctx);
     triggerGuesses(ctx);
   }
-  const engineOn = !!(ctx.engine && typeof ctx.engine.isOn === 'function' && ctx.engine.isOn());
-  return { scenario: scenarioOf(ctx), file, understood: understoodOf(ctx.db, file, { engineOn }) };
+  const engineOn = !!(ctx.engine && typeof ctx.engine.isOn === 'function' && await ctx.engine.isOn());
+  return { scenario: await scenarioOf(ctx), file, understood: await understoodOf(ctx.db, file, { engineOn }) };
 }

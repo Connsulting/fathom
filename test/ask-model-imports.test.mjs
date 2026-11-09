@@ -9,10 +9,10 @@ for (const operation of ['import_file', 'note', 'retry_import', 'review_import']
   if (operation === 'retry_import' || operation === 'review_import') {
     if (operation === 'retry_import') {
       const { setSetting } = await import('../src/store/db.mjs');
-      setSetting(x.db, 'engine', { on: false });
+      await setSetting(x.db, 'engine', { on: false });
       const initial = await x.mcp('import_file', { name: 'synthetic.csv', mime: 'text/csv', text: csv });
       args = { operation, fileId: initial.file.fileId };
-      setSetting(x.db, 'engine', { on: true });
+      await setSetting(x.db, 'engine', { on: true });
     } else {
       x.responses.push(response); const initial = await x.upload();
       args = { operation, proposalId: initial.proposalId, version: initial.version, decision: 'correct', evidence: 'Change the sign.' };
@@ -37,9 +37,9 @@ for (const operation of ['import_file', 'note', 'retry_import', 'review_import']
   assert.equal(x.extracts, before + 1, 'real interpreter called with the same engine and ledger');
   assert.match(result.json.message.text, /Fathom is reading/);
   assert.match(result.json.message.text, /Files.*Confirm/);
-  const proposal = x.db.prepare('SELECT * FROM import_proposals ORDER BY version DESC LIMIT 1').get();
+  const proposal = await x.db.prepare('SELECT * FROM import_proposals ORDER BY version DESC LIMIT 1').get();
   assert.equal(proposal.status, 'needs_confirmation');
   assert.equal(proposal.version, operation === 'review_import' ? 2 : 1);
-  assert.equal(x.db.prepare('SELECT count(*) n FROM transactions').get().n, 0);
-  assert.equal(x.db.prepare('SELECT count(*) n FROM facts').get().n, 0);
+  assert.equal((await x.db.prepare('SELECT count(*) n FROM transactions').get()).n, 0);
+  assert.equal((await x.db.prepare('SELECT count(*) n FROM facts').get()).n, 0);
 });

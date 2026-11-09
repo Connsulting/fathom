@@ -10,13 +10,13 @@ import { assertSnapshotShape } from '../src/blocks/snapshot-shape.mjs';
 let store, calls;
 const ref = (i, path = '') => ({ tool: calls[i].name, args: calls[i].args, path });
 before(async () => {
-  store = await tempDb(); seedDemo(store.db);
+  store = await tempDb(); await seedDemo(store.db);
   calls = [];
   for (const [name, args] of [['household', { operation: 'figures' }], ['goals', { operation: 'pace' }],
     ['transactions', { operation: 'search', limit: 4 }], ['household', { operation: 'deadlines' }], ['accounts', { operation: 'list' }]])
     calls.push({ name, args, result: await callTool(name, args, { db: store.db, now: new Date('2026-11-05T15:00:00Z') }) });
 });
-after(() => store?.close());
+after(async () => await store?.close());
 const check = (op, spec) => {
   assert.equal(validateBlock(op, spec, calls).ok, true);
   const before = structuredClone(calls);

@@ -8,7 +8,7 @@ import { reviewImport } from '../../src/ingest/model-review.mjs';
 
 export async function setup() {
   const x = await fixture({ engine: 'fake' });
-  createAuthStore(x.platform).setPlatformSetting('instance_model_cap_usd', 50);
+  await createAuthStore(x.platform).setPlatformSetting('instance_model_cap_usd', 50);
   return { ...x, opts: { ...x.ctx, config: x.config } };
 }
 export async function upload(x, text, layout = recipe(), options = {}) {
@@ -23,6 +23,6 @@ export async function upload(x, text, layout = recipe(), options = {}) {
   const result = options.reinterpret ? await retryFile(x.db, fileId, { ...opts, mode: 'reinterpret' }) : await ingestFile(x.db, { name, bytes }, opts);
   return { ...result, fileId };
 }
-export const approve = (x, r) => reviewImport(x.ctx, { proposalId: r.proposalId, version: r.version, decision: 'approve', evidence: 'yes' });
+export const approve = async (x, r) => reviewImport(x.ctx, { proposalId: r.proposalId, version: r.version, decision: 'approve', evidence: 'yes' });
 export const transactions = (amount = '-12.25', twice = true) => 'Account,Date,Amount USD,Description\n' +
   `account-synthetic,2032-03-02,${amount},Synthetic purchase\n` + (twice ? `account-synthetic,2032-03-02,${amount},Synthetic purchase\n` : '');

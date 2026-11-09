@@ -7,26 +7,26 @@ import { isVerifiable } from '../shared/rec-steps.mjs';
 
 export const SETTABLE_REC_STATUSES = Object.freeze(['doing', 'done', 'dismissed', 'snoozed', 'proposed']);
 
-export function visibleRecRow(db, id) {
-  const row = db.prepare('SELECT * FROM recs WHERE id = ?').get(id);
+export async function visibleRecRow(db, id) {
+  const row = await db.prepare('SELECT * FROM recs WHERE id = ?').get(id);
   if (!row || row.status === 'hidden') throw new ToolError('not_found', 'no such recommendation');
   return row;
 }
 
-export function detachRecThreads(db, id, { now, onWrite } = {}) {
-  return tx(db, () => {
-    visibleRecRow(db, id);
-    const before = db.prepare('SELECT key, rec_id, rec_detached_at FROM conversations WHERE rec_id = ? AND rec_detached_at IS NULL ORDER BY key').all(id);
-    db.prepare('UPDATE conversations SET rec_detached_at = ? WHERE rec_id = ? AND rec_detached_at IS NULL').run(now, id);
+export async function detachRecThreads(db, id, { now, onWrite } = {}) {
+  return await tx(db, async (db) => {
+    await visibleRecRow(db, id);
+    const before = await db.prepare('SELECT key, rec_id, rec_detached_at FROM conversations WHERE rec_id = ? AND rec_detached_at IS NULL ORDER BY key').all(id);
+    await db.prepare('UPDATE conversations SET rec_detached_at = ? WHERE rec_id = ? AND rec_detached_at IS NULL').run(now, id);
     const after = before.map(row => ({ ...row, rec_detached_at: now }));
-    onWrite?.(before, after);
+    await onWrite?.(before, after);
     return before.length;
   });
 }
 
-export function writeRec(db, id, kind, value, { now, actor = 'ui', onWrite, eventAction } = {}) {
-  return tx(db, () => {
-    const row = visibleRecRow(db, id);
+export async function writeRec(db, id, kind, value, { now, actor = 'ui', onWrite, eventAction } = {}) {
+  return await tx(db, async (db) => {
+    const row = await visibleRecRow(db, id);
     const def = parse(row.def, {});
     if (kind === 'step') {
       if (def.question?.primary) throw new ToolError('conflict', 'save the answers to update this recommendation');
@@ -38,23 +38,23 @@ export function writeRec(db, id, kind, value, { now, actor = 'ui', onWrite, even
       const done = parse(row.tasks_done, []);
       const next = tasks.map((_, k) => !!done[k]);
       next[value.index] = value.checked;
-      db.prepare('UPDATE recs SET tasks_done = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(next), now, id);
+      await db.prepare('UPDATE recs SET tasks_done = ?, updated_at = ? WHERE id = ?').run(JSON.stringify(next), now, id);
     } else if (kind === 'owner') {
       if (!OWNERS.includes(value)) throw new ToolError('bad_input', 'unknown recommendation owner');
-      setRecOwner(db, row, value, { ts: now, actor, action: eventAction || 'set_owner' });
+      await setRecOwner(db, row, value, { ts: now, actor, action: eventAction || 'set_owner' });
     } else if (kind === 'status') {
       if (!SETTABLE_REC_STATUSES.includes(value.status)) throw new ToolError('bad_input', 'unknown recommendation status');
       if (def.question?.primary && value.status === 'done') throw new ToolError('bad_input', 'Save the answers before completing this recommendation.');
       if (value.wake != null && (typeof value.wake !== 'string' || value.wake.length > 200)) throw new ToolError('bad_input', 'snooze label is too long or not text');
       const wake = value.status === 'snoozed' ? value.wake || 'Next month' : def.wake ?? null;
-      db.prepare('UPDATE recs SET status = ?, wake = ?, updated_at = ? WHERE id = ?').run(value.status, wake, now, id);
+      await db.prepare('UPDATE recs SET status = ?, wake = ?, updated_at = ? WHERE id = ?').run(value.status, wake, now, id);
     } else throw new ToolError('bad_input', 'unknown recommendation change');
-    const after = visibleRecRow(db, id);
+    const after = await visibleRecRow(db, id);
     // An "I did this" step records its time and actor by the step text, so a reordered list keeps it.
     const step = kind === 'step' ? def.tasks[value.index] : null;
-    if (kind !== 'owner') db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor)
+    if (kind !== 'owner') await db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor)
       VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id, now, step ? (value.checked ? 'step_did' : 'step_undo') : eventAction || 'set_status', step ? step.t : value.wake ?? null, row.status, after.status, actor);
-    onWrite?.(row, after);
+    await onWrite?.(row, after);
     return after;
   });
 }
@@ -63,17 +63,17 @@ export function writeRec(db, id, kind, value, { now, actor = 'ui', onWrite, even
 // changes it again, and records the change in rec history without a status change. Callers hold
 // the transaction and validate the owner. action/actor: 'owner'/'ui' from the app, 'set_owner'/'tool'
 // over MCP.
-export function setRecOwner(db, row, owner, { ts, action, actor }) {
-  db.prepare('UPDATE recs SET owner = ?, owner_override = 1, updated_at = ? WHERE id = ?').run(owner, ts, row.id);
-  db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+export async function setRecOwner(db, row, owner, { ts, action, actor }) {
+  await db.prepare('UPDATE recs SET owner = ?, owner_override = 1, updated_at = ? WHERE id = ?').run(owner, ts, row.id);
+  await db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, ?, ?, ?, ?, ?)`)
     .run(row.id, ts, action, owner, row.status, row.status, actor);
 }
 
-export function applyStatusAction(db, row, action, arg = null, { now = new Date().toISOString(), actor = 'ui' } = {}) {
+export async function applyStatusAction(db, row, action, arg = null, { now = new Date().toISOString(), actor = 'ui' } = {}) {
   const status = ACTION_STATUS[action];
   if (!status) throw new ToolError('bad_input', `unknown action ${action}`);
   const wake = action === 'snooze' ? arg : (parse(row.def, {}).wake ?? null);
-  db.prepare('UPDATE recs SET status = ?, wake = ?, updated_at = ? WHERE id = ?').run(status, wake, now, row.id);
-  db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+  await db.prepare('UPDATE recs SET status = ?, wake = ?, updated_at = ? WHERE id = ?').run(status, wake, now, row.id);
+  await db.prepare(`INSERT INTO rec_events (rec_id, ts, action, arg, from_status, to_status, actor) VALUES (?, ?, ?, ?, ?, ?, ?)`)
     .run(row.id, now, action, arg == null ? null : String(arg), row.status, status, actor);
 }

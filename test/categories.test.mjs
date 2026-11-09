@@ -23,26 +23,26 @@ const accounts = [{ id: 'checking', kind: 'checking', inst: 'Example Bank' }, { 
   { id: 'card', kind: 'card', inst: 'Example Card', mask: '5678' }, { id: 'biz', kind: 'business' }];
 const row = (id, patch = {}) => ({ id, account_id: 'checking', date: '2032-06-10', amount: -250, description: 'Example Shop', ...patch });
 const resolve = (transactions, extra = {}) => resolveCategories({ transactions, accounts, ...extra });
-function store(t) {
+async function store(t) {
   const dir = mkdtempSync(join(tmpdir(), 'fathom-category-'));
-  const s = createInstance(dir, { mode: 'real' });
-  setSetting(s.db, 'clock', clock);
-  t.after(() => { s.db.close(); s.platform.close(); rmSync(dir, { recursive: true, force: true }); });
+  const s = await createInstance(dir, { mode: 'real' });
+  await setSetting(s.db, 'clock', clock);
+  t.after(async () => { await s.db.close(); await s.platform.close(); rmSync(dir, { recursive: true, force: true }); });
   return { ...s, dir };
 }
-function account(db, id = 'checking', kind = 'checking') {
-  db.prepare("INSERT INTO accounts (id,kind,inst,mask,name,display_name,identity) VALUES (?,?, 'Example Bank','1111','Synthetic checking','Everyday account',?)").run(id, kind, 'examplebank|mask:' + id);
+async function account(db, id = 'checking', kind = 'checking') {
+  await db.prepare("INSERT INTO accounts (id,kind,inst,mask,name,display_name,identity) VALUES (?,?, 'Example Bank','1111','Synthetic checking','Everyday account',?)").run(id, kind, 'examplebank|mask:' + id);
 }
-function txn(db, patch = {}) {
+async function txn(db, patch = {}) {
   const r = row(0, patch);
-  const q = db.prepare('INSERT INTO transactions (account_id,date,amount,description,category,parser,dedupe_key,external_id) VALUES (?,?,?,?,?,?,?,?)')
-    .run(r.account_id, r.date, r.amount, r.description, r.category ?? null, r.parser ?? 'simplefin', r.dedupe_key ?? null, r.external_id ?? null);
-  return Number(q.lastInsertRowid);
+  const q = await db.prepare('INSERT INTO transactions (account_id,date,amount,description,category,parser,dedupe_key,external_id) VALUES (?,?,?,?,?,?,?,?) RETURNING id')
+    .get(r.account_id, r.date, r.amount, r.description, r.category ?? null, r.parser ?? 'simplefin', r.dedupe_key ?? null, r.external_id ?? null);
+  return Number(q.id);
 }
-function history(db) {
-  for (let m = 1; m <= 8; m++) for (const amount of [-100, 3000]) txn(db, { date: `2032-${String(m).padStart(2, '0')}-15`, amount, description: amount < 0 ? 'Household item' : 'Earned deposit', category: amount < 0 ? 'Groceries' : 'Income', parser: 'aggregator' });
+async function history(db) {
+  for (let m = 1; m <= 8; m++) for (const amount of [-100, 3000]) await txn(db, { date: `2032-${String(m).padStart(2, '0')}-15`, amount, description: amount < 0 ? 'Household item' : 'Earned deposit', category: amount < 0 ? 'Groceries' : 'Income', parser: 'aggregator' });
 }
-const spend = db => { const input = loadCategoryInputs(db); return spendingInputs({ ...input, clock }); };
+const spend = async db => { const input = await loadCategoryInputs(db); return spendingInputs({ ...input, clock }); };
 
 test('AC1 shipped source tables cover every stock name, and unknown names fall through', () => {
   const stock = ['Shopping','Income','Dining & Drinks','Business','Credit Card Payment','Entertainment & Rec.','Bills & Utilities','Auto & Transport','Groceries','Travel & Vacation','Software & Tech','Home & Garden','Mortgage','Income Tax','Investment','Medical','Childcare','Internal Transfers','Gifts','Uncategorized','Health & Wellness','Personal Care','Healthcare Premiums','Taxes','Cash & Checks','Mortgage Principal','HSA','Pets','Fees','Ignore','Family Care','Charitable Donations','Savings Transfer','Legal'];
@@ -89,122 +89,122 @@ test('AC1 structural layer recognizes card payments, preserves business draws an
   assert.equal(r.get(5).bucket,'household'); assert.equal(r.get(6).layer,'uncategorized');
 });
 
-test('AC4 store path gives in-window household transfers first claim over business/pre-window rows', t => {
-  const {db} = store(t); account(db); account(db,'biz','business'); account(db,'broker','taxable'); history(db);
-  txn(db,{ account_id:'biz',date:'2032-06-08',amount:-1000 });
-  txn(db,{ account_id:'broker',date:'2032-06-08',amount:-1000 });
-  txn(db,{ date:'2032-06-10',amount:-1000 });
-  txn(db,{ account_id:'broker',date:'2032-06-10',amount:1000 });
-  assert.equal(spend(db).spendTotal,600);
+test('AC4 store path gives in-window household transfers first claim over business/pre-window rows', async t => {
+  const {db} = await store(t); await account(db); await account(db,'biz','business'); await account(db,'broker','taxable'); await history(db);
+  await txn(db,{ account_id:'biz',date:'2032-06-08',amount:-1000 });
+  await txn(db,{ account_id:'broker',date:'2032-06-08',amount:-1000 });
+  await txn(db,{ date:'2032-06-10',amount:-1000 });
+  await txn(db,{ account_id:'broker',date:'2032-06-10',amount:1000 });
+  assert.equal((await spend(db)).spendTotal,600);
 });
 
-test('AC4 bucket filtering and retained uncertainty note change real spending figures', t => {
-  const {db} = store(t); account(db); history(db);
-  for (const category of ['Business','Credit Card Payment','Internal Transfers','Savings Transfer','Ignore','Taxes','Investment','HSA','Mortgage Principal']) txn(db,{category,parser:'aggregator',amount:-500});
-  txn(db,{amount:-275,description:'Unresolved service'});
-  const sp=spend(db); assert.equal(sp.spendTotal,875);
+test('AC4 bucket filtering and retained uncertainty note change real spending figures', async t => {
+  const {db} = await store(t); await account(db); await history(db);
+  for (const category of ['Business','Credit Card Payment','Internal Transfers','Savings Transfer','Ignore','Taxes','Investment','HSA','Mortgage Principal']) await txn(db,{category,parser:'aggregator',amount:-500});
+  await txn(db,{amount:-275,description:'Unresolved service'});
+  const sp=await spend(db); assert.equal(sp.spendTotal,875);
   const f=spendingFigures(sp,{clock}).monthlySpend;
   assert.equal(f.locator.inputs.uncategorizedSpend,275);
   assert.ok(f.notes.some(n=>n.includes('275.00') && n.includes('Uncategorized')));
   assert.match(f.locator.steps[0].formula,/household/);
 });
 
-test('AC3 amount threshold/top ten, one source-name mapping, rules past/future and undo', t => {
-  const {db} = store(t); account(db); history(db);
-  for(let i=0;i<12;i++) txn(db,{amount:-(100+i),description:'Merchant '+String.fromCharCode(65+i)});
-  txn(db,{amount:-99,description:'Below threshold'});
-  txn(db,{amount:-5000,description:'Outside the spending window',date:'2031-01-15'});
-  txn(db,{amount:-6000,description:'Future posting',date:'2033-01-15'});
-  queueCategoryChecks(db,{clock});
-  let pending=pendingItems(db).filter(i=>i.kind==='transaction_category');
+test('AC3 amount threshold/top ten, one source-name mapping, rules past/future and undo', async t => {
+  const {db} = await store(t); await account(db); await history(db);
+  for(let i=0;i<12;i++) await txn(db,{amount:-(100+i),description:'Merchant '+String.fromCharCode(65+i)});
+  await txn(db,{amount:-99,description:'Below threshold'});
+  await txn(db,{amount:-5000,description:'Outside the spending window',date:'2031-01-15'});
+  await txn(db,{amount:-6000,description:'Future posting',date:'2033-01-15'});
+  await queueCategoryChecks(db,{clock});
+  let pending=(await pendingItems(db)).filter(i=>i.kind==='transaction_category');
   assert.equal(pending.length,10);
   assert.equal(pending[0].context.amount,-111);
-  const item=pending[0]; const before=spend(db).spendTotal;
-  answerItem(db,item.id,'always:Business');
-  assert.equal(spend(db).spendTotal,before-111);
-  txn(db,{amount:-200,description:item.context.description,date:'2032-06-11'});
-  assert.equal(resolveCategories(loadCategoryInputs(db)).get(db.prepare('SELECT max(id) AS id FROM transactions').get().id).bucket,'business');
-  reopenItem(db,item.id);
-  assert.equal(spend(db).spendTotal,before+200);
-  txn(db,{category:'New category',parser:'another-app',amount:-50});
-  txn(db,{category:'New category',parser:'another-app',amount:-500});
-  queueCategoryChecks(db,{clock});
-  const maps=pendingItems(db).filter(i=>i.kind==='category_mapping');
+  const item=pending[0]; const before=(await spend(db)).spendTotal;
+  await answerItem(db,item.id,'always:Business');
+  assert.equal((await spend(db)).spendTotal,before-111);
+  await txn(db,{amount:-200,description:item.context.description,date:'2032-06-11'});
+  assert.equal(resolveCategories(await loadCategoryInputs(db)).get((await db.prepare('SELECT max(id) AS id FROM transactions').get()).id).bucket,'business');
+  await reopenItem(db,item.id);
+  assert.equal((await spend(db)).spendTotal,before+200);
+  await txn(db,{category:'New category',parser:'another-app',amount:-50});
+  await txn(db,{category:'New category',parser:'another-app',amount:-500});
+  await queueCategoryChecks(db,{clock});
+  const maps=(await pendingItems(db)).filter(i=>i.kind==='category_mapping');
   assert.equal(maps.length,1);
-  answerItem(db,maps[0].id,'tax');
-  assert.equal([...resolveCategories(loadCategoryInputs(db)).values()].filter(c=>c.category==='New category' && c.bucket==='tax').length,2);
-  reopenItem(db,maps[0].id);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM category_source_rules').get().n,0);
+  await answerItem(db,maps[0].id,'tax');
+  assert.equal([...resolveCategories(await loadCategoryInputs(db)).values()].filter(c=>c.category==='New category' && c.bucket==='tax').length,2);
+  await reopenItem(db,maps[0].id);
+  assert.equal((await db.prepare('SELECT count(*) AS n FROM category_source_rules').get()).n,0);
 });
 
 test('AC2 live-row enrichment keeps one posting, parser provenance, replay and ambiguous rows', async t => {
-  const {db,dir,platform,householdId}=store(t); const accountId=accountIdOf('examplebank|mask:1111'); account(db,accountId);
-  db.prepare("UPDATE accounts SET identity='examplebank|mask:1111' WHERE id=?").run(accountId);
-  const id=txn(db,{account_id:accountId,date:'2032-06-10',amount:-250,description:'POS DEBIT Example Shop',dedupe_key:'live:one',external_id:'live-one'});
+  const {db,dir,platform,householdId}=await store(t); const accountId=accountIdOf('examplebank|mask:1111'); await account(db,accountId);
+  await db.prepare("UPDATE accounts SET identity='examplebank|mask:1111' WHERE id=?").run(accountId);
+  const id=await txn(db,{account_id:accountId,date:'2032-06-10',amount:-250,description:'POS DEBIT Example Shop',dedupe_key:'live:one',external_id:'live-one'});
   const file=aggregatorFile('export.csv',[{date:'2032-06-12',amount:250,description:'Example Shop',category:'Business'}]);
   const {secrets,keys}=await instanceSecretsOf(dir,'real');
   const household=await householdContext({db,platform,householdId,mode:'real',config:{dataDir:dir,platformKeyFile:keys.platformKeyFile,mcpSecretFile:keys.mcpSecretFile},secrets});
   const opts={household,now:'2032-08-01T12:00:00Z'};
   assert.equal((await ingestFile(db,file,opts)).status,'imported');
-  assert.equal(db.prepare('SELECT count(*) AS n FROM transactions').get().n,1);
-  const c=resolveCategories(loadCategoryInputs(db)).get(id);
+  assert.equal((await db.prepare('SELECT count(*) AS n FROM transactions').get()).n,1);
+  const c=resolveCategories(await loadCategoryInputs(db)).get(id);
   assert.equal(c.bucket,'business'); assert.equal(c.evidence.parser,'aggregator');
   const overlap=aggregatorFile('overlap.csv',[{date:'2032-06-12',amount:250,description:'Example Shop',category:'Business'}, {date:'2032-06-13',amount:12,description:'Other Merchant',category:'Groceries'}]);
   await ingestFile(db,overlap,opts);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM transactions WHERE amount=-250').get().n,1);
-  txn(db,{account_id:accountId,date:'2032-08-13',amount:-350,description:'Early export',dedupe_key:'live:early'});
+  assert.equal((await db.prepare('SELECT count(*) AS n FROM transactions WHERE amount=-250').get()).n,1);
+  await txn(db,{account_id:accountId,date:'2032-08-13',amount:-350,description:'Early export',dedupe_key:'live:early'});
   await ingestFile(db,aggregatorFile('early-export.csv',[{date:'2032-08-11',amount:350,description:'Early export',category:'Taxes'}]),opts);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM transactions WHERE amount=-350').get().n,1);
-  txn(db,{account_id:accountId,date:'2032-09-10',amount:-375,description:'Late export',dedupe_key:'live:late'});
+  assert.equal((await db.prepare('SELECT count(*) AS n FROM transactions WHERE amount=-350').get()).n,1);
+  await txn(db,{account_id:accountId,date:'2032-09-10',amount:-375,description:'Late export',dedupe_key:'live:late'});
   await ingestFile(db,aggregatorFile('late-export.csv',[{date:'2032-09-13',amount:375,description:'Late export',category:'Taxes'}]),opts);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM transactions WHERE amount=-375').get().n,2);
-  txn(db,{account_id:accountId,date:'2032-07-10',amount:-400,description:'POS Example Shop',dedupe_key:'live:two'});
-  txn(db,{account_id:accountId,date:'2032-07-10',amount:-400,description:'POS Example Shop',dedupe_key:'live:three'});
+  assert.equal((await db.prepare('SELECT count(*) AS n FROM transactions WHERE amount=-375').get()).n,2);
+  await txn(db,{account_id:accountId,date:'2032-07-10',amount:-400,description:'POS Example Shop',dedupe_key:'live:two'});
+  await txn(db,{account_id:accountId,date:'2032-07-10',amount:-400,description:'POS Example Shop',dedupe_key:'live:three'});
   await ingestFile(db,aggregatorFile('ambiguous.csv',[{date:'2032-07-11',amount:400,description:'Example Shop',category:'Business'}]),opts);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM transactions WHERE amount=-400').get().n,3);
-  assert.ok(pendingItems(db).some(i=>i.kind==='near_duplicate'));
+  assert.equal((await db.prepare('SELECT count(*) AS n FROM transactions WHERE amount=-400').get()).n,3);
+  assert.ok((await pendingItems(db)).some(i=>i.kind==='near_duplicate'));
 });
 
-test('AC2 corrections survive duplicate consolidation and its undo without cascades', t => {
-  const {db}=store(t); account(db);
-  const a=txn(db,{dedupe_key:'a',description:'Original description'}), b=txn(db,{dedupe_key:'b'});
-  db.prepare("INSERT INTO transaction_category_corrections VALUES (?,'Business','business',?)").run(b,'2032-08-01');
-  const q=ask(db,{kind:'near_duplicate',subject:'a|b',question:'Same?',options:[{id:'same',label:'Same'},{id:'different',label:'Different'}],context:{keys:['a','b']}});
-  answerItem(db,q.id,'same');
-  assert.equal(resolveCategories(loadCategoryInputs(db)).get(a).bucket,'business');
-  reopenItem(db,q.id);
-  assert.equal(resolveCategories(loadCategoryInputs(db)).get(b).bucket,'business');
-  assert.equal(resolveCategories(loadCategoryInputs(db)).get(a).layer,'uncategorized');
-  assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
+test('AC2 corrections survive duplicate consolidation and its undo without cascades', async t => {
+  const {db}=await store(t); await account(db);
+  const a=await txn(db,{dedupe_key:'a',description:'Original description'}), b=await txn(db,{dedupe_key:'b'});
+  await db.prepare("INSERT INTO transaction_category_corrections VALUES (?,'Business','business',?)").run(b,'2032-08-01');
+  const q=await ask(db,{kind:'near_duplicate',subject:'a|b',question:'Same?',options:[{id:'same',label:'Same'},{id:'different',label:'Different'}],context:{keys:['a','b']}});
+  await answerItem(db,q.id,'same');
+  assert.equal(resolveCategories(await loadCategoryInputs(db)).get(a).bucket,'business');
+  await reopenItem(db,q.id);
+  assert.equal(resolveCategories(await loadCategoryInputs(db)).get(b).bucket,'business');
+  assert.equal(resolveCategories(await loadCategoryInputs(db)).get(a).layer,'uncategorized');
+  assert.deepEqual((await db.foreignKeyCheck()),[]);
   // Same dependency move is the account-merge call site; run it in a rollbackable transaction.
-  db.exec('BEGIN'); moveCategoryRows(db,b,a); db.prepare('DELETE FROM transactions WHERE id=?').run(b); db.exec('COMMIT');
-  assert.equal(resolveCategories(loadCategoryInputs(db)).get(a).bucket,'business');
+  await db.transaction(async db => { await moveCategoryRows(db,b,a); await db.prepare('DELETE FROM transactions WHERE id=?').run(b); });
+  assert.equal(resolveCategories(await loadCategoryInputs(db)).get(a).bucket,'business');
 });
 
 test('AC1 missing category provider does nothing and old uncalibrated proposals are not applied', async t => {
-  const {db}=store(t); account(db); const id=txn(db);
+  const {db}=await store(t); await account(db); const id=await txn(db);
   assert.equal((await guessCategories(db,{isOn:()=>false})).skipped,'provider_off');
-  db.prepare("INSERT INTO transaction_category_guesses VALUES (?,'Business','unmeasured',?)").run(id,'2032-01-01');
-  assert.equal(resolveCategories(loadCategoryInputs(db)).get(id).layer,'uncategorized');
+  await db.prepare("INSERT INTO transaction_category_guesses VALUES (?,'Business','unmeasured',?)").run(id,'2032-01-01');
+  assert.equal(resolveCategories(await loadCategoryInputs(db)).get(id).layer,'uncategorized');
 });
 
-test('AC3 only explicit checkbox can produce an always option; engine and best guess reject hidden options', t => {
-  const {db}=store(t); account(db); history(db); txn(db); queueCategoryChecks(db,{clock});
-  const item=pendingItems(db).find(i=>i.kind==='transaction_category');
+test('AC3 only explicit checkbox can produce an always option; engine and best guess reject hidden options', async t => {
+  const {db}=await store(t); await account(db); await history(db); await txn(db); await queueCategoryChecks(db,{clock});
+  const item=(await pendingItems(db)).find(i=>i.kind==='transaction_category');
   const options=visibleOptions(item);
   assert.ok(options.every(o=>!o.id.startsWith('always:')));
   assert.equal(categoryAnswerOption(item,options[1].id,false),options[1].id);
   assert.equal(categoryAnswerOption(item,options[1].id,true),'always:'+options[1].id);
   assert.equal(categoryAnswerOption(item,'always:Business',false),null);
   assert.deepEqual(validateGuesses([item],{guesses:[{item:item.id,option:'always:Business',basis:'question'}]}),[]);
-  db.prepare("INSERT INTO confirm_guesses VALUES (?,'always:Business','question','synthetic',?)").run(item.id,'2032-06-10');
-  const g=bestGuess(db,item,{});
+  await db.prepare("INSERT INTO confirm_guesses VALUES (?,'always:Business','question','synthetic',?)").run(item.id,'2032-06-10');
+  const g=await bestGuess(db,item,{});
   assert.ok(!g || !g.option.startsWith('always:'));
 });
 
-test('AC5 coverage CLI uses platform readiness and emits only counts; architecture documents source tables', t => {
-  const {db,dir,householdId}=store(t); account(db); txn(db);
-  const coverage=categoryCoverage(db,{clock}); assert.equal(coverage.uncategorized,1);
+test('AC5 coverage CLI uses platform readiness and emits only counts; architecture documents source tables', async t => {
+  const {db,dir,householdId}=await store(t); await account(db); await txn(db);
+  const coverage=await categoryCoverage(db,{clock}); assert.equal(coverage.uncategorized,1);
   const env={...process.env,FATHOM_DATA:dir};
   const unnamed=spawnSync(process.execPath,['scripts/category-coverage.mjs'],{encoding:'utf8',env});
   assert.equal(unnamed.status,1); assert.equal(unnamed.stdout,''); assert.equal(unnamed.stderr.trim(),'household_required');
@@ -217,38 +217,38 @@ test('AC5 coverage CLI uses platform readiness and emits only counts; architectu
 });
 
 test('AC1 migration preserves a populated store and existing Confirm undo history', async t => {
-  const {db}=store(t); account(db); history(db);
-  const q=ask(db,{kind:'account_owner',subject:'checking',question:'Whose account?',options:[{id:'owner',label:'You'},{id:'spouse',label:'Spouse'}]});
-  answerItem(db,q.id,'owner');
-  const before=db.prepare('SELECT changes FROM confirm_undo WHERE item_id=?').get(q.id).changes;
-  const count=db.prepare('SELECT count(*) AS n FROM transactions').get().n;
-  for(const table of ['transaction_category_imports','transaction_category_corrections','transaction_category_guesses','category_merchant_rules','category_source_rules']) db.exec(`DROP TABLE ${table}`);
-  db.prepare('DELETE FROM schema_migrations WHERE id=23').run();
+  const {db}=await store(t); await account(db); await history(db);
+  const q=await ask(db,{kind:'account_owner',subject:'checking',question:'Whose account?',options:[{id:'owner',label:'You'},{id:'spouse',label:'Spouse'}]});
+  await answerItem(db,q.id,'owner');
+  const before=(await db.prepare('SELECT changes FROM confirm_undo WHERE item_id=?').get(q.id)).changes;
+  const count=(await db.prepare('SELECT count(*) AS n FROM transactions').get()).n;
+  for(const table of ['transaction_category_imports','transaction_category_corrections','transaction_category_guesses','category_merchant_rules','category_source_rules']) await db.applySchema(`DROP TABLE ${table}`);
+  await db.prepare('DELETE FROM schema_migrations WHERE id=23').run();
   const {migrate}=await import('../src/store/db.mjs');
-  assert.deepEqual(migrate(db).applied,[23]);
-  assert.equal(db.prepare('SELECT changes FROM confirm_undo WHERE item_id=?').get(q.id).changes,before);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM transactions').get().n,count);
-  reopenItem(db,q.id);
-  assert.equal(db.prepare('SELECT owner FROM accounts WHERE id=?').get('checking').owner,null);
+  assert.deepEqual((await migrate(db)).applied,[23]);
+  assert.equal((await db.prepare('SELECT changes FROM confirm_undo WHERE item_id=?').get(q.id)).changes,before);
+  assert.equal((await db.prepare('SELECT count(*) AS n FROM transactions').get()).n,count);
+  await reopenItem(db,q.id);
+  assert.equal((await db.prepare('SELECT owner FROM accounts WHERE id=?').get('checking')).owner,null);
 });
 
 test('AC2 a corrected connected row survives the actual account merge and Undo', async t => {
   const {realStore}=await import('./helpers/ingest.mjs');
   const {seedDuplicate}=await import('./helpers/account-merge.mjs');
   const {queueAccountPairs}=await import('../src/ingest/account-merge.mjs');
-  const s=await realStore(); t.after(()=>s.close());
+  const s=await realStore(); t.after(async ()=>await s.close());
   const {own,keep}=await seedDuplicate(s,{sure:true});
-  const r=s.db.prepare('SELECT id FROM transactions WHERE account_id=?').get(own);
-  s.db.prepare("INSERT INTO transaction_category_corrections VALUES (?,'Business','business',?)").run(r.id,'2032-03-10');
-  queueAccountPairs(s.db);
-  const q=pendingItems(s.db).find(i=>i.kind==='account_match' && i.context?.repair);
+  const r=await s.db.prepare('SELECT id FROM transactions WHERE account_id=?').get(own);
+  await s.db.prepare("INSERT INTO transaction_category_corrections VALUES (?,'Business','business',?)").run(r.id,'2032-03-10');
+  await queueAccountPairs(s.db);
+  const q=(await pendingItems(s.db)).find(i=>i.kind==='account_match' && i.context?.repair);
   assert.ok(q);
-  answerItem(s.db,q.id,'same');
-  const survivor=s.db.prepare('SELECT id FROM transactions WHERE account_id=? AND amount=-10').get(keep);
-  assert.equal(resolveCategories(loadCategoryInputs(s.db)).get(survivor.id).bucket,'business');
-  reopenItem(s.db,q.id);
-  assert.equal(resolveCategories(loadCategoryInputs(s.db)).get(r.id).bucket,'business');
-  assert.deepEqual(s.db.prepare('PRAGMA foreign_key_check').all(),[]);
+  await answerItem(s.db,q.id,'same');
+  const survivor=await s.db.prepare('SELECT id FROM transactions WHERE account_id=? AND amount=-10').get(keep);
+  assert.equal(resolveCategories(await loadCategoryInputs(s.db)).get(survivor.id).bucket,'business');
+  await reopenItem(s.db,q.id);
+  assert.equal(resolveCategories(await loadCategoryInputs(s.db)).get(r.id).bucket,'business');
+  assert.deepEqual((await s.db.foreignKeyCheck()),[]);
 });
 
 
@@ -272,12 +272,12 @@ test('AC1 a shared bank name never makes mortgage payments card transfers', () =
   assert.equal(c.get(2).bucket,'transfer'); assert.equal(c.get(3).bucket,'transfer');
 });
 
-test('AC3 queue uses the same in-window transfer priority as the spending figure', t => {
-  const {db}=store(t); account(db); account(db,'broker','taxable'); history(db);
-  txn(db,{date:'2032-01-31',amount:-1000,description:'Partial-month posting'});
-  const transfer=txn(db,{date:'2032-02-02',amount:-1000,description:'Current-window transfer'});
-  txn(db,{date:'2032-02-02',amount:1000,account_id:'broker',description:'Transfer received'});
-  assert.ok(!spend(db).spendIds.includes(transfer));
-  queueCategoryChecks(db,{clock});
-  assert.ok(!pendingItems(db).some(i=>i.kind==='transaction_category' && i.context.transactionId===transfer));
+test('AC3 queue uses the same in-window transfer priority as the spending figure', async t => {
+  const {db}=await store(t); await account(db); await account(db,'broker','taxable'); await history(db);
+  await txn(db,{date:'2032-01-31',amount:-1000,description:'Partial-month posting'});
+  const transfer=await txn(db,{date:'2032-02-02',amount:-1000,description:'Current-window transfer'});
+  await txn(db,{date:'2032-02-02',amount:1000,account_id:'broker',description:'Transfer received'});
+  assert.ok(!(await spend(db)).spendIds.includes(transfer));
+  await queueCategoryChecks(db,{clock});
+  assert.ok(!(await pendingItems(db)).some(i=>i.kind==='transaction_category' && i.context.transactionId===transfer));
 });

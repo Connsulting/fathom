@@ -12,21 +12,21 @@ import { tempDb } from './helpers/server.mjs';
 async function withRealStore(fn) {
   const t = await tempDb();
   try {
-    setSetting(t.db, 'mode', 'real');
+    await setSetting(t.db, 'mode', 'real');
     return await fn(t.db);
   } finally {
-    t.close();
+    await t.close();
   }
 }
 
-const addAccount = db => db.prepare(`INSERT INTO accounts (id, inst, name, owner, kind, mirror, parser)
+const addAccount = async db => await db.prepare(`INSERT INTO accounts (id, inst, name, owner, kind, mirror, parser)
   VALUES ('acct-synth-1', 'Synthetic Bank', 'Synthetic Checking', NULL, 'checking', 'manual', 'test')`).run();
 
-const addFile = db => db.prepare(`INSERT INTO files (id, name, mime, size, uploaded_at, status)
+const addFile = async db => await db.prepare(`INSERT INTO files (id, name, mime, size, uploaded_at, status)
   VALUES ('f-synth-1', 'synthetic.csv', 'text/csv', 64, '2026-11-01T09:00:00Z', 'imported')`).run();
 
-test('an empty real store is fresh (first-run onboarding)', () => withRealStore(db => {
-  const sc = buildScenario(db);
+test('an empty real store is fresh (first-run onboarding)', async () => withRealStore(async db => {
+  const sc = await buildScenario(db);
   assert.equal(sc.live.mode, 'real');
   assert.equal(sc.live.demo, 'fresh');
 }));
@@ -34,55 +34,55 @@ test('an empty real store is fresh (first-run onboarding)', () => withRealStore(
 test('a store with no mode row is real and, empty, is fresh', async () => {
   const t = await tempDb();
   try {
-    const sc = buildScenario(t.db);
+    const sc = await buildScenario(t.db);
     assert.equal(sc.live.mode, 'real');
     assert.equal(sc.live.demo, 'fresh');
   } finally {
-    t.close();
+    await t.close();
   }
 });
 
-test('a real store with one account is november', () => withRealStore(db => {
-  addAccount(db);
-  const sc = buildScenario(db);
+test('a real store with one account is november', async () => withRealStore(async db => {
+  await addAccount(db);
+  const sc = await buildScenario(db);
   assert.equal(sc.live.mode, 'real');
   assert.equal(sc.live.demo, 'november');
   assert.equal(sc.accounts.length, 1);
 }));
 
-test('a real store with one files row and no account is november', () => withRealStore(db => {
-  addFile(db);
-  assert.equal(db.prepare('SELECT count(*) AS n FROM accounts').get().n, 0, 'precondition: no accounts');
-  assert.equal(buildScenario(db).live.demo, 'november');
+test('a real store with one files row and no account is november', async () => withRealStore(async db => {
+  await addFile(db);
+  assert.equal((await db.prepare('SELECT count(*) AS n FROM accounts').get()).n, 0, 'precondition: no accounts');
+  assert.equal((await buildScenario(db)).live.demo, 'november');
 }));
 
-test('a real store with onboarding done stays november, with or without data', () => withRealStore(db => {
-  setSetting(db, 'onboarding', { done: true, step: 6 });
-  assert.equal(buildScenario(db).live.demo, 'november', 'empty but onboarded');
-  addAccount(db);
-  assert.equal(buildScenario(db).live.demo, 'november', 'onboarded with data');
+test('a real store with onboarding done stays november, with or without data', async () => withRealStore(async db => {
+  await setSetting(db, 'onboarding', { done: true, step: 6 });
+  assert.equal((await buildScenario(db)).live.demo, 'november', 'empty but onboarded');
+  await addAccount(db);
+  assert.equal((await buildScenario(db)).live.demo, 'november', 'onboarded with data');
 }));
 
 test('the demo seed stays november', async () => {
   const t = await tempDb();
   try {
-    seedDemo(t.db);
-    const sc = buildScenario(t.db);
+    await seedDemo(t.db);
+    const sc = await buildScenario(t.db);
     assert.equal(sc.live.mode, 'demo');
     assert.equal(sc.live.demo, 'november');
   } finally {
-    t.close();
+    await t.close();
   }
 });
 
 test('a demo store with data but onboarding not done is still fresh (demo rule unchanged)', async () => {
   const t = await tempDb();
   try {
-    seedDemo(t.db);
-    assert.ok(t.db.prepare('SELECT count(*) AS n FROM accounts').get().n > 0, 'precondition: the demo seed has accounts');
-    setSetting(t.db, 'onboarding', { done: false, step: 0 });
-    assert.equal(buildScenario(t.db).live.demo, 'fresh');
+    await seedDemo(t.db);
+    assert.ok((await t.db.prepare('SELECT count(*) AS n FROM accounts').get()).n > 0, 'precondition: the demo seed has accounts');
+    await setSetting(t.db, 'onboarding', { done: false, step: 0 });
+    assert.equal((await buildScenario(t.db)).live.demo, 'fresh');
   } finally {
-    t.close();
+    await t.close();
   }
 });

@@ -62,7 +62,7 @@ test('multi-round fake executes the registry, records each round, and returns a 
 test('registry exposes exact JSON Schema, validates before execution, and removes writes from jobs', async () => {
   let writes = 0;
   const write = { ...read, name: 'set_status', kind: 'write', operations: [{ name: 'write', scope: 'write:recs' }], handler: async () => { writes++; return 'ok'; } };
-  const server = createRegistryServer([read, write], { purpose: 'job', ctx: { db: {}, now: 'demo' } });
+  const server = await createRegistryServer([read, write], { purpose: 'job', ctx: { db: {}, now: 'demo' } });
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '1' });
   await Promise.all([client.connect(a), server.instance.connect(b)]);

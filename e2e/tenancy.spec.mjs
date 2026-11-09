@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { DatabaseSync } from 'node:sqlite';
+import { openScope } from '../src/storage/index.mjs';
 import { test, expect } from '@playwright/test';
 import { createLocalData, localPort, removeLocalData, refuseSuppliedTarget } from './local-store.mjs';
 import { secretEnv, secretsFor } from '../test/helpers/server.mjs';
@@ -66,7 +66,7 @@ test.describe('household selection and isolation', () => {
     fx.owner = await enroll(tokenOf(await run(['scripts/user-invite.mjs', OWNER, '--admin'])));
     fx.A = fx.owner.identity.householdId;
     expect((await run(['scripts/operator.mjs', 'grant', OWNER], { output: false })).code).toBe(0);
-    seedPlatformSetting('multi_household_enabled', true);
+    await seedPlatformSetting('multi_household_enabled', true);
     // The operator provisions B; its first admin enrolls from the emailed link.
     let before = outboxNames();
     const made = await fx.owner.client.post('/api/operator/households', { displayName: BRAVO_NAME, adminEmail: BRAVO_ADMIN });
@@ -92,7 +92,7 @@ test.describe('household selection and isolation', () => {
     before = outboxNames();
     expect((await fx.bravo.client.post('/api/admin/users/invite', { email: CHARLIE, role: 'member' })).status).toBe(200);
     fx.charlieLink = `${base}/enroll#${await mailedToken(before, CHARLIE)}`;
-    clearTours();
+    await clearTours();
   });
 
   test.afterAll(async () => {
@@ -117,7 +117,7 @@ test.describe('household selection and isolation', () => {
     await page.getByRole('textbox', { name: 'Passkey name', exact: true }).fill('Synthetic laptop');
     await page.getByRole('button', { name: 'Create passkey', exact: true }).click();
     await expect(page).toHaveURL((url) => url.pathname === '/' && url.hash.startsWith('#/'));
-    clearTours();
+    await clearTours();
     await page.goto(`${base}/#/goals`);
     await expect(page.getByText(BRAVO_GOAL).first()).toBeVisible();
     await expect(page.getByText(ALPHA_GOAL)).toHaveCount(0);
@@ -188,7 +188,7 @@ test.describe('household selection and isolation', () => {
     expect(await page.evaluate(() => window.__stream), 'the stream resolved without an answer').toBeNull();
     await expect(page.getByRole('alert').filter({ hasText: STALE_NOTICE })).toBeVisible();
     await expect(page.getByText(BRAVO_GOAL), 'the stale tab shows nothing of the new household').toHaveCount(0);
-    expect(storedQuestions(fx.B)).not.toContain('Synthetic question during a switch');
+    expect(await storedQuestions(fx.B)).not.toContain('Synthetic question during a switch');
 
     // Delayed write: tab 3 (in B) posts a goal held in the network until tab 2 switches back.
     const tab3 = await context.newPage();
@@ -209,13 +209,13 @@ test.describe('household selection and isolation', () => {
     expect((await refused).status(), 'the server refused the delayed write').toBe(409);
     expect(await tab3.evaluate(() => window.__write)).toBe('dropped');
     await expect(tab3.getByRole('alert').filter({ hasText: STALE_NOTICE })).toBeVisible();
-    expect(goalTitles(fx.A)).not.toContain('Delayed stale goal');
-    expect(goalTitles(fx.B)).not.toContain('Delayed stale goal');
+    expect(await goalTitles(fx.A)).not.toContain('Delayed stale goal');
+    expect(await goalTitles(fx.B)).not.toContain('Delayed stale goal');
     // Liveness: the tab in the current household still writes.
     await tab2.goto(`${base}/#/goals`);
     const live = await tab2.evaluate(() => window.Fathom.api.goalCreate({ title: 'Live goal after switch', horizon: '1-3y' }));
     expect(live).not.toBeNull();
-    expect(goalTitles(fx.A)).toContain('Live goal after switch');
+    expect(await goalTitles(fx.A)).toContain('Live goal after switch');
   });
 
   test('a deep link to another household needs explicit selection; a foreign one is never followed', async ({ context, page }) => {
@@ -327,12 +327,11 @@ async function signInto(context, person) {
 }
 
 // Guided tours are out of scope here: none starts over these pages.
-function clearTours() {
-  const db = new DatabaseSync(join(dataDir, 'platform.sqlite'));
+async function clearTours() {
+  const db = await openScope({ path: join(dataDir, 'platform.sqlite'), journal: null, busyTimeout: 5000 });
   try {
-    db.exec('PRAGMA busy_timeout = 5000');
-    db.prepare('UPDATE users SET tour_pending = 0').run();
-  } finally { db.close(); }
+    await db.prepare('UPDATE users SET tour_pending = 0').run();
+  } finally { await db.close(); }
 }
 
 async function quietFonts(context) {
@@ -346,18 +345,17 @@ async function choose(page, householdId) {
   await expect(page.locator('select[data-hh-switch]')).toHaveValue(householdId, { timeout: 15_000 });
 }
 
-function seedPlatformSetting(key, value) {
-  const db = new DatabaseSync(join(dataDir, 'platform.sqlite'));
+async function seedPlatformSetting(key, value) {
+  const db = await openScope({ path: join(dataDir, 'platform.sqlite'), journal: null, busyTimeout: 5000 });
   try {
-    db.exec('PRAGMA busy_timeout = 5000');
-    db.prepare(`INSERT INTO platform_settings (key, value, updated_at) VALUES (?, ?, ?)
+    await db.prepare(`INSERT INTO platform_settings (key, value, updated_at) VALUES (?, ?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`).run(key, JSON.stringify(value), Date.now());
-  } finally { db.close(); }
+  } finally { await db.close(); }
 }
 
-function householdDb(id, fn) {
-  const db = new DatabaseSync(join(dataDir, 'households', id, 'fathom.sqlite'), { readOnly: true });
-  try { return fn(db); } finally { db.close(); }
+async function householdDb(id, fn) {
+  const db = await openScope({ path: join(dataDir, 'households', id, 'fathom.sqlite'), readOnly: true, journal: null, busyTimeout: 5000 });
+  try { return await fn(db); } finally { await db.close(); }
 }
-const goalTitles = (id) => householdDb(id, (db) => db.prepare('SELECT def FROM goals').all().map((r) => JSON.parse(r.def).title));
-const storedQuestions = (id) => householdDb(id, (db) => db.prepare("SELECT text FROM messages WHERE role = 'me'").all().map((r) => r.text));
+const goalTitles = async (id) => await householdDb(id, async (db) => (await db.prepare('SELECT def FROM goals').all()).map((r) => JSON.parse(r.def).title));
+const storedQuestions = async (id) => await householdDb(id, async (db) => (await db.prepare("SELECT text FROM messages WHERE role = 'me'").all()).map((r) => r.text));

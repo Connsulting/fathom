@@ -42,7 +42,7 @@ test('npm start on an empty data dir with FATHOM_DEMO unset serves the demo UI a
     assert.equal(h.json.platformSchema, latestMigrationId(join(ROOT, 'src/platform/migrations')));
 
     assert.ok(existsSync(join(dataDir, PLATFORM_FILE)), 'a synthetic platform.sqlite is created in FATHOM_DATA');
-    const served = await withPlatform(join(dataDir, PLATFORM_FILE), (platform, store) => store.servedHousehold());
+    const served = await withPlatform(join(dataDir, PLATFORM_FILE), async (platform, store) => await store.servedHousehold());
     assert.equal(served.mode, 'demo');
     assert.equal(served.status, 'active');
     assert.ok(existsSync(join(dataDir, 'households', served.id, DB_FILE)), 'fathom.sqlite is created in the household root');
@@ -56,14 +56,14 @@ test('FATHOM_DEMO=0 on an empty data dir serves a valid empty scenario', T, asyn
     const sc = await s.getScenario();
     // The startup tick may run the nightly plan job; any rec is the planner's, never a seeded one.
     const { openDb } = await src('src/store/db.mjs');
-    const db = openDb(servedStore(s.dataDir).file);
+    const db = await openDb((await servedStore(s.dataDir)).file);
     let planned;
     let identity;
     try {
-      planned = db.prepare('SELECT rec_id FROM planner_recs').all().map(r => r.rec_id);
-      identity = db.prepare('SELECT household_id FROM store_identity').get();
-    } finally { db.close(); }
-    const served = await withPlatform(s.platformFile, (platform, store) => store.servedHousehold());
+      planned = (await db.prepare('SELECT rec_id FROM planner_recs').all()).map(r => r.rec_id);
+      identity = await db.prepare('SELECT household_id FROM store_identity').get();
+    } finally { await db.close(); }
+    const served = await withPlatform(s.platformFile, async (platform, store) => await store.servedHousehold());
     assert.equal(served.mode, 'real');
     assert.equal(identity.household_id, served.id, 'the new store names the served household');
     assert.equal(s.session.householdId, served.id);
@@ -96,7 +96,7 @@ test('a taken FATHOM_PORT makes the process exit nonzero with a clear message', 
     assert.notEqual(code, 0);
     assert.match(out, new RegExp(String(port)), 'message names the port');
   } finally {
-    blocker.close();
+    await blocker.close();
   }
 });
 
