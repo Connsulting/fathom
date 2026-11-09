@@ -19,12 +19,12 @@ test('the checklist lists expected, received and unmatched documents with source
   await gotoRoute(page, 'yearend');
   await expectH1(page, 'The packet for your accountant');
   await expect(page.getByText('Tax year 2026.', { exact: false })).toBeVisible();
-  const w2 = group(page, 'expected').locator('[data-ye-item="w2:brightline"]');
+  const w2 = group(page, 'expected').locator('[data-ye-item="w2:lakeviewschoolofdesign"]');
   await expect(w2).toContainText('W-2 from Lakeview School of Design');
   await expect(w2).toContainText('Lakeview School of Design payroll. By January 31');
   const got = group(page, 'have').locator('[data-ye-item="1098:mortgage"]');
   await expect(got).toContainText('1098 mortgage interest');
-  await expect(got).toContainText('1098-2026-mortgage-payoff.pdf');
+  await expect(got).toContainText('1098-2026-mortgage.pdf');
   await expect(got).toContainText('stored Oct 14, 2026');
   const other = page.locator('section', { hasText: 'Received, not on the list' });
   await expect(other).toContainText('property-tax-receipt-2026.pdf');
