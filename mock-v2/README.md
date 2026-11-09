@@ -39,7 +39,7 @@ advisor, yearend, connect, engine, email, packs/<id>.
 | `designs/<id>/` | One design each: ledger, console, horizon, thread |
 | `scenario/example.js` | Synthetic scenario, tracked |
 | `private/scenario.js` | Real scenario, gitignored, never committed |
-| `tools/synthesize.mjs` | Builds the synthetic scenario from a private one; fails on any leaked name or literal amount |
+| `tools/sync-scenario.mjs` | Copies the demo scenario (`demo/scenario.mjs`) into `scenario/example.js`; `--check` verifies the copy |
 | `tools/deploy.sh` | Copies the site to a stable directory and serves it tailnet-only with `tailscale serve` |
 
 ## Container later

@@ -12,7 +12,7 @@ import { tempDb } from './helpers/server.mjs';
 import { assertRefsResolve, envelopeEntries } from './helpers/figures.mjs';
 
 const STATEMENTS = [
-  'We spend about $1,330 a month on childcare and $15,900 a year on travel.',
+  'We spend about $1,175 a month on childcare and $13,400 a year on travel.',
   'Use a 4 percent return over 10 years.',
   'What investment balance would cover that at a 4 percent withdrawal rate?',
 ];
@@ -37,8 +37,8 @@ after(() => t && t.close());
 const F = key => ({ ref: { tool: 'household', args: { operation: 'figures', keys: [key] }, path: '0' } });
 const P = entry => ({ ref: { tool: 'goals', args: { operation: 'pace' }, path: entry.path } });
 const owner = (name, v, unit, evidence) => ({ assumption: { name, value: v, unit, source: 'owner', evidence } });
-const monthlyChildcare = () => owner('childcare', 1330, 'usd_per_month', '$1,330 a month');
-const yearlyTravel = () => owner('travel', 15900, 'usd_per_year', '$15,900 a year');
+const monthlyChildcare = () => owner('childcare', 1175, 'usd_per_month', '$1,175 a month');
+const yearlyTravel = () => owner('travel', 13400, 'usd_per_year', '$13,400 a year');
 const rate4 = () => owner('rate', 0.04, 'ratio', '4 percent');
 const calc = (operation, operands, extra = {}, c = ctx) => callTool('calculate', { operation, operands, label: 'combined figure', ...extra }, c);
 const v = key => value[key].value;
@@ -86,9 +86,9 @@ describe('operations', () => {
       ['multiply', [F('biz_cash'), share], round(a * (b / a)), 'usd'],
       ['divide', [F('biz_cash'), share], round(a / (b / a)), 'usd'],
       ['percent_of', [share, F('sp_cash')], round((b / a) * c), 'usd'],
-      ['divide', [yearlyTravel(), rate4()], round(15900 / 0.04), 'usd'],
-      ['divide', [F('biz_cash'), monthlyChildcare()], Math.ceil(a / 1330), 'months'],
-      ['multiply', [{ expr: { operation: 'divide', operands: [F('biz_cash'), monthlyChildcare()] } }, monthlyChildcare()], round((a / 1330) * 1330), 'usd'],
+      ['divide', [yearlyTravel(), rate4()], round(13400 / 0.04), 'usd'],
+      ['divide', [F('biz_cash'), monthlyChildcare()], Math.ceil(a / 1175), 'months'],
+      ['multiply', [{ expr: { operation: 'divide', operands: [F('biz_cash'), monthlyChildcare()] } }, monthlyChildcare()], round((a / 1175) * 1175), 'usd'],
     ];
     for (const [operation, operands, expected, unit] of cases) {
       const { figure } = await calc(operation, operands);
@@ -107,13 +107,13 @@ describe('operations', () => {
   test('annualize and monthly convert per-month and per-year money, and chain through a ref', async () => {
     const yearly = await calc('annualize', [monthlyChildcare()]);
     assert.equal(yearly.figure.unit, 'usd_per_year');
-    assert.equal(yearly.figure.value, round(1330 * 12));
+    assert.equal(yearly.figure.value, round(1175 * 12));
     const back = await calc('monthly', [{ ref: yearly.figure.ref }]);
     assert.equal(back.figure.unit, 'usd_per_month');
     assert.equal(back.figure.value, round(yearly.figure.value / 12));
     assert.equal(back.figure.provenance.inputs[0].value, yearly.figure.value);
     const travel = await calc('monthly', [yearlyTravel()]);
-    assert.equal(travel.figure.value, round(15900 / 12));
+    assert.equal(travel.figure.value, round(13400 / 12));
   });
 
   test('round_up rounds up to 1, 100 or 1000', async () => {
@@ -235,12 +235,12 @@ describe('refusals', () => {
     assert.equal((await calc('add', [F('biz_cash'), fact(agi)])).figure.value, round(v('biz_cash') + agi));
     await assert.rejects(calc('add', [F('biz_cash'), fact(agi + 1)]), badInput(/income\.agiEstimate/));
     await assert.rejects(calc('add', [F('biz_cash'), { assumption: { name: 'income', value: 1, unit: 'usd', source: 'default' } }]), badInput(/default/));
-    await assert.rejects(calc('add', [F('biz_cash'), { assumption: { name: 'income', value: 1330, unit: 'usd', source: 'owner' } }]), badInput(/evidence/));
+    await assert.rejects(calc('add', [F('biz_cash'), { assumption: { name: 'income', value: 1175, unit: 'usd', source: 'owner' } }]), badInput(/evidence/));
     await assert.rejects(calc('divide', [yearlyTravel(), owner('rate', 0.05, 'ratio', '4 percent')]), badInput(/rate/));
     const noStatements = { ...ctx, ownerStatements: undefined };
     await assert.rejects(calc('divide', [yearlyTravel(), rate4()], {}, noStatements), badInput(/owner/));
     const mcp = { db: t.db, dataDir: t.dataDir, now: ctx.now, channel: 'mcp' };
-    assert.equal((await calc('divide', [yearlyTravel(), rate4()], {}, mcp)).figure.value, round(15900 / 0.04));
+    assert.equal((await calc('divide', [yearlyTravel(), rate4()], {}, mcp)).figure.value, round(13400 / 0.04));
   });
 });
 

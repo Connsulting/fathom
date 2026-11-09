@@ -25,14 +25,14 @@ after(() => t && t.close());
 const FORMS = [
   // [value, unit, quote, direction]
   [12345.67, 'usd', '$12,345.67'],
-  [18300, 'usd', '$18,300'],
+  [24650, 'usd', '$24,650'],
   [0.5, 'usd', '$0.50'],
   [1234567.891, 'usd', '$1,234,567.89'],
   [-2400, 'usd', '$2,400', 'out'],
   [-0.07, 'usd', '$0.07', 'out'],
-  [1330, 'usd_per_month', '$1,330 a month'],
+  [1175, 'usd_per_month', '$1,175 a month'],
   [-100.5, 'usd_per_month', '$100.50 a month', 'out'],
-  [15900, 'usd_per_year', '$15,900 a year'],
+  [13400, 'usd_per_year', '$13,400 a year'],
   [0.04, 'ratio', '4%'],
   [0.035, 'ratio', '3.5%'],
   [1 / 3, 'ratio', '33.3333%'],

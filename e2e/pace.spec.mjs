@@ -6,8 +6,8 @@ test('pace API supplies the demo goal data, provenance and explicit stale health
   expect(response.ok()).toBe(true);
   const pace = await response.json();
   const reserve = pace.goals.find(g => g.id === 'reserve');
-  expect(reserve.actual.v).toBe(117900);
-  expect(reserve.target.v).toBe(166000);
+  expect(reserve.actual.v).toBe(96000);
+  expect(reserve.target.v).toBe(135000);
   expect(reserve.status).toBe('unknown');
   expect(reserve.reason).toBe('stale_data');
   expect(reserve.expected.locator.calc).toBe('goalPace');

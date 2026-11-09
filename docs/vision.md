@@ -272,7 +272,7 @@ python3 -m http.server 4600 --bind 127.0.0.1
 ```
 
 Without `mock-v2/private/scenario.js` the mock runs on the synthetic scenario in
-`mock-v2/scenario/example.js`. Regenerate the synthetic scenario from a private one with
-`node mock-v2/tools/synthesize.mjs`.
+`mock-v2/scenario/example.js`, a copy of the demo scenario. Refresh it after editing
+`demo/scenario.mjs` with `node mock-v2/tools/sync-scenario.mjs`.
 
 Screens are linkable: `?d=<ledger|console|horizon|thread>&demo=<fresh|first|november|checkin|clear>#/<route>`.

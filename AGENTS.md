@@ -14,8 +14,9 @@ owner's homelab, reachable only on the owner's private network.
 2. Real household data never enters the repository. It lives in the deployment's data volume and,
    for the mock, in the gitignored `mock-v2/private/`. Imports, exports, raw dumps and derived
    files stay out of git (see `.gitignore`).
-3. Demo and test fixtures are synthetic. Generate the mock's synthetic scenario with
-   `node mock-v2/tools/synthesize.mjs`, which fails on any leaked name or literal amount.
+3. Demo and test fixtures are synthetic. The demo scenario is authored directly in
+   `demo/scenario.mjs` with invented names and values; copy it into the mock with
+   `node mock-v2/tools/sync-scenario.mjs` (`--check` verifies the copy).
 4. No real names, account numbers, tax identifiers, addresses, credentials, hostnames, usernames,
    network names or home paths in tracked files, commits or PR text. Refer to "the owner" and
    "the spouse". Code takes hosts, contexts, origins and secrets from its caller or environment.

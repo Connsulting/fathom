@@ -20,8 +20,8 @@ test('the checklist lists expected, received and unmatched documents with source
   await expectH1(page, 'The packet for your accountant');
   await expect(page.getByText('Tax year 2026.', { exact: false })).toBeVisible();
   const w2 = group(page, 'expected').locator('[data-ye-item="w2:brightline"]');
-  await expect(w2).toContainText('W-2 from Brightline');
-  await expect(w2).toContainText('Brightline payroll. By January 31');
+  await expect(w2).toContainText('W-2 from Lakeview School of Design');
+  await expect(w2).toContainText('Lakeview School of Design payroll. By January 31');
   const got = group(page, 'have').locator('[data-ye-item="1098:mortgage"]');
   await expect(got).toContainText('1098 mortgage interest');
   await expect(got).toContainText('1098-2026-mortgage-payoff.pdf');
@@ -74,7 +74,7 @@ test('assembling the packet downloads a zip of the index and every received docu
   const path = info.outputPath('packet.zip');
   await download.saveAs(path);
   const entries = readZip(await readFile(path));
-  expect(entries.map((e) => e.name)).toEqual(['index.html', 'documents/01-1098-Harbor-Bank-2026.txt', 'documents/02-Document-County-treasurer-2026.txt']);
+  expect(entries.map((e) => e.name)).toEqual(['index.html', 'documents/01-1098-Lakeshore-Credit-Union-2026.txt', 'documents/02-Document-County-treasurer-2026.txt']);
   const html = entries[0].data.toString('utf8');
   expect(html).toContain('Tax packet for 2026');
   expect(html).toContain('Tax payments for 2026');

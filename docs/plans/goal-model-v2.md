@@ -57,9 +57,7 @@ No external services, secrets or network are involved. Everything runs on demo d
    new `buildPace` shape unchanged otherwise.
 7. Demo: three seed-origin goals (range, floor, contribution) inserted by `demo/seed.mjs` after the
    ledger; existing seed goals with targets are the balance examples. `demo/scenario.mjs` and the
-   mock are untouched (the mock's `example.js` is generated from a private file by
-   `mock-v2/tools/synthesize.mjs`, so it must not be hand-edited, and `test/seed.test.mjs` requires
-   scenario.mjs to equal it).
+   mock are untouched (`test/seed.test.mjs` requires scenario.mjs to equal the mock's `example.js`).
 8. UI (Horizon): goal form gets a kind select with per-kind fields, a whose-goal select, a priority
    select and Mark done; Home cards and Goals cards show owner, priority, range position, floor
    state and contribution progress; Home and Goals order by priority.
@@ -380,20 +378,20 @@ Edit blocks (each quoted excerpt verified with `grep -cF`, count 1 unless stated
        export const KIND_GOALS = Object.freeze([
          { id: 'checking-range', kind: 'range', title: 'Keep household checking in a working range', horizon: 'now', status: 'on track',
            prose: 'Enough for the month ahead, with the rest swept to the reserve.', owner: 'joint', priority: 'medium',
-           targetLow: 5000, targetHigh: 8000, targetDate: '2026-12-31', track: { accounts: ['a_personal'] } },
+           targetLow: 9000, targetHigh: 16000, targetDate: '2026-12-31', track: { accounts: ['a_personal'] } },
          { id: 'biz-floor', kind: 'floor', title: 'Business cash never drops below its floor', horizon: 'now', status: 'on track',
            prose: '{n:biz} keeps a standing minimum for payroll.', owner: 'owner', priority: 'high',
-           floor: 15000, track: { accounts: ['a_biz'] } },
+           floor: 12000, track: { accounts: ['a_biz'] } },
          { id: 'ira-fill', kind: 'contribution', title: 'Fill both IRAs for 2026', horizon: 'now', status: 'open',
            prose: 'Each of us puts in the full amount before the April deadline.', owner: 'joint', priority: 'medium',
            target: 15000, taxYear: 2026, targetDate: '2027-04-15', accounts: ['a_broth', 'a_jroth'],
            split: [{ person: 'owner', amount: 7500 }, { person: 'spouse', amount: 7500 }],
-           entered: { asOf: '2026-10-31', people: [{ person: 'owner', amount: 7500 }, { person: 'spouse', amount: 4000 }] } },
+           entered: { asOf: '2026-10-31', people: [{ person: 'owner', amount: 6000 }, { person: 'spouse', amount: 7500 }] } },
        ]);
        ```
-       Demo facts these rely on: `a_personal` ends at 6,220 and `a_biz` at 18,300 on 2026-08-30;
+       Demo facts these rely on: `a_personal` ends at 14,800 and `a_biz` at 21,500 on 2026-08-30;
        `a_broth` and `a_jroth` have positions but no transactions, so the IRA goal uses the entered
-       basis (11,500 of 15,000, ahead of the linear plan at the demo clock).
+       basis (13,500 of 15,000, ahead of the linear plan at the demo clock).
     2. After (count 1) `    S.goals.forEach((g, i) => goal.run(g.id, JSON.stringify(g), i));` add
        `KIND_GOALS.forEach((g, i) => goal.run(g.id, JSON.stringify({ ...g, pace: g.kind === 'range' ? captureGoalPath(db, g, clock) : null }), S.goals.length + i));`
        The statement at (count 1) `    const goal = db.prepare('INSERT INTO goals (id, def, sort) VALUES (?, ?, ?)');`

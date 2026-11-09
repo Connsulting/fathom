@@ -41,7 +41,7 @@ mock-v2/
   private/scenario.js        real scenario (gitignored); loaded first, falls back to example
   designs/<id>/design.js     one design: registers itself, renders every route
   designs/<id>/design.css    styles, every selector scoped under .d-<id>
-  tools/synthesize.mjs       private/scenario.js -> scenario/example.js (names swapped, money scaled)
+  tools/sync-scenario.mjs    demo/scenario.mjs -> scenario/example.js (authored directly, copied)
   README.md
 ```
 
