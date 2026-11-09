@@ -29,7 +29,7 @@ async function withHousehold(fn, { names = false } = {}) {
   const s = await realStore();
   try {
     if (names) {
-      F.upsertFact(s.db, { key: 'household.names', value: { me: 'Avery Example', spouse: 'Blair Example' }, src: 'you', asOf: NOW.slice(0, 10), confirmed: true, now: NOW });
+      await F.upsertFact(s.db, { key: 'household.names', value: { me: 'Avery Example', spouse: 'Blair Example' }, src: 'you', asOf: NOW.slice(0, 10), confirmed: true, now: NOW });
     }
     await P.ingestFiles(s.db, household(), s.opts(await offEngine()));
     return await fn(s);
@@ -41,8 +41,8 @@ const byKind = (items) => items.reduce((out, i) => ({ ...out, [i.kind]: (out[i.k
 const textOf = (evidence) => (typeof evidence === 'string' ? evidence : evidence?.text);
 
 test('no names known: 12 pending including three source categories and 5 decided for the owner', async () => withHousehold(async (s) => {
-  const state = FR.ingestState(s.db);
-  const pending = C.pendingItems(s.db);
+  const state = (await FR.ingestState(s.db));
+  const pending = (await C.pendingItems(s.db));
   assert.equal(pending.length, 12);
   assert.deepEqual(byKind(pending), { account_owner: 7, account_kind: 1, near_duplicate: 1, category_mapping: 3 });
   const kindSubjects = pending.filter((i) => i.kind === 'account_kind').map((i) => i.subject).sort();
@@ -75,8 +75,8 @@ test('no names known: 12 pending including three source categories and 5 decided
 }));
 
 test('names known before the import: 6 pending including three source categories, the only owner question is Rainy Day', async () => withHousehold(async (s) => {
-  const state = FR.ingestState(s.db);
-  const pending = C.pendingItems(s.db);
+  const state = (await FR.ingestState(s.db));
+  const pending = (await C.pendingItems(s.db));
   assert.equal(pending.length, 6);
   assert.deepEqual(byKind(pending), { account_owner: 1, account_kind: 1, near_duplicate: 1, category_mapping: 3 });
   const owner = pending.find((i) => i.kind === 'account_owner');

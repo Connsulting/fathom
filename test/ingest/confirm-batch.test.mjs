@@ -45,7 +45,7 @@ const ROLES = {
 const accountId = async (db, role) => (await one(db, "SELECT id FROM accounts WHERE mask = ? AND coalesce(inst, '') = ?", ...ROLES[role])).id;
 async function ownerItem(db, role) {
   const id = await accountId(db, role);
-  const item = C.listItems(db, { status: 'all' }).find((i) => i.kind === 'account_owner' && i.subject === id);
+  const item = (await C.listItems(db, { status: 'all' })).find((i) => i.kind === 'account_owner' && i.subject === id);
   assert.ok(item, `an owner question for ${role}`);
   return C.getItem(db, item.id);
 }
@@ -54,7 +54,7 @@ const ownerOf = async (db, role) => (await one(db, 'SELECT owner FROM accounts W
 // Every table but the migration record, rows as sorted JSON, for "a refusal changes nothing".
 async function dump(db) {
   const out = {};
-  for (const t of DB.listTables(db)) {
+  for (const t of (await DB.listTables(db))) {
     if (t === 'schema_migrations') continue;
     out[t] = (await db.prepare(`SELECT * FROM "${t}"`).all()).map((r) => JSON.stringify({ ...r })).sort();
   }
@@ -62,7 +62,7 @@ async function dump(db) {
 }
 async function refused(db, fn, code, reason) {
   const before = await dump(db);
-  assert.throws(fn, (err) => {
+  await assert.rejects(async () => await fn(), (err) => {
     assert.ok(err instanceof C.ConfirmError, `ConfirmError, got ${err && err.name}: ${err && err.message}`);
     assert.equal(err.code, code);
     if (reason !== undefined) assert.equal(err.reason, reason);
@@ -75,14 +75,14 @@ describe('answerItems', () => {
   test('answers several items, each with its own undo log', async () => withHousehold(async (s) => {
     const rows = [['checking', 'owner', 'You'], ['card', 'spouse', 'Your spouse'], ['rainyDay', 'joint', 'Joint']];
     const answers = await mapSeries(rows, async ([role, option]) => ({ id: (await ownerItem(s.db, role)).id, option }));
-    const out = C.answerItems(s.db, answers, { now: LATER });
+    const out = (await C.answerItems(s.db, answers, { now: LATER }));
     assert.equal(typeof out.factsChanged, 'boolean');
     assert.deepEqual(out.items.map((i) => [i.id, i.status, i.answer]), answers.map((a) => [a.id, 'answered', a.option]));
     for (const [role, , label] of rows) assert.equal(await ownerOf(s.db, role), label, `${role} owner is ${label}`);
     for (const a of answers) assert.equal(await count(s.db, 'confirm_undo', 'item_id = ?', a.id), 1, 'one undo log per item');
 
     // Each log stands alone: one answer of the batch reopens without the others.
-    C.reopenItem(s.db, answers[1].id, { now: LATER });
+    await C.reopenItem(s.db, answers[1].id, { now: LATER });
     assert.equal(await ownerOf(s.db, 'card'), null);
     assert.equal(await ownerOf(s.db, 'checking'), 'You');
     assert.equal(await ownerOf(s.db, 'rainyDay'), 'Joint');
@@ -93,7 +93,7 @@ describe('answerItems', () => {
     const card = (await ownerItem(s.db, 'card')).id;
     await refused(s.db, () => C.answerItems(s.db, [{ id: checking, option: 'owner' }, { id: card, option: 'nobody' }], { now: LATER }), 'bad_option');
     const rainy = (await ownerItem(s.db, 'rainyDay')).id;
-    C.answerItem(s.db, rainy, 'joint', { now: LATER });
+    await C.answerItem(s.db, rainy, 'joint', { now: LATER });
     await refused(s.db, () => C.answerItems(s.db, [{ id: checking, option: 'owner' }, { id: rainy, option: 'owner' }], { now: LATER }), 'answered');
     await refused(s.db, () => C.answerItems(s.db, [{ id: checking, option: 'owner' }, { id: 999999, option: 'owner' }], { now: LATER }), 'not_found');
     assert.equal(await ownerOf(s.db, 'checking'), null);
@@ -104,15 +104,15 @@ describe('answerItems', () => {
     // "owner" to it. Here the owner picked "spouse" for it in the same batch.
     const checking = (await ownerItem(s.db, 'checking')).id;
     const brokerage = (await ownerItem(s.db, 'brokerage1111')).id;
-    C.answerItems(s.db, [{ id: checking, option: 'owner' }, { id: brokerage, option: 'spouse' }], { now: LATER });
-    A.autoResolve(s.db, { now: LATER });
-    const b = C.getItem(s.db, brokerage);
+    await C.answerItems(s.db, [{ id: checking, option: 'owner' }, { id: brokerage, option: 'spouse' }], { now: LATER });
+    await A.autoResolve(s.db, { now: LATER });
+    const b = (await C.getItem(s.db, brokerage));
     assert.equal(b.answer, 'spouse', 'the explicit option stands');
-    assert.equal(C.autoInfo(s.db, brokerage), null, 'it is the owner\'s answer, not Fathom\'s');
+    assert.equal((await C.autoInfo(s.db, brokerage)), null, 'it is the owner\'s answer, not Fathom\'s');
     assert.equal(await ownerOf(s.db, 'brokerage1111'), 'Your spouse');
     const positions = await ownerItem(s.db, 'positions1111');
     assert.equal(positions.answer, 'spouse', 'propagation follows the explicit answer');
-    assert.equal(C.autoInfo(s.db, positions.id).rule, 'shared_mask');
+    assert.equal((await C.autoInfo(s.db, positions.id)).rule, 'shared_mask');
   }));
 });
 
@@ -121,8 +121,8 @@ describe('reopenItems', () => {
 
   test('reopens every item of a group', async () => withHousehold(async (s) => {
     const answers = await batch(s.db);
-    C.answerItems(s.db, answers, { now: LATER });
-    const out = C.reopenItems(s.db, answers.map((a) => a.id), { now: LATER });
+    await C.answerItems(s.db, answers, { now: LATER });
+    const out = (await C.reopenItems(s.db, answers.map((a) => a.id), { now: LATER }));
     assert.equal(typeof out.factsChanged, 'boolean');
     assert.deepEqual(out.items.map((i) => [i.id, i.status, i.answer]), answers.map((a) => [a.id, 'pending', null]));
     for (const role of ['checking', 'card', 'rainyDay']) assert.equal(await ownerOf(s.db, role), null);
@@ -130,12 +130,12 @@ describe('reopenItems', () => {
 
   test('one final item refuses the whole undo with its reason', async () => withHousehold(async (s) => {
     const answers = await batch(s.db);
-    C.answerItems(s.db, answers, { now: LATER });
+    await C.answerItems(s.db, answers, { now: LATER });
     await s.db.prepare("UPDATE accounts SET owner = 'Business' WHERE id = ?").run(await accountId(s.db, 'card'));
     await refused(s.db, () => C.reopenItems(s.db, answers.map((a) => a.id), { now: LATER }), 'final', 'changed_since');
     assert.equal(await ownerOf(s.db, 'checking'), 'You');
     assert.equal(await ownerOf(s.db, 'rainyDay'), 'Joint');
-    for (const a of answers) assert.equal(C.getItem(s.db, a.id).status, 'answered');
+    for (const a of answers) assert.equal((await C.getItem(s.db, a.id)).status, 'answered');
   }));
 });
 
@@ -164,7 +164,7 @@ describe('batch routes over HTTP', () => {
 
     const brokerage = await ownerItem(s.db, 'brokerage1111');
     assert.equal(brokerage.answer, 'owner', 'the route ran autoResolve: the same-holder brokerage is answered');
-    assert.equal(C.autoInfo(s.db, brokerage.id).rule, 'holder_match');
+    assert.equal((await C.autoInfo(s.db, brokerage.id)).rule, 'holder_match');
 
     const refusedBatch = await client.postJson('/api/confirm/answers', { answers: [{ id: (await ownerItem(s.db, 'rainyDay')).id, answer: 'joint' }, { id: card, answer: 'owner' }] });
     assert.equal(refusedBatch.status, 409, 'an already answered row refuses the batch like the single answer route');

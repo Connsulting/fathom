@@ -39,18 +39,18 @@ async function withStore(fn) {
 }
 // The household files in one ingestFiles call, engine off; names: set household.names first.
 const withHousehold = async (fn, { names = false, extra = [] } = {}) => withStore(async (s) => {
-  if (names) F.upsertFact(s.db, { key: 'household.names', value: NAMES, src: 'you', asOf: NOW.slice(0, 10), confirmed: true, now: NOW });
+  if (names) await F.upsertFact(s.db, { key: 'household.names', value: NAMES, src: 'you', asOf: NOW.slice(0, 10), confirmed: true, now: NOW });
   await P.ingestFiles(s.db, [...household(), ...extra], s.opts(await offEngine()));
   return await fn(s);
 });
 
 const acct = async (db, mask, inst) => (await one(db, "SELECT id FROM accounts WHERE mask = ? AND coalesce(inst, '') = ?", mask, inst)).id;
-const pendingFor = (db, kind, subject) => {
-  const item = C.pendingItems(db).find((i) => i.kind === kind && i.subject === subject);
+const pendingFor = async (db, kind, subject) => {
+  const item = (await C.pendingItems(db)).find((i) => i.kind === kind && i.subject === subject);
   assert.ok(item, `a pending ${kind} for ${subject}`);
   return item;
 };
-const guessOf = (db, item) => B.bestGuess(db, item, X.cardDetail(db, item));
+const guessOf = async (db, item) => B.bestGuess(db, item, (await X.cardDetail(db, item)));
 const labelOf = (options, id) => options.find((o) => o.id === id).label;
 // A stored engine guess, as guessPending writes it (option NULL when the engine gave none).
 const storeGuess = async (db, itemId, option, reason) => await db.prepare(`INSERT INTO confirm_guesses (item_id, option_id, reason, model, ts) VALUES (?, ?, ?, 'test-model', ?)
@@ -64,9 +64,9 @@ const notReasonText = (evidence) => {
 describe('rule guesses', () => {
   test('account_kind from the account name: Rewards Card is a card, and the evidence quotes the name', async () => await withHousehold(async (s) => {
     const subject = await acct(s.db, '3344', 'Example Card');
-    C.reopenItem(s.db, C.listItems(s.db, { status: 'answered' }).find(i => i.kind === 'account_kind' && i.subject === subject).id, { now: NOW });
-    const item = pendingFor(s.db, 'account_kind', subject);
-    const g = guessOf(s.db, item);
+    await C.reopenItem(s.db, (await C.listItems(s.db, { status: 'answered' })).find(i => i.kind === 'account_kind' && i.subject === subject).id, { now: NOW });
+    const item = (await pendingFor(s.db, 'account_kind', subject));
+    const g = (await guessOf(s.db, item));
     assert.equal(g.option, 'card');
     assert.equal(g.label, labelOf(item.options, 'card'));
     assert.equal(g.source, 'rule');
@@ -79,9 +79,9 @@ describe('rule guesses', () => {
     const row = (description) => [{ date: '03/09/2032', amount: '-54.21', balance: '', description }];
     await P.ingestFile(s.db, activityFile('Chase4321_Activity_A.csv', row('SYNTH GROCERY NORTH')), s.opts(off));
     await P.ingestFile(s.db, activityFile('Chase4321_Activity_B.csv', row('SYNTH PHARMACY SOUTH')), s.opts(off));
-    const item = C.pendingItems(s.db).find((i) => i.kind === 'near_duplicate');
+    const item = (await C.pendingItems(s.db)).find((i) => i.kind === 'near_duplicate');
     assert.ok(item, 'the same-day collision is asked about');
-    const g = guessOf(s.db, item);
+    const g = (await guessOf(s.db, item));
     assert.equal(g.option, 'same');
     assert.equal(g.label, labelOf(item.options, 'same'));
     assert.equal(g.source, 'rule');
@@ -90,8 +90,8 @@ describe('rule guesses', () => {
   }));
 
   test('a holder naming both household members guesses joint for Rainy Day', async () => await withHousehold(async (s) => {
-    const item = pendingFor(s.db, 'account_owner', await acct(s.db, '5566', 'Example Credit Union'));
-    const g = guessOf(s.db, item);
+    const item = (await pendingFor(s.db, 'account_owner', await acct(s.db, '5566', 'Example Credit Union')));
+    const g = (await guessOf(s.db, item));
     assert.equal(g.option, 'joint');
     assert.equal(g.label, labelOf(item.options, 'joint'));
     assert.equal(g.source, 'rule');
@@ -115,8 +115,8 @@ describe('engine guesses', () => {
     { basis: 'imported_values', on: 'near', option: 'different', anyOf: ['Corner Cafe', 'SQ *CORNER CF', '8.75'] },
   ];
   const target = async (db, on) => (on === 'owner'
-    ? pendingFor(db, 'account_owner', await acct(db, '3344', 'Example Card'))
-    : C.pendingItems(db).find((i) => i.kind === 'near_duplicate'));
+    ? (await pendingFor(db, 'account_owner', await acct(db, '3344', 'Example Card')))
+    : (await C.pendingItems(db)).find((i) => i.kind === 'near_duplicate'));
 
   test('every basis code is covered', () => {
     assert.deepEqual(CASES.map((c) => c.basis).sort(), [...G.REASON_CODES].sort());
@@ -127,7 +127,7 @@ describe('engine guesses', () => {
       const item = await target(s.db, c.on);
       assert.ok(item, `a pending ${c.on} item`);
       await storeGuess(s.db, item.id, c.option, G.REASON_TEXT[c.basis]);
-      const g = guessOf(s.db, item);
+      const g = (await guessOf(s.db, item));
       assert.equal(g.option, c.option);
       assert.equal(g.label, labelOf(item.options, c.option));
       assert.equal(g.source, 'engine');
@@ -139,18 +139,18 @@ describe('engine guesses', () => {
 
   test('a rule guess wins over an engine guess on the same item', async () => await withHousehold(async (s) => {
     const subject = await acct(s.db, '3344', 'Example Card');
-    C.reopenItem(s.db, C.listItems(s.db, { status: 'answered' }).find(i => i.kind === 'account_kind' && i.subject === subject).id, { now: NOW });
-    const item = pendingFor(s.db, 'account_kind', subject);
+    await C.reopenItem(s.db, (await C.listItems(s.db, { status: 'answered' })).find(i => i.kind === 'account_kind' && i.subject === subject).id, { now: NOW });
+    const item = (await pendingFor(s.db, 'account_kind', subject));
     await storeGuess(s.db, item.id, 'checking', G.REASON_TEXT.account_name);
-    const g = guessOf(s.db, item);
+    const g = (await guessOf(s.db, item));
     assert.equal(g.option, 'card');
     assert.equal(g.source, 'rule');
   }));
 
   test('a stored guess row with no option gives no guess', async () => await withHousehold(async (s) => {
-    const item = pendingFor(s.db, 'account_owner', await acct(s.db, '3344', 'Example Card'));
+    const item = (await pendingFor(s.db, 'account_owner', await acct(s.db, '3344', 'Example Card')));
     await storeGuess(s.db, item.id, null, null);
-    assert.equal(guessOf(s.db, item), null);
+    assert.equal((await guessOf(s.db, item)), null);
   }));
 });
 
@@ -160,12 +160,12 @@ describe('ingestState', () => {
 
   test('items carry detail, guess with source and evidence, rank and group, ordered by rank', async () => await withHousehold(async (s) => {
     await seedHistoricalRows(s,fixture('tax-payments.xlsx'),historicalTaxRows(),{parser:'tax-payments',sourceKind:'tax_payments',period:{from:'2031-12-31',to:'2032-03-31'}});
-    const owner = pendingFor(s.db, 'account_owner', await acct(s.db, '3344', 'Example Card'));
+    const owner = (await pendingFor(s.db, 'account_owner', await acct(s.db, '3344', 'Example Card')));
     const subject = await acct(s.db, '3344', 'Example Card');
-    C.reopenItem(s.db, C.listItems(s.db, { status: 'answered' }).find(i => i.kind === 'account_kind' && i.subject === subject).id, { now: NOW });
-    const kind = pendingFor(s.db, 'account_kind', subject);
+    await C.reopenItem(s.db, (await C.listItems(s.db, { status: 'answered' })).find(i => i.kind === 'account_kind' && i.subject === subject).id, { now: NOW });
+    const kind = (await pendingFor(s.db, 'account_kind', subject));
     await storeGuess(s.db, owner.id, 'spouse', G.REASON_TEXT.institution);
-    const state = FR.ingestState(s.db);
+    const state = (await FR.ingestState(s.db));
     assert.equal(state.pending, state.items.length);
     assert.ok(state.items.some((i) => i.kind === 'tax_year'), 'the tax workbook adds tax_year items');
 
@@ -215,7 +215,7 @@ describe('ingestState', () => {
       // the stored mask, which the institution basis renders as "account ending <mask>".
       const account = await one(t.db, "SELECT mask FROM accounts WHERE id = 'a_tod'");
       assert.match(account.mask ?? '', /^\d{4}$/, 'the seeded account has a mask');
-      const item = FR.ingestState(t.db).items.find((i) => i.kind === 'account_owner' && i.subject === 'a_tod');
+      const item = (await FR.ingestState(t.db)).items.find((i) => i.kind === 'account_owner' && i.subject === 'a_tod');
       assert.ok(item?.guess, 'the seeded owner question carries a guess');
       assert.equal(item.guess.option, 'owner');
       assert.equal(item.guess.source, 'engine');
