@@ -18,7 +18,7 @@ const gapLoc = (gaps) => ({ completeness: `estimate with ${gaps.length} gap${gap
 const FIGURES = [
   ['tax.fed.proj', 30000, 'm', 'Projected federal tax for the year (rough partial estimate)', gapLoc([YTD])],
   ['tax.fed.paid', 8000, 'a', 'Federal estimated payments logged this year', { rows: { table: 'tax_payments', ids: [], count: 0 } }],
-  ['tax.fed.withheld', 4000, 'a', 'Federal tax withheld from wages', { rows: { table: 'tax_payments', ids: [], count: 0 } }],
+  ['tax.fed.withheld', 4000, 'a', 'Federal tax withheld from wages', { rows: { table: 'tax_payments', ids: [], count: 0 }, assumptions: ['addl_medicare_withholding_not_read'] }],
   ['tax.fed.paidToDate', 12000, 'a', 'Federal tax paid so far this year', { calc: 'taxPaidToDate', taxYear: 2026, completeness: 'complete', partial: false, rough: false, gaps: [] }],
   ['tax.fed.remaining', 18000, 'e', 'Federal tax left to pay this year (rough partial estimate)', { calc: 'taxRemaining', taxYear: 2026, ...gapLoc([YTD, PRIOR]) }],
   ['tax.va.proj', 6000, 'm', 'Projected Virginia tax for the year (rough partial estimate)', gapLoc([YTD])],
@@ -47,15 +47,21 @@ test('Tax this year opens from Home and shows sourced figures with gaps and fixe
   plantTax();
   await page.setViewportSize({ width: 390, height: 900 });
   await gotoRoute(page, 'home');
-  const homeCard = page.locator('a.h-taxh[data-go="tax"]');
+  const homeCard = page.locator('.h-taxh');
+  const homeLink = page.locator('a.h-taxh-link[data-go="tax"]');
   await expect(homeCard).toBeVisible();
   await expect(homeCard.locator('.fx-fig')).toHaveCount(2);
   await expect(homeCard).toContainText('$18,000');
+  // A Home figure opens its own provenance popover; it is not part of the link.
+  await homeCard.locator('.fx-fig[data-fig="tax.fed.remaining"]').click();
+  await expect(page.locator('.fx-pop')).toBeVisible();
+  await expect(page).not.toHaveURL(/#\/tax$/);
+  await page.keyboard.press('Escape');
   if (process.env.TX2_SHOTS) {
     mkdirSync(resolve(process.env.TX2_SHOTS), { recursive: true });
     await homeCard.screenshot({ path: resolve(process.env.TX2_SHOTS, 'home-tax-card-390.png') });
   }
-  await homeCard.click();
+  await homeLink.click();
   await expect(page).toHaveURL(/#\/tax$/);
   await expect(page.getByRole('heading', { level: 1, name: 'Tax this year', exact: true })).toBeVisible();
   await expect(page.locator('.h-tax-head .h-kicker')).toHaveText('Tax year 2026');
@@ -78,8 +84,12 @@ test('Tax this year opens from Home and shows sourced figures with gaps and fixe
   await page.keyboard.press('Escape');
 
   // What would sharpen this: each gap once, with its fix control.
-  const gaps = page.locator('.h-tax-gaps li');
+  const gaps = page.locator('.h-tax-gaps li[data-tax-gap]');
   await expect(gaps).toHaveCount(2);
+  // A stored assumption behind a figure is listed in plain words with its existing fix.
+  const assume = page.locator('li[data-tax-assume="addl_medicare_withholding_not_read"]');
+  await expect(assume).toContainText('Additional Medicare tax');
+  await expect(assume.locator('button[data-tax-gap-fix]')).toHaveText('Enter the withholding total');
   const ytd = page.locator('li[data-tax-gap="paystub_ytd_missing"]');
   await expect(ytd).toContainText(YTD.message);
   await expect(ytd.locator('button[data-tax-gap-fix]')).toHaveText(YTD.action.label);

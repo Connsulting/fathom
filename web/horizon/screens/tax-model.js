@@ -53,8 +53,21 @@ export function taxPanelModel(fig) {
       }
     }
   }
+  // The assumptions behind the shown figures (S.fig[key].assumes, plain words with any existing fix),
+  // once each, after the gaps; an assumption already listed as a gap is not repeated.
+  const assumes = [];
+  for (const row of rows) {
+    for (const key of Object.values(row.keys)) {
+      for (const a of arr(fig[key].assumes)) {
+        if (!a || typeof a.code !== 'string' || typeof a.text !== 'string' || !a.text || gaps.some((g) => g.code === a.code)) continue;
+        const prior = assumes.find((x) => x.code === a.code);
+        if (prior) { if (!prior.rows.includes(row.id)) prior.rows.push(row.id); continue; }
+        assumes.push({ code: a.code, text: a.text, fix: a.fix || null, rows: [row.id] });
+      }
+    }
+  }
   const ranked = gaps.map((g, i) => [g, i]).sort((a, b) => Number(b[0].rough) - Number(a[0].rough) || a[1] - b[1]).map(([g]) => g);
-  return { year: yearOf(fig, rows), available: rows.some((r) => r.keys.proj), rows, gaps: ranked };
+  return { year: yearOf(fig, rows), available: rows.some((r) => r.keys.proj), rows, gaps: ranked, assumes };
 }
 
 // The pace board's tax meter with no reserve recorded: the projected key per jurisdiction and its

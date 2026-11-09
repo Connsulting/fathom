@@ -57,6 +57,16 @@ export const ESTIMATE_GAP_RULES = Object.freeze({
   filing_status_assumed: { text: TAX_GAP_RULES.filing_status_assumed.text, fix: TAX_GAP_RULES.filing_status_assumed.fix },
 });
 
+// TX2: the existing fix for a planner assumption code (src/jobs/planner/assumptions.mjs) that shapes a
+// tax figure, where one exists. Codes with no fix (a modelling choice such as agi_as_magi_proxy) are
+// shown as plain words only.
+export const ASSUMPTION_FIXES = Object.freeze({
+  section125_unknown: upload('paystub', 'Upload a paystub with deductions'),
+  addl_medicare_withholding_not_read: answer('tax.withholding.federal', 'Enter the withholding total', 'Record my total federal withholding for this tax year, including any Additional Medicare tax withheld. Ask me for the amount.'),
+  qbi_no_prior_loss: upload('taxforms', "Upload last year's return"),
+  paid_rows_as_estimates: upload('estimates', 'Upload a labeled payment log'),
+});
+
 // The same shape as taxGap for an estimate assumption code.
 export function estimateGap(code) {
   const rule = ESTIMATE_GAP_RULES[code];

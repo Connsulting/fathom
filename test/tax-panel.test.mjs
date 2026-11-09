@@ -7,7 +7,8 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { scratch, addPayroll, w2Doc, figureRow } from './helpers/real-store.mjs';
 import { planRun } from './helpers/plan.mjs';
-import { taxGap, estimateGap, ESTIMATE_GAP_RULES, TAX_GAP_RULES } from '../src/shared/tax-gaps.mjs';
+import { taxGap, estimateGap, ESTIMATE_GAP_RULES, TAX_GAP_RULES, ASSUMPTION_FIXES } from '../src/shared/tax-gaps.mjs';
+import { ASSUMPTION_TEXT } from '../src/jobs/planner/assumptions.mjs';
 import { HOWTO } from '../src/ingest/howto.mjs';
 import { answerShape } from '../src/jobs/triggers/common.mjs';
 import { loadAskStarters, loadFigures, ASK_STARTERS } from '../src/scenario/build.mjs';
@@ -62,6 +63,10 @@ test('TX2-1 planner: paid so far and left to pay combine the stored inputs and c
     assert.ok(paid.locator.steps[0].formula.includes(j === 'fed' ? 'estimated payments and withholding' : 'on file'), `${j} step says which inputs were on file`);
   }
   assert.ok(figureRow(db, 'tax.fed.withheld'), 'the synthetic W-2 withholding is on file');
+  // The scenario exposes a tax figure's assumptions in plain words with their fix.
+  const withheldAssumes = loadFigures(db)['tax.fed.withheld'].assumes;
+  assert.deepEqual(withheldAssumes.find(a => a.code === 'addl_medicare_withholding_not_read'),
+    { code: 'addl_medicare_withholding_not_read', text: ASSUMPTION_TEXT.addl_medicare_withholding_not_read, fix: ASSUMPTION_FIXES.addl_medicare_withholding_not_read });
   const left = figureRow(db, 'tax.fed.remaining');
   const prior = left.locator.gaps.find(g => g.code === 'prior_year_missing');
   assert.ok(prior, 'federal left to pay carries the missing prior return');
@@ -159,4 +164,22 @@ test('TX2-6 the tax meter with no reserve shows paid against projected, not a ba
   assert.equal(fb.fix, TAX_RESERVE_FIX);
   assertFixTarget(fb.fix, 'tax reserve');
   assert.equal(taxMeterFallback({ 'tax.va.proj': fig(9000) }), null, 'no federal projection, no fallback');
+});
+
+// TX2-7: each assumption behind a shown figure is listed once in plain words, after the gaps, with its
+// existing fix where one exists; an assumption with no fix is words only, never dropped.
+const ASSUMES = [...Object.keys(ASSUMPTION_FIXES), 'agi_as_magi_proxy', 'va_exemptions_omitted'];
+for (const code of ASSUMES) test(`TX2-7 panel model lists the ${code} assumption with its fix when one exists`, () => {
+  const a = { code, text: ASSUMPTION_TEXT[code], fix: ASSUMPTION_FIXES[code] ? { ...ASSUMPTION_FIXES[code] } : null };
+  const S = { 'tax.fed.proj': fig(30000, { kind: 'm', assumes: [a] }), 'tax.fed.remaining': fig(20000, { assumes: [a] }), 'tax.va.proj': fig(5000, { kind: 'm', assumes: [a] }) };
+  const m = taxPanelModel(S);
+  assert.equal(m.gaps.length, 0);
+  assert.deepEqual(m.assumes.map(x => x.code), [code], 'listed once');
+  assert.deepEqual(m.assumes[0].rows, ['fed', 'state']);
+  assert.ok(m.assumes[0].text.trim() && !m.assumes[0].text.includes(code));
+  assert.doesNotMatch(m.assumes[0].text, /\$|\d{3,}|\d[.,]\d/, 'states no amount (a form name such as W-2 is fine)');
+  if (ASSUMPTION_FIXES[code]) assertFixTarget(m.assumes[0].fix, code);
+  else assert.equal(m.assumes[0].fix, null);
+  const asGap = taxPanelModel({ ...S, 'tax.fed.remaining': fig(20000, { assumes: [a], gaps: [{ ...taxGap('no_income_inputs'), code }] }) });
+  assert.equal(asGap.assumes.length, 0, 'an assumption already listed as a gap is not repeated');
 });

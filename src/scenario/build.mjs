@@ -30,6 +30,8 @@ import { getFacts } from '../store/facts.mjs';
 import { inferMortgage } from '../calc/mortgage-inference.mjs';
 import { deriveSteps } from '../shared/rec-steps.mjs';
 import { gapsFor, TRIGGER_INPUTS } from '../shared/rec-inputs.mjs';
+import { ASSUMPTION_FIXES } from '../shared/tax-gaps.mjs';
+import { ASSUMPTION_TEXT } from '../jobs/planner/assumptions.mjs';
 import { advisorWait } from '../shared/advisor-waits.mjs';
 import { ADVISOR_KEYS } from '../facts/derive.mjs';
 import { observedPayments } from '../ingest/transaction-payments.mjs';
@@ -176,6 +178,13 @@ export function loadFigures(db) {
     // TX2: the tax year a paid-so-far or left-to-pay figure was planned for (the planner keeps planning
     // last year until its return is due).
     if (Number.isInteger(loc?.taxYear)) f.taxYear = loc.taxYear;
+    // TX2: a tax figure's assumptions in plain words with the existing fix where there is one, so the
+    // Tax this year screen lists each beside the estimate (notes alone carry no fix and stop at five).
+    if (/^tax\./.test(r.key) && Array.isArray(loc?.assumptions)) {
+      const assumes = [...new Set(loc.assumptions)].filter(c => typeof c === 'string' && ASSUMPTION_TEXT[c])
+        .map(code => ({ code, text: ASSUMPTION_TEXT[code], fix: ASSUMPTION_FIXES[code] ? { ...ASSUMPTION_FIXES[code] } : null }));
+      if (assumes.length) f.assumes = assumes;
+    }
     if (loc?.completeness) {
       f.completeness = loc.completeness;
       f.partial = loc.partial;

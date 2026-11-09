@@ -31,9 +31,11 @@ function card(r) {
   return `<article class="h-tax-card" data-tax-row="${H.esc(r.id)}"><h3>${H.esc(r.title)}</h3><dl>${rows}</dl></article>`;
 }
 
-function gapsHtml(gaps) {
-  if (!gaps.length) return '<p class="h-mute">Nothing missing. The estimate uses everything on file.</p>';
-  return `<ul class="h-tax-gaps">${gaps.map((g) => `<li data-tax-gap="${H.esc(g.code)}"${g.rough ? ' class="rough"' : ''}><p>${H.esc(g.text)}</p>${gapControl(g.fix, H.esc)}</li>`).join('')}</ul>`;
+function gapsHtml(m) {
+  if (!m.gaps.length && !m.assumes.length) return '<p class="h-mute">Nothing missing. The estimate uses everything on file.</p>';
+  const gaps = m.gaps.map((g) => `<li data-tax-gap="${H.esc(g.code)}"${g.rough ? ' class="rough"' : ''}><p>${H.esc(g.text)}</p>${gapControl(g.fix, H.esc)}</li>`).join('');
+  const assumes = m.assumes.map((a) => `<li class="assume" data-tax-assume="${H.esc(a.code)}"><p>${H.esc(a.text)}</p>${a.fix ? gapControl(a.fix, H.esc) : ''}</li>`).join('');
+  return `<ul class="h-tax-gaps">${gaps}${assumes}</ul>`;
 }
 
 export function render() {
@@ -46,7 +48,8 @@ export function render() {
     return H.shell(`<section class="h-tax">${back}${head}${none}</section>`);
   }
   const cards = `<div class="h-tax-cards">${m.rows.map(card).join('')}</div>`;
-  const sharpen = H.section(`What would sharpen this${m.gaps.length ? ` <em>${m.gaps.length}</em>` : ''}`, gapsHtml(m.gaps), '', 'h-tax-sharpen');
+  const n = m.gaps.length + m.assumes.length;
+  const sharpen = H.section(`What would sharpen this${n ? ` <em>${n}</em>` : ''}`, gapsHtml(m), '', 'h-tax-sharpen');
   return H.shell(`<section class="h-tax">${back}${head}<div class="h-tax-cols"><div class="h-tax-main">${H.section('By jurisdiction', cards)}</div><div class="h-tax-side">${sharpen}</div></div></section>`);
 }
 
@@ -55,10 +58,12 @@ export function homeHtml() {
   const m = model();
   if (!m.available || !m.rows.some((r) => r.id === 'fed' && r.keys.proj)) return '';
   const lines = m.rows.filter((r) => r.keys.remaining).map((r) => `<span class="h-taxh-r" data-tax-row="${H.esc(r.id)}"><span>${H.esc(r.title)} ${r.overpaid ? 'overpaid' : 'left to pay'}</span>`
-    + `<b>${H.figHtml(r.keys.remaining, { abs: true, inert: true })}</b></span>`).join('');
+    + `<b>${H.figHtml(r.keys.remaining, { abs: true })}</b></span>`).join('');
   const body = lines || '<span class="h-taxh-r"><span>Projection on file</span></span>';
-  return `<div class="h-home-sec h-taxh-sec"><h2>Tax this year</h2></div>`
-    + `<a class="h-taxh" href="${H.href('tax')}" data-go="tax" aria-label="Tax this year">${body}<span class="h-taxh-go">See Tax this year${H.icon('arrow')}</span></a>`;
+  // The link sits in the section head and the figures stay outside it, so each figure opens its own
+  // provenance popover and the screen is still one tap away.
+  return `<div class="h-home-sec h-taxh-sec"><h2>Tax this year</h2><a class="h-taxh-link" href="${H.href('tax')}" data-go="tax">See Tax this year</a></div>`
+    + `<div class="h-taxh">${body}</div>`;
 }
 
 // The pace board's tax meter when no reserve is recorded: paid so far against projected, in words,

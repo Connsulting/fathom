@@ -273,11 +273,10 @@
 .d-horizon .h-tax-gaps li.rough { border-left-color: var(--ac); }
 .d-horizon .h-tax-gaps p { color: var(--tx2); font-size: 13.5px; line-height: 1.45; overflow-wrap: anywhere; }
 .d-horizon .h-tax-none { margin-top: 28px; color: var(--tx2); display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
-.d-horizon a.h-taxh { display: grid; gap: 4px; padding: 14px 18px; background: var(--s1); border: 1px solid var(--line); border-radius: 12px; }
-.d-horizon a.h-taxh:hover { border-color: var(--line2); }
+.d-horizon .h-taxh { display: grid; gap: 4px; padding: 14px 18px; background: var(--s1); border: 1px solid var(--line); border-radius: 12px; }
 .d-horizon .h-taxh-r { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; color: var(--tx2); font-size: 13.5px; }
 .d-horizon .h-taxh-r b { font-family: var(--mono); font-weight: 400; color: var(--tx); }
-.d-horizon .h-taxh-go { display: inline-flex; align-items: center; gap: 6px; margin-top: 6px; color: var(--ac); font-size: 13px; }
+.d-horizon .h-tax-gaps li.assume { border-left-color: var(--line); }
 .d-horizon .h-tax-meter { color: var(--tx2); }
 .d-horizon .h-tax-meter-acts { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; }
 @media (min-width: 1000px) {
