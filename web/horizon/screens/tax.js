@@ -10,7 +10,7 @@ let H = null;
 
 export function bind(kit) { H = kit; }
 
-const model = () => taxPanelModel(H.api.s.fig, { clock: H.api.s.meta?.clock });
+const model = () => taxPanelModel(H.api.s.fig);
 
 // A figure row: its label and the stored value. sub marks the two parts of paid so far.
 function row(label, key, { sub = false, abs = false } = {}) {
@@ -39,7 +39,7 @@ function gapsHtml(gaps) {
 export function render() {
   const m = model();
   const back = `<a class="h-back" href="${H.href('home')}" data-go="home">${H.icon('back')}Home</a>`;
-  const head = `<div class="h-tax-head"><div class="h-kicker">Tax year ${m.year ?? ''}</div><h1>Tax this year</h1>`
+  const head = `<div class="h-tax-head">${m.year ? `<div class="h-kicker">Tax year ${m.year}</div>` : ''}<h1>Tax this year</h1>`
     + '<p class="h-lede">What the household is projected to owe, what is paid so far and what is left, from your stored figures.</p></div>';
   if (!m.available) {
     const none = `<p class="h-tax-none">No tax projection yet. Add an income document to project this year's tax. ${gapControl(NO_PROJECTION_FIX, H.esc)}</p>`;
@@ -72,6 +72,6 @@ export function meterFallbackHtml(label) {
     ? `Paid ${H.figHtml(p.paid)} of ${H.figHtml(p.proj)} projected ${word[p.id]} tax`
     : `${H.figHtml(p.proj)} projected ${word[p.id]} tax`));
   return `<div class="h-meter" data-meter="tax"><div class="h-meter-top"><span>${label}</span></div>`
-    + `<p class="h-meter-none h-tax-meter">Reserve not recorded. ${parts.join('. ')}.</p>`
+    + `<p class="h-meter-none h-tax-meter">No tax reserve is tracked yet. ${parts.join('. ')}.</p>`
     + `<p class="h-tax-meter-acts"><a class="h-link" href="${H.href('tax')}" data-go="tax">See Tax this year</a>${gapControl(fb.fix, H.esc, 'h-link')}</p></div>`;
 }

@@ -173,6 +173,9 @@ export function loadFigures(db) {
     const loc = parse(r.locator, null);
     const notes = loc && Array.isArray(loc.notes) ? loc.notes.filter(n => typeof n === 'string' && n.trim()) : [];
     if (notes.length) f.notes = notes.slice(0, 5);
+    // TX2: the tax year a paid-so-far or left-to-pay figure was planned for (the planner keeps planning
+    // last year until its return is due).
+    if (Number.isInteger(loc?.taxYear)) f.taxYear = loc.taxYear;
     if (loc?.completeness) {
       f.completeness = loc.completeness;
       f.partial = loc.partial;
@@ -374,13 +377,14 @@ export const ASK_STARTERS = Object.freeze([
   Object.freeze({ id: 'wargame-salary', q: 'Compare the salary options for my S corp side by side.' }),
   Object.freeze({ id: 'wargame-deferral', q: 'Should I move some December invoices into January? Compare the options.' }),
   Object.freeze({ id: 'attention', q: 'What needs my attention right now?' }),
-  Object.freeze({ id: 'taxes', q: 'How are our tax payments tracking this year?' }),
   Object.freeze({ id: 'tax-estimate', q: "What's my tax estimate?" }),
+  Object.freeze({ id: 'taxes', q: 'How are our tax payments tracking this year?' }),
   Object.freeze({ id: 'scorp', q: 'How is the S corp doing this year?' }),
   Object.freeze({ id: 'yearend', q: 'What should we do before the year ends?' }),
 ]);
 
-// The starters whose condition holds: attention (a visible rec proposed or doing), taxes
+// Ask shows the first four that hold (web/horizon/screens/chat.js), so tax-estimate sits within the
+// first four entries. The starters whose condition holds: attention (a visible rec proposed or doing), taxes
 // (any tax payment), tax-estimate (a stored federal tax projection), scorp (fact income.sCorp is true or any P&L line), yearend (always).
 export function loadAskStarters(db, recs, wargame = {}) {
   const exists = table => !!db.prepare(`SELECT EXISTS (SELECT 1 FROM ${table}) AS x`).get().x;

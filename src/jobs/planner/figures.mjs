@@ -957,8 +957,8 @@ function writeTax(data, out, { hh, parts, owner, f, isVa, pay, section125 }) {
   if (!vaW.blocked && (vaW.v > 0 || pay.va.withheld.hasGap)) out.put('tax.va.withheld', vaW.v, 'a', 'Virginia tax withheld from wages', vaW.src, vaW.loc);
   if (out.figures['tax.fed.withheld'] && out.figures['tax.fed.withheld'].src === 'docs') out.source('docs', SOURCES.docs.label, dateLabel(data.clock), SOURCES.docs.kind);
   if (out.figures['tax.va.withheld'] && out.figures['tax.va.withheld'].src === 'docs') out.source('docs', SOURCES.docs.label, dateLabel(data.clock), SOURCES.docs.kind);
-  paidAndLeft(out, 'fed', 'Federal');
-  if (out.figures['tax.va.proj']) paidAndLeft(out, 'va', 'Virginia');
+  paidAndLeft(out, 'fed', 'Federal', data.year);
+  if (out.figures['tax.va.proj']) paidAndLeft(out, 'va', 'Virginia', data.year);
   // A blocked payment or withholding figure holds the safe-harbor figures that use it (already
   // withheld with its code in computeFigures).
   const fedHeld = !!(fedW.blocked || pay.fed.paid.blocked);
@@ -1032,7 +1032,7 @@ function writeTax(data, out, { hh, parts, owner, f, isVa, pay, section125 }) {
 // TX2: tax paid so far (estimated payments plus withholding, only those on file, missing counts as
 // zero) and the tax left to pay (projection less paid so far; negative means overpaid), so the
 // estimate is never blank while a projection exists.
-function paidAndLeft(out, j, name) {
+function paidAndLeft(out, j, name, taxYear) {
   const proj = out.figures[`tax.${j}.proj`];
   if (!proj) return;
   const parts = [`tax.${j}.paid`, `tax.${j}.withheld`];
@@ -1041,12 +1041,12 @@ function paidAndLeft(out, j, name) {
   const paid = cents(sum(onFile.map(k => out.figures[k].v)));
   const onFileText = onFile.length ? `on file: ${onFile.map(k => (k.endsWith('.paid') ? 'estimated payments' : 'withholding')).join(' and ')}` : 'none on file';
   out.put(`tax.${j}.paidToDate`, paid, 'a', `${name} tax paid so far this year`, 'calc:tax', {
-    calc: 'taxPaidToDate', ...rowsLoc('figures', onFile), inputs,
+    calc: 'taxPaidToDate', taxYear, ...rowsLoc('figures', onFile), inputs,
     steps: [{ label: 'Payments on file', formula: `estimated payments + withholding, ${onFileText}, missing counts as zero`, value: paid }],
   });
   const left = cents(proj.v - paid);
   out.put(`tax.${j}.remaining`, left, 'e', `${name} tax left to pay this year`, 'calc:tax', {
-    calc: 'taxRemaining', ...rowsLoc('figures', [`tax.${j}.proj`, `tax.${j}.paidToDate`]),
+    calc: 'taxRemaining', taxYear, ...rowsLoc('figures', [`tax.${j}.proj`, `tax.${j}.paidToDate`]),
     inputs: { [`tax.${j}.proj`]: proj.v, [`tax.${j}.paidToDate`]: paid },
     steps: [{ label: 'Paid so far', formula: `estimated payments + withholding, ${onFileText}`, value: paid },
       { label: 'Left to pay', formula: 'projected tax - paid so far, negative means overpaid', value: left }],

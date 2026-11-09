@@ -151,7 +151,7 @@ test('AC9 POST /api/threads creates an empty thread; list, open and the scenario
 
 test('AC9 the scenario lists Ask starters in the pinned order with yearend always last', T, () => withServer({ env: FAKE }, async s => {
   const starters = (await s.getScenario()).live.askStarters;
-  const order = ['wargame-salary', 'wargame-deferral', 'attention', 'taxes', 'tax-estimate', 'scorp', 'yearend'];
+  const order = ['wargame-salary', 'wargame-deferral', 'attention', 'tax-estimate', 'taxes', 'scorp', 'yearend'];
   assert.ok(Array.isArray(starters) && starters.length >= 1 && starters.length <= 7, JSON.stringify(starters));
   for (const st of starters) {
     assert.deepEqual(Object.keys(st).sort(), ['id', 'q']);

@@ -10,7 +10,7 @@ import { planRun } from './helpers/plan.mjs';
 import { taxGap, estimateGap, ESTIMATE_GAP_RULES, TAX_GAP_RULES } from '../src/shared/tax-gaps.mjs';
 import { HOWTO } from '../src/ingest/howto.mjs';
 import { answerShape } from '../src/jobs/triggers/common.mjs';
-import { loadAskStarters } from '../src/scenario/build.mjs';
+import { loadAskStarters, loadFigures, ASK_STARTERS } from '../src/scenario/build.mjs';
 import { taxPanelModel, taxMeterFallback, TAX_RESERVE_FIX, NO_PROJECTION_FIX } from '../web/horizon/screens/tax-model.js';
 import { paceMeters } from '../web/horizon/screens/home-model.js';
 
@@ -55,6 +55,8 @@ test('TX2-1 planner: paid so far and left to pay combine the stored inputs and c
     }
     assert.equal(paid.locator.calc, 'taxPaidToDate');
     assert.equal(left.locator.calc, 'taxRemaining');
+    assert.equal(paid.locator.taxYear, 2026, `${j} paid so far carries the planned tax year`);
+    assert.equal(loadFigures(db)[`tax.${j}.remaining`].taxYear, 2026, `${j} left to pay exposes the planned tax year`);
     assert.equal(paid.kind, 'a');
     assert.equal(left.kind, 'e');
     assert.ok(paid.locator.steps[0].formula.includes(j === 'fed' ? 'estimated payments and withholding' : 'on file'), `${j} step says which inputs were on file`);
@@ -80,9 +82,9 @@ const GAPS = [
 
 for (const [code, make] of GAPS) test(`TX2-2 panel model lists ${code} with plain text and a fix that exists`, () => {
   const gap = make();
-  const S = { 'tax.fed.proj': fig(30000, { kind: 'm' }), 'tax.fed.paidToDate': fig(10000, { kind: 'a' }), 'tax.fed.remaining': fig(20000, { gaps: [gap] }) };
-  const m = taxPanelModel(S, { clock: CLOCK });
-  assert.equal(m.year, 2026);
+  const S = { 'tax.fed.proj': fig(30000, { kind: 'm' }), 'tax.fed.paidToDate': fig(10000, { kind: 'a' }), 'tax.fed.remaining': fig(20000, { gaps: [gap], taxYear: 2025 }) };
+  const m = taxPanelModel(S);
+  assert.equal(m.year, 2025, 'the planned tax year, not the calendar year');
   assert.equal(m.available, true);
   const listed = m.gaps.find(g => g.code === code);
   assert.ok(listed, `${code} is listed`);
@@ -99,7 +101,7 @@ test('TX2-3 panel model keeps only stored keys, dedupes gaps and never computes 
     'tax.fed.remaining': fig(26000, { gaps: [ytd, estimateGap('prior_year_missing')] }),
     'tax.va.proj': fig(9000, { kind: 'm', gaps: [ytd] }), 'tax.va.remaining': fig(-1000, { gaps: [estimateGap('filing_status_assumed')] }),
   };
-  const m = taxPanelModel(S, { clock: CLOCK });
+  const m = taxPanelModel(S);
   assert.deepEqual(m.rows.map(r => r.id), ['fed', 'state']);
   assert.deepEqual(m.rows[0].keys, { proj: 'tax.fed.proj', paid: 'tax.fed.paidToDate', withheld: 'tax.fed.withheld', remaining: 'tax.fed.remaining' });
   assert.deepEqual(m.rows[1].keys, { proj: 'tax.va.proj', remaining: 'tax.va.remaining' });
@@ -109,10 +111,11 @@ test('TX2-3 panel model keeps only stored keys, dedupes gaps and never computes 
   assert.deepEqual(m.gaps[0].rows, ['fed', 'state']);
   // The model returns keys, never values: no number in it but the year.
   const numbers = JSON.stringify(m).match(/-?\d+(\.\d+)?/g) || [];
-  assert.deepEqual(numbers.filter(n => n !== '2026'), [], 'the model holds no figure value');
-  const none = taxPanelModel({ 'tax.fed.paid': fig(100, { kind: 'a' }) }, { clock: CLOCK });
+  assert.deepEqual(numbers, [], 'the model holds no figure value');
+  assert.equal(m.year, null, 'no planned tax year, no year shown');
+  const none = taxPanelModel({ 'tax.fed.paid': fig(100, { kind: 'a' }) });
   assert.equal(none.available, false, 'no projection, nothing available');
-  assert.equal(taxPanelModel({}, {}).rows.length, 0);
+  assert.equal(taxPanelModel({}).rows.length, 0);
   assertFixTarget(NO_PROJECTION_FIX, 'no projection');
   assert.deepEqual(NO_PROJECTION_FIX, { ...TAX_GAP_RULES.no_income_inputs.fix }, 'the no-projection fix is the no-income rule');
 });
@@ -139,6 +142,8 @@ test('TX2-5 the tax-estimate starter is held only with a stored federal projecti
   assert.ok(st, 'present with a projection');
   assert.equal(st.q, "What's my tax estimate?");
   assert.ok(list.findIndex(x => x.id === 'tax-estimate') < list.findIndex(x => x.id === 'yearend'), 'yearend stays last');
+  // Ask shows the first four starters that hold, so the tax estimate is always among them.
+  assert.ok(ASK_STARTERS.findIndex(x => x.id === 'tax-estimate') < 4, 'within the four Ask shows even when every starter holds');
 });
 
 test('TX2-6 the tax meter with no reserve shows paid against projected, not a bare reason', () => {

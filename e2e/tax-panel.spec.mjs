@@ -19,13 +19,13 @@ const FIGURES = [
   ['tax.fed.proj', 30000, 'm', 'Projected federal tax for the year (rough partial estimate)', gapLoc([YTD])],
   ['tax.fed.paid', 8000, 'a', 'Federal estimated payments logged this year', { rows: { table: 'tax_payments', ids: [], count: 0 } }],
   ['tax.fed.withheld', 4000, 'a', 'Federal tax withheld from wages', { rows: { table: 'tax_payments', ids: [], count: 0 } }],
-  ['tax.fed.paidToDate', 12000, 'a', 'Federal tax paid so far this year', { calc: 'taxPaidToDate', completeness: 'complete', partial: false, rough: false, gaps: [] }],
-  ['tax.fed.remaining', 18000, 'e', 'Federal tax left to pay this year (rough partial estimate)', { calc: 'taxRemaining', ...gapLoc([YTD, PRIOR]) }],
+  ['tax.fed.paidToDate', 12000, 'a', 'Federal tax paid so far this year', { calc: 'taxPaidToDate', taxYear: 2026, completeness: 'complete', partial: false, rough: false, gaps: [] }],
+  ['tax.fed.remaining', 18000, 'e', 'Federal tax left to pay this year (rough partial estimate)', { calc: 'taxRemaining', taxYear: 2026, ...gapLoc([YTD, PRIOR]) }],
   ['tax.va.proj', 6000, 'm', 'Projected Virginia tax for the year (rough partial estimate)', gapLoc([YTD])],
   ['tax.va.paid', 2000, 'a', 'Virginia estimated payments logged this year', { rows: { table: 'tax_payments', ids: [], count: 0 } }],
   ['tax.va.withheld', 1000, 'a', 'Virginia tax withheld from wages', { rows: { table: 'tax_payments', ids: [], count: 0 } }],
-  ['tax.va.paidToDate', 3000, 'a', 'Virginia tax paid so far this year', { calc: 'taxPaidToDate', completeness: 'complete', partial: false, rough: false, gaps: [] }],
-  ['tax.va.remaining', 3000, 'e', 'Virginia tax left to pay this year (rough partial estimate)', { calc: 'taxRemaining', ...gapLoc([YTD]) }],
+  ['tax.va.paidToDate', 3000, 'a', 'Virginia tax paid so far this year', { calc: 'taxPaidToDate', taxYear: 2026, completeness: 'complete', partial: false, rough: false, gaps: [] }],
+  ['tax.va.remaining', 3000, 'e', 'Virginia tax left to pay this year (rough partial estimate)', { calc: 'taxRemaining', taxYear: 2026, ...gapLoc([YTD]) }],
 ];
 
 function plantTax() {
@@ -58,6 +58,7 @@ test('Tax this year opens from Home and shows sourced figures with gaps and fixe
   await homeCard.click();
   await expect(page).toHaveURL(/#\/tax$/);
   await expect(page.getByRole('heading', { level: 1, name: 'Tax this year', exact: true })).toBeVisible();
+  await expect(page.locator('.h-tax-head .h-kicker')).toHaveText('Tax year 2026');
 
   const fed = page.locator('[data-tax-row="fed"]');
   const state = page.locator('[data-tax-row="state"]');
@@ -113,11 +114,11 @@ test('the pace board tax meter says paid against projected with one control when
     await gotoRoute(page, 'pace');
     const meter = page.locator('[data-meter="tax"]');
     await expect(meter).toBeVisible();
-    await expect(meter.locator('.h-tax-meter')).toHaveText('Reserve not recorded. Paid $12,000 of $30,000 projected federal tax. Paid $3,000 of $6,000 projected state tax.');
+    await expect(meter.locator('.h-tax-meter')).toHaveText('No tax reserve is tracked yet. Paid $12,000 of $30,000 projected federal tax. Paid $3,000 of $6,000 projected state tax.');
     await expect(meter).not.toContainText('The figures this needs are not stored yet');
     await expect(meter.locator('a[data-go="tax"]')).toHaveText('See Tax this year');
     await expect(meter.locator('button[data-tax-gap-fix]')).toHaveCount(1);
-    await expect(meter.locator('button[data-tax-gap-fix]')).toHaveText('Say where tax money is set aside');
+    await expect(meter.locator('button[data-tax-gap-fix]')).toHaveText('Tell Fathom where tax money is set aside');
     await noSideScroll(page);
   }
   await page.locator('[data-meter="tax"] a[data-go="tax"]').click();

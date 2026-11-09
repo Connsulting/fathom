@@ -17,21 +17,25 @@ const ROW_KEYS = (j) => ({
   proj: `tax.${j}.proj`, paid: `tax.${j}.paidToDate`, withheld: `tax.${j}.withheld`, estimates: `tax.${j}.paid`, remaining: `tax.${j}.remaining`
 });
 
-// The one control for saying where tax money is set aside: no answer shape holds a tax reserve, so
-// it is a prompt-only Ask.
+// The one control for saying where tax money is set aside. No answer shape holds a tax reserve, so it
+// is a prompt-only Ask that Ask keeps as a remembered household preference (update_preferences); it
+// does not fill the meter's reserve figure, and the meter's words do not promise that it will.
 export const TAX_RESERVE_FIX = Object.freeze({
-  screen: 'ask', label: 'Say where tax money is set aside',
-  prompt: "Record where we set aside money for this year's taxes and how much is in it. Ask me for the account or the amount."
+  screen: 'ask', label: 'Tell Fathom where tax money is set aside',
+  prompt: "Remember where we set aside money for this year's taxes. Ask me which account holds it."
 });
 // With no projection: upload an income document (TAX_GAP_RULES.no_income_inputs in src/shared/tax-gaps.mjs).
 export const NO_PROJECTION_FIX = Object.freeze({ screen: 'upload', kind: 'paystub', label: 'Upload an income document' });
 
-const yearOf = (clock) => { const m = /^(\d{4})/.exec(String(clock || '')); return m ? Number(m[1]) : null; };
+// The tax year the planner computed the figures for (it keeps planning last year until that return
+// is due), never the calendar year. Null when no shown figure carries one.
+const yearOf = (fig, rows) => rows.flatMap((r) => [r.keys.remaining, r.keys.paid]).filter(Boolean)
+  .map((k) => fig[k].taxYear).find((y) => Number.isInteger(y)) ?? null;
 
 // fig: the scenario's stored figures (S.fig). Returns { year, available, rows, gaps } where each row
 // is { id, title, keys } holding only the keys stored, overpaid is the sign of the stored left-to-pay
 // figure, and gaps is every gap on the rows' figures deduplicated by code and employer, rough first.
-export function taxPanelModel(fig, { clock } = {}) {
+export function taxPanelModel(fig) {
   const rows = [];
   for (const { id, j, title } of JURISDICTIONS) {
     const keys = Object.fromEntries(Object.entries(ROW_KEYS(j)).filter(([, key]) => present(fig, key)));
@@ -50,7 +54,7 @@ export function taxPanelModel(fig, { clock } = {}) {
     }
   }
   const ranked = gaps.map((g, i) => [g, i]).sort((a, b) => Number(b[0].rough) - Number(a[0].rough) || a[1] - b[1]).map(([g]) => g);
-  return { year: yearOf(clock), available: rows.some((r) => r.keys.proj), rows, gaps: ranked };
+  return { year: yearOf(fig, rows), available: rows.some((r) => r.keys.proj), rows, gaps: ranked };
 }
 
 // The pace board's tax meter with no reserve recorded: the projected key per jurisdiction and its
