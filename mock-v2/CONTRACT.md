@@ -7,8 +7,8 @@ simplest reading and note it at the top of your own file.
 ## Product in one paragraph
 
 Fathom is a year-round financial co-pilot for a household of two independent professionals (one
-S corp owner, one spouse moving from a partnership to a solo LLC, one toddler, a second child
-expected early 2027). It mirrors their accounts read-only, knows their goals and life events, and
+S corp owner, one spouse working as a sole proprietor, two school-age children, and an unpaid
+sabbatical for the spouse early in 2027). It mirrors their accounts read-only, knows their goals and life events, and
 on a monthly cadence tells them either "it's covered" or the few things that need them before a
 window closes. Each recommendation is a lightweight to-do with a why-now, a deadline, a value, a
 checklist, and a conversation thread. They can war-game decisions on a tradeoff curve, chat with

@@ -36,16 +36,17 @@ export default {
     ira_limit: 7500,
     va529_deduction: 20000,
     dcfsa: 7500,
+    dccredit_limit: 6000,
     std_ded: 32200,
     salt_cap: 40000,
     ss_base: 184500
   },
   pct: {
     phase_in: 22,
-    marginal: 37,
+    marginal: 29,
     va_rate: 4.95,
-    fed_bracket: 32,
-    deduction_rate: 37,
+    fed_bracket: 24,
+    deduction_rate: 29,
     comp_ratio: 33,
     employer_share: 25
   },
@@ -90,7 +91,7 @@ export default {
     ti_pre_qbi: { v: 436500, src: "model", kind: "m", label: "Taxable income before QBI, 2026" },
     qbi_total: { v: 66000, src: "model", kind: "m", label: "Household QBI deduction, 2026" },
     sp_qbi_lost: { v: 8600, src: "model", kind: "m", label: "Riley QBI deduction lost to the phase-in" },
-    sp_qbi_tax: { v: 2750, src: "model", kind: "m", label: "Tax cost of the phase-in" },
+    sp_qbi_tax: { v: 2060, src: "model", kind: "m", label: "Tax cost of the phase-in" },
     liability: { v: 128500, src: "plan", kind: "e", label: "2026 federal and Illinois liability" },
     safe_harbor: { v: 110600, src: "plan", kind: "m", label: "Safe harbor total" },
     fed_safe: { v: 88000, src: "plan", kind: "m", label: "Federal safe harbor (110% of 2025)" },
@@ -109,7 +110,7 @@ export default {
     regular_run: { v: 7000, src: "model", kind: "m", label: "Business cash per regular run" },
     dec_need: { v: 41400, src: "model", kind: "m", label: "December payroll cash needed" },
     extra_payroll_tax: { v: 4900, src: "plan", kind: "e", label: "Payroll tax on the catch-up wages" },
-    offcycle_tax_deferred: { v: 9050, src: "model", kind: "m", label: "Tax deferred by the deferral" },
+    offcycle_tax_deferred: { v: 7100, src: "model", kind: "m", label: "Tax deferred by the deferral" },
     biz_cash_now: { v: 29000, src: "model", kind: "p", label: "Business checking, projected today" },
     biz_cash_dec: { v: 58000, src: "model", kind: "p", label: "Business cash Dec 10, invoices sent" },
     biz_cash_dec_defer: { v: 32000, src: "model", kind: "p", label: "Business cash Dec 10, invoices deferred" },
@@ -117,9 +118,9 @@ export default {
     nov_distribution: { v: 11000, src: "model", kind: "p", label: "Usual monthly distribution" },
     distributions_ytd: { v: 84000, src: "biz", kind: "a", label: "Business to personal transfers, Jan to Aug" },
     fixed_fee: { v: 26000, src: "you", kind: "e", label: "Delivered fixed-fee work, not invoiced" },
-    defer_2026: { v: 9600, src: "model", kind: "m", label: "2026 tax saved by deferring" },
-    defer_2027: { v: 7500, src: "model", kind: "m", label: "2027 tax added by deferring" },
-    defer_net: { v: 2100, src: "model", kind: "m", label: "Net saved across both years" },
+    defer_2026: { v: 8300, src: "model", kind: "m", label: "2026 tax saved by deferring" },
+    defer_2027: { v: 7000, src: "model", kind: "m", label: "2027 tax added by deferring" },
+    defer_net: { v: 1300, src: "model", kind: "m", label: "Net saved across both years" },
     hsa_paid: { v: 4500, src: "txns", kind: "a", label: "HSA contributed this year" },
     hsa_left: { v: 4250, src: "model", kind: "m", label: "HSA room left" },
     sp_sep: { v: 44000, src: "plan", kind: "e", label: "Riley SEP, estimated maximum" },
@@ -128,10 +129,10 @@ export default {
     childcare_yr: { v: 11400, src: "txns", kind: "a", label: "Childcare paid, last 12 months" },
     w2_wages: { v: 11000, src: "ret2025", kind: "a", label: "Your W-2 wages there, 2025" },
     childcare_mo: { v: 950, src: "txns", kind: "a", label: "Childcare per month" },
-    dcfsa_save: { v: 3350, src: "model", kind: "m", label: "Tax saved by a full DCFSA" },
+    dcfsa_save: { v: 2740, src: "model", kind: "m", label: "Tax saved by a full DCFSA" },
     va529_save: { v: 990, src: "model", kind: "m", label: "Illinois tax saved at the full deduction" },
     vaq4_amt: { v: 5650, src: "plan", kind: "e", label: "Illinois Q4 estimate" },
-    vaq4_save: { v: 450, src: "model", kind: "m", label: "Federal tax saved by paying in December" },
+    vaq4_save: { v: 110, src: "model", kind: "m", label: "Federal tax saved by paying in December" },
     reserve_target: { v: 135000, src: "plan", kind: "e", label: "Nine months of cash" },
     yearend_cash: { v: 136000, src: "plan", kind: "p", label: "Year-end cash, projected" },
     true_reserve: { v: 96000, src: "plan", kind: "p", label: "Reserve after tax earmarks" },
@@ -484,7 +485,7 @@ export default {
         },
         {
           q: "What if the paychecks are too small?",
-          a: ["Elect what fits. Any amount saves at your marginal rate plus payroll tax. Childcare spend the FSA does not cover can still count toward the dependent care credit, though at your income that is worth little."]
+          a: ["Elect what fits. Any amount saves at your marginal rate plus payroll tax. One catch: every FSA dollar also comes off the expenses the dependent care credit can count, which top out at {l:dccredit_limit} for two children. An election at or above that leaves no credit at all, even though your childcare spend is higher. At your income the credit is worth little either way."]
         },
         {
           q: "Is this better than the childcare credit?",
@@ -1080,9 +1081,9 @@ export default {
       question: "Delivered fixed-fee design work, cash basis. Pick how much to bill in January.",
       options: [
         { id: "d0", label: "Bill it all now", amount: 0, tax2026: 0, tax2027: 0, net: 0, decCash: 58000, need: 41400, note: "Simplest. December cash is comfortable. No help for the sabbatical months." },
-        { id: "d15", label: "Defer half", amount: 13000, tax2026: -4800, tax2027: 3750, net: -1050, decCash: 45000, need: 41400, note: "Some cash into the sabbatical, payroll still covered even with the distribution." },
-        { id: "d30", label: "Defer all", amount: 26000, tax2026: -9600, tax2027: 7500, net: -2100, decCash: 32000, need: 41400, note: "Best tax and cash timing, but December payroll is short unless you skip the November distribution." },
-        { id: "d30s", label: "Defer all, skip the distribution", amount: 26000, tax2026: -9600, tax2027: 7500, net: -2100, decCash: 43000, need: 41400, note: "Same tax result with payroll covered. Personal cash takes the hit for one month." }
+        { id: "d15", label: "Defer half", amount: 13000, tax2026: -4150, tax2027: 3500, net: -650, decCash: 45000, need: 41400, note: "Some cash into the sabbatical, payroll still covered even with the distribution." },
+        { id: "d30", label: "Defer all", amount: 26000, tax2026: -8300, tax2027: 7000, net: -1300, decCash: 32000, need: 41400, note: "Best tax and cash timing, but December payroll is short unless you skip the November distribution." },
+        { id: "d30s", label: "Defer all, skip the distribution", amount: 26000, tax2026: -8300, tax2027: 7000, net: -1300, decCash: 43000, need: 41400, note: "Same tax result with payroll covered. Personal cash takes the hit for one month." }
       ],
       takeaway: "Defer it, and skip one distribution. The tax win is modest; the real win is income arriving during the sabbatical."
     }
@@ -1233,7 +1234,7 @@ export default {
     config: "{\n  \"mcpServers\": {\n    \"fathom\": {\n      \"type\": \"http\",\n      \"url\": \"https://fathom.home.example/mcp\",\n      \"headers\": { \"Authorization\": \"Bearer <read-only token>\" }\n    }\n  }\n}"
   },
   engine: {
-    budget: { monthly: 200, used: 27.6 },
+    budget: { monthly: 150, used: 27.6 },
     chat: {
       model: "Claude via the Agent SDK",
       note: "Chat reads the same read-only tools your own AI gets over MCP, plus the active knowledge packs. Turn the engine off during testing and every answer stays canned."

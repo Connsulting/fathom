@@ -32,16 +32,17 @@ window.FATHOM_SCENARIO = {
     "ira_limit": 7500,
     "va529_deduction": 20000,
     "dcfsa": 7500,
+    "dccredit_limit": 6000,
     "std_ded": 32200,
     "salt_cap": 40000,
     "ss_base": 184500
   },
   "pct": {
     "phase_in": 22,
-    "marginal": 37,
+    "marginal": 29,
     "va_rate": 4.95,
-    "fed_bracket": 32,
-    "deduction_rate": 37,
+    "fed_bracket": 24,
+    "deduction_rate": 29,
     "comp_ratio": 33,
     "employer_share": 25
   },
@@ -263,7 +264,7 @@ window.FATHOM_SCENARIO = {
       "label": "Riley QBI deduction lost to the phase-in"
     },
     "sp_qbi_tax": {
-      "v": 2750,
+      "v": 2060,
       "src": "model",
       "kind": "m",
       "label": "Tax cost of the phase-in"
@@ -377,7 +378,7 @@ window.FATHOM_SCENARIO = {
       "label": "Payroll tax on the catch-up wages"
     },
     "offcycle_tax_deferred": {
-      "v": 9050,
+      "v": 7100,
       "src": "model",
       "kind": "m",
       "label": "Tax deferred by the deferral"
@@ -425,19 +426,19 @@ window.FATHOM_SCENARIO = {
       "label": "Delivered fixed-fee work, not invoiced"
     },
     "defer_2026": {
-      "v": 9600,
+      "v": 8300,
       "src": "model",
       "kind": "m",
       "label": "2026 tax saved by deferring"
     },
     "defer_2027": {
-      "v": 7500,
+      "v": 7000,
       "src": "model",
       "kind": "m",
       "label": "2027 tax added by deferring"
     },
     "defer_net": {
-      "v": 2100,
+      "v": 1300,
       "src": "model",
       "kind": "m",
       "label": "Net saved across both years"
@@ -491,7 +492,7 @@ window.FATHOM_SCENARIO = {
       "label": "Childcare per month"
     },
     "dcfsa_save": {
-      "v": 3350,
+      "v": 2740,
       "src": "model",
       "kind": "m",
       "label": "Tax saved by a full DCFSA"
@@ -509,7 +510,7 @@ window.FATHOM_SCENARIO = {
       "label": "Illinois Q4 estimate"
     },
     "vaq4_save": {
-      "v": 450,
+      "v": 110,
       "src": "model",
       "kind": "m",
       "label": "Federal tax saved by paying in December"
@@ -1260,7 +1261,7 @@ window.FATHOM_SCENARIO = {
         {
           "q": "What if the paychecks are too small?",
           "a": [
-            "Elect what fits. Any amount saves at your marginal rate plus payroll tax. Childcare spend the FSA does not cover can still count toward the dependent care credit, though at your income that is worth little."
+            "Elect what fits. Any amount saves at your marginal rate plus payroll tax. One catch: every FSA dollar also comes off the expenses the dependent care credit can count, which top out at {l:dccredit_limit} for two children. An election at or above that leaves no credit at all, even though your childcare spend is higher. At your income the credit is worth little either way."
           ]
         },
         {
@@ -2400,9 +2401,9 @@ window.FATHOM_SCENARIO = {
           "id": "d15",
           "label": "Defer half",
           "amount": 13000,
-          "tax2026": -4800,
-          "tax2027": 3750,
-          "net": -1050,
+          "tax2026": -4150,
+          "tax2027": 3500,
+          "net": -650,
           "decCash": 45000,
           "need": 41400,
           "note": "Some cash into the sabbatical, payroll still covered even with the distribution."
@@ -2411,9 +2412,9 @@ window.FATHOM_SCENARIO = {
           "id": "d30",
           "label": "Defer all",
           "amount": 26000,
-          "tax2026": -9600,
-          "tax2027": 7500,
-          "net": -2100,
+          "tax2026": -8300,
+          "tax2027": 7000,
+          "net": -1300,
           "decCash": 32000,
           "need": 41400,
           "note": "Best tax and cash timing, but December payroll is short unless you skip the November distribution."
@@ -2422,9 +2423,9 @@ window.FATHOM_SCENARIO = {
           "id": "d30s",
           "label": "Defer all, skip the distribution",
           "amount": 26000,
-          "tax2026": -9600,
-          "tax2027": 7500,
-          "net": -2100,
+          "tax2026": -8300,
+          "tax2027": 7000,
+          "net": -1300,
           "decCash": 43000,
           "need": 41400,
           "note": "Same tax result with payroll covered. Personal cash takes the hit for one month."
@@ -2965,7 +2966,7 @@ window.FATHOM_SCENARIO = {
   },
   "engine": {
     "budget": {
-      "monthly": 200,
+      "monthly": 150,
       "used": 27.6
     },
     "chat": {

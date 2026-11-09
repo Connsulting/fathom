@@ -36,7 +36,7 @@ test('cap validation rejects non-numbers, negatives, over 10000 and NaN, and acc
   const raw = await postJson(s.baseUrl, '/api/engine/cap', '{"usd": NaN}');
   assert.equal(raw.status, 400);
   const before = await getScenario(s.baseUrl);
-  assert.equal(before.engine.budget.monthly, 200, 'refused bodies change nothing');
+  assert.equal(before.engine.budget.monthly, 150, 'refused bodies change nothing');
   assert.equal((await ok(postJson(s.baseUrl, '/api/engine/cap', { usd: 0 }))).scenario.engine.budget.monthly, 0);
   assert.equal((await ok(postJson(s.baseUrl, '/api/engine/cap', { usd: 10000 }))).scenario.engine.budget.monthly, 10000);
   assert.equal((await request(s.baseUrl, { path: '/api/engine/cap' })).status, 405);

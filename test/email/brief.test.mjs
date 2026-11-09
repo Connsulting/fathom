@@ -265,7 +265,7 @@ test('the sub-line is the verdict sub unless the model summary passed acceptSumm
 test('r2 item 2 and r3: summaries with literal amounts, number words or unknown tokens fall back to the template', () => withSeeded(async (db) => {
   const model = buildBrief(db, { clock: CLOCK, publicUrl: null });
   figByKey(model, 'engine.budget.left').notes = ['7 eligible days'];
-  assert.equal(figByKey(model, 'engine.budget.monthly').v, 200, 'demo cap is a round figure value');
+  assert.equal(figByKey(model, 'engine.budget.monthly').v, 150, 'demo cap is a round figure value');
   const rejected = [
     'Spend so far is $7.',
     'Save seven dollars.',
